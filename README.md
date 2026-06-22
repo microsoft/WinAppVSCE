@@ -35,6 +35,53 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
 
+#### Workspace & Multi-Project Support
+
+The extension supports workspaces where the app project is **not** at the root — such as monorepos, multi-app repositories, or nested project structures.
+
+**How it works:**
+
+When you run any WinApp command, the extension resolves the target project directory using this priority:
+
+1. **`winapp.appDirectories` setting** — If specified in `.vscode/settings.json`, the extension uses these paths directly (no scanning). With one entry, it auto-selects; with multiple, it shows a QuickPick.
+2. **Project at workspace root** — If a recognized project exists at the root, commands run there immediately.
+3. **Automatic scan** — Searches the workspace for compatible projects and prompts if multiple are found.
+
+**Configuration (optional):**
+
+To skip automatic scanning, add the `winapp.appDirectories` setting to your workspace:
+
+```jsonc
+// .vscode/settings.json
+{
+  "winapp.appDirectories": [
+    "apps/my-app",
+    "apps/shell"
+  ]
+}
+```
+
+| Scenario | Behavior |
+|----------|----------|
+| Setting has 1 entry | All commands auto-target that directory |
+| Setting has multiple entries | QuickPick prompt to choose which project |
+| Setting is absent or empty | Falls back to auto-detection (see below) |
+
+**Auto-detection behavior (when setting is not configured):**
+
+| Scenario | Behavior |
+|----------|----------|
+| Project at workspace root | Command runs directly — no prompt |
+| No project at root, 1 project found elsewhere | Auto-selects that project |
+| No project at root, multiple projects found | Shows a QuickPick list to choose which project to target |
+| No projects found anywhere | Falls back to workspace root (the CLI will report an error if initialization is required) |
+
+**Supported project types:** .NET (WPF, WinForms, WinUI 3, Console), Electron, Tauri, Flutter, Rust, and C++ (CMake).
+
+The **WinApp: Initialize Project** command has additional behavior: when no project is at the root, it searches and lets you pick which project to initialize. If no projects are found at all, it offers to initialize in the current directory anyway.
+
+> **Note:** If more than 10 projects are discovered, the search stops and the QuickPick indicates that the list may be incomplete.
+
 ### Integrated Debugging
 
 The extension provides a **custom `winapp` debug type** that launches your app with package identity and automatically attaches the appropriate debugger — all from a single **F5** press.
@@ -139,7 +186,11 @@ When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer 
 
 ### Initialize and set up a project
 
-Run **WinApp: Initialize Project** to configure your project with the Windows SDK and/or Windows App SDK. The command walks you through selecting an SDK channel and sets up the necessary dependencies.
+Run **WinApp: Initialize Project** to configure your project with the Windows SDK and/or Windows App SDK. The command:
+
+1. **Detects your project** — If there's a recognized app project at the workspace root, it proceeds immediately. Otherwise, it searches the workspace and presents a list of discovered projects for you to choose from.
+2. **Asks for SDK channel** — Select stable, preview, experimental, or none (for projects like Rust/Tauri that bring their own SDK bindings).
+3. **Runs `winapp init`** — Sets up the manifest, SDK packages, and configuration for the selected project.
 
 ### Debug with package identity
 
