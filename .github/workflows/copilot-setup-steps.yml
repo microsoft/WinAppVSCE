@@ -1,0 +1,41 @@
+name: "Copilot Setup Steps"
+
+# Run automatically when this file changes, and allow manual runs from the Actions tab
+# so we can smoke-test the setup before merging.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  # Job name MUST be `copilot-setup-steps` or Copilot will not pick it up.
+  copilot-setup-steps:
+    # This repository is a Node.js / TypeScript VS Code extension, but it uses
+    # Windows-oriented PowerShell scripts and validates Windows app workflows.
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # Warm the TypeScript/esbuild cache without downloading or building the
+      # native WinApp CLI. The agent can run the full build-vsce script on demand.
+      - name: Warm extension build
+        run: npm run compile
