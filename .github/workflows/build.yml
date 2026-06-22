@@ -43,6 +43,7 @@ jobs:
 
     - name: Package VSIX
       run: |
+        New-Item -ItemType Directory -Path artifacts -Force | Out-Null
         npx vsce package --no-dependencies -o artifacts/winapp-dev.vsix
 
     - name: Upload VSIX artifact
