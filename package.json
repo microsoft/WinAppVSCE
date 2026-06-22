@@ -7,7 +7,7 @@
   "version": "0.1.1",
   "repository": {
     "type": "git",
-    "url": "https://github.com/microsoft/WinAppCli.git"
+    "url": "https://github.com/microsoft/WinAppVSCE.git"
   },
   "engines": {
     "vscode": "^1.109.0"
@@ -118,6 +118,21 @@
         "category": "WinApp"
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "winapp.manifestEditor",
+        "displayName": "AppxManifest Editor",
+        "selector": [
+          {
+            "filenamePattern": "**/[Aa]ppx[Mm]anifest.xml"
+          },
+          {
+            "filenamePattern": "**/*.appxmanifest"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
     "debuggers": [
       {
         "type": "winapp",
@@ -173,20 +188,7 @@
           }
         ]
       }
-    ],
-    "configuration": {
-      "title": "WinApp",
-      "properties": {
-        "winapp.appDirectories": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "markdownDescription": "List of relative paths to app project directories. When specified, WinApp commands will target these directories instead of scanning the workspace. If a single directory is listed, it is used automatically. If multiple are listed, you'll be prompted to choose."
-        }
-      }
-    }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
@@ -197,23 +199,27 @@
     "pretest": "npm run compile-tsc && npm run lint",
     "lint": "eslint src",
     "test": "vscode-test",
-    "test:unit": "tsc -p ./ && mocha out/test/**/*.test.js",
+    "test:e2e": "npx playwright test --config=playwright.config.ts",
     "clean": "node -e \"require('fs').rmSync('bin', {recursive: true, force: true}); require('fs').rmSync('out', {recursive: true, force: true}); require('fs').rmSync('dist', {recursive: true, force: true});\"",
     "download-cli": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1\"",
-    "download-cli:latest": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1 -Tag latest\""
+    "download-cli:latest": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1 -Tag latest\"",
+    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && npx tsx --test src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-validator.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts"
   },
   "dependencies": {
+    "@xmldom/xmldom": "^0.9.9",
     "glob": "^13.0.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "@types/vscode": "^1.109.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
-    "@vscode/vsce": "^3.3.2",
+    "@vscode/vsce": "2.22.0",
     "esbuild": "^0.28.1",
     "eslint": "^10.0.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1"
   },
