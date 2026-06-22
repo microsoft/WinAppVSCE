@@ -139,10 +139,10 @@ try
 
     Push-Location $VscProjectPath
 
-    # Clean bin and out directories
-    npm run clean
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "npm clean failed, continuing..."
+    # Clean out and dist directories (preserve bin/ which may contain downloaded CLI binaries)
+    Write-Host "[VSC] Cleaning build artifacts..." -ForegroundColor Blue
+    @("out", "dist") | ForEach-Object {
+        if (Test-Path $_) { Remove-Item $_ -Recurse -Force }
     }
 
     # Install dependencies
@@ -163,17 +163,23 @@ try
         exit 1
     }
 
-    # Copy CLI binaries from artifacts
+    # Copy CLI binaries from artifacts (skip if source and destination are the same)
     Write-Host "[VSC] Copying CLI binaries to extension..." -ForegroundColor Blue
     $VscBinPath = "bin"
     New-Item -ItemType Directory -Path "$VscBinPath\win-x64" -Force | Out-Null
     New-Item -ItemType Directory -Path "$VscBinPath\win-arm64" -Force | Out-Null
 
-    Copy-Item "$CliBinariesPath\win-x64\*.exe" "$VscBinPath\win-x64\" -Force
-    Copy-Item "$CliBinariesPath\win-arm64\*.exe" "$VscBinPath\win-arm64\" -Force
+    $resolvedCliBin = (Resolve-Path $CliBinariesPath -ErrorAction SilentlyContinue)?.Path
+    $resolvedVscBin = (Resolve-Path $VscBinPath -ErrorAction SilentlyContinue)?.Path
+    if ($resolvedCliBin -and $resolvedVscBin -and ($resolvedCliBin -eq $resolvedVscBin)) {
+        Write-Host "  CLI binaries already in place (source = destination)" -ForegroundColor Gray
+    } else {
+        Copy-Item "$CliBinariesPath\win-x64\*.exe" "$VscBinPath\win-x64\" -Force
+        Copy-Item "$CliBinariesPath\win-arm64\*.exe" "$VscBinPath\win-arm64\" -Force
+    }
 
-    # Copy LICENSE from project root
-    Copy-Item "$ProjectRoot\LICENSE" "LICENSE" -Force
+    # In the monorepo, LICENSE was copied from project root into the VSC subdirectory.
+    # In this standalone repo, LICENSE already lives at the project root — no copy needed.
 
     # Stamp version information into README.md
     Write-Host "[VSC] Stamping version info into README.md..." -ForegroundColor Blue
@@ -231,11 +237,6 @@ try
     # Restore original README.md
     if (Test-Path "$ReadmePath.backup") {
         Move-Item "$ReadmePath.backup" $ReadmePath -Force
-    }
-
-    # Remove copied LICENSE
-    if (Test-Path "LICENSE") {
-        Remove-Item "LICENSE" -Force
     }
 
     Pop-Location
