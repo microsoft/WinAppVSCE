@@ -52,7 +52,7 @@ import { insertChildBeforeClose } from './manifest-xml-ops';
  * parsed or editable. They are preserved in the XML but not surfaced in the
  * editor UI. Common package-level extensions include
  * windows.activatableClass.inProcessServer and background task host DLLs.
- * See: https://github.com/microsoft/winappCli/issues
+ * See: https://github.com/microsoft/winappVSCE/issues
  */
 export function parseManifest(xmlText: string): ManifestData {
     const doc = new DOMParser().parseFromString(xmlText, 'application/xml');

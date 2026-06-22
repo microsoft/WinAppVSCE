@@ -2,20 +2,13 @@
 
 The **WinApp** extension brings the [Windows App Development CLI (WinApp CLI)](https://github.com/microsoft/WinAppCli) into Visual Studio Code so you can initialize, debug, package, and sign Windows applications without leaving the editor.
 
-> **Status: Public Preview** — The WinApp CLI and this extension are experimental and in active development. We'd love your feedback! [File an issue](https://github.com/microsoft/WinAppCli/issues).
+> **Status: Public Preview** — The WinApp CLI and this extension are experimental and in active development. We'd love your feedback! [File an issue](https://github.com/microsoft/WinAppVSCE/issues).
 
 ## Get Started
 
-> The WinApp VS Code Extension is not yet available in the VS Code Marketplace. We plan to publish the extension publicly soon.
+> The WinApp VS Code Extension is now available in the VS Code Marketplace.
 
-Try the WinApp extension today by downloading our latest prerelease: [**VS Code Extension**](https://nightly.link/microsoft/WinAppCli/workflows/build-package/main/vscode-extension.zip)
-
-Simply navigate to the 'Extensions' tab in VS Code, and select the option to 'Install via VSIX...'. You may need to restart VS Code for the extension to begin working. 
-
-| | Version |
-|--|---------|
-| **Extension** | <!-- EXT_VERSION -->0.1.0<!-- /EXT_VERSION --> |
-| **Bundled WinApp CLI** | <!-- CLI_VERSION -->development<!-- /CLI_VERSION --> |
+Try the WinApp extension today: [**VS Code Markplace**](https://marketplace.visualstudio.com/items?itemName=Microsoft-WinAppCLI.winapp)
 
 ## Features
 
@@ -156,8 +149,6 @@ For scenarios where you need to debug startup code from the very first instructi
 
 When you're done testing, use **WinApp: Unregister Package** to clean up sideloaded packages without leaving VS Code.
 
-See the full [Debugging Guide](https://github.com/microsoft/WinAppCli/blob/main/docs/debugging.md) for more details.
-
 ### Generate manifests and assets
 
 Use **WinApp: Generate Manifest** to create an `Package.appxmanifest` from a template, then **WinApp: Update Manifest Assets** to auto-generate all required app icons from a single source image. Use **WinApp: Add Manifest Execution Alias** to add a command-line alias so your packaged app can be launched by typing its name in a terminal.
@@ -202,5 +193,5 @@ For debugging, install the debugger extension that matches your app's language (
 
 ## Feedback and Support
 
-- [File an issue or feature request](https://github.com/microsoft/WinAppCli/issues)
-- [Support Guide](https://github.com/microsoft/WinAppCli/blob/main/SUPPORT.md)
+- [File an issue or feature request](https://github.com/microsoft/WinAppVSCE/issues)
+- [Support Guide](https://github.com/microsoft/WinAppVSCE/blob/main/SUPPORT.md)

@@ -443,7 +443,7 @@ ${getEditorStyles(nonce)}
 
     <div class="info-banner">
         <span class="info-banner-icon">ℹ</span>
-        <span>This editor does not support all appxmanifest customizations. For advanced scenarios, <a class="info-banner-link" id="open-xml-link">open the XML source</a>. Missing a feature? <a class="info-banner-link" href="https://github.com/microsoft/winappCli/issues">File feedback</a>.</span>
+        <span>This editor does not support all appxmanifest customizations. For advanced scenarios, <a class="info-banner-link" id="open-xml-link">open the XML source</a>. Missing a feature? <a class="info-banner-link" href="https://github.com/microsoft/WinAppVSCE/issues">File feedback</a>.</span>
     </div>
 
 
