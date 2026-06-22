@@ -423,6 +423,9 @@ FodyWeavers.xsd
 
 # VS Code extension build artifacts
 dist/
+out/
+bin/
+*.map
 .vscode-test/
 playwright-report/
 test-results/
