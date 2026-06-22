@@ -421,6 +421,12 @@ FodyWeavers.xsd
 # Built Visual Studio Code Extensions
 *.vsix
 
+# VS Code extension build artifacts
+dist/
+.vscode-test/
+playwright-report/
+test-results/
+
 # Windows Installer files from build outputs
 *.cab
 *.msi
