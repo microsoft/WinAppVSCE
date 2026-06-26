@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/hero.png" alt="WinApp — Run, debug, and package Windows applications right inside Visual Studio Code" width="100%" />
+</p>
+
 # WinApp — VS Code Extension
 
 The **WinApp** extension brings the [Windows App Development CLI (WinApp CLI)](https://github.com/microsoft/WinAppCli) into Visual Studio Code so you can initialize, debug, package, and sign Windows applications without leaving the editor.
