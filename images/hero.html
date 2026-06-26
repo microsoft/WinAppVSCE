@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WinApp Hero</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: #eef3f8;
+      font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+
+    .hero {
+      position: relative;
+      width: 1280px;
+      height: 440px;
+      border-radius: 16px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      /* Windows 11 "Mica" light gradient: soft sky blue */
+      background:
+        radial-gradient(1200px 500px at 78% 18%, rgba(255, 255, 255, 0.65) 0%, rgba(255, 255, 255, 0) 55%),
+        radial-gradient(900px 600px at 12% 95%, rgba(120, 170, 220, 0.35) 0%, rgba(120, 170, 220, 0) 60%),
+        linear-gradient(160deg, #b9d4ee 0%, #9fc4e8 38%, #b6d2ea 70%, #d4e6f4 100%);
+      box-shadow: 0 24px 60px rgba(30, 80, 140, 0.25);
+    }
+
+    /* Windows 11 four-pane logo, top-right */
+    .winlogo {
+      position: absolute;
+      top: 38px;
+      right: 48px;
+      display: grid;
+      grid-template-columns: 23px 23px;
+      grid-template-rows: 23px 23px;
+      gap: 3px;
+      opacity: 0.85;
+    }
+    .winlogo span {
+      background: #1f3a5f;
+      border-radius: 1px;
+    }
+
+    /* "VS CODE EXTENSION" glass pill */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 26px;
+      margin-bottom: 34px;
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: 3px;
+      color: #234a72;
+      background: rgba(255, 255, 255, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.85);
+      border-radius: 999px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 8px 24px rgba(40, 90, 150, 0.18);
+    }
+    .badge .mark {
+      display: grid;
+      grid-template-columns: 8px 8px;
+      grid-template-rows: 8px 8px;
+      gap: 1px;
+    }
+    .badge .mark span {
+      background: #2b6fd6;
+      border-radius: 0.5px;
+    }
+
+    .title {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+    }
+
+    .title .logo {
+      width: 132px;
+      height: 132px;
+      object-fit: contain;
+      filter: drop-shadow(0 10px 22px rgba(20, 60, 110, 0.28));
+    }
+
+    .title .name {
+      font-size: 104px;
+      font-weight: 700;
+      letter-spacing: -3px;
+      line-height: 1;
+    }
+    .title .name .win {
+      color: #1b2c44;
+    }
+    .title .name .app {
+      color: #1b2c44;
+    }
+
+    .subtitle {
+      margin-top: 26px;
+      font-size: 25px;
+      font-weight: 400;
+      max-width: 760px;
+      text-align: center;
+      color: #2c405a;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <div class="winlogo">
+      <span></span><span></span><span></span><span></span>
+    </div>
+
+    <div class="badge">
+      <span class="mark"><span></span><span></span><span></span><span></span></span>
+      VS CODE EXTENSION
+    </div>
+
+    <div class="title">
+      <img class="logo" src="icon.png" alt="WinApp icon" />
+      <div class="name"><span class="win">Win</span><span class="app">App</span></div>
+    </div>
+
+    <div class="subtitle">
+      Run, debug, and package Windows applications &mdash; right inside Visual Studio Code.
+    </div>
+  </div>
+</body>
+</html>
