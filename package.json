@@ -118,6 +118,19 @@
         "category": "WinApp"
       }
     ],
+    "configuration": {
+      "title": "WinApp",
+      "properties": {
+        "winapp.appDirectories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Relative paths (from the workspace root) to app project directories. When set, WinApp commands target these directories instead of auto-scanning. If multiple entries are provided, you'll be prompted to choose."
+        }
+      }
+    },
     "customEditors": [
       {
         "viewType": "winapp.manifestEditor",
