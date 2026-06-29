@@ -4,6 +4,7 @@ import { spawn } from 'child_process';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from './winapp-cli-utils';
 import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
+import { escapePowerShellArg } from './shell-escape';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 
@@ -63,7 +64,7 @@ async function runWinappCommand(extensionPath: string, command: string, cwd: str
 		terminal.show();
 	}
 
-	terminal.sendText(`& "${cliPath}" ${command}`);
+	terminal.sendText(`& ${escapePowerShellArg(cliPath)} ${command}`);
 	return '';
 }
 
@@ -492,7 +493,7 @@ export function activate(context: vscode.ExtensionContext) {
 				{ placeHolder: 'Bundle Windows App SDK runtime (self-contained)?' }
 			);
 
-			let command = `pack "${inputFolder}"`;
+			let command = `pack ${escapePowerShellArg(inputFolder)}`;
 			if (generateCert === 'Yes') {
 				command += ' --generate-cert --install-cert';
 			}
@@ -517,7 +518,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await runWinappCommand(extensionPath, `run "${inputFolder}"`, workspacePath);
+			await runWinappCommand(extensionPath, `run ${escapePowerShellArg(inputFolder)}`, workspacePath);
 		})
 	);
 
@@ -535,7 +536,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			let command = 'create-debug-identity';
 			if (entrypoint) {
-				command += ` "${entrypoint}"`;
+				command += ` ${escapePowerShellArg(entrypoint)}`;
 			}
 
 			await runWinappCommand(extensionPath, command, workspacePath);
@@ -581,7 +582,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await runWinappCommand(extensionPath, `manifest update-assets "${imagePath}"`, workspacePath);
+			await runWinappCommand(extensionPath, `manifest update-assets ${escapePowerShellArg(imagePath)}`, workspacePath);
 		})
 	);
 
@@ -624,7 +625,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await runWinappCommand(extensionPath, `cert install "${certPath}"`, workspacePath);
+			await runWinappCommand(extensionPath, `cert install ${escapePowerShellArg(certPath)}`, workspacePath);
 		})
 	);
 
@@ -656,7 +657,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await runWinappCommand(extensionPath, `sign "${filePath}" --cert "${certPath}"`, workspacePath);
+			await runWinappCommand(extensionPath, `sign ${escapePowerShellArg(filePath)} --cert ${escapePowerShellArg(certPath)}`, workspacePath);
 		})
 	);
 
