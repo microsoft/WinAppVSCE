@@ -1,3 +1,4 @@
+import * as fsp from 'fs/promises';
 import * as path from 'path';
 import { detectProjectAt, DetectedProject, getDisplayFilePath } from './project-detection';
 
@@ -51,18 +52,30 @@ export async function resolveProjectDirectory(
 	// 1) Explicit appDirectories setting.
 	const appDirs = deps.getAppDirectories();
 	if (appDirs.length > 0) {
-		// Validate paths are contained within the workspace.
-		const validDirs = appDirs.filter(dir => {
-			const resolved = path.resolve(workspacePath, dir);
-			const relative = path.relative(workspacePath, resolved);
-			return !relative.startsWith('..') && !path.isAbsolute(relative);
-		});
+		// Validate that each entry stays within the workspace (see isContainedInWorkspace).
+		const validDirs: string[] = [];
+		for (const dir of appDirs) {
+			if (await isContainedInWorkspace(workspacePath, dir)) {
+				validDirs.push(dir);
+			}
+		}
+		const droppedCount = appDirs.length - validDirs.length;
 
 		if (validDirs.length === 0) {
 			deps.showWarning('All winapp.appDirectories entries resolve outside the workspace and were ignored.');
-		} else if (validDirs.length === 1) {
-			return path.resolve(workspacePath, validDirs[0]);
 		} else {
+			// Surface a warning when some (but not all) entries were ignored so a
+			// misconfigured setting does not silently retarget the command.
+			if (droppedCount > 0) {
+				const noun = droppedCount === 1 ? 'entry' : 'entries';
+				const verb = droppedCount === 1 ? 'was' : 'were';
+				deps.showWarning(`${droppedCount} winapp.appDirectories ${noun} resolve outside the workspace and ${verb} ignored.`);
+			}
+
+			if (validDirs.length === 1) {
+				return path.resolve(workspacePath, validDirs[0]);
+			}
+
 			const items: ProjectQuickPickItem[] = validDirs.map(dir => ({
 				label: `$(folder) ${dir}`,
 				directory: path.resolve(workspacePath, dir)
@@ -102,4 +115,36 @@ export async function resolveProjectDirectory(
 		: 'Which project would you like to target?';
 
 	return deps.pickDirectory(items, placeHolder);
+}
+
+/**
+ * Determines whether `dir` (resolved relative to `workspacePath`) stays inside
+ * the workspace.
+ *
+ * Applies a lexical check first (rejecting `..` traversal and absolute paths),
+ * then — when the target exists on disk — a real-path check so that a symlink
+ * or junction living inside the workspace cannot point the command at a
+ * directory outside it. Non-existent targets cannot be reparse points, so the
+ * lexical result stands.
+ */
+async function isContainedInWorkspace(workspacePath: string, dir: string): Promise<boolean> {
+	const resolved = path.resolve(workspacePath, dir);
+	const relative = path.relative(workspacePath, resolved);
+	if (relative.startsWith('..') || path.isAbsolute(relative)) {
+		return false;
+	}
+
+	try {
+		const realWorkspace = await fsp.realpath(workspacePath);
+		const realResolved = await fsp.realpath(resolved);
+		const realRelative = path.relative(realWorkspace, realResolved);
+		if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
+			return false;
+		}
+	} catch {
+		// The target (or workspace) does not exist yet — it cannot be a symlink
+		// escape, so the lexical check above is authoritative.
+	}
+
+	return true;
 }

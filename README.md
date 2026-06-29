@@ -69,7 +69,7 @@ To skip automatic scanning, add the `winapp.appDirectories` setting to your work
 
 | Scenario | Behavior |
 |----------|----------|
-| Setting has 1 entry | All commands auto-target that directory |
+| Setting has 1 entry | Project-context commands auto-target that directory |
 | Setting has multiple entries | QuickPick prompt to choose which project |
 | Setting is absent or empty | Falls back to auto-detection (see below) |
 

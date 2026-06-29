@@ -159,6 +159,83 @@ describe('resolveProjectDirectory', () => {
 				removeTempDir(ws);
 			}
 		});
+
+		it('warns and uses the sole valid entry when some entries are outside the workspace', async () => {
+			const ws = createTempDir();
+			try {
+				const calls = emptyCalls();
+				// One in-workspace entry, one outside.
+				const deps = makeDeps({
+					getAppDirectories: () => ['apps/my-app', '../outside']
+				}, calls);
+
+				const result = await resolveProjectDirectory(ws, deps);
+
+				assert.equal(result, path.resolve(ws, 'apps/my-app'));
+				// The dropped entry must surface a warning rather than silently retargeting.
+				assert.equal(calls.warnings.length, 1);
+				assert.match(calls.warnings[0], /1 winapp\.appDirectories entry .*ignored/i);
+				// A single valid entry is auto-selected — no prompt.
+				assert.equal(calls.pickInvocations.length, 0);
+			} finally {
+				removeTempDir(ws);
+			}
+		});
+
+		it('warns and prompts among the remaining valid entries when some are outside', async () => {
+			const ws = createTempDir();
+			try {
+				const calls = emptyCalls();
+				const chosen = path.resolve(ws, 'apps/b');
+				const deps = makeDeps({
+					getAppDirectories: () => ['apps/a', 'apps/b', '../outside'],
+					pickDirectory: async (items, placeHolder) => {
+						calls.pickInvocations.push({ items, placeHolder });
+						return chosen;
+					}
+				}, calls);
+
+				const result = await resolveProjectDirectory(ws, deps);
+
+				assert.equal(result, chosen);
+				assert.equal(calls.warnings.length, 1);
+				assert.match(calls.warnings[0], /1 winapp\.appDirectories entry .*ignored/i);
+				// Only the two valid entries are offered.
+				assert.equal(calls.pickInvocations.length, 1);
+				assert.equal(calls.pickInvocations[0].items.length, 2);
+			} finally {
+				removeTempDir(ws);
+			}
+		});
+
+		it('rejects a junction inside the workspace that targets a directory outside it', async () => {
+			const ws = createTempDir();
+			const outside = createTempDir();
+			try {
+				const link = path.join(ws, 'linked-app');
+				try {
+					// Windows directory junctions do not require elevation.
+					fs.symlinkSync(outside, link, 'junction');
+				} catch {
+					// Environment cannot create the link — nothing to assert.
+					return;
+				}
+
+				const calls = emptyCalls();
+				const deps = makeDeps({ getAppDirectories: () => ['linked-app'] }, calls);
+
+				const result = await resolveProjectDirectory(ws, deps);
+
+				// The junction escapes the workspace, so it is ignored and we fall
+				// through to the scan, which finds nothing → workspace root.
+				assert.equal(result, ws);
+				assert.equal(calls.warnings.length, 1);
+				assert.match(calls.warnings[0], /outside the workspace/i);
+			} finally {
+				removeTempDir(ws);
+				removeTempDir(outside);
+			}
+		});
 	});
 
 	describe('workspace-root project', () => {
