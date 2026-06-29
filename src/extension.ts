@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { spawn } from 'child_process';
-import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from './winapp-cli-utils';
+import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE, escapePowerShellArg } from './winapp-cli-utils';
 import { detectProjects } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { glob } from 'glob';
@@ -65,16 +65,8 @@ async function runWinappCommand(extensionPath: string, command: string, cwd: str
 		terminal.show();
 	}
 
-	terminal.sendText(`& "${cliPath}" ${command}`);
+	terminal.sendText(`& ${escapePowerShellArg(cliPath)} ${command}`);
 	return '';
-}
-
-/**
- * Escapes a string for safe interpolation in a PowerShell single-quoted string.
- * Single quotes in the value are doubled per PowerShell rules.
- */
-function escapePowerShellArg(value: string): string {
-	return `'${value.replace(/'/g, "''")}'`;
 }
 
 /**
@@ -547,7 +539,7 @@ export function activate(context: vscode.ExtensionContext) {
 				{ placeHolder: 'Bundle Windows App SDK runtime (self-contained)?' }
 			);
 
-			let command = `pack "${inputFolder}"`;
+			let command = `pack ${escapePowerShellArg(inputFolder)}`;
 			if (generateCert === 'Yes') {
 				command += ' --generate-cert --install-cert';
 			}
@@ -572,7 +564,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await runWinappCommand(extensionPath, `run "${inputFolder}"`, workspacePath);
+			await runWinappCommand(extensionPath, `run ${escapePowerShellArg(inputFolder)}`, workspacePath);
 		})
 	);
 
@@ -590,7 +582,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			let command = 'create-debug-identity';
 			if (entrypoint) {
-				command += ` "${entrypoint}"`;
+				command += ` ${escapePowerShellArg(entrypoint)}`;
 			}
 
 			await runWinappCommand(extensionPath, command, workspacePath);
@@ -646,7 +638,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await runWinappCommand(extensionPath, `manifest update-assets "${imagePath}"`, projectDir);
+			await runWinappCommand(extensionPath, `manifest update-assets ${escapePowerShellArg(imagePath)}`, projectDir);
 		})
 	);
 
@@ -694,7 +686,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await runWinappCommand(extensionPath, `cert install "${certPath}"`, workspacePath);
+			await runWinappCommand(extensionPath, `cert install ${escapePowerShellArg(certPath)}`, workspacePath);
 		})
 	);
 
@@ -726,7 +718,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await runWinappCommand(extensionPath, `sign "${filePath}" --cert "${certPath}"`, workspacePath);
+			await runWinappCommand(extensionPath, `sign ${escapePowerShellArg(filePath)} --cert ${escapePowerShellArg(certPath)}`, workspacePath);
 		})
 	);
 
@@ -767,8 +759,11 @@ export function activate(context: vscode.ExtensionContext) {
 				placeHolder: 'e.g., --help'
 			});
 
-			let command = `tool ${toolName}`;
+			let command = `tool ${escapePowerShellArg(toolName)}`;
 			if (args) {
+				// args is a raw, multi-token passthrough for the selected tool
+				// (e.g. "--foo bar /p:baz"), so it is intentionally not quoted as a
+				// single literal. toolName is escaped above because it is a single value.
 				command += ` ${args}`;
 			}
 
