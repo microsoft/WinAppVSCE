@@ -45,11 +45,13 @@ The extension supports workspaces where the app project is **not** at the root �
 
 **How it works:**
 
-When you run any WinApp command, the extension resolves the target project directory using this priority:
+When you run a project-context WinApp command — such as **Initialize Project**, **Restore/Update Packages**, **Generate Manifest**, **Update Manifest Assets**, **Add Manifest Execution Alias**, **Generate Certificate**, **Unregister Package**, or **Get WinApp Path** — the extension resolves the target project directory using this priority:
 
 1. **`winapp.appDirectories` setting** — If specified in `.vscode/settings.json`, the extension uses these paths directly (no scanning). With one entry, it auto-selects; with multiple, it shows a QuickPick.
 2. **Project at workspace root** — If a recognized project exists at the root, commands run there immediately.
 3. **Automatic scan** — Searches the workspace for compatible projects and prompts if multiple are found.
+
+Commands that already take an explicit target — such as **Run Application**, **Create MSIX Package** (input folder), **Sign Package**, **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
 **Configuration (optional):**
 
