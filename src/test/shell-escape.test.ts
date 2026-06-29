@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { escapePowerShellArg } from '../shell-escape';
+import { escapePowerShellArg } from '../winapp-cli-utils';
 
 describe('escapePowerShellArg', () => {
 	it('wraps an ordinary path in single quotes', () => {

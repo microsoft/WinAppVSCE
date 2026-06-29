@@ -1,10 +1,9 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { spawn } from 'child_process';
-import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from './winapp-cli-utils';
+import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE, escapePowerShellArg } from './winapp-cli-utils';
 import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
-import { escapePowerShellArg } from './shell-escape';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 
