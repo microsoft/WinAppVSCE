@@ -759,8 +759,11 @@ export function activate(context: vscode.ExtensionContext) {
 				placeHolder: 'e.g., --help'
 			});
 
-			let command = `tool ${toolName}`;
+			let command = `tool ${escapePowerShellArg(toolName)}`;
 			if (args) {
+				// args is a raw, multi-token passthrough for the selected tool
+				// (e.g. "--foo bar /p:baz"), so it is intentionally not quoted as a
+				// single literal. toolName is escaped above because it is a single value.
 				command += ` ${args}`;
 			}
 
