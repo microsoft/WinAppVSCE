@@ -232,7 +232,14 @@ extends:
               scriptType: bash
               scriptLocation: inlineScript
               inlineScript: |
-                npm install -g @vscode/vsce@3
+                # Install vsce from the authenticated Azure Artifacts feed.
+                # The 1ES pool blocks public npmjs egress, so a plain global install
+                # falls back to the public registry and fails with EACCES. Pin the
+                # registry to the private feed and point npm at the authenticated
+                # .npmrc so vsce + its transitive deps resolve through the proxy.
+                npm install -g @vscode/vsce@3 \
+                  --registry=https://pkgs.dev.azure.com/microsoft/pde-oss/_packaging/winapp-npm-feed/npm/registry/ \
+                  --userconfig "$(System.DefaultWorkingDirectory)/.npmrc"
 
                 VSIX=$(find "$(Pipeline.Workspace)/vscode-extension/" -name "*.vsix" | head -1)
                 if [ -z "$VSIX" ]; then
