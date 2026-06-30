@@ -50,6 +50,20 @@ extends:
           os: windows
           hostArchitecture: amd64
         steps:
+          - pwsh: |
+              Write-Host "=== Pre-checkout network diagnostic ==="
+              Write-Host "--- DNS: github.com ---"
+              try { Resolve-DnsName github.com -Type A -ErrorAction Stop | Format-Table Name,IPAddress,Type -AutoSize | Out-String | Write-Host } catch { Write-Host "Resolve-DnsName failed: $($_.Exception.Message)" }
+              Write-Host "--- DNS: codeload.github.com ---"
+              try { Resolve-DnsName codeload.github.com -Type A -ErrorAction Stop | Format-Table Name,IPAddress,Type -AutoSize | Out-String | Write-Host } catch { Write-Host "Resolve-DnsName failed: $($_.Exception.Message)" }
+              Write-Host "--- TCP 443 to github.com ---"
+              Test-NetConnection github.com -Port 443 -WarningAction SilentlyContinue | Format-List ComputerName,RemoteAddress,RemotePort,TcpTestSucceeded | Out-String | Write-Host
+              Write-Host "--- curl -v https://github.com (max 20s) ---"
+              curl.exe -sv -o NUL --max-time 20 https://github.com 2>&1 | Write-Host
+              Write-Host "--- HTTP(S) proxy env ---"
+              "HTTP_PROXY=$env:HTTP_PROXY"; "HTTPS_PROXY=$env:HTTPS_PROXY"; "NO_PROXY=$env:NO_PROXY"
+            displayName: 'Diagnose github.com connectivity (pre-checkout)'
+            continueOnError: true
           - checkout: self
           - task: UseNode@1
             displayName: Setup Node.js 24
