@@ -1,0 +1,37 @@
+# Minimal pipeline to test `checkout: self` in isolation on the 1ES pool.
+# Does nothing but check out the repo, to determine whether the GitHub egress
+# block reproduces with a bare pipeline (no signing/npm/etc. steps).
+trigger:
+  branches:
+    include:
+      - vsc-rel/v*
+pr: none
+
+resources:
+  repositories:
+  - repository: 1esPipelines
+    type: git
+    name: 1ESPipelineTemplates/1ESPipelineTemplates
+    ref: refs/tags/release
+
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1esPipelines
+  parameters:
+    sdl:
+      sourceAnalysisPool:
+        name: Azure-Pipelines-1ESPT-ExDShared
+        image: windows-latest
+        os: windows
+    stages:
+    - stage: CheckoutTest
+      jobs:
+      - job: checkout_only
+        pool:
+          name: Azure-Pipelines-1ESPT-ExDShared
+          image: windows-latest
+          os: windows
+          hostArchitecture: amd64
+        steps:
+          - checkout: self
+          - pwsh: Write-Host "Checkout succeeded."
+            displayName: Confirm checkout
