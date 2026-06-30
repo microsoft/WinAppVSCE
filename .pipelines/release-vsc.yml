@@ -62,6 +62,15 @@ extends:
               curl.exe -sv -o NUL --max-time 20 https://github.com 2>&1 | Write-Host
               Write-Host "--- HTTP(S) proxy env ---"
               "HTTP_PROXY=$env:HTTP_PROXY"; "HTTPS_PROXY=$env:HTTPS_PROXY"; "NO_PROXY=$env:NO_PROXY"
+              Write-Host "=== EXPERIMENT: is the block repo-specific or all of github.com? ==="
+              Write-Host "--- Control: non-GitHub egress (dev.azure.com:443) ---"
+              Test-NetConnection dev.azure.com -Port 443 -WarningAction SilentlyContinue | Format-List ComputerName,RemoteAddress,TcpTestSucceeded | Out-String | Write-Host
+              Write-Host "--- clone a DIFFERENT github repo: microsoft/winappcli (public, no auth) ---"
+              git clone --depth 1 https://github.com/microsoft/winappcli.git "$env:AGENT_TEMPDIRECTORY/winappcli-conntest" 2>&1 | Write-Host
+              Write-Host "winappcli clone exit code: $LASTEXITCODE"
+              Write-Host "--- ls-remote self repo: microsoft/WinAppVSCE ---"
+              git ls-remote https://github.com/microsoft/WinAppVSCE.git HEAD 2>&1 | Write-Host
+              Write-Host "WinAppVSCE ls-remote exit code: $LASTEXITCODE"
             displayName: 'Diagnose github.com connectivity (pre-checkout)'
             continueOnError: true
           - checkout: self
