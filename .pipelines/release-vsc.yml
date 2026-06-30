@@ -175,11 +175,62 @@ extends:
                           "ToolVersion": "1.0"
                       }
                   ]
+          - task: PowerShell@2
+            displayName: Generate extension manifest for publisher signing
+            inputs:
+              pwsh: true
+              targetType: inline
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              script: |
+                $artifactsDir = "$(System.DefaultWorkingDirectory)/artifacts"
+                $vsix = Get-ChildItem -Path $artifactsDir -Filter "winapp-*.vsix" |
+                    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                if (-not $vsix) {
+                    Write-Error "No VSIX found in $artifactsDir"
+                    exit 1
+                }
+                Write-Host "Generating publisher manifest for $($vsix.Name)"
+                # Uses the @vscode/vsce devDependency installed by package-vsc.ps1 (offline, no public registry)
+                npx vsce generate-manifest -i "$($vsix.FullName)" -o "$artifactsDir/extension.manifest"
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "vsce generate-manifest failed"
+                    exit 1
+                }
+                # ESRP signs this file in place to produce the publisher signature
+                Copy-Item "$artifactsDir/extension.manifest" "$artifactsDir/extension.signature.p7s" -Force
+                Write-Host "Created extension.manifest and extension.signature.p7s"
+          - ${{ if eq(parameters.DoEsrp, 'true') }}:
+            - task: EsrpCodeSigning@6
+              displayName: Code Sign ESRP - VS Code Publisher Signature
+              inputs:
+                ConnectedServiceName: $(SigningServiceName)
+                AppRegistrationClientId: $(SigningAppId)
+                AppRegistrationTenantId: $(SigningTenantId)
+                AuthAKVName: $(SigningAKVName)
+                AuthCertName: $(SigningAuthCertName)
+                AuthSignCertName: $(SigningSignCertName)
+                FolderPath: '$(System.DefaultWorkingDirectory)/artifacts/'
+                Pattern: 'extension.signature.p7s'
+                UseMinimatch: true
+                signConfigType: inlineSignParams
+                inlineOperation: |
+                  [
+                      {
+                          "KeyCode": "CP-401405",
+                          "OperationCode": "VSCodePublisherSign",
+                          "Parameters": {},
+                          "ToolName": "sign",
+                          "ToolVersion": "1.0"
+                      }
+                  ]
           - task: CopyFiles@2
             displayName: Copy Artifacts - VS Code Extension
             inputs:
               sourceFolder: '$(System.DefaultWorkingDirectory)/artifacts/'
-              contents: '*.vsix'
+              contents: |
+                *.vsix
+                extension.manifest
+                extension.signature.p7s
               targetFolder: '$(Build.ArtifactStagingDirectory)/vscode-extension'
           - task: 1ES.PublishPipelineArtifact@1
             displayName: Upload Artifact - VS Code Extension
@@ -242,11 +293,17 @@ extends:
                   --userconfig "$(System.DefaultWorkingDirectory)/.npmrc"
 
                 VSIX=$(find "$(Pipeline.Workspace)/vscode-extension/" -name "*.vsix" | head -1)
+                MANIFEST=$(find "$(Pipeline.Workspace)/vscode-extension/" -name "extension.manifest" | head -1)
+                SIGNATURE=$(find "$(Pipeline.Workspace)/vscode-extension/" -name "extension.signature.p7s" | head -1)
                 if [ -z "$VSIX" ]; then
                   echo "##[error]No VSIX file found in vscode-extension artifact"
                   exit 1
                 fi
+                if [ -z "$MANIFEST" ] || [ -z "$SIGNATURE" ]; then
+                  echo "##[error]No publisher manifest/signature found in vscode-extension artifact"
+                  exit 1
+                fi
 
-                echo "Publishing $VSIX to VS Code Marketplace..."
-                vsce publish --packagePath "$VSIX" --azure-credential
+                echo "Publishing $VSIX to VS Code Marketplace with publisher signature..."
+                vsce publish --packagePath "$VSIX" --manifestPath "$MANIFEST" --signaturePath "$SIGNATURE" --azure-credential
 
