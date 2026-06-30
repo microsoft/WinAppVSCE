@@ -305,5 +305,17 @@ extends:
                 fi
 
                 echo "Publishing $VSIX to VS Code Marketplace with publisher signature..."
+
+                # Diagnostic: print the Marketplace identity this job authenticates as.
+                # Per VS Code docs, the 'id' below must be added as a Contributor member
+                # of the publisher (Marketplace > Manage Publishers > Microsoft-WinAppCLI).
+                # If publishing fails with "log in with Microsoft corporate credentials",
+                # this id does NOT match an authorized publisher member.
+                echo "##[group]Marketplace identity (must be a Contributor on the publisher)"
+                az rest -u https://app.vssps.visualstudio.com/_apis/profile/profiles/me \
+                  --resource 499b84ac-1321-427f-aa17-267ca6975798 || \
+                  echo "##[warning]Could not resolve profiles/me (token/identity issue)"
+                echo "##[endgroup]"
+
                 vsce publish --packagePath "$VSIX" --manifestPath "$MANIFEST" --signaturePath "$SIGNATURE" --azure-credential
 
