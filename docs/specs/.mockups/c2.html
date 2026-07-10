@@ -1,0 +1,49 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head>
+<body><div class="win">
+  <div class="titlebar"><div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+    <div class="t">Package.appxmanifest — CounterApp — Visual Studio Code</div></div>
+  <div class="body">
+    <div class="activity"><div class="ic active">🗎</div><div class="ic">🔍</div><div class="ic">⑃</div><div class="ic">▷</div><div class="ic">⬢</div></div>
+    <div class="side">
+      <h3>Explorer</h3>
+      <div class="row"><span class="tw">▾</span>📁 CounterApp</div>
+      <div class="row sel" style="padding-left:28px">📄 Package.appxmanifest</div>
+      <div class="row" style="padding-left:28px">📄 CounterApp.csproj</div>
+    </div>
+    <div class="editor">
+      <div class="tabs"><div class="tab active">📄 Package.appxmanifest</div></div>
+      <div class="code">
+        <div class="ln"><span class="gutter">12</span><span class="txt">  <span class="k">&lt;Capabilities&gt;</span></span></div>
+        <div class="ln"><span class="gutter">13</span><span class="txt">    <span class="k">&lt;Capability</span> <span class="a">Name</span>=<span class="s">"internetClient"</span> <span class="k">/&gt;</span></span></div>
+        <div class="ln"><span class="gutter">14</span><span class="txt">    <span class="k">&lt;rescap:Capability</span> <span class="a">Name</span>=<span class="s">"</span></span></div>
+        <div class="ln"><span class="gutter">15</span><span class="txt">  <span class="k">&lt;/Capabilities&gt;</span></span></div>
+        <div class="ln"><span class="gutter">16</span><span class="txt">  <span class="k">&lt;Applications&gt;</span></span></div>
+        <div class="ln"><span class="gutter">17</span><span class="txt">    <span class="k">&lt;Application</span> <span class="a">Id</span>=<span class="s">"App"</span> <span class="a squig">Executable</span>=<span class="s">"CountApp.exe"</span></span></div>
+
+        <div class="popup" style="left:340px;top:34px;width:340px">
+          <div class="it sel"><span class="badge b-en">V</span>runFullTrust<span style="margin-left:auto;color:#808080">restricted</span></div>
+          <div class="it"><span class="badge b-en">V</span>broadFileSystemAccess</div>
+          <div class="it"><span class="badge b-en">V</span>packageManagement</div>
+          <div class="it"><span class="badge b-en">V</span>appDiagnostics</div>
+          <div class="it"><span class="badge b-en">V</span>allowElevation</div>
+        </div>
+        <div class="doc" style="left:686px;top:34px;width:300px">
+          <b class="e">runFullTrust</b> <span class="tag" style="margin-left:6px">rescap</span><br><br>
+          Allows a packaged desktop (Win32) app to run without AppContainer isolation.
+          Required for most WinUI 3 desktop apps.
+          <div style="margin-top:6px;color:#808080">Schema: uap/rescap • foundation/windows10</div>
+        </div>
+        <div class="doc" style="left:560px;top:154px;width:340px;border-color:#cca700">
+          <span style="color:#cca700">⚠ APPX0102</span> &nbsp; <b>'CountApp.exe'</b> was not found in the build output.
+          Did you mean <b>'CounterApp.exe'</b>? <span style="color:#569cd6;cursor:pointer">Quick Fix…</span>
+        </div>
+      </div>
+      <div style="height:150px;background:#1e1e1e;border-top:1px solid #3c3c3c;padding:8px 14px;font-size:12px">
+        <div style="color:#bbb;font-size:11px;letter-spacing:.5px">PROBLEMS <span class="chip" style="background:#cca700;color:#1e1e1e">2</span></div>
+        <div style="margin-top:8px;color:#cccccc">⚠ <b>Package.appxmanifest</b> [Ln 17]  Executable 'CountApp.exe' not found in build output.</div>
+        <div style="margin-top:4px;color:#cccccc">⚠ <b>Package.appxmanifest</b> [Ln 3]  Package version '1.0' should be four-part (e.g. 1.0.0.0).</div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="seg">⑃ main</span><span class="seg">WinApp Manifest: schema uap10</span><span class="seg">Ln 14, Col 30</span><span class="seg">XML</span><span class="seg" style="margin-left:auto">Open Visual Editor ↗</span></div>
+</div></body></html>

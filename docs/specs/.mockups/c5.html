@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head>
+<body><div class="win">
+  <div class="titlebar"><div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+    <div class="t">MainWindow.xaml.cs — CounterApp — Visual Studio Code [Running]</div></div>
+  <div class="body">
+    <div class="activity"><div class="ic">🗎</div><div class="ic">🔍</div><div class="ic">⑃</div><div class="ic active">▷</div><div class="ic">⬢</div></div>
+    <div class="side">
+      <h3>Run and Debug</h3>
+      <div style="padding:6px 12px"><span style="background:#3c3c3c;padding:3px 8px;border-radius:3px;font-size:12px">▷ WinApp: Launch and Attach ▾</span></div>
+      <div style="padding:8px 14px;font-size:12px;color:#bbb">CALL STACK</div>
+      <div class="row" style="padding-left:20px">CounterApp.exe (coreclr)</div>
+      <div style="padding:8px 14px;font-size:12px;color:#bbb">HOT RELOAD</div>
+      <div class="row" style="padding-left:20px;color:#4ec9b0">● Active · C# + XAML</div>
+      <div class="row" style="padding-left:20px">2 edits applied</div>
+    </div>
+    <div class="editor">
+      <!-- debug toolbar -->
+      <div style="height:36px;background:#252526;display:flex;align-items:center;gap:14px;justify-content:center;font-size:16px;color:#ccc;border-bottom:1px solid #3c3c3c">
+        <span>⏸</span><span>↻</span><span style="color:#4ec9b0">🔥 Hot Reload</span><span>⤓ Restart</span><span style="color:#f14c4c">⏹</span>
+        <span style="font-size:12px;color:#858585;margin-left:12px">☑ Hot Reload on Save</span>
+      </div>
+      <div class="tabs"><div class="tab active">📄 MainWindow.xaml.cs</div><div class="tab">📄 MainWindow.xaml</div></div>
+      <div class="code">
+        <div class="ln"><span class="gutter">14</span><span class="txt">    <span class="k">private void</span> <span class="a">Increment_Click</span>(<span class="t">object</span> sender, <span class="t">RoutedEventArgs</span> e)</span></div>
+        <div class="ln"><span class="gutter">15</span><span class="txt">    {</span></div>
+        <div class="ln" style="background:#264f2a33"><span class="gutter">16</span><span class="txt">        Count = (Count + <span class="n">1</span>) % <span class="n">10</span>;  <span class="c">// edited — hot reloaded</span></span></div>
+        <div class="ln"><span class="gutter">17</span><span class="txt">        CountText.Text = Count.<span class="a">ToString</span>();</span></div>
+        <div class="ln"><span class="gutter">18</span><span class="txt">    }</span></div>
+      </div>
+      <div style="height:120px;background:#181818;border-top:1px solid #3c3c3c;padding:8px 14px;font-size:12px;font-family:monospace;color:#cccccc">
+        <div style="color:#bbb;font-family:'Segoe UI';font-size:11px">DEBUG CONSOLE</div>
+        <div style="margin-top:6px;color:#4ec9b0">[HotReload] Applied 1 code edit to CounterApp (12 ms) — state preserved</div>
+        <div style="color:#4ec9b0">[HotReload] Applied 1 XAML edit to MainWindow.xaml (8 ms)</div>
+        <div style="color:#858585">winapp run --hot-reload  ·  pid 24188  ·  identity: CounterApp_1.0.0.0_x64</div>
+      </div>
+    </div>
+  </div>
+  <!-- notification -->
+  <div class="notif"><div class="h">🔥 <b>Hot Reload applied</b></div>
+    2 changes applied to the running app without restart. App state was preserved.
+    <div style="margin-top:10px;display:flex;gap:8px"><button class="btn">Restart instead</button><button class="btn sec">Settings</button></div>
+  </div>
+  <div class="statusbar"><span class="seg">⑃ main</span><span class="seg" style="background:#c4471f;padding:0 8px;height:22px;display:flex;align-items:center;margin:0 -4px">🔥 Hot Reload</span><span class="seg">CounterApp running · x64</span><span class="seg" style="margin-left:auto">WinUI 3</span></div>
+</div></body></html>

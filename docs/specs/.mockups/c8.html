@@ -1,0 +1,45 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head>
+<body><div class="win">
+  <div class="titlebar"><div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+    <div class="t">CounterApp — Visual Studio Code — Copilot Chat (Agent)</div></div>
+  <div class="body">
+    <div class="activity"><div class="ic">🗎</div><div class="ic">🔍</div><div class="ic">⑃</div><div class="ic">▷</div><div class="ic active">✦</div></div>
+    <div class="editor">
+      <div class="tabs"><div class="tab active">📄 MainWindow.xaml</div></div>
+      <div class="code">
+        <div class="ln"><span class="gutter">7</span><span class="txt">  <span class="k">&lt;StackPanel</span> <span class="a">Spacing</span>=<span class="s">"12"</span><span class="k">&gt;</span></span></div>
+        <div class="ln"><span class="gutter">8</span><span class="txt">    <span class="k">&lt;TextBlock</span> <span class="a">Text</span>=<span class="s">"Counter"</span><span class="k">/&gt;</span></span></div>
+        <div class="ln" style="background:#264f2a33"><span class="gutter">9</span><span class="txt">    <span class="k">&lt;InfoBar</span> <span class="a">Severity</span>=<span class="s">"Success"</span> <span class="a">Title</span>=<span class="s">"Saved"</span><span class="k">/&gt;</span> <span class="c">← added by agent</span></span></div>
+        <div class="ln"><span class="gutter">10</span><span class="txt">  <span class="k">&lt;/StackPanel&gt;</span></span></div>
+      </div>
+    </div>
+    <!-- Copilot chat panel -->
+    <div class="panel" style="width:420px;background:#1e1e1e;display:flex;flex-direction:column">
+      <div style="height:34px;background:#252526;display:flex;align-items:center;gap:8px;padding:0 12px;font-size:13px;color:#fff;border-bottom:1px solid #3c3c3c">✦ Copilot <span style="color:#858585">Agent</span><span style="margin-left:auto;color:#858585">⋯</span></div>
+      <div style="flex:1;padding:14px;font-size:13px;overflow:hidden">
+        <div style="color:#fff;margin-bottom:6px"><b>You</b></div>
+        <div style="background:#2d2d2d;border-radius:6px;padding:8px 10px;margin-bottom:14px">
+          <span class="chip" style="background:#8367c7">@winapp</span> add a success InfoBar to MainWindow and package the app for release.
+        </div>
+        <div style="color:#fff;margin-bottom:6px"><b>✦ @winapp</b> <span class="chip">winui-design skill</span></div>
+        <div style="margin-bottom:10px;color:#cccccc">I'll follow the WinUI design guidance and use the extension's build tools.</div>
+
+        <!-- tool cards -->
+        <div style="background:#252526;border:1px solid #3c3c3c;border-radius:6px;padding:8px 10px;margin-bottom:8px">
+          <span style="color:#4ec9b0">✓</span> <b>winui_xaml_edit</b> <span style="color:#858585">— inserted &lt;InfoBar/&gt; (validated against XAML schema)</span></div>
+        <div style="background:#252526;border:1px solid #3c3c3c;border-radius:6px;padding:8px 10px;margin-bottom:8px">
+          <span style="color:#4ec9b0">✓</span> <b>winapp_build</b> <span style="color:#858585">— Release · x64 succeeded (4.1s)</span></div>
+        <div style="background:#252526;border:1px solid #dcdcaa;border-radius:6px;padding:8px 10px;margin-bottom:8px">
+          <span style="color:#dcdcaa">▶</span> <b>winapp_package</b> <span style="color:#858585">— run <code>winapp pack</code>?</span>
+          <div style="margin-top:8px;display:flex;gap:8px"><button class="btn">Continue</button><button class="btn sec">Cancel</button></div></div>
+
+        <div style="color:#858585;font-size:11px;margin-top:8px">Tools: winui_xaml_edit · winapp_build · winapp_package · winapp_sign · api_search — also available via MCP</div>
+      </div>
+      <div style="padding:10px 12px;border-top:1px solid #3c3c3c">
+        <div style="background:#3c3c3c;border:1px solid #007acc;border-radius:6px;padding:8px 10px;font-size:13px;color:#9d9d9d">Ask @winapp, or type / for skills…</div>
+        <div style="margin-top:6px;font-size:11px;color:#858585">Skills: /new-app · /design-review · /migrate-wpf · /fix-manifest</div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="seg">⑃ main</span><span class="seg">✦ @winapp participant active</span><span class="seg" style="margin-left:auto">Agent mode</span></div>
+</div></body></html>

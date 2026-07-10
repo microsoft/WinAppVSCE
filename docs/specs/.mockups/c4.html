@@ -1,0 +1,61 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head>
+<body><div class="win">
+  <div class="titlebar"><div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+    <div class="t">MainWindow.xaml — CounterApp — WinApp XAML Designer</div></div>
+  <div class="body">
+    <div class="activity"><div class="ic active">🗎</div><div class="ic">🔍</div><div class="ic">⑃</div><div class="ic">▷</div><div class="ic">⬢</div></div>
+    <!-- toolbox -->
+    <div class="side" style="width:180px">
+      <h3>Toolbox</h3>
+      <div class="row">🔘 Button</div>
+      <div class="row">🔤 TextBlock</div>
+      <div class="row">▭ TextBox</div>
+      <div class="row sel">⇄ ToggleSwitch</div>
+      <div class="row">☑ CheckBox</div>
+      <div class="row">▤ ListView</div>
+      <div class="row">▦ Grid</div>
+      <div class="row">↕ StackPanel</div>
+      <div class="row">🖼 Image</div>
+      <div class="row">◉ Slider</div>
+    </div>
+    <!-- design canvas -->
+    <div class="editor">
+      <div class="tabs"><div class="tab">📄 XAML</div><div class="tab active">▦ Design</div><div class="tab">⇋ Split</div>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center;padding-right:12px;color:#bbb;font-size:12px"><span>↶</span><span>↷</span><span>🔍 100%</span><span>⊞ Grid</span></div></div>
+      <div class="canvas">
+        <div style="width:320px;background:#fff;border:1px solid #ddd;padding:24px;box-shadow:0 6px 24px rgba(0,0,0,.15);position:relative;font-family:'Segoe UI'">
+          <div style="font-size:20px;font-weight:600;color:#111;margin-bottom:14px">Counter</div>
+          <div style="font-size:44px;color:#111;margin-bottom:14px">7</div>
+          <div style="background:#0067c0;color:#fff;padding:8px 16px;border-radius:4px;display:inline-block;font-size:13px">Increment</div>
+          <!-- selected element -->
+          <div style="margin-top:20px;position:relative;display:inline-block;outline:2px solid #0078d4;outline-offset:3px">
+            <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:#111">
+              <div style="width:40px;height:20px;background:#0067c0;border-radius:10px;position:relative"><div style="width:16px;height:16px;background:#fff;border-radius:50%;position:absolute;right:2px;top:2px"></div></div>
+              Dark mode</div>
+            <span class="handle" style="left:-8px;top:-8px"></span><span class="handle" style="right:-8px;top:-8px"></span>
+            <span class="handle" style="left:-8px;bottom:-8px"></span><span class="handle" style="right:-8px;bottom:-8px"></span>
+            <div style="position:absolute;top:-26px;left:0;background:#0078d4;color:#fff;font-size:10px;padding:1px 6px;border-radius:3px">ToggleSwitch</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- properties -->
+    <div class="panel" style="width:250px">
+      <h3 style="font-size:11px;text-transform:uppercase;color:#bbb;padding:10px 14px 6px">Properties — ToggleSwitch</h3>
+      <div style="padding:0 12px 8px"><input style="width:100%;background:#3c3c3c;border:1px solid #555;color:#ccc;padding:4px;font-size:12px" value="🔍 Search properties"></div>
+      <div class="prop-grid">
+        <div class="pr"><span class="pn">Name</span><span class="pv">DarkToggle</span></div>
+        <div class="pr"><span class="pn">Header</span><span class="pv">"Dark mode"</span></div>
+        <div class="pr"><span class="pn">IsOn</span><span class="pv">True ▾</span></div>
+        <div class="pr"><span class="pn">Width</span><span class="pv">Auto</span></div>
+        <div class="pr"><span class="pn">Margin</span><span class="pv">0,20,0,0</span></div>
+        <div class="pr"><span class="pn">HorizontalAlignment</span><span class="pv">Left ▾</span></div>
+        <div class="pr"><span class="pn">Foreground</span><span class="pv">🎨 #FFFFFF</span></div>
+        <div class="pr"><span class="pn">Toggled</span><span class="pv" style="color:#dcdcaa">OnDarkToggled ↗</span></div>
+      </div>
+      <h3 style="font-size:11px;text-transform:uppercase;color:#bbb;padding:12px 14px 6px">Binding</h3>
+      <div class="prop-grid"><div class="pr"><span class="pn">IsOn</span><span class="pv">{x:Bind VM.IsDark}</span></div></div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="seg">⑃ main</span><span class="seg">WinApp Designer · edits write to XAML</span><span class="seg" style="margin-left:auto">WinUI 3</span></div>
+</div></body></html>

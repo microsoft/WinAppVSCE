@@ -1,0 +1,52 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head>
+<body><div class="win">
+  <div class="titlebar"><div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+    <div class="t">CounterApp — Visual Studio Code</div></div>
+  <div class="body">
+    <div class="activity"><div class="ic">🗎</div><div class="ic">🔍</div><div class="ic">⑃</div><div class="ic">▷</div><div class="ic active">⬢</div></div>
+    <!-- WinApp view container -->
+    <div class="side" style="width:300px">
+      <h3>WinApp</h3>
+      <div class="row"><span class="tw">▾</span>📦 PROJECT</div>
+      <div class="row" style="padding-left:26px">＋ New Project…</div>
+      <div class="row" style="padding-left:26px">🔧 Initialize (Windows App SDK)</div>
+      <div class="row" style="padding-left:26px">🔨 Build <span style="color:#808080;margin-left:auto;margin-right:10px">x64 · Debug</span></div>
+      <div class="row sel" style="padding-left:26px">▷ Run (F5) <span style="color:#808080;margin-left:auto;margin-right:10px">with identity</span></div>
+      <div class="row" style="padding-left:26px">🔥 Run with Hot Reload</div>
+      <div class="row"><span class="tw">▾</span>📦 PACKAGE</div>
+      <div class="row" style="padding-left:26px">📦 Create MSIX</div>
+      <div class="row" style="padding-left:26px">🔑 Generate Certificate</div>
+      <div class="row" style="padding-left:26px">✍ Sign Package</div>
+      <div class="row"><span class="tw">▾</span>📖 API SEARCH</div>
+      <div class="row" style="padding-left:26px;color:#858585">Search WinUI / WinRT APIs…</div>
+    </div>
+    <div class="editor">
+      <div class="tabs"><div class="tab active">📖 WinApp: API Search</div></div>
+      <!-- API search palette -->
+      <div style="flex:1;background:#1e1e1e;padding:24px;display:flex;flex-direction:column;align-items:center">
+        <div style="width:640px;background:#252526;border:1px solid #454545;box-shadow:0 8px 30px rgba(0,0,0,.5)">
+          <div style="padding:10px 12px;border-bottom:1px solid #3c3c3c"><input style="width:100%;background:#3c3c3c;border:1px solid #007acc;color:#fff;padding:7px 10px;font-size:14px" value="AppNotification toast"></div>
+          <div class="popup" style="position:static;width:100%;border:none;box-shadow:none">
+            <div class="it sel"><span class="badge b-pr">M</span>AppNotificationManager.Show(AppNotification)<span style="margin-left:auto;color:#808080">WinRT</span></div>
+            <div class="it"><span class="badge b-el">C</span>AppNotificationBuilder</div>
+            <div class="it"><span class="badge b-el">C</span>AppNotification</div>
+            <div class="it"><span class="badge b-en">E</span>AppNotificationManager.NotificationInvoked</div>
+            <div class="it"><span class="badge b-snip">◇</span>Snippet: send a toast notification (C#)</div>
+          </div>
+          <div style="padding:12px;border-top:1px solid #3c3c3c;font-size:12px;color:#cccccc">
+            <b class="t">AppNotificationManager.Show</b> <span style="color:#808080">(Microsoft.Windows.AppNotifications)</span><br>
+            <span style="color:#9d9d9d">namespace requires package identity · Windows App SDK 1.6+</span><br><br>
+            Displays a toast notification. <span style="color:#569cd6;cursor:pointer">Open docs ↗</span> · <span style="color:#569cd6;cursor:pointer">Insert snippet</span> · <span style="color:#569cd6;cursor:pointer">Ask Copilot</span>
+          </div>
+        </div>
+        <div style="width:640px;margin-top:14px;color:#858585;font-size:12px">Powered by <b>winapp api search</b> — the same index the CLI uses (B).</div>
+      </div>
+      <div style="height:110px;background:#181818;border-top:1px solid #3c3c3c;padding:8px 14px;font-size:12px;font-family:monospace;color:#cccccc">
+        <div style="color:#bbb;font-family:'Segoe UI';font-size:11px">TERMINAL — WinApp CLI</div>
+        <div style="margin-top:6px"><span style="color:#4ec9b0">›</span> winapp build --configuration Debug --arch x64</div>
+        <div style="color:#4ec9b0">✓ Build succeeded in 3.8s → bin\x64\Debug\net8.0\win-x64</div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="seg">⑃ main</span><span class="seg">WinApp CLI 0.4.0</span><span class="seg">Build ✓</span><span class="seg" style="margin-left:auto">x64 · Debug ▾</span></div>
+</div></body></html>

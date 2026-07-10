@@ -1,0 +1,51 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head>
+<body><div class="win">
+  <div class="titlebar"><div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+    <div class="t">CounterApp — WinApp Live Visual Tree [Running]</div></div>
+  <div class="body">
+    <div class="activity"><div class="ic">🗎</div><div class="ic">🔍</div><div class="ic">⑃</div><div class="ic active">▷</div><div class="ic">⬢</div></div>
+    <!-- live visual tree -->
+    <div class="side" style="width:300px">
+      <h3>WinApp: Live Visual Tree</h3>
+      <div style="padding:2px 12px 8px;color:#858585;font-size:11px">🎯 Select element in app · 🔍 Search</div>
+      <div class="row"><span class="tw">▾</span>Window</div>
+      <div class="row" style="padding-left:26px"><span class="tw">▾</span>Grid <span style="color:#808080;margin-left:6px">Padding=24</span></div>
+      <div class="row" style="padding-left:40px"><span class="tw">▾</span>StackPanel <span style="color:#808080;margin-left:6px">Spacing=12</span></div>
+      <div class="row" style="padding-left:54px">TextBlock <span style="color:#808080;margin-left:6px">"Counter"</span></div>
+      <div class="row" style="padding-left:54px">TextBlock <span style="color:#808080;margin-left:6px">"7"</span></div>
+      <div class="row sel" style="padding-left:54px">Button <span style="color:#dcdcaa;margin-left:6px">"Increment"</span></div>
+      <div class="row" style="padding-left:68px">◱ ContentPresenter</div>
+      <div class="row" style="padding-left:54px">ToggleSwitch <span style="color:#808080;margin-left:6px">Dark mode</span></div>
+    </div>
+    <!-- live preview of app -->
+    <div class="editor">
+      <div class="tabs"><div class="tab active">◱ Live Preview</div></div>
+      <div style="flex:1;background:#3a3a3a;display:flex;align-items:center;justify-content:center;position:relative">
+        <div style="width:300px;background:#202020;border-radius:8px;padding:24px;color:#fff;font-family:'Segoe UI'">
+          <div style="font-size:20px;font-weight:600;margin-bottom:14px">Counter</div>
+          <div style="font-size:44px;margin-bottom:14px">7</div>
+          <div style="background:#60cdff;color:#000;padding:8px 16px;border-radius:4px;display:inline-block;font-size:13px;outline:2px solid #ff8c00;outline-offset:3px">Increment</div>
+          <div style="margin-top:20px;display:flex;align-items:center;gap:10px;font-size:13px">
+            <div style="width:40px;height:20px;background:#60cdff;border-radius:10px;position:relative"><div style="width:16px;height:16px;background:#000;border-radius:50%;position:absolute;right:2px;top:2px"></div></div>Dark mode</div>
+        </div>
+        <div style="position:absolute;top:12px;left:12px;background:#252526;border:1px solid #454545;border-radius:4px;font-size:11px;color:#bbb;padding:4px 8px">🎯 Enable selection · ⧉ Track focused element</div>
+      </div>
+    </div>
+    <!-- live property explorer -->
+    <div class="panel" style="width:280px">
+      <h3 style="font-size:11px;text-transform:uppercase;color:#bbb;padding:10px 14px 6px">Live Property Explorer — Button</h3>
+      <div style="padding:0 12px 8px"><input style="width:100%;background:#3c3c3c;border:1px solid #555;color:#ccc;padding:4px;font-size:12px" value="🔍 IsEnabled"></div>
+      <div class="prop-grid">
+        <div class="pr"><span class="pn">Content</span><span class="pv">"Increment"</span></div>
+        <div class="pr"><span class="pn">ActualWidth</span><span class="pv">112</span></div>
+        <div class="pr"><span class="pn">ActualHeight</span><span class="pv">36</span></div>
+        <div class="pr"><span class="pn">Background</span><span class="pv">🎨 #60CDFF</span></div>
+        <div class="pr"><span class="pn">IsEnabled</span><span class="pv">True ▾</span></div>
+        <div class="pr"><span class="pn">Margin</span><span class="pv">0,0,0,0 ✎</span></div>
+        <div class="pr"><span class="pn">Visibility</span><span class="pv">Visible ▾</span></div>
+      </div>
+      <div style="padding:10px 14px;color:#858585;font-size:11px">Data source: attached debugger (B4) · edits pushed live to app</div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="seg">⑃ main</span><span class="seg">Live Visual Tree · 214 elements</span><span class="seg" style="margin-left:auto">WinUI 3</span></div>
+</div></body></html>

@@ -1,0 +1,53 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head>
+<body><div class="win">
+  <div class="titlebar"><div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+    <div class="t">MainWindow.xaml — CounterApp — Visual Studio Code</div></div>
+  <div class="body">
+    <div class="activity"><div class="ic active">🗎</div><div class="ic">🔍</div><div class="ic">⑃</div><div class="ic">▷</div><div class="ic">⬢</div></div>
+    <div class="side">
+      <h3>Explorer</h3>
+      <div class="row"><span class="tw">▾</span>📁 CounterApp</div>
+      <div class="row" style="padding-left:28px"><span class="tw"></span>📄 App.xaml</div>
+      <div class="row sel" style="padding-left:28px"><span class="tw"></span>📄 MainWindow.xaml</div>
+      <div class="row" style="padding-left:28px"><span class="tw"></span>📄 MainWindow.xaml.cs</div>
+      <div class="row" style="padding-left:28px"><span class="tw"></span>📄 CounterApp.csproj</div>
+    </div>
+    <div class="editor">
+      <div class="tabs"><div class="tab active">📄 MainWindow.xaml</div></div>
+      <div class="code">
+        <div class="ln"><span class="gutter">6</span><span class="txt">    <span class="k">&lt;StackPanel</span> <span class="a">Orientation</span>=<span class="s">"Vertical"</span> <span class="a">Spacing</span>=<span class="s">"12"</span><span class="k">&gt;</span></span></div>
+        <div class="ln"><span class="gutter">7</span><span class="txt">        <span class="k">&lt;TextBlock</span> <span class="a">Text</span>=<span class="s">"{x:Bind ViewModel.Count}"</span><span class="k">/&gt;</span></span></div>
+        <div class="ln"><span class="gutter">8</span><span class="txt">        <span class="k">&lt;Butt</span></span></div>
+        <div class="ln"><span class="gutter">9</span><span class="txt">        <span class="k">&lt;ToggleSwitch</span> <span class="a">Header</span>=<span class="s">"Dark"</span> <span class="a squig">IsCheckd</span>=<span class="s">"True"</span><span class="k">/&gt;</span></span></div>
+        <div class="ln"><span class="gutter">10</span><span class="txt">    <span class="k">&lt;/StackPanel&gt;</span></span></div>
+
+        <!-- completion popup at line 8 -->
+        <div class="popup" style="left:150px;top:56px">
+          <div class="it sel"><span class="badge b-el">E</span>Button<span style="margin-left:auto;color:#808080">class</span></div>
+          <div class="it"><span class="badge b-el">E</span>ButtonBase</div>
+          <div class="it"><span class="badge b-snip">◇</span>Button (click handler)<span style="margin-left:auto;color:#808080">snippet</span></div>
+          <div class="it"><span class="badge b-el">E</span>RepeatButton</div>
+          <div class="it"><span class="badge b-el">E</span>ToggleButton</div>
+          <div class="it"><span class="badge b-el">E</span>HyperlinkButton</div>
+        </div>
+        <!-- hover doc for the completion -->
+        <div class="doc" style="left:474px;top:56px">
+          <b class="t">Button</b> <span style="color:#808080">: ButtonBase</span><br>
+          <span style="color:#9d9d9d">Microsoft.UI.Xaml.Controls</span><br><br>
+          Represents a templated button control that responds to a <i>Click</i> event.
+          <div style="margin-top:6px"><span class="tag">Content</span><span class="tag">Click</span><span class="tag">Command</span></div>
+        </div>
+        <!-- error squiggle tooltip for IsCheckd -->
+        <div class="doc" style="left:520px;top:132px;width:320px;border-color:#f14c4c">
+          <span style="color:#f14c4c">⛔ XAML1002</span> &nbsp; The property <b>'IsCheckd'</b> was not found on type
+          <b class="t">ToggleSwitch</b>. Did you mean <b>'IsChecked'</b>? <span style="color:#569cd6;cursor:pointer">Quick Fix…</span>
+        </div>
+      </div>
+      <div style="height:150px;background:#1e1e1e;border-top:1px solid #3c3c3c;padding:8px 14px;font-size:12px">
+        <div style="color:#bbb;font-size:11px;letter-spacing:.5px">PROBLEMS <span class="chip" style="background:#f14c4c">1</span></div>
+        <div style="margin-top:8px;color:#cccccc">⛔ <b>MainWindow.xaml</b> [Ln 9]  Property 'IsCheckd' not found on 'ToggleSwitch'. <span style="color:#808080">winapp-xaml</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="seg">⑃ main</span><span class="seg">WinApp XAML: ready</span><span class="seg">Ln 8, Col 15</span><span class="seg">XAML</span><span class="seg" style="margin-left:auto">WinUI 3</span></div>
+</div></body></html>
