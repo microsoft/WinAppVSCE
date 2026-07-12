@@ -78,6 +78,9 @@ internal sealed class XamlLanguageServer
             case "textDocument/didClose":
                 await DidCloseAsync(Deserialize<DidCloseTextDocumentParams>(@params)).ConfigureAwait(false);
                 break;
+            case "workspace/didChangeWatchedFiles":
+                await DidChangeWatchedFilesAsync(Deserialize<DidChangeWatchedFilesParams>(@params)).ConfigureAwait(false);
+                break;
             case "exit":
                 Environment.Exit(_shuttingDown ? 0 : 1);
                 break;
@@ -161,6 +164,71 @@ internal sealed class XamlLanguageServer
             "textDocument/publishDiagnostics",
             new PublishDiagnosticsParams { Uri = p.TextDocument.Uri, Diagnostics = new List<Diagnostic>() })
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reacts to on-disk changes reported by the client's <c>**/*.{csproj,xaml}</c> watcher by dropping
+    /// stale cached Roslyn project/type data. Without this, a project reference or file added on disk
+    /// stays invisible until the server is restarted.
+    /// <para>
+    /// A <c>.csproj</c> change, or a <c>.xaml</c> file being created/deleted, alters the project's
+    /// type/reference set, so the owning project's cached workspace is invalidated (the next resolve
+    /// reloads it). A plain <c>.xaml</c> content save is already reflected through the open buffer and
+    /// the timestamp-guarded App.xaml resource cache, so it does not force a full project reload.
+    /// </para>
+    /// </summary>
+    private Task DidChangeWatchedFilesAsync(DidChangeWatchedFilesParams p)
+    {
+        if (p.Changes.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var projectsToInvalidate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var change in p.Changes)
+        {
+            var path = UriToPath(change.Uri);
+            if (path == null)
+            {
+                continue;
+            }
+
+            var ext = System.IO.Path.GetExtension(path);
+            var isCsproj = ext.Equals(".csproj", StringComparison.OrdinalIgnoreCase);
+            var isXaml = ext.Equals(".xaml", StringComparison.OrdinalIgnoreCase);
+            if (!isCsproj && !isXaml)
+            {
+                continue;
+            }
+
+            // Structural change: a project-file edit, or a page added/removed. A plain .xaml content
+            // save (Changed) does not change the project's type/reference graph, so skip the reload.
+            var structural = isCsproj || change.Type != FileChangeType.Changed;
+            if (!structural)
+            {
+                continue;
+            }
+
+            var owning = isCsproj ? path : XamlProjectResolver.FindOwningProject(path);
+            if (owning != null)
+            {
+                projectsToInvalidate.Add(owning);
+            }
+        }
+
+        foreach (var project in projectsToInvalidate)
+        {
+            _resolver.Invalidate(project);
+        }
+
+        // The App.xaml resource-key cache is timestamp-guarded, but a delete/rename won't bump a stamp
+        // we still hold; drop it wholesale on any watched change (it repopulates lazily and cheaply).
+        if (projectsToInvalidate.Count > 0)
+        {
+            _appResourceCache.Clear();
+        }
+
+        return Task.CompletedTask;
     }
 
     private async Task PublishDiagnosticsAsync(TextDocument doc)

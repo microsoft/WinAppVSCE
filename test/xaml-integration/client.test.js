@@ -1,0 +1,109 @@
+"use strict";
+
+// Integration coverage for the extension's LSP *client surface* (src/xaml/xamlLanguageService.ts):
+// the winui-xaml.showInfo / winui-xaml.restartServer commands, restart lifecycle serialization, and
+// graceful degradation to syntax-only when the server can't launch. Complements features.test.js
+// (which exercises the language features themselves) by driving the client's own commands/config.
+//
+// Note on scope: the harness always resolves a real server DLL (via WINUI_XAML_SERVER_DLL and the
+// repo-relative Debug build), so a truly "missing DLL" can't be reproduced here. The bad-dotnetPath
+// case below drives the SAME graceful-degradation code path (doStart's catch → notify → return),
+// proving activation stays syntax-only and never throws.
+
+const assert = require("node:assert");
+const vscode = require("vscode");
+const h = require("./helper");
+
+const EXT = "winui-xaml";
+
+describe("WinUI XAML — client commands & lifecycle", function () {
+  this.timeout(180000);
+
+  before(async () => {
+    await h.warmUp();
+  });
+
+  after(async () => {
+    // Make sure we hand a healthy, default-configured server to any later test files.
+    await vscode.workspace
+      .getConfiguration(EXT)
+      .update("server.dotnetPath", undefined, vscode.ConfigurationTarget.Global);
+    await vscode.commands.executeCommand("winui-xaml.restartServer");
+    await h.warmUp();
+    await h.revertProbe();
+  });
+
+  it("registers the winui-xaml commands", async () => {
+    const commands = await vscode.commands.getCommands(true);
+    assert.ok(commands.includes("winui-xaml.showInfo"), "expected winui-xaml.showInfo to be registered");
+    assert.ok(
+      commands.includes("winui-xaml.restartServer"),
+      "expected winui-xaml.restartServer to be registered"
+    );
+  });
+
+  it("executes winui-xaml.showInfo without throwing", async () => {
+    // showInfo pops a non-blocking information message; executing it must resolve, not reject.
+    await assert.doesNotReject(() => vscode.commands.executeCommand("winui-xaml.showInfo"));
+  });
+
+  it("restarts the server and keeps it healthy", async () => {
+    await assert.doesNotReject(
+      () => vscode.commands.executeCommand("winui-xaml.restartServer"),
+      "restartServer should never reject"
+    );
+    // After a clean restart the server answers completions again (proves start/stop serialization).
+    await h.warmUp();
+    const items = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+    assert.ok(items.includes("Button"), `expected Button after restart; got ${items.slice(0, 20).join(", ")}`);
+  });
+
+  it("tolerates rapid back-to-back restarts (no torn-down pending start)", async () => {
+    // Fire several restarts without awaiting between them; the lifecycle mutex must keep these from
+    // stopping a still-pending start. All must settle without rejecting.
+    const restarts = [
+      vscode.commands.executeCommand("winui-xaml.restartServer"),
+      vscode.commands.executeCommand("winui-xaml.restartServer"),
+      vscode.commands.executeCommand("winui-xaml.restartServer"),
+    ];
+    await assert.doesNotReject(() => Promise.all(restarts));
+    await h.warmUp();
+    const items = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+    assert.ok(items.includes("Button"), "server should recover after rapid restarts");
+  });
+
+  it("degrades to syntax-only when dotnet can't launch (no throw)", async function () {
+    // The trust gate ignores workspace-provided dotnetPath in untrusted workspaces, so the bad value
+    // would have no effect there — only assert the degraded behavior when the workspace is trusted.
+    const config = () => vscode.workspace.getConfiguration(EXT);
+    await config().update(
+      "server.dotnetPath",
+      "winui-xaml-nonexistent-dotnet",
+      vscode.ConfigurationTarget.Global
+    );
+    try {
+      // Restart must swallow the launch failure and resolve — activation stays syntax-only.
+      await assert.doesNotReject(
+        () => vscode.commands.executeCommand("winui-xaml.restartServer"),
+        "restartServer must not reject even when the server can't launch"
+      );
+
+      if (vscode.workspace.isTrusted) {
+        // With no running server, the element-name completion no longer produces "Button".
+        const items = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+        assert.ok(
+          !items.includes("Button"),
+          `expected syntax-only degradation (no Button) but got: ${items.slice(0, 20).join(", ")}`
+        );
+      }
+    } finally {
+      // Recover: restore the default dotnet and restart so the server comes back for later tests.
+      await config().update("server.dotnetPath", undefined, vscode.ConfigurationTarget.Global);
+      await vscode.commands.executeCommand("winui-xaml.restartServer");
+      await h.warmUp();
+    }
+
+    const recovered = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+    assert.ok(recovered.includes("Button"), "server should recover after restoring dotnetPath");
+  });
+});

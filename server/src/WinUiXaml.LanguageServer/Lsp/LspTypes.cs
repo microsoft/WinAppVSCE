@@ -162,6 +162,26 @@ internal sealed class DidCloseTextDocumentParams
     [JsonPropertyName("textDocument")] public TextDocumentIdentifier TextDocument { get; set; } = new();
 }
 
+// --- Watched-file sync (workspace/didChangeWatchedFiles) --------------------
+
+internal static class FileChangeType
+{
+    public const int Created = 1;
+    public const int Changed = 2;
+    public const int Deleted = 3;
+}
+
+internal sealed class FileEvent
+{
+    [JsonPropertyName("uri")] public string Uri { get; set; } = string.Empty;
+    [JsonPropertyName("type")] public int Type { get; set; }
+}
+
+internal sealed class DidChangeWatchedFilesParams
+{
+    [JsonPropertyName("changes")] public List<FileEvent> Changes { get; set; } = new();
+}
+
 internal sealed class TextDocumentPositionParams
 {
     [JsonPropertyName("textDocument")] public TextDocumentIdentifier TextDocument { get; set; } = new();

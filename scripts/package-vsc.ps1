@@ -302,6 +302,23 @@ try
         Write-Warning "VSIX was created but could not be located in $OutputPath"
     }
 
+    # Assert the WinUI XAML language server actually shipped in the VSIX. Catches packaging drift
+    # (e.g. a prepublish/ignore change that silently drops dist/server) before it reaches users.
+    if ($CreatedVsix) {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($CreatedVsix.FullName)
+        try {
+            $serverEntry = $zip.Entries | Where-Object { $_.FullName -ieq 'extension/dist/server/WinUiXaml.LanguageServer.dll' }
+        } finally {
+            $zip.Dispose()
+        }
+        if (-not $serverEntry) {
+            Write-Error "VSIX is missing extension/dist/server/WinUiXaml.LanguageServer.dll — the language server was not bundled."
+            exit 1
+        }
+        Write-Host "[VALIDATE] VSIX contains the WinUI XAML language server." -ForegroundColor Green
+    }
+
     Write-Host "[DONE] VS Code extension packaging complete!" -ForegroundColor Green
 }
 finally

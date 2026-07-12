@@ -139,8 +139,9 @@ extends:
               script: |
                 # Build + publish the .NET language server into dist/server so it is bundled in the VSIX.
                 # package-vsc.ps1 runs below with -SkipServerBuild to reuse this (signed) output.
-                # NOTE (maintainers): this restores NuGet packages from the default feed. If the pool
-                # blocks public NuGet egress, point restore at the approved internal feed (nuget.config).
+                # NuGet restore uses the feed pinned in server/nuget.config (public nuget.org by
+                # default). If this pool blocks public NuGet egress, switch server/nuget.config to the
+                # approved internal mirror first — see docs/RELEASE.md ("Package feed").
                 dotnet publish `
                   "$(System.DefaultWorkingDirectory)/server/src/WinUiXaml.LanguageServer/WinUiXaml.LanguageServer.csproj" `
                   -c Release `
@@ -167,9 +168,9 @@ extends:
                 Pattern: 'WinUiXaml.LanguageServer.dll;WinUiXaml.Workspace.dll;WinUiXaml.Xaml.dll'
                 UseMinimatch: false
                 signConfigType: inlineSignParams
-                # NOTE (maintainers): confirm this Authenticode KeyCode matches the winapp signing identity.
-                # The VSIX/publisher tasks below use CP-401405 (OPC + VSCodePublisher operations); loose .NET
-                # DLLs use Authenticode SigntoolSign. CP-230012 is the standard Microsoft Authenticode keycode.
+                # Authenticode KeyCode CP-230012 is an accepted, documented release decision — see the
+                # "DLL code signing (ESRP)" section of docs/RELEASE.md. The VSIX/publisher tasks below use
+                # CP-401405 (OPC + VSCodePublisher operations); loose .NET DLLs use Authenticode SigntoolSign.
                 inlineOperation: |
                   [
                       {
