@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>WinUiXaml.Workspace</AssemblyName>
+    <RootNamespace>WinUiXaml.Workspace</RootNamespace>
+    <!-- The Microsoft.Build.* references below are compile-only (ExcludeAssets=runtime); the real,
+         SDK-patched assemblies are loaded by Build.Locator at runtime. The NU1903 advisories against
+         the compile-time versions therefore do not apply to anything we ship. -->
+    <NoWarn>$(NoWarn);NU1903</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The tolerant XAML parser (#2): reads x:Class and other directives out of .xaml files. -->
+    <ProjectReference Include="..\WinUiXaml.Xaml\WinUiXaml.Xaml.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Build.Locator finds the installed .NET SDK MSBuild so the workspace can run a
+         design-time build. It must be registered before any Microsoft.Build type loads. -->
+    <PackageReference Include="Microsoft.Build.Locator" Version="1.11.2" />
+    <!-- Roslyn workspace + C# compilation. These must share the same version. CSharp.Workspaces
+         registers the C# language service so MSBuildWorkspace can load .csproj files (without it:
+         "the language 'C#' is not supported"). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="4.14.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.14.0" />
+    <!-- Compile against MSBuild's API but never ship its assemblies: Build.Locator loads the
+         real ones from the SDK at runtime. ExcludeAssets=runtime is required (MSBL001). -->
+    <PackageReference Include="Microsoft.Build" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Framework" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Tasks.Core" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.StringTools" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,439 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using WinUiXaml.LanguageServer;
+using WinUiXaml.LanguageServer.Lsp;
+using Xunit;
+
+namespace WinUiXaml.LanguageServer.Tests;
+
+/// <summary>
+/// Hermetic coverage for <see cref="XamlRename"/> (textDocument/prepareRename + textDocument/rename). A
+/// <c>|</c> marks the caret in each buffer. Asserts the renameable-symbol gate, the exact edit set (every
+/// occurrence of an x:Name or x:Key), new-name validation, and range precision — all without a running
+/// server. Rename reuses the same occurrence engine as Find All References / Document Highlights.
+/// </summary>
+public class XamlRenameTests
+{
+    private const string Uri = "file:///C:/proj/Page.xaml";
+
+    private static (TextDocument Doc, int Offset) Caret(string textWithCaret)
+    {
+        var offset = textWithCaret.IndexOf('|');
+        Assert.True(offset >= 0, "test buffer must contain a '|' caret marker");
+        return (new TextDocument(Uri, textWithCaret.Remove(offset, 1)), offset);
+    }
+
+    private static string Covered(TextDocument doc, Lsp.Range range) =>
+        doc.Text.Substring(doc.OffsetAt(range.Start), doc.OffsetAt(range.End) - doc.OffsetAt(range.Start));
+
+    private static List<TextEdit> RenameEdits(string textWithCaret, string newName)
+    {
+        var (doc, offset) = Caret(textWithCaret);
+        var edit = XamlRename.Rename(doc, offset, newName);
+        Assert.NotNull(edit);
+        Assert.True(edit!.Changes.ContainsKey(Uri), "edit must target the open document");
+        return edit.Changes[Uri];
+    }
+
+    // ---- prepareRename gating ------------------------------------------------
+
+    [Fact]
+    public void PrepareRename_OnNameDeclaration_ReturnsTokenRangeAndPlaceholder()
+    {
+        var (doc, offset) = Caret("<Grid x:Name=\"Ro|ot\" />");
+        var result = XamlRename.PrepareRename(doc, offset);
+        Assert.NotNull(result);
+        Assert.Equal("Root", result!.Placeholder);
+        Assert.Equal("Root", Covered(doc, result.Range));
+    }
+
+    [Fact]
+    public void PrepareRename_OnElementNameUsage_ReturnsUsageTokenRange()
+    {
+        var buffer =
+            "<Grid x:Name=\"Root\">\n" +
+            "  <TextBox Text=\"{Binding ElementName=Ro|ot}\" />\n" +
+            "</Grid>";
+        var (doc, offset) = Caret(buffer);
+        var result = XamlRename.PrepareRename(doc, offset);
+        Assert.NotNull(result);
+        Assert.Equal("Root", result!.Placeholder);
+        Assert.Equal("Root", Covered(doc, result.Range));
+        // The editable range is the usage on line 1, not the declaration on line 0.
+        Assert.Equal(1, result.Range.Start.Line);
+    }
+
+    [Fact]
+    public void PrepareRename_OnResourceKeyDeclaration_ReturnsPlaceholder()
+    {
+        var buffer =
+            "<Page><Page.Resources>\n" +
+            "  <SolidColorBrush x:Key=\"Acc|ent\" Color=\"Red\" />\n" +
+            "</Page.Resources></Page>";
+        var (doc, offset) = Caret(buffer);
+        var result = XamlRename.PrepareRename(doc, offset);
+        Assert.NotNull(result);
+        Assert.Equal("Accent", result!.Placeholder);
+        Assert.Equal("Accent", Covered(doc, result.Range));
+    }
+
+    [Fact]
+    public void PrepareRename_OnElementName_ReturnsNull()
+    {
+        var (doc, offset) = Caret("<Gr|id x:Name=\"Root\" />");
+        Assert.Null(XamlRename.PrepareRename(doc, offset));
+    }
+
+    [Fact]
+    public void PrepareRename_OnPlainAttributeValue_ReturnsNull()
+    {
+        var (doc, offset) = Caret("<Grid Width=\"1|00\" />");
+        Assert.Null(XamlRename.PrepareRename(doc, offset));
+    }
+
+    [Fact]
+    public void PrepareRename_InsideUnterminatedExtension_ReturnsNull()
+    {
+        var (doc, offset) = Caret("<Grid Background=\"{StaticResource Acc|ent\" />");
+        Assert.Null(XamlRename.PrepareRename(doc, offset));
+    }
+
+    // ---- rename edit sets ----------------------------------------------------
+
+    [Fact]
+    public void Rename_Name_RewritesDeclarationAndAllUsages()
+    {
+        var buffer =
+            "<Grid x:Name=\"Ro|ot\">\n" +
+            "  <TextBox Text=\"{Binding ElementName=Root}\" />\n" +
+            "  <Storyboard><DoubleAnimation Storyboard.TargetName=\"Root\" /></Storyboard>\n" +
+            "</Grid>";
+        var edits = RenameEdits(buffer, "Panel");
+        Assert.Equal(3, edits.Count);
+        Assert.All(edits, e => Assert.Equal("Panel", e.NewText));
+    }
+
+    [Fact]
+    public void Rename_Name_FromUsageCaret_RewritesSameSet()
+    {
+        var buffer =
+            "<Grid x:Name=\"Root\">\n" +
+            "  <TextBox Text=\"{Binding ElementName=Ro|ot}\" />\n" +
+            "</Grid>";
+        var edits = RenameEdits(buffer, "Panel");
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, e => Assert.Equal("Panel", e.NewText));
+    }
+
+    [Fact]
+    public void Rename_ResourceKey_RewritesDeclarationAndStaticResourceUsages()
+    {
+        var buffer =
+            "<Page><Page.Resources>\n" +
+            "  <SolidColorBrush x:Key=\"Acc|ent\" Color=\"Red\" />\n" +
+            "</Page.Resources>\n" +
+            "  <Grid Background=\"{StaticResource Accent}\" />\n" +
+            "  <Border Background=\"{ThemeResource Accent}\" />\n" +
+            "</Page>";
+        var edits = RenameEdits(buffer, "Brand");
+        Assert.Equal(3, edits.Count);
+        Assert.All(edits, e => Assert.Equal("Brand", e.NewText));
+    }
+
+    [Fact]
+    public void Rename_OnlyRewritesTheTargetedSymbol()
+    {
+        var buffer =
+            "<Grid x:Name=\"Ro|ot\">\n" +
+            "  <Grid x:Name=\"Other\" />\n" +
+            "  <TextBox Text=\"{Binding ElementName=Other}\" />\n" +
+            "</Grid>";
+        var edits = RenameEdits(buffer, "Panel");
+        Assert.Single(edits);
+        Assert.Equal("Panel", edits[0].NewText);
+    }
+
+    [Fact]
+    public void Rename_EditRangesCoverTheOldNameTokens()
+    {
+        var buffer =
+            "<Grid x:Name=\"Root\">\n" +
+            "  <TextBox Text=\"{Binding ElementName=Ro|ot}\" />\n" +
+            "</Grid>";
+        var (doc, offset) = Caret(buffer);
+        var edit = XamlRename.Rename(doc, offset, "Panel");
+        Assert.NotNull(edit);
+        Assert.All(edit!.Changes[Uri], e => Assert.Equal("Root", Covered(doc, e.Range)));
+    }
+
+    [Fact]
+    public void Rename_OnNonSymbol_ReturnsNull()
+    {
+        var (doc, offset) = Caret("<Gr|id x:Name=\"Root\" />");
+        Assert.Null(XamlRename.Rename(doc, offset, "Panel"));
+    }
+
+    // ---- round 80: RelativePanel alignment + VSM Setter.Target element references ----
+
+    [Fact]
+    public void Rename_Name_RewritesRelativePanelAlignmentReferences()
+    {
+        var buffer =
+            "<RelativePanel>\n" +
+            "  <TextBox x:Name=\"An|chor\" />\n" +
+            "  <Button RelativePanel.RightOf=\"Anchor\" RelativePanel.AlignTopWith=\"Anchor\" />\n" +
+            "</RelativePanel>";
+        var edits = RenameEdits(buffer, "Pivot");
+        Assert.Equal(3, edits.Count); // declaration + RightOf + AlignTopWith
+        Assert.All(edits, e => Assert.Equal("Pivot", e.NewText));
+    }
+
+    [Fact]
+    public void Rename_Name_FromRelativePanelUsageCaret_RewritesSameSet()
+    {
+        var buffer =
+            "<RelativePanel>\n" +
+            "  <TextBox x:Name=\"Anchor\" />\n" +
+            "  <Button RelativePanel.Below=\"An|chor\" />\n" +
+            "</RelativePanel>";
+        var edits = RenameEdits(buffer, "Pivot");
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, e => Assert.Equal("Pivot", e.NewText));
+    }
+
+    [Fact]
+    public void Rename_Name_RewritesSetterTargetElementSegmentOnly()
+    {
+        var buffer =
+            "<Page>\n" +
+            "  <Border x:Name=\"He|ro\" />\n" +
+            "  <Setter Target=\"Hero.Background\" Value=\"Red\" />\n" +
+            "</Page>";
+        var (doc, offset) = Caret(buffer);
+        var edit = XamlRename.Rename(doc, offset, "Banner");
+        Assert.NotNull(edit);
+        var edits = edit!.Changes[Uri];
+        Assert.Equal(2, edits.Count); // declaration + Setter.Target element segment
+        Assert.All(edits, e => Assert.Equal("Banner", e.NewText));
+        // The razor: each edit covers exactly "Hero", never the ".Background" property tail.
+        Assert.All(edits, e => Assert.Equal("Hero", Covered(doc, e.Range)));
+    }
+
+    [Fact]
+    public void PrepareRename_OnSetterTargetElementSegment_ReturnsName()
+    {
+        var buffer =
+            "<Page>\n" +
+            "  <Border x:Name=\"Hero\" />\n" +
+            "  <Setter Target=\"He|ro.Background\" Value=\"Red\" />\n" +
+            "</Page>";
+        var (doc, offset) = Caret(buffer);
+        var result = XamlRename.PrepareRename(doc, offset);
+        Assert.NotNull(result);
+        Assert.Equal("Hero", result!.Placeholder);
+        Assert.Equal("Hero", Covered(doc, result.Range));
+    }
+
+    [Fact]
+    public void PrepareRename_OnSetterTargetPropertySegment_ReturnsNull()
+    {
+        // The caret is on the ".Background" property tail — a member on Hero, not the element name.
+        var buffer =
+            "<Page>\n" +
+            "  <Border x:Name=\"Hero\" />\n" +
+            "  <Setter Target=\"Hero.Backgr|ound\" Value=\"Red\" />\n" +
+            "</Page>";
+        var (doc, offset) = Caret(buffer);
+        Assert.Null(XamlRename.PrepareRename(doc, offset));
+    }
+
+    // ---- new-name validation -------------------------------------------------
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("1Panel")]
+    [InlineData("My Panel")]
+    [InlineData("Panel!")]
+    [InlineData("local:Panel")]
+    [InlineData("Panel.Child")]
+    public void Rename_Name_RejectsInvalidIdentifier(string newName)
+    {
+        var (doc, offset) = Caret("<Grid x:Name=\"Ro|ot\" />");
+        Assert.Throws<RenameValidationException>(() => XamlRename.Rename(doc, offset, newName));
+    }
+
+    [Theory]
+    [InlineData("Panel")]
+    [InlineData("_hidden")]
+    [InlineData("Panel2")]
+    [InlineData("MyGrid_1")]
+    public void Rename_Name_AcceptsValidIdentifier(string newName)
+    {
+        var edits = RenameEdits("<Grid x:Name=\"Ro|ot\" />", newName);
+        Assert.Single(edits);
+        Assert.Equal(newName, edits[0].NewText);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("Bad<Key")]
+    [InlineData("Bad>Key")]
+    [InlineData("Bad&Key")]
+    [InlineData("Bad{Key")]
+    [InlineData("Bad}Key")]
+    [InlineData("Bad\"Key")]
+    public void Rename_Key_RejectsForbiddenCharacters(string newName)
+    {
+        var buffer =
+            "<Page><Page.Resources>\n" +
+            "  <SolidColorBrush x:Key=\"Acc|ent\" Color=\"Red\" />\n" +
+            "</Page.Resources></Page>";
+        var (doc, offset) = Caret(buffer);
+        Assert.Throws<RenameValidationException>(() => XamlRename.Rename(doc, offset, newName));
+    }
+
+    [Theory]
+    [InlineData("Brand")]
+    [InlineData("Brand.Accent")]
+    [InlineData("Accent-2")]
+    public void Rename_Key_AcceptsPermissiveNames(string newName)
+    {
+        var buffer =
+            "<Page><Page.Resources>\n" +
+            "  <SolidColorBrush x:Key=\"Acc|ent\" Color=\"Red\" />\n" +
+            "</Page.Resources>\n" +
+            "  <Grid Background=\"{StaticResource Accent}\" />\n" +
+            "</Page>";
+        var edits = RenameEdits(buffer, newName);
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, e => Assert.Equal(newName, e.NewText));
+    }
+
+    [Fact]
+    public void Rename_TrimsSurroundingWhitespaceFromNewName()
+    {
+        var edits = RenameEdits("<Grid x:Name=\"Ro|ot\" />", "  Panel  ");
+        Assert.Single(edits);
+        Assert.Equal("Panel", edits[0].NewText);
+    }
+
+    // ---- robustness ----------------------------------------------------------
+
+    [Fact]
+    public void Rename_IsDeterministicAcrossRepeatedCalls()
+    {
+        var buffer =
+            "<Grid x:Name=\"Ro|ot\">\n" +
+            "  <TextBox Text=\"{Binding ElementName=Root}\" />\n" +
+            "</Grid>";
+        var (doc, offset) = Caret(buffer);
+        var first = XamlRename.Rename(doc, offset, "Panel")!.Changes[Uri];
+        var second = XamlRename.Rename(doc, offset, "Panel")!.Changes[Uri];
+        Assert.Equal(first.Count, second.Count);
+        for (var i = 0; i < first.Count; i++)
+        {
+            Assert.Equal(first[i].NewText, second[i].NewText);
+            Assert.Equal(first[i].Range.Start.Line, second[i].Range.Start.Line);
+            Assert.Equal(first[i].Range.Start.Character, second[i].Range.Start.Character);
+            Assert.Equal(first[i].Range.End.Line, second[i].Range.End.Line);
+            Assert.Equal(first[i].Range.End.Character, second[i].Range.End.Character);
+        }
+    }
+
+    [Fact]
+    public void PrepareRename_OnEmptyDocument_ReturnsNull()
+    {
+        var doc = new TextDocument(Uri, string.Empty);
+        Assert.Null(XamlRename.PrepareRename(doc, 0));
+    }
+
+    // ---- whitespace-padded values (round-42 red-team) ------------------------
+    // A padded attribute value (e.g. x:Name="Root ") must resolve to the trimmed token only: the edit /
+    // highlight range never swallows surrounding whitespace, and a caret out in the padding is off-token.
+
+    [Fact]
+    public void Rename_Name_PaddedDeclaration_CoversTrimmedTokenOnly()
+    {
+        var buffer =
+            "<Grid x:Name=\"Ro|ot \">\n" +
+            "  <TextBox Text=\"{Binding ElementName=Root}\" />\n" +
+            "</Grid>";
+        var (doc, offset) = Caret(buffer);
+        var edit = XamlRename.Rename(doc, offset, "Panel");
+        Assert.NotNull(edit);
+        Assert.Equal(2, edit!.Changes[Uri].Count);
+        Assert.All(edit.Changes[Uri], e => Assert.Equal("Root", Covered(doc, e.Range)));
+    }
+
+    [Fact]
+    public void Rename_Name_LeadingAndTrailingWhitespace_CoversTrimmedTokenOnly()
+    {
+        var edits = RenameEdits("<Grid x:Name=\" Ro|ot \" />", "Panel");
+        var (doc, offset) = Caret("<Grid x:Name=\" Ro|ot \" />");
+        Assert.Single(edits);
+        Assert.Equal("Root", Covered(doc, edits[0].Range));
+    }
+
+    [Fact]
+    public void Rename_Name_PaddedStoryboardTargetName_CoversTrimmedTokenOnly()
+    {
+        var buffer =
+            "<Grid x:Name=\"Ro|ot\">\n" +
+            "  <Storyboard><DoubleAnimation Storyboard.TargetName=\"Root \" /></Storyboard>\n" +
+            "</Grid>";
+        var (doc, offset) = Caret(buffer);
+        var edit = XamlRename.Rename(doc, offset, "Panel");
+        Assert.NotNull(edit);
+        Assert.Equal(2, edit!.Changes[Uri].Count);
+        Assert.All(edit.Changes[Uri], e => Assert.Equal("Root", Covered(doc, e.Range)));
+    }
+
+    [Fact]
+    public void Rename_Key_PaddedDeclaration_CoversTrimmedTokenOnly()
+    {
+        var buffer =
+            "<Page><Page.Resources>\n" +
+            "  <SolidColorBrush x:Key=\" Acc|ent \" Color=\"Red\" />\n" +
+            "</Page.Resources>\n" +
+            "  <Grid Background=\"{StaticResource Accent}\" />\n" +
+            "</Page>";
+        var (doc, offset) = Caret(buffer);
+        var edit = XamlRename.Rename(doc, offset, "Brand");
+        Assert.NotNull(edit);
+        Assert.Equal(2, edit!.Changes[Uri].Count);
+        Assert.All(edit.Changes[Uri], e => Assert.Equal("Accent", Covered(doc, e.Range)));
+    }
+
+    [Fact]
+    public void PrepareRename_PaddedDeclaration_ReturnsTrimmedTokenRange()
+    {
+        var (doc, offset) = Caret("<Grid x:Name=\"Ro|ot \" />");
+        var result = XamlRename.PrepareRename(doc, offset);
+        Assert.NotNull(result);
+        Assert.Equal("Root", Covered(doc, result!.Range));
+    }
+
+    [Fact]
+    public void Rename_CaretAtTokenEndBoundary_RenamesTrimmedToken()
+    {
+        // Caret sits immediately after the last identifier char (before the trailing space): this is the
+        // token's end boundary, so it renames — but only the token, never the trailing whitespace.
+        var (doc, offset) = Caret("<Grid x:Name=\"Root| \" />");
+        var edit = XamlRename.Rename(doc, offset, "Panel");
+        Assert.NotNull(edit);
+        Assert.Single(edit!.Changes[Uri]);
+        Assert.Equal("Root", Covered(doc, edit.Changes[Uri][0].Range));
+    }
+
+    [Fact]
+    public void Rename_CaretInTrailingPadding_ReturnsNull()
+    {
+        // Caret sits past the token, out in the value's trailing whitespace: not renameable.
+        var (doc, offset) = Caret("<Grid x:Name=\"Root |\" />");
+        Assert.Null(XamlRename.Rename(doc, offset, "Panel"));
+        Assert.Null(XamlRename.PrepareRename(doc, offset));
+    }
+}

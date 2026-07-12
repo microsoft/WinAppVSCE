@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>WinUiXaml.LanguageServer</AssemblyName>
+    <RootNamespace>WinUiXaml.LanguageServer</RootNamespace>
+    <!-- MSBuild refs are compile-only; runtime copies come from the SDK via Build.Locator. -->
+    <NoWarn>$(NoWarn);NU1903</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WinUiXaml.LanguageServer.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinUiXaml.Xaml\WinUiXaml.Xaml.csproj" />
+    <ProjectReference Include="..\WinUiXaml.Workspace\WinUiXaml.Workspace.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- As an MSBuildWorkspace entry point, this exe must also exclude MSBuild's runtime assemblies
+         (Build.Locator provides them from the SDK). See MSBL001. -->
+    <PackageReference Include="Microsoft.Build" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Framework" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Tasks.Core" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.StringTools" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

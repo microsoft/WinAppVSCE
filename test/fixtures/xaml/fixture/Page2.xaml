@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="SmokeFixture.Page2"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:SmokeFixture"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Padding="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock
+            x:Name="Page2Title"
+            Grid.Row="0"
+            AutomationProperties.AutomationId="Page2Title"
+            Style="{StaticResource TitleTextBlockStyle}"
+            Text="Page 2" />
+
+        <!-- Reaches the constructor-injected DiPage via App.Services. -->
+        <Button
+            x:Name="OpenDiPageButton"
+            Grid.Row="1"
+            AutomationProperties.AutomationId="OpenDiPageButton"
+            Click="OnOpenDiPage_Click"
+            Content="Open DI Page" />
+
+        <Button
+            x:Name="BackButton"
+            Grid.Row="2"
+            AutomationProperties.AutomationId="BackButton"
+            Click="OnBack_Click"
+            Content="Back" />
+    </Grid>
+</Page>

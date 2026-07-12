@@ -57,6 +57,11 @@ extends:
             displayName: Setup Node.js 24
             inputs:
               version: '24.x'
+          - task: UseDotNet@2
+            displayName: Setup .NET SDK 10.0 (build WinUI XAML language server)
+            inputs:
+              packageType: sdk
+              version: 10.0.x
           - ${{ if eq(parameters.DoEsrp, 'true') }}:
             - task: UseDotNet@2
               displayName: Setup .NET 8.0 (For ESRP Task)
@@ -126,6 +131,69 @@ extends:
 
                 Write-Host "CLI binaries ($cliReleaseTag) downloaded and validated successfully"
           - task: PowerShell@2
+            displayName: Publish WinUI XAML language server
+            inputs:
+              pwsh: true
+              errorActionPreference: 'stop'
+              targetType: 'inline'
+              script: |
+                # Build + publish the .NET language server into dist/server so it is bundled in the VSIX.
+                # package-vsc.ps1 runs below with -SkipServerBuild to reuse this (signed) output.
+                # NOTE (maintainers): this restores NuGet packages from the default feed. If the pool
+                # blocks public NuGet egress, point restore at the approved internal feed (nuget.config).
+                dotnet publish `
+                  "$(System.DefaultWorkingDirectory)/server/src/WinUiXaml.LanguageServer/WinUiXaml.LanguageServer.csproj" `
+                  -c Release `
+                  -o "$(System.DefaultWorkingDirectory)/dist/server"
+                if ($LASTEXITCODE -ne 0) { Write-Error "WinUI XAML language server publish failed"; exit 1 }
+                if (-not (Test-Path "$(System.DefaultWorkingDirectory)/dist/server/WinUiXaml.LanguageServer.dll")) {
+                    Write-Error "dist/server/WinUiXaml.LanguageServer.dll not found after publish"
+                    exit 1
+                }
+                Write-Host "WinUI XAML language server published to dist/server"
+          - ${{ if eq(parameters.DoEsrp, 'true') }}:
+            - task: EsrpCodeSigning@6
+              displayName: Code Sign ESRP - WinUI XAML language server DLLs
+              inputs:
+                ConnectedServiceName: $(SigningServiceName)
+                AppRegistrationClientId: $(SigningAppId)
+                AppRegistrationTenantId: $(SigningTenantId)
+                AuthAKVName: $(SigningAKVName)
+                AuthCertName: $(SigningAuthCertName)
+                AuthSignCertName: $(SigningSignCertName)
+                FolderPath: '$(System.DefaultWorkingDirectory)/dist/server'
+                # Sign only our own assemblies. The bundled Roslyn/MSBuild/System.* DLLs are already
+                # Microsoft-signed + strong-named; re-signing them is unnecessary and can break validation.
+                Pattern: 'WinUiXaml.LanguageServer.dll;WinUiXaml.Workspace.dll;WinUiXaml.Xaml.dll'
+                UseMinimatch: false
+                signConfigType: inlineSignParams
+                # NOTE (maintainers): confirm this Authenticode KeyCode matches the winapp signing identity.
+                # The VSIX/publisher tasks below use CP-401405 (OPC + VSCodePublisher operations); loose .NET
+                # DLLs use Authenticode SigntoolSign. CP-230012 is the standard Microsoft Authenticode keycode.
+                inlineOperation: |
+                  [
+                      {
+                          "KeyCode": "CP-230012",
+                          "OperationCode": "SigntoolSign",
+                          "Parameters": {
+                              "OpusName": "Microsoft",
+                              "OpusInfo": "https://www.microsoft.com",
+                              "FileDigest": "/fd SHA256",
+                              "PageHash": "/NPH",
+                              "TimeStamp": "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td SHA256"
+                          },
+                          "ToolName": "sign",
+                          "ToolVersion": "1.0"
+                      },
+                      {
+                          "KeyCode": "CP-230012",
+                          "OperationCode": "SigntoolVerify",
+                          "Parameters": {},
+                          "ToolName": "sign",
+                          "ToolVersion": "1.0"
+                      }
+                  ]
+          - task: PowerShell@2
             displayName: Create temporary .npmrc for Build
             inputs:
               targetType: inline
@@ -143,7 +211,7 @@ extends:
             inputs:
               pwsh: true
               filePath: $(System.DefaultWorkingDirectory)\scripts\package-vsc.ps1
-              arguments: "-Stable -CliBinariesPath '$(System.DefaultWorkingDirectory)/artifacts/public-cli'"
+              arguments: "-Stable -SkipServerBuild -CliBinariesPath '$(System.DefaultWorkingDirectory)/artifacts/public-cli'"
           - task: PowerShell@2
             displayName: Run E2E tests
             inputs:

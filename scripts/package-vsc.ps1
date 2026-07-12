@@ -29,7 +29,10 @@ param(
     [switch]$Stable = $false,
 
     [Parameter(Mandatory=$false)]
-    [string]$CliBinariesPath
+    [string]$CliBinariesPath,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$SkipServerBuild = $false
 )
 
 # Ensure we're running from the project root
@@ -139,9 +142,12 @@ try
 
     Push-Location $VscProjectPath
 
-    # Clean out and dist directories (preserve bin/ which may contain downloaded CLI binaries)
+    # Clean out and dist directories (preserve bin/ which may contain downloaded CLI binaries).
+    # Under -SkipServerBuild the language server has already been published (and signed) into
+    # dist/server by a prior pipeline step, so preserve dist/ and only clean out/.
     Write-Host "[VSC] Cleaning build artifacts..." -ForegroundColor Blue
-    @("out", "dist") | ForEach-Object {
+    $CleanTargets = if ($SkipServerBuild) { @("out") } else { @("out", "dist") }
+    $CleanTargets | ForEach-Object {
         if (Test-Path $_) { Remove-Item $_ -Recurse -Force }
     }
 
@@ -161,6 +167,26 @@ try
         Write-Error "TypeScript compilation failed"
         Pop-Location
         exit 1
+    }
+
+    # Publish the WinUI XAML language server (.NET) into dist/server so it is bundled in the VSIX.
+    # In CI this is performed (and the resulting DLLs signed) as separate, earlier steps; passing
+    # -SkipServerBuild reuses that pre-published/signed output instead of rebuilding it here.
+    if ($SkipServerBuild) {
+        Write-Host "[VSC] Skipping server build; reusing pre-published dist/server..." -ForegroundColor Blue
+        if (-not (Test-Path "dist\server\WinUiXaml.LanguageServer.dll")) {
+            Write-Error "SkipServerBuild was set but dist\server\WinUiXaml.LanguageServer.dll was not found. Publish the language server first."
+            Pop-Location
+            exit 1
+        }
+    } else {
+        Write-Host "[VSC] Publishing WinUI XAML language server (dotnet publish -> dist/server)..." -ForegroundColor Blue
+        npm run bundle:server
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "WinUI XAML language server publish (bundle:server) failed. Ensure the .NET 10 SDK is installed."
+            Pop-Location
+            exit 1
+        }
     }
 
     # Copy CLI binaries from artifacts (skip if source and destination are the same)
