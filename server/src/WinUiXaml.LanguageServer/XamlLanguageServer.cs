@@ -179,7 +179,7 @@ internal sealed class XamlLanguageServer
     /// </summary>
     private Task DidChangeWatchedFilesAsync(DidChangeWatchedFilesParams p)
     {
-        if (p.Changes.Count == 0)
+        if (p.Changes is null || p.Changes.Count == 0)
         {
             return Task.CompletedTask;
         }

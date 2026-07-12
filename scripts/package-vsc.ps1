@@ -179,6 +179,10 @@ try
             Pop-Location
             exit 1
         }
+        # The `vsce package` step below triggers vscode:prepublish -> ensure-server-bundle.mjs, which
+        # publishes a fresh server by default. In CI the dist/server DLLs are already ESRP-signed, so
+        # opt into reuse to preserve those signatures instead of rebuilding over them.
+        $env:WINUI_REUSE_SIGNED_SERVER = "1"
     } else {
         Write-Host "[VSC] Publishing WinUI XAML language server (dotnet publish -> dist/server)..." -ForegroundColor Blue
         npm run bundle:server

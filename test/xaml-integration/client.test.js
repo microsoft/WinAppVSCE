@@ -5,10 +5,11 @@
 // graceful degradation to syntax-only when the server can't launch. Complements features.test.js
 // (which exercises the language features themselves) by driving the client's own commands/config.
 //
-// Note on scope: the harness always resolves a real server DLL (via WINUI_XAML_SERVER_DLL and the
-// repo-relative Debug build), so a truly "missing DLL" can't be reproduced here. The bad-dotnetPath
-// case below drives the SAME graceful-degradation code path (doStart's catch → notify → return),
-// proving activation stays syntax-only and never throws.
+// Note on scope: the harness normally resolves a real server DLL (via WINUI_XAML_SERVER_DLL and the
+// repo-relative Debug build). Two graceful-degradation paths are covered here: (1) the missing-DLL
+// path, forced deterministically via the WINUI_XAML_FORCE_NO_SERVER test seam (resolveServerDll
+// returns undefined → notifyDegraded → syntax-only); and (2) the bad-dotnetPath path, which drives
+// doStart's catch → notify → return. Both prove activation stays syntax-only and never throws.
 
 const assert = require("node:assert");
 const vscode = require("vscode");
@@ -70,6 +71,36 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     await h.warmUp();
     const items = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
     assert.ok(items.includes("Button"), "server should recover after rapid restarts");
+  });
+
+  it("degrades to syntax-only when the server DLL is absent (no throw)", async function () {
+    // Force resolveServerDll to find no DLL (test-only seam), reproducing the missing-server branch
+    // that resolves undefined → notifyDegraded → syntax-only, without a real running server.
+    process.env.WINUI_XAML_FORCE_NO_SERVER = "1";
+    try {
+      // Restart must swallow the missing-DLL condition and resolve — activation stays syntax-only.
+      await assert.doesNotReject(
+        () => vscode.commands.executeCommand("winui-xaml.restartServer"),
+        "restartServer must not reject when the server DLL is absent"
+      );
+
+      if (vscode.workspace.isTrusted) {
+        // With no server, element-name completion no longer produces "Button".
+        const items = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+        assert.ok(
+          !items.includes("Button"),
+          `expected syntax-only degradation (no Button) but got: ${items.slice(0, 20).join(", ")}`
+        );
+      }
+    } finally {
+      // Recover: drop the seam and restart so the server comes back for later tests.
+      delete process.env.WINUI_XAML_FORCE_NO_SERVER;
+      await vscode.commands.executeCommand("winui-xaml.restartServer");
+      await h.warmUp();
+    }
+
+    const recovered = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+    assert.ok(recovered.includes("Button"), "server should recover after clearing the missing-DLL seam");
   });
 
   it("degrades to syntax-only when dotnet can't launch (no throw)", async function () {

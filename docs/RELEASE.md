@@ -28,6 +28,11 @@ used for the packaged extension.
       winapp signing identity for this release.
 - [ ] Only first-party assemblies are signed. The bundled Roslyn/MSBuild/`System.*` DLLs are already
       Microsoft-signed and strong-named; re-signing them is unnecessary and can break validation.
+- [ ] **Fresh-vs-signed server bundle:** `scripts/ensure-server-bundle.mjs` (run from
+      `vscode:prepublish`) publishes a fresh `dist/server` by default, so a plain `vsce package`
+      never ships a stale DLL. The CI release path preserves its ESRP-signed DLLs by setting
+      `WINUI_REUSE_SIGNED_SERVER=1` — `package-vsc.ps1 -SkipServerBuild` sets it automatically. Do not
+      set that flag in a normal local package.
 
 ## General
 

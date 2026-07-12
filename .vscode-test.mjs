@@ -25,8 +25,10 @@ export default defineConfig({
   files: process.env.WINUI_XAML_TEST_FILES || "test/xaml-integration/**/*.test.js",
   version: "stable",
   workspaceFolder: fixture,
-  // Isolate the extension under test from any other installed extensions.
-  launchArgs: ["--disable-extensions"],
+  // Isolate the extension under test from any other installed extensions. --disable-workspace-trust
+  // makes vscode.workspace.isTrusted true in the harness so the full feature suite still exercises
+  // the semantic server; production behavior is unchanged (the trust gate is only bypassed here).
+  launchArgs: ["--disable-extensions", "--disable-workspace-trust"],
   env: {
     WINUI_XAML_SERVER_DLL: debugServerDll,
     WINUI_XAML_TEST: "1",
