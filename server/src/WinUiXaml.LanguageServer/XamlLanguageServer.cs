@@ -277,15 +277,46 @@ internal sealed class XamlLanguageServer
     /// <summary>
     /// Returns the final on-disk path with reparse points (junctions/symlinks) resolved, so the
     /// allow-list cannot be bypassed by a link inside a trusted root that targets an external dir.
-    /// Falls back to the lexical full path when the entry does not exist or the OS call fails.
+    /// The document leaf need NOT exist: <c>FindOwningProject</c> walks the containing DIRECTORY
+    /// (via <c>new FileInfo(path).Directory</c>) and enumerates its <c>.csproj</c> files, so a
+    /// not-yet-created <c>Page.xaml</c> under an in-root junction would still reach the junction's
+    /// external project. We therefore resolve the deepest EXISTING ancestor (which follows any
+    /// junction/symlink in the chain) and re-append the not-yet-existing tail, instead of falling
+    /// back to the lexical path when only the leaf is missing. Pure lexical fallback is used only
+    /// when no ancestor exists (nothing to follow) or the OS call fails.
     /// </summary>
     internal static string CanonicalizePath(string path)
     {
         string full;
         try { full = System.IO.Path.GetFullPath(path); }
         catch { return path; }
-        try { return TryGetFinalPath(full) ?? full; }
-        catch { return full; }
+
+        try
+        {
+            var existing = full;
+            var suffix = string.Empty;
+            while (existing != null
+                && !System.IO.File.Exists(existing)
+                && !System.IO.Directory.Exists(existing))
+            {
+                var name = System.IO.Path.GetFileName(existing);
+                suffix = suffix.Length == 0 ? name : System.IO.Path.Combine(name, suffix);
+                existing = System.IO.Path.GetDirectoryName(existing);
+            }
+
+            if (existing == null)
+            {
+                // Nothing in the chain exists, so there is no reparse point to follow.
+                return full;
+            }
+
+            var resolved = TryGetFinalPath(existing) ?? existing;
+            return suffix.Length == 0 ? resolved : System.IO.Path.Combine(resolved, suffix);
+        }
+        catch
+        {
+            return full;
+        }
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

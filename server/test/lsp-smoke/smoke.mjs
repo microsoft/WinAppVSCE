@@ -3743,7 +3743,10 @@ async function main() {
   // real .xaml under the OS temp dir (guaranteed outside the fixture root that was passed as the only
   // allowedRoot) with an x:Class + event handler, and assert F12 on the handler yields NO location.
   // The in-root fixture DID resolve earlier (definition #2 landed in the code-behind), so a null here
-  // proves the boundary gates resolution rather than the feature being globally broken.
+  // proves the boundary gates resolution rather than the feature being globally broken. A sibling
+  // .csproj + code-behind are written next to it so FindOwningProject WOULD discover a project (and
+  // F12 could land) if the gate were bypassed — making the null result attributable to the gate, not
+  // to an absent project. These are only ever loaded on a bypass, so the passing path never touches MSBuild.
   {
     const outDir = mkdtempSync(join(tmpdir(), "winui-xaml-oob-"));
     const outFile = join(outDir, "OutOfRootPage.xaml");
@@ -3755,6 +3758,18 @@ async function main() {
       `</Page>\n`;
     try {
       writeFileSync(outFile, outText, "utf8");
+      // Give the out-of-root file genuine project-discovery affordance: absent the trust gate,
+      // FindOwningProject would find this .csproj and F12 could resolve into the code-behind.
+      writeFileSync(
+        join(outDir, "OutOfRoot.csproj"),
+        `<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n`,
+        "utf8"
+      );
+      writeFileSync(
+        join(outDir, "OutOfRootPage.xaml.cs"),
+        `namespace OutOfRoot { public partial class OutOfRootPage { public void OnOobClick(object sender, object e) { } } }\n`,
+        "utf8"
+      );
       const outUri = pathToFileURL(outFile).href;
       const handlerAt = outText.indexOf("OnOobClick") + 3;
       const outCaret = offsetToPosition(outText, handlerAt);
@@ -3779,7 +3794,7 @@ async function main() {
       try { rmSync(outDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
   }
-  console.log(`[ok] workspace-trust boundary: an out-of-root .xaml is served project-less (F12 handler -> no location), while the in-root fixture resolved`);
+  console.log(`[ok] workspace-trust boundary: an out-of-root .xaml (with a sibling project) is served project-less (F12 handler -> no location), while the in-root fixture resolved`);
 
   // 22) shutdown
   send({ id: 11, method: "shutdown", params: null });

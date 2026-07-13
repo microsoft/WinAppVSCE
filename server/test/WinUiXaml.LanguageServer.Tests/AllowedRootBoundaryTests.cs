@@ -110,17 +110,21 @@ public class AllowedRootBoundaryTests
     {
         // G15 regression (non-admin): a junction inside a trusted root that targets an external
         // directory must NOT canonicalize to inside the root, so a file under it is out-of-bounds.
+        // Both an EXISTING file and a not-yet-created (missing-leaf) file must be rejected — the
+        // missing-leaf case is the one that must not fall back to the lexical in-root path.
         var baseDir = Path.Combine(Path.GetTempPath(), "winui-xaml-jtest-" + Guid.NewGuid().ToString("N"));
         var trustedRoot = Path.Combine(baseDir, "trusted");
         var externalDir = Path.Combine(baseDir, "external");
         var linkPath = Path.Combine(trustedRoot, "link");
+        var junctionCreated = false;
         try
         {
             Directory.CreateDirectory(trustedRoot);
             Directory.CreateDirectory(externalDir);
             File.WriteAllText(Path.Combine(externalDir, "Evil.csproj"), "<Project />");
 
-            // Junctions do NOT require admin; skip gracefully if the OS refuses.
+            // Junctions do NOT require admin; skip the assertions ONLY when the OS refuses to make
+            // one. Assertions live outside this guard so a real regression can never be swallowed.
             var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{linkPath}\" \"{externalDir}\"")
             {
                 UseShellExecute = false,
@@ -128,25 +132,42 @@ public class AllowedRootBoundaryTests
                 RedirectStandardError = true,
                 CreateNoWindow = true,
             };
-            using var proc = Process.Start(psi);
-            if (proc is null) { return; } // skip
-            proc.WaitForExit(10000);
-            if (proc.ExitCode != 0 || !Directory.Exists(linkPath)) { return; } // skip: mklink /J unavailable
+            using (var proc = Process.Start(psi))
+            {
+                proc?.WaitForExit(10000);
+                junctionCreated = proc is { ExitCode: 0 } && Directory.Exists(linkPath);
+            }
+        }
+        catch (Exception)
+        {
+            junctionCreated = false; // environment can't create junctions — treated as skip below
+        }
+
+        try
+        {
+            if (!junctionCreated)
+            {
+                return; // skip: junction creation unavailable (nothing proven, nothing masked)
+            }
 
             var normalized = XamlLanguageServer.NormalizeRoots(new[] { trustedRoot });
             Assert.Single(normalized);
 
-            // A file reached through the junction physically lives in externalDir; canonicalization
-            // resolves the reparse point so it is NOT under the trusted root.
-            var fileViaLink = Path.Combine(linkPath, "Page.xaml");
-            var canonical = XamlLanguageServer.CanonicalizePath(fileViaLink);
-            Assert.False(
-                XamlLanguageServer.PathIsWithin(canonical, normalized[0]),
-                $"canonical '{canonical}' must not be under trusted root '{normalized[0]}'");
-        }
-        catch (Exception)
-        {
-            // Environment can't create junctions — skip rather than fail the suite.
+            // A real file reached through the junction physically lives in externalDir.
+            var existingViaLink = Path.Combine(linkPath, "Page.xaml");
+            File.WriteAllText(existingViaLink, "<Page/>");
+
+            // A missing leaf under the junction: FindOwningProject only needs the DIRECTORY, so this
+            // must also canonicalize outside the trusted root (the reparse point is in the ancestry).
+            var missingViaLink = Path.Combine(linkPath, "DoesNotExist.xaml");
+
+            foreach (var probe in new[] { existingViaLink, missingViaLink })
+            {
+                var canonical = XamlLanguageServer.CanonicalizePath(probe);
+                Assert.False(
+                    XamlLanguageServer.PathIsWithin(canonical, normalized[0]),
+                    $"canonical '{canonical}' (from '{probe}') must not be under trusted root '{normalized[0]}'");
+            }
         }
         finally
         {
