@@ -367,32 +367,72 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 }
 
 /**
- * A minimal no-op debug adapter. The winapp debug type doesn't need a real adapter
- * since we delegate to a child debug session (coreclr/node).
+ * A minimal debug adapter for the parent `winapp` session. The real debugging
+ * happens in the child coreclr/node session started in
+ * createDebugAdapterDescriptor, so this adapter does no debugging itself — but
+ * it MUST complete the DAP launch handshake so VS Code reports the session as
+ * successfully started. If it doesn't, vscode.debug.startDebugging(...) (and
+ * F5) resolve to `false` even though the app launched fine (see issue #40).
+ *
+ * The handshake VS Code expects: respond to `initialize`, fire the
+ * `initialized` event, acknowledge the `launch`/`attach` request, and respond
+ * to `configurationDone`. Missing any of these makes VS Code treat the session
+ * as failed-to-start.
  */
 class NoOpDebugAdapter implements vscode.DebugAdapter {
 	private sendMessageEmitter = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
 	readonly onDidSendMessage: vscode.Event<vscode.DebugProtocolMessage> = this.sendMessageEmitter.event;
+	private seq = 1;
+
+	private sendResponse(request: any, body?: unknown): void {
+		this.sendMessageEmitter.fire({
+			seq: this.seq++,
+			type: 'response',
+			request_seq: request.seq,
+			success: true,
+			command: request.command,
+			body
+		} as any);
+	}
+
+	private sendEvent(event: string, body?: unknown): void {
+		this.sendMessageEmitter.fire({
+			seq: this.seq++,
+			type: 'event',
+			event,
+			body
+		} as any);
+	}
 
 	handleMessage(message: vscode.DebugProtocolMessage): void {
-		// Respond to the initialize request so VS Code doesn't hang
 		const msg = message as any;
-		if (msg.type === 'request' && msg.command === 'initialize') {
-			this.sendMessageEmitter.fire({
-				type: 'response',
-				request_seq: msg.seq,
-				success: true,
-				command: msg.command,
-				seq: 0
-			} as any);
-		} else if (msg.type === 'request' && msg.command === 'disconnect') {
-			this.sendMessageEmitter.fire({
-				type: 'response',
-				request_seq: msg.seq,
-				success: true,
-				command: msg.command,
-				seq: 0
-			} as any);
+		if (msg.type !== 'request') {
+			return;
+		}
+
+		switch (msg.command) {
+			case 'initialize':
+				// Advertise configurationDone support so VS Code sends it as the
+				// final handshake step, then signal we're ready for configuration.
+				this.sendResponse(msg, { supportsConfigurationDoneRequest: true });
+				this.sendEvent('initialized');
+				break;
+			case 'launch':
+			case 'attach':
+				// Acknowledge the launch/attach — this is the response VS Code
+				// keys `startDebugging`'s truthy result on.
+				this.sendResponse(msg);
+				break;
+			case 'configurationDone':
+				this.sendResponse(msg);
+				break;
+			case 'disconnect':
+				this.sendResponse(msg);
+				break;
+			default:
+				// Acknowledge any other request so VS Code never blocks on us.
+				this.sendResponse(msg);
+				break;
 		}
 	}
 
