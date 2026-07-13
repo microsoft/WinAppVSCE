@@ -8,9 +8,19 @@ import {
   Executable,
 } from "vscode-languageclient/node";
 import { firstExistingPath } from "../winapp-cli-utils";
+import {
+  buildDegradedNotification,
+  DegradedAction,
+  DegradedCause,
+} from "./degradedNotification";
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
+
+// The file-system watcher handed to the LanguageClient's `synchronize.fileEvents`. vscode-languageclient
+// does NOT dispose caller-supplied watchers, so we retain it here and dispose it in doStop — otherwise
+// each start/restart/trust cycle would leak one watcher.
+let fileWatcher: vscode.FileSystemWatcher | undefined;
 
 // Single lifecycle queue. Every start/stop/restart/trust-grant/deactivate op is chained here so a
 // stop fully completes before the next start begins — two servers can never run at once, and a
@@ -126,8 +136,17 @@ async function doStart(context: vscode.ExtensionContext): Promise<void> {
   // targets). So merely opening a .xaml file in an untrusted cloned repo could run attacker code.
   // Staying syntax-only (TextMate grammar) is the intended safe behavior; the
   // onDidGrantWorkspaceTrust handler restarts us once trust is granted.
-  if (!vscode.workspace.isTrusted) {
-    log("Workspace is untrusted — language server not started (syntax-only until trust is granted).");
+  //
+  // WINUI_XAML_FORCE_UNTRUSTED is a test-only seam (mirrors WINUI_XAML_FORCE_NO_SERVER): the
+  // integration harness runs with --disable-workspace-trust (isTrusted always true), so this env var
+  // lets a test exercise the untrusted degradation + trust-grant recovery paths deterministically.
+  // It is never set outside the harness, so production behavior is unchanged.
+  const forceUntrusted = process.env.WINUI_XAML_FORCE_UNTRUSTED === "1";
+  if (forceUntrusted || !vscode.workspace.isTrusted) {
+    notifyDegraded(
+      "Workspace is untrusted — language server not started (syntax-only until trust is granted).",
+      "untrusted"
+    );
     return;
   }
 
@@ -157,14 +176,23 @@ async function doStart(context: vscode.ExtensionContext): Promise<void> {
 
   const serverOptions: ServerOptions = { run: executable, debug: executable };
 
+  // Pass the trusted workspace roots to the server so it only performs project discovery / MSBuild
+  // evaluation for documents under one of these folders. An empty window contributes an empty list,
+  // which disables project evaluation entirely (workspace-trust boundary, defense-in-depth).
+  const allowedRoots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+
+  // Retained so doStop can dispose it (vscode-languageclient never disposes caller-supplied watchers).
+  fileWatcher = vscode.workspace.createFileSystemWatcher("**/*.{csproj,xaml}");
+
   const clientOptions: LanguageClientOptions = {
     documentSelector: [
       { scheme: "file", language: "xaml" },
       { scheme: "untitled", language: "xaml" },
     ],
     outputChannel: output,
+    initializationOptions: { allowedRoots },
     synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{csproj,xaml}"),
+      fileEvents: fileWatcher,
     },
   };
 
@@ -188,11 +216,22 @@ async function doStart(context: vscode.ExtensionContext): Promise<void> {
     } catch {
       /* ignore — the start already failed */
     }
+    // The client never took ownership, so dispose the watcher we created for it here (doStop only
+    // runs when there is a tracked client to stop).
+    disposeFileWatcher();
     notifyDegraded(
       `Failed to start language server (${dotnet}): ${detail}. ` +
         "Ensure the .NET runtime is installed or set 'winui-xaml.server.dotnetPath'. " +
         "Syntax highlighting remains available."
     );
+  }
+}
+
+/** Disposes and clears the retained file-system watcher, if any. Idempotent. */
+function disposeFileWatcher(): void {
+  if (fileWatcher) {
+    fileWatcher.dispose();
+    fileWatcher = undefined;
   }
 }
 
@@ -206,6 +245,9 @@ async function stopClient(): Promise<void> {
 }
 
 async function doStop(): Promise<void> {
+  // Dispose the retained watcher on every stop (restart / trust cycle / deactivate) so it never leaks,
+  // regardless of whether a client is currently tracked.
+  disposeFileWatcher();
   const current = client;
   client = undefined;
   if (!current) {
@@ -220,35 +262,47 @@ async function doStop(): Promise<void> {
 
 /**
  * Logs the reason and, once per transition into the degraded (syntax-only) state, shows a
- * non-blocking warning with actionable buttons. Kept non-nagging via {@link degradedNotified}.
+ * non-blocking warning with actionable buttons. The message + actions are chosen by the pure
+ * {@link buildDegradedNotification} (unit-tested), and kept non-nagging via {@link degradedNotified}.
  */
-function notifyDegraded(reason: string): void {
+function notifyDegraded(reason: string, cause: DegradedCause = "server"): void {
   log(reason);
   if (degradedNotified) {
     return;
   }
   degradedNotified = true;
 
-  const OPEN_SETTINGS = "Open Settings";
-  const SHOW_OUTPUT = "Show Output";
-  const INSTALL_DOTNET = "Install .NET";
+  const { message, actions } = buildDegradedNotification(cause);
   void vscode.window
-    .showWarningMessage(
-      "WinUI XAML: language server not started — XAML is syntax-only. " +
-        "IntelliSense, diagnostics, and navigation are unavailable.",
-      OPEN_SETTINGS,
-      SHOW_OUTPUT,
-      INSTALL_DOTNET
-    )
+    .showWarningMessage(message, ...actions.map((a) => a.label))
     .then((choice) => {
-      if (choice === OPEN_SETTINGS) {
-        void vscode.commands.executeCommand("workbench.action.openSettings", "winui-xaml.server");
-      } else if (choice === SHOW_OUTPUT) {
-        output?.show(true);
-      } else if (choice === INSTALL_DOTNET) {
-        void vscode.env.openExternal(vscode.Uri.parse("https://dotnet.microsoft.com/download"));
+      const action = actions.find((a) => a.label === choice);
+      if (action) {
+        void runDegradedAction(action);
       }
     });
+}
+
+/** Executes a single degraded-notification action (command / external URL / output reveal). */
+function runDegradedAction(action: DegradedAction): Thenable<unknown> | void {
+  if (action.showOutput) {
+    output?.show(true);
+    return;
+  }
+  if (action.url) {
+    return vscode.env.openExternal(vscode.Uri.parse(action.url));
+  }
+  if (action.command) {
+    const primary =
+      action.commandArg !== undefined
+        ? vscode.commands.executeCommand(action.command, action.commandArg)
+        : vscode.commands.executeCommand(action.command);
+    // VS Code has renamed the workspace-trust command across versions; try the fallback if the
+    // primary id is not registered in this host.
+    return Promise.resolve(primary).then(undefined, () =>
+      action.fallbackCommand ? vscode.commands.executeCommand(action.fallbackCommand) : undefined
+    );
+  }
 }
 
 /**

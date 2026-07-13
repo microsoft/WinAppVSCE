@@ -176,9 +176,11 @@ try
         exit 1
     }
 
-    # Publish the WinUI XAML language server (.NET) into dist/server so it is bundled in the VSIX.
-    # In CI this is performed (and the resulting DLLs signed) as separate, earlier steps; passing
-    # -SkipServerBuild reuses that pre-published/signed output instead of rebuilding it here.
+    # Ensure the WinUI XAML language server (.NET) is published into dist/server so it ships in the VSIX.
+    # The single publish path is vscode:prepublish -> ensure-server-bundle.mjs (triggered by `vsce package`
+    # below), which builds a fresh dist/server by default. In CI the server is published + signed as
+    # separate, earlier steps; passing -SkipServerBuild reuses that pre-published/signed output (via
+    # WINUI_REUSE_SIGNED_SERVER) instead of rebuilding over the signatures here.
     if ($SkipServerBuild) {
         Write-Host "[VSC] Skipping server build; reusing pre-published dist/server..." -ForegroundColor Blue
         if (-not (Test-Path "dist\server\WinUiXaml.LanguageServer.dll")) {
@@ -193,13 +195,12 @@ try
         $env:WINUI_REUSE_SIGNED_SERVER = "1"
         $ReuseSignedServerSet = $true
     } else {
-        Write-Host "[VSC] Publishing WinUI XAML language server (dotnet publish -> dist/server)..." -ForegroundColor Blue
-        npm run bundle:server
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "WinUI XAML language server publish (bundle:server) failed. Ensure the .NET 10 SDK is installed."
-            Pop-Location
-            exit 1
-        }
+        # Normal packaging: DON'T publish the server here. The `vsce package` step below triggers
+        # vscode:prepublish -> ensure-server-bundle.mjs, which publishes a FRESH dist/server by default
+        # (WINUI_REUSE_SIGNED_SERVER is only set under -SkipServerBuild). Publishing here too would build
+        # the server twice for every package. The VSIX-contents assertion at the end still guards against
+        # the server going missing.
+        Write-Host "[VSC] WinUI XAML language server will be published by vscode:prepublish (ensure-server-bundle)." -ForegroundColor Blue
     }
 
     # Copy CLI binaries from artifacts (skip if source and destination are the same)
@@ -322,6 +323,9 @@ try
         $zip = [System.IO.Compression.ZipFile]::OpenRead($CreatedVsix.FullName)
         try {
             $serverEntry = $zip.Entries | Where-Object { $_.FullName -ieq 'extension/dist/server/WinUiXaml.LanguageServer.dll' }
+            # The Roslyn MSBuild BuildHost (a *BuildHost.exe under dist/server) serves WinUI 3 projects;
+            # a too-broad .vscodeignore exe exclude would silently drop it, so assert one ships.
+            $buildHostEntry = $zip.Entries | Where-Object { $_.FullName -imatch '^extension/dist/server/.*BuildHost\.exe$' }
         } finally {
             $zip.Dispose()
         }
@@ -329,7 +333,11 @@ try
             Write-Error "VSIX is missing extension/dist/server/WinUiXaml.LanguageServer.dll — the language server was not bundled."
             exit 1
         }
-        Write-Host "[VALIDATE] VSIX contains the WinUI XAML language server." -ForegroundColor Green
+        if (-not $buildHostEntry) {
+            Write-Error "VSIX is missing a dist/server BuildHost.exe — project resolution for WinUI 3 projects would be broken."
+            exit 1
+        }
+        Write-Host "[VALIDATE] VSIX contains the WinUI XAML language server and MSBuild BuildHost." -ForegroundColor Green
     }
 
     Write-Host "[DONE] VS Code extension packaging complete!" -ForegroundColor Green

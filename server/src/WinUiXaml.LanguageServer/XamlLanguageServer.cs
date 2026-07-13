@@ -29,6 +29,12 @@ internal sealed class XamlLanguageServer
     private readonly ConcurrentDictionary<string, (System.DateTime Stamp, string[] Keys)> _appResourceCache = new(StringComparer.OrdinalIgnoreCase);
     private bool _shuttingDown;
 
+    // Workspace-trust boundary (defense-in-depth): normalized absolute directories the client trusts.
+    // Project discovery + MSBuild evaluation only runs for documents under one of these roots. Empty =>
+    // no project evaluation at all (e.g. an empty window, or a loose file outside every workspace root),
+    // so merely opening an attacker-controlled .xaml can never trigger MSBuildWorkspace.OpenProjectAsync.
+    private string[] _allowedRoots = System.Array.Empty<string>();
+
     public XamlLanguageServer(JsonRpcConnection connection, XamlProjectResolver resolver)
     {
         _connection = connection;
@@ -39,7 +45,7 @@ internal sealed class XamlLanguageServer
 
     private Task<object?> HandleRequestAsync(string method, JsonElement? @params) => method switch
     {
-        "initialize" => Task.FromResult<object?>(Initialize()),
+        "initialize" => Task.FromResult<object?>(Initialize(Deserialize<InitializeParams>(@params))),
         "shutdown" => Shutdown(),
         "textDocument/definition" => GoToDefinitionAsync(Deserialize<TextDocumentPositionParams>(@params)),
         "textDocument/references" => FindReferencesAsync(Deserialize<ReferenceParams>(@params)),
@@ -87,8 +93,13 @@ internal sealed class XamlLanguageServer
         }
     }
 
-    private static InitializeResult Initialize() => new()
+    private InitializeResult Initialize(InitializeParams p)
     {
+        _allowedRoots = ResolveAllowedRoots(p);
+        Console.Error.WriteLine(
+            $"[winui-xaml-ls] allowed roots: {(_allowedRoots.Length == 0 ? "(none — project evaluation disabled)" : string.Join("; ", _allowedRoots))}");
+        return new()
+        {
         Capabilities = new ServerCapabilities
         {
             TextDocumentSync = new TextDocumentSyncOptions { OpenClose = true, Change = 1 /* Full */ },
@@ -125,7 +136,146 @@ internal sealed class XamlLanguageServer
             },
         },
         ServerInfo = new ServerInfo { Version = "0.1.0" },
-    };
+        };
+    }
+
+    /// <summary>
+    /// Computes the workspace-trust boundary from initialize params. The client's
+    /// <c>initializationOptions.allowedRoots</c> is authoritative when present (a non-null list, even
+    /// empty); only a legacy client that omits it falls back to the declared <c>rootUri</c>/<c>rootPath</c>.
+    /// All entries are normalized to full paths with any trailing separator trimmed.
+    /// </summary>
+    private static string[] ResolveAllowedRoots(InitializeParams p)
+    {
+        var explicitRoots = p.InitializationOptions?.AllowedRoots;
+        if (explicitRoots != null)
+        {
+            return NormalizeRoots(explicitRoots);
+        }
+
+        var fallback = new List<string>(2);
+        if (!string.IsNullOrWhiteSpace(p.RootUri) && LspUri.ToPath(p.RootUri) is { } rootFromUri)
+        {
+            fallback.Add(rootFromUri);
+        }
+        if (fallback.Count == 0 && !string.IsNullOrWhiteSpace(p.RootPath))
+        {
+            fallback.Add(p.RootPath!);
+        }
+
+        return NormalizeRoots(fallback.ToArray());
+    }
+
+    private static string[] NormalizeRoots(string[] roots)
+    {
+        if (roots.Length == 0)
+        {
+            return System.Array.Empty<string>();
+        }
+
+        var normalized = new List<string>(roots.Length);
+        foreach (var root in roots)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                continue;
+            }
+
+            string full;
+            try
+            {
+                full = System.IO.Path.GetFullPath(root);
+            }
+            catch (System.Exception)
+            {
+                continue;
+            }
+
+            // Trim a trailing separator so "C:\root" and "C:\root\" compare equal, but keep a bare drive
+            // root ("C:\") intact so it does not collapse to the drive-relative "C:".
+            if (full.Length > 3 || !(full.Length == 3 && full[1] == ':'))
+            {
+                full = full.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+            }
+
+            if (full.Length > 0)
+            {
+                normalized.Add(full);
+            }
+        }
+
+        return normalized.ToArray();
+    }
+
+    /// <summary>
+    /// True when <paramref name="path"/> lies under one of the trusted <see cref="_allowedRoots"/>.
+    /// An empty allow-list always returns false (no project evaluation). Comparison is case-insensitive
+    /// and separator-boundary aware so "C:\root" never matches "C:\rootEvil".
+    /// </summary>
+    private bool IsPathUnderAllowedRoot(string path)
+    {
+        var roots = _allowedRoots;
+        if (roots.Length == 0)
+        {
+            return false;
+        }
+
+        string full;
+        try
+        {
+            full = System.IO.Path.GetFullPath(path);
+        }
+        catch (System.Exception)
+        {
+            return false;
+        }
+
+        foreach (var root in roots)
+        {
+            if (PathIsWithin(full, root))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool PathIsWithin(string path, string root)
+    {
+        if (path.Length == root.Length)
+        {
+            return string.Equals(path, root, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (path.Length <= root.Length)
+        {
+            return false;
+        }
+
+        if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var boundary = path[root.Length];
+        return boundary == System.IO.Path.DirectorySeparatorChar
+            || boundary == System.IO.Path.AltDirectorySeparatorChar;
+    }
+
+    /// <summary>
+    /// Resolves the document's project context only when it is under a trusted workspace root; otherwise
+    /// serves it project-less (no MSBuild evaluation). This is the workspace-trust boundary enforcement.
+    /// </summary>
+    private Task<XamlResolution?> ResolveIfAllowedAsync(string path)
+    {
+        if (!IsPathUnderAllowedRoot(path))
+        {
+            return Task.FromResult<XamlResolution?>(null);
+        }
+
+        return _resolver.ResolveAsync(path);
+    }
 
     private Task<object?> Shutdown()
     {
@@ -3146,7 +3296,7 @@ internal sealed class XamlLanguageServer
         XamlResolution? resolution;
         try
         {
-            resolution = await _resolver.ResolveAsync(path).ConfigureAwait(false);
+            resolution = await ResolveIfAllowedAsync(path).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -3191,7 +3341,7 @@ internal sealed class XamlLanguageServer
         XamlResolution? resolution;
         try
         {
-            resolution = await _resolver.ResolveAsync(path).ConfigureAwait(false);
+            resolution = await ResolveIfAllowedAsync(path).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -3621,6 +3771,13 @@ internal sealed class XamlLanguageServer
     {
         var path = UriToPath(uri);
         if (path == null)
+        {
+            return;
+        }
+
+        // Only warm up (which triggers project discovery + MSBuild evaluation) for documents under a
+        // trusted workspace root. Out-of-root / empty-window files are served project-less.
+        if (!IsPathUnderAllowedRoot(path))
         {
             return;
         }

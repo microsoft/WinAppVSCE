@@ -137,4 +137,93 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     const recovered = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
     assert.ok(recovered.includes("Button"), "server should recover after restoring dotnetPath");
   });
+
+  it("degrades to syntax-only when the workspace is untrusted, then recovers (WINUI_XAML_FORCE_UNTRUSTED)", async function () {
+    // The harness runs with --disable-workspace-trust (isTrusted === true), so the untrusted gate is
+    // never hit organically. WINUI_XAML_FORCE_UNTRUSTED is the test seam (mirrors WINUI_XAML_FORCE_NO_SERVER)
+    // that forces doStart down the untrusted branch: the semantic server is not started, so element-name
+    // completion loses "Button". Clearing the seam and restarting (the same path onDidGrantWorkspaceTrust
+    // takes) must bring the server back.
+    process.env.WINUI_XAML_FORCE_UNTRUSTED = "1";
+    try {
+      // (a) Forced-untrusted restart must not reject and must degrade to syntax-only (no server).
+      await assert.doesNotReject(
+        () => vscode.commands.executeCommand("winui-xaml.restartServer"),
+        "restartServer must not reject when the workspace is untrusted"
+      );
+      const degraded = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+      assert.ok(
+        !degraded.includes("Button"),
+        `expected syntax-only degradation while untrusted (no Button) but got: ${degraded.slice(0, 20).join(", ")}`
+      );
+    } finally {
+      // (b) Simulate trust being granted: clear the seam and restart, which must start the server.
+      delete process.env.WINUI_XAML_FORCE_UNTRUSTED;
+      await vscode.commands.executeCommand("winui-xaml.restartServer");
+      await h.warmUp();
+    }
+
+    const recovered = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+    assert.ok(recovered.includes("Button"), "server should start once trust is granted (seam cleared)");
+  });
+
+  it("resolves an explicit winui-xaml.server.path and serves semantic completion", async function () {
+    // Exercises the configuredDll branch of resolveServerDll (candidate #1), which the other tests
+    // never hit (they rely on the WINUI_XAML_SERVER_DLL env / repo-relative fallback). Point server.path
+    // at the freshly-built Debug DLL (the value the harness normally passes via the env var) and clear
+    // the env so the explicit setting is the ONLY thing that can resolve the server.
+    const debugDll = process.env.WINUI_XAML_SERVER_DLL;
+    assert.ok(debugDll, "harness must expose the Debug server DLL via WINUI_XAML_SERVER_DLL");
+    const config = () => vscode.workspace.getConfiguration(EXT);
+    delete process.env.WINUI_XAML_SERVER_DLL;
+    await config().update("server.path", debugDll, vscode.ConfigurationTarget.Global);
+    try {
+      await assert.doesNotReject(
+        () => vscode.commands.executeCommand("winui-xaml.restartServer"),
+        "restartServer must not reject when server.path points at a valid DLL"
+      );
+      await h.warmUp();
+      const items = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+      assert.ok(items.includes("Button"), `expected Button via explicit server.path; got ${items.slice(0, 20).join(", ")}`);
+    } finally {
+      process.env.WINUI_XAML_SERVER_DLL = debugDll;
+      await config().update("server.path", undefined, vscode.ConfigurationTarget.Global);
+      await vscode.commands.executeCommand("winui-xaml.restartServer");
+      await h.warmUp();
+    }
+
+    const recovered = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+    assert.ok(recovered.includes("Button"), "server should recover after clearing server.path");
+  });
+
+  it("degrades to syntax-only when winui-xaml.server.path points at an invalid DLL (no throw)", async function () {
+    // An existing-but-non-DLL server.path resolves (the file exists) but fails to launch as an assembly,
+    // driving doStart's catch -> notifyDegraded -> syntax-only. Clear the env too so the invalid setting
+    // wins over every fallback candidate.
+    const debugDll = process.env.WINUI_XAML_SERVER_DLL;
+    const config = () => vscode.workspace.getConfiguration(EXT);
+    delete process.env.WINUI_XAML_SERVER_DLL;
+    await config().update("server.path", h.XAML_PATH, vscode.ConfigurationTarget.Global);
+    try {
+      await assert.doesNotReject(
+        () => vscode.commands.executeCommand("winui-xaml.restartServer"),
+        "restartServer must not reject when server.path is an invalid DLL"
+      );
+      if (vscode.workspace.isTrusted) {
+        const items = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+        assert.ok(
+          !items.includes("Button"),
+          `expected syntax-only degradation for an invalid server.path but got: ${items.slice(0, 20).join(", ")}`
+        );
+      }
+    } finally {
+      if (debugDll) process.env.WINUI_XAML_SERVER_DLL = debugDll;
+      await config().update("server.path", undefined, vscode.ConfigurationTarget.Global);
+      await vscode.commands.executeCommand("winui-xaml.restartServer");
+      await h.warmUp();
+    }
+
+    const recovered = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+    assert.ok(recovered.includes("Button"), "server should recover after clearing the invalid server.path");
+  });
 });

@@ -43,6 +43,19 @@ internal sealed class InitializeParams
     [JsonPropertyName("processId")] public int? ProcessId { get; set; }
     [JsonPropertyName("rootUri")] public string? RootUri { get; set; }
     [JsonPropertyName("rootPath")] public string? RootPath { get; set; }
+    [JsonPropertyName("initializationOptions")] public InitializationOptions? InitializationOptions { get; set; }
+}
+
+/// <summary>
+/// Client-supplied options passed at initialize. <see cref="AllowedRoots"/> carries the workspace
+/// folder filesystem paths the client trusts; the server only performs project discovery / MSBuild
+/// evaluation for documents under one of these roots (workspace-trust boundary — see the language
+/// server's project-resolution gate). A non-null-but-empty list means "no roots" (e.g. an empty
+/// window), which disables project evaluation entirely.
+/// </summary>
+internal sealed class InitializationOptions
+{
+    [JsonPropertyName("allowedRoots")] public string[]? AllowedRoots { get; set; }
 }
 
 internal sealed class InitializeResult

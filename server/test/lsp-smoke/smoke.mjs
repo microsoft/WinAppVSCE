@@ -130,7 +130,15 @@ const notification = (method) => (m) => m.method === method;
 
 async function main() {
   // 1) initialize
-  send({ id: 1, method: "initialize", params: { processId: process.pid, rootUri: null } });
+  // Pass the fixture directory as the sole trusted workspace root so the server performs project
+  // discovery / MSBuild evaluation for the in-root fixture (matching the real client, which sends
+  // its workspace folders as initializationOptions.allowedRoots).
+  const allowedRoots = [dirname(XAML)];
+  send({
+    id: 1,
+    method: "initialize",
+    params: { processId: process.pid, rootUri: null, initializationOptions: { allowedRoots } },
+  });
   const init = await waitFor(responseFor(1), 15000, "initialize");
   if (init.error) fail(`initialize errored: ${JSON.stringify(init.error)}`);
   const caps = init.result?.capabilities ?? {};
@@ -3711,6 +3719,23 @@ async function main() {
     if (genOf(markup)) fail(`gap #3: a markup-extension value is not a handler name: ${JSON.stringify(markup.map((a) => a.title))}`);
   }
   console.log(`[ok] generate event handler (#3): missing handler -> cross-file stub into the user code-behind; existing/non-event/markup values offer nothing`);
+
+  // 555) workspace/didChangeWatchedFiles null/empty-changes guard (regression): a client may send this
+  // notification with an omitted, null, or empty `changes` array. The server must treat it as a no-op
+  // and stay fully responsive to subsequent requests (never throw / drop the connection).
+  send({ method: "workspace/didChangeWatchedFiles", params: {} }); // omitted changes
+  send({ method: "workspace/didChangeWatchedFiles", params: { changes: null } }); // null changes
+  send({ method: "workspace/didChangeWatchedFiles", params: { changes: [] } }); // empty changes
+  {
+    const stillAlive = await docSymbols(
+      560,
+      `<Page ${NS}>\n  <Grid>\n    <Button x:Name="WatchProbe" Content="Go" />\n  </Grid>\n</Page>`,
+      "post-didChangeWatchedFiles"
+    );
+    if (stillAlive.length !== 1) fail(`server unresponsive after null/empty didChangeWatchedFiles, got ${stillAlive.length} symbols`);
+    if (!stillAlive[0].name.includes("Page")) fail(`unexpected outline after didChangeWatchedFiles guard: '${stillAlive[0].name}'`);
+  }
+  console.log(`[ok] workspace/didChangeWatchedFiles: omitted/null/empty changes are a no-op; server stays responsive`);
 
   // 22) shutdown
   send({ id: 11, method: "shutdown", params: null });
