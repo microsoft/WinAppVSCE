@@ -24,6 +24,11 @@ function runExclusive(op: () => Promise<void>): Promise<void> {
   return next;
 }
 
+// Set synchronously at the very start of deactivateXaml, before any await. Once true, doStart
+// no-ops so no queued or later start (a racing restartServer, or a deferred trust-grant restart)
+// can resurrect the language server after the extension has begun shutting down.
+let disposing = false;
+
 // One non-nagging "degraded to syntax-only" warning per transition into the degraded state. Reset on a
 // successful start so a later failure (e.g. after granting trust or fixing a setting) notifies again.
 let degradedNotified = false;
@@ -44,6 +49,9 @@ function log(message: string): void {
  * and never disturbs the other extension features.
  */
 export async function activateXaml(context: vscode.ExtensionContext): Promise<void> {
+  // Clear any state left from a prior deactivate in the same host process so a re-activation can
+  // start the server again.
+  disposing = false;
   output = vscode.window.createOutputChannel("WinUI XAML");
   context.subscriptions.push(output);
   log("WinUI XAML Tools activating…");
@@ -56,16 +64,12 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
           : "WinUI XAML Tools — syntax only; language server not started."
       );
     }),
-    vscode.commands.registerCommand("winui-xaml.restartServer", async () => {
-      await stopClient();
-      await startClient(context);
-    }),
+    vscode.commands.registerCommand("winui-xaml.restartServer", () => restartClient(context)),
     // The server is not started at all while the workspace is untrusted (see doStart). Once trust is
     // granted, restart so the semantic server starts and workspace-provided paths can take effect.
-    vscode.workspace.onDidGrantWorkspaceTrust(async () => {
+    vscode.workspace.onDidGrantWorkspaceTrust(() => {
       log("Workspace trust granted — restarting language server.");
-      await stopClient();
-      await startClient(context);
+      return restartClient(context);
     })
   );
 
@@ -73,6 +77,10 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
 }
 
 export async function deactivateXaml(): Promise<void> {
+  // Set synchronously (before any await) so a start already queued behind this — or one enqueued
+  // by a racing restartServer/trust-grant after we begin — no-ops in doStart and can't resurrect
+  // the server after shutdown. We still stop any running client below.
+  disposing = true;
   await stopClient();
 }
 
@@ -84,7 +92,28 @@ async function startClient(context: vscode.ExtensionContext): Promise<void> {
   return runExclusive(() => doStart(context));
 }
 
+/**
+ * Restarts the language server as a SINGLE exclusive lifecycle transition: the stop and the
+ * subsequent start run inside one queued op, so no other op (a racing restart, trust-grant, or
+ * deactivate) can interleave between them. If deactivation has begun, the start is skipped so the
+ * server is not resurrected.
+ */
+async function restartClient(context: vscode.ExtensionContext): Promise<void> {
+  return runExclusive(async () => {
+    await doStop();
+    if (!disposing) {
+      await doStart(context);
+    }
+  });
+}
+
 async function doStart(context: vscode.ExtensionContext): Promise<void> {
+  // Deactivation has begun — never start (or resurrect) the server after shutdown, even if this
+  // start was queued before deactivateXaml ran or enqueued by a racing restart/trust-grant.
+  if (disposing) {
+    return;
+  }
+
   // Already running (e.g. a redundant start queued behind another) — nothing to do.
   if (client) {
     return;

@@ -38,6 +38,13 @@ param(
 # Ensure we're running from the project root
 $ProjectRoot = $PSScriptRoot | Split-Path -Parent
 Push-Location $ProjectRoot
+
+# Track whether we set WINUI_REUSE_SIGNED_SERVER so the finally block can restore the caller's
+# process environment. Leaking it would make a later bare `vsce package` in the same shell wrongly
+# reuse an existing (possibly stale/unsigned) dist/server.
+$ReuseSignedServerSet = $false
+$PriorReuseSignedServer = $env:WINUI_REUSE_SIGNED_SERVER
+
 try
 {
     # Define standard paths
@@ -181,8 +188,10 @@ try
         }
         # The `vsce package` step below triggers vscode:prepublish -> ensure-server-bundle.mjs, which
         # publishes a fresh server by default. In CI the dist/server DLLs are already ESRP-signed, so
-        # opt into reuse to preserve those signatures instead of rebuilding over them.
+        # opt into reuse to preserve those signatures instead of rebuilding over them. This is
+        # restored in the finally block so it never leaks into the caller's shell.
         $env:WINUI_REUSE_SIGNED_SERVER = "1"
+        $ReuseSignedServerSet = $true
     } else {
         Write-Host "[VSC] Publishing WinUI XAML language server (dotnet publish -> dist/server)..." -ForegroundColor Blue
         npm run bundle:server
@@ -329,4 +338,14 @@ finally
 {
     # Restore original working directory
     Pop-Location
+
+    # Restore WINUI_REUSE_SIGNED_SERVER so the reuse opt-in does not persist in the caller's shell
+    # (a later bare `vsce package` must not silently reuse a stale/unsigned dist/server).
+    if ($ReuseSignedServerSet) {
+        if ($null -eq $PriorReuseSignedServer) {
+            Remove-Item Env:\WINUI_REUSE_SIGNED_SERVER -ErrorAction SilentlyContinue
+        } else {
+            $env:WINUI_REUSE_SIGNED_SERVER = $PriorReuseSignedServer
+        }
+    }
 }
