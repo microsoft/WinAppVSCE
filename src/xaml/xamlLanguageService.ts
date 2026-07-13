@@ -39,9 +39,10 @@ function runExclusive(op: () => Promise<void>): Promise<void> {
 // can resurrect the language server after the extension has begun shutting down.
 let disposing = false;
 
-// One non-nagging "degraded to syntax-only" warning per transition into the degraded state. Reset on a
-// successful start so a later failure (e.g. after granting trust or fixing a setting) notifies again.
-let degradedNotified = false;
+// One non-nagging "degraded to syntax-only" warning per DISTINCT cause. Reset on a successful start
+// so a later failure notifies again. Cause-aware so an untrusted→server transition (or vice versa)
+// still surfaces the new, correct guidance once instead of being suppressed by a prior warning.
+let lastDegradedCause: DegradedCause | undefined;
 
 // When running under the integration harness, mirror diagnostics to stdout so failures are
 // visible in the test output (OutputChannel contents aren't reachable via the extension API).
@@ -206,7 +207,7 @@ async function doStart(context: vscode.ExtensionContext): Promise<void> {
   try {
     await candidate.start();
     client = candidate;
-    degradedNotified = false;
+    lastDegradedCause = undefined;
     log("Language server started.");
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
@@ -263,14 +264,15 @@ async function doStop(): Promise<void> {
 /**
  * Logs the reason and, once per transition into the degraded (syntax-only) state, shows a
  * non-blocking warning with actionable buttons. The message + actions are chosen by the pure
- * {@link buildDegradedNotification} (unit-tested), and kept non-nagging via {@link degradedNotified}.
+ * {@link buildDegradedNotification} (unit-tested), and kept non-nagging (per distinct
+ * {@link DegradedCause}) via {@link lastDegradedCause}.
  */
 function notifyDegraded(reason: string, cause: DegradedCause = "server"): void {
   log(reason);
-  if (degradedNotified) {
+  if (cause === lastDegradedCause) {
     return;
   }
-  degradedNotified = true;
+  lastDegradedCause = cause;
 
   const { message, actions } = buildDegradedNotification(cause);
   void vscode.window

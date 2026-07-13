@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
+using Microsoft.Win32.SafeHandles;
 using WinUiXaml.LanguageServer.Lsp;
 using WinUiXaml.Workspace;
 using WinUiXaml.Xaml;
@@ -166,7 +168,7 @@ internal sealed class XamlLanguageServer
         return NormalizeRoots(fallback.ToArray());
     }
 
-    private static string[] NormalizeRoots(string[] roots)
+    internal static string[] NormalizeRoots(string[] roots)
     {
         if (roots.Length == 0)
         {
@@ -184,7 +186,7 @@ internal sealed class XamlLanguageServer
             string full;
             try
             {
-                full = System.IO.Path.GetFullPath(root);
+                full = CanonicalizePath(root);
             }
             catch (System.Exception)
             {
@@ -223,7 +225,7 @@ internal sealed class XamlLanguageServer
         string full;
         try
         {
-            full = System.IO.Path.GetFullPath(path);
+            full = CanonicalizePath(path);
         }
         catch (System.Exception)
         {
@@ -241,7 +243,7 @@ internal sealed class XamlLanguageServer
         return false;
     }
 
-    private static bool PathIsWithin(string path, string root)
+    internal static bool PathIsWithin(string path, string root)
     {
         if (path.Length == root.Length)
         {
@@ -258,9 +260,67 @@ internal sealed class XamlLanguageServer
             return false;
         }
 
+        // A bare drive/UNC root that NormalizeRoots leaves untrimmed already ends in a separator
+        // (e.g. "C:\"), so the prefix match itself is the boundary — every child is contained.
+        var rootLast = root[root.Length - 1];
+        if (rootLast == System.IO.Path.DirectorySeparatorChar
+            || rootLast == System.IO.Path.AltDirectorySeparatorChar)
+        {
+            return true;
+        }
+
         var boundary = path[root.Length];
         return boundary == System.IO.Path.DirectorySeparatorChar
             || boundary == System.IO.Path.AltDirectorySeparatorChar;
+    }
+
+    /// <summary>
+    /// Returns the final on-disk path with reparse points (junctions/symlinks) resolved, so the
+    /// allow-list cannot be bypassed by a link inside a trusted root that targets an external dir.
+    /// Falls back to the lexical full path when the entry does not exist or the OS call fails.
+    /// </summary>
+    internal static string CanonicalizePath(string path)
+    {
+        string full;
+        try { full = System.IO.Path.GetFullPath(path); }
+        catch { return path; }
+        try { return TryGetFinalPath(full) ?? full; }
+        catch { return full; }
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(
+        string lpFileName, uint dwDesiredAccess, uint dwShareMode, IntPtr lpSecurityAttributes,
+        uint dwCreationDisposition, uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(
+        SafeFileHandle hFile, [Out] char[] lpszFilePath, uint cchFilePath, uint dwFlags);
+
+    private static string? TryGetFinalPath(string path)
+    {
+        const uint FILE_SHARE_READ = 0x1, FILE_SHARE_WRITE = 0x2, FILE_SHARE_DELETE = 0x4;
+        const uint OPEN_EXISTING = 3;
+        const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000; // allows opening directories
+        using var handle = CreateFileW(path, 0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
+        if (handle.IsInvalid) { return null; }
+        var buffer = new char[512];
+        uint len = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Length, 0);
+        if (len == 0) { return null; }
+        if (len > buffer.Length)
+        {
+            buffer = new char[len];
+            len = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Length, 0);
+            if (len == 0) { return null; }
+        }
+        var result = new string(buffer, 0, (int)len);
+        const string uncPrefix = @"\\?\UNC\";
+        const string dosPrefix = @"\\?\";
+        if (result.StartsWith(uncPrefix, StringComparison.Ordinal)) { return @"\\" + result.Substring(uncPrefix.Length); }
+        if (result.StartsWith(dosPrefix, StringComparison.Ordinal)) { return result.Substring(dosPrefix.Length); }
+        return result;
     }
 
     /// <summary>

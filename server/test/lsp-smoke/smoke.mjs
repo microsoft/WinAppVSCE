@@ -8,9 +8,10 @@
 // Exit 0 = pass. Requires the server to be built (Debug) and the WinUI smoke fixture on disk.
 
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, join } from "node:path";
+import { tmpdir } from "node:os";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -3736,6 +3737,49 @@ async function main() {
     if (!stillAlive[0].name.includes("Page")) fail(`unexpected outline after didChangeWatchedFiles guard: '${stillAlive[0].name}'`);
   }
   console.log(`[ok] workspace/didChangeWatchedFiles: omitted/null/empty changes are a no-op; server stays responsive`);
+
+  // 556) workspace-trust boundary (behavioral negative): a document OUTSIDE every allowedRoot must be
+  // served project-less — the server must NOT reach the project resolver / MSBuild for it. We open a
+  // real .xaml under the OS temp dir (guaranteed outside the fixture root that was passed as the only
+  // allowedRoot) with an x:Class + event handler, and assert F12 on the handler yields NO location.
+  // The in-root fixture DID resolve earlier (definition #2 landed in the code-behind), so a null here
+  // proves the boundary gates resolution rather than the feature being globally broken.
+  {
+    const outDir = mkdtempSync(join(tmpdir(), "winui-xaml-oob-"));
+    const outFile = join(outDir, "OutOfRootPage.xaml");
+    const outText =
+      `<Page x:Class="OutOfRoot.OutOfRootPage" ${NS}>\n` +
+      `  <Grid>\n` +
+      `    <Button x:Name="OobButton" Click="OnOobClick" Content="Go" />\n` +
+      `  </Grid>\n` +
+      `</Page>\n`;
+    try {
+      writeFileSync(outFile, outText, "utf8");
+      const outUri = pathToFileURL(outFile).href;
+      const handlerAt = outText.indexOf("OnOobClick") + 3;
+      const outCaret = offsetToPosition(outText, handlerAt);
+
+      send({
+        method: "textDocument/didOpen",
+        params: { textDocument: { uri: outUri, languageId: "xaml", version: 1, text: outText } },
+      });
+      send({
+        id: 561,
+        method: "textDocument/definition",
+        params: { textDocument: { uri: outUri }, position: outCaret },
+      });
+      const oobDef = await waitFor(responseFor(561), 30000, "out-of-root definition");
+      if (oobDef.error) fail(`out-of-root definition errored: ${JSON.stringify(oobDef.error)}`);
+      const oobLoc = Array.isArray(oobDef.result) ? oobDef.result[0] : oobDef.result;
+      if (oobLoc && oobLoc.uri) {
+        fail(`out-of-root document was project-resolved (boundary bypass): ${JSON.stringify(oobLoc)}`);
+      }
+      send({ method: "textDocument/didClose", params: { textDocument: { uri: outUri } } });
+    } finally {
+      try { rmSync(outDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+  }
+  console.log(`[ok] workspace-trust boundary: an out-of-root .xaml is served project-less (F12 handler -> no location), while the in-root fixture resolved`);
 
   // 22) shutdown
   send({ id: 11, method: "shutdown", params: null });
