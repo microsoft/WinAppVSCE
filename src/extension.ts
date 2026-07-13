@@ -367,17 +367,11 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 }
 
 /**
- * A minimal debug adapter for the parent `winapp` session. The real debugging
- * happens in the child coreclr/node session started in
- * createDebugAdapterDescriptor, so this adapter does no debugging itself — but
- * it MUST complete the DAP launch handshake so VS Code reports the session as
- * successfully started. If it doesn't, vscode.debug.startDebugging(...) (and
- * F5) resolve to `false` even though the app launched fine (see issue #40).
- *
- * The handshake VS Code expects: respond to `initialize`, fire the
- * `initialized` event, acknowledge the `launch`/`attach` request, and respond
- * to `configurationDone`. Missing any of these makes VS Code treat the session
- * as failed-to-start.
+ * Minimal debug adapter for the parent `winapp` session. The real debugging
+ * happens in the child coreclr/node session, but this adapter must still
+ * complete the DAP launch handshake (initialize, initialized event,
+ * launch/attach, configurationDone) or startDebugging/F5 resolves to `false`
+ * even when the app launched fine (see issue #40).
  */
 class NoOpDebugAdapter implements vscode.DebugAdapter {
 	private sendMessageEmitter = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
