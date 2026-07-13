@@ -235,7 +235,7 @@
     "mocha": "^11.7.5",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.62.0"
+    "typescript-eslint": "^8.63.0"
   },
   "overrides": {
     "diff": "^8.0.3",
