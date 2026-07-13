@@ -23,25 +23,16 @@ WinApp extension so it works identically across all LSP-capable editors.
 
 ## 2. Problem / motivation
 
-Today, editing WinUI/WPF XAML in VS Code is **colorization only** — there is no first-party XAML
-IntelliSense outside Visual Studio (Windows-only). A Windows engineer who lives in VS Code (or Cursor /
-Windsurf) hand-types control names, guesses attribute names, and only discovers typos at build time.
-Our own UX battle-testing repeatedly hit avoidable mistakes (`IsCheckd` vs `IsChecked`, wrong resource
-keys) that a language server would catch instantly. This is the single biggest editor-parity gap
-between VS Code and Visual Studio for Windows app developers.
+Today, editing WinUI/WPF XAML in VS Code is **colorization only** — there is no first-party XAML IntelliSense outside Visual Studio (Windows-only). A Windows engineer who lives in VS Code (or Cursor / Windsurf) hand-types control names, guesses attribute names, and only discovers typos at build time. This is a big editor-parity gap between VS Code and Visual Studio for Windows app developers.
 
-## 3. Prior art & competitive analysis
+## 3. Similar Products
 
 | Tool | Approach | Gap we address |
 |------|----------|----------------|
 | **Visual Studio** (WPF/WinUI/UWP) | Rich native XAML IntelliSense via the in-proc XAML Language Service; Windows + VS only. | We bring comparable intelligence to VS Code / Cursor / Windsurf, cross-editor. |
 | **Avalonia for VS Code** | Ships a dedicated Avalonia XAML LSP (project-aware completion, diagnostics, go-to-def). | Proves the LSP model works well in VS Code; we target **WinUI/WinRT** metadata rather than Avalonia's. |
-| **Uno Platform for VS Code** | Roslyn-based XAML language server for Uno's XAML dialect. | Similar architecture; we key off the **Windows App SDK / WinMD** type system and `winapp` project model. |
+| **Uno Platform for VS Code** | Roslyn-based XAML language server for Uno's XAML dialect. | Similar architecture |
 | **Marketplace "XAML" extensions** | Grammar/syntax highlighting only. | We add semantic completion, diagnostics, navigation. |
-
-**Takeaway:** the winning pattern (Avalonia, Uno) is a **project-aware LSP backed by the framework's own
-type metadata**. We should follow it, sourcing types from WinUI/WinRT metadata (WinMD) + the project's
-referenced assemblies, reusing the design-time type resolver from **B4** where possible.
 
 ## 4. Goals / non-goals
 
@@ -59,7 +50,7 @@ referenced assemblies, reusing the design-time type resolver from **B4** where p
 **Non-goals (this spec)**
 - Visual rendering / preview (that is **C3**) and interactive design (**C4**).
 - Full binding-expression type-checking parity with the WinUI XAML compiler (best-effort only).
-- VB, C++/WinRT `.idl`, or RESW localization intelligence (future).
+- VB, C++/WinRT `.idl`, or RESW localization intelligence.
 
 ## 5. Proposed implementation
 
@@ -124,8 +115,6 @@ VS Code / Cursor / Windsurf  ──LSP──▶  WinApp XAML Language Server
 - **Bundled metadata snapshot vs project-restored metadata.** Snapshot gives instant value with zero
   setup but can drift from the project's SDK version; project-restored is accurate but needs a restore.
   Ship both: snapshot as fallback, project metadata when available.
-- **One server for all XAML dialects vs WinUI-only.** A pluggable metadata provider lets us add WPF/Uno
-  later without a new server; adds abstraction cost now. Recommend pluggable, WinUI provider first.
 
 ## 8. What will / won't be supported
 
@@ -152,15 +141,3 @@ VS Code / Cursor / Windsurf  ──LSP──▶  WinApp XAML Language Server
 3. How much `{x:Bind}` checking is "enough" for v1 to feel credible vs. VS?
 4. Do we own the XAML TextMate grammar, or depend on an existing community grammar?
 5. Cross-platform ambition: is WPF/Uno support a committed follow-up or merely "designed for"?
-
-## Effort & phasing
-
-> Estimates are for the **extension + language server**, and assume B4 provides (or will provide) a
-> reusable type-resolution engine. They **exclude** B4 engine development itself. Confidence: medium.
-
-| Phase | Scope | Estimate |
-|-------|-------|----------|
-| P1 | LSP scaffolding, parser, namespace/element/attribute completion, hover | 6–9 wk |
-| P2 | Value completion (enums/brushes/resources/events), diagnostics + quick fixes | 5–8 wk |
-| P3 | Go-to-def / find-refs XAML↔C#, formatting, perf hardening, multi-editor QA | 5–9 wk |
-| **Total** | | **16–26 engineer-weeks** |

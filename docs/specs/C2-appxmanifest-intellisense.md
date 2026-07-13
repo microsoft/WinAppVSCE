@@ -26,8 +26,7 @@ the extension's existing **visual** manifest editor with a great **text-editing*
 The manifest is central to every packaged Windows app, yet hand-editing it in VS Code is unguided XML.
 Developers must memorize the sprawling capability list, which `xmlns` prefix a capability needs, exact
 enum spellings (`ProcessorArchitecture`, `TrustLevel`, target device families), and four-part version
-rules. Mistakes surface late (at pack/deploy) with cryptic errors. Our battle-testing saw manifest
-typos (wrong `Executable`, missing capability namespace) cause confusing packaging failures. The
+rules. Mistakes surface late (at pack/deploy) with cryptic errors. The
 extension already understands manifests deeply (it ships a **visual editor** with typed extensions and
 real-time validation); C2 exposes that intelligence to people editing the XML directly.
 
@@ -74,11 +73,6 @@ Cursor/Windsurf (which already run VS Code extensions). Given manifests are Wind
 logic is already in-extension, (A) is preferred; keep the provider logic editor-agnostic so it could be
 lifted into an LSP later.
 
-- **Schema source:** bundle the MSIX manifest XSDs (foundation + uap/rescap/desktop/com/…); build a
-  prefix↔namespace map so completion knows which prefix a capability/extension needs.
-- **Semantic layer:** reuse the visual editor's field validators; add build-output cross-checks by asking
-  the winapp CLI/project model (B) for the resolved output folder + produced `.exe` names.
-
 ## 6. API / contribution surface
 
 ```jsonc
@@ -99,41 +93,18 @@ lifted into an LSP later.
 
 - **Bundled XSD vs generic XML-extension dependency.** Bundling gives zero-config correctness and lets us
   layer semantics; costs us keeping schemas current with new Windows SDK releases (low churn).
-- **Reuse visual-editor validator vs new engine.** Reuse avoids drift and duplicate bugs; couples C2 to
-  that module's internals (acceptable — same team/repo).
 - **Warnings vs errors for semantic checks.** Build-output cross-checks can false-positive before a build;
   default them to **warning** and make the level configurable.
 
-## 8. What will / won't be supported
-
-| Supported (v1) | Not in v1 |
-|---|---|
-| Element/attribute/enum/capability completion | Store policy / certification rules |
-| Namespace + `IgnorableNamespaces` auto-insertion | `.wapproj` / packaging-project MSBuild intelligence |
-| Hover docs from schema + curated capability copy | Arbitrary third-party manifest extension vendors |
-| Executable/entry-point cross-check with build output | Full XSD 1.1 assertion coverage |
-| Quick fixes (namespace, version, exe name) | |
-
-## 9. Dependencies & risks
+## 8. Dependencies & risks
 
 - **Schema currency:** must track Windows SDK manifest schema updates (bundled + refreshable).
 - **Two-view sync:** text IntelliSense and the visual editor must agree; mitigated by sharing the validator.
 - **Build-output cross-check** depends on B's project/output resolution being reliable.
 
-## 10. Open questions
+## 9. Open questions
 
-1. Do we depend on the Red Hat XML extension for base XML services, or keep C2 self-contained?
+1. Do we depend on the Red Hat XML extension for base XML services, or keep it self-contained?
 2. Should selecting a namespaced capability edit `IgnorableNamespaces` automatically, or only offer a quick fix?
 3. How do we surface the relationship to the visual editor (CodeLens? status-bar toggle? both)?
 4. Do we validate against the SDK version the project targets, or the newest bundled schema?
-
-## Effort & phasing
-
-> Assumes substantial reuse of the extension's existing manifest schema + validator. Confidence: medium-high.
-
-| Phase | Scope | Estimate |
-|-------|-------|----------|
-| P1 | Schema bundling + completion (elements/attributes/enums/capabilities) + namespace auto-insert | 2–4 wk |
-| P2 | Hover docs + semantic diagnostics (versions, GUIDs, DN, executable cross-check) + quick fixes | 2–3 wk |
-| P3 | Visual-editor sync, polish, multi-editor QA | 1–2 wk |
-| **Total** | | **5–9 engineer-weeks** |
