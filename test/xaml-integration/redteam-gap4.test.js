@@ -23,7 +23,7 @@ function lineCharToOffset(text, pos) {
 }
 
 function clean(buffer) {
-  return buffer.replace("|", "");
+  return buffer.replaceAll("|", "");
 }
 
 function assertZeroWidthRootXmlnsEdit(buffer, edit, expectedText) {

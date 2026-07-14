@@ -335,7 +335,7 @@ describe("WinUI XAML red-team 19 — light secondary regression sweep", function
     assert.ok(/SmokeAccentBrush/.test(md), `resource hover should name SmokeAccentBrush; buffer=${hoverBuffer}; got ${md}`);
     assert.ok(/SolidColorBrush/.test(md), `resource hover should include SolidColorBrush; buffer=${hoverBuffer}; got ${md}`);
 
-    const defBuffer = hoverBuffer.replace("SmokeAccent|Brush", "SmokeAccent|Brush");
+    const defBuffer = hoverBuffer;
     const defs = await h.definitionsAt(defBuffer);
     assert.ok(defs.length > 0, `resource F12 should find App.xaml; buffer=${defBuffer}; got ${JSON.stringify(defs)}`);
     assert.ok(path.basename(defs[0].fsPath) === APP, `resource F12 should target ${APP}; buffer=${defBuffer}; got ${JSON.stringify(defs)}`);
