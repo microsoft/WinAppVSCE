@@ -1493,7 +1493,7 @@ async function main() {
     (d) => d.some((x) => x.code === "WXAML0005"),
     "function-arg-diagnostic");
   const fnArgBad = fnArgDiag.filter((x) => x.code === "WXAML0005");
-  if (fnArgBad.length !== 1) fail(`expected exactly 1 WXAML0005 for the bogus function argument (valid args must stay silent), got ${fnArgBad.length}: ${JSON.stringify(fnArgDiag.map((x) => `${x.code}:${x.message}`))}`);
+  if (fnArgBad.length !== 1) fail(`expected exactly 1 WXAML0005 for the bogus function argument (valid args must stay silent), got ${fnArgBad.length}: ${JSON.stringify(fnArgDiag.map((x) => x.code + ":" + x.message))}`);
   if (!/DefinitelyMissingArg28/.test(fnArgBad[0].message)) fail(`function-arg diagnostic should name the bogus argument (got ${JSON.stringify(fnArgBad[0].message)})`);
   console.log(`[ok] validation(x:Bind function arg): bogus arg -> 1 WXAML0005; valid args silent`);
 
@@ -1511,7 +1511,7 @@ async function main() {
     `  <Page.Resources>\n    <SolidColorBrush x:Key="ScopeKey28" Color="Red" />\n  </Page.Resources>\n` +
     `  <Grid>\n    <Grid.Resources>\n      <SolidColorBrush x:Key="ScopeKey28" Color="Blue" />\n    </Grid.Resources>\n` +
     `    <Border Background="{StaticResource Scope|Key28}" />\n  </Grid>\n</Page>`;
-  const shadowClean = shadowBody.replace("|", "");
+  const shadowClean = shadowBody.replaceAll("|", "");
   const shadowLines = shadowClean.split("\n");
   const expectedShadowLine = shadowLines.findIndex((l) => l.includes('x:Key="ScopeKey28"') && l.includes('Color="Blue"'));
   const shadowDef = await definitionWith(321, shadowBody, "scoped-resource-f12");
@@ -2649,7 +2649,7 @@ async function main() {
   }
   // A partial URI filters on the whole value: the presentation prefix matches the WinUI URI but not the mc URI.
   const xvHttp = (await completeItemsWith(432, `<Page ${NS} xmlns:zzz="http://schemas.microsoft.com/winfx|">\n  <Grid />\n</Page>`, "xmlns-value-partial")).map((i) => i.label);
-  if (!xvHttp.includes(PRES) || xvHttp.includes(MC)) {
+  if (!xvHttp.some((l) => l === PRES) || xvHttp.some((l) => l === MC)) {
     fail(`partial winfx URI must match the WinUI URIs but not the openxmlformats mc URI (got ${JSON.stringify(xvHttp.filter((l) => l.startsWith("http")))})`);
   }
   console.log(`[ok] xmlns value completion -> framework URIs + using: scheme, whole-value replacement, prefix-filtered`);
@@ -3448,7 +3448,7 @@ async function main() {
   {
     const body = pageCls('<TextBlock Foreground="Corn|silk" Tag="tail" />');
     const items = await completeItemsWith(483, body, "namedcolor-midtoken");
-    const text = body.replace("|", "");
+    const text = body.replaceAll("|", "");
     const cs = items.find((i) => i.label === "Cornsilk" && i.kind === 16);
     if (!cs?.textEdit) fail(`mid-token Cornsilk should carry a TextEdit: ${JSON.stringify(cs)}`);
     const applied = applyEdit(text, cs.textEdit.range, cs.textEdit.newText);
@@ -3460,7 +3460,7 @@ async function main() {
   {
     const body = pageCls('<Grid>\n    <Grid.RowDefinitions>\n      <RowDefinition Height="A|uto" />\n    </Grid.RowDefinitions>\n  </Grid>');
     const items = await completeItemsWith(484, body, "gridlength-midtoken");
-    const text = body.replace("|", "");
+    const text = body.replaceAll("|", "");
     const au = items.find((i) => i.label === "Auto" && (i.detail ?? "").startsWith("GridLength"));
     if (!au?.textEdit) fail(`mid-token Auto should carry a TextEdit: ${JSON.stringify(au)}`);
     const applied = applyEdit(text, au.textEdit.range, au.textEdit.newText);

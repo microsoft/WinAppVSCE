@@ -336,8 +336,8 @@ describe("WinUI XAML — xmlns value completion", function () {
 
   it("filters on the whole value — a winfx prefix matches the WinUI URIs but not the mc URI", async () => {
     const labels = xv(await h.completionItemsAt(page('<Grid xmlns:zzz="http://schemas.microsoft.com/winfx|" />'))).map((i) => i.label);
-    assert.ok(labels.includes(PRES), `expected the WinUI presentation URI; got ${JSON.stringify(labels)}`);
-    assert.ok(!labels.includes(MC), `the openxmlformats mc URI must not match a winfx prefix; got ${JSON.stringify(labels)}`);
+    assert.ok(labels.some((l) => l === PRES), `expected the WinUI presentation URI; got ${JSON.stringify(labels)}`);
+    assert.ok(!labels.some((l) => l === MC), `the openxmlformats mc URI must not match a winfx prefix; got ${JSON.stringify(labels)}`);
   });
 
   it("does not offer xmlns values on a non-xmlns attribute", async () => {
@@ -1396,7 +1396,7 @@ describe("WinUI XAML — RelativePanel + Setter.Target element references", func
       `    <Button RelativePanel.RightOf="An|chor" />\n` +
       `  </RelativePanel>\n</Page>`;
     // The multi-line h.NS header shifts line numbers, so locate the declaration line dynamically.
-    const declLine = buf.replace("|", "").split("\n").findIndex((l) => l.includes('x:Name="Anchor"'));
+    const declLine = buf.replaceAll("|", "").split("\n").findIndex((l) => l.includes('x:Name="Anchor"'));
     const defs = await h.definitionsAt(buf);
     assert.ok(defs.some((d) => d.line === declLine), `expected the x:Name="Anchor" decl on line ${declLine}; got ${JSON.stringify(defs)}`);
   });
@@ -1462,14 +1462,14 @@ describe("WinUI XAML — VSM Setter.Target / Storyboard.TargetProperty member na
 
   it("F12 on the Setter.Target member does not navigate to the x:Name declaration (framework member, graceful)", async () => {
     const buf = setterTarget("Chrome.Opac|ity");
-    const declLine = buf.replace("|", "").split("\n").findIndex((l) => l.includes('x:Name="Chrome"'));
+    const declLine = buf.replaceAll("|", "").split("\n").findIndex((l) => l.includes('x:Name="Chrome"'));
     const defs = await h.definitionsAt(buf);
     assert.ok(!defs.some((d) => d.line === declLine), `the member caret must not resolve the element decl; got ${JSON.stringify(defs)}`);
   });
 
   it("F12 on the Setter.Target element segment still navigates to the x:Name declaration (round-80 intact)", async () => {
     const buf = setterTarget("Chr|ome.Opacity");
-    const declLine = buf.replace("|", "").split("\n").findIndex((l) => l.includes('x:Name="Chrome"'));
+    const declLine = buf.replaceAll("|", "").split("\n").findIndex((l) => l.includes('x:Name="Chrome"'));
     const defs = await h.definitionsAt(buf);
     assert.ok(defs.some((d) => d.line === declLine), `expected the x:Name="Chrome" decl on line ${declLine}; got ${JSON.stringify(defs)}`);
   });
