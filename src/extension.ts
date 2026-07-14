@@ -18,33 +18,18 @@ const DEBUGGER_EXTENSION_MAP: Record<string, { id: string; name: string }> = {
 };
 
 /**
- * Check that the VS Code extension required for the given debugger type is installed.
- * If it is not installed, show a clear error message with an option to install it.
- * Returns true if the extension is present (or the debugger type has no known requirement),
- * false if the extension is missing.
+ * Debugger types to consider (in preference order) when a launch configuration
+ * doesn't specify one, and we need to reuse an already-installed extension.
  */
-async function ensureDebuggerExtensionInstalled(debuggerType: string): Promise<boolean> {
-	const requirement = DEBUGGER_EXTENSION_MAP[debuggerType];
-	if (!requirement) {
-		return true;
-	}
+const DEFAULT_DEBUGGER_CANDIDATES: string[] = ['coreclr', 'cppvsdbg'];
 
-	if (vscode.extensions.getExtension(requirement.id)) {
-		return true;
-	}
-
-	// Use a modal so the user makes a deliberate choice before the session starts,
-	// rather than a passive notification they can miss (see issue #32).
-	const choice = await vscode.window.showErrorMessage(
-		`The WinApp debugger needs the ${requirement.name} extension to debug "${debuggerType}" apps, but it isn't installed.`,
-		{ modal: true },
-		'Install and Retry'
-	);
-
-	if (choice !== 'Install and Retry') {
-		return false;
-	}
-
+/**
+ * Install a VS Code extension and activate it in this session so debugging can
+ * continue without a full window reload. If VS Code hasn't surfaced it to this
+ * extension host yet, fall back to prompting the user to reload.
+ * Returns true if the extension is installed and usable now, false otherwise.
+ */
+async function installAndActivateExtension(requirement: { id: string; name: string }): Promise<boolean> {
 	try {
 		await vscode.window.withProgress(
 			{ location: vscode.ProgressLocation.Notification, title: `Installing ${requirement.name}…` },
@@ -60,9 +45,6 @@ async function ensureDebuggerExtensionInstalled(debuggerType: string): Promise<b
 		return false;
 	}
 
-	// Activate the freshly installed extension so debugging can continue in this
-	// same session without a full window reload. If VS Code hasn't surfaced it to
-	// this extension host yet, fall back to asking the user to reload and retry.
 	const installed = vscode.extensions.getExtension(requirement.id);
 	if (!installed) {
 		vscode.window.showInformationMessage(
@@ -86,6 +68,83 @@ async function ensureDebuggerExtensionInstalled(debuggerType: string): Promise<b
 	}
 
 	return true;
+}
+
+/**
+ * Check that the VS Code extension required for the given debugger type is installed.
+ * If it is not installed, show an actionable modal offering to install it.
+ * Returns true if the extension is present (or the debugger type has no known requirement),
+ * false if the extension is missing and wasn't installed.
+ */
+async function ensureDebuggerExtensionInstalled(debuggerType: string): Promise<boolean> {
+	const requirement = DEBUGGER_EXTENSION_MAP[debuggerType];
+	if (!requirement) {
+		return true;
+	}
+
+	if (vscode.extensions.getExtension(requirement.id)) {
+		return true;
+	}
+
+	// Use a modal so the user makes a deliberate choice before the session starts,
+	// rather than a passive notification they can miss (see issue #32).
+	const choice = await vscode.window.showErrorMessage(
+		`The WinApp debugger needs the ${requirement.name} extension to debug "${debuggerType}" apps, but it isn't installed.`,
+		{ modal: true },
+		'Install and Retry'
+	);
+
+	if (choice !== 'Install and Retry') {
+		return false;
+	}
+
+	return installAndActivateExtension(requirement);
+}
+
+/**
+ * Resolve the debugger type for a session and make sure its backing extension is
+ * installed. When the configuration specifies a debuggerType, ensure that one.
+ * When it doesn't (e.g. first F5 with no launch.json), reuse an already-installed
+ * debugger extension if there is one, otherwise let the user pick the extension
+ * that matches their project type (C# vs C/C++) instead of guessing.
+ * Returns the resolved debugger type, or undefined if the user cancelled.
+ */
+async function resolveDebuggerType(explicitType: string | undefined): Promise<string | undefined> {
+	if (explicitType) {
+		return (await ensureDebuggerExtensionInstalled(explicitType)) ? explicitType : undefined;
+	}
+
+	// No debuggerType specified: reuse an already-installed debugger extension.
+	for (const candidate of DEFAULT_DEBUGGER_CANDIDATES) {
+		const requirement = DEBUGGER_EXTENSION_MAP[candidate];
+		if (requirement && vscode.extensions.getExtension(requirement.id)) {
+			return candidate;
+		}
+	}
+
+	// First run with nothing installed and no debuggerType configured: let the
+	// user choose the debugger that matches their project rather than assuming C#.
+	const installCsharp = 'Install C# (.NET)';
+	const installCpp = 'Install C/C++';
+	const choice = await vscode.window.showErrorMessage(
+		'To launch your app you need a debugger extension installed. Since no "debuggerType" is set, ' +
+		'install the one that matches your project type:',
+		{ modal: true },
+		installCsharp,
+		installCpp
+	);
+
+	let selected: string | undefined;
+	if (choice === installCsharp) {
+		selected = 'coreclr';
+	} else if (choice === installCpp) {
+		selected = 'cppvsdbg';
+	} else {
+		return undefined;
+	}
+
+	const requirement = DEBUGGER_EXTENSION_MAP[selected];
+	return (await installAndActivateExtension(requirement)) ? selected : undefined;
 }
 
 /**
@@ -195,13 +254,16 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 			config.request = 'launch';
 		}
 
-		// Ensure the extension backing the underlying debugger (e.g. the C#
-		// extension for coreclr) is installed before the session starts, so a
-		// first-run user isn't dropped into a half-started session (issue #32).
-		const debuggerType = config.debuggerType || 'coreclr';
-		if (!await ensureDebuggerExtensionInstalled(debuggerType)) {
+		// Ensure the extension backing the underlying debugger is installed before
+		// the session starts, so a first-run user isn't dropped into a half-started
+		// session (issue #32). When no debuggerType is configured, let the user
+		// choose the extension matching their project instead of assuming coreclr.
+		const debuggerType = await resolveDebuggerType(config.debuggerType);
+		if (!debuggerType) {
 			return undefined;
 		}
+		// Persist the resolved type so the attach step uses the matching debugger.
+		config.debuggerType = debuggerType;
 
 		return config;
 	}
