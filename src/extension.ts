@@ -10,7 +10,8 @@ import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
 	getDebuggerExtensionRequirement,
-	getDebuggerTypeFromChoice
+	getDebuggerTypeFromChoice,
+	inferDebuggerTypeFromProject
 } from './debugger-resolver';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
@@ -155,12 +156,32 @@ async function ensureDebuggerExtensionInstalled(debuggerType: string): Promise<b
  * that matches their project type (C#/.NET, C/C++, or Node/Electron) instead of guessing.
  * Returns the resolved debugger type, or undefined if the user cancelled.
  */
-async function resolveDebuggerType(explicitType: string | undefined): Promise<string | undefined> {
+async function resolveDebuggerType(
+	explicitType: string | undefined,
+	folder: vscode.WorkspaceFolder | undefined
+): Promise<string | undefined> {
 	if (explicitType) {
 		return (await ensureDebuggerExtensionInstalled(explicitType)) ? explicitType : undefined;
 	}
 
-	// No debuggerType specified: reuse an already-installed debugger extension.
+	// No debuggerType specified: infer from project files before falling back to
+	// installed extension reuse so Node/Electron projects are not misclassified
+	// just because a C# or C++ debugger extension is already installed.
+	if (folder) {
+		const projectFiles = await glob(['**/*.csproj', '**/*.fsproj', '**/*.vbproj', '**/*.vcxproj', '**/package.json'], {
+			cwd: folder.uri.fsPath,
+			absolute: false,
+			nocase: true,
+			ignore: ['**/node_modules/**', '**/.git/**', '**/obj/**', '**/bin/**', '**/dist/**', '**/out/**', '**/.vs/**', '**/AppX/**', '**/.winapp/**', '**/packages/**']
+		});
+		const inferredType = inferDebuggerTypeFromProject(projectFiles);
+		if (inferredType) {
+			return (await ensureDebuggerExtensionInstalled(inferredType)) ? inferredType : undefined;
+		}
+	}
+
+	// Reuse an already-installed debugger extension only when project inference
+	// is unavailable or ambiguous.
 	const installedCandidate = chooseInstalledDebuggerType(vscode.extensions.all.map(extension => extension.id));
 	if (installedCandidate) {
 		return installedCandidate;
@@ -286,7 +307,7 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		// the session starts, so a first-run user isn't dropped into a half-started
 		// session (issue #32). When no debuggerType is configured, let the user
 		// choose the extension matching their project instead of assuming coreclr.
-		const debuggerType = await resolveDebuggerType(config.debuggerType);
+		const debuggerType = await resolveDebuggerType(config.debuggerType, folder);
 		if (!debuggerType) {
 			return undefined;
 		}
@@ -481,16 +502,56 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 					});
 				});
 
+				let runProcessExited = false;
+				let earlyWatchSettled = false;
+				let earlyWatchTimeout: ReturnType<typeof setTimeout> | undefined;
+				let resolveEarlyAttachFailure: (failed: boolean) => void = () => { };
+				let terminateDisposable: vscode.Disposable | undefined;
+				const finishEarlyAttachWatch = (failed: boolean): void => {
+					if (earlyWatchSettled) {
+						return;
+					}
+					earlyWatchSettled = true;
+					if (earlyWatchTimeout) {
+						clearTimeout(earlyWatchTimeout);
+					}
+					terminateDisposable?.dispose();
+					resolveEarlyAttachFailure(failed);
+				};
+
+				const earlyAttachFailure = new Promise<boolean>((resolve) => {
+					resolveEarlyAttachFailure = resolve;
+					earlyWatchTimeout = setTimeout(() => finishEarlyAttachWatch(false), 1500);
+				});
+
+				runProcess.once('close', () => {
+					runProcessExited = true;
+					finishEarlyAttachWatch(false);
+				});
+
+				terminateDisposable = vscode.debug.onDidTerminateDebugSession((ended) => {
+					if (ended.parentSession === session && !runProcessExited) {
+						finishEarlyAttachWatch(true);
+					}
+				});
+
 				const debugConfiguration = buildAttachDebugConfiguration(currentDebuggerType, processId);
 				try {
 					const started = await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
 					if (!started) {
+						finishEarlyAttachWatch(false);
 						runProcess.kill();
 						return undefined;
 					}
 				} catch (error) {
+					finishEarlyAttachWatch(false);
 					runProcess.kill();
 					throw error;
+				}
+
+				if (await earlyAttachFailure) {
+					runProcess.kill();
+					return undefined;
 				}
 
 				return runProcess;

@@ -163,8 +163,12 @@
               },
               "debuggerType": {
                 "type": "string",
-                "description": "The underlying debugger to use (e.g., 'coreclr', 'cppvsdbg')",
-                "default": "coreclr"
+                "enum": [
+                  "coreclr",
+                  "cppvsdbg",
+                  "node"
+                ],
+                "description": "Optional override for the underlying debugger to use. Omit to let WinApp infer or prompt for the best debugger ('coreclr', 'cppvsdbg', or 'node')."
               },
               "workingDirectory": {
                 "type": "string",
@@ -195,8 +199,7 @@
             "body": {
               "type": "winapp",
               "request": "launch",
-              "name": "WinApp: Launch and Attach",
-              "debuggerType": "coreclr"
+              "name": "WinApp: Launch and Attach"
             }
           }
         ]

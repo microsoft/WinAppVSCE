@@ -53,3 +53,36 @@ export function getDebuggerTypeFromChoice(choice: string | undefined): string | 
 	}
 	return undefined;
 }
+
+/**
+ * Infers the debugger from project files only when exactly one project family is
+ * present. Precedence is deliberately conservative: .NET, C++ and Node signals
+ * are collected first, and mixed families return undefined so the installed
+ * debugger reuse/picker path can decide instead of guessing.
+ */
+export function inferDebuggerTypeFromProject(fileNames: readonly string[]): string | undefined {
+	let hasDotNet = false;
+	let hasCpp = false;
+	let hasNode = false;
+
+	for (const fileName of fileNames) {
+		const normalized = fileName.replace(/\\/g, '/').toLowerCase();
+		const baseName = normalized.substring(normalized.lastIndexOf('/') + 1);
+
+		if (baseName.endsWith('.csproj') || baseName.endsWith('.fsproj') || baseName.endsWith('.vbproj')) {
+			hasDotNet = true;
+		} else if (baseName.endsWith('.vcxproj')) {
+			hasCpp = true;
+		} else if (baseName === 'package.json') {
+			hasNode = true;
+		}
+	}
+
+	const matches = [
+		hasDotNet ? 'coreclr' : undefined,
+		hasCpp ? 'cppvsdbg' : undefined,
+		hasNode ? 'node' : undefined
+	].filter((debuggerType): debuggerType is string => debuggerType !== undefined);
+
+	return matches.length === 1 ? matches[0] : undefined;
+}
