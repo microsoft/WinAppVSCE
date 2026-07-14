@@ -77,7 +77,7 @@ describe('debugger resolver helpers', () => {
 			assert.equal(inferDebuggerTypeFromProject(['native/App.vcxproj']), 'cppvsdbg');
 		});
 
-		it('infers node for package.json or Electron-style Node projects without .NET or C++ projects', () => {
+		it('infers node for package.json or Electron-style Node projects without native signals', () => {
 			assert.equal(inferDebuggerTypeFromProject(['package.json']), 'node');
 			assert.equal(inferDebuggerTypeFromProject(['apps/electron/package.json']), 'node');
 		});
@@ -85,7 +85,10 @@ describe('debugger resolver helpers', () => {
 		it('returns undefined for mixed or ambiguous project families', () => {
 			assert.equal(inferDebuggerTypeFromProject(['App.csproj', 'package.json']), undefined);
 			assert.equal(inferDebuggerTypeFromProject(['App.csproj', 'Native.vcxproj']), undefined);
+			// C++ plus package.json is ambiguous: it could be a native app with JS tooling.
 			assert.equal(inferDebuggerTypeFromProject(['Native.vcxproj', 'package.json']), undefined);
+			assert.equal(inferDebuggerTypeFromProject(['package.json', 'Cargo.toml']), undefined);
+			assert.equal(inferDebuggerTypeFromProject(['src-tauri/tauri.conf.json', 'package.json']), undefined);
 		});
 
 		it('returns undefined for empty or unknown file listings', () => {

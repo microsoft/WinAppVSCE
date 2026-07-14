@@ -168,7 +168,7 @@ async function resolveDebuggerType(
 	// installed extension reuse so Node/Electron projects are not misclassified
 	// just because a C# or C++ debugger extension is already installed.
 	if (folder) {
-		const projectFiles = await glob(['**/*.csproj', '**/*.fsproj', '**/*.vbproj', '**/*.vcxproj', '**/package.json'], {
+		const projectFiles = await glob(['**/*.csproj', '**/*.fsproj', '**/*.vbproj', '**/*.vcxproj', '**/package.json', '**/Cargo.toml', '**/tauri.conf.json'], {
 			cwd: folder.uri.fsPath,
 			absolute: false,
 			nocase: true,
@@ -430,7 +430,12 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				return debugConfiguration;
 			};
 
-			const launchAndAttach = async (currentDebuggerType: string): Promise<ReturnType<typeof spawn> | undefined> => {
+			interface LaunchAttachResult {
+				runProcess: ReturnType<typeof spawn>;
+				hasExited: () => boolean;
+			}
+
+			const launchAndAttach = async (currentDebuggerType: string): Promise<LaunchAttachResult | undefined> => {
 				const spawnArgs = [...baseSpawnArgs];
 				let args = config.args || '';
 				if (currentDebuggerType === 'node') {
@@ -554,15 +559,18 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 					return undefined;
 				}
 
-				return runProcess;
+				return {
+					runProcess,
+					hasExited: () => runProcessExited
+				};
 			};
 
 			// Start the real debug session as a child of the winapp session.
 			// startDebugging resolves false when the child debugger can't attach —
 			// most commonly because the installed debugger extension doesn't match
 			// the project type (e.g. a C# extension was reused for a C/C++ app).
-			let runProcess = await launchAndAttach(debuggerType);
-			if (!runProcess) {
+			let launchResult = await launchAndAttach(debuggerType);
+			if (!launchResult) {
 				const debuggerName = getDebuggerExtensionRequirement(debuggerType)?.name ?? `"${debuggerType}"`;
 				const retryDebuggerType = await promptAndInstallDebuggerChoice(
 					`The ${debuggerName} debugger couldn't attach to your app. ` +
@@ -571,8 +579,8 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 					'you selected it after the previous debugger failed to attach'
 				);
 				if (retryDebuggerType) {
-					runProcess = await launchAndAttach(retryDebuggerType);
-					if (!runProcess) {
+					launchResult = await launchAndAttach(retryDebuggerType);
+					if (!launchResult) {
 						const retryDebuggerName = getDebuggerExtensionRequirement(retryDebuggerType)?.name ?? `"${retryDebuggerType}"`;
 						vscode.window.showErrorMessage(
 							`The ${retryDebuggerName} debugger still couldn't attach to your app. Check your project type and debugger configuration, then try again.`
@@ -580,25 +588,42 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 					}
 				}
 
-				if (!runProcess) {
+				if (!launchResult) {
 					return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
 				}
 			}
 
+			const { runProcess, hasExited: hasRunProcessExited } = launchResult;
+
 			// When the child debug session ends, kill the winapp run process and stop the parent session
 			const parentSession = session;
+			let parentStopRequested = false;
+			const stopParentDebugging = (): void => {
+				if (parentStopRequested) {
+					return;
+				}
+				parentStopRequested = true;
+				vscode.debug.stopDebugging(parentSession);
+			};
+
 			const disposable = vscode.debug.onDidTerminateDebugSession((ended) => {
 				if (ended.parentSession === parentSession) {
 					disposable.dispose();
-					runProcess.kill();
-					vscode.debug.stopDebugging(parentSession);
+					if (!hasRunProcessExited()) {
+						runProcess.kill();
+					}
+					stopParentDebugging();
 				}
 			});
 
 			// When the winapp run process exits (app closed), stop the debug session
-			runProcess.on('close', () => {
-				vscode.debug.stopDebugging(parentSession);
-			});
+			if (hasRunProcessExited()) {
+				stopParentDebugging();
+			} else {
+				runProcess.once('close', () => {
+					stopParentDebugging();
+				});
+			}
 
 			// Return an inline no-op adapter — the real debugging happens in the child session above
 			return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
