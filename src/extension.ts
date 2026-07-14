@@ -338,23 +338,42 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				debugConfiguration.processId = processId;
 			}
 
-			// Start the real debug session as a child of the winapp session
-			await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
-
-			// When the child debug session ends, kill the winapp run process and stop the parent session
 			const parentSession = session;
+
+			// Tear down exactly once, whichever side finishes first: the child debug
+			// session ending or the winapp run process exiting. Killing the run
+			// process here prevents it from being orphaned in the background.
+			let teardownRequested = false;
+			const teardown = () => {
+				if (teardownRequested) {
+					return;
+				}
+				teardownRequested = true;
+				disposable.dispose();
+				runProcess.kill();
+				vscode.debug.stopDebugging(parentSession);
+			};
+
+			// When the child debug session ends, tear down the run process and parent session
 			const disposable = vscode.debug.onDidTerminateDebugSession((ended) => {
 				if (ended.parentSession === parentSession) {
-					disposable.dispose();
-					runProcess.kill();
-					vscode.debug.stopDebugging(parentSession);
+					teardown();
 				}
 			});
 
 			// When the winapp run process exits (app closed), stop the debug session
 			runProcess.on('close', () => {
-				vscode.debug.stopDebugging(parentSession);
+				teardown();
 			});
+
+			// Start the real debug session as a child of the winapp session. If it
+			// throws, tear down so the winapp run process is not left orphaned.
+			try {
+				await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
+			} catch (startError) {
+				teardown();
+				throw startError;
+			}
 
 			// Return an inline no-op adapter — the real debugging happens in the child session above
 			return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
