@@ -24,12 +24,32 @@ const DEBUGGER_EXTENSION_MAP: Record<string, { id: string; name: string }> = {
 const DEFAULT_DEBUGGER_CANDIDATES: string[] = ['coreclr', 'cppvsdbg'];
 
 /**
+ * Output channel for debugger-related activity (e.g. auto-installed extensions),
+ * so the user has a durable record of why WinApp added an extension. Created lazily.
+ */
+let debuggerLogChannel: vscode.OutputChannel | undefined;
+
+function logDebuggerActivity(message: string): void {
+	if (!debuggerLogChannel) {
+		debuggerLogChannel = vscode.window.createOutputChannel('WinApp Debugger');
+	}
+	debuggerLogChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
+	console.log(`[WinApp] ${message}`);
+}
+
+/**
  * Install a VS Code extension and activate it in this session so debugging can
  * continue without a full window reload. If VS Code hasn't surfaced it to this
  * extension host yet, fall back to prompting the user to reload.
+ * `reason` explains why the extension is being added and is written to the
+ * "WinApp Debugger" output channel so the change isn't a surprise to the user.
  * Returns true if the extension is installed and usable now, false otherwise.
  */
-async function installAndActivateExtension(requirement: { id: string; name: string }): Promise<boolean> {
+async function installAndActivateExtension(
+	requirement: { id: string; name: string },
+	reason: string
+): Promise<boolean> {
+	logDebuggerActivity(`Installing ${requirement.name} (${requirement.id}) because ${reason}.`);
 	try {
 		await vscode.window.withProgress(
 			{ location: vscode.ProgressLocation.Notification, title: `Installing ${requirement.name}…` },
@@ -67,7 +87,40 @@ async function installAndActivateExtension(requirement: { id: string; name: stri
 		}
 	}
 
+	logDebuggerActivity(`${requirement.name} installed and ready.`);
+	vscode.window.showInformationMessage(
+		`WinApp installed ${requirement.name} to debug your app. See the "WinApp Debugger" output channel for details.`
+	);
 	return true;
+}
+
+/**
+ * Show a modal letting the user pick and install the debugger extension that
+ * matches their project (C# vs C/C++). Used both on first run (no debuggerType)
+ * and when an attach fails because the installed debugger doesn't match the
+ * project. Returns the resolved debugger type, or undefined if cancelled.
+ */
+async function promptAndInstallDebuggerChoice(message: string, reason: string): Promise<string | undefined> {
+	const installCsharp = 'Install C# (.NET)';
+	const installCpp = 'Install C/C++';
+	const choice = await vscode.window.showErrorMessage(
+		message,
+		{ modal: true },
+		installCsharp,
+		installCpp
+	);
+
+	let selected: string | undefined;
+	if (choice === installCsharp) {
+		selected = 'coreclr';
+	} else if (choice === installCpp) {
+		selected = 'cppvsdbg';
+	} else {
+		return undefined;
+	}
+
+	const requirement = DEBUGGER_EXTENSION_MAP[selected];
+	return (await installAndActivateExtension(requirement, reason)) ? selected : undefined;
 }
 
 /**
@@ -98,7 +151,10 @@ async function ensureDebuggerExtensionInstalled(debuggerType: string): Promise<b
 		return false;
 	}
 
-	return installAndActivateExtension(requirement);
+	return installAndActivateExtension(
+		requirement,
+		`the "${debuggerType}" debugger configured for this launch requires it`
+	);
 }
 
 /**
@@ -124,27 +180,11 @@ async function resolveDebuggerType(explicitType: string | undefined): Promise<st
 
 	// First run with nothing installed and no debuggerType configured: let the
 	// user choose the debugger that matches their project rather than assuming C#.
-	const installCsharp = 'Install C# (.NET)';
-	const installCpp = 'Install C/C++';
-	const choice = await vscode.window.showErrorMessage(
+	return promptAndInstallDebuggerChoice(
 		'To launch your app you need a debugger extension installed. Since no "debuggerType" is set, ' +
 		'install the one that matches your project type:',
-		{ modal: true },
-		installCsharp,
-		installCpp
+		'you selected it to debug this project'
 	);
-
-	let selected: string | undefined;
-	if (choice === installCsharp) {
-		selected = 'coreclr';
-	} else if (choice === installCpp) {
-		selected = 'cppvsdbg';
-	} else {
-		return undefined;
-	}
-
-	const requirement = DEBUGGER_EXTENSION_MAP[selected];
-	return (await installAndActivateExtension(requirement)) ? selected : undefined;
 }
 
 /**
@@ -448,8 +488,23 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				debugConfiguration.processId = processId;
 			}
 
-			// Start the real debug session as a child of the winapp session
-			await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
+			// Start the real debug session as a child of the winapp session.
+			// startDebugging resolves false when the child debugger can't attach —
+			// most commonly because the installed debugger extension doesn't match
+			// the project type (e.g. a C# extension was reused for a C/C++ app).
+			// Surface a clear, actionable error so the user can install the right one.
+			const started = await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
+			if (!started) {
+				runProcess.kill();
+				const debuggerName = DEBUGGER_EXTENSION_MAP[debuggerType]?.name ?? `"${debuggerType}"`;
+				await promptAndInstallDebuggerChoice(
+					`The ${debuggerName} debugger couldn't attach to your app. ` +
+					`This usually means the installed debugger extension doesn't match your project type. ` +
+					`Install the debugger that matches your project, then start debugging again:`,
+					'you selected it after the previous debugger failed to attach'
+				);
+				return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
+			}
 
 			// When the child debug session ends, kill the winapp run process and stop the parent session
 			const parentSession = session;
@@ -1025,4 +1080,6 @@ function parseProcessIdFromJson(output: string): number | undefined {
 }
 
 export function deactivate() {
+	debuggerLogChannel?.dispose();
+	debuggerLogChannel = undefined;
 }
