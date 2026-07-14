@@ -168,7 +168,7 @@
                   "cppvsdbg",
                   "node"
                 ],
-                "description": "Optional override for the underlying debugger to use. Omit to let WinApp infer or prompt for the best debugger ('coreclr', 'cppvsdbg', or 'node')."
+                "description": "Optional override for the underlying debugger to use. Omit to let WinApp reuse an installed debugger or prompt you to pick one ('coreclr', 'cppvsdbg', or 'node')."
               },
               "workingDirectory": {
                 "type": "string",

@@ -4,8 +4,7 @@ import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
 	getDebuggerExtensionRequirement,
-	getDebuggerTypeFromChoice,
-	inferDebuggerTypeFromProject
+	getDebuggerTypeFromChoice
 } from '../debugger-resolver';
 
 describe('debugger resolver helpers', () => {
@@ -64,37 +63,6 @@ describe('debugger resolver helpers', () => {
 		it('returns undefined when the modal is cancelled or returns an unknown label', () => {
 			assert.equal(getDebuggerTypeFromChoice(undefined), undefined);
 			assert.equal(getDebuggerTypeFromChoice('Cancel'), undefined);
-		});
-	});
-
-	describe('inferDebuggerTypeFromProject', () => {
-		it('infers coreclr for pure .NET project files', () => {
-			assert.equal(inferDebuggerTypeFromProject(['src/App.csproj']), 'coreclr');
-			assert.equal(inferDebuggerTypeFromProject(['src/Library.fsproj']), 'coreclr');
-		});
-
-		it('infers cppvsdbg for pure C++ project files', () => {
-			assert.equal(inferDebuggerTypeFromProject(['native/App.vcxproj']), 'cppvsdbg');
-		});
-
-		it('infers node for package.json or Electron-style Node projects without native signals', () => {
-			assert.equal(inferDebuggerTypeFromProject(['package.json']), 'node');
-			assert.equal(inferDebuggerTypeFromProject(['apps/electron/package.json']), 'node');
-		});
-
-		it('returns undefined for mixed or ambiguous project families', () => {
-			assert.equal(inferDebuggerTypeFromProject(['App.csproj', 'package.json']), undefined);
-			assert.equal(inferDebuggerTypeFromProject(['App.csproj', 'Native.vcxproj']), undefined);
-			// C++ plus package.json is ambiguous: it could be a native app with JS tooling.
-			assert.equal(inferDebuggerTypeFromProject(['Native.vcxproj', 'package.json']), undefined);
-			assert.equal(inferDebuggerTypeFromProject(['package.json', 'Cargo.toml']), undefined);
-			assert.equal(inferDebuggerTypeFromProject(['src-tauri/tauri.conf.json', 'package.json']), undefined);
-			assert.equal(inferDebuggerTypeFromProject(['CMakeLists.txt', 'package.json']), undefined);
-		});
-
-		it('returns undefined for empty or unknown file listings', () => {
-			assert.equal(inferDebuggerTypeFromProject([]), undefined);
-			assert.equal(inferDebuggerTypeFromProject(['README.md', 'src/app.ts']), undefined);
 		});
 	});
 });

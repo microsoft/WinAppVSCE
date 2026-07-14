@@ -10,8 +10,7 @@ import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
 	getDebuggerExtensionRequirement,
-	getDebuggerTypeFromChoice,
-	inferDebuggerTypeFromProject
+	getDebuggerTypeFromChoice
 } from './debugger-resolver';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
@@ -156,32 +155,12 @@ async function ensureDebuggerExtensionInstalled(debuggerType: string): Promise<b
  * that matches their project type (C#/.NET, C/C++, or Node/Electron) instead of guessing.
  * Returns the resolved debugger type, or undefined if the user cancelled.
  */
-async function resolveDebuggerType(
-	explicitType: string | undefined,
-	folder: vscode.WorkspaceFolder | undefined
-): Promise<string | undefined> {
+async function resolveDebuggerType(explicitType: string | undefined): Promise<string | undefined> {
 	if (explicitType) {
 		return (await ensureDebuggerExtensionInstalled(explicitType)) ? explicitType : undefined;
 	}
 
-	// No debuggerType specified: infer from project files before falling back to
-	// installed extension reuse so Node/Electron projects are not misclassified
-	// just because a C# or C++ debugger extension is already installed.
-	if (folder) {
-		const projectFiles = await glob(['**/*.csproj', '**/*.fsproj', '**/*.vbproj', '**/*.vcxproj', '**/package.json', '**/Cargo.toml', '**/tauri.conf.json', '**/CMakeLists.txt'], {
-			cwd: folder.uri.fsPath,
-			absolute: false,
-			nocase: true,
-			ignore: ['**/node_modules/**', '**/.git/**', '**/obj/**', '**/bin/**', '**/dist/**', '**/out/**', '**/.vs/**', '**/AppX/**', '**/.winapp/**', '**/packages/**']
-		});
-		const inferredType = inferDebuggerTypeFromProject(projectFiles);
-		if (inferredType) {
-			return (await ensureDebuggerExtensionInstalled(inferredType)) ? inferredType : undefined;
-		}
-	}
-
-	// Reuse an already-installed debugger extension only when project inference
-	// is unavailable or ambiguous.
+	// No debuggerType specified: reuse an already-installed debugger extension.
 	const installedCandidate = chooseInstalledDebuggerType(vscode.extensions.all.map(extension => extension.id));
 	if (installedCandidate) {
 		return installedCandidate;
@@ -292,7 +271,7 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 	}
 
 	async resolveDebugConfiguration(
-		folder: vscode.WorkspaceFolder | undefined,
+		_folder: vscode.WorkspaceFolder | undefined,
 		config: vscode.DebugConfiguration,
 		_token?: vscode.CancellationToken
 	): Promise<vscode.DebugConfiguration | undefined> {
@@ -307,7 +286,7 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		// the session starts, so a first-run user isn't dropped into a half-started
 		// session (issue #32). When no debuggerType is configured, let the user
 		// choose the extension matching their project instead of assuming coreclr.
-		const debuggerType = await resolveDebuggerType(config.debuggerType, folder);
+		const debuggerType = await resolveDebuggerType(config.debuggerType);
 		if (!debuggerType) {
 			return undefined;
 		}
@@ -414,228 +393,121 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
 			}
 
-			const buildAttachDebugConfiguration = (currentDebuggerType: string, processId: number): vscode.DebugConfiguration => {
-				const debugConfiguration: vscode.DebugConfiguration = {
-					type: currentDebuggerType,
-					name: config.name || 'Attach to WinApp Package',
-					request: 'attach'
-				};
-
-				if (currentDebuggerType === 'node') {
-					debugConfiguration.port = config.port || 9229;
-				} else {
-					debugConfiguration.processId = processId;
-				}
-
-				return debugConfiguration;
-			};
-
-			interface LaunchAttachResult {
-				runProcess: ReturnType<typeof spawn>;
-				hasExited: () => boolean;
+			let args = config.args || '';
+			if (debuggerType === 'node') {
+				args = '--inspect' + (config.port ? `=${config.port}` : '') + ' ' + args;
 			}
 
-			const launchAndAttach = async (currentDebuggerType: string): Promise<LaunchAttachResult | undefined> => {
-				const spawnArgs = [...baseSpawnArgs];
-				let args = config.args || '';
-				if (currentDebuggerType === 'node') {
-					args = '--inspect' + (config.port ? `=${config.port}` : '') + ' ' + args;
+			if (args.trim()) {
+				baseSpawnArgs.push('--args', args.trim());
+			}
+
+			baseSpawnArgs.push('--json');
+
+			// Spawn winapp run --json. The process stays alive while the app runs,
+			// so we stream stdout to parse the JSON with the PID before waiting for exit.
+			const { processId, runProcess } = await vscode.window.withProgress({
+				location: vscode.ProgressLocation.Notification,
+				title: 'Launching package...',
+				cancellable: false
+			}, async (progress) => {
+				progress.report({ message: 'Running winapp run...' });
+
+				let cwd = folder.uri.fsPath;
+				if (config.workingDirectory) {
+					cwd = config.workingDirectory;
 				}
 
-				if (args.trim()) {
-					spawnArgs.push('--args', args.trim());
-				}
+				return new Promise<{ processId: number; runProcess: ReturnType<typeof spawn> }>((resolve, reject) => {
+					const child = spawn(cliPath, baseSpawnArgs, {
+						cwd,
+						env: { ...process.env, WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE },
+						shell: false
+					});
 
-				spawnArgs.push('--json');
+					let stdout = '';
+					let stderr = '';
+					let resolved = false;
 
-				// Spawn winapp run --json. The process stays alive while the app runs,
-				// so we stream stdout to parse the JSON with the PID before waiting for exit.
-				const { processId, runProcess } = await vscode.window.withProgress({
-					location: vscode.ProgressLocation.Notification,
-					title: 'Launching package...',
-					cancellable: false
-				}, async (progress) => {
-					progress.report({ message: 'Running winapp run...' });
+					child.stdout!.on('data', (data: Buffer) => {
+						stdout += data.toString();
+						if (resolved) { return; }
 
-					let cwd = folder.uri.fsPath;
-					if (config.workingDirectory) {
-						cwd = config.workingDirectory;
-					}
+						const pid = parseProcessIdFromJson(stdout);
+						if (pid) {
+							resolved = true;
+							resolve({ processId: pid, runProcess: child });
+						}
+					});
 
-					return new Promise<{ processId: number; runProcess: ReturnType<typeof spawn> }>((resolve, reject) => {
-						const child = spawn(cliPath, spawnArgs, {
-							cwd,
-							env: { ...process.env, WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE },
-							shell: false
-						});
+					child.stderr!.on('data', (data: Buffer) => {
+						stderr += data.toString();
+						console.warn('winapp run stderr:', data.toString());
+					});
 
-						let stdout = '';
-						let stderr = '';
-						let resolved = false;
+					child.on('error', (err) => {
+						if (!resolved) {
+							reject(new Error(`Failed to start winapp run: ${err.message}`));
+						}
+					});
 
-						child.stdout!.on('data', (data: Buffer) => {
-							stdout += data.toString();
-							if (resolved) { return; }
-
-							const pid = parseProcessIdFromJson(stdout);
-							if (pid) {
-								resolved = true;
-								resolve({ processId: pid, runProcess: child });
+					child.on('close', (code) => {
+						if (!resolved) {
+							if (code !== 0) {
+								reject(new Error(`winapp run exited with code ${code}. stderr: ${stderr}\nstdout: ${stdout}`));
+							} else {
+								reject(new Error(`winapp run exited before returning a process ID. stdout: ${stdout}`));
 							}
-						});
-
-						child.stderr!.on('data', (data: Buffer) => {
-							stderr += data.toString();
-							console.warn('winapp run stderr:', data.toString());
-						});
-
-						child.on('error', (err) => {
-							if (!resolved) {
-								reject(new Error(`Failed to start winapp run: ${err.message}`));
-							}
-						});
-
-						child.on('close', (code) => {
-							if (!resolved) {
-								if (code !== 0) {
-									reject(new Error(`winapp run exited with code ${code}. stderr: ${stderr}\nstdout: ${stdout}`));
-								} else {
-									reject(new Error(`winapp run exited before returning a process ID. stdout: ${stdout}`));
-								}
-							}
-						});
+						}
 					});
 				});
+			});
 
-				let runProcessExited = false;
-				let earlyWatchSettled = false;
-				let earlyWatchTimeout: ReturnType<typeof setTimeout> | undefined;
-				let earlyTerminationGraceTimeout: ReturnType<typeof setTimeout> | undefined;
-				let resolveEarlyAttachFailure: (failed: boolean) => void = () => { };
-				let terminateDisposable: vscode.Disposable | undefined;
-				const finishEarlyAttachWatch = (failed: boolean): void => {
-					if (earlyWatchSettled) {
-						return;
-					}
-					earlyWatchSettled = true;
-					if (earlyWatchTimeout) {
-						clearTimeout(earlyWatchTimeout);
-					}
-					if (earlyTerminationGraceTimeout) {
-						clearTimeout(earlyTerminationGraceTimeout);
-					}
-					terminateDisposable?.dispose();
-					resolveEarlyAttachFailure(failed);
-				};
-
-				const earlyAttachFailure = new Promise<boolean>((resolve) => {
-					resolveEarlyAttachFailure = resolve;
-					earlyWatchTimeout = setTimeout(() => finishEarlyAttachWatch(false), 1500);
-				});
-
-				runProcess.once('close', () => {
-					runProcessExited = true;
-					finishEarlyAttachWatch(false);
-				});
-
-				terminateDisposable = vscode.debug.onDidTerminateDebugSession((ended) => {
-					if (ended.parentSession === session && !runProcessExited) {
-						if (earlyWatchTimeout) {
-							clearTimeout(earlyWatchTimeout);
-							earlyWatchTimeout = undefined;
-						}
-						if (!earlyTerminationGraceTimeout) {
-							earlyTerminationGraceTimeout = setTimeout(() => {
-								finishEarlyAttachWatch(!runProcessExited);
-							}, 900);
-						}
-					}
-				});
-
-				const debugConfiguration = buildAttachDebugConfiguration(currentDebuggerType, processId);
-				try {
-					const started = await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
-					if (!started) {
-						finishEarlyAttachWatch(false);
-						runProcess.kill();
-						return undefined;
-					}
-				} catch (error) {
-					finishEarlyAttachWatch(false);
-					runProcess.kill();
-					throw error;
-				}
-
-				if (await earlyAttachFailure) {
-					runProcess.kill();
-					return undefined;
-				}
-
-				return {
-					runProcess,
-					hasExited: () => runProcessExited
-				};
+			// Build the attach debug configuration
+			const debugConfiguration: vscode.DebugConfiguration = {
+				type: debuggerType,
+				name: config.name || 'Attach to WinApp Package',
+				request: 'attach'
 			};
+
+			if (debuggerType === 'node') {
+				debugConfiguration.port = config.port || 9229;
+			} else {
+				debugConfiguration.processId = processId;
+			}
 
 			// Start the real debug session as a child of the winapp session.
 			// startDebugging resolves false when the child debugger can't attach —
 			// most commonly because the installed debugger extension doesn't match
 			// the project type (e.g. a C# extension was reused for a C/C++ app).
-			let launchResult = await launchAndAttach(debuggerType);
-			if (!launchResult) {
+			// Surface a clear, actionable error so the user can install the right one.
+			const started = await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
+			if (!started) {
+				runProcess.kill();
 				const debuggerName = getDebuggerExtensionRequirement(debuggerType)?.name ?? `"${debuggerType}"`;
-				const retryDebuggerType = await promptAndInstallDebuggerChoice(
+				await promptAndInstallDebuggerChoice(
 					`The ${debuggerName} debugger couldn't attach to your app. ` +
 					`This usually means the installed debugger extension doesn't match your project type. ` +
-					`Choose the debugger that matches your project so WinApp can retry:`,
+					`Install the debugger that matches your project, then start debugging again:`,
 					'you selected it after the previous debugger failed to attach'
 				);
-				if (retryDebuggerType) {
-					launchResult = await launchAndAttach(retryDebuggerType);
-					if (!launchResult) {
-						const retryDebuggerName = getDebuggerExtensionRequirement(retryDebuggerType)?.name ?? `"${retryDebuggerType}"`;
-						vscode.window.showErrorMessage(
-							`The ${retryDebuggerName} debugger still couldn't attach to your app. Check your project type and debugger configuration, then try again.`
-						);
-					}
-				}
-
-				if (!launchResult) {
-					return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
-				}
+				return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
 			}
-
-			const { runProcess, hasExited: hasRunProcessExited } = launchResult;
 
 			// When the child debug session ends, kill the winapp run process and stop the parent session
 			const parentSession = session;
-			let parentStopRequested = false;
-			const stopParentDebugging = (): void => {
-				if (parentStopRequested) {
-					return;
-				}
-				parentStopRequested = true;
-				vscode.debug.stopDebugging(parentSession);
-			};
-
 			const disposable = vscode.debug.onDidTerminateDebugSession((ended) => {
 				if (ended.parentSession === parentSession) {
 					disposable.dispose();
-					if (!hasRunProcessExited()) {
-						runProcess.kill();
-					}
-					stopParentDebugging();
+					runProcess.kill();
+					vscode.debug.stopDebugging(parentSession);
 				}
 			});
 
 			// When the winapp run process exits (app closed), stop the debug session
-			if (hasRunProcessExited()) {
-				stopParentDebugging();
-			} else {
-				runProcess.once('close', () => {
-					stopParentDebugging();
-				});
-			}
+			runProcess.on('close', () => {
+				vscode.debug.stopDebugging(parentSession);
+			});
 
 			// Return an inline no-op adapter — the real debugging happens in the child session above
 			return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
