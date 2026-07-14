@@ -137,6 +137,8 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 | `cppvsdbg` | C / C++ | [C/C++](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools) |
 | `node` | Node.js / Electron | Built-in |
 
+> On your first debug session, if the extension for the selected `debuggerType` isn't installed, WinApp offers to install it and continues the session automatically — no manual reload needed in most cases.
+
 **Example `launch.json`:**
 
 ```jsonc

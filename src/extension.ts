@@ -33,20 +33,59 @@ async function ensureDebuggerExtensionInstalled(debuggerType: string): Promise<b
 		return true;
 	}
 
-	const install = await vscode.window.showErrorMessage(
-		`The "${debuggerType}" debugger requires the ${requirement.name} VS Code extension. ` +
-		`Please install it and reload VS Code, then retry.`,
-		'Install Extension'
+	// Use a modal so the user makes a deliberate choice before the session starts,
+	// rather than a passive notification they can miss (see issue #32).
+	const choice = await vscode.window.showErrorMessage(
+		`The WinApp debugger needs the ${requirement.name} extension to debug "${debuggerType}" apps, but it isn't installed.`,
+		{ modal: true },
+		'Install and Retry'
 	);
 
-	if (install === 'Install Extension') {
-		await vscode.commands.executeCommand('workbench.extensions.installExtension', requirement.id);
-		vscode.window.showInformationMessage(
-			`Installing ${requirement.name}. Please reload VS Code once the installation completes, then retry the debug session.`
-		);
+	if (choice !== 'Install and Retry') {
+		return false;
 	}
 
-	return false;
+	try {
+		await vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title: `Installing ${requirement.name}…` },
+			async () => {
+				await vscode.commands.executeCommand('workbench.extensions.installExtension', requirement.id);
+			}
+		);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		vscode.window.showErrorMessage(
+			`Failed to install ${requirement.name}: ${message}. Please install it manually and retry.`
+		);
+		return false;
+	}
+
+	// Activate the freshly installed extension so debugging can continue in this
+	// same session without a full window reload. If VS Code hasn't surfaced it to
+	// this extension host yet, fall back to asking the user to reload and retry.
+	const installed = vscode.extensions.getExtension(requirement.id);
+	if (!installed) {
+		vscode.window.showInformationMessage(
+			`${requirement.name} was installed. Reload VS Code to finish enabling it, then start debugging again.`,
+			'Reload Window'
+		).then((selection) => {
+			if (selection === 'Reload Window') {
+				vscode.commands.executeCommand('workbench.action.reloadWindow');
+			}
+		});
+		return false;
+	}
+
+	if (!installed.isActive) {
+		try {
+			await installed.activate();
+		} catch {
+			// Non-fatal: the debugger contribution is registered on install, so
+			// proceed and let the attach step surface any remaining issue.
+		}
+	}
+
+	return true;
 }
 
 /**
@@ -156,6 +195,14 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 			config.request = 'launch';
 		}
 
+		// Ensure the extension backing the underlying debugger (e.g. the C#
+		// extension for coreclr) is installed before the session starts, so a
+		// first-run user isn't dropped into a half-started session (issue #32).
+		const debuggerType = config.debuggerType || 'coreclr';
+		if (!await ensureDebuggerExtensionInstalled(debuggerType)) {
+			return undefined;
+		}
+
 		return config;
 	}
 
@@ -249,8 +296,9 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// Determine the debugger type based on config or default to coreclr
 			const debuggerType = config.debuggerType || 'coreclr';
 
-			// Verify the required VS Code extension for this debugger type is installed
-			// before starting the app, so we don't launch the process only to fail on attach.
+			// Safety net: resolveDebugConfiguration already verifies the required
+			// extension before the session starts, but re-check here so we never
+			// launch the process only to fail on attach if resolution was bypassed.
 			if (!await ensureDebuggerExtensionInstalled(debuggerType)) {
 				return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
 			}
