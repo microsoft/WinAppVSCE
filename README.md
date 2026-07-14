@@ -133,11 +133,11 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 
 | `debuggerType` | Language | Required Extension |
 |----------------|----------|--------------------|
-| `coreclr` (default) | C# / .NET | [C# Dev Kit](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csharp) |
+| `coreclr` (default) | C# / .NET | [C#](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csharp) |
 | `cppvsdbg` | C / C++ | [C/C++](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools) |
 | `node` | Node.js / Electron | Built-in |
 
-> On your first debug session, if the extension for the selected `debuggerType` isn't installed, WinApp offers to install it and continues the session automatically — no manual reload needed in most cases. If no `debuggerType` is set and none is installed yet, WinApp lets you pick the debugger extension that matches your project (C# or C/C++).
+> On your first debug session, if the extension for the selected `debuggerType` isn't installed, WinApp offers to install it and continues the session automatically — no manual reload needed in most cases. If no `debuggerType` is set and none is installed yet, WinApp lets you pick the debugger that matches your project (C#, C/C++, or built-in Node.js/Electron).
 
 **Example `launch.json`:**
 
