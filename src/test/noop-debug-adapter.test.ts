@@ -65,26 +65,4 @@ describe('NoOpDebugAdapter', () => {
 		assert.equal(messages[1].type, 'event');
 		assert.equal(messages[1].event, 'initialized');
 	});
-
-	it('fails launch and terminates when the required debugger extension is missing', () => {
-		const adapter = new NoOpDebugAdapter({
-			launchErrorMessage: 'The "coreclr" debugger extension is not installed.'
-		});
-		const messages = collectMessages(adapter);
-
-		adapter.handleMessage(request(1, 'initialize'));
-		adapter.handleMessage(request(2, 'launch'));
-
-		assert.deepEqual(messages.slice(2), [
-			{
-				seq: 3,
-				type: 'response',
-				request_seq: 2,
-				success: false,
-				command: 'launch',
-				message: 'The "coreclr" debugger extension is not installed.'
-			},
-			{ seq: 4, type: 'event', event: 'terminated', body: undefined }
-		]);
-	});
 });

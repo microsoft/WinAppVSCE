@@ -7,8 +7,6 @@ import { resolveProjectDirectory as resolveProjectDirectoryCore } from './projec
 import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
-import { continueIfDebuggerExtensionInstalled } from './debugger-extension-guard';
-import { continueIfChildDebugStarted } from './child-debug-session';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 
@@ -254,14 +252,8 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 
 			// Verify the required VS Code extension for this debugger type is installed
 			// before starting the app, so we don't launch the process only to fail on attach.
-			const debuggerExtensionGuard = await continueIfDebuggerExtensionInstalled(
-				debuggerType,
-				ensureDebuggerExtensionInstalled,
-				(options) => new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter(options)),
-				() => undefined
-			);
-			if (debuggerExtensionGuard) {
-				return debuggerExtensionGuard;
+			if (!await ensureDebuggerExtensionInstalled(debuggerType)) {
+				return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
 			}
 
 			let args = config.args || '';
@@ -347,19 +339,8 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				debugConfiguration.processId = processId;
 			}
 
-			// Start the real debug session as a child of the winapp session.
-			// If VS Code reports that the child debugger did not start, stop the
-			// launched app process and return a parent adapter that fails cleanly.
-			const childDebugStartGuard = await continueIfChildDebugStarted(
-				debuggerType,
-				() => vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session }),
-				() => runProcess.kill(),
-				(options) => new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter(options)),
-				() => undefined
-			);
-			if (childDebugStartGuard) {
-				return childDebugStartGuard;
-			}
+			// Start the real debug session as a child of the winapp session
+			await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
 
 			// When the child debug session ends, kill the winapp run process and stop the parent session
 			const parentSession = session;

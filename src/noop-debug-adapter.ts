@@ -48,10 +48,6 @@ class SimpleEventEmitter<T> {
 	}
 }
 
-export type NoOpDebugAdapterOptions = {
-	launchErrorMessage?: string;
-};
-
 /**
  * Minimal debug adapter for the parent `winapp` session. The real debugging
  * happens in the child coreclr/node session, but this adapter must still
@@ -64,8 +60,6 @@ export class NoOpDebugAdapter implements vscode.DebugAdapter {
 	readonly onDidSendMessage: vscode.Event<vscode.DebugProtocolMessage> = this.sendMessageEmitter.event;
 	private seq = 1;
 
-	constructor(private readonly options: NoOpDebugAdapterOptions = {}) { }
-
 	private sendResponse(request: DebugRequest, body?: unknown): void {
 		this.sendMessageEmitter.fire({
 			seq: this.seq++,
@@ -74,17 +68,6 @@ export class NoOpDebugAdapter implements vscode.DebugAdapter {
 			success: true,
 			command: request.command,
 			body
-		} as vscode.DebugProtocolMessage);
-	}
-
-	private sendErrorResponse(request: DebugRequest, message: string): void {
-		this.sendMessageEmitter.fire({
-			seq: this.seq++,
-			type: 'response',
-			request_seq: request.seq,
-			success: false,
-			command: request.command,
-			message
 		} as vscode.DebugProtocolMessage);
 	}
 
@@ -112,11 +95,6 @@ export class NoOpDebugAdapter implements vscode.DebugAdapter {
 				break;
 			case 'launch':
 			case 'attach':
-				if (this.options.launchErrorMessage) {
-					this.sendErrorResponse(msg, this.options.launchErrorMessage);
-					this.sendEvent('terminated');
-					break;
-				}
 				// Acknowledge the launch/attach — this is the response VS Code
 				// keys `startDebugging`'s truthy result on.
 				this.sendResponse(msg);
