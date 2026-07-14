@@ -58,9 +58,9 @@ export function getDebuggerTypeFromChoice(choice: string | undefined): string | 
  * Infers the debugger from project files only when exactly one supported project
  * family is present. Precedence is deliberately conservative: .NET and C++
  * project files map directly to their debuggers, while package.json maps to
- * Node only when there are no competing native signals such as Cargo.toml or
- * tauri.conf.json. Mixed families return undefined so the installed debugger
- * reuse/picker path can decide instead of guessing.
+ * Node only when there are no competing native/other-language signals. Mixed
+ * families return undefined so the installed debugger reuse/picker path can
+ * decide instead of guessing.
  */
 export function inferDebuggerTypeFromProject(fileNames: readonly string[]): string | undefined {
 	let hasDotNet = false;
@@ -78,12 +78,14 @@ export function inferDebuggerTypeFromProject(fileNames: readonly string[]): stri
 			hasCpp = true;
 		} else if (baseName === 'package.json') {
 			hasNode = true;
-		} else if (baseName === 'cargo.toml' || baseName === 'tauri.conf.json') {
+		// Add new native build-system markers here so package.json used for JS
+		// tooling does not cause native apps to be inferred as Node/Electron.
+		} else if (baseName === 'cargo.toml' || baseName === 'tauri.conf.json' || baseName === 'cmakelists.txt') {
 			hasOtherNative = true;
 		}
 	}
 
-	if (hasNode && hasOtherNative) {
+	if (hasNode && (hasDotNet || hasCpp || hasOtherNative)) {
 		return undefined;
 	}
 

@@ -168,7 +168,7 @@ async function resolveDebuggerType(
 	// installed extension reuse so Node/Electron projects are not misclassified
 	// just because a C# or C++ debugger extension is already installed.
 	if (folder) {
-		const projectFiles = await glob(['**/*.csproj', '**/*.fsproj', '**/*.vbproj', '**/*.vcxproj', '**/package.json', '**/Cargo.toml', '**/tauri.conf.json'], {
+		const projectFiles = await glob(['**/*.csproj', '**/*.fsproj', '**/*.vbproj', '**/*.vcxproj', '**/package.json', '**/Cargo.toml', '**/tauri.conf.json', '**/CMakeLists.txt'], {
 			cwd: folder.uri.fsPath,
 			absolute: false,
 			nocase: true,
@@ -510,6 +510,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				let runProcessExited = false;
 				let earlyWatchSettled = false;
 				let earlyWatchTimeout: ReturnType<typeof setTimeout> | undefined;
+				let earlyTerminationGraceTimeout: ReturnType<typeof setTimeout> | undefined;
 				let resolveEarlyAttachFailure: (failed: boolean) => void = () => { };
 				let terminateDisposable: vscode.Disposable | undefined;
 				const finishEarlyAttachWatch = (failed: boolean): void => {
@@ -519,6 +520,9 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 					earlyWatchSettled = true;
 					if (earlyWatchTimeout) {
 						clearTimeout(earlyWatchTimeout);
+					}
+					if (earlyTerminationGraceTimeout) {
+						clearTimeout(earlyTerminationGraceTimeout);
 					}
 					terminateDisposable?.dispose();
 					resolveEarlyAttachFailure(failed);
@@ -536,7 +540,15 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 
 				terminateDisposable = vscode.debug.onDidTerminateDebugSession((ended) => {
 					if (ended.parentSession === session && !runProcessExited) {
-						finishEarlyAttachWatch(true);
+						if (earlyWatchTimeout) {
+							clearTimeout(earlyWatchTimeout);
+							earlyWatchTimeout = undefined;
+						}
+						if (!earlyTerminationGraceTimeout) {
+							earlyTerminationGraceTimeout = setTimeout(() => {
+								finishEarlyAttachWatch(!runProcessExited);
+							}, 900);
+						}
 					}
 				});
 

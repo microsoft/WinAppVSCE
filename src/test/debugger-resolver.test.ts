@@ -89,6 +89,7 @@ describe('debugger resolver helpers', () => {
 			assert.equal(inferDebuggerTypeFromProject(['Native.vcxproj', 'package.json']), undefined);
 			assert.equal(inferDebuggerTypeFromProject(['package.json', 'Cargo.toml']), undefined);
 			assert.equal(inferDebuggerTypeFromProject(['src-tauri/tauri.conf.json', 'package.json']), undefined);
+			assert.equal(inferDebuggerTypeFromProject(['CMakeLists.txt', 'package.json']), undefined);
 		});
 
 		it('returns undefined for empty or unknown file listings', () => {
