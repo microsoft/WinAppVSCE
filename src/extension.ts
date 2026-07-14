@@ -6,6 +6,9 @@ import { detectProjects } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
+import { NoOpDebugAdapter } from './noop-debug-adapter';
+import { continueIfDebuggerExtensionInstalled } from './debugger-extension-guard';
+import { continueIfChildDebugStarted } from './child-debug-session';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 
@@ -251,8 +254,14 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 
 			// Verify the required VS Code extension for this debugger type is installed
 			// before starting the app, so we don't launch the process only to fail on attach.
-			if (!await ensureDebuggerExtensionInstalled(debuggerType)) {
-				return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
+			const debuggerExtensionGuard = await continueIfDebuggerExtensionInstalled(
+				debuggerType,
+				ensureDebuggerExtensionInstalled,
+				(options) => new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter(options)),
+				() => undefined
+			);
+			if (debuggerExtensionGuard) {
+				return debuggerExtensionGuard;
 			}
 
 			let args = config.args || '';
@@ -338,8 +347,19 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				debugConfiguration.processId = processId;
 			}
 
-			// Start the real debug session as a child of the winapp session
-			await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
+			// Start the real debug session as a child of the winapp session.
+			// If VS Code reports that the child debugger did not start, stop the
+			// launched app process and return a parent adapter that fails cleanly.
+			const childDebugStartGuard = await continueIfChildDebugStarted(
+				debuggerType,
+				() => vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session }),
+				() => runProcess.kill(),
+				(options) => new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter(options)),
+				() => undefined
+			);
+			if (childDebugStartGuard) {
+				return childDebugStartGuard;
+			}
 
 			// When the child debug session ends, kill the winapp run process and stop the parent session
 			const parentSession = session;
@@ -363,75 +383,6 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			vscode.window.showErrorMessage(`Failed to launch and attach: ${message}`);
 			throw error;
 		}
-	}
-}
-
-/**
- * Minimal debug adapter for the parent `winapp` session. The real debugging
- * happens in the child coreclr/node session, but this adapter must still
- * complete the DAP launch handshake (initialize, initialized event,
- * launch/attach, configurationDone) or startDebugging/F5 resolves to `false`
- * even when the app launched fine (see issue #40).
- */
-class NoOpDebugAdapter implements vscode.DebugAdapter {
-	private sendMessageEmitter = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
-	readonly onDidSendMessage: vscode.Event<vscode.DebugProtocolMessage> = this.sendMessageEmitter.event;
-	private seq = 1;
-
-	private sendResponse(request: any, body?: unknown): void {
-		this.sendMessageEmitter.fire({
-			seq: this.seq++,
-			type: 'response',
-			request_seq: request.seq,
-			success: true,
-			command: request.command,
-			body
-		} as any);
-	}
-
-	private sendEvent(event: string, body?: unknown): void {
-		this.sendMessageEmitter.fire({
-			seq: this.seq++,
-			type: 'event',
-			event,
-			body
-		} as any);
-	}
-
-	handleMessage(message: vscode.DebugProtocolMessage): void {
-		const msg = message as any;
-		if (msg.type !== 'request') {
-			return;
-		}
-
-		switch (msg.command) {
-			case 'initialize':
-				// Advertise configurationDone support so VS Code sends it as the
-				// final handshake step, then signal we're ready for configuration.
-				this.sendResponse(msg, { supportsConfigurationDoneRequest: true });
-				this.sendEvent('initialized');
-				break;
-			case 'launch':
-			case 'attach':
-				// Acknowledge the launch/attach — this is the response VS Code
-				// keys `startDebugging`'s truthy result on.
-				this.sendResponse(msg);
-				break;
-			case 'configurationDone':
-				this.sendResponse(msg);
-				break;
-			case 'disconnect':
-				this.sendResponse(msg);
-				break;
-			default:
-				// Acknowledge any other request so VS Code never blocks on us.
-				this.sendResponse(msg);
-				break;
-		}
-	}
-
-	dispose(): void {
-		this.sendMessageEmitter.dispose();
 	}
 }
 
