@@ -41,6 +41,38 @@ export function escapePowerShellArg(value: string): string {
 	return `'${value.replace(/'/g, "''")}'`;
 }
 
+export function getWindowsPowerShellPath(systemRoot?: string): string {
+	return path.join(systemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
+export function isUsableElevatedCliPath(cliPath: string, cliPathExists: boolean): boolean {
+	return path.isAbsolute(cliPath) && path.basename(cliPath).toLowerCase() === 'winapp.exe' && cliPathExists;
+}
+
+export type ElevatedWinappCommandDecision =
+	| { kind: 'run-normally' }
+	| { kind: 'run-elevated'; command: string }
+	| { kind: 'error-cli-missing' };
+
+export function decideElevatedWinappCommand(
+	isElevated: boolean,
+	cliPathIsUsable: boolean,
+	cliPath: string,
+	cliArgs: string,
+	workingDirectory: string,
+	launcherPath: string
+): ElevatedWinappCommandDecision {
+	if (isElevated) {
+		return { kind: 'run-normally' };
+	}
+
+	if (!cliPathIsUsable) {
+		return { kind: 'error-cli-missing' };
+	}
+
+	return { kind: 'run-elevated', command: buildElevatedTerminalCommand(cliPath, cliArgs, workingDirectory, launcherPath) };
+}
+
 /**
  * Build a PowerShell command that runs the winapp CLI elevated in a *separate*
  * console via `Start-Process -Verb RunAs`.
@@ -63,13 +95,14 @@ export function escapePowerShellArg(value: string): string {
  * {@link escapePowerShellArg}, so values containing single quotes stay balanced
  * and cannot break out of the literal.
  *
+ * @param launcherPath Absolute path to Windows PowerShell for the elevated launcher.
  * @param cliPath Path to the bundled winapp executable.
  * @param cliArgs The winapp arguments, already PowerShell-escaped where needed
  *                (e.g. `cert install 'C:\path\devcert.pfx'`).
  * @param workingDirectory Directory to run the elevated command in.
  * @returns A PowerShell command line to send to a (non-elevated) terminal.
  */
-export function buildElevatedTerminalCommand(cliPath: string, cliArgs: string, workingDirectory: string): string {
+export function buildElevatedTerminalCommand(cliPath: string, cliArgs: string, workingDirectory: string, launcherPath: string): string {
 	const innerCommand = `Set-Location -LiteralPath ${escapePowerShellArg(workingDirectory)}; & ${escapePowerShellArg(cliPath)} ${cliArgs}`.trim();
-	return `Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList '-NoExit', '-Command', ${escapePowerShellArg(innerCommand)}`;
+	return `Start-Process -FilePath ${escapePowerShellArg(launcherPath)} -Verb RunAs -ArgumentList '-NoExit', '-Command', ${escapePowerShellArg(innerCommand)}`;
 }

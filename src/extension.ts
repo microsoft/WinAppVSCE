@@ -1,7 +1,15 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { spawn, execFile } from 'child_process';
-import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE, escapePowerShellArg, buildElevatedTerminalCommand } from './winapp-cli-utils';
+import {
+	getWinappCliPath,
+	WINAPP_CLI_CALLER_VALUE,
+	escapePowerShellArg,
+	getWindowsPowerShellPath,
+	isUsableElevatedCliPath,
+	decideElevatedWinappCommand
+} from './winapp-cli-utils';
 import { detectProjects } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { glob } from 'glob';
@@ -107,12 +115,30 @@ async function isProcessElevated(): Promise<boolean> {
  * message explains that a Windows admin prompt will appear.
  */
 async function runWinappCommandElevated(extensionPath: string, command: string, cwd: string): Promise<void> {
-	if (await isProcessElevated()) {
+	const isElevated = await isProcessElevated();
+	const cliPath = getWinappCliPath(extensionPath);
+	const launcherPath = getWindowsPowerShellPath(process.env.SystemRoot);
+	const decision = decideElevatedWinappCommand(
+		isElevated,
+		isUsableElevatedCliPath(cliPath, fs.existsSync(cliPath)),
+		cliPath,
+		command,
+		cwd,
+		launcherPath
+	);
+
+	if (decision.kind === 'run-normally') {
 		await runWinappCommand(extensionPath, command, cwd);
 		return;
 	}
 
-	const cliPath = getWinappCliPath(extensionPath);
+	if (decision.kind === 'error-cli-missing') {
+		vscode.window.showErrorMessage(
+			'The bundled WinApp CLI executable could not be found, so the administrator command was not started. Rebuild or reinstall the extension, then try again.'
+		);
+		return;
+	}
+
 	const terminal = vscode.window.createTerminal({
 		name: 'WinApp CLI (Admin)',
 		cwd: cwd,
@@ -120,7 +146,7 @@ async function runWinappCommandElevated(extensionPath: string, command: string, 
 		env: { WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE }
 	});
 	terminal.show();
-	terminal.sendText(buildElevatedTerminalCommand(cliPath, command, cwd));
+	terminal.sendText(decision.command);
 	vscode.window.showInformationMessage(
 		'Installing the certificate requires administrator rights. Approve the Windows User Account Control (UAC) prompt in the elevated window that just opened.'
 	);
