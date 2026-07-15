@@ -4,24 +4,37 @@ import {
 	parsePackagedArtifactPath,
 	buildPackSuccessMessage,
 	deriveAppNameFromArtifact,
-	PACK_ACTIONS
+	PACK_ACTIONS,
+	getPackNotificationAction,
+	isArtifactWithinRoot,
+	planPackCompletion
 } from '../pack-result';
 
 describe('parsePackagedArtifactPath', () => {
-	it('extracts the path when it wraps onto the line after the marker', () => {
-		// This is the real layout observed from the CLI: Spectre.Console wraps the
-		// path onto the next line after "📦 Package:".
+	it('extracts a following-line path that contains spaces', () => {
 		const output = [
 			'Creating MSIX package...\r',
 			'  📦 Package: \r',
-			'C:\\Users\\me\\proj\\CounterApp_1.0.0.0_x64.msix\r',
+			'C:\\Users\\me\\My Project\\My App_1.0.0.0_x64.msix\r',
 			'✅ MSIX package creation completed.\r',
 			''
 		].join('\n');
 
 		assert.equal(
 			parsePackagedArtifactPath(output),
-			'C:\\Users\\me\\proj\\CounterApp_1.0.0.0_x64.msix'
+			'C:\\Users\\me\\My Project\\My App_1.0.0.0_x64.msix'
+		);
+	});
+
+	it('trims an indented following-line path while preserving internal spaces', () => {
+		const output =
+			'Creating MSIX package...\n' +
+			'  📦 Package: \n' +
+			'   C:\\Users\\me\\My Project\\My App_1.0.0.0_x64.msix   \n';
+
+		assert.equal(
+			parsePackagedArtifactPath(output),
+			'C:\\Users\\me\\My Project\\My App_1.0.0.0_x64.msix'
 		);
 	});
 
@@ -143,5 +156,114 @@ describe('PACK_ACTIONS', () => {
 			sign: 'Sign',
 			install: 'Install'
 		});
+	});
+});
+
+describe('getPackNotificationAction', () => {
+	it('maps notification labels to action kinds', () => {
+		assert.equal(getPackNotificationAction(PACK_ACTIONS.reveal), 'reveal');
+		assert.equal(getPackNotificationAction(PACK_ACTIONS.sign), 'sign');
+		assert.equal(getPackNotificationAction(PACK_ACTIONS.install), 'install');
+	});
+
+	it('maps dismissal and unknown choices to none', () => {
+		assert.equal(getPackNotificationAction(undefined), 'none');
+		assert.equal(getPackNotificationAction('Dismiss'), 'none');
+	});
+});
+
+describe('isArtifactWithinRoot', () => {
+	it('accepts an artifact under the root', () => {
+		assert.equal(
+			isArtifactWithinRoot('C:\\workspace\\out\\App_1.0.0.0_x64.msix', 'C:\\workspace'),
+			true
+		);
+	});
+
+	it('rejects a sibling path escape', () => {
+		assert.equal(
+			isArtifactWithinRoot('C:\\workspace-other\\App_1.0.0.0_x64.msix', 'C:\\workspace'),
+			false
+		);
+	});
+
+	it('rejects a different drive', () => {
+		assert.equal(
+			isArtifactWithinRoot('D:\\workspace\\out\\App_1.0.0.0_x64.msix', 'C:\\workspace'),
+			false
+		);
+	});
+
+	it('rejects the exact root path', () => {
+		assert.equal(isArtifactWithinRoot('C:\\workspace', 'C:\\workspace'), false);
+	});
+
+	it('compares paths case-insensitively', () => {
+		assert.equal(
+			isArtifactWithinRoot('c:\\workspace\\out\\App_1.0.0.0_x64.msix', 'C:\\WORKSPACE'),
+			true
+		);
+	});
+
+	it('can be composed to accept a selected input folder outside the workspace', () => {
+		const artifactPath = 'C:\\selected-input\\out\\App_1.0.0.0_x64.msix';
+
+		assert.equal(
+			isArtifactWithinRoot(artifactPath, 'C:\\workspace') ||
+				isArtifactWithinRoot(artifactPath, 'C:\\selected-input'),
+			true
+		);
+		assert.equal(
+			isArtifactWithinRoot('C:\\unrelated\\App_1.0.0.0_x64.msix', 'C:\\workspace') ||
+				isArtifactWithinRoot('C:\\unrelated\\App_1.0.0.0_x64.msix', 'C:\\selected-input'),
+			false
+		);
+	});
+});
+
+describe('planPackCompletion', () => {
+	it('plans a silent cancellation', () => {
+		assert.deepEqual(
+			planPackCompletion({ code: null, output: '', cancelled: true }),
+			{ kind: 'cancelled' }
+		);
+	});
+
+	it('plans an error for non-zero exit code', () => {
+		assert.deepEqual(
+			planPackCompletion({
+				code: 1,
+				output: '  📦 Package: C:\\out\\CounterApp_1.0.0.0_x64.msix\n'
+			}),
+			{
+				kind: 'error',
+				message: 'Packaging failed. See the WinApp output channel for details.'
+			}
+		);
+	});
+
+	it('plans an error for unparseable successful output', () => {
+		assert.deepEqual(
+			planPackCompletion({ code: 0, output: '✅ MSIX package creation completed.\n' }),
+			{
+				kind: 'error',
+				message: 'Packaging failed. See the WinApp output channel for details.'
+			}
+		);
+	});
+
+	it('plans success with the artifact path, app name, and message', () => {
+		assert.deepEqual(
+			planPackCompletion({
+				code: 0,
+				output: '  📦 Package: C:\\out\\CounterApp_1.0.0.0_x64.msix\n'
+			}),
+			{
+				kind: 'success',
+				artifactPath: 'C:\\out\\CounterApp_1.0.0.0_x64.msix',
+				appName: 'CounterApp',
+				message: 'CounterApp packaged → CounterApp_1.0.0.0_x64.msix'
+			}
+		);
 	});
 });

@@ -15,6 +15,11 @@ export const PACK_ACTIONS = {
 } as const;
 
 export type PackActionLabel = (typeof PACK_ACTIONS)[keyof typeof PACK_ACTIONS];
+export type PackNotificationAction = 'reveal' | 'sign' | 'install' | 'none';
+export type PackCompletionPlan =
+	| { kind: 'cancelled' }
+	| { kind: 'error'; message: string }
+	| { kind: 'success'; artifactPath: string; appName: string | undefined; message: string };
 
 /** File extensions the CLI can emit for a packaged artifact. */
 const ARTIFACT_EXTENSIONS = ['.msixbundle', '.msix', '.appxbundle', '.appx'];
@@ -75,16 +80,15 @@ export function parsePackagedArtifactPath(output: string): string | undefined {
 			return sameLine;
 		}
 
-		// Path wrapped onto the following non-empty line(s).
+		// Path printed on a following value row.
 		for (let j = i + 1; j < lines.length; j++) {
-			const next = lines[j].trim();
-			if (next.length === 0) {
+			const candidate = lines[j].trim();
+			if (candidate.length === 0) {
 				continue;
 			}
-			if (looksLikeArtifactPath(next)) {
-				return next;
+			if (looksLikeArtifactPath(candidate)) {
+				return candidate;
 			}
-			break;
 		}
 	}
 
@@ -117,6 +121,52 @@ export function buildPackSuccessMessage(artifactPath: string, appName?: string):
 	return `Package created → ${fileName}`;
 }
 
+export function getPackNotificationAction(choice: string | undefined): PackNotificationAction {
+	if (choice === PACK_ACTIONS.reveal) {
+		return 'reveal';
+	}
+	if (choice === PACK_ACTIONS.sign) {
+		return 'sign';
+	}
+	if (choice === PACK_ACTIONS.install) {
+		return 'install';
+	}
+	return 'none';
+}
+
+export function isArtifactWithinRoot(artifactPath: string, root: string): boolean {
+	const resolvedArtifact = path.resolve(artifactPath).toLowerCase();
+	const resolvedRoot = path.resolve(root).toLowerCase();
+	const relativePath = path.relative(resolvedRoot, resolvedArtifact);
+	return relativePath.length > 0 && !relativePath.startsWith('..') && !path.isAbsolute(relativePath);
+}
+
+export function planPackCompletion(result: {
+	code: number | null;
+	output: string;
+	cancelled?: boolean;
+}): PackCompletionPlan {
+	if (result.cancelled) {
+		return { kind: 'cancelled' };
+	}
+
+	const artifactPath = parsePackagedArtifactPath(result.output);
+	if (result.code !== 0 || !artifactPath) {
+		return {
+			kind: 'error',
+			message: 'Packaging failed. See the WinApp output channel for details.'
+		};
+	}
+
+	const appName = deriveAppNameFromArtifact(artifactPath);
+	return {
+		kind: 'success',
+		artifactPath,
+		appName,
+		message: buildPackSuccessMessage(artifactPath, appName)
+	};
+}
+
 /**
  * Derive a friendly app name from a packaged artifact's file name.
  *
@@ -138,4 +188,3 @@ export function deriveAppNameFromArtifact(artifactPath: string): string | undefi
 	}
 	return undefined;
 }
-

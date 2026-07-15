@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE, escapePowerShellArg } from './winapp-cli-utils';
@@ -7,10 +8,10 @@ import { resolveProjectDirectory as resolveProjectDirectoryCore } from './projec
 import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import {
-	parsePackagedArtifactPath,
-	buildPackSuccessMessage,
-	deriveAppNameFromArtifact,
-	PACK_ACTIONS
+	PACK_ACTIONS,
+	getPackNotificationAction,
+	isArtifactWithinRoot,
+	planPackCompletion
 } from './pack-result';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
@@ -102,7 +103,7 @@ async function runWinappCapture(
 	args: string[],
 	cwd: string,
 	progressTitle: string
-): Promise<{ code: number | null; output: string }> {
+): Promise<{ code: number | null; output: string; cancelled?: boolean }> {
 	const cliPath = getWinappCliPath(extensionPath);
 	const outputChannel = getWinappOutputChannel();
 	outputChannel.appendLine(`> winapp ${args.join(' ')}`);
@@ -111,10 +112,10 @@ async function runWinappCapture(
 		{
 			location: vscode.ProgressLocation.Notification,
 			title: progressTitle,
-			cancellable: false
+			cancellable: true
 		},
-		() =>
-			new Promise<{ code: number | null; output: string }>((resolve) => {
+		(_progress, token) =>
+			new Promise<{ code: number | null; output: string; cancelled?: boolean }>((resolve) => {
 				const child = spawn(cliPath, args, {
 					cwd,
 					env: { ...process.env, WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE },
@@ -122,6 +123,37 @@ async function runWinappCapture(
 				});
 
 				let output = '';
+				let settled = false;
+				let cancelled = false;
+				const finish = (result: { code: number | null; output: string; cancelled?: boolean }) => {
+					if (!settled) {
+						settled = true;
+						resolve(result);
+					}
+				};
+
+				const cancellation = token.onCancellationRequested(() => {
+					if (cancelled || settled) {
+						return;
+					}
+					cancelled = true;
+					outputChannel.appendLine('\nPackaging cancelled.');
+					if (child.pid) {
+						// On Windows, winapp pack may spawn helper processes; taskkill /t
+						// terminates the whole tree instead of only the direct child.
+						const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+							windowsHide: true
+						});
+						killer.on('error', () => child.kill());
+						killer.on('close', (code) => {
+							if (code !== 0) {
+								child.kill();
+							}
+						});
+					} else {
+						child.kill();
+					}
+				});
 
 				child.stdout!.on('data', (data: Buffer) => {
 					const text = data.toString();
@@ -136,12 +168,18 @@ async function runWinappCapture(
 				});
 
 				child.on('error', (err) => {
+					cancellation.dispose();
+					if (cancelled) {
+						finish({ code: null, output, cancelled: true });
+						return;
+					}
 					outputChannel.appendLine(`\nFailed to run winapp: ${err.message}`);
-					resolve({ code: null, output });
+					finish({ code: null, output });
 				});
 
 				child.on('close', (code) => {
-					resolve({ code, output });
+					cancellation.dispose();
+					finish({ code, output, cancelled });
 				});
 			})
 	);
@@ -171,16 +209,13 @@ async function signPackage(
 	}
 
 	if (!filePath) {
-		vscode.window.showErrorMessage('A file to sign is required');
 		return;
 	}
 
 	const certPath = await selectFile('Select signing certificate', {
 		'Certificates': ['pfx']
 	});
-
 	if (!certPath) {
-		vscode.window.showErrorMessage('A certificate file is required');
 		return;
 	}
 
@@ -214,34 +249,46 @@ function installPackage(artifactPath: string, cwd: string): void {
 async function handlePackCompletion(
 	extensionPath: string,
 	workspacePath: string,
-	result: { code: number | null; output: string }
+	inputFolder: string,
+	result: { code: number | null; output: string; cancelled?: boolean }
 ): Promise<void> {
-	const artifactPath = parsePackagedArtifactPath(result.output);
+	const plan = planPackCompletion(result);
+	switch (plan.kind) {
+		case 'cancelled':
+			return;
+		case 'error':
+			getWinappOutputChannel().show();
+			vscode.window.showErrorMessage(plan.message);
+			return;
+	}
 
-	if (result.code !== 0 || !artifactPath) {
+	if (
+		!fs.existsSync(plan.artifactPath) ||
+		(!isArtifactWithinRoot(plan.artifactPath, workspacePath) &&
+			!isArtifactWithinRoot(plan.artifactPath, inputFolder))
+	) {
 		getWinappOutputChannel().show();
-		vscode.window.showErrorMessage(
-			'Packaging failed. See the WinApp output channel for details.'
-		);
+		vscode.window.showErrorMessage('Packaging failed. See the WinApp output channel for details.');
 		return;
 	}
 
-	const appName = deriveAppNameFromArtifact(artifactPath);
-	const message = buildPackSuccessMessage(artifactPath, appName);
-
 	const choice = await vscode.window.showInformationMessage(
-		message,
+		plan.message,
 		PACK_ACTIONS.reveal,
 		PACK_ACTIONS.sign,
 		PACK_ACTIONS.install
 	);
 
-	if (choice === PACK_ACTIONS.reveal) {
-		await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(artifactPath));
-	} else if (choice === PACK_ACTIONS.sign) {
-		await signPackage(extensionPath, workspacePath, artifactPath);
-	} else if (choice === PACK_ACTIONS.install) {
-		installPackage(artifactPath, path.dirname(artifactPath));
+	switch (getPackNotificationAction(choice)) {
+		case 'reveal':
+			await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(plan.artifactPath));
+			break;
+		case 'sign':
+			await signPackage(extensionPath, workspacePath, plan.artifactPath);
+			break;
+		case 'install':
+			installPackage(plan.artifactPath, path.dirname(plan.artifactPath));
+			break;
 	}
 }
 
@@ -734,7 +781,7 @@ export function activate(context: vscode.ExtensionContext) {
 				workspacePath,
 				'Packaging app...'
 			);
-			await handlePackCompletion(extensionPath, workspacePath, result);
+			await handlePackCompletion(extensionPath, workspacePath, inputFolder, result);
 		})
 	);
 
