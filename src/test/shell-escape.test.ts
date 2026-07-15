@@ -129,9 +129,16 @@ describe('isUsableElevatedCliPath', () => {
 });
 
 describe('decideElevatedWinappCommand', () => {
-	it('routes elevated processes to the normal terminal without requiring an elevated-safe CLI path', () => {
+	it('fails closed when an elevated process only has an unusable CLI path', () => {
 		assert.deepEqual(
 			decideElevatedWinappCommand(true, false, 'winapp', 'cert generate --install', 'C:\\proj', launcherPath),
+			{ kind: 'error-cli-missing' }
+		);
+	});
+
+	it('routes elevated processes with a usable CLI path to the normal terminal', () => {
+		assert.deepEqual(
+			decideElevatedWinappCommand(true, true, 'C:\\ext\\bin\\winapp.exe', 'cert generate --install', 'C:\\proj', launcherPath),
 			{ kind: 'run-normally' }
 		);
 	});

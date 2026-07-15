@@ -140,7 +140,7 @@ async function runWinappCommandElevated(extensionPath: string, command: string, 
 	}
 
 	const terminal = vscode.window.createTerminal({
-		name: 'WinApp CLI (Admin)',
+		name: 'WinApp CLI (Admin launcher)',
 		cwd: cwd,
 		shellPath: 'powershell.exe',
 		env: { WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE }

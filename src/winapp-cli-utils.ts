@@ -62,12 +62,12 @@ export function decideElevatedWinappCommand(
 	workingDirectory: string,
 	launcherPath: string
 ): ElevatedWinappCommandDecision {
-	if (isElevated) {
-		return { kind: 'run-normally' };
-	}
-
 	if (!cliPathIsUsable) {
 		return { kind: 'error-cli-missing' };
+	}
+
+	if (isElevated) {
+		return { kind: 'run-normally' };
 	}
 
 	return { kind: 'run-elevated', command: buildElevatedTerminalCommand(cliPath, cliArgs, workingDirectory, launcherPath) };
