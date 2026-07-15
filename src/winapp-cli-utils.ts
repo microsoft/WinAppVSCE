@@ -40,3 +40,36 @@ export function getWinappCliPath(extensionPath: string): string {
 export function escapePowerShellArg(value: string): string {
 	return `'${value.replace(/'/g, "''")}'`;
 }
+
+/**
+ * Build a PowerShell command that runs the winapp CLI elevated in a *separate*
+ * console via `Start-Process -Verb RunAs`.
+ *
+ * VS Code cannot create an elevated integrated terminal (there is no extension
+ * API for it, by design). Commands that need administrator rights — notably
+ * `cert install`, which trusts a certificate in the machine store — are
+ * therefore launched in a new UAC-elevated PowerShell window. `-NoExit` keeps
+ * that window open so the user can read the result and any errors.
+ *
+ * The elevated shell is pointed at `workingDirectory` with `Set-Location`
+ * before invoking the CLI. A RunAs-elevated process otherwise starts in
+ * `System32`, which would break commands that rely on the working directory
+ * (e.g. `cert generate` infers the publisher from the manifest in the current
+ * directory and writes `devcert.pfx` there). `Set-Location` is used instead of
+ * `Start-Process -WorkingDirectory` because the latter is ignored with `-Verb`
+ * on Windows PowerShell 5.1.
+ *
+ * The working directory, CLI path, and the composed command are all quoted with
+ * {@link escapePowerShellArg}, so values containing single quotes stay balanced
+ * and cannot break out of the literal.
+ *
+ * @param cliPath Path to the bundled winapp executable.
+ * @param cliArgs The winapp arguments, already PowerShell-escaped where needed
+ *                (e.g. `cert install 'C:\path\devcert.pfx'`).
+ * @param workingDirectory Directory to run the elevated command in.
+ * @returns A PowerShell command line to send to a (non-elevated) terminal.
+ */
+export function buildElevatedTerminalCommand(cliPath: string, cliArgs: string, workingDirectory: string): string {
+	const innerCommand = `Set-Location -LiteralPath ${escapePowerShellArg(workingDirectory)}; & ${escapePowerShellArg(cliPath)} ${cliArgs}`.trim();
+	return `Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList '-NoExit', '-Command', ${escapePowerShellArg(innerCommand)}`;
+}
