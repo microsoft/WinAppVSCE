@@ -6,7 +6,7 @@ import {
 	getWinappCliPath,
 	WINAPP_CLI_CALLER_VALUE,
 	escapePowerShellArg,
-	getWindowsPowerShellPath,
+	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
 	decideElevatedWinappCommand
 } from './winapp-cli-utils';
@@ -16,6 +16,7 @@ import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
+const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
 
 /**
  * Maps debugger types to the VS Code extensions that provide them.
@@ -91,7 +92,7 @@ async function runWinappCommand(extensionPath: string, command: string, cwd: str
 async function isProcessElevated(): Promise<boolean> {
 	return new Promise((resolve) => {
 		execFile(
-			'powershell.exe',
+			WINDOWS_POWERSHELL_PATH,
 			[
 				'-NoProfile',
 				'-NonInteractive',
@@ -117,7 +118,7 @@ async function isProcessElevated(): Promise<boolean> {
 async function runWinappCommandElevated(extensionPath: string, command: string, cwd: string): Promise<void> {
 	const isElevated = await isProcessElevated();
 	const cliPath = getWinappCliPath(extensionPath);
-	const launcherPath = getWindowsPowerShellPath(process.env.SystemRoot);
+	const launcherPath = WINDOWS_POWERSHELL_PATH;
 	const decision = decideElevatedWinappCommand(
 		isElevated,
 		isUsableElevatedCliPath(cliPath, fs.existsSync(cliPath)),
@@ -142,7 +143,7 @@ async function runWinappCommandElevated(extensionPath: string, command: string, 
 	const terminal = vscode.window.createTerminal({
 		name: 'WinApp CLI (Admin launcher)',
 		cwd: cwd,
-		shellPath: 'powershell.exe',
+		shellPath: WINDOWS_POWERSHELL_PATH,
 		env: { WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE }
 	});
 	terminal.show();

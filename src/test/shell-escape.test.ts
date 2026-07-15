@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
 	escapePowerShellArg,
 	buildElevatedTerminalCommand,
-	getWindowsPowerShellPath,
+	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
 	decideElevatedWinappCommand
 } from '../winapp-cli-utils';
@@ -100,13 +100,17 @@ describe('buildElevatedTerminalCommand', () => {
 	});
 });
 
-describe('getWindowsPowerShellPath', () => {
+describe('resolveWindowsPowerShellPath', () => {
 	it('builds the launcher path from SystemRoot', () => {
-		assert.equal(getWindowsPowerShellPath('D:\\Windows'), 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+		assert.equal(resolveWindowsPowerShellPath('D:\\Windows'), 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
 	});
 
 	it('falls back to C:\\Windows when SystemRoot is unavailable', () => {
-		assert.equal(getWindowsPowerShellPath(), launcherPath);
+		assert.equal(resolveWindowsPowerShellPath(undefined), launcherPath);
+	});
+
+	it('falls back to C:\\Windows when SystemRoot is empty', () => {
+		assert.equal(resolveWindowsPowerShellPath(''), launcherPath);
 	});
 });
 

@@ -41,7 +41,7 @@ export function escapePowerShellArg(value: string): string {
 	return `'${value.replace(/'/g, "''")}'`;
 }
 
-export function getWindowsPowerShellPath(systemRoot?: string): string {
+export function resolveWindowsPowerShellPath(systemRoot: string | undefined): string {
 	return path.join(systemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 
