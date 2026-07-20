@@ -188,6 +188,10 @@ The extension includes a **visual editor** for `AppxManifest.xml` and `.appxmani
 
 When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer the visual editor as an option alongside the default text editor. You can switch between them at any time by right clicking on the file and selecting the **Open With…** command.
 
+### AppxManifest IntelliSense
+
+When you edit an `AppxManifest.xml` or `.appxmanifest` file in the text editor, the extension also provides schema-aware IntelliSense. You get element and attribute completions, hover documentation for manifest fields, and diagnostics for missing required attributes or invalid enum values. IntelliSense respects manifest namespaces and common Windows manifest extensions out of the box. You can control it with `winapp.manifest.intelliSense.enable` and `winapp.manifest.diagnostics.level`.
+
 ## Scenarios
 
 ### Initialize and set up a project

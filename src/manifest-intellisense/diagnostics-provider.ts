@@ -10,8 +10,9 @@ import { validateManifestText } from './intellisense-logic';
 export class ManifestDiagnosticsProvider {
     private readonly diagnosticCollection: vscode.DiagnosticCollection;
     private readonly disposables: vscode.Disposable[] = [];
+    private readonly pendingValidations = new Map<string, ReturnType<typeof setTimeout>>();
 
-    constructor(private readonly schema: SchemaModel) {
+    constructor(private readonly getSchema: () => SchemaModel | undefined) {
         this.diagnosticCollection = vscode.languages.createDiagnosticCollection('winapp-manifest');
     }
 
@@ -22,11 +23,20 @@ export class ManifestDiagnosticsProvider {
             vscode.workspace.onDidOpenTextDocument(doc => this.validateIfManifest(doc))
         );
         // Validate on change (debounced)
-        let timeout: ReturnType<typeof setTimeout> | undefined;
         this.disposables.push(
             vscode.workspace.onDidChangeTextDocument(e => {
-                if (timeout) { clearTimeout(timeout); }
-                timeout = setTimeout(() => this.validateIfManifest(e.document), 500);
+                const key = e.document.uri.toString();
+                const existingTimeout = this.pendingValidations.get(key);
+                if (existingTimeout) {
+                    clearTimeout(existingTimeout);
+                }
+
+                const timeout = setTimeout(() => {
+                    this.pendingValidations.delete(key);
+                    this.validateIfManifest(e.document);
+                }, 500);
+
+                this.pendingValidations.set(key, timeout);
             })
         );
         // Validate on save
@@ -36,6 +46,12 @@ export class ManifestDiagnosticsProvider {
         // Clear when closed
         this.disposables.push(
             vscode.workspace.onDidCloseTextDocument(doc => {
+                const key = doc.uri.toString();
+                const timeout = this.pendingValidations.get(key);
+                if (timeout) {
+                    clearTimeout(timeout);
+                    this.pendingValidations.delete(key);
+                }
                 this.diagnosticCollection.delete(doc.uri);
             })
         );
@@ -56,10 +72,19 @@ export class ManifestDiagnosticsProvider {
         if (!this.isManifestFile(document)) { return; }
 
         const config = vscode.workspace.getConfiguration('winapp.manifest');
-        if (!config.get<boolean>('intelliSense.enable', true)) { return; }
+        if (!config.get<boolean>('intelliSense.enable', true)) {
+            this.diagnosticCollection.delete(document.uri);
+            return;
+        }
 
         const level = config.get<string>('diagnostics.level', 'warning');
         if (level === 'off') {
+            this.diagnosticCollection.delete(document.uri);
+            return;
+        }
+
+        const schema = this.getSchema();
+        if (!schema) {
             this.diagnosticCollection.delete(document.uri);
             return;
         }
@@ -77,8 +102,13 @@ export class ManifestDiagnosticsProvider {
 
     /** Validate the manifest document. */
     private validate(document: vscode.TextDocument, level: string): vscode.Diagnostic[] {
+        const schema = this.getSchema();
+        if (!schema) {
+            return [];
+        }
+
         return validateManifestText(
-            this.schema,
+            schema,
             document.getText(),
             level === 'error' ? 'error' : 'warning'
         ).map(diagnostic => new vscode.Diagnostic(

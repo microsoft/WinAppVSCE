@@ -437,7 +437,7 @@ function validateElement(
     }
 
     for (const attr of schemaDef.attributes) {
-        if (attr.required && !element.getAttribute(attr.name)) {
+        if (attr.required && !element.hasAttribute(attr.name)) {
             const range = getElementRange(element, lines);
             diagnostics.push({
                 message: `Missing required attribute '${attr.name}' on <${localName}>`,
@@ -450,7 +450,7 @@ function validateElement(
     for (const attr of schemaDef.attributes) {
         if (!attr.enumerations || attr.enumerations.length === 0) { continue; }
         const value = element.getAttribute(attr.name);
-        if (value && !attr.enumerations.includes(value)) {
+        if (value !== null && !attr.enumerations.includes(value)) {
             const range = getElementRange(element, lines);
             diagnostics.push({
                 message: `Invalid value '${value}' for attribute '${attr.name}'. Expected one of: ${attr.enumerations.slice(0, 10).join(', ')}`,
@@ -515,7 +515,7 @@ export function findSchemaElementExact(
 
 export function extractDocumentPrefixes(text: string): Map<string, string> {
     const prefixes = new Map<string, string>();
-    const regex = /xmlns(?::([a-zA-Z][\w]*))?="([^"]+)"/g;
+    const regex = /xmlns(?::([a-zA-Z][\w]*))?=["']([^"']+)["']/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(text)) !== null) {
         prefixes.set(match[1] || '', match[2]);

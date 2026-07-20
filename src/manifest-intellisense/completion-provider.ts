@@ -8,7 +8,7 @@ import { SchemaModel } from './schema-model';
 import { getManifestCompletions } from './intellisense-logic';
 
 export class ManifestCompletionProvider implements vscode.CompletionItemProvider {
-    constructor(private readonly schema: SchemaModel) {}
+    constructor(private readonly getSchema: () => SchemaModel | undefined) {}
 
     provideCompletionItems(
         document: vscode.TextDocument,
@@ -16,7 +16,17 @@ export class ManifestCompletionProvider implements vscode.CompletionItemProvider
         _token: vscode.CancellationToken,
         _context: vscode.CompletionContext
     ): vscode.CompletionItem[] | undefined {
-        return getManifestCompletions(this.schema, document.getText(), document.offsetAt(position)).map(suggestion => {
+        const config = vscode.workspace.getConfiguration('winapp.manifest');
+        if (!config.get<boolean>('intelliSense.enable', true)) {
+            return undefined;
+        }
+
+        const schema = this.getSchema();
+        if (!schema) {
+            return undefined;
+        }
+
+        return getManifestCompletions(schema, document.getText(), document.offsetAt(position)).map(suggestion => {
             const kind = suggestion.kind === 'attribute'
                 ? vscode.CompletionItemKind.Field
                 : suggestion.kind === 'enumValue'

@@ -16,6 +16,8 @@ export interface SchemaElement {
     attributes: SchemaAttribute[];
     /** The complex type name if this element references a named type. */
     typeName?: string;
+    /** Base complex type name if this type extends another type. */
+    baseTypeName?: string;
 }
 
 /** Reference to a child element within a parent. */
@@ -28,6 +30,8 @@ export interface SchemaChildRef {
     minOccurs: number;
     /** Maximum occurrences (-1 = unbounded). */
     maxOccurs: number;
+    /** Named complex type referenced by the child element, if any. */
+    typeName?: string;
 }
 
 /** Represents an attribute on an element. */

@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import * as path from 'path';
 import { getXmlContext } from '../manifest-intellisense/xml-context';
 import {
+    extractDocumentPrefixes,
     findManifestElement,
     findSchemaElementExact,
     formatManifestHoverMarkdown,
@@ -24,6 +25,7 @@ import { loadSchemaModel } from '../manifest-intellisense/xsd-parser';
 const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
 const FOUNDATION_NS = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10';
 const UAP_NS = 'http://schemas.microsoft.com/appx/manifest/uap/windows10';
+const COM_NS = 'http://schemas.microsoft.com/appx/manifest/com/windows10';
 const model = loadSchemaModel(SCHEMAS_DIR);
 
 function makeManifest(body: string, extraNamespaces = ''): string {
@@ -278,6 +280,13 @@ describe('manifest diagnostics logic', () => {
         assert.ok(diagnostics.some(diagnostic => diagnostic.message.includes("Invalid value 'invalid' for attribute 'AppListEntry'")));
     });
 
+    it('does not treat empty-string required attributes as missing', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="" Publisher="CN=Test" Version="1.0.0.0" />`));
+
+        assert.ok(!diagnostics.some(diagnostic => diagnostic.message.includes("Missing required attribute 'Name'")));
+    });
+
     it('skips unknown elements instead of producing false positives', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
   <Applications>
@@ -308,6 +317,31 @@ describe('schema and context integration', () => {
         const visualElements = findManifestElement(model, 'VisualElements', 'ux', docText);
         assert.ok(visualElements);
         assert.equal(visualElements.namespace, UAP_NS);
+    });
+
+    it('finds nested child elements that use named complex types', () => {
+        const docText = `<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="${FOUNDATION_NS}" xmlns:com="${COM_NS}">
+  <Applications>
+    <Application Id="App">
+      <Extensions>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="demo.exe" DisplayName="Demo">
+              <com:Class Id="{11111111-1111-1111-1111-111111111111}">
+                <com:ImplementedCategories />
+              </com:Class>
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>`;
+
+        const implementedCategories = findManifestElement(model, 'ImplementedCategories', 'com', docText);
+        assert.ok(implementedCategories);
+        assert.ok(implementedCategories.children.some(child => child.name === 'ImplementedCategory'));
     });
 
     it('detects attribute name context in multi-line tags', () => {
@@ -349,5 +383,11 @@ describe('schema and context integration', () => {
         const items = getManifestCompletions(model, text, text.length);
 
         assert.deepEqual(items.map(item => item.label), ['x86', 'x64', 'arm', 'arm64', 'x86a64', 'neutral']);
+    });
+
+    it('extracts namespace prefixes from single-quoted declarations', () => {
+        const prefixes = extractDocumentPrefixes(`<Package xmlns='${FOUNDATION_NS}' xmlns:ux='${UAP_NS}' />`);
+        assert.equal(prefixes.get(''), FOUNDATION_NS);
+        assert.equal(prefixes.get('ux'), UAP_NS);
     });
 });

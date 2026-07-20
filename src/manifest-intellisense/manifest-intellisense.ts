@@ -25,27 +25,33 @@ const TRIGGER_CHARACTERS = ['<', ' ', '"', '='];
  * Call this from the extension's activate function.
  */
 export function registerManifestIntelliSense(context: vscode.ExtensionContext): void {
-    const config = vscode.workspace.getConfiguration('winapp.manifest');
-    if (!config.get<boolean>('intelliSense.enable', true)) {
-        return;
-    }
-
-    // Load schema from bundled XSD files
     const schemasDir = path.join(context.extensionPath, 'schemas');
-    let schema: SchemaModel;
+    let schema: SchemaModel | undefined;
+    let loadFailed = false;
 
-    try {
-        schema = loadSchemaModel(schemasDir);
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        vscode.window.showWarningMessage(
-            `WinApp: Failed to load manifest schemas for IntelliSense: ${message}`
-        );
-        return;
-    }
+    const getSchema = (): SchemaModel | undefined => {
+        if (schema) {
+            return schema;
+        }
+        if (loadFailed) {
+            return undefined;
+        }
+
+        try {
+            schema = loadSchemaModel(schemasDir);
+            return schema;
+        } catch (err) {
+            loadFailed = true;
+            const message = err instanceof Error ? err.message : String(err);
+            vscode.window.showWarningMessage(
+                `WinApp: Failed to load manifest schemas for IntelliSense: ${message}`
+            );
+            return undefined;
+        }
+    };
 
     // Register completion provider
-    const completionProvider = new ManifestCompletionProvider(schema);
+    const completionProvider = new ManifestCompletionProvider(getSchema);
     context.subscriptions.push(
         vscode.languages.registerCompletionItemProvider(
             MANIFEST_SELECTOR,
@@ -55,24 +61,12 @@ export function registerManifestIntelliSense(context: vscode.ExtensionContext): 
     );
 
     // Register hover provider
-    const hoverProvider = new ManifestHoverProvider(schema);
+    const hoverProvider = new ManifestHoverProvider(getSchema);
     context.subscriptions.push(
         vscode.languages.registerHoverProvider(MANIFEST_SELECTOR, hoverProvider)
     );
 
     // Register diagnostics provider
-    const diagnosticsProvider = new ManifestDiagnosticsProvider(schema);
+    const diagnosticsProvider = new ManifestDiagnosticsProvider(getSchema);
     diagnosticsProvider.activate(context);
-
-    // Listen for configuration changes
-    context.subscriptions.push(
-        vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('winapp.manifest')) {
-                // Configuration changed; a full reload would be ideal but for now just notify
-                vscode.window.showInformationMessage(
-                    'WinApp: Manifest IntelliSense configuration changed. Reload window to apply all changes.'
-                );
-            }
-        })
-    );
 }

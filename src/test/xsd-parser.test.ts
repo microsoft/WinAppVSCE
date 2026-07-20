@@ -14,6 +14,9 @@ const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
 
 describe('loadSchemaModel', () => {
     let model: SchemaModel;
+    const FOUNDATION_NS = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10';
+    const UAP_NS = 'http://schemas.microsoft.com/appx/manifest/uap/windows10';
+    const COM_NS = 'http://schemas.microsoft.com/appx/manifest/com/windows10';
 
     it('loads without throwing', () => {
         model = loadSchemaModel(SCHEMAS_DIR);
@@ -32,18 +35,16 @@ describe('loadSchemaModel', () => {
 
     it('parses Package element from foundation schema', () => {
         model = loadSchemaModel(SCHEMAS_DIR);
-        const ns = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10';
-        const pkg = model.elements.get(`${ns}|Package`);
+        const pkg = model.elements.get(`${FOUNDATION_NS}|Package`);
         assert.ok(pkg, 'Package element should exist');
         assert.equal(pkg.name, 'Package');
-        assert.equal(pkg.namespace, ns);
+        assert.equal(pkg.namespace, FOUNDATION_NS);
         assert.ok(pkg.children.length > 0, 'Package should have child elements');
     });
 
     it('Package has expected children (Identity, Properties, Dependencies, etc.)', () => {
         model = loadSchemaModel(SCHEMAS_DIR);
-        const ns = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10';
-        const pkg = model.elements.get(`${ns}|Package`);
+        const pkg = model.elements.get(`${FOUNDATION_NS}|Package`);
         assert.ok(pkg);
         const childNames = pkg.children.map(c => c.name);
         assert.ok(childNames.includes('Identity'), 'Package should have Identity child');
@@ -56,9 +57,8 @@ describe('loadSchemaModel', () => {
 
     it('parses Identity type with attributes (as CT_Identity)', () => {
         model = loadSchemaModel(SCHEMAS_DIR);
-        const ns = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10';
         // Identity is defined as a named complex type CT_Identity, not a top-level element
-        const identity = model.elements.get(`${ns}|type:CT_Identity`);
+        const identity = model.elements.get(`${FOUNDATION_NS}|type:CT_Identity`);
         assert.ok(identity, 'CT_Identity type should exist');
         assert.ok(identity.attributes.length > 0, 'Identity should have attributes');
 
@@ -95,8 +95,7 @@ describe('loadSchemaModel', () => {
 
     it('parses VisualElements from UAP schema', () => {
         model = loadSchemaModel(SCHEMAS_DIR);
-        const ns = 'http://schemas.microsoft.com/appx/manifest/uap/windows10';
-        const ve = model.elements.get(`${ns}|VisualElements`);
+        const ve = model.elements.get(`${UAP_NS}|VisualElements`);
         assert.ok(ve, 'VisualElements element should exist');
         assert.ok(ve.attributes.length > 0, 'VisualElements should have attributes');
 
@@ -109,8 +108,46 @@ describe('loadSchemaModel', () => {
         model = loadSchemaModel(SCHEMAS_DIR);
         assert.ok(model.namespacePrefixes.size > 0);
         assert.equal(
-            model.namespacePrefixes.get('http://schemas.microsoft.com/appx/manifest/uap/windows10'),
+            model.namespacePrefixes.get(UAP_NS),
             'uap'
         );
+    });
+
+    it('resolves referenced attributes on inline complex types', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const resource = model.elements.get(`${FOUNDATION_NS}|Resource`);
+        assert.ok(resource, 'Resource element should exist');
+
+        const scale = resource.attributes.find(attribute => attribute.name === 'Scale');
+        const dxFeatureLevel = resource.attributes.find(attribute => attribute.name === 'DXFeatureLevel');
+        assert.ok(scale, 'Resource should include the referenced Scale attribute');
+        assert.equal(scale.typeName, 'ST_Scale_All');
+        assert.ok(dxFeatureLevel, 'Resource should include the referenced DXFeatureLevel attribute');
+    });
+
+    it('expands referenced attribute groups', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const extension = model.elements.get(`${UAP_NS}|Extension`);
+        assert.ok(extension, 'uap:Extension element should exist');
+
+        assert.ok(extension.attributes.some(attribute => attribute.name === 'Executable'));
+        assert.ok(extension.attributes.some(attribute => attribute.name === 'EntryPoint'));
+        assert.ok(extension.attributes.some(attribute => attribute.name === 'TrustLevel'));
+    });
+
+    it('materializes child elements that use named complex types', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const implementedCategories = model.elements.get(`${COM_NS}|ImplementedCategories`);
+        assert.ok(implementedCategories, 'ImplementedCategories child element should resolve to a schema element');
+        assert.ok(implementedCategories.children.some(child => child.name === 'ImplementedCategory'));
+    });
+
+    it('merges inherited members from complex type extensions', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const exeServerClass = model.elements.get(`${COM_NS}|type:CT_ExeServerClass`);
+        assert.ok(exeServerClass, 'CT_ExeServerClass type should exist');
+        assert.ok(exeServerClass.attributes.some(attribute => attribute.name === 'Id'));
+        assert.ok(exeServerClass.attributes.some(attribute => attribute.name === 'DisplayName'));
+        assert.ok(exeServerClass.children.some(child => child.name === 'DefaultIcon'));
     });
 });
