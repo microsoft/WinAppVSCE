@@ -23,9 +23,11 @@ import {
 import { loadSchemaModel } from '../manifest-intellisense/xsd-parser';
 
 const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
-const FOUNDATION_NS = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10';
-const UAP_NS = 'http://schemas.microsoft.com/appx/manifest/uap/windows10';
-const COM_NS = 'http://schemas.microsoft.com/appx/manifest/com/windows10';
+// These are XML namespace URI constants, not regular expressions.
+// lgtm[js/incomplete-hostname-regexp]
+const FOUNDATION_NS = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10'; // CodeQL: not a regex
+const UAP_NS = 'http://schemas.microsoft.com/appx/manifest/uap/windows10'; // CodeQL: not a regex
+const COM_NS = 'http://schemas.microsoft.com/appx/manifest/com/windows10'; // CodeQL: not a regex
 const model = loadSchemaModel(SCHEMAS_DIR);
 
 function makeManifest(body: string, extraNamespaces = ''): string {
