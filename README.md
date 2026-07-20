@@ -210,8 +210,8 @@ When you edit an `AppxManifest.xml` or `.appxmanifest` file in the text editor, 
 
 | Setting | Description |
 |---------|-------------|
-| `winAppSdk.manifestIntelliSense.enabled` | Enable or disable AppxManifest IntelliSense features. |
-| `winAppSdk.manifestIntelliSense.diagnostics.enabled` | Enable or disable manifest diagnostics independently from completions and hovers. |
+| `winapp.manifest.intelliSense.enable` | Enable or disable AppxManifest IntelliSense features. |
+| `winapp.manifest.diagnostics.level` | Set manifest diagnostics severity to `off`, `warning`, or `error`. |
 
 ## Scenarios
 

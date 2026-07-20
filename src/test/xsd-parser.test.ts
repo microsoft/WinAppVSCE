@@ -135,6 +135,16 @@ describe('loadSchemaModel', () => {
         assert.ok(extension.attributes.some(attribute => attribute.name === 'TrustLevel'));
     });
 
+    it('marks qualified attributes from referenced groups', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const application = model.elements.get(`${FOUNDATION_NS}|Application`);
+        assert.ok(application, 'Application element should exist');
+
+        const trustLevel = application.attributes.find(attribute => attribute.name === 'TrustLevel');
+        assert.ok(trustLevel, 'Application should include TrustLevel');
+        assert.equal(trustLevel.qualified, true);
+    });
+
     it('materializes child elements that use named complex types', () => {
         model = loadSchemaModel(SCHEMAS_DIR);
         const implementedCategories = model.elements.get(`${COM_NS}|ImplementedCategories`);

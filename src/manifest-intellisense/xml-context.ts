@@ -86,7 +86,7 @@ function checkAttributeValue(before: string, _text: string, _offset: number): Xm
 
     // Check if we're inside a quoted attribute value
     // Count quotes after the last unquoted attribute assignment
-    const attrMatch = /(\w[\w.-]*)=(['"])([^'"]*?)$/s.exec(tagContent);
+    const attrMatch = /([a-zA-Z_][\w.-]*(?::[a-zA-Z_][\w.-]*)?)\s*=\s*(['"])([^'"]*?)$/s.exec(tagContent);
     if (!attrMatch) { return null; }
 
     const attrName = attrMatch[1];
@@ -96,8 +96,8 @@ function checkAttributeValue(before: string, _text: string, _offset: number): Xm
     // Verify the quote is not closed
     const afterAttr = tagContent.substring(tagContent.lastIndexOf(quoteChar + partialValue));
     // Simple check: count quotes of this type after the =
-    const assignIdx = tagContent.lastIndexOf(`${attrName}=`);
-    const afterAssign = tagContent.substring(assignIdx + attrName.length + 1);
+    const quoteIdx = tagContent.indexOf(quoteChar, attrMatch.index + attrName.length);
+    const afterAssign = quoteIdx === -1 ? '' : tagContent.substring(quoteIdx);
     const quoteCount = (afterAssign.match(new RegExp(quoteChar.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
     if (quoteCount >= 2) { return null; } // Both quotes present, we're past the value
 
@@ -202,6 +202,7 @@ function checkClosingTag(before: string): XmlContext | null {
  * Returns the stack of open (unclosed) elements.
  */
 export function findParentPath(textBefore: string): ParentElement[] {
+    textBefore = textBefore.replace(/<!--[\s\S]*?-->/g, '');
     const stack: ParentElement[] = [];
 
     // Simple approach: scan for opening and closing tags
@@ -247,7 +248,7 @@ export function splitPrefixedName(name: string): { prefix: string; localName: st
 /** Extract existing attribute names from a tag string. */
 function extractExistingAttributes(tagContent: string): string[] {
     const attrs: string[] = [];
-    const attrRegex = /\s([a-zA-Z_][\w.-]*(?::[a-zA-Z_][\w.-]*)?)=/g;
+    const attrRegex = /\s([a-zA-Z_][\w.-]*(?::[a-zA-Z_][\w.-]*)?)\s*=/g;
     let m: RegExpExecArray | null;
     while ((m = attrRegex.exec(tagContent)) !== null) {
         attrs.push(m[1]);

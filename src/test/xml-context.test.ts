@@ -55,6 +55,12 @@ describe('findParentPath', () => {
         assert.equal(path[1].name, 'VisualElements');
         assert.equal(path[1].prefix, 'uap');
     });
+
+    it('ignores XML comments when building the parent stack', () => {
+        const xml = '<Package><!-- <Applications> --><Properties>';
+        const path = findParentPath(xml);
+        assert.deepEqual(path.map(element => element.name), ['Package', 'Properties']);
+    });
 });
 
 describe('getXmlContext', () => {
@@ -112,6 +118,14 @@ describe('getXmlContext', () => {
         assert.equal(ctx.partialText, 'Test');
     });
 
+    it('detects attribute value context with spaces around =', () => {
+        const text = `<Package>\n  <Identity Name = "Test`;
+        const ctx = getXmlContext(text, text.length);
+        assert.equal(ctx.type, 'attributeValue');
+        assert.equal(ctx.currentAttribute, 'Name');
+        assert.equal(ctx.partialText, 'Test');
+    });
+
     it('detects text context between tags', () => {
         const text = `<Package>\n  <Properties>\n    `;
         const ctx = getXmlContext(text, text.length);
@@ -140,5 +154,13 @@ describe('getXmlContext', () => {
         assert.ok(ctx.existingAttributes);
         assert.ok(ctx.existingAttributes.includes('Name'));
         assert.ok(ctx.existingAttributes.includes('Publisher'));
+    });
+
+    it('lists existing attributes when whitespace surrounds =', () => {
+        const text = `<Package>\n  <Identity Name = "App" Publisher = "CN=Test" `;
+        const ctx = getXmlContext(text, text.length);
+        assert.equal(ctx.type, 'attributeName');
+        assert.ok(ctx.existingAttributes?.includes('Name'));
+        assert.ok(ctx.existingAttributes?.includes('Publisher'));
     });
 });

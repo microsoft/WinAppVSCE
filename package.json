@@ -37,6 +37,17 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "languages": [
+      {
+        "id": "xml",
+        "extensions": [
+          ".appxmanifest"
+        ],
+        "aliases": [
+          "AppxManifest"
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "winapp.init",

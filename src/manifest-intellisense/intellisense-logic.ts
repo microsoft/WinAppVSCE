@@ -437,6 +437,8 @@ function validateElement(
     }
 
     for (const attr of schemaDef.attributes) {
+        // TODO: Resolve qualified attributes via namespace-aware DOM lookup instead of skipping validation.
+        if (attr.qualified) { continue; }
         if (attr.required && !element.hasAttribute(attr.name)) {
             const range = getElementRange(element, lines);
             diagnostics.push({
@@ -448,6 +450,7 @@ function validateElement(
     }
 
     for (const attr of schemaDef.attributes) {
+        if (attr.qualified) { continue; }
         if (!attr.enumerations || attr.enumerations.length === 0) { continue; }
         const value = element.getAttribute(attr.name);
         if (value !== null && !attr.enumerations.includes(value)) {
@@ -462,6 +465,7 @@ function validateElement(
 
     // Validate attribute values against pattern constraints
     for (const attr of schemaDef.attributes) {
+        if (attr.qualified) { continue; }
         if (!attr.patterns || attr.patterns.length === 0) { continue; }
         if (attr.enumerations && attr.enumerations.length > 0) { continue; } // enum validation already covers this
         const value = element.getAttribute(attr.name);
@@ -485,6 +489,7 @@ function validateElement(
 
     // Validate attribute value lengths
     for (const attr of schemaDef.attributes) {
+        if (attr.qualified) { continue; }
         if (attr.minLength === undefined && attr.maxLength === undefined) { continue; }
         const value = element.getAttribute(attr.name);
         if (value === null) { continue; }
@@ -541,6 +546,8 @@ export function findManifestElement(
     const typeKey = `${ns}|type:CT_${name}`;
     elem = schema.elements.get(typeKey);
     if (elem) { return elem; }
+
+    if (prefix) { return undefined; }
 
     for (const [candidateKey, candidate] of schema.elements) {
         if (candidateKey.endsWith(`|${name}`) && !candidateKey.includes('|type:')) {

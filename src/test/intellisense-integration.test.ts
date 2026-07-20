@@ -255,6 +255,8 @@ describe('manifest hover logic', () => {
 });
 
 describe('manifest diagnostics logic', () => {
+    // TODO(M4, M5): Add VS Code extension-host tests for command wiring plus settings/lifecycle behavior.
+    // Pure logic tests in this file cover the core IntelliSense and diagnostics behavior for now.
     it('returns no diagnostics for a valid minimal manifest', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
   <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />`));
@@ -279,6 +281,15 @@ describe('manifest diagnostics logic', () => {
   </Applications>`));
 
         assert.ok(diagnostics.some(diagnostic => diagnostic.message.includes("Invalid value 'invalid' for attribute 'AppListEntry'")));
+    });
+
+    it('returns XML Error diagnostics for malformed XML', () => {
+        const diagnostics = validateManifestText(
+            model,
+            'unexpected text<Package />'
+        );
+
+        assert.ok(diagnostics.some(diagnostic => diagnostic.message.startsWith('XML Error:')));
     });
 
     it('does not treat empty-string required attributes as missing', () => {
@@ -329,6 +340,15 @@ describe('manifest diagnostics logic', () => {
             'Valid Name and Version should not trigger pattern violations');
     });
 
+    it('skips diagnostics for qualified attributes until namespace-aware lookup is implemented', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Applications>
+    <Application Id="App" uap10:TrustLevel="not-a-real-value" />
+  </Applications>`, ` xmlns:uap10="${MANIFEST_NAMESPACES['uap10']}"`));
+
+        assert.ok(!diagnostics.some(diagnostic => diagnostic.message.includes('TrustLevel')));
+    });
+
     it('does not produce false positives on Dependencies or Applications', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
   <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
@@ -372,6 +392,11 @@ describe('schema and context integration', () => {
         const visualElements = findManifestElement(model, 'VisualElements', 'ux', docText);
         assert.ok(visualElements);
         assert.equal(visualElements.namespace, UAP_NS);
+    });
+
+    it('does not fall back across namespaces for unknown prefixes', () => {
+        const docText = makeManifest('', ` xmlns:ux="${UAP_NS}"`);
+        assert.equal(findManifestElement(model, 'VisualElements', 'missing', docText), undefined);
     });
 
     it('finds nested child elements that use named complex types', () => {

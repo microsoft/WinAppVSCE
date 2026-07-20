@@ -524,6 +524,7 @@ function parseAttribute(
 
     return {
         name,
+        qualified: (attr.getAttribute('form') || sourceAttr.getAttribute('form')) === 'qualified',
         required: use === 'required',
         typeName,
         enumerations,
@@ -820,6 +821,7 @@ function mergeAttribute(target: SchemaAttribute[], source: SchemaAttribute): voi
     }
 
     existing.required = existing.required || source.required;
+    existing.qualified = existing.qualified || source.qualified;
     existing.typeName = existing.typeName || source.typeName;
     existing.documentation = existing.documentation || source.documentation;
     if (source.enumerations?.length) {
