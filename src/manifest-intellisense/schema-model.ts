@@ -48,6 +48,12 @@ export interface SchemaAttribute {
     typeName?: string;
     /** Enumerated values if the type is a restriction with enumerations. */
     enumerations?: string[];
+    /** Pattern constraints (regex strings) from xs:pattern facets. */
+    patterns?: string[];
+    /** Minimum string length from xs:minLength. */
+    minLength?: number;
+    /** Maximum string length from xs:maxLength. */
+    maxLength?: number;
     /** Documentation. */
     documentation?: string;
     /** Absolute path to the XSD file where this attribute is defined. */
@@ -68,12 +74,30 @@ export interface SchemaEnumType {
     documentation?: string;
 }
 
+/** A simple type with pattern/length constraints. */
+export interface SchemaPatternType {
+    /** Type name. */
+    name: string;
+    /** Namespace URI. */
+    namespace: string;
+    /** Pattern constraints (regex strings). */
+    patterns: string[];
+    /** Minimum string length. */
+    minLength?: number;
+    /** Maximum string length. */
+    maxLength?: number;
+    /** Base type name (for inheritance chain resolution). */
+    baseType?: string;
+}
+
 /** The full schema model combining all parsed XSD information. */
 export interface SchemaModel {
     /** All element definitions keyed by "namespace|localName". */
     elements: Map<string, SchemaElement>;
     /** All enum types keyed by "namespace|typeName". */
     enumTypes: Map<string, SchemaEnumType>;
+    /** All pattern types keyed by "namespace|typeName". */
+    patternTypes: Map<string, SchemaPatternType>;
     /** Namespace URI to common prefix mapping. */
     namespacePrefixes: Map<string, string>;
 }

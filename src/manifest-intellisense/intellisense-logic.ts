@@ -460,6 +460,52 @@ function validateElement(
         }
     }
 
+    // Validate attribute values against pattern constraints
+    for (const attr of schemaDef.attributes) {
+        if (!attr.patterns || attr.patterns.length === 0) { continue; }
+        if (attr.enumerations && attr.enumerations.length > 0) { continue; } // enum validation already covers this
+        const value = element.getAttribute(attr.name);
+        if (value === null) { continue; }
+        const matchesAnyPattern = attr.patterns.some(pattern => {
+            try {
+                return new RegExp(`^(?:${pattern})$`).test(value);
+            } catch {
+                return true; // skip invalid regex patterns
+            }
+        });
+        if (!matchesAnyPattern) {
+            const range = getAttributeValueRange(element, attr.name, lines);
+            diagnostics.push({
+                message: `Value '${value}' for attribute '${attr.name}' does not match the expected pattern`,
+                severity,
+                ...range,
+            });
+        }
+    }
+
+    // Validate attribute value lengths
+    for (const attr of schemaDef.attributes) {
+        if (attr.minLength === undefined && attr.maxLength === undefined) { continue; }
+        const value = element.getAttribute(attr.name);
+        if (value === null) { continue; }
+        if (attr.minLength !== undefined && value.length < attr.minLength) {
+            const range = getAttributeValueRange(element, attr.name, lines);
+            diagnostics.push({
+                message: `Value for '${attr.name}' must be at least ${attr.minLength} characters (got ${value.length})`,
+                severity,
+                ...range,
+            });
+        }
+        if (attr.maxLength !== undefined && value.length > attr.maxLength) {
+            const range = getAttributeValueRange(element, attr.name, lines);
+            diagnostics.push({
+                message: `Value for '${attr.name}' exceeds maximum length of ${attr.maxLength} characters (got ${value.length})`,
+                severity,
+                ...range,
+            });
+        }
+    }
+
     validateChildren(schema, element, diagnostics, severity, lines);
 }
 
@@ -593,6 +639,27 @@ function getElementRange(element: Element, lines: string[]): { line: number; col
     const line = typeof lineNumber === 'number' ? clamp(lineNumber - 1, 0, Math.max(lines.length - 1, 0)) : 0;
     const col = typeof columnNumber === 'number' ? Math.max(columnNumber - 1, 0) : 0;
     return { line, col, endCol: getLineLength(lines, line) };
+}
+
+function getAttributeValueRange(element: Element, attrName: string, lines: string[]): { line: number; col: number; endCol: number } {
+    const elemLine = (element as unknown as { lineNumber?: number }).lineNumber;
+    const startLine = typeof elemLine === 'number' ? elemLine - 1 : 0;
+
+    // Search for the attribute in lines near the element
+    const searchEnd = Math.min(startLine + 10, lines.length);
+    for (let i = startLine; i < searchEnd; i++) {
+        const lineText = lines[i];
+        // Match attrName="value" or attrName='value'
+        const regex = new RegExp(`${attrName}\\s*=\\s*(['"])([^'"]*?)\\1`);
+        const match = regex.exec(lineText);
+        if (match) {
+            const valueStart = match.index + match[0].indexOf(match[2]);
+            return { line: i, col: valueStart, endCol: valueStart + match[2].length };
+        }
+    }
+
+    // Fallback to element range
+    return getElementRange(element, lines);
 }
 
 function getLineLength(lines: string[], line: number): number {

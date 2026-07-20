@@ -13,6 +13,7 @@ import {
     SchemaAttribute,
     SchemaChildRef,
     SchemaEnumType,
+    SchemaPatternType,
     URI_TO_PREFIX,
 } from './schema-model';
 
@@ -39,6 +40,7 @@ export function loadSchemaModel(schemasDir: string): SchemaModel {
     const model: SchemaModel = {
         elements: new Map(),
         enumTypes: new Map(),
+        patternTypes: new Map(),
         namespacePrefixes: new Map(URI_TO_PREFIX),
     };
 
@@ -119,9 +121,10 @@ function parseSimpleTypes(doc: Document, targetNs: string, model: SchemaModel): 
         const name = st.getAttribute('name');
         if (!name) { continue; }
 
+        const key = `${targetNs}|${name}`;
+
         const values = extractEnumerations(st);
         if (values.length > 0) {
-            const key = `${targetNs}|${name}`;
             model.enumTypes.set(key, {
                 name,
                 namespace: targetNs,
@@ -129,7 +132,53 @@ function parseSimpleTypes(doc: Document, targetNs: string, model: SchemaModel): 
                 documentation: extractDocumentation(st),
             });
         }
+
+        // Extract pattern/length constraints
+        const patternType = extractPatternType(st, name, targetNs);
+        if (patternType) {
+            model.patternTypes.set(key, patternType);
+        }
     }
+}
+
+/** Extract pattern and length facets from a simple type. */
+function extractPatternType(element: Element, name: string, namespace: string): SchemaPatternType | null {
+    const patterns: string[] = [];
+    let minLength: number | undefined;
+    let maxLength: number | undefined;
+    let baseType: string | undefined;
+
+    const restrictions = getElementsByLocalName(element, 'restriction');
+    for (const restriction of restrictions) {
+        const base = restriction.getAttribute('base');
+        if (base && !baseType) {
+            baseType = getLocalNameFromQName(base);
+        }
+
+        const patternElems = getDirectChildrenByLocalName(restriction, 'pattern');
+        for (const p of patternElems) {
+            const val = p.getAttribute('value');
+            if (val) { patterns.push(val); }
+        }
+
+        const minLenElems = getDirectChildrenByLocalName(restriction, 'minLength');
+        for (const ml of minLenElems) {
+            const val = ml.getAttribute('value');
+            if (val) { minLength = parseInt(val, 10); }
+        }
+
+        const maxLenElems = getDirectChildrenByLocalName(restriction, 'maxLength');
+        for (const ml of maxLenElems) {
+            const val = ml.getAttribute('value');
+            if (val) { maxLength = parseInt(val, 10); }
+        }
+    }
+
+    if (patterns.length === 0 && minLength === undefined && maxLength === undefined) {
+        return null;
+    }
+
+    return { name, namespace, patterns, minLength, maxLength, baseType };
 }
 
 /** Extract xs:enumeration values from a simple type or its restriction. */
@@ -429,6 +478,9 @@ function parseAttribute(
     );
 
     let enumerations: string[] | undefined;
+    let patterns: string[] | undefined;
+    let minLength: number | undefined;
+    let maxLength: number | undefined;
     let typeName = typeReference?.localName;
 
     if (typeReference) {
@@ -436,6 +488,17 @@ function parseAttribute(
         const enumType = model.enumTypes.get(typeKey);
         if (enumType) {
             enumerations = enumType.values;
+        }
+        // Resolve pattern constraints from type
+        const resolvedPatterns = resolvePatternConstraints(typeKey, model);
+        if (resolvedPatterns) {
+            // Flatten patternSets into a single array for storage on the attribute.
+            // Store only the most-derived (first) set for validation — base type patterns are too broad.
+            if (resolvedPatterns.patternSets.length > 0) {
+                patterns = resolvedPatterns.patternSets[0]; // most-derived restriction's patterns
+            }
+            minLength = resolvedPatterns.minLength;
+            maxLength = resolvedPatterns.maxLength;
         }
     }
 
@@ -448,6 +511,15 @@ function parseAttribute(
                 typeName = inlineSimple.getAttribute('name') || undefined;
             }
         }
+        // Also check inline patterns
+        const inlinePattern = extractPatternType(inlineSimple, '', '');
+        if (inlinePattern) {
+            if (inlinePattern.patterns.length > 0) {
+                patterns = [...(patterns || []), ...inlinePattern.patterns];
+            }
+            if (inlinePattern.minLength !== undefined) { minLength = inlinePattern.minLength; }
+            if (inlinePattern.maxLength !== undefined) { maxLength = inlinePattern.maxLength; }
+        }
     }
 
     return {
@@ -455,10 +527,62 @@ function parseAttribute(
         required: use === 'required',
         typeName,
         enumerations,
+        patterns,
+        minLength,
+        maxLength,
         documentation: extractDocumentation(attr) || extractDocumentation(sourceAttr),
         sourceFile: parseContext.documentFiles.get(sourceAttr.ownerDocument || doc) || filePath,
         sourceLine: getNodeSourceLine(sourceAttr),
     };
+}
+
+/** Resolve all pattern/length constraints for a type, walking the inheritance chain.
+ * Returns patternSets: each set is the patterns from one restriction level (OR within, AND between).
+ */
+function resolvePatternConstraints(
+    typeKey: string,
+    model: SchemaModel
+): { patternSets: string[][]; minLength?: number; maxLength?: number } | null {
+    const visited = new Set<string>();
+    const patternSets: string[][] = [];
+    let minLength: number | undefined;
+    let maxLength: number | undefined;
+
+    let currentKey: string | undefined = typeKey;
+    while (currentKey && !visited.has(currentKey)) {
+        visited.add(currentKey);
+        const pt = model.patternTypes.get(currentKey);
+        if (pt) {
+            if (pt.patterns.length > 0) {
+                patternSets.push(pt.patterns);
+            }
+            if (pt.minLength !== undefined && (minLength === undefined || pt.minLength > minLength)) {
+                minLength = pt.minLength;
+            }
+            if (pt.maxLength !== undefined && (maxLength === undefined || pt.maxLength < maxLength)) {
+                maxLength = pt.maxLength;
+            }
+            if (pt.baseType) {
+                const ns = currentKey.split('|')[0];
+                const baseKey = `${ns}|${pt.baseType}`;
+                if (model.patternTypes.has(baseKey)) {
+                    currentKey = baseKey;
+                } else {
+                    const typesKey = `${TYPES_NS}|${pt.baseType}`;
+                    currentKey = model.patternTypes.has(typesKey) ? typesKey : undefined;
+                }
+            } else {
+                currentKey = undefined;
+            }
+        } else {
+            currentKey = undefined;
+        }
+    }
+
+    if (patternSets.length === 0 && minLength === undefined && maxLength === undefined) {
+        return null;
+    }
+    return { patternSets, minLength, maxLength };
 }
 
 /** Resolve type references on elements that reference named complex types. */
@@ -690,6 +814,7 @@ function mergeAttribute(target: SchemaAttribute[], source: SchemaAttribute): voi
         target.push({
             ...source,
             enumerations: source.enumerations ? [...source.enumerations] : undefined,
+            patterns: source.patterns ? [...source.patterns] : undefined,
         });
         return;
     }
@@ -700,6 +825,11 @@ function mergeAttribute(target: SchemaAttribute[], source: SchemaAttribute): voi
     if (source.enumerations?.length) {
         existing.enumerations = Array.from(new Set([...(existing.enumerations || []), ...source.enumerations]));
     }
+    if (source.patterns?.length) {
+        existing.patterns = [...(existing.patterns || []), ...source.patterns];
+    }
+    if (source.minLength !== undefined) { existing.minLength = source.minLength; }
+    if (source.maxLength !== undefined) { existing.maxLength = source.maxLength; }
 }
 
 function mergeChildren(target: SchemaChildRef[], source: SchemaChildRef[]): void {
@@ -726,6 +856,7 @@ function cloneAttributes(attributes: SchemaAttribute[]): SchemaAttribute[] {
     return attributes.map(attribute => ({
         ...attribute,
         enumerations: attribute.enumerations ? [...attribute.enumerations] : undefined,
+        patterns: attribute.patterns ? [...attribute.patterns] : undefined,
     }));
 }
 

@@ -190,7 +190,28 @@ When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer 
 
 ### AppxManifest IntelliSense
 
-When you edit an `AppxManifest.xml` or `.appxmanifest` file in the text editor, the extension also provides schema-aware IntelliSense. You get element and attribute completions, hover documentation for manifest fields, and diagnostics for missing required attributes or invalid enum values. IntelliSense respects manifest namespaces and common Windows manifest extensions out of the box. You can control it with `winapp.manifest.intelliSense.enable` and `winapp.manifest.diagnostics.level`.
+When you edit an `AppxManifest.xml` or `.appxmanifest` file in the text editor, the extension provides schema-aware IntelliSense powered by bundled AppxManifest XSD schemas from the Windows SDK. That means completions, hovers, validation, and navigation are based on the same schema definitions used by Windows manifests.
+
+**What you get:**
+
+- **Element completions** — context-aware child element suggestions for the current XML location
+- **Attribute completions** — valid attributes for the current element
+- **Attribute value completions** — allowed enum values from XSD restrictions
+- **Hover documentation** — element and attribute descriptions from XSD annotations
+- **Diagnostics** — warnings for missing required attributes and invalid enum values
+- **Go to Definition** — **F12** / **Ctrl+Click** jumps to the relevant schema definition
+
+**Supported files:**
+
+- `**/[Aa]ppx[Mm]anifest.xml`
+- `**/*.appxmanifest`
+
+**Configuration:**
+
+| Setting | Description |
+|---------|-------------|
+| `winAppSdk.manifestIntelliSense.enabled` | Enable or disable AppxManifest IntelliSense features. |
+| `winAppSdk.manifestIntelliSense.diagnostics.enabled` | Enable or disable manifest diagnostics independently from completions and hovers. |
 
 ## Scenarios
 
