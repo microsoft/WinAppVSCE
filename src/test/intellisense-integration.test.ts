@@ -21,13 +21,12 @@ import {
     validateManifestText,
 } from '../manifest-intellisense/intellisense-logic';
 import { loadSchemaModel } from '../manifest-intellisense/xsd-parser';
+import { MANIFEST_NAMESPACES } from '../manifest-intellisense/schema-model';
 
 const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
-// These are XML namespace URI constants, not regular expressions.
-// lgtm[js/incomplete-hostname-regexp]
-const FOUNDATION_NS = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10'; // CodeQL: not a regex
-const UAP_NS = 'http://schemas.microsoft.com/appx/manifest/uap/windows10'; // CodeQL: not a regex
-const COM_NS = 'http://schemas.microsoft.com/appx/manifest/com/windows10'; // CodeQL: not a regex
+const FOUNDATION_NS = MANIFEST_NAMESPACES[''];
+const UAP_NS = MANIFEST_NAMESPACES['uap'];
+const COM_NS = MANIFEST_NAMESPACES['com'];
 const model = loadSchemaModel(SCHEMAS_DIR);
 
 function makeManifest(body: string, extraNamespaces = ''): string {
