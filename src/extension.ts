@@ -6,6 +6,7 @@ import { detectProjects } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
+import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 
@@ -416,6 +417,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register the AppxManifest visual editor
 	context.subscriptions.push(ManifestEditorProvider.register(context));
+
+	// Register AppxManifest IntelliSense (completion, hover, diagnostics)
+	registerManifestIntelliSense(context);
 
 	// When an appxmanifest file is opened in the default text editor,
 	// suggest switching to the visual editor.
