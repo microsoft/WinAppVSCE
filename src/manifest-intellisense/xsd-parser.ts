@@ -243,9 +243,9 @@ function parseChildElements(
 
             const childName = childElem.getAttribute('name');
             if (childName) {
+                const childKey = `${targetNs}|${childName}`;
                 const inlineTypes = getDirectChildrenByLocalName(childElem, 'complexType');
                 if (inlineTypes.length > 0) {
-                    const childKey = `${targetNs}|${childName}`;
                     if (!model.elements.has(childKey)) {
                         const inlineElem: SchemaElement = {
                             name: childName,
@@ -256,6 +256,26 @@ function parseChildElements(
                         };
                         parseComplexTypeContent(inlineTypes[0], targetNs, inlineElem, model, parseContext, doc);
                         model.elements.set(childKey, inlineElem);
+                    }
+                } else if (!model.elements.has(childKey)) {
+                    // Register elements that reference named types (complex or simple)
+                    // so hover can find them by direct name lookup.
+                    // Skip if the element's type resolves to an existing CT_ entry
+                    // (those are already findable via the CT_ fallback in findManifestElement).
+                    const typeAttr = childElem.getAttribute('type');
+                    const typeRef = typeAttr ? resolveTypeReference(typeAttr, childElem, doc) : null;
+                    const ctKey = `${targetNs}|type:CT_${childName}`;
+                    const hasComplexType = model.elements.has(ctKey) ||
+                        (typeRef && typeRef.localName.startsWith('CT_'));
+                    if (!hasComplexType) {
+                        const simpleElem: SchemaElement = {
+                            name: childName,
+                            namespace: targetNs,
+                            documentation: extractDocumentation(childElem),
+                            children: [],
+                            attributes: [],
+                        };
+                        model.elements.set(childKey, simpleElem);
                     }
                 }
             }
