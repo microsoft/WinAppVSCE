@@ -304,6 +304,60 @@ describe('manifest diagnostics logic', () => {
         assert.ok(findSchemaElementExact(model, 'VisualElements', UAP_NS));
         assert.equal(findSchemaElementExact(model, 'VisualElements', FOUNDATION_NS), undefined);
     });
+
+    it('flags Identity Name with spaces as invalid pattern', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Invalid Name With Spaces" Publisher="CN=Test" Version="1.0.0.0" />`));
+
+        assert.ok(diagnostics.some(d => d.message.includes("'Name'") && d.message.includes('does not match')),
+            'Name with spaces should violate pattern constraint');
+    });
+
+    it('flags Identity Version with wrong format as invalid pattern', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="TestApp" Publisher="CN=Test" Version="not.a.version" />`));
+
+        assert.ok(diagnostics.some(d => d.message.includes("'Version'") && d.message.includes('does not match')),
+            'Version with invalid format should violate pattern constraint');
+    });
+
+    it('does not flag valid Identity Name and Version as pattern violations', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="ValidName.App" Publisher="CN=Test" Version="1.2.3.4" />`));
+
+        assert.ok(!diagnostics.some(d => d.message.includes('does not match')),
+            'Valid Name and Version should not trigger pattern violations');
+    });
+
+    it('does not produce false positives on Dependencies or Applications', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
+  </Dependencies>
+  <Applications>
+    <Application Id="App" Executable="App.exe" EntryPoint="App.App" />
+  </Applications>`));
+
+        assert.ok(!diagnostics.some(d => d.message.includes("'Dependencies'") || d.message.includes("on <Dependencies>")),
+            'Dependencies element should not get false-positive attribute warnings');
+        assert.ok(!diagnostics.some(d => d.message.includes("'Applications'") || d.message.includes("on <Applications>")),
+            'Applications element should not get false-positive attribute warnings');
+    });
+
+    it('positions pattern diagnostics on the attribute value, not the element tag', () => {
+        const text = makeManifest(`
+  <Identity Name="Bad Name" Publisher="CN=Test" Version="1.0.0.0" />`);
+        const diagnostics = validateManifestText(model, text);
+        const nameDiag = diagnostics.find(d => d.message.includes("'Name'") && d.message.includes('does not match'));
+        assert.ok(nameDiag, 'Should produce Name pattern diagnostic');
+
+        // The diagnostic should point to the value "Bad Name", not the element start
+        const lines = text.split('\n');
+        const identityLine = lines.findIndex(l => l.includes('Identity'));
+        assert.equal(nameDiag.line, identityLine, 'Diagnostic should be on the Identity line');
+        assert.ok(nameDiag.col > 0, 'Diagnostic column should be within the attribute value');
+    });
 });
 
 describe('schema and context integration', () => {

@@ -150,4 +150,76 @@ describe('loadSchemaModel', () => {
         assert.ok(exeServerClass.attributes.some(attribute => attribute.name === 'DisplayName'));
         assert.ok(exeServerClass.children.some(child => child.name === 'DefaultIcon'));
     });
+
+    it('tracks sourceFile and sourceLine for elements', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const pkg = model.elements.get(`${FOUNDATION_NS}|Package`);
+        assert.ok(pkg, 'Package element should exist');
+        assert.ok(pkg.sourceFile, 'Package should have sourceFile set');
+        assert.ok(pkg.sourceFile.endsWith('.xsd'), 'sourceFile should be an XSD file');
+        assert.equal(typeof pkg.sourceLine, 'number', 'sourceLine should be a number');
+        assert.ok(pkg.sourceLine >= 0, 'sourceLine should be non-negative');
+    });
+
+    it('tracks sourceFile and sourceLine for attributes', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const identity = model.elements.get(`${FOUNDATION_NS}|type:CT_Identity`);
+        assert.ok(identity, 'CT_Identity type should exist');
+        const nameAttr = identity.attributes.find(a => a.name === 'Name');
+        assert.ok(nameAttr, 'Name attribute should exist');
+        assert.ok(nameAttr.sourceFile, 'Name attribute should have sourceFile');
+        assert.ok(nameAttr.sourceFile.endsWith('.xsd'), 'sourceFile should be an XSD file');
+        assert.equal(typeof nameAttr.sourceLine, 'number', 'sourceLine should be a number');
+    });
+
+    it('resolves pattern constraints on Identity Name attribute', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const identity = model.elements.get(`${FOUNDATION_NS}|type:CT_Identity`);
+        assert.ok(identity);
+        const nameAttr = identity.attributes.find(a => a.name === 'Name');
+        assert.ok(nameAttr);
+        assert.ok(nameAttr.patterns && nameAttr.patterns.length > 0,
+            'Name attribute should have pattern constraints resolved from its XSD type');
+    });
+
+    it('resolves pattern constraints on Identity Version attribute', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const identity = model.elements.get(`${FOUNDATION_NS}|type:CT_Identity`);
+        assert.ok(identity);
+        const versionAttr = identity.attributes.find(a => a.name === 'Version');
+        assert.ok(versionAttr);
+        assert.ok(versionAttr.patterns && versionAttr.patterns.length > 0,
+            'Version attribute should have pattern constraints');
+
+        // The version pattern should match dotted quad format (e.g. 1.0.0.0)
+        const regex = new RegExp(`^(?:${versionAttr.patterns[0]})$`);
+        assert.ok(regex.test('1.0.0.0'), 'Pattern should match valid version 1.0.0.0');
+        assert.ok(!regex.test('not.a.version'), 'Pattern should not match invalid version');
+    });
+
+    it('populates patternTypes map', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        assert.ok(model.patternTypes.size > 0, 'Should have parsed some pattern types');
+
+        // ST_PackageVersion should have patterns
+        let foundVersionType = false;
+        for (const [key, pt] of model.patternTypes) {
+            if (key.includes('ST_PackageVersion') || key.includes('ST_VersionQuad')) {
+                foundVersionType = true;
+                assert.ok(pt.patterns.length > 0, `${key} should have patterns`);
+                break;
+            }
+        }
+        assert.ok(foundVersionType, 'Should find a version-related pattern type');
+    });
+
+    it('registers simple-typed elements like DisplayName and Logo', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+
+        // DisplayName is a simple-typed element in the Properties complex type
+        // It should be discoverable via findManifestElement or as a registered element
+        const displayName = model.elements.get(`${FOUNDATION_NS}|DisplayName`);
+        assert.ok(displayName, 'DisplayName should be registered as an element');
+        assert.equal(displayName.name, 'DisplayName');
+    });
 });
