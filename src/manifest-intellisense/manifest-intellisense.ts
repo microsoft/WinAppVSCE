@@ -10,6 +10,7 @@ import { SchemaModel } from './schema-model';
 import { ManifestCompletionProvider } from './completion-provider';
 import { ManifestHoverProvider } from './hover-provider';
 import { ManifestDiagnosticsProvider } from './diagnostics-provider';
+import { ManifestDefinitionProvider } from './definition-provider';
 
 /** Document selector for manifest files. */
 const MANIFEST_SELECTOR: vscode.DocumentSelector = [
@@ -64,6 +65,12 @@ export function registerManifestIntelliSense(context: vscode.ExtensionContext): 
     const hoverProvider = new ManifestHoverProvider(getSchema);
     context.subscriptions.push(
         vscode.languages.registerHoverProvider(MANIFEST_SELECTOR, hoverProvider)
+    );
+
+    // Register definition provider
+    const definitionProvider = new ManifestDefinitionProvider(getSchema);
+    context.subscriptions.push(
+        vscode.languages.registerDefinitionProvider(MANIFEST_SELECTOR, definitionProvider)
     );
 
     // Register diagnostics provider

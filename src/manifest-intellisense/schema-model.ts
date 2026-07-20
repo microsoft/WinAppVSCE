@@ -18,6 +18,10 @@ export interface SchemaElement {
     typeName?: string;
     /** Base complex type name if this type extends another type. */
     baseTypeName?: string;
+    /** Absolute path to the XSD file where this element is defined. */
+    sourceFile?: string;
+    /** 0-based line number in the source XSD file. */
+    sourceLine?: number;
 }
 
 /** Reference to a child element within a parent. */
@@ -46,6 +50,10 @@ export interface SchemaAttribute {
     enumerations?: string[];
     /** Documentation. */
     documentation?: string;
+    /** Absolute path to the XSD file where this attribute is defined. */
+    sourceFile?: string;
+    /** 0-based line number in the source XSD file. */
+    sourceLine?: number;
 }
 
 /** A simple type with enumeration restrictions. */

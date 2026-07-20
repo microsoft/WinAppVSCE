@@ -22,11 +22,13 @@ const TYPES_NS = 'http://schemas.microsoft.com/appx/manifest/types';
 interface ParsedSchemaDocument {
     doc: Document;
     targetNs: string;
+    filePath: string;
 }
 
 interface SchemaParseContext {
     attributeDefinitions: Map<string, Element>;
     attributeGroupDefinitions: Map<string, Element>;
+    documentFiles: Map<Document, string>;
 }
 
 /**
@@ -49,9 +51,9 @@ export function loadSchemaModel(schemasDir: string): SchemaModel {
     }
 
     // Second pass: parse elements and complex types
-    for (const { doc, targetNs } of parsedDocs) {
-        parseElements(doc, targetNs, model, parseContext);
-        parseComplexTypes(doc, targetNs, model, parseContext);
+    for (const { doc, targetNs, filePath } of parsedDocs) {
+        parseElements(doc, targetNs, model, parseContext, filePath);
+        parseComplexTypes(doc, targetNs, model, parseContext, filePath);
     }
 
     // Third pass: resolve type references on elements
@@ -72,15 +74,17 @@ function loadSchemaDocuments(schemasDir: string): ParsedSchemaDocument[] {
 
             const doc = new DOMParser().parseFromString(content, 'application/xml');
             const targetNs = doc.documentElement?.getAttribute('targetNamespace') || '';
-            return { doc, targetNs };
+            return { doc, targetNs, filePath };
         });
 }
 
 function buildParseContext(parsedDocs: ParsedSchemaDocument[]): SchemaParseContext {
     const attributeDefinitions = new Map<string, Element>();
     const attributeGroupDefinitions = new Map<string, Element>();
+    const documentFiles = new Map<Document, string>();
 
-    for (const { doc, targetNs } of parsedDocs) {
+    for (const { doc, targetNs, filePath } of parsedDocs) {
+        documentFiles.set(doc, filePath);
         const root = doc.documentElement;
         if (!root) { continue; }
 
@@ -100,7 +104,7 @@ function buildParseContext(parsedDocs: ParsedSchemaDocument[]): SchemaParseConte
         }
     }
 
-    return { attributeDefinitions, attributeGroupDefinitions };
+    return { attributeDefinitions, attributeGroupDefinitions, documentFiles };
 }
 
 /** Parse xs:simpleType elements with enumeration restrictions. */
@@ -143,7 +147,13 @@ function extractEnumerations(element: Element): string[] {
 }
 
 /** Parse top-level xs:element definitions. */
-function parseElements(doc: Document, targetNs: string, model: SchemaModel, parseContext: SchemaParseContext): void {
+function parseElements(
+    doc: Document,
+    targetNs: string,
+    model: SchemaModel,
+    parseContext: SchemaParseContext,
+    filePath: string
+): void {
     const root = doc.documentElement;
     if (!root) { return; }
 
@@ -165,11 +175,13 @@ function parseElements(doc: Document, targetNs: string, model: SchemaModel, pars
             children: [],
             attributes: [],
             typeName: typeReference?.localName,
+            sourceFile: filePath,
+            sourceLine: getNodeSourceLine(elem),
         };
 
         const inlineTypes = getDirectChildrenByLocalName(elem, 'complexType');
         if (inlineTypes.length > 0) {
-            parseComplexTypeContent(inlineTypes[0], targetNs, schemaElem, model, parseContext, doc);
+            parseComplexTypeContent(inlineTypes[0], targetNs, schemaElem, model, parseContext, doc, filePath);
         }
 
         model.elements.set(key, schemaElem);
@@ -177,7 +189,13 @@ function parseElements(doc: Document, targetNs: string, model: SchemaModel, pars
 }
 
 /** Parse top-level xs:complexType definitions and associate them with elements. */
-function parseComplexTypes(doc: Document, targetNs: string, model: SchemaModel, parseContext: SchemaParseContext): void {
+function parseComplexTypes(
+    doc: Document,
+    targetNs: string,
+    model: SchemaModel,
+    parseContext: SchemaParseContext,
+    filePath: string
+): void {
     const root = doc.documentElement;
     if (!root) { return; }
 
@@ -194,9 +212,11 @@ function parseComplexTypes(doc: Document, targetNs: string, model: SchemaModel, 
             documentation: extractDocumentation(ct),
             children: [],
             attributes: [],
+            sourceFile: filePath,
+            sourceLine: getNodeSourceLine(ct),
         };
 
-        parseComplexTypeContent(ct, targetNs, schemaElem, model, parseContext, doc);
+        parseComplexTypeContent(ct, targetNs, schemaElem, model, parseContext, doc, filePath);
         model.elements.set(key, schemaElem);
     }
 }
@@ -208,7 +228,8 @@ function parseComplexTypeContent(
     schemaElem: SchemaElement,
     model: SchemaModel,
     parseContext: SchemaParseContext,
-    doc: Document
+    doc: Document,
+    filePath: string
 ): void {
     const complexContent = getDirectChildrenByLocalName(ct, 'complexContent')[0];
     const extension = complexContent
@@ -221,8 +242,8 @@ function parseComplexTypeContent(
         schemaElem.baseTypeName = baseReference?.localName;
     }
 
-    parseChildElements(scope, targetNs, schemaElem, model, parseContext, doc);
-    parseAttributesAndGroups(scope, targetNs, schemaElem, model, parseContext, doc);
+    parseChildElements(scope, targetNs, schemaElem, model, parseContext, doc, filePath);
+    parseAttributesAndGroups(scope, targetNs, schemaElem, model, parseContext, doc, filePath);
 }
 
 function parseChildElements(
@@ -231,7 +252,8 @@ function parseChildElements(
     schemaElem: SchemaElement,
     model: SchemaModel,
     parseContext: SchemaParseContext,
-    doc: Document
+    doc: Document,
+    filePath: string
 ): void {
     for (const container of collectParticleContainers(scope)) {
         const childElements = getDirectChildrenByLocalName(container, 'element');
@@ -253,30 +275,28 @@ function parseChildElements(
                             documentation: extractDocumentation(childElem),
                             children: [],
                             attributes: [],
+                            sourceFile: filePath,
+                            sourceLine: getNodeSourceLine(childElem),
                         };
-                        parseComplexTypeContent(inlineTypes[0], targetNs, inlineElem, model, parseContext, doc);
+                        parseComplexTypeContent(inlineTypes[0], targetNs, inlineElem, model, parseContext, doc, filePath);
                         model.elements.set(childKey, inlineElem);
                     }
                 } else if (!model.elements.has(childKey)) {
-                    // Register elements that reference named types (complex or simple)
-                    // so hover can find them by direct name lookup.
-                    // Skip if the element's type resolves to an existing CT_ entry
-                    // (those are already findable via the CT_ fallback in findManifestElement).
                     const typeAttr = childElem.getAttribute('type');
                     const typeRef = typeAttr ? resolveTypeReference(typeAttr, childElem, doc) : null;
                     const ctKey = `${targetNs}|type:CT_${childName}`;
-                    const hasComplexType = model.elements.has(ctKey) ||
-                        (typeRef && typeRef.localName.startsWith('CT_'));
-                    if (!hasComplexType) {
-                        const simpleElem: SchemaElement = {
-                            name: childName,
-                            namespace: targetNs,
-                            documentation: extractDocumentation(childElem),
-                            children: [],
-                            attributes: [],
-                        };
-                        model.elements.set(childKey, simpleElem);
-                    }
+                    const typeName = typeRef?.localName || (model.elements.has(ctKey) ? `CT_${childName}` : undefined);
+                    const simpleElem: SchemaElement = {
+                        name: childName,
+                        namespace: targetNs,
+                        documentation: extractDocumentation(childElem),
+                        children: [],
+                        attributes: [],
+                        typeName,
+                        sourceFile: filePath,
+                        sourceLine: getNodeSourceLine(childElem),
+                    };
+                    model.elements.set(childKey, simpleElem);
                 }
             }
         }
@@ -289,12 +309,13 @@ function parseAttributesAndGroups(
     schemaElem: SchemaElement,
     model: SchemaModel,
     parseContext: SchemaParseContext,
-    doc: Document
+    doc: Document,
+    filePath: string
 ): void {
     for (const child of getDirectChildElements(scope)) {
         const localName = getLocalName(child);
         if (localName === 'attribute') {
-            const attrDef = parseAttribute(child, targetNs, model, parseContext, doc);
+            const attrDef = parseAttribute(child, targetNs, model, parseContext, doc, filePath);
             if (attrDef) {
                 mergeAttribute(schemaElem.attributes, attrDef);
             }
@@ -302,7 +323,7 @@ function parseAttributesAndGroups(
         }
 
         if (localName === 'attributeGroup') {
-            expandAttributeGroup(child, targetNs, schemaElem, model, parseContext, doc, new Set<string>());
+            expandAttributeGroup(child, targetNs, schemaElem, model, parseContext, doc, filePath, new Set<string>());
         }
     }
 }
@@ -314,6 +335,7 @@ function expandAttributeGroup(
     model: SchemaModel,
     parseContext: SchemaParseContext,
     doc: Document,
+    filePath: string,
     visitedGroups: Set<string>
 ): void {
     const ref = attributeGroupRef.getAttribute('ref');
@@ -330,7 +352,7 @@ function expandAttributeGroup(
     for (const child of getDirectChildElements(groupDefinition)) {
         const localName = getLocalName(child);
         if (localName === 'attribute') {
-            const attrDef = parseAttribute(child, targetNs, model, parseContext, doc);
+            const attrDef = parseAttribute(child, targetNs, model, parseContext, doc, filePath);
             if (attrDef) {
                 mergeAttribute(schemaElem.attributes, attrDef);
             }
@@ -338,7 +360,7 @@ function expandAttributeGroup(
         }
 
         if (localName === 'attributeGroup') {
-            expandAttributeGroup(child, targetNs, schemaElem, model, parseContext, doc, visitedGroups);
+            expandAttributeGroup(child, targetNs, schemaElem, model, parseContext, doc, filePath, visitedGroups);
         }
     }
 }
@@ -379,7 +401,8 @@ function parseAttribute(
     targetNs: string,
     model: SchemaModel,
     parseContext: SchemaParseContext,
-    doc: Document
+    doc: Document,
+    filePath: string
 ): SchemaAttribute | null {
     let sourceAttr = attr;
     let name = attr.getAttribute('name');
@@ -433,6 +456,8 @@ function parseAttribute(
         typeName,
         enumerations,
         documentation: extractDocumentation(attr) || extractDocumentation(sourceAttr),
+        sourceFile: parseContext.documentFiles.get(sourceAttr.ownerDocument || doc) || filePath,
+        sourceLine: getNodeSourceLine(sourceAttr),
     };
 }
 
@@ -505,6 +530,8 @@ function resolveTypeReferences(model: SchemaModel): void {
                 children: cloneChildRefs(resolvedType.children),
                 attributes: cloneAttributes(resolvedType.attributes),
                 typeName: child.typeName,
+                sourceFile: resolvedType.sourceFile,
+                sourceLine: resolvedType.sourceLine,
             });
         }
     }
@@ -713,4 +740,9 @@ function getLocalName(element: Element): string {
 function getLocalNameFromQName(qname: string): string {
     const colonIdx = qname.indexOf(':');
     return colonIdx === -1 ? qname : qname.substring(colonIdx + 1);
+}
+
+function getNodeSourceLine(element: Element): number | undefined {
+    const lineNumber = (element as any).lineNumber;
+    return typeof lineNumber === 'number' && lineNumber > 0 ? lineNumber - 1 : undefined;
 }
