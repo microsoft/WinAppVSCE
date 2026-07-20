@@ -455,11 +455,12 @@ function parseAttribute(
 ): SchemaAttribute | null {
     let sourceAttr = attr;
     let name = attr.getAttribute('name');
+    let resolvedRef: { namespace: string; localName: string } | undefined;
 
     if (!name) {
         const ref = attr.getAttribute('ref');
         if (ref) {
-            const resolvedRef = resolveQName(ref, attr, doc);
+            resolvedRef = resolveQName(ref, attr, doc);
             name = resolvedRef.localName;
             const referencedAttr = parseContext.attributeDefinitions.get(`${resolvedRef.namespace}|${resolvedRef.localName}`);
             if (referencedAttr) {
@@ -522,9 +523,19 @@ function parseAttribute(
         }
     }
 
+    const isQualified = Boolean(resolvedRef?.namespace)
+        || (attr.getAttribute('form') || sourceAttr.getAttribute('form')) === 'qualified';
+    const attributeNamespace = isQualified
+        ? resolvedRef?.namespace
+            || sourceAttr.ownerDocument?.documentElement?.getAttribute('targetNamespace')
+            || attr.ownerDocument?.documentElement?.getAttribute('targetNamespace')
+            || targetNs
+        : undefined;
+
     return {
         name,
-        qualified: (attr.getAttribute('form') || sourceAttr.getAttribute('form')) === 'qualified',
+        qualified: isQualified,
+        namespace: attributeNamespace,
         required: use === 'required',
         typeName,
         enumerations,
@@ -810,7 +821,7 @@ function mergeAttributes(target: SchemaAttribute[], source: SchemaAttribute[]): 
 }
 
 function mergeAttribute(target: SchemaAttribute[], source: SchemaAttribute): void {
-    const existing = target.find(attribute => attribute.name === source.name);
+    const existing = target.find(attribute => attribute.name === source.name && attribute.namespace === source.namespace);
     if (!existing) {
         target.push({
             ...source,
@@ -822,6 +833,7 @@ function mergeAttribute(target: SchemaAttribute[], source: SchemaAttribute): voi
 
     existing.required = existing.required || source.required;
     existing.qualified = existing.qualified || source.qualified;
+    existing.namespace = existing.namespace || source.namespace;
     existing.typeName = existing.typeName || source.typeName;
     existing.documentation = existing.documentation || source.documentation;
     if (source.enumerations?.length) {

@@ -1,6 +1,6 @@
 import { DOMParser } from '@xmldom/xmldom';
 import type { Element } from '@xmldom/xmldom';
-import { MANIFEST_NAMESPACES, SchemaElement, SchemaModel, URI_TO_PREFIX } from './schema-model';
+import { MANIFEST_NAMESPACES, SchemaAttribute, SchemaElement, SchemaModel, URI_TO_PREFIX } from './schema-model';
 import { getXmlContext, splitPrefixedName } from './xml-context';
 
 /**
@@ -181,28 +181,31 @@ export function getAttributeCompletions(
     if (!elem) { return []; }
 
     const existing = new Set(existingAttrs || []);
+    const docPrefixes = extractDocumentPrefixes(docText);
     const items: ManifestCompletionSuggestion[] = [];
 
     for (const attr of elem.attributes) {
-        if (existing.has(attr.name)) { continue; }
+        const displayName = formatAttributeName(attr, docPrefixes, schema, true);
+        if (!displayName) { continue; }
+        if (existing.has(displayName)) { continue; }
 
         let detail = attr.required ? '(required)' : '(optional)';
-        let insertText = `${attr.name}="\${1:}"`;
+        let insertText = `${displayName}="\${1:}"`;
 
         if (attr.enumerations && attr.enumerations.length > 0) {
             detail += ` [${attr.enumerations.slice(0, 5).join(', ')}${attr.enumerations.length > 5 ? '...' : ''}]`;
             if (attr.enumerations.length <= 20) {
-                insertText = `${attr.name}="\${1|${attr.enumerations.join(',')}|}"`;
+                insertText = `${displayName}="\${1|${attr.enumerations.join(',')}|}"`;
             }
         }
 
         items.push({
             kind: 'attribute',
-            label: attr.name,
+            label: displayName,
             insertText,
             detail,
             documentation: attr.documentation,
-            sortText: attr.required ? `0_${attr.name}` : `1_${attr.name}`,
+            sortText: attr.required ? `0_${displayName}` : `1_${displayName}`,
         });
     }
 
@@ -221,7 +224,7 @@ export function getAttributeValueCompletions(
     const elem = findManifestElement(schema, elementName, prefix, docText);
     if (!elem) { return []; }
 
-    const attr = elem.attributes.find(a => a.name === attrName);
+    const attr = findAttribute(elem.attributes, attrName, docText);
     if (!attr?.enumerations) { return []; }
 
     return attr.enumerations.map((value, idx) => ({
@@ -285,8 +288,15 @@ export function getElementHover(
     const elem = findManifestElement(schema, localName, prefix || undefined, docText);
     if (!elem) { return undefined; }
 
-    const requiredAttributes = elem.attributes.filter(a => a.required).map(a => a.name);
-    const optionalAttributes = elem.attributes.filter(a => !a.required).map(a => a.name);
+    const docPrefixes = extractDocumentPrefixes(docText);
+    const requiredAttributes = elem.attributes
+        .filter(a => a.required)
+        .map(a => formatAttributeName(a, docPrefixes, schema))
+        .filter((name): name is string => Boolean(name));
+    const optionalAttributes = elem.attributes
+        .filter(a => !a.required)
+        .map(a => formatAttributeName(a, docPrefixes, schema))
+        .filter((name): name is string => Boolean(name));
     const childElements = elem.children.slice(0, 10).map(child => {
         const childPrefix = URI_TO_PREFIX.get(child.namespace) || '';
         return {
@@ -316,12 +326,13 @@ export function getAttributeHover(
     const elem = findManifestElement(schema, localName, prefix || undefined, docText);
     if (!elem) { return undefined; }
 
-    const attr = elem.attributes.find(a => a.name === attrName);
+    const attr = findAttribute(elem.attributes, attrName, docText);
     if (!attr) { return undefined; }
 
+    const docPrefixes = extractDocumentPrefixes(docText);
     return {
         kind: 'attribute',
-        name: attrName,
+        name: formatAttributeName(attr, docPrefixes, schema) || attrName,
         elementName,
         documentation: attr.documentation,
         required: attr.required,
@@ -471,6 +482,10 @@ function validateElement(
         const value = element.getAttribute(attr.name);
         if (value === null) { continue; }
         const matchesAnyPattern = attr.patterns.some(pattern => {
+            // XSD-sourced regexes can be expensive on arbitrarily long input, so cap the value length.
+            if (value.length > 1024) {
+                return true;
+            }
             try {
                 return new RegExp(`^(?:${pattern})$`).test(value);
             } catch {
@@ -568,7 +583,7 @@ export function findSchemaElementExact(
 
 export function extractDocumentPrefixes(text: string): Map<string, string> {
     const prefixes = new Map<string, string>();
-    const regex = /xmlns(?::([a-zA-Z][\w]*))?=["']([^"']+)["']/g;
+    const regex = /xmlns(?::([a-zA-Z][\w]*))?\s*=\s*["']([^"']+)["']/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(text)) !== null) {
         prefixes.set(match[1] || '', match[2]);
@@ -609,6 +624,48 @@ function buildElementSnippet(displayName: string, element: SchemaElement | undef
     }
 
     return snippet;
+}
+
+function findAttribute(attributes: SchemaAttribute[], attrName: string, docText: string): SchemaAttribute | undefined {
+    const { prefix, localName } = splitPrefixedName(attrName);
+    if (!prefix) {
+        return attributes.find(attribute => !attribute.qualified && attribute.name === attrName)
+            || attributes.find(attribute => attribute.name === attrName);
+    }
+
+    const namespace = resolveNamespaceFromPrefix(prefix, extractDocumentPrefixes(docText));
+    return attributes.find(attribute =>
+        attribute.name === localName
+        && attribute.qualified
+        && attribute.namespace === namespace
+    ) || attributes.find(attribute => attribute.name === localName);
+}
+
+function formatAttributeName(
+    attr: Pick<SchemaAttribute, 'name' | 'qualified' | 'namespace'>,
+    docPrefixes: Map<string, string>,
+    schema: SchemaModel,
+    requireDeclaredPrefix = false
+): string | undefined {
+    if (!attr.qualified) {
+        return attr.name;
+    }
+
+    const prefix = getDeclaredPrefixForNamespace(attr.namespace || '', docPrefixes)
+        || (!requireDeclaredPrefix ? schema.namespacePrefixes.get(attr.namespace || '') : undefined);
+    if (!prefix) {
+        return undefined;
+    }
+    return `${prefix}:${attr.name}`;
+}
+
+function getDeclaredPrefixForNamespace(namespace: string, docPrefixes: Map<string, string>): string | undefined {
+    for (const [prefix, uri] of docPrefixes) {
+        if (uri === namespace && prefix) {
+            return prefix;
+        }
+    }
+    return undefined;
 }
 
 function getWordAtOffset(text: string, offset: number): { value: string; start: number; end: number } | undefined {

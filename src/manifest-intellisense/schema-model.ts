@@ -44,6 +44,8 @@ export interface SchemaAttribute {
     name: string;
     /** True when the attribute must be namespace-qualified in XML. */
     qualified?: boolean;
+    /** Namespace URI used when the attribute is namespace-qualified. */
+    namespace?: string;
     /** Whether the attribute is required. */
     required: boolean;
     /** Type name (simple type reference). */

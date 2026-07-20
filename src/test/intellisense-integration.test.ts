@@ -6,6 +6,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import * as path from 'path';
 import { getXmlContext } from '../manifest-intellisense/xml-context';
 import {
@@ -40,6 +41,21 @@ function makeOpenManifest(body: string, rootNamespaces = `xmlns="${FOUNDATION_NS
     return `<?xml version="1.0" encoding="utf-8"?>
 <Package ${rootNamespaces}>
 ${body}`;
+}
+
+function assertValidSourceLocation(
+    label: string,
+    sourceFile: string | undefined,
+    sourceLine: number | undefined,
+    expectedLinePattern: RegExp
+): void {
+    assert.ok(sourceFile, `${label} should include a source file`);
+    assert.ok(sourceLine !== undefined && sourceLine >= 0, `${label} should include a non-negative source line`);
+    assert.ok(fs.existsSync(sourceFile), `${label} source file should exist on disk: ${sourceFile}`);
+
+    const sourceLines = fs.readFileSync(sourceFile, 'utf8').split(/\r?\n/);
+    assert.ok(sourceLine < sourceLines.length, `${label} source line should be within file bounds`);
+    assert.match(sourceLines[sourceLine], expectedLinePattern, `${label} source line should point at the expected XSD declaration`);
 }
 
 describe('manifest completion logic', () => {
@@ -125,6 +141,17 @@ describe('manifest completion logic', () => {
         assert.deepEqual(items.map(item => item.label), ['x86', 'x64', 'arm', 'arm64', 'x86a64', 'neutral']);
     });
 
+    it('returns enum value completions for prefixed qualified attributes using the local name', () => {
+        const items = getAttributeValueCompletions(
+            model,
+            'Application',
+            undefined,
+            'ux:TrustLevel',
+            makeManifest('', ` xmlns:ux="${MANIFEST_NAMESPACES['uap10']}"`)
+        );
+        assert.deepEqual(items.map(item => item.label), ['appContainer', 'mediumIL']);
+    });
+
     it('includes Application attributes used by manifest IntelliSense', () => {
         const items = getAttributeCompletions(model, 'Application', undefined, [], makeManifest(''));
         const labels = items.map(item => item.label);
@@ -135,6 +162,25 @@ describe('manifest completion logic', () => {
         assert.ok(labels.includes('EntryPoint'));
         assert.match(details.get('Id') || '', /^\(required\)/);
         assert.match(details.get('Executable') || '', /^\(optional\)/);
+    });
+
+    it('uses declared namespace prefixes for qualified attribute completions', () => {
+        const items = getAttributeCompletions(
+            model,
+            'Application',
+            undefined,
+            [],
+            makeManifest('', ` xmlns:ux="${MANIFEST_NAMESPACES['uap10']}"`)
+        );
+
+        const trustLevel = items.find(item => item.label === 'ux:TrustLevel');
+        assert.ok(trustLevel);
+        assert.equal(trustLevel.insertText, 'ux:TrustLevel="${1|appContainer,mediumIL|}"');
+    });
+
+    it('skips qualified attribute completions when the namespace is not declared', () => {
+        const items = getAttributeCompletions(model, 'Application', undefined, [], makeManifest(''));
+        assert.ok(!items.some(item => item.label.endsWith(':TrustLevel')));
     });
 
     it('offers child element completions in text context', () => {
@@ -219,6 +265,21 @@ describe('manifest hover logic', () => {
 
         const markdown = formatManifestHoverMarkdown(hover);
         assert.match(markdown, /Allowed values: `x86`, `x64`, `arm`, `arm64`, `x86a64`, `neutral`/);
+    });
+
+    it('shows qualified attribute names with the document prefix in hover', () => {
+        const text = makeManifest(`
+  <Applications>
+    <Application Id="App" ux:TrustLevel="mediumIL" />
+  </Applications>`, ` xmlns:ux="${MANIFEST_NAMESPACES['uap10']}"`);
+        const offset = text.indexOf('ux:TrustLevel') + 4;
+        const hover = getManifestHover(model, text, offset);
+        assert.ok(hover);
+        assert.equal(hover.kind, 'attribute');
+        assert.equal(hover.name, 'ux:TrustLevel');
+
+        const markdown = formatManifestHoverMarkdown(hover);
+        assert.match(markdown, /\*\*`ux:TrustLevel`\*\*/);
     });
 
     it('returns hover for namespace-prefixed elements', () => {
@@ -378,6 +439,39 @@ describe('manifest diagnostics logic', () => {
         assert.equal(nameDiag.line, identityLine, 'Diagnostic should be on the Identity line');
         assert.ok(nameDiag.col > 0, 'Diagnostic column should be within the attribute value');
     });
+
+    it('flags values shorter than schema minLength constraints', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="A" Publisher="CN=Test" Version="1.0.0.0" />`));
+
+        assert.ok(
+            diagnostics.some(diagnostic => diagnostic.message.includes("Value for 'Name' must be at least 3 characters (got 1)")),
+            'Expected a minLength diagnostic for Identity.Name'
+        );
+    });
+
+    it('flags values longer than schema maxLength constraints', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="${'A'.repeat(51)}" Publisher="CN=Test" Version="1.0.0.0" />`));
+
+        assert.ok(
+            diagnostics.some(diagnostic => diagnostic.message.includes("Value for 'Name' exceeds maximum length of 50 characters (got 51)")),
+            'Expected a maxLength diagnostic for Identity.Name'
+        );
+    });
+
+    it('does not emit length diagnostics for values within schema bounds', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="ValidName" Publisher="CN=Test" Version="1.0.0.0" ResourceId="${'R'.repeat(30)}" />`));
+
+        assert.ok(
+            !diagnostics.some(diagnostic =>
+                diagnostic.message.includes('must be at least') ||
+                diagnostic.message.includes('exceeds maximum length')
+            ),
+            'Values within minLength/maxLength bounds should not trigger length diagnostics'
+        );
+    });
 });
 
 describe('schema and context integration', () => {
@@ -392,6 +486,67 @@ describe('schema and context integration', () => {
         const visualElements = findManifestElement(model, 'VisualElements', 'ux', docText);
         assert.ok(visualElements);
         assert.equal(visualElements.namespace, UAP_NS);
+    });
+
+    it('returns source locations for Package, Identity, and VisualElements definitions', () => {
+        const defaultDocText = makeManifest('');
+        const prefixedDocText = makeManifest('', ` xmlns:ux="${UAP_NS}"`);
+        const cases = [
+            { label: 'Package', element: findManifestElement(model, 'Package', undefined, defaultDocText), pattern: /<xs:element name="Package"/ },
+            { label: 'Identity', element: findManifestElement(model, 'Identity', undefined, defaultDocText), pattern: /<xs:element name="Identity"/ },
+            { label: 'VisualElements', element: findManifestElement(model, 'VisualElements', 'ux', prefixedDocText), pattern: /<xs:element name="VisualElements"/ },
+        ];
+
+        for (const testCase of cases) {
+            assert.ok(testCase.element, `${testCase.label} should resolve from the manifest schema model`);
+            assertValidSourceLocation(
+                testCase.label,
+                testCase.element?.sourceFile,
+                testCase.element?.sourceLine,
+                testCase.pattern
+            );
+        }
+    });
+
+    it('returns source locations for attributes resolved through findManifestElement', () => {
+        const identity = findManifestElement(model, 'Identity', undefined, makeManifest(''));
+        const visualElements = findManifestElement(model, 'VisualElements', 'ux', makeManifest('', ` xmlns:ux="${UAP_NS}"`));
+
+        assert.ok(identity);
+        assert.ok(visualElements);
+
+        const attrs = [
+            { label: 'Identity.Name', attribute: identity?.attributes.find(attribute => attribute.name === 'Name'), pattern: /<xs:attribute name="Name"/ },
+            { label: 'Identity.Version', attribute: identity?.attributes.find(attribute => attribute.name === 'Version'), pattern: /<xs:attribute name="Version"/ },
+            { label: 'VisualElements.DisplayName', attribute: visualElements?.attributes.find(attribute => attribute.name === 'DisplayName'), pattern: /<xs:attribute name="DisplayName"/ },
+        ];
+
+        for (const testCase of attrs) {
+            assert.ok(testCase.attribute, `${testCase.label} should resolve from the manifest schema model`);
+            assertValidSourceLocation(
+                testCase.label,
+                testCase.attribute?.sourceFile,
+                testCase.attribute?.sourceLine,
+                testCase.pattern
+            );
+        }
+    });
+
+    it('points resolved source locations at XSD files on disk', () => {
+        const identity = findManifestElement(model, 'Identity', undefined, makeManifest(''));
+        const visualElements = findManifestElement(model, 'VisualElements', 'ux', makeManifest('', ` xmlns:ux="${UAP_NS}"`));
+        const sourceFiles = [
+            identity?.sourceFile,
+            identity?.attributes.find(attribute => attribute.name === 'Name')?.sourceFile,
+            visualElements?.sourceFile,
+            visualElements?.attributes.find(attribute => attribute.name === 'DisplayName')?.sourceFile,
+        ];
+
+        for (const sourceFile of sourceFiles) {
+            assert.ok(sourceFile, 'Resolved schema entries should include a source file');
+            assert.match(sourceFile, /\.xsd$/i);
+            assert.ok(fs.existsSync(sourceFile), `Expected schema file to exist: ${sourceFile}`);
+        }
     });
 
     it('does not fall back across namespaces for unknown prefixes', () => {
@@ -467,6 +622,12 @@ describe('schema and context integration', () => {
 
     it('extracts namespace prefixes from single-quoted declarations', () => {
         const prefixes = extractDocumentPrefixes(`<Package xmlns='${FOUNDATION_NS}' xmlns:ux='${UAP_NS}' />`);
+        assert.equal(prefixes.get(''), FOUNDATION_NS);
+        assert.equal(prefixes.get('ux'), UAP_NS);
+    });
+
+    it('extracts namespace prefixes when whitespace surrounds the equals sign', () => {
+        const prefixes = extractDocumentPrefixes(`<Package xmlns = "${FOUNDATION_NS}" xmlns:ux = "${UAP_NS}" />`);
         assert.equal(prefixes.get(''), FOUNDATION_NS);
         assert.equal(prefixes.get('ux'), UAP_NS);
     });

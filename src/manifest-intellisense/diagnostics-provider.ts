@@ -43,6 +43,12 @@ export class ManifestDiagnosticsProvider {
         this.disposables.push(
             vscode.workspace.onDidSaveTextDocument(doc => this.validateIfManifest(doc))
         );
+        this.disposables.push(
+            vscode.workspace.onDidChangeConfiguration(event => {
+                if (!event.affectsConfiguration('winapp.manifest')) { return; }
+                this.refreshOpenManifestDiagnostics();
+            })
+        );
         // Clear when closed
         this.disposables.push(
             vscode.workspace.onDidCloseTextDocument(doc => {
@@ -91,6 +97,21 @@ export class ManifestDiagnosticsProvider {
 
         const diagnostics = this.validate(document, level);
         this.diagnosticCollection.set(document.uri, diagnostics);
+    }
+
+    /** Re-run diagnostics for open manifest documents after configuration changes. */
+    private refreshOpenManifestDiagnostics(): void {
+        const config = vscode.workspace.getConfiguration('winapp.manifest');
+        const enabled = config.get<boolean>('intelliSense.enable', true);
+        const level = config.get<string>('diagnostics.level', 'warning');
+        if (!enabled || level === 'off') {
+            this.diagnosticCollection.clear();
+            return;
+        }
+
+        for (const document of vscode.workspace.textDocuments) {
+            this.validateIfManifest(document);
+        }
     }
 
     /** Check if a document is a manifest file. */

@@ -8,7 +8,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'path';
 import { loadSchemaModel } from '../manifest-intellisense/xsd-parser';
-import { SchemaModel } from '../manifest-intellisense/schema-model';
+import { MANIFEST_NAMESPACES, SchemaModel } from '../manifest-intellisense/schema-model';
 
 const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
 
@@ -140,9 +140,12 @@ describe('loadSchemaModel', () => {
         const application = model.elements.get(`${FOUNDATION_NS}|Application`);
         assert.ok(application, 'Application element should exist');
 
-        const trustLevel = application.attributes.find(attribute => attribute.name === 'TrustLevel');
-        assert.ok(trustLevel, 'Application should include TrustLevel');
+        const trustLevel = application.attributes.find(
+            attribute => attribute.name === 'TrustLevel' && attribute.namespace === MANIFEST_NAMESPACES['uap10']
+        );
+        assert.ok(trustLevel, 'Application should include qualified uap10:TrustLevel');
         assert.equal(trustLevel.qualified, true);
+        assert.equal(trustLevel.namespace, MANIFEST_NAMESPACES['uap10']);
     });
 
     it('materializes child elements that use named complex types', () => {
