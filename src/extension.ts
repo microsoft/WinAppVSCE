@@ -1,7 +1,15 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { spawn } from 'child_process';
-import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE, escapePowerShellArg } from './winapp-cli-utils';
+import * as fs from 'fs';
+import { spawn, execFile } from 'child_process';
+import {
+	getWinappCliPath,
+	WINAPP_CLI_CALLER_VALUE,
+	escapePowerShellArg,
+	resolveWindowsPowerShellPath,
+	isUsableElevatedCliPath,
+	decideElevatedWinappCommand
+} from './winapp-cli-utils';
 import { detectProjects } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { glob } from 'glob';
@@ -9,6 +17,7 @@ import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provid
 import { NoOpDebugAdapter } from './noop-debug-adapter';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
+const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
 
 /**
  * Maps debugger types to the VS Code extensions that provide them.
@@ -68,6 +77,81 @@ async function runWinappCommand(extensionPath: string, command: string, cwd: str
 
 	terminal.sendText(`& ${escapePowerShellArg(cliPath)} ${command}`);
 	return '';
+}
+
+/**
+ * Report whether the current VS Code process is running elevated (as
+ * administrator).
+ *
+ * VS Code cannot launch an elevated integrated terminal, so admin-only winapp
+ * commands must be routed either through the normal terminal (when already
+ * elevated) or through a separate UAC-elevated window (when not). We probe the
+ * process token with PowerShell's WindowsPrincipal check. On any failure we
+ * return `false`, which is the safe default: the command is then launched via
+ * an elevated window (UAC), avoiding a silent "Access denied" failure.
+ */
+async function isProcessElevated(): Promise<boolean> {
+	return new Promise((resolve) => {
+		execFile(
+			WINDOWS_POWERSHELL_PATH,
+			[
+				'-NoProfile',
+				'-NonInteractive',
+				'-Command',
+				'[bool]([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)'
+			],
+			{ timeout: 10000, windowsHide: true },
+			(error, stdout) => {
+				resolve(!error && stdout.trim().toLowerCase() === 'true');
+			}
+		);
+	});
+}
+
+/**
+ * Run a winapp command that requires administrator rights.
+ *
+ * If VS Code is already elevated, the command runs in the normal integrated
+ * terminal. Otherwise it is launched in a separate UAC-elevated PowerShell
+ * window (VS Code cannot elevate the integrated terminal), and an information
+ * message explains that a Windows admin prompt will appear.
+ */
+async function runWinappCommandElevated(extensionPath: string, command: string, cwd: string): Promise<void> {
+	const isElevated = await isProcessElevated();
+	const cliPath = getWinappCliPath(extensionPath);
+	const launcherPath = WINDOWS_POWERSHELL_PATH;
+	const decision = decideElevatedWinappCommand(
+		isElevated,
+		isUsableElevatedCliPath(cliPath, fs.existsSync(cliPath)),
+		cliPath,
+		command,
+		cwd,
+		launcherPath
+	);
+
+	if (decision.kind === 'run-normally') {
+		await runWinappCommand(extensionPath, command, cwd);
+		return;
+	}
+
+	if (decision.kind === 'error-cli-missing') {
+		vscode.window.showErrorMessage(
+			'The bundled WinApp CLI executable could not be found, so the administrator command was not started. Rebuild or reinstall the extension, then try again.'
+		);
+		return;
+	}
+
+	const terminal = vscode.window.createTerminal({
+		name: 'WinApp CLI (Admin launcher)',
+		cwd: cwd,
+		shellPath: WINDOWS_POWERSHELL_PATH,
+		env: { WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE }
+	});
+	terminal.show();
+	terminal.sendText(decision.command);
+	vscode.window.showInformationMessage(
+		'Installing the certificate requires administrator rights. Approve the Windows User Account Control (UAC) prompt in the elevated window that just opened.'
+	);
 }
 
 /**
@@ -641,16 +725,23 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			const install = await vscode.window.showQuickPick(
-				['Yes', 'No'],
-				{ placeHolder: 'Install certificate after generation?' }
+				['Generate only', 'Generate and install (requires admin)'],
+				{ placeHolder: 'Generate a development certificate — install it in the machine store too?' }
 			);
 
-			let command = 'cert generate';
-			if (install === 'Yes') {
-				command += ' --install';
+			if (!install) {
+				return;
 			}
 
-			await runWinappCommand(extensionPath, command, projectDir);
+			// Installing trusts the certificate in the machine store, which needs
+			// administrator rights. When VS Code isn't elevated we can't install
+			// from the integrated terminal, so run the whole generate+install in a
+			// separate UAC-elevated window instead of failing with "Access denied".
+			if (install === 'Generate and install (requires admin)') {
+				await runWinappCommandElevated(extensionPath, 'cert generate --install', projectDir);
+			} else {
+				await runWinappCommand(extensionPath, 'cert generate', projectDir);
+			}
 		})
 	);
 
@@ -671,7 +762,9 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await runWinappCommand(extensionPath, `cert install ${escapePowerShellArg(certPath)}`, workspacePath);
+			// Trusting a certificate in the machine store requires admin; route
+			// through an elevated window when VS Code isn't already elevated.
+			await runWinappCommandElevated(extensionPath, `cert install ${escapePowerShellArg(certPath)}`, workspacePath);
 		})
 	);
 
