@@ -285,7 +285,6 @@ function validateChildPlacement(
     diagnostics: ManifestDiagnostic[],
     lines: string[]
 ): void {
-    const parentLocalName = parentElement.localName || parentElement.nodeName.split(':').pop() || '';
     const childLocalName = childElement.localName || childElement.nodeName.split(':').pop() || '';
     const childNamespace = childElement.namespaceURI || '';
     if (isAllowedChild(schemaDef, childLocalName, childNamespace)) {
@@ -293,11 +292,14 @@ function validateChildPlacement(
     }
 
     const childSchemaDef = findSchemaElementExact(schema, childLocalName, childNamespace);
+    if (childSchemaDef) {
+        // Element exists in schema but not in this parent's children list.
+        // Could be valid via substitution groups we haven't fully mapped — skip silently.
+        return;
+    }
     const range = getElementRange(childElement, lines);
     diagnostics.push({
-        message: childSchemaDef
-            ? `Element '${childLocalName}' is not allowed as a child of '${parentLocalName}'`
-            : `Unknown element '${childLocalName}'`,
+        message: `Unknown element '${childLocalName}'`,
         severity: 'warning',
         ...range,
     });

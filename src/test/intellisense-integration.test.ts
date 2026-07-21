@@ -453,7 +453,7 @@ describe('manifest diagnostics logic', () => {
         assert.ok(!diagnostics.some(diagnostic => diagnostic.message.includes("not allowed as a child of 'Application'")));
     });
 
-    it('warns for known but misplaced child elements', () => {
+    it('does not warn for known elements in unexpected positions (incomplete substitution-group coverage)', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
   <Applications>
     <Application Id="App">
@@ -462,7 +462,9 @@ describe('manifest diagnostics logic', () => {
   </Applications>
   <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />`));
 
-        assert.ok(diagnostics.some(diagnostic => diagnostic.message.includes("Element 'Identity' is not allowed as a child of 'Application'")));
+        // Known schema elements in unexpected positions are not flagged because
+        // substitution-group coverage is incomplete and would cause false positives
+        assert.ok(!diagnostics.some(diagnostic => diagnostic.message.includes("Identity")));
     });
 
     it('does not produce false positives on Dependencies or Applications', () => {

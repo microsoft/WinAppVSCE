@@ -308,9 +308,11 @@ function validateDependencies(data: ManifestData, errors: ValidationError[], sch
     const isValidVersion = (v: string) => schema
         ? matchesSchemaPattern(schema, 'ST_VersionQuad', v)
         : isValidDotQuadNumber(v);
-    const isValidPublisher = (v: string) => schema
-        ? matchesSchemaPattern(schema, 'ST_Publisher_2010_v2', v)
-        : isValidPublisherDN(v);
+    const isValidPublisher = (v: string) => {
+        if (!isValidPublisherDN(v)) { return false; }
+        if (schema) { return matchesSchemaPattern(schema, 'ST_Publisher_2010_v2', v); }
+        return true;
+    };
     const isValidPkgName = (v: string) => schema
         ? (validateValueAgainstType(schema, 'ST_PackageName', v) === null)
         : (IDENTITY_NAME_REGEX.test(v) && v.length >= 3 && v.length <= 50);
