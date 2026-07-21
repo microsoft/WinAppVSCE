@@ -7,6 +7,22 @@ Thanks for your interest in contributing to the WinApp VS Code Extension.
 - Node.js 24
 - Visual Studio Code
 - PowerShell 7 or Windows PowerShell for the build scripts
+- [WinApp CLI](https://github.com/microsoft/WinAppCli) (for syncing manifest schemas)
+
+## Setup
+
+After cloning the repository, restore the Windows SDK packages and sync the
+AppxManifest XSD schema files:
+
+```powershell
+winapp restore
+npm run sync-schemas
+```
+
+This downloads `Microsoft.Windows.SDK.BuildTools` and `Microsoft.Windows.SDK.CPP`
+to the NuGet package cache and copies the required XSD files into `schemas/`.
+The schema files are not checked into the repository — they are derived from
+the SDK versions pinned in `winapp.yaml`.
 
 ## Build
 
