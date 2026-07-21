@@ -13,14 +13,18 @@ import { validateManifest } from './manifest-validator';
 import { getWebviewContent, getParseErrorContent } from './webview-content';
 import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
+import { SchemaModel } from '../manifest-schema/schema-model';
 
 export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'winapp.manifestEditor';
 
-    constructor(private readonly context: vscode.ExtensionContext) {}
+    constructor(
+        private readonly context: vscode.ExtensionContext,
+        private readonly getSchema?: () => SchemaModel | undefined,
+    ) {}
 
-    public static register(context: vscode.ExtensionContext): vscode.Disposable {
-        const provider = new ManifestEditorProvider(context);
+    public static register(context: vscode.ExtensionContext, getSchema?: () => SchemaModel | undefined): vscode.Disposable {
+        const provider = new ManifestEditorProvider(context, getSchema);
         return vscode.window.registerCustomEditorProvider(
             ManifestEditorProvider.viewType,
             provider,
@@ -150,7 +154,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                 return;
             }
             if (showingErrorView) { showEditorView(); }
-            const errors = validateManifest(data);
+            const errors = validateManifest(data, this.getSchema?.());
             webviewPanel.webview.postMessage({ type: 'update', data, errors, forceAll });
         };
 

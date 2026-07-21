@@ -4,7 +4,7 @@
  */
 
 import * as vscode from 'vscode';
-import { SchemaModel } from './schema-model';
+import { SchemaModel } from '../manifest-schema/schema-model';
 import { getManifestCompletions } from './intellisense-logic';
 
 export class ManifestCompletionProvider implements vscode.CompletionItemProvider {

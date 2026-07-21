@@ -7,6 +7,8 @@ import { resolveProjectDirectory as resolveProjectDirectoryCore } from './projec
 import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
+import { SchemaModel } from './manifest-schema/schema-model';
+import { loadSchemaModel } from './manifest-schema/xsd-parser';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 
@@ -415,11 +417,31 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.debug.registerDebugAdapterDescriptorFactory(WINAPP_DEBUG_TYPE, factory)
 	);
 
-	// Register the AppxManifest visual editor
-	context.subscriptions.push(ManifestEditorProvider.register(context));
+	// Shared schema model — loaded lazily, shared by both editor and IntelliSense
+	const schemasDir = path.join(extensionPath, 'schemas');
+	let sharedSchema: SchemaModel | undefined;
+	let schemaLoadFailed = false;
+	const getSharedSchema = (): SchemaModel | undefined => {
+		if (sharedSchema) { return sharedSchema; }
+		if (schemaLoadFailed) { return undefined; }
+		try {
+			sharedSchema = loadSchemaModel(schemasDir);
+			return sharedSchema;
+		} catch (err) {
+			schemaLoadFailed = true;
+			const message = err instanceof Error ? err.message : String(err);
+			vscode.window.showWarningMessage(
+				`WinApp: Failed to load manifest schemas: ${message}`
+			);
+			return undefined;
+		}
+	};
 
-	// Register AppxManifest IntelliSense (completion, hover, diagnostics)
-	registerManifestIntelliSense(context);
+	// Register the AppxManifest visual editor (with schema support)
+	context.subscriptions.push(ManifestEditorProvider.register(context, getSharedSchema));
+
+	// Register AppxManifest IntelliSense (completion, hover, diagnostics) — shares the same schema
+	registerManifestIntelliSense(context, getSharedSchema);
 
 	// When an appxmanifest file is opened in the default text editor,
 	// suggest switching to the visual editor.

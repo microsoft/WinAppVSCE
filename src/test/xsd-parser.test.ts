@@ -171,7 +171,7 @@ describe('loadSchemaModel', () => {
         assert.ok(pkg.sourceFile, 'Package should have sourceFile set');
         assert.ok(pkg.sourceFile.endsWith('.xsd'), 'sourceFile should be an XSD file');
         assert.equal(typeof pkg.sourceLine, 'number', 'sourceLine should be a number');
-        assert.ok(pkg.sourceLine >= 0, 'sourceLine should be non-negative');
+        assert.ok(pkg.sourceLine !== undefined && pkg.sourceLine >= 0, 'sourceLine should be non-negative');
     });
 
     it('tracks sourceFile and sourceLine for attributes', () => {

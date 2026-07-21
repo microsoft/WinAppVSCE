@@ -5,8 +5,8 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { loadSchemaModel } from './xsd-parser';
-import { SchemaModel } from './schema-model';
+import { loadSchemaModel } from '../manifest-schema/xsd-parser';
+import { SchemaModel } from '../manifest-schema/schema-model';
 import { ManifestCompletionProvider } from './completion-provider';
 import { ManifestHoverProvider } from './hover-provider';
 import { ManifestDiagnosticsProvider } from './diagnostics-provider';
@@ -24,32 +24,40 @@ const TRIGGER_CHARACTERS = ['<', ' ', '"', '=', '/'];
 /**
  * Register all manifest IntelliSense providers.
  * Call this from the extension's activate function.
+ * 
+ * @param context VS Code extension context
+ * @param sharedGetSchema Optional shared schema getter (used when a shared schema is
+ *   loaded at the extension level). If not provided, creates its own lazy loader.
  */
-export function registerManifestIntelliSense(context: vscode.ExtensionContext): void {
-    const schemasDir = path.join(context.extensionPath, 'schemas');
-    let schema: SchemaModel | undefined;
-    let loadFailed = false;
+export function registerManifestIntelliSense(
+    context: vscode.ExtensionContext,
+    sharedGetSchema?: () => SchemaModel | undefined
+): void {
+    let getSchema: () => SchemaModel | undefined;
 
-    const getSchema = (): SchemaModel | undefined => {
-        if (schema) {
-            return schema;
-        }
-        if (loadFailed) {
-            return undefined;
-        }
+    if (sharedGetSchema) {
+        getSchema = sharedGetSchema;
+    } else {
+        const schemasDir = path.join(context.extensionPath, 'schemas');
+        let schema: SchemaModel | undefined;
+        let loadFailed = false;
 
-        try {
-            schema = loadSchemaModel(schemasDir);
-            return schema;
-        } catch (err) {
-            loadFailed = true;
-            const message = err instanceof Error ? err.message : String(err);
-            vscode.window.showWarningMessage(
-                `WinApp: Failed to load manifest schemas for IntelliSense: ${message}`
-            );
-            return undefined;
-        }
-    };
+        getSchema = (): SchemaModel | undefined => {
+            if (schema) { return schema; }
+            if (loadFailed) { return undefined; }
+            try {
+                schema = loadSchemaModel(schemasDir);
+                return schema;
+            } catch (err) {
+                loadFailed = true;
+                const message = err instanceof Error ? err.message : String(err);
+                vscode.window.showWarningMessage(
+                    `WinApp: Failed to load manifest schemas for IntelliSense: ${message}`
+                );
+                return undefined;
+            }
+        };
+    }
 
     // Register completion provider
     const completionProvider = new ManifestCompletionProvider(getSchema);

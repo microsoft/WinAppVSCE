@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { findAttribute, findManifestElement } from './intellisense-logic';
-import { SchemaModel } from './schema-model';
-import { getXmlContext, splitPrefixedName } from './xml-context';
+import { SchemaModel } from '../manifest-schema/schema-model';
+import { getXmlContext, splitPrefixedName } from '../manifest-schema/xml-context';
 
 const XML_NAME_REGEX = /[A-Za-z_][\w.:-]*/;
 

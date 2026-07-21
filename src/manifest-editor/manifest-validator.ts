@@ -1,9 +1,15 @@
 /**
  * Validation rules for appxmanifest.xml fields.
  * Provides real-time inline validation for the form editor.
+ * 
+ * Uses the shared XSD schema model for pattern/length validation where available.
+ * Semantic rules not expressible in XSD (version comparison, reserved names,
+ * image extension checks, resource package constraints) remain as hand-written logic.
  */
 
 import { ManifestData, ValidationError } from './manifest-types';
+import { SchemaModel } from '../manifest-schema/schema-model';
+import { validateValueAgainstType, matchesSchemaPattern, isValidSchemaColor } from './schema-helpers';
 
 const VERSION_REGEX = /^\d+\.\d+\.\d+\.\d+$/;
 // Full X.500 DN structural pattern matching the appxmanifest schema constraint (RFC 2253).
@@ -171,49 +177,75 @@ function validateImageField(errors: ValidationError[], field: string, value: str
 }
 
 /** Validate all fields and return a list of errors. */
-export function validateManifest(data: ManifestData): ValidationError[] {
+export function validateManifest(data: ManifestData, schema?: SchemaModel): ValidationError[] {
     const errors: ValidationError[] = [];
-    validateIdentity(data, errors);
-    validatePhoneIdentity(data, errors);
-    validateProperties(data, errors);
-    validateDependencies(data, errors);
+    validateIdentity(data, errors, schema);
+    validatePhoneIdentity(data, errors, schema);
+    validateProperties(data, errors, schema);
+    validateDependencies(data, errors, schema);
     validateResources(data, errors);
-    validateApplications(data, errors);
+    validateApplications(data, errors, schema);
     return errors;
 }
 
-function validateIdentity(data: ManifestData, errors: ValidationError[]): void {
+function validateIdentity(data: ManifestData, errors: ValidationError[], schema?: SchemaModel): void {
     if (!data.identity.name) {
         errors.push({ field: 'identity.name', message: 'Package name is required.', severity: 'error' });
-    } else if (!IDENTITY_NAME_REGEX.test(data.identity.name)) {
-        errors.push({ field: 'identity.name', message: 'Package name can only contain letters, numbers, dots, and hyphens.', severity: 'error' });
-    } else if (data.identity.name.length < 3) {
-        errors.push({ field: 'identity.name', message: 'Package name must be at least 3 characters.', severity: 'error' });
-    } else if (data.identity.name.length > 50) {
-        errors.push({ field: 'identity.name', message: 'Package name must be 50 characters or fewer.', severity: 'error' });
-    } else if (RESERVED_NAMES.has(data.identity.name.toUpperCase())) {
-        errors.push({ field: 'identity.name', message: 'Package name cannot be a reserved device name (CON, PRN, AUX, NUL, COM1–9, LPT1–9).', severity: 'error' });
+    } else if (schema) {
+        const err = validateValueAgainstType(schema, 'ST_PackageName', data.identity.name);
+        if (err) {
+            errors.push({ field: 'identity.name', message: `Package name: ${err}`, severity: 'error' });
+        } else if (RESERVED_NAMES.has(data.identity.name.toUpperCase())) {
+            errors.push({ field: 'identity.name', message: 'Package name cannot be a reserved device name (CON, PRN, AUX, NUL, COM1–9, LPT1–9).', severity: 'error' });
+        }
+    } else {
+        if (!IDENTITY_NAME_REGEX.test(data.identity.name)) {
+            errors.push({ field: 'identity.name', message: 'Package name can only contain letters, numbers, dots, and hyphens.', severity: 'error' });
+        } else if (data.identity.name.length < 3) {
+            errors.push({ field: 'identity.name', message: 'Package name must be at least 3 characters.', severity: 'error' });
+        } else if (data.identity.name.length > 50) {
+            errors.push({ field: 'identity.name', message: 'Package name must be 50 characters or fewer.', severity: 'error' });
+        } else if (RESERVED_NAMES.has(data.identity.name.toUpperCase())) {
+            errors.push({ field: 'identity.name', message: 'Package name cannot be a reserved device name (CON, PRN, AUX, NUL, COM1–9, LPT1–9).', severity: 'error' });
+        }
     }
 
     if (!data.identity.publisher) {
         errors.push({ field: 'identity.publisher', message: 'Publisher is required.', severity: 'error' });
+    } else if (schema) {
+        if (!matchesSchemaPattern(schema, 'ST_Publisher_2010_v2', data.identity.publisher)) {
+            errors.push({ field: 'identity.publisher', message: 'Publisher must be a valid X.500 distinguished name (e.g. CN=Contoso, O=Contoso Ltd).', severity: 'error' });
+        }
     } else if (!isValidPublisherDN(data.identity.publisher)) {
         errors.push({ field: 'identity.publisher', message: 'Publisher must be a valid X.500 distinguished name (e.g. CN=Contoso, O=Contoso Ltd).', severity: 'error' });
     }
 
     if (!data.identity.version) {
         errors.push({ field: 'identity.version', message: 'Version is required.', severity: 'error' });
+    } else if (schema) {
+        if (!matchesSchemaPattern(schema, 'ST_VersionQuad', data.identity.version)) {
+            errors.push({ field: 'identity.version', message: 'Version must be a DotQuadNumber in Major.Minor.Build.Revision format (e.g. 1.0.0.0), each part 0–65535.', severity: 'error' });
+        }
     } else if (!isValidDotQuadNumber(data.identity.version)) {
         errors.push({ field: 'identity.version', message: 'Version must be a DotQuadNumber in Major.Minor.Build.Revision format (e.g. 1.0.0.0), each part 0–65535.', severity: 'error' });
     }
 
     if (data.identity.resourceId) {
-        if (!IDENTITY_NAME_REGEX.test(data.identity.resourceId)) {
-            errors.push({ field: 'identity.resourceId', message: 'Resource ID can only contain letters, numbers, dots, and hyphens.', severity: 'error' });
-        } else if (data.identity.resourceId.length > 30) {
-            errors.push({ field: 'identity.resourceId', message: 'Resource ID must be 30 characters or fewer.', severity: 'error' });
-        } else if (RESERVED_NAMES.has(data.identity.resourceId.toUpperCase())) {
-            errors.push({ field: 'identity.resourceId', message: 'Resource ID cannot be a reserved device name (CON, PRN, AUX, NUL, COM1–9, LPT1–9).', severity: 'error' });
+        if (schema) {
+            const err = validateValueAgainstType(schema, 'ST_ResourceId', data.identity.resourceId);
+            if (err) {
+                errors.push({ field: 'identity.resourceId', message: `Resource ID: ${err}`, severity: 'error' });
+            } else if (RESERVED_NAMES.has(data.identity.resourceId.toUpperCase())) {
+                errors.push({ field: 'identity.resourceId', message: 'Resource ID cannot be a reserved device name (CON, PRN, AUX, NUL, COM1–9, LPT1–9).', severity: 'error' });
+            }
+        } else {
+            if (!IDENTITY_NAME_REGEX.test(data.identity.resourceId)) {
+                errors.push({ field: 'identity.resourceId', message: 'Resource ID can only contain letters, numbers, dots, and hyphens.', severity: 'error' });
+            } else if (data.identity.resourceId.length > 30) {
+                errors.push({ field: 'identity.resourceId', message: 'Resource ID must be 30 characters or fewer.', severity: 'error' });
+            } else if (RESERVED_NAMES.has(data.identity.resourceId.toUpperCase())) {
+                errors.push({ field: 'identity.resourceId', message: 'Resource ID cannot be a reserved device name (CON, PRN, AUX, NUL, COM1–9, LPT1–9).', severity: 'error' });
+            }
         }
     }
 
@@ -224,25 +256,38 @@ function validateIdentity(data: ManifestData, errors: ValidationError[]): void {
     }
 }
 
-function validatePhoneIdentity(data: ManifestData, errors: ValidationError[]): void {
+function validatePhoneIdentity(data: ManifestData, errors: ValidationError[], schema?: SchemaModel): void {
     if (!data.phoneIdentity) { return; }
-    if (!data.phoneIdentity.phoneProductId || !GUID_REGEX.test(data.phoneIdentity.phoneProductId)) {
+    const isGuidValid = (v: string) => schema
+        ? matchesSchemaPattern(schema, 'ST_GUID', v)
+        : GUID_REGEX.test(v);
+    if (!data.phoneIdentity.phoneProductId || !isGuidValid(data.phoneIdentity.phoneProductId)) {
         errors.push({ field: 'phoneIdentity.phoneProductId', message: 'Phone Product ID must be a valid GUID (e.g. 00000000-0000-0000-0000-000000000000).', severity: 'error' });
     }
-    if (data.phoneIdentity.phonePublisherId && !GUID_REGEX.test(data.phoneIdentity.phonePublisherId)) {
+    if (data.phoneIdentity.phonePublisherId && !isGuidValid(data.phoneIdentity.phonePublisherId)) {
         errors.push({ field: 'phoneIdentity.phonePublisherId', message: 'Phone Publisher ID must be a valid GUID (e.g. 00000000-0000-0000-0000-000000000000).', severity: 'error' });
     }
 }
 
-function validateProperties(data: ManifestData, errors: ValidationError[]): void {
+function validateProperties(data: ManifestData, errors: ValidationError[], schema?: SchemaModel): void {
     if (!data.properties.displayName) {
         errors.push({ field: 'properties.displayName', message: 'Display name is required.', severity: 'error' });
+    } else if (schema) {
+        const err = validateValueAgainstType(schema, 'ST_DisplayName', data.properties.displayName);
+        if (err) {
+            errors.push({ field: 'properties.displayName', message: `Display name: ${err}`, severity: 'error' });
+        }
     } else if (data.properties.displayName.length > 256) {
         errors.push({ field: 'properties.displayName', message: 'Display name must be 256 characters or fewer.', severity: 'error' });
     }
 
     if (!data.properties.publisherDisplayName) {
         errors.push({ field: 'properties.publisherDisplayName', message: 'Publisher display name is required.', severity: 'error' });
+    } else if (schema) {
+        const err = validateValueAgainstType(schema, 'ST_DisplayName', data.properties.publisherDisplayName);
+        if (err) {
+            errors.push({ field: 'properties.publisherDisplayName', message: `Publisher display name: ${err}`, severity: 'error' });
+        }
     } else if (data.properties.publisherDisplayName.length > 256) {
         errors.push({ field: 'properties.publisherDisplayName', message: 'Publisher display name must be 256 characters or fewer.', severity: 'error' });
     }
@@ -259,25 +304,34 @@ function validateProperties(data: ManifestData, errors: ValidationError[]): void
     }
 }
 
-function validateDependencies(data: ManifestData, errors: ValidationError[]): void {
+function validateDependencies(data: ManifestData, errors: ValidationError[], schema?: SchemaModel): void {
+    const isValidVersion = (v: string) => schema
+        ? matchesSchemaPattern(schema, 'ST_VersionQuad', v)
+        : isValidDotQuadNumber(v);
+    const isValidPublisher = (v: string) => schema
+        ? matchesSchemaPattern(schema, 'ST_Publisher_2010_v2', v)
+        : isValidPublisherDN(v);
+    const isValidPkgName = (v: string) => schema
+        ? (validateValueAgainstType(schema, 'ST_PackageName', v) === null)
+        : (IDENTITY_NAME_REGEX.test(v) && v.length >= 3 && v.length <= 50);
     for (let i = 0; i < data.dependencies.targetDeviceFamilies.length; i++) {
         const family = data.dependencies.targetDeviceFamilies[i];
         const prefix = `dependencies.targetDeviceFamily.${i}`;
 
         if (!family.minVersion) {
             errors.push({ field: `${prefix}.minVersion`, message: 'MinVersion is required.', severity: 'error' });
-        } else if (!isValidDotQuadNumber(family.minVersion)) {
+        } else if (!isValidVersion(family.minVersion)) {
             errors.push({ field: `${prefix}.minVersion`, message: 'MinVersion must be a DotQuadNumber (e.g. 10.0.17763.0), each part 0–65535.', severity: 'error' });
         }
 
         if (!family.maxVersionTested) {
             errors.push({ field: `${prefix}.maxVersionTested`, message: 'MaxVersionTested is required.', severity: 'error' });
-        } else if (!isValidDotQuadNumber(family.maxVersionTested)) {
+        } else if (!isValidVersion(family.maxVersionTested)) {
             errors.push({ field: `${prefix}.maxVersionTested`, message: 'MaxVersionTested must be a DotQuadNumber (e.g. 10.0.26100.0), each part 0–65535.', severity: 'error' });
         }
 
         if (family.minVersion && family.maxVersionTested &&
-            isValidDotQuadNumber(family.minVersion) && isValidDotQuadNumber(family.maxVersionTested)) {
+            isValidVersion(family.minVersion) && isValidVersion(family.maxVersionTested)) {
             if (compareVersions(family.maxVersionTested, family.minVersion) < 0) {
                 errors.push({ field: `${prefix}.maxVersionTested`, message: 'MaxVersionTested must be greater than or equal to MinVersion.', severity: 'error' });
             }
@@ -290,21 +344,19 @@ function validateDependencies(data: ManifestData, errors: ValidationError[]): vo
 
         if (!dep.name) {
             errors.push({ field: `${prefix}.name`, message: 'Package dependency name is required.', severity: 'error' });
-        } else if (!IDENTITY_NAME_REGEX.test(dep.name)) {
-            errors.push({ field: `${prefix}.name`, message: 'Name can only contain letters, numbers, dots, and hyphens.', severity: 'error' });
-        } else if (dep.name.length < 3 || dep.name.length > 50) {
-            errors.push({ field: `${prefix}.name`, message: 'Name must be between 3 and 50 characters.', severity: 'error' });
+        } else if (!isValidPkgName(dep.name)) {
+            errors.push({ field: `${prefix}.name`, message: 'Name can only contain letters, numbers, dots, and hyphens (3–50 chars).', severity: 'error' });
         }
 
         if (!dep.minVersion) {
             errors.push({ field: `${prefix}.minVersion`, message: 'MinVersion is required.', severity: 'error' });
-        } else if (!isValidDotQuadNumber(dep.minVersion)) {
+        } else if (!isValidVersion(dep.minVersion)) {
             errors.push({ field: `${prefix}.minVersion`, message: 'MinVersion must be a 4-part dotted version (e.g. 14.0.0.0), each part 0–65535.', severity: 'error' });
         }
 
         if (!dep.publisher) {
             errors.push({ field: `${prefix}.publisher`, message: 'Publisher is required.', severity: 'error' });
-        } else if (!isValidPublisherDN(dep.publisher)) {
+        } else if (!isValidPublisher(dep.publisher)) {
             errors.push({ field: `${prefix}.publisher`, message: 'Publisher must be a valid X.500 distinguished name (e.g. CN=Microsoft Corporation, O=Microsoft Corporation).', severity: 'error' });
         }
     }
@@ -315,10 +367,8 @@ function validateDependencies(data: ManifestData, errors: ValidationError[]): vo
 
         if (!dep.name) {
             errors.push({ field: `${prefix}.name`, message: 'Main package dependency name is required.', severity: 'error' });
-        } else if (!IDENTITY_NAME_REGEX.test(dep.name)) {
-            errors.push({ field: `${prefix}.name`, message: 'Name can only contain letters, numbers, dots, and hyphens.', severity: 'error' });
-        } else if (dep.name.length < 3 || dep.name.length > 50) {
-            errors.push({ field: `${prefix}.name`, message: 'Name must be between 3 and 50 characters.', severity: 'error' });
+        } else if (!isValidPkgName(dep.name)) {
+            errors.push({ field: `${prefix}.name`, message: 'Name can only contain letters, numbers, dots, and hyphens (3–50 chars).', severity: 'error' });
         }
     }
 
@@ -332,7 +382,7 @@ function validateDependencies(data: ManifestData, errors: ValidationError[]): vo
 
         if (!constraint.minVersion) {
             errors.push({ field: `${prefix}.minVersion`, message: 'Driver constraint MinVersion is required.', severity: 'error' });
-        } else if (!isValidDotQuadNumber(constraint.minVersion)) {
+        } else if (!isValidVersion(constraint.minVersion)) {
             errors.push({ field: `${prefix}.minVersion`, message: 'MinVersion must be a DotQuadNumber (e.g. 1.0.0.0), each part 0–65535.', severity: 'error' });
         }
 
@@ -349,15 +399,13 @@ function validateDependencies(data: ManifestData, errors: ValidationError[]): vo
 
         if (!dep.name) {
             errors.push({ field: `${prefix}.name`, message: 'OS package dependency name is required.', severity: 'error' });
-        } else if (!IDENTITY_NAME_REGEX.test(dep.name)) {
-            errors.push({ field: `${prefix}.name`, message: 'Name can only contain letters, numbers, dots, and hyphens.', severity: 'error' });
-        } else if (dep.name.length < 3 || dep.name.length > 50) {
-            errors.push({ field: `${prefix}.name`, message: 'Name must be between 3 and 50 characters.', severity: 'error' });
+        } else if (!isValidPkgName(dep.name)) {
+            errors.push({ field: `${prefix}.name`, message: 'Name can only contain letters, numbers, dots, and hyphens (3–50 chars).', severity: 'error' });
         }
 
         if (!dep.version) {
             errors.push({ field: `${prefix}.version`, message: 'OS package dependency version is required.', severity: 'error' });
-        } else if (!isValidDotQuadNumber(dep.version)) {
+        } else if (!isValidVersion(dep.version)) {
             errors.push({ field: `${prefix}.version`, message: 'Version must be a DotQuadNumber (e.g. 10.0.0.0), each part 0–65535.', severity: 'error' });
         }
     }
@@ -372,13 +420,13 @@ function validateDependencies(data: ManifestData, errors: ValidationError[]): vo
 
         if (!dep.publisher) {
             errors.push({ field: `${prefix}.publisher`, message: 'Host runtime dependency publisher is required.', severity: 'error' });
-        } else if (!isValidPublisherDN(dep.publisher)) {
+        } else if (!isValidPublisher(dep.publisher)) {
             errors.push({ field: `${prefix}.publisher`, message: 'Publisher must be a valid X.500 distinguished name (e.g. CN=Contoso).', severity: 'error' });
         }
 
         if (!dep.minVersion) {
             errors.push({ field: `${prefix}.minVersion`, message: 'Host runtime dependency MinVersion is required.', severity: 'error' });
-        } else if (!isValidDotQuadNumber(dep.minVersion)) {
+        } else if (!isValidVersion(dep.minVersion)) {
             errors.push({ field: `${prefix}.minVersion`, message: 'MinVersion must be a DotQuadNumber (e.g. 1.0.0.0), each part 0–65535.', severity: 'error' });
         }
     }
@@ -393,13 +441,13 @@ function validateDependencies(data: ManifestData, errors: ValidationError[]): vo
 
         if (!dep.publisher) {
             errors.push({ field: `${prefix}.publisher`, message: 'External dependency publisher is required.', severity: 'error' });
-        } else if (!isValidPublisherDN(dep.publisher)) {
+        } else if (!isValidPublisher(dep.publisher)) {
             errors.push({ field: `${prefix}.publisher`, message: 'Publisher must be a valid X.500 distinguished name (e.g. CN=Contoso).', severity: 'error' });
         }
 
         if (!dep.minVersion) {
             errors.push({ field: `${prefix}.minVersion`, message: 'External dependency MinVersion is required.', severity: 'error' });
-        } else if (!isValidDotQuadNumber(dep.minVersion)) {
+        } else if (!isValidVersion(dep.minVersion)) {
             errors.push({ field: `${prefix}.minVersion`, message: 'MinVersion must be a DotQuadNumber (e.g. 1.0.0.0), each part 0–65535.', severity: 'error' });
         }
     }
@@ -429,18 +477,20 @@ function validateResources(data: ManifestData, errors: ValidationError[]): void 
     }
 }
 
-function validateApplications(data: ManifestData, errors: ValidationError[]): void {
+function validateApplications(data: ManifestData, errors: ValidationError[], schema?: SchemaModel): void {
+    const isValidAppId = (v: string) => schema
+        ? (validateValueAgainstType(schema, 'ST_ApplicationId', v) === null)
+        : (APP_ID_REGEX.test(v) && v.length <= 64);
     for (let i = 0; i < data.applications.length; i++) {
         const app = data.applications[i];
         const prefix = `applications.${i}`;
 
         if (!app.id) {
             errors.push({ field: `${prefix}.id`, message: 'Application Id is required.', severity: 'error' });
-        } else if (!APP_ID_REGEX.test(app.id)) {
-            errors.push({ field: `${prefix}.id`, message: 'Application Id must contain alpha-numeric fields separated by periods, each starting with a letter.', severity: 'error' });
-        } else if (app.id.length > 64) {
-            errors.push({ field: `${prefix}.id`, message: 'Application Id must be 64 characters or fewer.', severity: 'error' });
+        } else if (!isValidAppId(app.id)) {
+            errors.push({ field: `${prefix}.id`, message: 'Application Id must contain alpha-numeric fields separated by periods, each starting with a letter (max 64 chars).', severity: 'error' });
         } else {
+            // Semantic rule: no reserved device names as field values (not in XSD)
             const idFields = app.id.split('.');
             const reservedField = idFields.find(f => RESERVED_NAMES.has(f.toUpperCase()));
             if (reservedField) {
@@ -470,10 +520,13 @@ function validateApplications(data: ManifestData, errors: ValidationError[]): vo
             errors.push({ field: `${prefix}.visualElements.description`, message: 'Description cannot contain tabs, carriage returns, or line feeds.', severity: 'error' });
         }
 
-        if (app.visualElements.backgroundColor &&
-            !HEX_COLOR_REGEX.test(app.visualElements.backgroundColor) &&
-            !NAMED_COLORS.has(app.visualElements.backgroundColor)) {
-            errors.push({ field: `${prefix}.visualElements.backgroundColor`, message: 'Background color must be a hex color (e.g. #FFFFFF), "transparent", or a named color (e.g. cornflowerBlue).', severity: 'error' });
+        if (app.visualElements.backgroundColor) {
+            const validColor = schema
+                ? isValidSchemaColor(schema, app.visualElements.backgroundColor)
+                : (HEX_COLOR_REGEX.test(app.visualElements.backgroundColor) || NAMED_COLORS.has(app.visualElements.backgroundColor));
+            if (!validColor) {
+                errors.push({ field: `${prefix}.visualElements.backgroundColor`, message: 'Background color must be a hex color (e.g. #FFFFFF), "transparent", or a named color (e.g. cornflowerBlue).', severity: 'error' });
+            }
         }
 
         const ve = app.visualElements;
