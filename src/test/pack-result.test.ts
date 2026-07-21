@@ -57,17 +57,6 @@ describe('parsePackagedArtifactPath', () => {
 		);
 	});
 
-	it('falls back to the last package-like line when the marker is absent', () => {
-		const output =
-			'some noisy log line\n' +
-			'C:\\out\\First_1.0.0_x64.msix\n' +
-			'another log line\n' +
-			'C:\\out\\Final_2.0.0_x64.msix\n' +
-			'done\n';
-
-		assert.equal(parsePackagedArtifactPath(output), 'C:\\out\\Final_2.0.0_x64.msix');
-	});
-
 	it('is case-insensitive about the extension', () => {
 		const output = '  📦 Package: \nC:\\out\\MyApp_1.0.0_x64.MSIX\n';
 		assert.equal(parsePackagedArtifactPath(output), 'C:\\out\\MyApp_1.0.0_x64.MSIX');
