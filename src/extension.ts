@@ -564,8 +564,9 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			const parentSession = session;
 
 			// Tear down exactly once, whichever side finishes first: the child debug
-			// session ending or the winapp run process exiting. Killing the run
-			// process here prevents it from being orphaned in the background.
+			// session ending, the parent session being stopped by the user, or the
+			// winapp run process exiting. Killing the run process here prevents it
+			// from being orphaned in the background.
 			let teardownRequested = false;
 			const teardown = () => {
 				if (teardownRequested) {
@@ -577,9 +578,10 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				vscode.debug.stopDebugging(parentSession);
 			};
 
-			// When the child debug session ends, tear down the run process and parent session
+			// When the child debug session ends OR the parent session itself is
+			// stopped (user clicks stop), tear down the run process.
 			const disposable = vscode.debug.onDidTerminateDebugSession((ended) => {
-				if (ended.parentSession === parentSession) {
+				if (ended.parentSession === parentSession || ended === parentSession) {
 					teardown();
 				}
 			});
