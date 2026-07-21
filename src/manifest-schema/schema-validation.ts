@@ -175,7 +175,15 @@ function validateElement(
         if (resolvedAttribute.displayName.startsWith('xmlns') || resolvedAttribute.displayName.startsWith('xml:')) {
             continue;
         }
-        const declaredAttribute = schemaDef.attributes.find(attr => attr.name === resolvedAttribute.localName);
+        // Use namespace-aware matching: an attribute is declared only if both
+        // local name and namespace/qualification match a schema attribute.
+        const declaredAttribute = schemaDef.attributes.find(attr => {
+            if (attr.name !== resolvedAttribute.localName) { return false; }
+            if (attr.qualified) {
+                return resolvedAttribute.namespace === attr.namespace;
+            }
+            return resolvedAttribute.namespace === undefined;
+        });
         if (declaredAttribute) {
             continue;
         }
