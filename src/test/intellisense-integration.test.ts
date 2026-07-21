@@ -152,6 +152,18 @@ describe('manifest completion logic', () => {
         assert.deepEqual(items.map(item => item.label), ['appContainer', 'mediumIL']);
     });
 
+    it('does not fall back across namespaces for prefixed attribute lookups', () => {
+        const items = getAttributeValueCompletions(
+            model,
+            'Application',
+            undefined,
+            'ux:TrustLevel',
+            makeManifest('', ` xmlns:ux="${FOUNDATION_NS}"`)
+        );
+
+        assert.deepEqual(items, []);
+    });
+
     it('includes Application attributes used by manifest IntelliSense', () => {
         const items = getAttributeCompletions(model, 'Application', undefined, [], makeManifest(''));
         const labels = items.map(item => item.label);
@@ -176,6 +188,16 @@ describe('manifest completion logic', () => {
         const trustLevel = items.find(item => item.label === 'ux:TrustLevel');
         assert.ok(trustLevel);
         assert.equal(trustLevel.insertText, 'ux:TrustLevel="${1|appContainer,mediumIL|}"');
+    });
+
+    it('ignores commented and nested xmlns rebindings when extracting document prefixes', () => {
+        const prefixes = extractDocumentPrefixes(makeManifest(`
+  <!-- xmlns:ux="https://example.com/comment-only" -->
+  <Applications>
+    <Application xmlns:ux="https://example.com/nested-rebind" />
+  </Applications>`, ` xmlns:ux="${UAP_NS}"`));
+
+        assert.equal(prefixes.get('ux'), UAP_NS);
     });
 
     it('skips qualified attribute completions when the namespace is not declared', () => {
@@ -216,6 +238,15 @@ describe('manifest completion logic', () => {
 
         assert.deepEqual(items.map(item => item.label), ['uap:VisualElements']);
         assert.equal(items[0].insertText, 'uap:VisualElements>');
+    });
+
+    it('registers slash as a completion trigger character for closing tags', () => {
+        const source = fs.readFileSync(
+            path.join(__dirname, '..', 'manifest-intellisense', 'manifest-intellisense.ts'),
+            'utf8'
+        );
+
+        assert.match(source, /const TRIGGER_CHARACTERS = \[[^\]]*'\/'/);
     });
 
     it('does not produce duplicate child labels for any tested parent', () => {

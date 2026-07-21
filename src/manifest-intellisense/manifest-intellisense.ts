@@ -19,7 +19,7 @@ const MANIFEST_SELECTOR: vscode.DocumentSelector = [
 ];
 
 /** Trigger characters for completions. */
-const TRIGGER_CHARACTERS = ['<', ' ', '"', '='];
+const TRIGGER_CHARACTERS = ['<', ' ', '"', '=', '/'];
 
 /**
  * Register all manifest IntelliSense providers.

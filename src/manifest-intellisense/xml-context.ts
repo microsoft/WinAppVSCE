@@ -79,10 +79,9 @@ function checkAttributeValue(before: string, _text: string, _offset: number): Xm
     // We need to be inside quotes and inside a tag
     const tagStart = before.lastIndexOf('<');
     if (tagStart === -1) { return null; }
+    const tagEnd = findLastTagBoundary(before);
+    if (tagEnd > tagStart) { return null; }
     const tagContent = before.substring(tagStart);
-
-    // Make sure we're not past the closing > of the tag
-    if (tagContent.includes('>')) { return null; }
 
     // Check if we're inside a quoted attribute value
     // Count quotes after the last unquoted attribute assignment
@@ -124,10 +123,9 @@ function checkAttributeValue(before: string, _text: string, _offset: number): Xm
 function checkAttributeName(before: string, _text: string, _offset: number): XmlContext | null {
     const tagStart = before.lastIndexOf('<');
     if (tagStart === -1) { return null; }
+    const tagEnd = findLastTagBoundary(before);
+    if (tagEnd > tagStart) { return null; }
     const tagContent = before.substring(tagStart);
-
-    // Must not be past closing >
-    if (tagContent.includes('>')) { return null; }
 
     // Must not be a closing tag
     if (/^<\//.test(tagContent)) { return null; }
@@ -266,4 +264,25 @@ function isInsideQuotes(text: string): boolean {
         if (ch === "'" && !inDouble) { inSingle = !inSingle; }
     }
     return inSingle || inDouble;
+}
+
+function findLastTagBoundary(text: string): number {
+    let inSingle = false;
+    let inDouble = false;
+    let lastBoundary = -1;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === '"' && !inSingle) {
+            inDouble = !inDouble;
+            continue;
+        }
+        if (ch === "'" && !inDouble) {
+            inSingle = !inSingle;
+            continue;
+        }
+        if (ch === '>' && !inSingle && !inDouble) {
+            lastBoundary = i;
+        }
+    }
+    return lastBoundary;
 }

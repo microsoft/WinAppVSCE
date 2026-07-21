@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { findManifestElement } from './intellisense-logic';
+import { findAttribute, findManifestElement } from './intellisense-logic';
 import { SchemaModel } from './schema-model';
 import { getXmlContext, splitPrefixedName } from './xml-context';
 
@@ -31,13 +31,14 @@ export class ManifestDefinitionProvider implements vscode.DefinitionProvider {
 
         if (context.type === 'attributeName' && context.currentElement && word) {
             const element = findManifestElement(schema, context.currentElement, context.currentPrefix || undefined, text);
-            const { localName: attributeName } = splitPrefixedName(word);
-            const attribute = element?.attributes.find(candidate => candidate.name === attributeName);
-            if (attribute?.sourceFile && attribute.sourceLine !== undefined) {
-                return new vscode.Location(
-                    vscode.Uri.file(attribute.sourceFile),
-                    new vscode.Position(attribute.sourceLine, 0)
-                );
+            if (element) {
+                const attribute = findAttribute(element.attributes, word, text);
+                if (attribute?.sourceFile && attribute.sourceLine !== undefined) {
+                    return new vscode.Location(
+                        vscode.Uri.file(attribute.sourceFile),
+                        new vscode.Position(attribute.sourceLine, 0)
+                    );
+                }
             }
         }
 

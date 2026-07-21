@@ -582,11 +582,15 @@ export function findSchemaElementExact(
 }
 
 export function extractDocumentPrefixes(text: string): Map<string, string> {
+    text = text.replace(/<!--[\s\S]*?-->/g, '');
     const prefixes = new Map<string, string>();
     const regex = /xmlns(?::([a-zA-Z][\w]*))?\s*=\s*["']([^"']+)["']/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(text)) !== null) {
-        prefixes.set(match[1] || '', match[2]);
+        const prefix = match[1] || '';
+        if (!prefixes.has(prefix)) {
+            prefixes.set(prefix, match[2]);
+        }
     }
     return prefixes;
 }
@@ -626,7 +630,7 @@ function buildElementSnippet(displayName: string, element: SchemaElement | undef
     return snippet;
 }
 
-function findAttribute(attributes: SchemaAttribute[], attrName: string, docText: string): SchemaAttribute | undefined {
+export function findAttribute(attributes: SchemaAttribute[], attrName: string, docText: string): SchemaAttribute | undefined {
     const { prefix, localName } = splitPrefixedName(attrName);
     if (!prefix) {
         return attributes.find(attribute => !attribute.qualified && attribute.name === attrName)
@@ -638,7 +642,7 @@ function findAttribute(attributes: SchemaAttribute[], attrName: string, docText:
         attribute.name === localName
         && attribute.qualified
         && attribute.namespace === namespace
-    ) || attributes.find(attribute => attribute.name === localName);
+    );
 }
 
 function formatAttributeName(

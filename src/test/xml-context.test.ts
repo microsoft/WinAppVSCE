@@ -126,6 +126,14 @@ describe('getXmlContext', () => {
         assert.equal(ctx.partialText, 'Test');
     });
 
+    it('detects attribute value context when earlier attribute values contain >', () => {
+        const text = `<Package>\n  <Identity Name="A>B" Publisher="CN=Te`;
+        const ctx = getXmlContext(text, text.length);
+        assert.equal(ctx.type, 'attributeValue');
+        assert.equal(ctx.currentAttribute, 'Publisher');
+        assert.equal(ctx.partialText, 'CN=Te');
+    });
+
     it('detects text context between tags', () => {
         const text = `<Package>\n  <Properties>\n    `;
         const ctx = getXmlContext(text, text.length);
@@ -162,5 +170,13 @@ describe('getXmlContext', () => {
         assert.equal(ctx.type, 'attributeName');
         assert.ok(ctx.existingAttributes?.includes('Name'));
         assert.ok(ctx.existingAttributes?.includes('Publisher'));
+    });
+
+    it('detects attribute name context when earlier attribute values contain >', () => {
+        const text = `<Package>\n  <Identity Name="A>B" `;
+        const ctx = getXmlContext(text, text.length);
+        assert.equal(ctx.type, 'attributeName');
+        assert.equal(ctx.currentElement, 'Identity');
+        assert.ok(ctx.existingAttributes?.includes('Name'));
     });
 });
