@@ -6,6 +6,7 @@ import { detectProjects } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
+import { NoOpDebugAdapter } from './noop-debug-adapter';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 
@@ -363,41 +364,6 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			vscode.window.showErrorMessage(`Failed to launch and attach: ${message}`);
 			throw error;
 		}
-	}
-}
-
-/**
- * A minimal no-op debug adapter. The winapp debug type doesn't need a real adapter
- * since we delegate to a child debug session (coreclr/node).
- */
-class NoOpDebugAdapter implements vscode.DebugAdapter {
-	private sendMessageEmitter = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
-	readonly onDidSendMessage: vscode.Event<vscode.DebugProtocolMessage> = this.sendMessageEmitter.event;
-
-	handleMessage(message: vscode.DebugProtocolMessage): void {
-		// Respond to the initialize request so VS Code doesn't hang
-		const msg = message as any;
-		if (msg.type === 'request' && msg.command === 'initialize') {
-			this.sendMessageEmitter.fire({
-				type: 'response',
-				request_seq: msg.seq,
-				success: true,
-				command: msg.command,
-				seq: 0
-			} as any);
-		} else if (msg.type === 'request' && msg.command === 'disconnect') {
-			this.sendMessageEmitter.fire({
-				type: 'response',
-				request_seq: msg.seq,
-				success: true,
-				command: msg.command,
-				seq: 0
-			} as any);
-		}
-	}
-
-	dispose(): void {
-		this.sendMessageEmitter.dispose();
 	}
 }
 
