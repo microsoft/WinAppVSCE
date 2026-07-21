@@ -159,10 +159,11 @@ function validateProperties(data: ManifestData, errors: ValidationError[], schem
     }
     validateImageField(errors, 'properties.logo', data.properties.logo);
 
-    if (data.properties.description && data.properties.description.length > 2048) {
-        errors.push({ field: 'properties.description', message: 'Description must be 2048 characters or fewer.', severity: 'error' });
-    } else if (data.properties.description && /[\t\r\n]/.test(data.properties.description)) {
-        errors.push({ field: 'properties.description', message: 'Description cannot contain tabs, carriage returns, or line feeds.', severity: 'error' });
+    if (data.properties.description) {
+        const err = validateValueAgainstType(schema, 'ST_Description', data.properties.description);
+        if (err) {
+            errors.push({ field: 'properties.description', message: `Description: ${err}`, severity: 'error' });
+        }
     }
 }
 
@@ -363,14 +364,18 @@ function validateApplications(data: ManifestData, errors: ValidationError[], sch
 
         if (!app.visualElements.displayName) {
             errors.push({ field: `${prefix}.visualElements.displayName`, message: 'Display name is required.', severity: 'error' });
-        } else if (app.visualElements.displayName.length > 256) {
-            errors.push({ field: `${prefix}.visualElements.displayName`, message: 'Display name must be 256 characters or fewer.', severity: 'error' });
+        } else {
+            const err = validateValueAgainstType(schema, 'ST_DisplayName', app.visualElements.displayName);
+            if (err) {
+                errors.push({ field: `${prefix}.visualElements.displayName`, message: `Display name: ${err}`, severity: 'error' });
+            }
         }
 
-        if (app.visualElements.description && app.visualElements.description.length > 2048) {
-            errors.push({ field: `${prefix}.visualElements.description`, message: 'Description must be 2048 characters or fewer.', severity: 'error' });
-        } else if (app.visualElements.description && /[\t\r\n]/.test(app.visualElements.description)) {
-            errors.push({ field: `${prefix}.visualElements.description`, message: 'Description cannot contain tabs, carriage returns, or line feeds.', severity: 'error' });
+        if (app.visualElements.description) {
+            const err = validateValueAgainstType(schema, 'ST_Description', app.visualElements.description);
+            if (err) {
+                errors.push({ field: `${prefix}.visualElements.description`, message: `Description: ${err}`, severity: 'error' });
+            }
         }
 
         if (app.visualElements.backgroundColor) {
@@ -395,7 +400,7 @@ function validateApplications(data: ManifestData, errors: ValidationError[], sch
                 const extFields = parseExtensionFieldsFromXml(extXml);
                 for (const field of extFields) {
                     const isRequired = REQUIRED_EXT_FIELDS.has(field.label);
-                    const validation = validateExtensionField(field.label, field.value, isRequired);
+                    const validation = validateExtensionField(field.label, field.value, isRequired, schema);
                     if (validation) {
                         errors.push({
                             field: `${prefix}.extensions.${extIdx}.${field.label}`,
@@ -416,9 +421,6 @@ export interface ExtFieldValidation {
     message: string;
 }
 
-// GUID regex that allows optional braces (CLSIDs typically have braces)
-const EXT_GUID_REGEX = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
-
 /** Required extension fields that must have a value. */
 const REQUIRED_EXT_FIELDS = new Set([
     'ExeServer.Executable', 'ExeServer.DisplayName', 'Class.Id',
@@ -435,9 +437,9 @@ const REQUIRED_EXT_FIELDS = new Set([
 
 /**
  * Validate an extension field value and return { level, message } or null if valid.
- * This is the single source of truth for extension field validation.
+ * Uses XSD schema types where available; keeps hand-written rules for fields not in XSD.
  */
-export function validateExtensionField(fieldLabel: string, value: string, isRequired: boolean): ExtFieldValidation | null {
+export function validateExtensionField(fieldLabel: string, value: string, isRequired: boolean, schema: SchemaModel): ExtFieldValidation | null {
     // Required check first
     if (isRequired && !value) {
         return { level: 'error', message: 'This field is required.' };
@@ -446,11 +448,14 @@ export function validateExtensionField(fieldLabel: string, value: string, isRequ
 
     switch (fieldLabel) {
         case 'Class.Id':
-        case 'ToastNotificationActivation.ToastActivatorCLSID':
-            if (!EXT_GUID_REGEX.test(value)) {
+        case 'ToastNotificationActivation.ToastActivatorCLSID': {
+            // CLSIDs may have braces; strip them before validating against XSD ST_GUID
+            const stripped = value.replace(/^\{|\}$/g, '');
+            if (!matchesSchemaPattern(schema, 'ST_GUID', stripped)) {
                 return { level: 'error', message: 'Must be a valid GUID, e.g., {12345678-1234-1234-1234-123456789012}' };
             }
             break;
+        }
         case 'ExecutionAlias.Alias':
             if (!/\.exe$/i.test(value)) {
                 return { level: 'error', message: 'Alias must end with .exe (e.g., "myapp.exe").' };
@@ -460,15 +465,17 @@ export function validateExtensionField(fieldLabel: string, value: string, isRequ
             }
             break;
         case 'Protocol.Name':
-            if (!/^[a-z][a-z0-9.+\-]*$/.test(value)) {
-                return { level: 'error', message: 'Protocol must start with a lowercase letter and contain only lowercase letters, digits, ".", "+", or "-".' };
+            if (!matchesSchemaPattern(schema, 'ST_Protocol_2010_v2', value)) {
+                return { level: 'error', message: 'Protocol must start with a lowercase letter and contain only lowercase letters, digits, ".", "+", or "-" (2–39 chars).' };
             }
             break;
-        case 'FileType':
-            if (!/^\.[a-zA-Z0-9]+$/.test(value)) {
-                return { level: 'error', message: 'File extension must start with "." followed by alphanumeric characters (e.g., ".txt").' };
+        case 'FileType': {
+            const err = validateValueAgainstType(schema, 'ST_FileType', value);
+            if (err) {
+                return { level: 'error', message: `File extension: ${err}` };
             }
             break;
+        }
         case 'FileTypeAssociation.Name':
             if (!/^[a-zA-Z0-9.]+$/.test(value)) {
                 return { level: 'error', message: 'Name must contain only letters, digits, and periods.' };
@@ -491,11 +498,13 @@ export function validateExtensionField(fieldLabel: string, value: string, isRequ
             }
             break;
         }
-        case 'AppService.Name':
-            if (!/^[a-zA-Z][a-zA-Z0-9._]*$/.test(value)) {
-                return { level: 'warning', message: 'Recommended format: reverse-domain style (e.g., "com.contoso.myservice").' };
+        case 'AppService.Name': {
+            const err = validateValueAgainstType(schema, 'ST_AppServiceName', value);
+            if (err) {
+                return { level: 'warning', message: `App service name: ${err}` };
             }
             break;
+        }
     }
     return null;
 }
