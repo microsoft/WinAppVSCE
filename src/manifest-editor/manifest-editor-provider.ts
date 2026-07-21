@@ -154,8 +154,13 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                 return;
             }
             if (showingErrorView) { showEditorView(); }
-            const errors = validateManifest(data, this.getSchema?.());
-            webviewPanel.webview.postMessage({ type: 'update', data, errors, forceAll });
+            const schema = this.getSchema?.();
+            if (schema) {
+                const errors = validateManifest(data, schema);
+                webviewPanel.webview.postMessage({ type: 'update', data, errors, forceAll });
+            } else {
+                webviewPanel.webview.postMessage({ type: 'update', data, errors: [], forceAll });
+            }
         };
 
         // Initial load: check if XML is valid

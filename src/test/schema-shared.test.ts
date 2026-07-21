@@ -240,8 +240,9 @@ describe('manifest-editor validateManifest with schema', () => {
         assert.ok(!errors3.some((e: any) => e.field === 'identity.name'));
     });
 
-    it('validates without schema (fallback to hand-written regexes)', async () => {
+    it('validates invalid package name with schema', async () => {
         const { validateManifest } = await import('../manifest-editor/manifest-validator.js');
+        model = loadSchemaModel(SCHEMAS_DIR);
         const baseData = {
             identity: { name: 'My App', publisher: 'CN=Test', version: '1.0.0.0', processorArchitecture: 'x64' },
             phoneIdentity: undefined,
@@ -252,8 +253,8 @@ describe('manifest-editor validateManifest with schema', () => {
             capabilities: [],
         };
 
-        // No schema passed — should still validate using fallback regexes
-        const errors = validateManifest(baseData as any);
+        // Schema validates — space in name is invalid per ST_PackageName
+        const errors = validateManifest(baseData as any, model);
         assert.ok(errors.some((e: any) => e.field === 'identity.name'));
     });
 

@@ -8,17 +8,23 @@
  * Run: npx tsx --test src/test/extension-templates.test.ts
  */
 
-import { describe, it } from 'node:test';
+import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { addExtension, parseManifest } from '../manifest-editor/manifest-parser';
 import { EXTENSION_TEMPLATES } from '../manifest-editor/manifest-types';
 import { validateManifest } from '../manifest-editor/manifest-validator';
+import { loadSchemaModel } from '../manifest-schema/xsd-parser';
+import { SchemaModel } from '../manifest-schema/schema-model';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 const FIXTURES_DIR = join(__dirname, 'fixtures');
+let schema: SchemaModel;
+before(() => {
+    schema = loadSchemaModel(join(__dirname, '..', '..', 'schemas'));
+});
 
 function loadFixture(name: string): string {
     return readFileSync(join(FIXTURES_DIR, name), 'utf-8');
@@ -208,7 +214,7 @@ describe('Real-world manifest fixtures', () => {
 
             it('should produce no fatal validation errors for existing content', () => {
                 const parsed = parseManifest(xml);
-                const errors = validateManifest(parsed);
+                const errors = validateManifest(parsed, schema);
                 // Only check for errors that indicate our parser is broken, not
                 // validation warnings about the fixture content itself.
                 // The $targetnametoken$ placeholders in sample manifests will trigger
