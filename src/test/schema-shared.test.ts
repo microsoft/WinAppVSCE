@@ -204,7 +204,7 @@ describe('schema-helpers for manifest-editor', () => {
 describe('manifest-editor validateManifest with schema', () => {
     it('validates identity.name using schema when provided', async () => {
         // Dynamic import to avoid pulling in vscode types at module level
-        const { validateManifest } = await import('../manifest-editor/manifest-validator');
+        const { validateManifest } = await import('../manifest-editor/manifest-validator.js');
         model = loadSchemaModel(SCHEMAS_DIR);
         const baseData = {
             identity: { name: '', publisher: 'CN=Test', version: '1.0.0.0', processorArchitecture: 'x64' },
@@ -218,19 +218,19 @@ describe('manifest-editor validateManifest with schema', () => {
 
         // Missing name
         const errors1 = validateManifest(baseData as any, model);
-        assert.ok(errors1.some(e => e.field === 'identity.name'));
+        assert.ok(errors1.some((e: any) => e.field === 'identity.name'));
 
         // Invalid name (spaces)
         const errors2 = validateManifest({ ...baseData, identity: { ...baseData.identity, name: 'My App' } } as any, model);
-        assert.ok(errors2.some(e => e.field === 'identity.name'));
+        assert.ok(errors2.some((e: any) => e.field === 'identity.name'));
 
         // Valid name with schema
         const errors3 = validateManifest({ ...baseData, identity: { ...baseData.identity, name: 'My.Valid.App' } } as any, model);
-        assert.ok(!errors3.some(e => e.field === 'identity.name'));
+        assert.ok(!errors3.some((e: any) => e.field === 'identity.name'));
     });
 
     it('validates without schema (fallback to hand-written regexes)', async () => {
-        const { validateManifest } = await import('../manifest-editor/manifest-validator');
+        const { validateManifest } = await import('../manifest-editor/manifest-validator.js');
         const baseData = {
             identity: { name: 'My App', publisher: 'CN=Test', version: '1.0.0.0', processorArchitecture: 'x64' },
             phoneIdentity: undefined,
@@ -243,6 +243,6 @@ describe('manifest-editor validateManifest with schema', () => {
 
         // No schema passed — should still validate using fallback regexes
         const errors = validateManifest(baseData as any);
-        assert.ok(errors.some(e => e.field === 'identity.name'));
+        assert.ok(errors.some((e: any) => e.field === 'identity.name'));
     });
 });

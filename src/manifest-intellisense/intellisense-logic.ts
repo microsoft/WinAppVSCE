@@ -84,21 +84,24 @@ function completeElementOrAttributes(
 ): ManifestCompletionSuggestion[] {
     const items: ManifestCompletionSuggestion[] = [];
 
-    if (parentName) {
-        items.push(...getChildCompletions(schema, parentName, parentPrefix, docText));
-    }
-
     if (partial) {
         const { prefix, localName } = splitPrefixedName(partial);
         const elem = findManifestElement(schema, localName, prefix || undefined, docText);
         if (elem) {
+            // User typed a known element name — show only attribute completions
             const attrItems = getAttributeCompletions(schema, localName, prefix || undefined, [], docText);
             items.push(...attrItems.map(attr => ({
                 ...attr,
                 insertText: ` ${attr.insertText}`,
                 sortText: `2_${attr.label}`,
             })));
+            return items;
         }
+    }
+
+    // No partial or partial doesn't match an element — show child elements
+    if (parentName) {
+        items.push(...getChildCompletions(schema, parentName, parentPrefix, docText));
     }
 
     return items;
@@ -289,13 +292,16 @@ export function getElementHover(
         .filter(a => !a.required)
         .map(a => formatAttributeName(a, docPrefixes, schema))
         .filter((name): name is string => Boolean(name));
-    const childElements = elem.children.slice(0, 10).map(child => {
+    const seenDisplayNames = new Set<string>();
+    const childElements: Array<{ displayName: string; required: boolean }> = [];
+    for (const child of elem.children.slice(0, 15)) {
         const childPrefix = URI_TO_PREFIX.get(child.namespace) || '';
-        return {
-            displayName: childPrefix ? `${childPrefix}:${child.name}` : child.name,
-            required: child.minOccurs > 0,
-        };
-    });
+        const displayName = childPrefix ? `${childPrefix}:${child.name}` : child.name;
+        if (seenDisplayNames.has(displayName)) { continue; }
+        seenDisplayNames.add(displayName);
+        childElements.push({ displayName, required: child.minOccurs > 0 });
+        if (childElements.length >= 10) { break; }
+    }
 
     return {
         kind: 'element',
