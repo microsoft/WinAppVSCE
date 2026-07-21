@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import * as fs from 'fs';
+import * as path from 'path';
 import { spawn, execFile } from 'child_process';
 import {
 	getWinappCliPath,
@@ -14,6 +14,12 @@ import { detectProjects } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
+import {
+	PACK_ACTIONS,
+	getPackNotificationAction,
+	isArtifactWithinRoot,
+	planPackCompletion
+} from './pack-result';
 import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
@@ -198,6 +204,222 @@ async function runWinappCommand(extensionPath: string, command: string, cwd: str
 
 	terminal.sendText(`& ${escapePowerShellArg(cliPath)} ${command}`);
 	return '';
+}
+
+/**
+ * Shared output channel for capture-based winapp commands (e.g. pack). Created
+ * lazily and reused so repeated runs don't leak channels.
+ */
+let winappOutputChannel: vscode.OutputChannel | undefined;
+
+function getWinappOutputChannel(): vscode.OutputChannel {
+	if (!winappOutputChannel) {
+		winappOutputChannel = vscode.window.createOutputChannel('WinApp');
+	}
+	return winappOutputChannel;
+}
+
+/**
+ * Run a winapp CLI command via `spawn` (shell: false) while capturing its
+ * combined stdout/stderr, streaming it to the WinApp output channel and a
+ * progress notification. Unlike {@link runWinappCommand}, this waits for the
+ * command to finish so callers can inspect the output (e.g. the produced
+ * package path).
+ *
+ * @returns The process exit code and the full captured output.
+ */
+async function runWinappCapture(
+	extensionPath: string,
+	args: string[],
+	cwd: string,
+	progressTitle: string
+): Promise<{ code: number | null; output: string; cancelled?: boolean }> {
+	const cliPath = getWinappCliPath(extensionPath);
+	const outputChannel = getWinappOutputChannel();
+	outputChannel.appendLine(`> winapp ${args.join(' ')}`);
+
+	return vscode.window.withProgress(
+		{
+			location: vscode.ProgressLocation.Notification,
+			title: progressTitle,
+			cancellable: true
+		},
+		(_progress, token) =>
+			new Promise<{ code: number | null; output: string; cancelled?: boolean }>((resolve) => {
+				const child = spawn(cliPath, args, {
+					cwd,
+					env: { ...process.env, WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE },
+					shell: false
+				});
+
+				let output = '';
+				let settled = false;
+				let cancelled = false;
+				const finish = (result: { code: number | null; output: string; cancelled?: boolean }) => {
+					if (!settled) {
+						settled = true;
+						resolve(result);
+					}
+				};
+
+				const cancellation = token.onCancellationRequested(() => {
+					if (cancelled || settled) {
+						return;
+					}
+					cancelled = true;
+					outputChannel.appendLine('\nPackaging cancelled.');
+					if (child.pid) {
+						// On Windows, winapp pack may spawn helper processes; taskkill /t
+						// terminates the whole tree instead of only the direct child.
+						const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+							windowsHide: true
+						});
+						killer.on('error', () => child.kill());
+						killer.on('close', (code) => {
+							if (code !== 0) {
+								child.kill();
+							}
+						});
+					} else {
+						child.kill();
+					}
+				});
+
+				child.stdout!.on('data', (data: Buffer) => {
+					const text = data.toString();
+					output += text;
+					outputChannel.append(text);
+				});
+
+				child.stderr!.on('data', (data: Buffer) => {
+					const text = data.toString();
+					output += text;
+					outputChannel.append(text);
+				});
+
+				child.on('error', (err) => {
+					cancellation.dispose();
+					if (cancelled) {
+						finish({ code: null, output, cancelled: true });
+						return;
+					}
+					outputChannel.appendLine(`\nFailed to run winapp: ${err.message}`);
+					finish({ code: null, output });
+				});
+
+				child.on('close', (code) => {
+					cancellation.dispose();
+					finish({ code, output, cancelled });
+				});
+			})
+	);
+}
+
+/**
+ * Run the code-signing flow for an MSIX/executable. Prompts for the file to
+ * sign (unless one is supplied) and the signing certificate, then invokes
+ * `winapp sign`. Reused by both the `winapp.sign` command and the post-pack
+ * completion notification.
+ *
+ * @param prefilledFilePath When provided, skips the file picker and signs this
+ *   path directly (e.g. the MSIX just produced by pack).
+ */
+async function signPackage(
+	extensionPath: string,
+	workspacePath: string,
+	prefilledFilePath?: string
+): Promise<void> {
+	let filePath = prefilledFilePath;
+	if (!filePath) {
+		filePath = await selectFile('Select file to sign', {
+			'MSIX Packages': ['msix', 'appx'],
+			'Executables': ['exe', 'dll'],
+			'All files': ['*']
+		});
+	}
+
+	if (!filePath) {
+		return;
+	}
+
+	const certPath = await selectFile('Select signing certificate', {
+		'Certificates': ['pfx']
+	});
+	if (!certPath) {
+		return;
+	}
+
+	await runWinappCommand(
+		extensionPath,
+		`sign ${escapePowerShellArg(filePath)} --cert ${escapePowerShellArg(certPath)}`,
+		workspacePath
+	);
+}
+
+/**
+ * Install (sideload) a packaged MSIX by running `Add-AppxPackage` in a
+ * PowerShell terminal. The package must be signed with a trusted certificate
+ * for installation to succeed; the terminal surfaces any errors to the user.
+ */
+function installPackage(artifactPath: string, cwd: string): void {
+	const terminal = vscode.window.createTerminal({
+		name: 'WinApp Install',
+		cwd,
+		shellPath: 'powershell.exe'
+	});
+	terminal.show();
+	terminal.sendText(`Add-AppxPackage -Path ${escapePowerShellArg(artifactPath)}`);
+}
+
+/**
+ * Surface the result of a pack run. On success, show a completion notification
+ * naming the produced artifact with Reveal / Sign / Install actions. On
+ * failure, direct the user to the WinApp output channel.
+ */
+async function handlePackCompletion(
+	extensionPath: string,
+	workspacePath: string,
+	inputFolder: string,
+	result: { code: number | null; output: string; cancelled?: boolean }
+): Promise<void> {
+	const plan = planPackCompletion(result);
+	switch (plan.kind) {
+		case 'cancelled':
+			return;
+		case 'error':
+			getWinappOutputChannel().show();
+			vscode.window.showErrorMessage(plan.message);
+			return;
+	}
+
+	if (
+		!fs.existsSync(plan.artifactPath) ||
+		(!isArtifactWithinRoot(plan.artifactPath, workspacePath) &&
+			!isArtifactWithinRoot(plan.artifactPath, inputFolder))
+	) {
+		getWinappOutputChannel().show();
+		vscode.window.showErrorMessage('Packaging failed. See the WinApp output channel for details.');
+		return;
+	}
+
+	const choice = await vscode.window.showInformationMessage(
+		plan.message,
+		PACK_ACTIONS.reveal,
+		PACK_ACTIONS.sign,
+		PACK_ACTIONS.install
+	);
+
+	switch (getPackNotificationAction(choice)) {
+		case 'reveal':
+			await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(plan.artifactPath));
+			break;
+		case 'sign':
+			await signPackage(extensionPath, workspacePath, plan.artifactPath);
+			break;
+		case 'install':
+			installPackage(plan.artifactPath, path.dirname(plan.artifactPath));
+			break;
+	}
 }
 
 /**
@@ -621,6 +843,9 @@ export function activate(context: vscode.ExtensionContext) {
 	const extensionPath = context.extensionPath;
 	const provider = new WinAppDebugConfigurationProvider(extensionPath);
 
+	// Dispose the shared WinApp output channel when the extension unloads.
+	context.subscriptions.push({ dispose: () => winappOutputChannel?.dispose() });
+
 	context.subscriptions.push(
 		vscode.debug.registerDebugConfigurationProvider(WINAPP_DEBUG_TYPE, provider)
 	);
@@ -755,15 +980,23 @@ export function activate(context: vscode.ExtensionContext) {
 				{ placeHolder: 'Bundle Windows App SDK runtime (self-contained)?' }
 			);
 
-			let command = `pack ${escapePowerShellArg(inputFolder)}`;
+			// Build the argument array for spawn (shell: false) so paths and flags
+			// are passed literally — no PowerShell parsing/escaping required.
+			const args = ['pack', inputFolder];
 			if (generateCert === 'Yes') {
-				command += ' --generate-cert --install-cert';
+				args.push('--generate-cert', '--install-cert');
 			}
 			if (selfContained === 'Yes') {
-				command += ' --self-contained';
+				args.push('--self-contained');
 			}
 
-			await runWinappCommand(extensionPath, command, workspacePath);
+			const result = await runWinappCapture(
+				extensionPath,
+				args,
+				workspacePath,
+				'Packaging app...'
+			);
+			await handlePackCompletion(extensionPath, workspacePath, inputFolder, result);
 		})
 	);
 
@@ -923,27 +1156,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const filePath = await selectFile('Select file to sign', {
-				'MSIX Packages': ['msix', 'appx'],
-				'Executables': ['exe', 'dll'],
-				'All files': ['*']
-			});
-
-			if (!filePath) {
-				vscode.window.showErrorMessage('A file to sign is required');
-				return;
-			}
-
-			const certPath = await selectFile('Select signing certificate', {
-				'Certificates': ['pfx']
-			});
-
-			if (!certPath) {
-				vscode.window.showErrorMessage('A certificate file is required');
-				return;
-			}
-
-			await runWinappCommand(extensionPath, `sign ${escapePowerShellArg(filePath)} --cert ${escapePowerShellArg(certPath)}`, workspacePath);
+			await signPackage(extensionPath, workspacePath);
 		})
 	);
 
