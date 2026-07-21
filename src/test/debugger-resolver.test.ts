@@ -1,0 +1,68 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+	DEBUGGER_CHOICE_LABELS,
+	chooseInstalledDebuggerType,
+	getDebuggerExtensionRequirement,
+	getDebuggerTypeFromChoice
+} from '../debugger-resolver';
+
+describe('debugger resolver helpers', () => {
+	describe('getDebuggerExtensionRequirement', () => {
+		it('returns the extension requirement for known extension-backed debugger types', () => {
+			assert.deepEqual(getDebuggerExtensionRequirement('coreclr'), {
+				id: 'ms-dotnettools.csharp',
+				name: 'C# (ms-dotnettools.csharp)'
+			});
+			assert.deepEqual(getDebuggerExtensionRequirement('cppvsdbg'), {
+				id: 'ms-vscode.cpptools',
+				name: 'C/C++ (ms-vscode.cpptools)'
+			});
+		});
+
+		it('returns undefined for debugger types with no extension requirement or unknown types', () => {
+			assert.equal(getDebuggerExtensionRequirement('node'), undefined);
+			assert.equal(getDebuggerExtensionRequirement('unknown'), undefined);
+		});
+	});
+
+	describe('chooseInstalledDebuggerType', () => {
+		it('reuses coreclr first when both supported debugger extensions are installed', () => {
+			const result = chooseInstalledDebuggerType([
+				'ms-vscode.cpptools',
+				'ms-dotnettools.csharp'
+			]);
+
+			assert.equal(result, 'coreclr');
+		});
+
+		it('reuses cppvsdbg when only the C/C++ extension is installed', () => {
+			assert.equal(chooseInstalledDebuggerType(['ms-vscode.cpptools']), 'cppvsdbg');
+		});
+
+		it('matches installed extension IDs case-insensitively', () => {
+			assert.equal(chooseInstalledDebuggerType(['MS-DOTNETTOOLS.CSHARP']), 'coreclr');
+		});
+
+		it('returns undefined when no supported debugger extension is installed', () => {
+			assert.equal(chooseInstalledDebuggerType(['publisher.other-extension']), undefined);
+			assert.equal(chooseInstalledDebuggerType([]), undefined);
+		});
+	});
+
+	describe('getDebuggerTypeFromChoice', () => {
+		it('maps install choices to debugger types', () => {
+			assert.equal(getDebuggerTypeFromChoice(DEBUGGER_CHOICE_LABELS.installCsharp), 'coreclr');
+			assert.equal(getDebuggerTypeFromChoice(DEBUGGER_CHOICE_LABELS.installCpp), 'cppvsdbg');
+		});
+
+		it('maps the Node/Electron built-in choice without requiring installation', () => {
+			assert.equal(getDebuggerTypeFromChoice(DEBUGGER_CHOICE_LABELS.useNode), 'node');
+		});
+
+		it('returns undefined when the modal is cancelled or returns an unknown label', () => {
+			assert.equal(getDebuggerTypeFromChoice(undefined), undefined);
+			assert.equal(getDebuggerTypeFromChoice('Cancel'), undefined);
+		});
+	});
+});
