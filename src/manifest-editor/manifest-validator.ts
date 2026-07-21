@@ -212,12 +212,12 @@ function validateIdentity(data: ManifestData, errors: ValidationError[], schema?
 
     if (!data.identity.publisher) {
         errors.push({ field: 'identity.publisher', message: 'Publisher is required.', severity: 'error' });
+    } else if (!isValidPublisherDN(data.identity.publisher)) {
+        errors.push({ field: 'identity.publisher', message: 'Publisher must be a valid X.500 distinguished name (e.g. CN=Contoso, O=Contoso Ltd).', severity: 'error' });
     } else if (schema) {
         if (!matchesSchemaPattern(schema, 'ST_Publisher_2010_v2', data.identity.publisher)) {
             errors.push({ field: 'identity.publisher', message: 'Publisher must be a valid X.500 distinguished name (e.g. CN=Contoso, O=Contoso Ltd).', severity: 'error' });
         }
-    } else if (!isValidPublisherDN(data.identity.publisher)) {
-        errors.push({ field: 'identity.publisher', message: 'Publisher must be a valid X.500 distinguished name (e.g. CN=Contoso, O=Contoso Ltd).', severity: 'error' });
     }
 
     if (!data.identity.version) {

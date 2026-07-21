@@ -31,7 +31,7 @@ export function buildAttributeFromPatternType(
     schema: SchemaModel,
     typeName: string
 ): SchemaAttribute | undefined {
-    const allPatterns: string[] = [];
+    const patternSets: string[][] = [];
     let minLength: number | undefined;
     let maxLength: number | undefined;
 
@@ -43,10 +43,8 @@ export function buildAttributeFromPatternType(
         const pt = schema.patternTypes.get(currentKey);
         if (!pt) { break; }
 
-        // Collect patterns from this level
-        if (pt.patterns.length > 0 && allPatterns.length === 0) {
-            // Use the most-derived type's patterns (first ones found)
-            allPatterns.push(...pt.patterns);
+        if (pt.patterns.length > 0) {
+            patternSets.push([...pt.patterns]);
         }
 
         // Use most restrictive length constraints (max of minLengths, min of maxLengths)
@@ -73,7 +71,7 @@ export function buildAttributeFromPatternType(
         }
     }
 
-    if (allPatterns.length === 0 && minLength === undefined && maxLength === undefined) {
+    if (patternSets.length === 0 && minLength === undefined && maxLength === undefined) {
         return undefined;
     }
 
@@ -81,7 +79,8 @@ export function buildAttributeFromPatternType(
         name: typeName,
         required: false,
         typeName,
-        patterns: allPatterns.length > 0 ? allPatterns : undefined,
+        patterns: patternSets[0] ? [...patternSets[0]] : undefined,
+        patternSets: patternSets.length > 0 ? patternSets : undefined,
         minLength,
         maxLength,
     };

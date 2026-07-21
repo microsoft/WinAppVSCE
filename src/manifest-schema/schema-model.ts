@@ -52,8 +52,10 @@ export interface SchemaAttribute {
     typeName?: string;
     /** Enumerated values if the type is a restriction with enumerations. */
     enumerations?: string[];
-    /** Pattern constraints (regex strings) from xs:pattern facets. */
+    /** Most-derived pattern constraints (regex strings) from xs:pattern facets. */
     patterns?: string[];
+    /** Pattern constraints grouped by restriction level (OR within, AND between sets). */
+    patternSets?: string[][];
     /** Minimum string length from xs:minLength. */
     minLength?: number;
     /** Maximum string length from xs:maxLength. */

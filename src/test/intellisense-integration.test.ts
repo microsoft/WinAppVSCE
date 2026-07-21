@@ -391,7 +391,7 @@ describe('manifest diagnostics logic', () => {
         assert.ok(!diagnostics.some(diagnostic => diagnostic.message.includes("Missing required attribute 'Name'")));
     });
 
-    it('skips unknown elements instead of producing false positives', () => {
+    it('warns for unknown or misplaced child elements', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
   <Applications>
     <Application Id="App">
@@ -400,7 +400,7 @@ describe('manifest diagnostics logic', () => {
   </Applications>
   <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />`));
 
-        assert.equal(diagnostics.length, 0);
+        assert.ok(diagnostics.some(diagnostic => diagnostic.message.includes("Unknown element 'VisualElements'")));
     });
 
     it('findSchemaElementExact only matches exact namespaces', () => {
@@ -432,13 +432,37 @@ describe('manifest diagnostics logic', () => {
             'Valid Name and Version should not trigger pattern violations');
     });
 
-    it('skips diagnostics for qualified attributes until namespace-aware lookup is implemented', () => {
+    it('validates qualified attributes when their namespace is declared', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
   <Applications>
     <Application Id="App" uap10:TrustLevel="not-a-real-value" />
   </Applications>`, ` xmlns:uap10="${MANIFEST_NAMESPACES['uap10']}"`));
 
-        assert.ok(!diagnostics.some(diagnostic => diagnostic.message.includes('TrustLevel')));
+        assert.ok(diagnostics.some(diagnostic => diagnostic.message.includes('TrustLevel')));
+    });
+
+    it('accepts substitution-group children without misplaced-element warnings', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Applications>
+    <Application Id="App">
+      <uap:VisualElements DisplayName="App" Description="Desc" BackgroundColor="transparent" Square150x150Logo="logo.png" Square44x44Logo="small.png" />
+    </Application>
+  </Applications>
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />`));
+
+        assert.ok(!diagnostics.some(diagnostic => diagnostic.message.includes("not allowed as a child of 'Application'")));
+    });
+
+    it('warns for known but misplaced child elements', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Applications>
+    <Application Id="App">
+      <Identity Name="Nested" Publisher="CN=Test" Version="1.0.0.0" />
+    </Application>
+  </Applications>
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />`));
+
+        assert.ok(diagnostics.some(diagnostic => diagnostic.message.includes("Element 'Identity' is not allowed as a child of 'Application'")));
     });
 
     it('does not produce false positives on Dependencies or Applications', () => {

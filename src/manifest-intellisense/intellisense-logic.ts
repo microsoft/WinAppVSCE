@@ -1,26 +1,8 @@
 import { MANIFEST_NAMESPACES, SchemaAttribute, SchemaElement, SchemaModel, URI_TO_PREFIX } from '../manifest-schema/schema-model';
+import { SUBSTITUTION_GROUPS } from '../manifest-schema/substitution-groups';
 import { getXmlContext, splitPrefixedName } from '../manifest-schema/xml-context';
 // Re-export validation from shared module so existing consumers don't break
 export { validateManifestText, findSchemaElementExact, ManifestDiagnostic } from '../manifest-schema/schema-validation';
-
-/**
- * Known XSD substitution groups: abstract elements mapped to their concrete substitutions.
- * These are elements like VisualElementsChoice that users never type directly.
- */
-export const SUBSTITUTION_GROUPS: Record<string, Array<{ name: string; namespace: string }>> = {
-    'VisualElementsChoice': [
-        { name: 'VisualElements', namespace: 'http://schemas.microsoft.com/appx/manifest/uap/windows10' },
-    ],
-    'ApplicationExtensionChoice': [
-        { name: 'Extension', namespace: 'http://schemas.microsoft.com/appx/manifest/uap/windows10' },
-    ],
-    'CapabilityChoice': [
-        { name: 'Capability', namespace: 'http://schemas.microsoft.com/appx/manifest/foundation/windows10' },
-        { name: 'Capability', namespace: 'http://schemas.microsoft.com/appx/manifest/uap/windows10' },
-        { name: 'DeviceCapability', namespace: 'http://schemas.microsoft.com/appx/manifest/foundation/windows10' },
-    ],
-    'HoloContentChoice': [],
-};
 
 export type ManifestCompletionKind = 'element' | 'attribute' | 'enumValue' | 'closingTag';
 

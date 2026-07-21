@@ -482,6 +482,7 @@ function parseAttribute(
 
     let enumerations: string[] | undefined;
     let patterns: string[] | undefined;
+    let patternSets: string[][] | undefined;
     let minLength: number | undefined;
     let maxLength: number | undefined;
     let typeName = typeReference?.localName;
@@ -495,10 +496,9 @@ function parseAttribute(
         // Resolve pattern constraints from type
         const resolvedPatterns = resolvePatternConstraints(typeKey, model);
         if (resolvedPatterns) {
-            // Flatten patternSets into a single array for storage on the attribute.
-            // Store only the most-derived (first) set for validation — base type patterns are too broad.
             if (resolvedPatterns.patternSets.length > 0) {
-                patterns = resolvedPatterns.patternSets[0]; // most-derived restriction's patterns
+                patternSets = resolvedPatterns.patternSets.map(set => [...set]);
+                patterns = [...patternSets[0]];
             }
             minLength = resolvedPatterns.minLength;
             maxLength = resolvedPatterns.maxLength;
@@ -518,7 +518,8 @@ function parseAttribute(
         const inlinePattern = extractPatternType(inlineSimple, '', '');
         if (inlinePattern) {
             if (inlinePattern.patterns.length > 0) {
-                patterns = [...(patterns || []), ...inlinePattern.patterns];
+                patternSets = [inlinePattern.patterns, ...(patternSets || [])];
+                patterns = [...inlinePattern.patterns];
             }
             if (inlinePattern.minLength !== undefined) { minLength = inlinePattern.minLength; }
             if (inlinePattern.maxLength !== undefined) { maxLength = inlinePattern.maxLength; }
@@ -542,6 +543,7 @@ function parseAttribute(
         typeName,
         enumerations,
         patterns,
+        patternSets,
         minLength,
         maxLength,
         documentation: extractDocumentation(attr) || extractDocumentation(sourceAttr),
@@ -829,6 +831,7 @@ function mergeAttribute(target: SchemaAttribute[], source: SchemaAttribute): voi
             ...source,
             enumerations: source.enumerations ? [...source.enumerations] : undefined,
             patterns: source.patterns ? [...source.patterns] : undefined,
+            patternSets: source.patternSets?.map(patternSet => [...patternSet]),
         });
         return;
     }
@@ -843,6 +846,9 @@ function mergeAttribute(target: SchemaAttribute[], source: SchemaAttribute): voi
     }
     if (source.patterns?.length) {
         existing.patterns = [...(existing.patterns || []), ...source.patterns];
+    }
+    if (source.patternSets?.length) {
+        existing.patternSets = [...(existing.patternSets || []), ...source.patternSets.map(patternSet => [...patternSet])];
     }
     if (source.minLength !== undefined) { existing.minLength = source.minLength; }
     if (source.maxLength !== undefined) { existing.maxLength = source.maxLength; }
@@ -873,6 +879,7 @@ function cloneAttributes(attributes: SchemaAttribute[]): SchemaAttribute[] {
         ...attribute,
         enumerations: attribute.enumerations ? [...attribute.enumerations] : undefined,
         patterns: attribute.patterns ? [...attribute.patterns] : undefined,
+        patternSets: attribute.patternSets?.map(patternSet => [...patternSet]),
     }));
 }
 

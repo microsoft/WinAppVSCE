@@ -10,6 +10,7 @@
 import { DOMParser } from '@xmldom/xmldom';
 import type { Element } from '@xmldom/xmldom';
 import { SchemaElement, SchemaModel, SchemaAttribute } from './schema-model';
+import { SUBSTITUTION_GROUPS } from './substitution-groups';
 
 /** A diagnostic produced by schema validation. */
 export interface ManifestDiagnostic {
@@ -84,15 +85,15 @@ function validateElement(
 
     const schemaDef = findSchemaElementExact(schema, localName, ns);
     if (!schemaDef) {
-        validateChildren(schema, element, diagnostics, severity, lines);
+        validateChildren(schema, element, undefined, diagnostics, severity, lines);
         return;
     }
 
+    const resolvedAttributes = resolveElementAttributes(element);
+
     // Check required attributes
     for (const attr of schemaDef.attributes) {
-        // TODO: Resolve qualified attributes via namespace-aware DOM lookup instead of skipping validation.
-        if (attr.qualified) { continue; }
-        if (attr.required && !element.hasAttribute(attr.name)) {
+        if (attr.required && !findResolvedAttribute(resolvedAttributes, attr)) {
             const range = getElementRange(element, lines);
             diagnostics.push({
                 message: `Missing required attribute '${attr.name}' on <${localName}>`,
@@ -104,13 +105,12 @@ function validateElement(
 
     // Check enum values
     for (const attr of schemaDef.attributes) {
-        if (attr.qualified) { continue; }
         if (!attr.enumerations || attr.enumerations.length === 0) { continue; }
-        const value = element.getAttribute(attr.name);
-        if (value !== null && !attr.enumerations.includes(value)) {
-            const range = getElementRange(element, lines);
+        const resolvedAttribute = findResolvedAttribute(resolvedAttributes, attr);
+        if (resolvedAttribute && !attr.enumerations.includes(resolvedAttribute.value)) {
+            const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
-                message: `Invalid value '${value}' for attribute '${attr.name}'. Expected one of: ${attr.enumerations.slice(0, 10).join(', ')}`,
+                message: `Invalid value '${resolvedAttribute.value}' for attribute '${attr.name}'. Expected one of: ${attr.enumerations.slice(0, 10).join(', ')}`,
                 severity,
                 ...range,
             });
@@ -119,26 +119,14 @@ function validateElement(
 
     // Validate attribute values against pattern constraints
     for (const attr of schemaDef.attributes) {
-        if (attr.qualified) { continue; }
-        if (!attr.patterns || attr.patterns.length === 0) { continue; }
+        if (!hasPatternConstraints(attr)) { continue; }
         if (attr.enumerations && attr.enumerations.length > 0) { continue; } // enum validation already covers this
-        const value = element.getAttribute(attr.name);
-        if (value === null) { continue; }
-        const matchesAnyPattern = attr.patterns.some(pattern => {
-            // XSD-sourced regexes can be expensive on arbitrarily long input, so cap the value length.
-            if (value.length > 1024) {
-                return true;
-            }
-            try {
-                return new RegExp(`^(?:${pattern})$`).test(value);
-            } catch {
-                return true; // skip invalid regex patterns
-            }
-        });
-        if (!matchesAnyPattern) {
-            const range = getAttributeValueRange(element, attr.name, lines);
+        const resolvedAttribute = findResolvedAttribute(resolvedAttributes, attr);
+        if (!resolvedAttribute) { continue; }
+        if (!validateAttributeValuePattern(attr, resolvedAttribute.value)) {
+            const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
-                message: `Value '${value}' for attribute '${attr.name}' does not match the expected pattern`,
+                message: `Value '${resolvedAttribute.value}' for attribute '${attr.name}' does not match the expected pattern`,
                 severity,
                 ...range,
             });
@@ -147,34 +135,34 @@ function validateElement(
 
     // Validate attribute value lengths
     for (const attr of schemaDef.attributes) {
-        if (attr.qualified) { continue; }
         if (attr.minLength === undefined && attr.maxLength === undefined) { continue; }
-        const value = element.getAttribute(attr.name);
-        if (value === null) { continue; }
-        if (attr.minLength !== undefined && value.length < attr.minLength) {
-            const range = getAttributeValueRange(element, attr.name, lines);
+        const resolvedAttribute = findResolvedAttribute(resolvedAttributes, attr);
+        if (!resolvedAttribute) { continue; }
+        if (attr.minLength !== undefined && resolvedAttribute.value.length < attr.minLength) {
+            const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
-                message: `Value for '${attr.name}' must be at least ${attr.minLength} characters (got ${value.length})`,
+                message: `Value for '${attr.name}' must be at least ${attr.minLength} characters (got ${resolvedAttribute.value.length})`,
                 severity,
                 ...range,
             });
         }
-        if (attr.maxLength !== undefined && value.length > attr.maxLength) {
-            const range = getAttributeValueRange(element, attr.name, lines);
+        if (attr.maxLength !== undefined && resolvedAttribute.value.length > attr.maxLength) {
+            const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
-                message: `Value for '${attr.name}' exceeds maximum length of ${attr.maxLength} characters (got ${value.length})`,
+                message: `Value for '${attr.name}' exceeds maximum length of ${attr.maxLength} characters (got ${resolvedAttribute.value.length})`,
                 severity,
                 ...range,
             });
         }
     }
 
-    validateChildren(schema, element, diagnostics, severity, lines);
+    validateChildren(schema, element, schemaDef, diagnostics, severity, lines);
 }
 
 function validateChildren(
     schema: SchemaModel,
     element: Element,
+    schemaDef: SchemaElement | undefined,
     diagnostics: ManifestDiagnostic[],
     severity: 'warning' | 'error',
     lines: string[]
@@ -183,7 +171,11 @@ function validateChildren(
     for (let i = 0; i < children.length; i++) {
         const child = children[i];
         if (child.nodeType === 1) {
-            validateElement(schema, child as Element, diagnostics, severity, lines);
+            const childElement = child as Element;
+            if (schemaDef) {
+                validateChildPlacement(schema, element, schemaDef, childElement, diagnostics, lines);
+            }
+            validateElement(schema, childElement, diagnostics, severity, lines);
         }
     }
 }
@@ -201,20 +193,21 @@ export function findSchemaElementExact(
 
 /**
  * Test an attribute value against its schema-defined pattern constraints.
- * Returns true if valid (or no patterns), false if it fails all patterns.
+ * Returns true if valid (or no patterns), false if it fails any required pattern set.
  * Useful for manifest-editor to validate individual field values against XSD patterns.
  */
 export function validateAttributeValuePattern(attr: SchemaAttribute, value: string): boolean {
-    if (!attr.patterns || attr.patterns.length === 0) { return true; }
+    const patternSets = getPatternSets(attr);
+    if (patternSets.length === 0) { return true; }
     if (attr.enumerations && attr.enumerations.length > 0) { return true; } // enum check takes precedence
     if (value.length > 1024) { return true; } // ReDoS safety
-    return attr.patterns.some(pattern => {
+    return patternSets.every(patternSet => patternSet.some(pattern => {
         try {
             return new RegExp(`^(?:${pattern})$`).test(value);
         } catch {
             return true;
         }
-    });
+    }));
 }
 
 /**
@@ -275,4 +268,118 @@ function getLineLength(lines: string[], line: number): number {
 
 function clamp(value: number, min: number, max: number): number {
     return Math.min(Math.max(value, min), max);
+}
+
+interface ResolvedElementAttribute {
+    displayName: string;
+    localName: string;
+    namespace?: string;
+    value: string;
+}
+
+function validateChildPlacement(
+    schema: SchemaModel,
+    parentElement: Element,
+    schemaDef: SchemaElement,
+    childElement: Element,
+    diagnostics: ManifestDiagnostic[],
+    lines: string[]
+): void {
+    const parentLocalName = parentElement.localName || parentElement.nodeName.split(':').pop() || '';
+    const childLocalName = childElement.localName || childElement.nodeName.split(':').pop() || '';
+    const childNamespace = childElement.namespaceURI || '';
+    if (isAllowedChild(schemaDef, childLocalName, childNamespace)) {
+        return;
+    }
+
+    const childSchemaDef = findSchemaElementExact(schema, childLocalName, childNamespace);
+    const range = getElementRange(childElement, lines);
+    diagnostics.push({
+        message: childSchemaDef
+            ? `Element '${childLocalName}' is not allowed as a child of '${parentLocalName}'`
+            : `Unknown element '${childLocalName}'`,
+        severity: 'warning',
+        ...range,
+    });
+}
+
+function isAllowedChild(schemaDef: SchemaElement, childName: string, childNamespace: string): boolean {
+    return schemaDef.children.some(child => {
+        if (child.name === childName && child.namespace === childNamespace) {
+            return true;
+        }
+        return (SUBSTITUTION_GROUPS[child.name] || []).some(substitution =>
+            substitution.name === childName && substitution.namespace === childNamespace
+        );
+    });
+}
+
+function resolveElementAttributes(element: Element): ResolvedElementAttribute[] {
+    const resolved: ResolvedElementAttribute[] = [];
+    const attributes = element.attributes;
+    if (!attributes) {
+        return resolved;
+    }
+
+    for (let i = 0; i < attributes.length; i++) {
+        const attribute = attributes.item(i);
+        if (!attribute) { continue; }
+
+        const displayName = attribute.nodeName;
+        if (displayName === 'xmlns' || displayName.startsWith('xmlns:')) {
+            continue;
+        }
+
+        const localName = attribute.localName || displayName.split(':').pop() || '';
+        const prefix = attribute.prefix || displayName.split(':')[0];
+        resolved.push({
+            displayName,
+            localName,
+            namespace: displayName.includes(':') ? resolveNamespacePrefix(element, prefix) : undefined,
+            value: attribute.nodeValue || '',
+        });
+    }
+
+    return resolved;
+}
+
+function findResolvedAttribute(
+    resolvedAttributes: ResolvedElementAttribute[],
+    schemaAttribute: SchemaAttribute
+): ResolvedElementAttribute | undefined {
+    return resolvedAttributes.find(attribute => {
+        if (attribute.localName !== schemaAttribute.name) {
+            return false;
+        }
+        if (schemaAttribute.qualified) {
+            return attribute.namespace === schemaAttribute.namespace;
+        }
+        return attribute.namespace === undefined;
+    });
+}
+
+function resolveNamespacePrefix(contextElement: Element, prefix: string): string | undefined {
+    let node: Element | null = contextElement;
+    while (node) {
+        const namespace = node.getAttribute(`xmlns:${prefix}`);
+        if (namespace) {
+            return namespace;
+        }
+        node = node.parentNode as Element | null;
+        if (node && node.nodeType !== 1) {
+            node = null;
+        }
+    }
+    return undefined;
+}
+
+function hasPatternConstraints(attr: SchemaAttribute): boolean {
+    return getPatternSets(attr).length > 0;
+}
+
+function getPatternSets(attr: SchemaAttribute): string[][] {
+    if (attr.patternSets && attr.patternSets.length > 0) {
+        return attr.patternSets.filter(patternSet => patternSet.length > 0);
+    }
+    return attr.patterns && attr.patterns.length > 0 ? [attr.patterns] : [];
 }

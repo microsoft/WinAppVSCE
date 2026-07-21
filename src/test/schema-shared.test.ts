@@ -93,6 +93,16 @@ describe('schema-validation shared functions', () => {
         assert.equal(validateAttributeValuePattern(attr, 'abc'), false);
     });
 
+    it('validateAttributeValuePattern applies all inherited pattern sets with AND semantics', () => {
+        const attr = {
+            name: 'test',
+            required: false,
+            patternSets: [['[A-Z]+'], ['AB|ABC']],
+        };
+        assert.equal(validateAttributeValuePattern(attr, 'AB'), true);
+        assert.equal(validateAttributeValuePattern(attr, 'A'), false);
+    });
+
     it('validateAttributeValuePattern returns true when no patterns', () => {
         assert.equal(validateAttributeValuePattern({ name: 'x', required: false }, 'anything'), true);
     });
@@ -126,8 +136,9 @@ describe('schema-helpers for manifest-editor', () => {
         assert.ok(attr);
         assert.equal(attr.minLength, 3);
         assert.equal(attr.maxLength, 50);
-        // Patterns come from ST_AsciiIdentifier base type
-        assert.ok(attr.patterns && attr.patterns.length > 0);
+        assert.ok(attr.patternSets && attr.patternSets.length > 0);
+        // Patterns come from ST_AsciiIdentifier base type and lengths from ST_PackageName.
+        assert.ok(attr.patternSets?.some(patternSet => patternSet.includes('[-.A-Za-z0-9]+')));
     });
 
     it('buildAttributeFromPatternType resolves ST_VersionQuad', () => {
@@ -244,5 +255,22 @@ describe('manifest-editor validateManifest with schema', () => {
         // No schema passed — should still validate using fallback regexes
         const errors = validateManifest(baseData as any);
         assert.ok(errors.some((e: any) => e.field === 'identity.name'));
+    });
+
+    it('still applies semantic publisher validation when schema is provided', async () => {
+        const { validateManifest } = await import('../manifest-editor/manifest-validator.js');
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const data = {
+            identity: { name: 'My.Valid.App', publisher: 'Not a DN', version: '1.0.0.0', processorArchitecture: 'x64' },
+            phoneIdentity: undefined,
+            properties: { displayName: 'Test', publisherDisplayName: 'Test', logo: 'test.png', description: '' },
+            dependencies: { targetDeviceFamilies: [], packageDependencies: [], mainPackageDependencies: [], driverConstraints: [], osPackageDependencies: [], hostRuntimeDependencies: [], externalDependencies: [] },
+            resources: [],
+            applications: [],
+            capabilities: [],
+        };
+
+        const errors = validateManifest(data as any, model);
+        assert.ok(errors.some((e: any) => e.field === 'identity.publisher'));
     });
 });

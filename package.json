@@ -43,6 +43,10 @@
         "extensions": [
           ".appxmanifest"
         ],
+        "filenames": [
+          "AppxManifest.xml",
+          "appxmanifest.xml"
+        ],
         "aliases": [
           "AppxManifest"
         ]
@@ -144,7 +148,7 @@
         "winapp.manifest.intelliSense.enable": {
           "type": "boolean",
           "default": true,
-          "description": "Enable IntelliSense (completion, hover, diagnostics) for AppxManifest.xml files."
+          "description": "Enable IntelliSense (completion, hover, diagnostics, and Go to Definition/navigation) for AppxManifest.xml files."
         },
         "winapp.manifest.diagnostics.level": {
           "type": "string",

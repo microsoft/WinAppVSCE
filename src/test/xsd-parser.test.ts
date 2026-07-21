@@ -191,8 +191,9 @@ describe('loadSchemaModel', () => {
         assert.ok(identity);
         const nameAttr = identity.attributes.find(a => a.name === 'Name');
         assert.ok(nameAttr);
-        assert.ok(nameAttr.patterns && nameAttr.patterns.length > 0,
+        assert.ok(nameAttr.patternSets && nameAttr.patternSets.length > 0,
             'Name attribute should have pattern constraints resolved from its XSD type');
+        assert.ok(nameAttr.patternSets?.some(patternSet => patternSet.includes('[-.A-Za-z0-9]+')));
     });
 
     it('resolves pattern constraints on Identity Version attribute', () => {
@@ -201,11 +202,11 @@ describe('loadSchemaModel', () => {
         assert.ok(identity);
         const versionAttr = identity.attributes.find(a => a.name === 'Version');
         assert.ok(versionAttr);
-        assert.ok(versionAttr.patterns && versionAttr.patterns.length > 0,
+        assert.ok(versionAttr.patternSets && versionAttr.patternSets.length > 0,
             'Version attribute should have pattern constraints');
 
         // The version pattern should match dotted quad format (e.g. 1.0.0.0)
-        const regex = new RegExp(`^(?:${versionAttr.patterns[0]})$`);
+        const regex = new RegExp(`^(?:${versionAttr.patterns?.[0]})$`);
         assert.ok(regex.test('1.0.0.0'), 'Pattern should match valid version 1.0.0.0');
         assert.ok(!regex.test('not.a.version'), 'Pattern should not match invalid version');
     });
