@@ -53,12 +53,7 @@ async function installAndActivateExtension(
 ): Promise<boolean> {
 	logDebuggerActivity(`Installing ${requirement.name} (${requirement.id}) because ${reason}.`);
 	try {
-		await vscode.window.withProgress(
-			{ location: vscode.ProgressLocation.Notification, title: `Installing ${requirement.name}…` },
-			async () => {
-				await vscode.commands.executeCommand('workbench.extensions.installExtension', requirement.id);
-			}
-		);
+		await vscode.commands.executeCommand('workbench.extensions.installExtension', requirement.id);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		vscode.window.showErrorMessage(
