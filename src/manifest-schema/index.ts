@@ -37,6 +37,7 @@ export {
 // Schema-driven validation
 export {
     ManifestDiagnostic,
+    ManifestValidationOptions,
     validateManifestText,
     findSchemaElementExact,
     validateAttributeValuePattern,
@@ -44,3 +45,12 @@ export {
     validateAttributeValueEnum,
     getAttributeValueRange,
 } from './schema-validation';
+
+export {
+    getPatternType,
+    buildAttributeFromPatternType,
+    validateValueAgainstType,
+    matchesSchemaPattern,
+    checkSchemaLength,
+    isValidSchemaColor,
+} from './schema-helpers';

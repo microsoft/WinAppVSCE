@@ -7,6 +7,12 @@ import * as vscode from 'vscode';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { validateManifestText } from './intellisense-logic';
 
+const MANIFEST_CONFIG_SECTION = 'winapp.manifest';
+const INTELLISENSE_ENABLE_CONFIG_KEY = 'intelliSense.enable';
+const DIAGNOSTICS_LEVEL_CONFIG_KEY = 'diagnostics.level';
+const STRICT_CHILD_PLACEMENT_CONFIG_KEY = 'intelliSense.diagnostics.strictChildPlacement';
+const VALIDATION_DEBOUNCE_MS = 500;
+
 export class ManifestDiagnosticsProvider {
     private readonly diagnosticCollection: vscode.DiagnosticCollection;
     private readonly disposables: vscode.Disposable[] = [];
@@ -34,7 +40,7 @@ export class ManifestDiagnosticsProvider {
                 const timeout = setTimeout(() => {
                     this.pendingValidations.delete(key);
                     this.validateIfManifest(e.document);
-                }, 500);
+                }, VALIDATION_DEBOUNCE_MS);
 
                 this.pendingValidations.set(key, timeout);
             })
@@ -45,7 +51,7 @@ export class ManifestDiagnosticsProvider {
         );
         this.disposables.push(
             vscode.workspace.onDidChangeConfiguration(event => {
-                if (!event.affectsConfiguration('winapp.manifest')) { return; }
+                if (!event.affectsConfiguration(MANIFEST_CONFIG_SECTION)) { return; }
                 this.refreshOpenManifestDiagnostics();
             })
         );
@@ -77,13 +83,13 @@ export class ManifestDiagnosticsProvider {
     private validateIfManifest(document: vscode.TextDocument): void {
         if (!this.isManifestFile(document)) { return; }
 
-        const config = vscode.workspace.getConfiguration('winapp.manifest');
-        if (!config.get<boolean>('intelliSense.enable', true)) {
+        const config = vscode.workspace.getConfiguration(MANIFEST_CONFIG_SECTION);
+        if (!config.get<boolean>(INTELLISENSE_ENABLE_CONFIG_KEY, true)) {
             this.diagnosticCollection.delete(document.uri);
             return;
         }
 
-        const level = config.get<string>('diagnostics.level', 'warning');
+        const level = config.get<string>(DIAGNOSTICS_LEVEL_CONFIG_KEY, 'warning');
         if (level === 'off') {
             this.diagnosticCollection.delete(document.uri);
             return;
@@ -101,9 +107,9 @@ export class ManifestDiagnosticsProvider {
 
     /** Re-run diagnostics for open manifest documents after configuration changes. */
     private refreshOpenManifestDiagnostics(): void {
-        const config = vscode.workspace.getConfiguration('winapp.manifest');
-        const enabled = config.get<boolean>('intelliSense.enable', true);
-        const level = config.get<string>('diagnostics.level', 'warning');
+        const config = vscode.workspace.getConfiguration(MANIFEST_CONFIG_SECTION);
+        const enabled = config.get<boolean>(INTELLISENSE_ENABLE_CONFIG_KEY, true);
+        const level = config.get<string>(DIAGNOSTICS_LEVEL_CONFIG_KEY, 'warning');
         if (!enabled || level === 'off') {
             this.diagnosticCollection.clear();
             return;
@@ -131,13 +137,20 @@ export class ManifestDiagnosticsProvider {
         return validateManifestText(
             schema,
             document.getText(),
-            level === 'error' ? 'error' : 'warning'
+            level === 'error' ? 'error' : 'warning',
+            {
+                strictChildPlacement: vscode.workspace
+                    .getConfiguration(MANIFEST_CONFIG_SECTION)
+                    .get<boolean>(STRICT_CHILD_PLACEMENT_CONFIG_KEY, false),
+            }
         ).map(diagnostic => new vscode.Diagnostic(
             new vscode.Range(diagnostic.line, diagnostic.col, diagnostic.line, diagnostic.endCol),
             diagnostic.message,
             diagnostic.severity === 'error'
                 ? vscode.DiagnosticSeverity.Error
-                : vscode.DiagnosticSeverity.Warning
+                : diagnostic.severity === 'warning'
+                    ? vscode.DiagnosticSeverity.Warning
+                    : vscode.DiagnosticSeverity.Hint
         ));
     }
 }

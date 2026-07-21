@@ -387,6 +387,14 @@ export function findManifestElement(
 
     if (prefix) { return undefined; }
 
+    // AppxManifest documents often omit prefixes for elements that conceptually belong
+    // to the default foundation namespace. Prefer that match before falling back across
+    // namespaces so unprefixed lookups stay stable instead of picking an arbitrary peer.
+    const defaultNamespaceMatch = schema.elements.get(`${MANIFEST_NAMESPACES['']}|${name}`);
+    if (defaultNamespaceMatch) {
+        return defaultNamespaceMatch;
+    }
+
     for (const [candidateKey, candidate] of schema.elements) {
         if (candidateKey.endsWith(`|${name}`) && !candidateKey.includes('|type:')) {
             return candidate;

@@ -20,14 +20,12 @@ import {
     splitPrefixedName,
     getXmlContext,
     findParentPath,
-} from '../manifest-schema';
-import {
     validateValueAgainstType,
     matchesSchemaPattern,
     isValidSchemaColor,
     buildAttributeFromPatternType,
     checkSchemaLength,
-} from '../manifest-editor/schema-helpers';
+} from '../manifest-schema';
 
 const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
 const FOUNDATION_NS = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10';
@@ -78,6 +76,54 @@ describe('schema-validation shared functions', () => {
 </Package>`;
         const diags = validateManifestText(model, xml);
         assert.ok(diags.some(d => d.message.includes("Missing required attribute 'Name'")));
+    });
+
+    it('validateManifestText warns when the root element is not in the schema', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const xml = `<?xml version="1.0"?>
+<UnknownRoot xmlns="${FOUNDATION_NS}">
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+</UnknownRoot>`;
+        const diags = validateManifestText(model, xml);
+        assert.ok(diags.some(d => d.message.includes("Root element 'UnknownRoot' not recognized in schema") && d.severity === 'warning'));
+    });
+
+    it('validateManifestText reports undeclared attributes as hints', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const xml = `<?xml version="1.0"?>
+<Package xmlns="${FOUNDATION_NS}">
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" ExtraAttribute="value" />
+</Package>`;
+        const diags = validateManifestText(model, xml);
+        assert.ok(diags.some(d => d.message.includes("Attribute 'ExtraAttribute' is not declared") && d.severity === 'hint'));
+    });
+
+    it('validateManifestText preserves relaxed child placement by default for known schema elements', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const xml = `<?xml version="1.0"?>
+<Package xmlns="${FOUNDATION_NS}">
+  <Applications>
+    <Application Id="App">
+      <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+    </Application>
+  </Applications>
+</Package>`;
+        const diags = validateManifestText(model, xml);
+        assert.ok(!diags.some(d => d.message.includes("Element 'Identity' is not allowed under <Application>")));
+    });
+
+    it('validateManifestText flags misplaced known schema elements in strict child placement mode', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const xml = `<?xml version="1.0"?>
+<Package xmlns="${FOUNDATION_NS}">
+  <Applications>
+    <Application Id="App">
+      <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+    </Application>
+  </Applications>
+</Package>`;
+        const diags = validateManifestText(model, xml, 'warning', { strictChildPlacement: true });
+        assert.ok(diags.some(d => d.message.includes("Element 'Identity' is not allowed under <Application>") && d.severity === 'warning'));
     });
 
     it('findSchemaElementExact finds Package element', () => {

@@ -33,7 +33,8 @@
     "onCommand:winapp.getWinappPath",
     "onCommand:winapp.manifestAddAlias",
     "onCommand:winapp.unregister",
-    "onCommand:winapp.certInfo"
+    "onCommand:winapp.certInfo",
+    "onCommand:winapp.openManifestEditor"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -132,6 +133,11 @@
         "command": "winapp.certInfo",
         "title": "Certificate Info",
         "category": "WinApp"
+      },
+      {
+        "command": "winapp.openManifestEditor",
+        "title": "Open Manifest Editor",
+        "category": "WinApp"
       }
     ],
     "configuration": {
@@ -155,6 +161,11 @@
           "enum": ["off", "warning", "error"],
           "default": "warning",
           "description": "Severity level for manifest schema diagnostics. Set to 'off' to disable validation."
+        },
+        "winapp.manifest.intelliSense.diagnostics.strictChildPlacement": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, report known manifest elements that appear under an unexpected parent even when substitution-group coverage is incomplete."
         }
       }
     },

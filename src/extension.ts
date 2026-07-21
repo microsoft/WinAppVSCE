@@ -140,6 +140,10 @@ async function selectFolder(title: string): Promise<string | undefined> {
 	return result?.[0]?.fsPath;
 }
 
+function isManifestPath(fsPath: string): boolean {
+	return /(?:^|[\\/])appxmanifest\.xml$|\.appxmanifest$/i.test(fsPath);
+}
+
 class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
 	private extensionPath: string;
 
@@ -445,13 +449,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// When an appxmanifest file is opened in the default text editor,
 	// suggest switching to the visual editor.
-	const MANIFEST_PATTERN = /(?:^|[\\/])appxmanifest\.xml$|\.appxmanifest$/i;
 	const dismissedKey = 'winapp.manifestEditorNotificationDismissed';
 
 	context.subscriptions.push(
 		vscode.window.onDidChangeActiveTextEditor(editor => {
 			if (!editor || editor.document.uri.scheme !== 'file') { return; }
-			if (!MANIFEST_PATTERN.test(editor.document.uri.fsPath)) { return; }
+			if (!isManifestPath(editor.document.uri.fsPath)) { return; }
 			if (context.globalState.get<boolean>(dismissedKey)) { return; }
 
 			vscode.window.showInformationMessage(
@@ -465,6 +468,18 @@ export function activate(context: vscode.ExtensionContext) {
 					context.globalState.update(dismissedKey, true);
 				}
 			});
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('winapp.openManifestEditor', async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor || editor.document.uri.scheme !== 'file' || !isManifestPath(editor.document.uri.fsPath)) {
+				vscode.window.showWarningMessage('Open an AppxManifest.xml file to use the WinApp manifest editor.');
+				return;
+			}
+
+			await vscode.commands.executeCommand('vscode.openWith', editor.document.uri, ManifestEditorProvider.viewType);
 		})
 	);
 

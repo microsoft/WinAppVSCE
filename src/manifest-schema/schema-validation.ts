@@ -15,10 +15,14 @@ import { SUBSTITUTION_GROUPS } from './substitution-groups';
 /** A diagnostic produced by schema validation. */
 export interface ManifestDiagnostic {
     message: string;
-    severity: 'warning' | 'error';
+    severity: 'hint' | 'warning' | 'error';
     line: number;
     col: number;
     endCol: number;
+}
+
+export interface ManifestValidationOptions {
+    strictChildPlacement?: boolean;
 }
 
 /**
@@ -29,7 +33,8 @@ export interface ManifestDiagnostic {
 export function validateManifestText(
     schema: SchemaModel,
     text: string,
-    level: 'warning' | 'error' = 'warning'
+    level: 'warning' | 'error' = 'warning',
+    options: ManifestValidationOptions = {}
 ): ManifestDiagnostic[] {
     const diagnostics: ManifestDiagnostic[] = [];
     const lines = text.split(/\r?\n/);
@@ -65,7 +70,7 @@ export function validateManifestText(
         return diagnostics;
     }
 
-    validateElement(schema, doc.documentElement, diagnostics, level, lines);
+    validateElement(schema, doc.documentElement, diagnostics, level, lines, options, 0);
     return diagnostics;
 }
 
@@ -78,14 +83,24 @@ function validateElement(
     element: Element,
     diagnostics: ManifestDiagnostic[],
     severity: 'warning' | 'error',
-    lines: string[]
+    lines: string[],
+    options: ManifestValidationOptions,
+    depth: number
 ): void {
     const localName = element.localName || element.nodeName.split(':').pop() || '';
     const ns = element.namespaceURI || '';
 
     const schemaDef = findSchemaElementExact(schema, localName, ns);
     if (!schemaDef) {
-        validateChildren(schema, element, undefined, diagnostics, severity, lines);
+        if (depth === 0) {
+            const range = getElementRange(element, lines);
+            diagnostics.push({
+                message: `Root element '${localName}' not recognized in schema`,
+                severity: 'warning',
+                ...range,
+            });
+        }
+        validateChildren(schema, element, undefined, diagnostics, severity, lines, options, depth);
         return;
     }
 
@@ -156,7 +171,23 @@ function validateElement(
         }
     }
 
-    validateChildren(schema, element, schemaDef, diagnostics, severity, lines);
+    for (const resolvedAttribute of resolvedAttributes) {
+        if (resolvedAttribute.displayName.startsWith('xmlns') || resolvedAttribute.displayName.startsWith('xml:')) {
+            continue;
+        }
+        const declaredAttribute = schemaDef.attributes.find(attr => attr.name === resolvedAttribute.localName);
+        if (declaredAttribute) {
+            continue;
+        }
+        const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
+        diagnostics.push({
+            message: `Attribute '${resolvedAttribute.displayName}' is not declared in the schema for element '${localName}'`,
+            severity: 'hint',
+            ...range,
+        });
+    }
+
+    validateChildren(schema, element, schemaDef, diagnostics, severity, lines, options, depth);
 }
 
 function validateChildren(
@@ -165,7 +196,9 @@ function validateChildren(
     schemaDef: SchemaElement | undefined,
     diagnostics: ManifestDiagnostic[],
     severity: 'warning' | 'error',
-    lines: string[]
+    lines: string[],
+    options: ManifestValidationOptions,
+    depth: number
 ): void {
     const children = element.childNodes;
     for (let i = 0; i < children.length; i++) {
@@ -173,9 +206,9 @@ function validateChildren(
         if (child.nodeType === 1) {
             const childElement = child as Element;
             if (schemaDef) {
-                validateChildPlacement(schema, element, schemaDef, childElement, diagnostics, lines);
+                validateChildPlacement(schema, element, schemaDef, childElement, diagnostics, lines, options);
             }
-            validateElement(schema, childElement, diagnostics, severity, lines);
+            validateElement(schema, childElement, diagnostics, severity, lines, options, depth + 1);
         }
     }
 }
@@ -283,7 +316,8 @@ function validateChildPlacement(
     schemaDef: SchemaElement,
     childElement: Element,
     diagnostics: ManifestDiagnostic[],
-    lines: string[]
+    lines: string[],
+    options: ManifestValidationOptions
 ): void {
     const childLocalName = childElement.localName || childElement.nodeName.split(':').pop() || '';
     const childNamespace = childElement.namespaceURI || '';
@@ -293,8 +327,20 @@ function validateChildPlacement(
 
     const childSchemaDef = findSchemaElementExact(schema, childLocalName, childNamespace);
     if (childSchemaDef) {
-        // Element exists in schema but not in this parent's children list.
-        // Could be valid via substitution groups we haven't fully mapped — skip silently.
+        // The substitution-group map is intentionally incomplete today, so the default mode
+        // avoids warning on elements that are known to the schema but appear under an
+        // unexpected parent. This trades some missed misplaced-child diagnostics for fewer
+        // false positives in real AppxManifest files. Strict mode opts into flagging them.
+        if (!options.strictChildPlacement) {
+            return;
+        }
+
+        const range = getElementRange(childElement, lines);
+        diagnostics.push({
+            message: `Element '${childLocalName}' is not allowed under <${parentElement.localName || parentElement.nodeName.split(':').pop() || ''}>`,
+            severity: 'warning',
+            ...range,
+        });
         return;
     }
     const range = getElementRange(childElement, lines);

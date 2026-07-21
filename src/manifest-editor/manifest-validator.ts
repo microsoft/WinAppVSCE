@@ -9,7 +9,7 @@
 
 import { ManifestData, ValidationError } from './manifest-types';
 import { SchemaModel } from '../manifest-schema/schema-model';
-import { validateValueAgainstType, matchesSchemaPattern, isValidSchemaColor } from './schema-helpers';
+import { validateValueAgainstType, matchesSchemaPattern, isValidSchemaColor } from '../manifest-schema/schema-helpers';
 
 // BCP-47: language[-script][-region][-variant] (simplified for common MSIX usage)
 // Also accepts private-use tags like "x-generate" used by MSIX tooling

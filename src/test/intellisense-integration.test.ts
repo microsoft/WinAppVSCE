@@ -249,6 +249,18 @@ describe('manifest completion logic', () => {
         assert.match(source, /const TRIGGER_CHARACTERS = \[[^\]]*'\/'/);
     });
 
+    it('prefers the default namespace match for unprefixed element fallback', () => {
+        const element = findManifestElement(
+            model,
+            'Extension',
+            undefined,
+            makeOpenManifest('', `xmlns="https://example.com/custom" xmlns:desktop="${MANIFEST_NAMESPACES['desktop4']}"`)
+        );
+
+        assert.ok(element);
+        assert.equal(element?.namespace, FOUNDATION_NS);
+    });
+
     it('does not produce duplicate child labels for any tested parent', () => {
         const testedParents = ['Package', 'Application', 'Capabilities', 'Applications'];
         for (const parent of testedParents) {
@@ -346,8 +358,36 @@ describe('manifest hover logic', () => {
     });
 });
 
+describe('manifest diagnostics integration boundaries', () => {
+    it('validateManifestText honors warning and error severity modes', () => {
+        const text = makeManifest(`
+  <Identity />`);
+
+        const warningDiagnostics = validateManifestText(model, text, 'warning');
+        const errorDiagnostics = validateManifestText(model, text, 'error');
+
+        assert.ok(warningDiagnostics.some(diagnostic => diagnostic.severity === 'warning'));
+        assert.ok(errorDiagnostics.some(diagnostic => diagnostic.severity === 'error'));
+    });
+
+    it('tracks diagnostics provider wiring through stable config keys and debounce timing', () => {
+        // ManifestDiagnosticsProvider depends on vscode APIs and is better covered in
+        // VS Code integration tests; here we lock down the public config contract.
+        const source = fs.readFileSync(
+            path.join(__dirname, '..', 'manifest-intellisense', 'diagnostics-provider.ts'),
+            'utf8'
+        );
+
+        assert.match(source, /const MANIFEST_CONFIG_SECTION = 'winapp\.manifest'/);
+        assert.match(source, /const INTELLISENSE_ENABLE_CONFIG_KEY = 'intelliSense\.enable'/);
+        assert.match(source, /const DIAGNOSTICS_LEVEL_CONFIG_KEY = 'diagnostics\.level'/);
+        assert.match(source, /const STRICT_CHILD_PLACEMENT_CONFIG_KEY = 'intelliSense\.diagnostics\.strictChildPlacement'/);
+        assert.match(source, /const VALIDATION_DEBOUNCE_MS = 500/);
+    });
+});
+
 describe('manifest diagnostics logic', () => {
-    // TODO(M4, M5): Add VS Code extension-host tests for command wiring plus settings/lifecycle behavior.
+    // TODO(M4): Add VS Code extension-host tests for command wiring plus settings/lifecycle behavior.
     // Pure logic tests in this file cover the core IntelliSense and diagnostics behavior for now.
     it('returns no diagnostics for a valid minimal manifest', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
