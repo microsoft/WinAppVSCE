@@ -80,23 +80,54 @@ export function parsePackagedArtifactPath(output: string): string | undefined {
 			return sameLine;
 		}
 
-		// Path printed on a following value row.
+		// Path printed on following row(s). Spectre.Console may wrap a long
+		// path across multiple lines, so we concatenate non-empty lines after
+		// the marker until the accumulated text ends in a known extension.
+		let accumulated = sameLine;
 		for (let j = i + 1; j < lines.length; j++) {
-			const candidate = lines[j].trim();
-			if (candidate.length === 0) {
+			const fragment = lines[j].trim();
+			if (fragment.length === 0) {
+				if (accumulated.length > 0) {
+					// A blank line after content means the path block ended
+					// without matching — stop accumulating.
+					break;
+				}
 				continue;
 			}
-			if (looksLikeArtifactPath(candidate)) {
-				return candidate;
+			accumulated += fragment;
+			if (looksLikeArtifactPath(accumulated)) {
+				return accumulated;
 			}
 		}
 	}
 
-	// 2. Fallback: the last line that looks like a package path wins.
+	// 2. Fallback: find the last line ending in a known extension, then
+	//    walk backwards to reconstruct a wrapped path.
 	for (let i = lines.length - 1; i >= 0; i--) {
 		const candidate = lines[i].trim();
+		if (candidate.length === 0) {
+			continue;
+		}
 		if (looksLikeArtifactPath(candidate)) {
+			// The whole path might be on this single line.
 			return candidate;
+		}
+		// Check if this line is a trailing extension fragment (e.g. ".msix")
+		// that belongs to the preceding line(s).
+		const lower = candidate.toLowerCase();
+		const isExtFragment = ARTIFACT_EXTENSIONS.some((ext) => ext === lower || ext.endsWith(lower));
+		if (isExtFragment) {
+			let assembled = candidate;
+			for (let k = i - 1; k >= 0; k--) {
+				const prev = lines[k].trim();
+				if (prev.length === 0) {
+					break;
+				}
+				assembled = prev + assembled;
+				if (looksLikeArtifactPath(assembled)) {
+					return assembled;
+				}
+			}
 		}
 	}
 

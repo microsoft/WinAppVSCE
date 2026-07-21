@@ -91,6 +91,36 @@ describe('parsePackagedArtifactPath', () => {
 			'❌ Failed\n';
 		assert.equal(parsePackagedArtifactPath(output), undefined);
 	});
+
+	it('reconstructs a path wrapped across multiple lines after the marker', () => {
+		const output = [
+			'⚠ Found `Appx` directory in input folder. It will be excluded from the package.',
+			'  📦 Package:',
+			'c:\\Users\\chiaramooney\\winappCli\\samples\\winui-app\\winui-app-sample_1.0.0.0_arm64',
+			'.msix',
+			'✅ MSIX package creation completed.'
+		].join('\n');
+
+		assert.equal(
+			parsePackagedArtifactPath(output),
+			'c:\\Users\\chiaramooney\\winappCli\\samples\\winui-app\\winui-app-sample_1.0.0.0_arm64.msix'
+		);
+	});
+
+	it('reconstructs a path wrapped across three lines after the marker', () => {
+		const output = [
+			'  📦 Package:',
+			'C:\\very\\long\\path\\to\\some\\deep\\folder\\winui-app-sample_1.0.0.0',
+			'_arm64',
+			'.msix',
+			'✅ Done.'
+		].join('\n');
+
+		assert.equal(
+			parsePackagedArtifactPath(output),
+			'C:\\very\\long\\path\\to\\some\\deep\\folder\\winui-app-sample_1.0.0.0_arm64.msix'
+		);
+	});
 });
 
 describe('buildPackSuccessMessage', () => {
