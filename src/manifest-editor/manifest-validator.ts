@@ -10,6 +10,8 @@
 import { ManifestData, ValidationError } from './manifest-types';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { validateValueAgainstType, matchesSchemaPattern, isValidSchemaColor } from '../manifest-schema/schema-helpers';
+import { DOMParser } from '@xmldom/xmldom';
+import type { Element } from '@xmldom/xmldom';
 
 // BCP-47: language[-script][-region][-variant] (simplified for common MSIX usage)
 // Also accepts private-use tags like "x-generate" used by MSIX tooling
@@ -511,45 +513,60 @@ export function validateExtensionField(fieldLabel: string, value: string, isRequ
 
 /**
  * Parse extension XML and extract editable fields with their labels and values.
- * Simplified server-side version of the webview's parseExtensionFields().
+ * Uses DOM parsing for correct handling of namespaced elements, single-quoted
+ * attributes, and nested structures.
  */
 function parseExtensionFieldsFromXml(xml: string): Array<{ label: string; value: string }> {
     const fields: Array<{ label: string; value: string }> = [];
 
-    // Extract attributes from XML elements (Element.Attribute="value")
-    // Match: <ElementName AttrName="value" ...> patterns
-    const attrRegex = /<([a-zA-Z][a-zA-Z0-9]*)\s+([^>]*?)\/?>|<([a-zA-Z][a-zA-Z0-9]*)\s+([^>]*?)>/g;
-    let match: RegExpExecArray | null;
-    while ((match = attrRegex.exec(xml)) !== null) {
-        const elementName = match[1] || match[3];
-        const attrString = match[2] || match[4];
-        if (!attrString) continue;
-
-        // Parse individual attributes from the attribute string
-        const attrItemRegex = /([a-zA-Z][a-zA-Z0-9]*)="([^"]*)"/g;
-        let attrMatch: RegExpExecArray | null;
-        while ((attrMatch = attrItemRegex.exec(attrString)) !== null) {
-            const attrName = attrMatch[1];
-            const attrValue = attrMatch[2];
-            // Skip xmlns and Category on root
-            if (attrName.startsWith('xmlns') || attrName === 'xmlns') continue;
-            if (attrName === 'Category') continue;
-            const fieldKey = elementName + '.' + attrName;
-            fields.push({ label: fieldKey, value: attrValue });
-        }
+    let doc;
+    try {
+        doc = new DOMParser({ onError: () => {} })
+            .parseFromString(xml, 'application/xml');
+    } catch {
+        return fields;
     }
+    if (!doc || !doc.documentElement) { return fields; }
 
-    // Extract text content from leaf elements: <Element>text</Element>
-    const textContentRegex = /<([a-zA-Z][a-zA-Z0-9]*)(?:\s[^>]*)?>([^<]+)<\/\1>/g;
-    while ((match = textContentRegex.exec(xml)) !== null) {
-        const elementName = match[1];
-        const textValue = match[2].trim();
-        if (textValue) {
-            fields.push({ label: elementName, value: textValue });
-        }
-    }
-
+    walkElement(doc.documentElement, fields);
     return fields;
+}
+
+/** Recursively walk DOM elements extracting field labels and values. */
+function walkElement(element: Element, fields: Array<{ label: string; value: string }>): void {
+    const localName = element.localName || element.nodeName.split(':').pop() || '';
+
+    // Extract attributes as ElementLocalName.AttributeName
+    for (let i = 0; i < element.attributes.length; i++) {
+        const attr = element.attributes.item(i);
+        if (!attr) { continue; }
+        const attrName = attr.localName || attr.nodeName;
+        // Skip namespace declarations and the root Extension Category
+        if (attrName === 'xmlns' || attr.nodeName.startsWith('xmlns:')) { continue; }
+        if (attrName === 'Category') { continue; }
+        fields.push({ label: `${localName}.${attrName}`, value: attr.value || '' });
+    }
+
+    // Extract text content from leaf elements (no child elements)
+    let hasChildElements = false;
+    const childNodes = element.childNodes;
+    for (let i = 0; i < childNodes.length; i++) {
+        if (childNodes.item(i)?.nodeType === 1) { hasChildElements = true; break; }
+    }
+    if (!hasChildElements) {
+        const text = (element.textContent || '').trim();
+        if (text) {
+            fields.push({ label: localName, value: text });
+        }
+    }
+
+    // Recurse into child elements
+    for (let i = 0; i < childNodes.length; i++) {
+        const child = childNodes.item(i);
+        if (child && child.nodeType === 1) {
+            walkElement(child as Element, fields);
+        }
+    }
 }
 
 /** Compare two version strings. Returns negative if a < b, 0 if equal, positive if a > b. */
