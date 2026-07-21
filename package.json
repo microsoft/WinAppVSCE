@@ -219,7 +219,7 @@
     "clean": "node -e \"require('fs').rmSync('bin', {recursive: true, force: true}); require('fs').rmSync('out', {recursive: true, force: true}); require('fs').rmSync('dist', {recursive: true, force: true});\"",
     "download-cli": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1\"",
     "download-cli:latest": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1 -Tag latest\"",
-    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && npx tsx --test src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-validator.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts"
+    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && npx tsx --test src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-validator.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/noop-debug-adapter.test.ts"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.9",
@@ -234,11 +234,11 @@
     "@vscode/test-electron": "^3.0.0",
     "@vscode/vsce": "3.9.2",
     "esbuild": "^0.28.1",
-    "eslint": "^10.6.0",
+    "eslint": "^10.7.0",
     "mocha": "^11.7.5",
-    "tsx": "^4.21.0",
+    "tsx": "^4.23.1",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.62.0"
+    "typescript-eslint": "^8.63.0"
   },
   "overrides": {
     "diff": "^8.0.3",

@@ -1,7 +1,15 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { spawn } from 'child_process';
-import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE, escapePowerShellArg } from './winapp-cli-utils';
+import * as fs from 'fs';
+import { spawn, execFile } from 'child_process';
+import {
+	getWinappCliPath,
+	WINAPP_CLI_CALLER_VALUE,
+	escapePowerShellArg,
+	resolveWindowsPowerShellPath,
+	isUsableElevatedCliPath,
+	decideElevatedWinappCommand
+} from './winapp-cli-utils';
 import { detectProjects } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { glob } from 'glob';
@@ -12,8 +20,10 @@ import {
 	getDebuggerExtensionRequirement,
 	getDebuggerTypeFromChoice
 } from './debugger-resolver';
+import { NoOpDebugAdapter } from './noop-debug-adapter';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
+const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
 
 /**
  * Output channel for debugger-related activity (e.g. auto-installed extensions),
@@ -193,6 +203,81 @@ async function runWinappCommand(extensionPath: string, command: string, cwd: str
 
 	terminal.sendText(`& ${escapePowerShellArg(cliPath)} ${command}`);
 	return '';
+}
+
+/**
+ * Report whether the current VS Code process is running elevated (as
+ * administrator).
+ *
+ * VS Code cannot launch an elevated integrated terminal, so admin-only winapp
+ * commands must be routed either through the normal terminal (when already
+ * elevated) or through a separate UAC-elevated window (when not). We probe the
+ * process token with PowerShell's WindowsPrincipal check. On any failure we
+ * return `false`, which is the safe default: the command is then launched via
+ * an elevated window (UAC), avoiding a silent "Access denied" failure.
+ */
+async function isProcessElevated(): Promise<boolean> {
+	return new Promise((resolve) => {
+		execFile(
+			WINDOWS_POWERSHELL_PATH,
+			[
+				'-NoProfile',
+				'-NonInteractive',
+				'-Command',
+				'[bool]([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)'
+			],
+			{ timeout: 10000, windowsHide: true },
+			(error, stdout) => {
+				resolve(!error && stdout.trim().toLowerCase() === 'true');
+			}
+		);
+	});
+}
+
+/**
+ * Run a winapp command that requires administrator rights.
+ *
+ * If VS Code is already elevated, the command runs in the normal integrated
+ * terminal. Otherwise it is launched in a separate UAC-elevated PowerShell
+ * window (VS Code cannot elevate the integrated terminal), and an information
+ * message explains that a Windows admin prompt will appear.
+ */
+async function runWinappCommandElevated(extensionPath: string, command: string, cwd: string): Promise<void> {
+	const isElevated = await isProcessElevated();
+	const cliPath = getWinappCliPath(extensionPath);
+	const launcherPath = WINDOWS_POWERSHELL_PATH;
+	const decision = decideElevatedWinappCommand(
+		isElevated,
+		isUsableElevatedCliPath(cliPath, fs.existsSync(cliPath)),
+		cliPath,
+		command,
+		cwd,
+		launcherPath
+	);
+
+	if (decision.kind === 'run-normally') {
+		await runWinappCommand(extensionPath, command, cwd);
+		return;
+	}
+
+	if (decision.kind === 'error-cli-missing') {
+		vscode.window.showErrorMessage(
+			'The bundled WinApp CLI executable could not be found, so the administrator command was not started. Rebuild or reinstall the extension, then try again.'
+		);
+		return;
+	}
+
+	const terminal = vscode.window.createTerminal({
+		name: 'WinApp CLI (Admin launcher)',
+		cwd: cwd,
+		shellPath: WINDOWS_POWERSHELL_PATH,
+		env: { WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE }
+	});
+	terminal.show();
+	terminal.sendText(decision.command);
+	vscode.window.showInformationMessage(
+		'Installing the certificate requires administrator rights. Approve the Windows User Account Control (UAC) prompt in the elevated window that just opened.'
+	);
 }
 
 /**
@@ -476,38 +561,56 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				debugConfiguration.processId = processId;
 			}
 
-			// Start the real debug session as a child of the winapp session.
-			// startDebugging resolves false when the child debugger can't attach —
-			// most commonly because the installed debugger extension doesn't match
-			// the project type (e.g. a C# extension was reused for a C/C++ app).
-			// Surface a clear, actionable error so the user can install the right one.
-			const started = await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
-			if (!started) {
-				runProcess.kill();
-				const debuggerName = getDebuggerExtensionRequirement(debuggerType)?.name ?? `"${debuggerType}"`;
-				await promptAndInstallDebuggerChoice(
-					`The ${debuggerName} debugger couldn't attach to your app. ` +
-					`This usually means the installed debugger extension doesn't match your project type. ` +
-					`Install the debugger that matches your project, then start debugging again:`,
-					'you selected it after the previous debugger failed to attach'
-				);
-				return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
-			}
-
-			// When the child debug session ends, kill the winapp run process and stop the parent session
 			const parentSession = session;
+
+			// Tear down exactly once, whichever side finishes first: the child debug
+			// session ending or the winapp run process exiting. Killing the run
+			// process here prevents it from being orphaned in the background.
+			let teardownRequested = false;
+			const teardown = () => {
+				if (teardownRequested) {
+					return;
+				}
+				teardownRequested = true;
+				disposable.dispose();
+				runProcess.kill();
+				vscode.debug.stopDebugging(parentSession);
+			};
+
+			// When the child debug session ends, tear down the run process and parent session
 			const disposable = vscode.debug.onDidTerminateDebugSession((ended) => {
 				if (ended.parentSession === parentSession) {
-					disposable.dispose();
-					runProcess.kill();
-					vscode.debug.stopDebugging(parentSession);
+					teardown();
 				}
 			});
 
 			// When the winapp run process exits (app closed), stop the debug session
 			runProcess.on('close', () => {
-				vscode.debug.stopDebugging(parentSession);
+				teardown();
 			});
+
+			// Start the real debug session as a child of the winapp session.
+			// startDebugging resolves false when the child debugger can't attach —
+			// most commonly because the installed debugger extension doesn't match
+			// the project type (e.g. a C# extension was reused for a C/C++ app).
+			// If it throws, tear down so the winapp run process is not left orphaned.
+			try {
+				const started = await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
+				if (!started) {
+					teardown();
+					const debuggerName = getDebuggerExtensionRequirement(debuggerType)?.name ?? `"${debuggerType}"`;
+					await promptAndInstallDebuggerChoice(
+						`The ${debuggerName} debugger couldn't attach to your app. ` +
+						`This usually means the installed debugger extension doesn't match your project type. ` +
+						`Install the debugger that matches your project, then start debugging again:`,
+						'you selected it after the previous debugger failed to attach'
+					);
+					return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
+				}
+			} catch (startError) {
+				teardown();
+				throw startError;
+			}
 
 			// Return an inline no-op adapter — the real debugging happens in the child session above
 			return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
@@ -516,41 +619,6 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			vscode.window.showErrorMessage(`Failed to launch and attach: ${message}`);
 			throw error;
 		}
-	}
-}
-
-/**
- * A minimal no-op debug adapter. The winapp debug type doesn't need a real adapter
- * since we delegate to a child debug session (coreclr/node).
- */
-class NoOpDebugAdapter implements vscode.DebugAdapter {
-	private sendMessageEmitter = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
-	readonly onDidSendMessage: vscode.Event<vscode.DebugProtocolMessage> = this.sendMessageEmitter.event;
-
-	handleMessage(message: vscode.DebugProtocolMessage): void {
-		// Respond to the initialize request so VS Code doesn't hang
-		const msg = message as any;
-		if (msg.type === 'request' && msg.command === 'initialize') {
-			this.sendMessageEmitter.fire({
-				type: 'response',
-				request_seq: msg.seq,
-				success: true,
-				command: msg.command,
-				seq: 0
-			} as any);
-		} else if (msg.type === 'request' && msg.command === 'disconnect') {
-			this.sendMessageEmitter.fire({
-				type: 'response',
-				request_seq: msg.seq,
-				success: true,
-				command: msg.command,
-				seq: 0
-			} as any);
-		}
-	}
-
-	dispose(): void {
-		this.sendMessageEmitter.dispose();
 	}
 }
 
@@ -809,16 +877,23 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			const install = await vscode.window.showQuickPick(
-				['Yes', 'No'],
-				{ placeHolder: 'Install certificate after generation?' }
+				['Generate only', 'Generate and install (requires admin)'],
+				{ placeHolder: 'Generate a development certificate — install it in the machine store too?' }
 			);
 
-			let command = 'cert generate';
-			if (install === 'Yes') {
-				command += ' --install';
+			if (!install) {
+				return;
 			}
 
-			await runWinappCommand(extensionPath, command, projectDir);
+			// Installing trusts the certificate in the machine store, which needs
+			// administrator rights. When VS Code isn't elevated we can't install
+			// from the integrated terminal, so run the whole generate+install in a
+			// separate UAC-elevated window instead of failing with "Access denied".
+			if (install === 'Generate and install (requires admin)') {
+				await runWinappCommandElevated(extensionPath, 'cert generate --install', projectDir);
+			} else {
+				await runWinappCommand(extensionPath, 'cert generate', projectDir);
+			}
 		})
 	);
 
@@ -839,7 +914,9 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await runWinappCommand(extensionPath, `cert install ${escapePowerShellArg(certPath)}`, workspacePath);
+			// Trusting a certificate in the machine store requires admin; route
+			// through an elevated window when VS Code isn't already elevated.
+			await runWinappCommandElevated(extensionPath, `cert install ${escapePowerShellArg(certPath)}`, workspacePath);
 		})
 	);
 

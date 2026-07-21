@@ -1,0 +1,228 @@
+name: Post VSIX Size Comment
+
+# Triggered after the "Build and Test" workflow completes. Runs in the context
+# of the *base* repository, so it has full GITHUB_TOKEN write access even when
+# the source build was for a PR opened from a fork — the scenario where posting
+# from inside the build job fails with 403.
+
+on:
+  workflow_run:
+    workflows: ["Build and Test"]
+    types: [completed]
+
+permissions:
+  pull-requests: write   # post / update the size comment
+  actions: read          # download the metrics-data artifact from the source run
+
+jobs:
+  post-comment:
+    # Only run for PR-driven builds. We intentionally do NOT gate on
+    # workflow_run.conclusion == 'success': the download step below is the real
+    # gate — it succeeds only if the source build uploaded a metrics-data
+    # artifact, and we skip the comment otherwise.
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download metrics-data artifact
+        id: download
+        uses: actions/download-artifact@v4
+        with:
+          name: metrics-data
+          path: metrics-data
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Skip if no metrics artifact
+        if: steps.download.outcome != 'success'
+        run: |
+          echo "::notice::Source build did not produce a metrics-data artifact (likely failed before the VSIX was packaged). Nothing to comment."
+
+      - name: Post / update PR VSIX size comment
+        if: steps.download.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const dataPath = 'metrics-data';
+
+            // === SECURITY MODEL ===
+            // The `metrics-data` artifact is produced by a `pull_request` build
+            // that ran the PR's code, so every byte in it must be treated as
+            // attacker-controlled. We:
+            //   * use ONLY trusted workflow_run metadata for head_sha and the
+            //     source run id (never the artifact's pr-context.json),
+            //   * resolve the PR number from the GitHub API by trusted head_sha
+            //     and verify the PR's current head still matches,
+            //   * allowlist the single `vsix` key we render so a malicious build
+            //     can't inject table breaks, mentions, hidden HTML, or links.
+
+            const trustedHeadSha = context.payload.workflow_run.head_sha;
+            const sourceRunId = context.payload.workflow_run.id;
+
+            // Find the PR (or PRs) whose head is trustedHeadSha.
+            const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: trustedHeadSha,
+            });
+
+            // Keep only an OPEN PR whose CURRENT head still matches (skip if a
+            // newer commit was pushed since this build started — an older run
+            // shouldn't overwrite the report for a newer one).
+            const candidate = pulls.find(p => p.state === 'open' && p.head && p.head.sha === trustedHeadSha);
+            if (!candidate) {
+              core.info(`No open PR with current head ${trustedHeadSha}; skipping (likely a newer commit was pushed).`);
+              return;
+            }
+            const prNumber = candidate.number;
+
+            // === Whitelisted metric keys ===
+            const ALLOWED_SIZE_KEYS = new Set(['vsix']);
+            const labels = {
+              'vsix': 'VS Code Extension (VSIX)',
+            };
+
+            // safeNum: coerce to a finite non-negative number or 0
+            function safeNum(v) {
+              const n = Number(v);
+              return Number.isFinite(n) && n >= 0 ? n : 0;
+            }
+
+            // sanitizeSizes: drop unknown keys, coerce values
+            function sanitizeSizes(obj) {
+              const out = {};
+              if (obj && typeof obj === 'object') {
+                for (const [k, v] of Object.entries(obj)) {
+                  if (ALLOWED_SIZE_KEYS.has(k)) out[k] = safeNum(v);
+                }
+              }
+              return out;
+            }
+
+            // --- Load + sanitize current size ---
+            let current = {};
+            try { current = sanitizeSizes(JSON.parse(fs.readFileSync(`${dataPath}/vsix-sizes.json`, 'utf8'))); } catch {}
+
+            // --- Load + sanitize baseline (may be missing on the first-ever PR) ---
+            let sizeBaseline = {};
+            let hasBaseline = false;
+            try {
+              sizeBaseline = sanitizeSizes(JSON.parse(fs.readFileSync(`${dataPath}/baseline/sizes.json`, 'utf8')));
+              hasBaseline = Object.keys(sizeBaseline).length > 0;
+            } catch {}
+
+            // --- Artifact download link (resolved against the SOURCE run) ---
+            const artifactLinks = {};
+            try {
+              const { data: { artifacts } } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: sourceRunId,
+              });
+              const artifactNameMap = {
+                'vsix': 'vscode-extension',
+              };
+              const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${sourceRunId}`;
+              for (const [sizeKey, artifactName] of Object.entries(artifactNameMap)) {
+                const artifact = artifacts.find(a => a.name === artifactName);
+                if (artifact) {
+                  artifactLinks[sizeKey] = `${runUrl}/artifacts/${artifact.id}`;
+                }
+              }
+            } catch (e) {
+              core.warning(`Could not fetch artifact links: ${e.message}`);
+            }
+
+            // --- Helpers ---
+            function formatBytes(bytes) {
+              const abs = Math.abs(bytes);
+              const mb = abs / (1024 * 1024);
+              if (mb >= 1) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+              const kb = bytes / 1024;
+              return `${kb.toFixed(1)} KB`;
+            }
+
+            function formatDelta(curr, base) {
+              const delta = curr - base;
+              const pct = base > 0 ? ((delta / base) * 100).toFixed(2) : 'N/A';
+              const sign = delta > 0 ? '+' : '';
+              let icon = ':white_check_mark:';
+              if (delta > 0) icon = ':chart_with_upwards_trend:';
+              else if (delta < 0) icon = ':chart_with_downwards_trend:';
+              return `${icon} ${sign}${formatBytes(delta)} (${sign}${pct}%)`;
+            }
+
+            function artifactLink(key, label) {
+              const url = artifactLinks[key];
+              return url ? `[${label}](${url})` : label;
+            }
+
+            // --- Build report body ---
+            // (keys are already whitelisted via sanitizeSizes; labels[key] is always defined)
+            let body = '## VSIX Build\n\n';
+            if (hasBaseline) {
+              body += '| Artifact | Baseline | Current | Delta |\n';
+              body += '|----------|----------|---------|-------|\n';
+              const allKeys = [...new Set([...Object.keys(sizeBaseline), ...Object.keys(current)])].sort();
+              for (const key of allKeys) {
+                const label = labels[key];
+                if (!label) continue;
+                const linkedLabel = artifactLink(key, label);
+                const baseSize = sizeBaseline[key] || 0;
+                const currSize = current[key] || 0;
+                if (currSize === 0 && baseSize === 0) continue;
+                const baseStr = baseSize > 0 ? formatBytes(baseSize) : 'N/A';
+                const currStr = currSize > 0 ? formatBytes(currSize) : 'N/A';
+                const deltaStr = (baseSize > 0 && currSize > 0)
+                  ? formatDelta(currSize, baseSize) : 'N/A';
+                body += `| ${linkedLabel} | ${baseStr} | ${currStr} | ${deltaStr} |\n`;
+              }
+            } else {
+              body += '> No baseline found. Showing absolute size only.\n\n';
+              body += '| Artifact | Size |\n';
+              body += '|----------|------|\n';
+              for (const [key, size] of Object.entries(current).sort()) {
+                const label = labels[key];
+                if (!label) continue;
+                const linkedLabel = artifactLink(key, label);
+                body += `| ${linkedLabel} | ${formatBytes(size)} |\n`;
+              }
+            }
+
+            // --- Footer (uses TRUSTED head_sha + source run id) ---
+            const timestamp = new Date().toISOString().replace('T', ' ').replace(/\.[0-9]+Z$/, ' UTC');
+            const shortSha = trustedHeadSha.substring(0, 7);
+            const commitUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/commit/${trustedHeadSha}`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${sourceRunId}`;
+            body += `\n---\n*Updated ${timestamp} · commit [\`${shortSha}\`](${commitUrl}) · [workflow run](${runUrl})*\n`;
+            body += '\n<!-- vsix-size-report -->';
+
+            // --- Find existing comment (paginated) and update; otherwise create ---
+            const allComments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+
+            const existing = allComments.find(c => c.body && c.body.includes('<!-- vsix-size-report -->'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              core.info(`Updated existing comment ${existing.id}`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+              core.info('Created new VSIX size report comment');
+            }
