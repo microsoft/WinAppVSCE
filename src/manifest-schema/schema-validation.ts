@@ -77,6 +77,10 @@ export function validateManifestText(
  * Validate a single XML element against the schema.
  * Checks required attributes, enum values, patterns, and lengths.
  */
+function formatSchemaSource(ns: string): string {
+    return ns ? `\n\n(${ns})` : '';
+}
+
 function validateElement(
     schema: SchemaModel,
     element: Element,
@@ -104,13 +108,14 @@ function validateElement(
     }
 
     const resolvedAttributes = resolveElementAttributes(element);
+    const schemaSrc = formatSchemaSource(ns);
 
     // Check required attributes
     for (const attr of schemaDef.attributes) {
         if (attr.required && !findResolvedAttribute(resolvedAttributes, attr)) {
             const range = getElementRange(element, lines);
             diagnostics.push({
-                message: `Missing required attribute '${attr.name}' on <${localName}>`,
+                message: `Missing required attribute '${attr.name}' on <${localName}>${schemaSrc}`,
                 severity,
                 ...range,
             });
@@ -124,7 +129,7 @@ function validateElement(
         if (resolvedAttribute && !attr.enumerations.includes(resolvedAttribute.value)) {
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
-                message: `Invalid value '${resolvedAttribute.value}' for attribute '${attr.name}'. Expected one of: ${attr.enumerations.slice(0, 10).join(', ')}`,
+                message: `Invalid value '${resolvedAttribute.value}' for attribute '${attr.name}'. Expected one of: ${attr.enumerations.slice(0, 10).join(', ')}${schemaSrc}`,
                 severity,
                 ...range,
             });
@@ -141,7 +146,7 @@ function validateElement(
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             const patternHint = formatPatternHint(attr);
             diagnostics.push({
-                message: `Value '${resolvedAttribute.value}' for attribute '${attr.name}' is invalid${patternHint}`,
+                message: `Value '${resolvedAttribute.value}' for attribute '${attr.name}' is invalid${patternHint}${schemaSrc}`,
                 severity,
                 ...range,
             });
@@ -156,7 +161,7 @@ function validateElement(
         if (attr.minLength !== undefined && resolvedAttribute.value.length < attr.minLength) {
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
-                message: `Value for '${attr.name}' must be at least ${attr.minLength} characters (got ${resolvedAttribute.value.length})`,
+                message: `Value for '${attr.name}' must be at least ${attr.minLength} characters (got ${resolvedAttribute.value.length})${schemaSrc}`,
                 severity,
                 ...range,
             });
@@ -164,7 +169,7 @@ function validateElement(
         if (attr.maxLength !== undefined && resolvedAttribute.value.length > attr.maxLength) {
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
-                message: `Value for '${attr.name}' exceeds maximum length of ${attr.maxLength} characters (got ${resolvedAttribute.value.length})`,
+                message: `Value for '${attr.name}' exceeds maximum length of ${attr.maxLength} characters (got ${resolvedAttribute.value.length})${schemaSrc}`,
                 severity,
                 ...range,
             });
@@ -189,7 +194,7 @@ function validateElement(
         }
         const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
         diagnostics.push({
-            message: `Attribute '${resolvedAttribute.displayName}' is not declared in the schema for element '${localName}'`,
+            message: `Attribute '${resolvedAttribute.displayName}' is not declared in the schema for element '${localName}'${schemaSrc}`,
             severity: 'hint',
             ...range,
         });
@@ -333,19 +338,18 @@ function validateChildPlacement(
         return;
     }
 
+    const parentNs = parentElement.namespaceURI || '';
+    const parentSchemaSrc = formatSchemaSource(parentNs);
+
     const childSchemaDef = findSchemaElementExact(schema, childLocalName, childNamespace);
     if (childSchemaDef) {
-        // Substitution groups are now parsed automatically from XSD, but the default mode
-        // still avoids warning on elements that are known to the schema but appear under an
-        // unexpected parent. This trades some missed misplaced-child diagnostics for fewer
-        // false positives in real AppxManifest files. Strict mode opts into flagging them.
         if (!options.strictChildPlacement) {
             return;
         }
 
         const range = getElementRange(childElement, lines);
         diagnostics.push({
-            message: `Element '${childLocalName}' is not allowed under <${parentElement.localName || parentElement.nodeName.split(':').pop() || ''}>`,
+            message: `Element '${childLocalName}' is not allowed under <${parentElement.localName || parentElement.nodeName.split(':').pop() || ''}>${parentSchemaSrc}`,
             severity: 'warning',
             ...range,
         });
@@ -353,7 +357,7 @@ function validateChildPlacement(
     }
     const range = getElementRange(childElement, lines);
     diagnostics.push({
-        message: `Unknown element '${childLocalName}'`,
+        message: `Unknown element '${childLocalName}'${formatSchemaSource(childNamespace)}`,
         severity: 'warning',
         ...range,
     });
