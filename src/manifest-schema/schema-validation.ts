@@ -454,7 +454,7 @@ function formatPatternHint(attr: SchemaAttribute): string {
             .map(p => `/${p}/`);
         const patternText = displayPatterns.join(' or ');
         const suffix = patternSets[0].length > 3 ? ' (and more)' : '';
-        parts.push(`The Pattern constraint failed. Expected pattern: ${patternText}${suffix}`);
+        parts.push(`\nExpected pattern: ${patternText}${suffix}`);
     }
     return parts.length > 0 ? ` — ${parts.join('. ')}` : '';
 }
