@@ -4,6 +4,9 @@ import { glob } from 'glob';
 /** Glob patterns for packaged MSIX/APPX artifacts within a workspace. */
 export const SIGNABLE_ARTIFACT_GLOBS = ['**/*.msix', '**/*.msixbundle', '**/*.appx', '**/*.appxbundle'];
 
+/** Glob patterns for PFX certificate files within a workspace. */
+export const CERTIFICATE_GLOBS = ['**/*.pfx'];
+
 const SIGNABLE_ARTIFACT_IGNORES = ['**/node_modules/**', '**/.git/**'];
 
 /**

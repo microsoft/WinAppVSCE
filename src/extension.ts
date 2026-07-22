@@ -20,7 +20,7 @@ import {
 	isArtifactWithinRoot,
 	planPackCompletion
 } from './pack-result';
-import { findWorkspaceArtifacts, SIGNABLE_ARTIFACT_GLOBS } from './sign-utils';
+import { findWorkspaceArtifacts, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS } from './sign-utils';
 import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
@@ -380,6 +380,58 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 }
 
 /**
+ * Search the workspace for PFX certificate files and let the user pick one
+ * via a QuickPick. Falls back to a native file dialog when none are found;
+ * a "Browse…" entry is always appended.
+ *
+ * @returns The selected certificate path, or `undefined` if cancelled.
+ */
+async function pickCertificateFile(workspacePath: string): Promise<string | undefined> {
+	let cancelled = false;
+	const certPaths = await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: 'Searching for certificates...', cancellable: true },
+		async (_progress, token) => {
+			token.onCancellationRequested(() => { cancelled = true; });
+			return findWorkspaceArtifacts(workspacePath, CERTIFICATE_GLOBS);
+		}
+	);
+
+	if (cancelled) {
+		return undefined;
+	}
+
+	if (certPaths.length === 0) {
+		return selectFile('Select signing certificate', {
+			'Certificates': ['pfx']
+		});
+	}
+
+	const items: vscode.QuickPickItem[] = certPaths.map((p) => ({
+		label: path.basename(p),
+		description: path.relative(workspacePath, p),
+		detail: p
+	}));
+
+	items.push({ label: '$(folder-opened) Browse…', description: 'Open a file picker', detail: BROWSE_SENTINEL, kind: vscode.QuickPickItemKind.Default });
+
+	const picked = await vscode.window.showQuickPick(items, {
+		placeHolder: 'Select a signing certificate'
+	});
+
+	if (!picked) {
+		return undefined;
+	}
+
+	if (picked.detail === BROWSE_SENTINEL) {
+		return selectFile('Select signing certificate', {
+			'Certificates': ['pfx']
+		});
+	}
+
+	return picked.detail;
+}
+
+/**
  * Run the code-signing flow for an MSIX/executable. Prompts for the file to
  * sign (unless one is supplied) and the signing certificate, then invokes
  * `winapp sign`. Reused by both the `winapp.sign` command and the post-pack
@@ -408,9 +460,7 @@ async function signPackage(
 		return;
 	}
 
-	const certPath = await selectFile('Select signing certificate', {
-		'Certificates': ['pfx']
-	});
+	const certPath = await pickCertificateFile(workspacePath);
 	if (!certPath) {
 		return;
 	}

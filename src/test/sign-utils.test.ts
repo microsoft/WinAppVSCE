@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { findWorkspaceArtifacts, SIGNABLE_ARTIFACT_GLOBS } from '../sign-utils';
+import { findWorkspaceArtifacts, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS } from '../sign-utils';
 
 function createTempDir(): string {
 	return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-sign-utils-')));
@@ -116,6 +116,45 @@ describe('findWorkspaceArtifacts', () => {
 		createFile(path.join(tempDir, '.git', 'objects', 'ignored.appx'));
 
 		const results = await findWorkspaceArtifacts(tempDir, SIGNABLE_ARTIFACT_GLOBS);
+
+		assert.deepEqual(results, [included]);
+	});
+});
+
+describe('findWorkspaceArtifacts with CERTIFICATE_GLOBS', () => {
+	it('discovers .pfx certificate files', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		createFile(path.join(tempDir, 'devcert.pfx'));
+		createFile(path.join(tempDir, 'certs', 'prod.pfx'));
+
+		const results = await findWorkspaceArtifacts(tempDir, CERTIFICATE_GLOBS);
+
+		assert.deepEqual(
+			results.map(filePath => path.basename(filePath)).sort(),
+			['devcert.pfx', 'prod.pfx']
+		);
+	});
+
+	it('does not discover non-pfx files', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		createFile(path.join(tempDir, 'app.msix'));
+		createFile(path.join(tempDir, 'cert.pem'));
+
+		const results = await findWorkspaceArtifacts(tempDir, CERTIFICATE_GLOBS);
+
+		assert.deepEqual(results, []);
+	});
+
+	it('excludes node_modules certificates', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const included = path.join(tempDir, 'devcert.pfx');
+		createFile(included);
+		createFile(path.join(tempDir, 'node_modules', 'pkg', 'test.pfx'));
+
+		const results = await findWorkspaceArtifacts(tempDir, CERTIFICATE_GLOBS);
 
 		assert.deepEqual(results, [included]);
 	});
