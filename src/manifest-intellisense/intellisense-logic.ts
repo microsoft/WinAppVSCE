@@ -1,5 +1,4 @@
 import { MANIFEST_NAMESPACES, SchemaAttribute, SchemaElement, SchemaModel, URI_TO_PREFIX } from '../manifest-schema/schema-model';
-import { SUBSTITUTION_GROUPS } from '../manifest-schema/substitution-groups';
 import { getXmlContext, splitPrefixedName } from '../manifest-schema/xml-context';
 // Re-export validation from shared module so existing consumers don't break
 export { validateManifestText, findSchemaElementExact, ManifestDiagnostic } from '../manifest-schema/schema-validation';
@@ -105,7 +104,7 @@ export function getChildCompletions(
     const seen = new Set<string>();
 
     for (const child of parentElem.children) {
-        const substitutions = SUBSTITUTION_GROUPS[child.name];
+        const substitutions = schema.substitutionGroups.get(child.name);
         if (substitutions) {
             for (const sub of substitutions) {
                 const subPrefix = getPrefixForNamespace(sub.namespace, docPrefixes);

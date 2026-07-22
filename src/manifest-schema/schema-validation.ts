@@ -10,7 +10,6 @@
 import { DOMParser } from '@xmldom/xmldom';
 import type { Element } from '@xmldom/xmldom';
 import { SchemaElement, SchemaModel, SchemaAttribute } from './schema-model';
-import { SUBSTITUTION_GROUPS } from './substitution-groups';
 
 /** A diagnostic produced by schema validation. */
 export interface ManifestDiagnostic {
@@ -329,14 +328,14 @@ function validateChildPlacement(
 ): void {
     const childLocalName = childElement.localName || childElement.nodeName.split(':').pop() || '';
     const childNamespace = childElement.namespaceURI || '';
-    if (isAllowedChild(schemaDef, childLocalName, childNamespace)) {
+    if (isAllowedChild(schema, schemaDef, childLocalName, childNamespace)) {
         return;
     }
 
     const childSchemaDef = findSchemaElementExact(schema, childLocalName, childNamespace);
     if (childSchemaDef) {
-        // The substitution-group map is intentionally incomplete today, so the default mode
-        // avoids warning on elements that are known to the schema but appear under an
+        // Substitution groups are now parsed automatically from XSD, but the default mode
+        // still avoids warning on elements that are known to the schema but appear under an
         // unexpected parent. This trades some missed misplaced-child diagnostics for fewer
         // false positives in real AppxManifest files. Strict mode opts into flagging them.
         if (!options.strictChildPlacement) {
@@ -359,12 +358,12 @@ function validateChildPlacement(
     });
 }
 
-function isAllowedChild(schemaDef: SchemaElement, childName: string, childNamespace: string): boolean {
+function isAllowedChild(schema: SchemaModel, schemaDef: SchemaElement, childName: string, childNamespace: string): boolean {
     return schemaDef.children.some(child => {
         if (child.name === childName && child.namespace === childNamespace) {
             return true;
         }
-        return (SUBSTITUTION_GROUPS[child.name] || []).some(substitution =>
+        return (schema.substitutionGroups.get(child.name) || []).some(substitution =>
             substitution.name === childName && substitution.namespace === childNamespace
         );
     });

@@ -106,6 +106,8 @@ export interface SchemaModel {
     patternTypes: Map<string, SchemaPatternType>;
     /** Namespace URI to common prefix mapping. */
     namespacePrefixes: Map<string, string>;
+    /** Substitution groups: abstract element local name → concrete members. */
+    substitutionGroups: Map<string, Array<{ name: string; namespace: string }>>;
 }
 
 /** Well-known namespace URIs for AppxManifest. */

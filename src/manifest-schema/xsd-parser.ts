@@ -44,6 +44,7 @@ export function loadSchemaModel(schemasDir: string): SchemaModel {
         enumTypes: new Map(),
         patternTypes: new Map(),
         namespacePrefixes: new Map(URI_TO_PREFIX),
+        substitutionGroups: new Map(),
     };
 
     const parsedDocs = loadSchemaDocuments(schemasDir);
@@ -236,6 +237,18 @@ function parseElements(
         }
 
         model.elements.set(key, schemaElem);
+
+        // Track substitution group membership
+        const subGroupAttr = elem.getAttribute('substitutionGroup');
+        if (subGroupAttr) {
+            const resolved = resolveTypeReference(subGroupAttr, elem, doc);
+            const headName = resolved ? resolved.localName : subGroupAttr;
+            const existing = model.substitutionGroups.get(headName) || [];
+            if (!existing.some(e => e.name === name && e.namespace === targetNs)) {
+                existing.push({ name, namespace: targetNs });
+            }
+            model.substitutionGroups.set(headName, existing);
+        }
     }
 }
 
