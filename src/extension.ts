@@ -20,6 +20,7 @@ import {
 	isArtifactWithinRoot,
 	planPackCompletion
 } from './pack-result';
+import { findWorkspaceArtifacts, SIGNABLE_ARTIFACT_GLOBS } from './sign-utils';
 import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
@@ -315,9 +316,6 @@ async function runWinappCapture(
 	);
 }
 
-/** Glob patterns for packaged MSIX/APPX artifacts within a workspace. */
-const SIGNABLE_ARTIFACT_GLOBS = ['**/*.msix', '**/*.msixbundle', '**/*.appx', '**/*.appxbundle'];
-
 /**
  * Browse-option sentinel returned by the QuickPick when the user wants to fall
  * back to the native file dialog instead of picking a discovered artifact.
@@ -333,7 +331,10 @@ const BROWSE_SENTINEL = '__browse__';
  * @returns The selected file path, or `undefined` if cancelled.
  */
 async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
-	const artifactPaths = await findWorkspaceArtifacts(workspacePath, SIGNABLE_ARTIFACT_GLOBS);
+	const artifactPaths = await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...' },
+		async () => findWorkspaceArtifacts(workspacePath, SIGNABLE_ARTIFACT_GLOBS)
+	);
 
 	if (artifactPaths.length === 0) {
 		return selectFile('Select file to sign', {
@@ -368,34 +369,6 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 	}
 
 	return picked.detail;
-}
-
-/**
- * Find files matching the given glob patterns within a workspace root.
- *
- * Results are sorted by modification time (newest first) so the most recently
- * packaged artifact appears at the top of the QuickPick.
- */
-async function findWorkspaceArtifacts(workspacePath: string, patterns: string[]): Promise<string[]> {
-	const results: string[] = [];
-	for (const pattern of patterns) {
-		const matches = await glob(pattern, { cwd: workspacePath, absolute: true, nodir: true });
-		results.push(...matches);
-	}
-
-	// Sort by mtime descending (newest first); if stat fails, push to end.
-	const withStats = await Promise.all(
-		results.map(async (p) => {
-			try {
-				const stat = await fs.promises.stat(p);
-				return { path: p, mtime: stat.mtimeMs };
-			} catch {
-				return { path: p, mtime: 0 };
-			}
-		})
-	);
-	withStats.sort((a, b) => b.mtime - a.mtime);
-	return withStats.map((s) => s.path);
 }
 
 /**
