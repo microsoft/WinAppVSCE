@@ -1266,13 +1266,13 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.sign command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.sign', async () => {
+		vscode.commands.registerCommand('winapp.sign', async (prefilledPath?: string) => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
 			}
 
-			await signPackage(extensionPath, workspacePath);
+			await signPackage(extensionPath, workspacePath, prefilledPath);
 		})
 	);
 

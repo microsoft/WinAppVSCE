@@ -188,4 +188,19 @@ test.describe('winapp.sign command — artifact discovery', () => {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
+
+    // The post-pack "Sign" action calls winapp.sign with a prefilled artifact
+    // path, which skips the package QuickPick and goes straight to the
+    // certificate picker. This flow cannot be tested from Playwright because
+    // executeCommand with arguments requires VS Code extension test host
+    // infrastructure (vscode-test). The command registration was updated to
+    // accept an optional path argument so this path IS testable once the
+    // extension test host is configured. See issue #83.
+    test.skip('skips package QuickPick when invoked with prefilled path (needs extension test host)', () => {
+        // Intended assertions when extension test host is available:
+        // 1. Call vscode.commands.executeCommand('winapp.sign', '/path/to/app.msix')
+        // 2. Assert the package QuickPick is NOT shown
+        // 3. Assert the certificate QuickPick appears directly
+        // 4. Assert the prefilled path is passed to the sign terminal command
+    });
 });
