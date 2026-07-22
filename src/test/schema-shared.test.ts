@@ -8,24 +8,30 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'path';
 import {
-    loadSchemaModel,
     SchemaModel,
     MANIFEST_NAMESPACES,
     URI_TO_PREFIX,
+} from '../manifest-schema/schema-model';
+import { loadSchemaModel } from '../manifest-schema/xsd-parser';
+import {
     validateManifestText,
     findSchemaElementExact,
     validateAttributeValuePattern,
     validateAttributeValueLength,
     validateAttributeValueEnum,
+} from '../manifest-schema/schema-validation';
+import {
     splitPrefixedName,
     getXmlContext,
     findParentPath,
+} from '../manifest-schema/xml-context';
+import {
     validateValueAgainstType,
     matchesSchemaPattern,
     isValidSchemaColor,
     buildAttributeFromPatternType,
     checkSchemaLength,
-} from '../manifest-schema';
+} from '../manifest-schema/schema-helpers';
 
 const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
 const FOUNDATION_NS = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10';
