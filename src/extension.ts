@@ -24,9 +24,7 @@ import {
 	detectArchFromPath,
 	getMachineArch,
 	checkSelfContainedArchMismatch,
-	buildArchMismatchWarning,
-	buildArchChoices,
-	parseArchChoice
+	buildArchMismatchWarning
 } from './arch-detection';
 import {
 	DEBUGGER_CHOICE_LABELS,
@@ -978,19 +976,6 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			// --- Architecture detection ---
-			const detectedArch = detectArchFromPath(inputFolder);
-			const archChoices = buildArchChoices(detectedArch);
-			const archPick = await vscode.window.showQuickPick(archChoices, {
-				placeHolder: detectedArch
-					? `Target architecture: ${detectedArch} (detected from build output path)`
-					: 'Select target architecture'
-			});
-			if (!archPick) {
-				return;
-			}
-			const selectedArch = parseArchChoice(archPick);
-
 			const generateCert = await vscode.window.showQuickPick(
 				['Yes', 'No'],
 				{ placeHolder: 'Generate and install a development certificate?' }
@@ -1002,9 +987,10 @@ export function activate(context: vscode.ExtensionContext) {
 			);
 
 			// --- Architecture mismatch warning for self-contained packages ---
-			if (selfContained === 'Yes' && selectedArch) {
+			if (selfContained === 'Yes') {
+				const detectedArch = detectArchFromPath(inputFolder);
 				const machineArch = getMachineArch();
-				const mismatchResult = checkSelfContainedArchMismatch(selectedArch, machineArch);
+				const mismatchResult = checkSelfContainedArchMismatch(detectedArch, machineArch);
 				if (mismatchResult.mismatch) {
 					const warning = buildArchMismatchWarning(mismatchResult.buildArch, mismatchResult.machineArch);
 					const proceed = await vscode.window.showWarningMessage(

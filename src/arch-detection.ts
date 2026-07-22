@@ -1,4 +1,3 @@
-import * as path from 'path';
 import * as os from 'os';
 
 /**
@@ -11,8 +10,6 @@ import * as os from 'os';
 
 /** Architectures the WinApp CLI can package for. */
 export type PackageArch = 'x64' | 'arm64' | 'x86';
-
-const KNOWN_ARCHS: PackageArch[] = ['arm64', 'x64', 'x86'];
 
 /**
  * Patterns that indicate an architecture in a path segment.
@@ -56,18 +53,24 @@ export function detectArchFromPath(folderPath: string): PackageArch | undefined 
 }
 
 /**
- * Map `os.arch()` values to the corresponding {@link PackageArch}.
+ * Map `os.machine()` values to the corresponding {@link PackageArch}.
  * Returns `undefined` for architectures the WinApp CLI does not support.
  */
-export function getMachineArch(): PackageArch | undefined {
-	const nodeArch = os.arch();
-	switch (nodeArch) {
+export function getMachineArch(machineString?: string): PackageArch | undefined {
+	const arch = machineString ?? os.machine();
+	switch (arch) {
 		case 'x64':
+		case 'x86_64':
 			return 'x64';
 		case 'arm64':
+		case 'aarch64':
 			return 'arm64';
+		case 'x86':
 		case 'ia32':
+		case 'i686':
 			return 'x86';
+		case 'unknown':
+			return machineString === undefined ? getMachineArch(os.arch()) : undefined;
 		default:
 			return undefined;
 	}
@@ -88,7 +91,7 @@ export type ArchMismatchResult =
  * footgun.
  *
  * @param buildArch Architecture detected from the build-output folder.
- * @param machineArch Architecture of the current machine (from `os.arch()`).
+ * @param machineArch Architecture of the current machine (from `os.machine()`).
  * @returns A result indicating whether a mismatch exists, and if so, the details.
  */
 export function checkSelfContainedArchMismatch(
@@ -114,28 +117,4 @@ export function buildArchMismatchWarning(buildArch: PackageArch, machineArch: Pa
 		`${machineArch} Windows App SDK runtime alongside ${buildArch} app binaries, ` +
 		`which may not work correctly.`
 	);
-}
-
-/**
- * Return an ordered list of architecture choices for the QuickPick, with the
- * detected architecture (if any) presented first and marked as default.
- */
-export function buildArchChoices(detectedArch: PackageArch | undefined): string[] {
-	if (!detectedArch) {
-		return KNOWN_ARCHS.map((a) => a);
-	}
-	const rest = KNOWN_ARCHS.filter((a) => a !== detectedArch);
-	return [`${detectedArch} (detected)`, ...rest];
-}
-
-/**
- * Parse a QuickPick selection back to a {@link PackageArch}.
- * Handles both plain labels (`x64`) and annotated labels (`x64 (detected)`).
- */
-export function parseArchChoice(choice: string): PackageArch | undefined {
-	const stripped = choice.replace(/\s*\(detected\)\s*$/i, '').trim().toLowerCase();
-	if (KNOWN_ARCHS.includes(stripped as PackageArch)) {
-		return stripped as PackageArch;
-	}
-	return undefined;
 }

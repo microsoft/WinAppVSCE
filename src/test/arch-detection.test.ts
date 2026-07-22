@@ -4,8 +4,7 @@ import {
 	detectArchFromPath,
 	checkSelfContainedArchMismatch,
 	buildArchMismatchWarning,
-	buildArchChoices,
-	parseArchChoice
+	getMachineArch
 } from '../arch-detection';
 
 describe('detectArchFromPath', () => {
@@ -101,40 +100,24 @@ describe('buildArchMismatchWarning', () => {
 	});
 });
 
-describe('buildArchChoices', () => {
-	it('puts detected arch first with annotation', () => {
-		const choices = buildArchChoices('arm64');
-		assert.equal(choices[0], 'arm64 (detected)');
-		assert.ok(choices.includes('x64'));
-		assert.ok(choices.includes('x86'));
-		assert.equal(choices.length, 3);
+describe('getMachineArch', () => {
+	it('maps x86_64 to x64', () => {
+		assert.equal(getMachineArch('x86_64'), 'x64');
 	});
 
-	it('returns all architectures unannotated when none is detected', () => {
-		const choices = buildArchChoices(undefined);
-		assert.deepEqual(choices, ['arm64', 'x64', 'x86']);
+	it('maps aarch64 to arm64', () => {
+		assert.equal(getMachineArch('aarch64'), 'arm64');
 	});
 
-	it('does not duplicate the detected architecture', () => {
-		const choices = buildArchChoices('x64');
-		const x64Count = choices.filter((c) => c.startsWith('x64')).length;
-		assert.equal(x64Count, 1);
-	});
-});
-
-describe('parseArchChoice', () => {
-	it('parses a plain architecture label', () => {
-		assert.equal(parseArchChoice('x64'), 'x64');
-		assert.equal(parseArchChoice('arm64'), 'arm64');
-		assert.equal(parseArchChoice('x86'), 'x86');
+	it('maps i686 to x86', () => {
+		assert.equal(getMachineArch('i686'), 'x86');
 	});
 
-	it('strips the (detected) annotation', () => {
-		assert.equal(parseArchChoice('arm64 (detected)'), 'arm64');
-		assert.equal(parseArchChoice('x64 (detected)'), 'x64');
+	it('returns undefined for unknown architectures', () => {
+		assert.equal(getMachineArch('unknown'), undefined);
 	});
 
-	it('returns undefined for unrecognised values', () => {
-		assert.equal(parseArchChoice('unknown'), undefined);
+	it('returns a defined value on the current machine', () => {
+		assert.notEqual(getMachineArch(), undefined);
 	});
 });
