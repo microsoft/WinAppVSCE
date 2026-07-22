@@ -168,6 +168,8 @@ and a real developer would hit it. This is the kind of friction the report shoul
 - `driver-extension/extension.js` — the in-VS-Code driver: `startQueuePoller()` watches
   `WINAPP_UX_QUEUE\req-*.json`; also runs a one-shot batch from `WINAPP_UX_SCRIPT`.
 - `scripts/test-driver-queue.ps1` — the end-to-end validation (run to confirm the mechanism works).
+- `scripts/test-vscode-drive.ps1` — complementary smoke test: launches VS Code, verifies focus/editor,
+  then exercises the queue-based command flow via `Invoke-VSCodeDriverCommand`.
 - `scripts/drive-extension.ps1` — batch launcher (`WINAPP_UX_SCRIPT`) documenting command IDs/answers.
 - `.drive-extensions/` — isolated extensions dir holding the installed winapp extension.
 - `config/apps.json` — the 10 app specs. `reports/FINAL-REPORT.md`, `reports/WINAPP-UI-FRICTION.md` —
