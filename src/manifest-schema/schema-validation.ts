@@ -139,8 +139,9 @@ function validateElement(
         if (!resolvedAttribute) { continue; }
         if (!validateAttributeValuePattern(attr, resolvedAttribute.value)) {
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
+            const patternHint = formatPatternHint(attr);
             diagnostics.push({
-                message: `Value '${resolvedAttribute.value}' for attribute '${attr.name}' does not match the expected pattern`,
+                message: `Value '${resolvedAttribute.value}' for attribute '${attr.name}' is invalid${patternHint}`,
                 severity,
                 ...range,
             });
@@ -437,4 +438,23 @@ function getPatternSets(attr: SchemaAttribute): string[][] {
         return attr.patternSets.filter(patternSet => patternSet.length > 0);
     }
     return attr.patterns && attr.patterns.length > 0 ? [attr.patterns] : [];
+}
+
+/** Build an informative suffix for pattern validation errors showing the type name and pattern. */
+function formatPatternHint(attr: SchemaAttribute): string {
+    const parts: string[] = [];
+    if (attr.typeName) {
+        parts.push(`according to its datatype '${attr.typeName}'`);
+    }
+    const patternSets = getPatternSets(attr);
+    if (patternSets.length > 0) {
+        // Show the first pattern set's patterns (they are OR'd together)
+        const displayPatterns = patternSets[0]
+            .slice(0, 3) // limit display to avoid very long messages
+            .map(p => `/${p}/`);
+        const patternText = displayPatterns.join(' or ');
+        const suffix = patternSets[0].length > 3 ? ' (and more)' : '';
+        parts.push(`The Pattern constraint failed. Expected pattern: ${patternText}${suffix}`);
+    }
+    return parts.length > 0 ? ` — ${parts.join('. ')}` : '';
 }

@@ -91,7 +91,11 @@ export function validateValueAgainstType(
     if (!attr) { return null; }
 
     if (!validateAttributeValuePattern(attr, value)) {
-        return `Value does not match the expected format for ${typeName}`;
+        const patterns = (attr.patternSets && attr.patternSets.length > 0
+            ? attr.patternSets[0] : attr.patterns || [])
+            .slice(0, 3).map(p => `/${p}/`);
+        const patternHint = patterns.length > 0 ? `. Expected pattern: ${patterns.join(' or ')}` : '';
+        return `Value does not match the expected format for ${typeName}${patternHint}`;
     }
 
     const lengthError = validateAttributeValueLength(attr, value);

@@ -451,7 +451,7 @@ describe('manifest diagnostics logic', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
   <Identity Name="Invalid Name With Spaces" Publisher="CN=Test" Version="1.0.0.0" />`));
 
-        assert.ok(diagnostics.some(d => d.message.includes("'Name'") && d.message.includes('does not match')),
+        assert.ok(diagnostics.some(d => d.message.includes("'Name'") && d.message.includes('is invalid')),
             'Name with spaces should violate pattern constraint');
     });
 
@@ -459,7 +459,7 @@ describe('manifest diagnostics logic', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
   <Identity Name="TestApp" Publisher="CN=Test" Version="not.a.version" />`));
 
-        assert.ok(diagnostics.some(d => d.message.includes("'Version'") && d.message.includes('does not match')),
+        assert.ok(diagnostics.some(d => d.message.includes("'Version'") && d.message.includes('is invalid')),
             'Version with invalid format should violate pattern constraint');
     });
 
@@ -467,7 +467,7 @@ describe('manifest diagnostics logic', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
   <Identity Name="ValidName.App" Publisher="CN=Test" Version="1.2.3.4" />`));
 
-        assert.ok(!diagnostics.some(d => d.message.includes('does not match')),
+        assert.ok(!diagnostics.some(d => d.message.includes('is invalid')),
             'Valid Name and Version should not trigger pattern violations');
     });
 
@@ -526,7 +526,7 @@ describe('manifest diagnostics logic', () => {
         const text = makeManifest(`
   <Identity Name="Bad Name" Publisher="CN=Test" Version="1.0.0.0" />`);
         const diagnostics = validateManifestText(model, text);
-        const nameDiag = diagnostics.find(d => d.message.includes("'Name'") && d.message.includes('does not match'));
+        const nameDiag = diagnostics.find(d => d.message.includes("'Name'") && d.message.includes('is invalid'));
         assert.ok(nameDiag, 'Should produce Name pattern diagnostic');
 
         // The diagnostic should point to the value "Bad Name", not the element start

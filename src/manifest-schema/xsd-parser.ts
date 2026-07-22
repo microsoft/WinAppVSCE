@@ -628,7 +628,7 @@ function resolveTypeReferences(model: SchemaModel): void {
         resolvingKeys.add(key);
 
         if (elem.baseTypeName) {
-            const baseMatch = findTypeEntry(elem.baseTypeName, elem.namespace, model);
+            const baseMatch = findTypeEntry(elem.baseTypeName, elem.namespace, model, key);
             if (baseMatch) {
                 const baseElem = resolveElementByKey(baseMatch.key) || baseMatch.element;
                 const localChildren = cloneChildRefs(elem.children);
@@ -698,24 +698,29 @@ function resolveTypeReferences(model: SchemaModel): void {
 function findTypeEntry(
     typeName: string,
     defaultNs: string,
-    model: SchemaModel
+    model: SchemaModel,
+    excludeKey?: string
 ): { key: string; element: SchemaElement } | undefined {
     const normalizedTypeName = getLocalNameFromQName(typeName);
 
     const sameNsKey = `${defaultNs}|type:${normalizedTypeName}`;
-    const sameNsType = model.elements.get(sameNsKey);
-    if (sameNsType) {
-        return { key: sameNsKey, element: sameNsType };
+    if (sameNsKey !== excludeKey) {
+        const sameNsType = model.elements.get(sameNsKey);
+        if (sameNsType) {
+            return { key: sameNsKey, element: sameNsType };
+        }
     }
 
     const typesKey = `${TYPES_NS}|type:${normalizedTypeName}`;
-    const typesType = model.elements.get(typesKey);
-    if (typesType) {
-        return { key: typesKey, element: typesType };
+    if (typesKey !== excludeKey) {
+        const typesType = model.elements.get(typesKey);
+        if (typesType) {
+            return { key: typesKey, element: typesType };
+        }
     }
 
     for (const [key, elem] of model.elements) {
-        if (key.endsWith(`|type:${normalizedTypeName}`)) {
+        if (key !== excludeKey && key.endsWith(`|type:${normalizedTypeName}`)) {
             return { key, element: elem };
         }
     }
