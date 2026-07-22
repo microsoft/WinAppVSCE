@@ -42,13 +42,13 @@ scripts\drive-extension.ps1 -Project <projectDir> -ScriptJson <stepsFile> [-Time
 
 The helper lives at an ABSOLUTE path (your shell's working directory is the project workspace, so
 always use the absolute path): `{{HARNESS}}\scripts\drive-extension.ps1`.
-Write your steps file to `{{WORK}}\.winapp-ux\script.json`.
+Write your steps file to `{{WORK}}\.vsce-testing\script.json`.
 
 It launches a fresh VS Code that loads the installed WinApp extension + the driver, runs your steps,
 and prints a result JSON (per-step success/error, which prompts appeared, debugger launch + session
 events). **Read that JSON and base your feedback on what actually happened.**
 
-### Steps file schema (write this to `.winapp-ux\script.json` with the app's REAL absolute paths)
+### Steps file schema (write this to `.vsce-testing\script.json` with the app's REAL absolute paths)
 ```
 {
   "label": "<APP_ID>",
@@ -114,7 +114,7 @@ normal .NET debug. Would a newcomer know the order to run commands? Is there onb
 2. Add the specified NuGet packages and implement the features (XAML + C#); keep template files.
 3. `dotnet build` (Debug, x64) so an `.exe` exists. Find the exe output folder
    (e.g. `bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64`) — you need it for pack/debug.
-4. Author `.winapp-ux\script.json` (schema above) exercising the spec's `extensionFocus` + the
+4. Author `.vsce-testing\script.json` (schema above) exercising the spec's `extensionFocus` + the
    cert/manifest/pack chain + the **WinApp debugger** + unregister, with this app's real paths.
 5. Run `{{HARNESS}}\scripts\drive-extension.ps1` and READ the printed result JSON. Iterate if needed.
 6. Verify the app the debugger launched with `winapp ui` (status/screenshot/interact/screenshot).

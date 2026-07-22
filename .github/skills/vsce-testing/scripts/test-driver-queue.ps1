@@ -6,13 +6,27 @@
     verify its effect (devcert.pfx is (re)created) -> screenshot -> teardown.
   This is the mechanism that works despite synthetic keyboard injection being blocked.
 #>
+param(
+    [string]$Project
+)
+
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'vscode-drive.psm1') -Force
 
 $skillRoot = Split-Path $PSScriptRoot -Parent
-$proj = Join-Path $skillRoot 'workspace\01-counter-blank\CounterApp'
+$proj = if ($Project) { $Project } else { Join-Path $skillRoot 'workspace\01-counter-blank\CounterApp' }
+if (-not (Test-Path $proj -PathType Container)) {
+    Write-Error "ERROR: Sample app not found at $proj. Run the campaign first to generate workspace apps, or provide a project path via -Project parameter."
+    exit 1
+}
+$proj = (Resolve-Path $proj).Path
 $file = Get-ChildItem $proj -Recurse -Filter '*.xaml.cs' -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -notmatch '\\(obj|bin)\\' } | Select-Object -First 1
+if (-not $file) {
+    Write-Error "ERROR: No .xaml.cs file found under $proj. Run the campaign first to generate workspace apps, or provide a project path via -Project parameter."
+    exit 1
+}
+
+Import-Module (Join-Path $PSScriptRoot 'vscode-drive.psm1') -Force
 $cert = Join-Path $proj 'devcert.pfx'
 
 $ctx = $null
