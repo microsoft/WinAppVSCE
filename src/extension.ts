@@ -331,12 +331,16 @@ const BROWSE_SENTINEL = '__browse__';
  * @returns The selected file path, or `undefined` if cancelled.
  */
 async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
+	let cancelled = false;
 	const artifactPaths = await vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...' },
-		async () => findWorkspaceArtifacts(workspacePath, SIGNABLE_ARTIFACT_GLOBS)
+		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
+		async (_progress, token) => {
+			token.onCancellationRequested(() => { cancelled = true; });
+			return findWorkspaceArtifacts(workspacePath, SIGNABLE_ARTIFACT_GLOBS);
+		}
 	);
 
-	if (artifactPaths.length === 0) {
+	if (cancelled || artifactPaths.length === 0) {
 		return selectFile('Select file to sign', {
 			'MSIX Packages': ['msix', 'msixbundle', 'appx', 'appxbundle'],
 			'Executables': ['exe', 'dll'],
@@ -353,7 +357,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 	items.push({ label: '$(folder-opened) Browse…', description: 'Open a file picker', detail: BROWSE_SENTINEL, kind: vscode.QuickPickItemKind.Default });
 
 	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select an MSIX package to sign'
+		placeHolder: 'Select a package to sign'
 	});
 
 	if (!picked) {
