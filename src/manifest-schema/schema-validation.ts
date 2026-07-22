@@ -440,21 +440,66 @@ function getPatternSets(attr: SchemaAttribute): string[][] {
     return attr.patterns && attr.patterns.length > 0 ? [attr.patterns] : [];
 }
 
-/** Build an informative suffix for pattern validation errors showing the type name and pattern. */
+/** Human-readable descriptions for common XSD simple types. */
+export const TYPE_DESCRIPTIONS: Record<string, string> = {
+    ST_VersionQuad: 'a dot-quad version number (e.g. "1.0.0.0")',
+    ST_VersionQuadNoneZero: 'a dot-quad version number with non-zero components',
+    ST_Publisher: 'an X.500 distinguished name (e.g. "CN=Contoso")',
+    ST_Publisher_2010_v2: 'an X.500 distinguished name (e.g. "CN=Contoso")',
+    ST_PackageName: 'a package name using alphanumeric characters and periods (e.g. "MyCompany.MyApp")',
+    ST_GUID: 'a GUID (e.g. "01234567-89ab-cdef-0123-456789abcdef")',
+    ST_ApplicationId: 'an application ID starting with a letter, using alphanumeric characters and periods',
+    ST_Protocol: 'a protocol name using lowercase letters, digits, and ".", "+", "-"',
+    ST_Protocol_2010_v2: 'a protocol name using lowercase letters, digits, and ".", "+", "-"',
+    ST_Protocol_2019: 'a protocol name using lowercase letters, digits, and ".", "+", "-"',
+    ST_Color: 'a hex color (e.g. "#FF0000") or a named color (e.g. "red")',
+    ST_DisplayName: 'a display name (1-256 characters, cannot start/end with whitespace)',
+    ST_ShortDisplayName: 'a short display name (1-40 characters)',
+    ST_Description: 'a description (1-2048 characters)',
+    ST_ImageFile: 'an image file path (e.g. "Assets\\Logo.png")',
+    ST_Executable: 'an executable path (e.g. "MyApp.exe")',
+    ST_ExecutableAnyCase: 'an executable path (e.g. "MyApp.exe")',
+    ST_ExecutableNoPath: 'an executable filename without path (e.g. "MyApp.exe")',
+    ST_FileName: 'a filename (e.g. "myfile.dll")',
+    ST_FileNameFullPath: 'a full file path',
+    ST_DllFile: 'a DLL filename (e.g. "mylib.dll")',
+    ST_EntryPoint: 'a fully qualified class name (e.g. "MyNamespace.MyClass")',
+    ST_ContentType: 'a MIME content type (e.g. "image/png")',
+    ST_URI: 'a URI (e.g. "https://example.com")',
+    ST_NonEmptyString: 'a non-empty string',
+    ST_ResourceId: 'a resource identifier using alphanumeric characters, periods, and hyphens',
+    ST_CustomCapability: 'a custom capability name in reverse domain notation (e.g. "com.company.capability")',
+    ST_FTAName: 'a file type name (e.g. ".txt")',
+    ST_ActivatableClassId: 'an activatable class ID (e.g. "MyNamespace.MyClass")',
+    ST_AsciiWindowsId: 'an ASCII Windows identifier',
+    ST_ProgId: 'a programmatic identifier (e.g. "MyApp.Document.1")',
+    ST_Date: 'an ISO date (e.g. "2024-01-15")',
+};
+
+/** Build an informative suffix for pattern validation errors. */
 function formatPatternHint(attr: SchemaAttribute): string {
     const parts: string[] = [];
-    if (attr.typeName) {
+
+    // Try to provide a human-readable description based on the type name
+    const friendlyDesc = attr.typeName ? TYPE_DESCRIPTIONS[attr.typeName] : undefined;
+    if (friendlyDesc) {
+        parts.push(`expected ${friendlyDesc}`);
+    } else if (attr.typeName) {
         parts.push(`according to its datatype '${attr.typeName}'`);
     }
-    const patternSets = getPatternSets(attr);
-    if (patternSets.length > 0) {
-        // Show the first pattern set's patterns (they are OR'd together)
-        const displayPatterns = patternSets[0]
-            .slice(0, 3) // limit display to avoid very long messages
-            .map(p => `/${p}/`);
-        const patternText = displayPatterns.join(' or ');
-        const suffix = patternSets[0].length > 3 ? ' (and more)' : '';
-        parts.push(`\nExpected pattern: ${patternText}${suffix}`);
+
+    // If no friendly description, fall back to showing the raw pattern
+    if (!friendlyDesc) {
+        const patternSets = getPatternSets(attr);
+        if (patternSets.length > 0) {
+            const displayPatterns = patternSets[0]
+                .slice(0, 3)
+                .map(p => `/${p}/`);
+            const patternText = displayPatterns.join(' or ');
+            const suffix = patternSets[0].length > 3 ? ' (and more)' : '';
+            parts.push(`\n\nExpected pattern: ${patternText}${suffix}`);
+        }
     }
+
     return parts.length > 0 ? ` — ${parts.join('. ')}` : '';
 }

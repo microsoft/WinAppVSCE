@@ -3,7 +3,7 @@
  */
 
 import { SchemaModel, SchemaAttribute, SchemaPatternType } from './schema-model';
-import { validateAttributeValuePattern, validateAttributeValueLength } from './schema-validation';
+import { validateAttributeValuePattern, validateAttributeValueLength, TYPE_DESCRIPTIONS } from './schema-validation';
 
 const TYPES_NS = 'http://schemas.microsoft.com/appx/manifest/types';
 
@@ -91,10 +91,14 @@ export function validateValueAgainstType(
     if (!attr) { return null; }
 
     if (!validateAttributeValuePattern(attr, value)) {
+        const friendly = TYPE_DESCRIPTIONS[typeName];
+        if (friendly) {
+            return `Value does not match the expected format for ${typeName} — expected ${friendly}`;
+        }
         const patterns = (attr.patternSets && attr.patternSets.length > 0
             ? attr.patternSets[0] : attr.patterns || [])
             .slice(0, 3).map(p => `/${p}/`);
-        const patternHint = patterns.length > 0 ? `. Expected pattern: ${patterns.join(' or ')}` : '';
+        const patternHint = patterns.length > 0 ? `\n\nExpected pattern: ${patterns.join(' or ')}` : '';
         return `Value does not match the expected format for ${typeName}${patternHint}`;
     }
 
