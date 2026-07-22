@@ -21,6 +21,12 @@ import {
 	planPackCompletion
 } from './pack-result';
 import {
+	detectArchFromPath,
+	getMachineArch,
+	checkSelfContainedArchMismatch,
+	buildArchMismatchWarning
+} from './arch-detection';
+import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
 	getDebuggerExtensionRequirement,
@@ -979,6 +985,24 @@ export function activate(context: vscode.ExtensionContext) {
 				['Yes', 'No'],
 				{ placeHolder: 'Bundle Windows App SDK runtime (self-contained)?' }
 			);
+
+			// --- Architecture mismatch warning for self-contained packages ---
+			if (selfContained === 'Yes') {
+				const detectedArch = detectArchFromPath(inputFolder);
+				const machineArch = getMachineArch();
+				const mismatchResult = checkSelfContainedArchMismatch(detectedArch, machineArch);
+				if (mismatchResult.mismatch) {
+					const warning = buildArchMismatchWarning(mismatchResult.buildArch, mismatchResult.machineArch);
+					const proceed = await vscode.window.showWarningMessage(
+						warning,
+						{ modal: true },
+						'Continue anyway'
+					);
+					if (proceed !== 'Continue anyway') {
+						return;
+					}
+				}
+			}
 
 			// Build the argument array for spawn (shell: false) so paths and flags
 			// are passed literally — no PowerShell parsing/escaping required.
