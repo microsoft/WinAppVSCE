@@ -42,7 +42,7 @@ try {
     Write-Host "  on editor = $onEditor"
 
     Write-Host "STEP 4: run queue command (verifiable)" -ForegroundColor Magenta
-    $r = Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.getWinappPath' -TimeoutSec 60
+    $r = Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.getWinappPath' -Answers @(@{ accept = $true }) -TimeoutSec 60
     $r | ConvertTo-Json -Depth 6 | Write-Host
     $commandStep = @($r.steps | Where-Object { $_.type -eq 'command' -and $_.command -eq 'winapp.getWinappPath' }) | Select-Object -First 1
     $commandVerified = [bool]($r.done -and $commandStep -and -not $commandStep.error)
