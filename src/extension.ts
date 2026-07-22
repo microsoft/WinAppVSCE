@@ -340,7 +340,11 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		}
 	);
 
-	if (cancelled || artifactPaths.length === 0) {
+	if (cancelled) {
+		return undefined;
+	}
+
+	if (artifactPaths.length === 0) {
 		return selectFile('Select file to sign', {
 			'MSIX Packages': ['msix', 'msixbundle', 'appx', 'appxbundle'],
 			'Executables': ['exe', 'dll'],
