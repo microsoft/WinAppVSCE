@@ -1,0 +1,162 @@
+{
+  "description": "10 WinUI 3 app specs to battle-test the WinApp VS Code extension. Each is built and exercised by a simulated Windows engineer (Copilot CLI + winui3-builder agent) through the extension's command surface.",
+  "apps": [
+    {
+      "id": "01-counter-blank",
+      "template": "winui",
+      "packages": [],
+      "summary": "Minimal packaged counter app. Baseline: blank template, no extra deps.",
+      "features": [
+        "A single button that increments a counter TextBlock.",
+        "Window title shows the current count."
+      ],
+      "extensionFocus": [
+        "winapp.init (Initialize Project) on a fresh blank template",
+        "winapp.run (Run Application) + VS Code debugger (F5) on a packaged app",
+        "winapp.getWinappPath / winapp.restore"
+      ],
+      "edgeCases": ["First-run experience: what does init prompt for? Are defaults sensible?"]
+    },
+    {
+      "id": "02-todo-mvvm",
+      "template": "winui",
+      "packages": ["CommunityToolkit.Mvvm"],
+      "summary": "Todo list using MVVM with CommunityToolkit.Mvvm; add/remove/complete items.",
+      "features": [
+        "ObservableCollection of todo items bound to a ListView.",
+        "TextBox + Add button; checkbox to complete; swipe/Delete to remove."
+      ],
+      "extensionFocus": [
+        "winapp.restore after adding a NuGet dependency",
+        "winapp.update (Update Packages)",
+        "Debugging data-binding issues with the extension run/debug flow"
+      ],
+      "edgeCases": ["Does restore pick up newly added PackageReference cleanly?"]
+    },
+    {
+      "id": "03-navview-settings",
+      "template": "winui-navview",
+      "packages": ["CommunityToolkit.Mvvm"],
+      "summary": "NavigationView app with a Settings page: light/dark/system theme toggle persisted to local settings.",
+      "features": [
+        "Multi-page NavigationView (Home, Settings).",
+        "Theme radio buttons that persist across launches via ApplicationData/local settings."
+      ],
+      "extensionFocus": [
+        "winapp.init on the navview template (different project structure)",
+        "winapp.run with persisted local settings (package identity required)",
+        "winapp.certInfo to inspect the dev cert"
+      ],
+      "edgeCases": ["Local settings require package identity; verify run path provides it."]
+    },
+    {
+      "id": "04-gallery-toolkit",
+      "template": "winui",
+      "packages": ["CommunityToolkit.WinUI.Controls.DataGrid", "CommunityToolkit.Mvvm"],
+      "summary": "Data gallery using the Community Toolkit DataGrid control to show a sortable table.",
+      "features": [
+        "DataGrid bound to a list of sample records (name, value, date).",
+        "Column sorting and selection."
+      ],
+      "extensionFocus": [
+        "winapp.restore with multiple/transitive NuGet deps",
+        "winapp.pack (Create MSIX Package) of an app with heavier dependencies"
+      ],
+      "edgeCases": ["Third-party control packages: do restore/pack handle assets correctly?"]
+    },
+    {
+      "id": "05-lib-plus-app",
+      "template": "winui",
+      "packages": [],
+      "summary": "Multi-project: a winui-lib class library (reusable UserControl) referenced by a winui app.",
+      "features": [
+        "Class library project (winui-lib) exposing a reusable UserControl.",
+        "App project references the library and hosts the control."
+      ],
+      "extensionFocus": [
+        "winapp behavior in a multi-project workspace (which project does it target?)",
+        "winapp.pack across a project reference",
+        "VS Code workspace with >1 csproj: command targeting/discoverability"
+      ],
+      "edgeCases": ["Multi-project workspace: how does the extension choose the active project?"]
+    },
+    {
+      "id": "06-http-weather",
+      "template": "winui",
+      "packages": ["CommunityToolkit.Mvvm"],
+      "summary": "Async HTTP demo: fetch JSON from a public endpoint and display it (uses System.Net.Http).",
+      "features": [
+        "Button triggers an async HTTP GET to a public test API (e.g. worldtimeapi or a static JSON).",
+        "Loading state + result/error display."
+      ],
+      "extensionFocus": [
+        "winapp.manifestGenerate / capabilities (internetClient) editing",
+        "winapp.run for a network-capable packaged app"
+      ],
+      "edgeCases": ["Does the app need internetClient capability when packaged? Surface manifest editing UX."]
+    },
+    {
+      "id": "07-filepicker-images",
+      "template": "winui",
+      "packages": [],
+      "summary": "File picker + image viewer. Uses Windows.Storage.Pickers (needs HWND interop in WinUI 3).",
+      "features": [
+        "Open button launches a FileOpenPicker initialized with the window HWND.",
+        "Selected image rendered in an Image control."
+      ],
+      "extensionFocus": [
+        "winapp.run (broker/picker APIs require package identity)",
+        "Debugging an interop/runtime exception via the extension's run/debug flow and Output channel"
+      ],
+      "edgeCases": ["FileOpenPicker in WinUI 3 needs InitializeWithWindow; surfaces a common dev pitfall."]
+    },
+    {
+      "id": "08-notifications-app",
+      "template": "winui",
+      "packages": [],
+      "summary": "App notifications (toast) using AppNotificationManager; requires manifest registration.",
+      "features": [
+        "Button sends a toast via AppNotificationManager.",
+        "Handle activation when the toast is clicked."
+      ],
+      "extensionFocus": [
+        "winapp.manifestGenerate / winapp.manifestAddAlias (Add Manifest Execution Alias)",
+        "winapp.manifestUpdateAssets (Update Manifest Assets)",
+        "winapp.certGenerate + winapp.certInstall + winapp.sign full signing chain"
+      ],
+      "edgeCases": ["Notifications need com activator/alias in manifest; exercise manifest + alias commands."]
+    },
+    {
+      "id": "09-unpackaged-tool",
+      "template": "winui",
+      "packages": [],
+      "summary": "Run the app UNPACKAGED to exercise the create-debug-identity / unpackaged run path.",
+      "features": [
+        "Simple single-window utility (e.g. a unit converter).",
+        "Configured to run without a full MSIX where possible."
+      ],
+      "extensionFocus": [
+        "winapp.createDebugIdentity (Create Debug Identity)",
+        "winapp.run unpackaged vs packaged distinction",
+        "winapp.unregister (Unregister Package) cleanup flow"
+      ],
+      "edgeCases": ["Packaged vs unpackaged ambiguity; cleanup via unregister; sparse package identity."]
+    },
+    {
+      "id": "10-tested-app",
+      "template": "winui",
+      "packages": ["CommunityToolkit.Mvvm"],
+      "summary": "App plus a winui-unittest project; exercise build/test alongside the extension workflow.",
+      "features": [
+        "A small calculator/business-logic class with bindable UI.",
+        "A winui-unittest project covering the logic."
+      ],
+      "extensionFocus": [
+        "winapp.tool (Run SDK Tool) usage",
+        "winapp.pack of the app while a test project is present",
+        "How the extension coexists with a multi-project test setup"
+      ],
+      "edgeCases": ["Test project in workspace: does the extension get confused about the target app?"]
+    }
+  ]
+}

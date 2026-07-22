@@ -1,0 +1,16 @@
+# Generated apps and run artifacts (not source)
+workspace/
+logs/
+reports/per-app/
+reports/raw-campaign-data.md
+reports/FINAL-REPORT.md
+
+# VS Code drive session artifacts
+.drive-extensions/
+.drive-udd-*/
+.queue-*/
+
+# Keep the directories themselves
+!workspace/.gitkeep
+!logs/.gitkeep
+!reports/.gitkeep

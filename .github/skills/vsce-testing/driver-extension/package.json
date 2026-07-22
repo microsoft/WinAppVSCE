@@ -1,0 +1,17 @@
+{
+  "name": "winapp-ux-driver",
+  "displayName": "WinApp UX Driver",
+  "description": "Test harness extension that programmatically invokes the WinApp extension's commands and debugger inside VS Code, so an automated agent can exercise the real extension UX visibly.",
+  "version": "0.1.0",
+  "publisher": "winapp-ux",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "winappUxDriver.runScript", "title": "WinApp UX Driver: Run Script" },
+      { "command": "winappUxDriver.probePrompts", "title": "WinApp UX Driver: Probe Prompt Accept" }
+    ]
+  }
+}
