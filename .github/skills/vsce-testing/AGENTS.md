@@ -1,4 +1,4 @@
-# AGENTS.md — WinApp Extension UX Battle-Test Harness
+# AGENTS.md — WinApp Extension Live-Drive Harness
 
 > **Read this first.** It is the onboarding contract for any agent/session working in
 > `vsce-testing`. It encodes the *validated* way to drive the **WinApp VS Code extension**
@@ -6,8 +6,9 @@
 > cost hours to rediscover. Follow the "Getting started" checklist before doing anything else.
 
 This directory lives inside the `WinAppVSCE` repo at `.github/skills/vsce-testing/`.
-Goal: simulate a Windows engineer using the extension to build/ship WinUI 3
-apps, and gather real UX findings.
+It provides the infrastructure for an agent to launch an isolated VS Code instance with the WinApp
+extension installed and programmatically interact with the extension to test any piece of
+functionality live.
 
 ---
 
@@ -45,7 +46,7 @@ screenshot. All of this is wrapped by `scripts/vscode-drive.psm1`.
    code --extensions-dir="$PWD\.drive-extensions" --list-extensions --show-versions
    # expect: microsoft-winappcli.winapp@<version>
    ```
-   If missing, (re)build + install (per the user's convention, build with `build-vsce.ps1 -Package`):
+   If missing, (re)build + install:
    ```powershell
    # From the repo root (4 levels up from this skill directory):
    $repoRoot = Resolve-Path "$PSScriptRoot\..\..\..\.."
@@ -55,9 +56,9 @@ screenshot. All of this is wrapped by `scripts/vscode-drive.psm1`.
    ```
    `Start-VSCodeDrive` auto-adds `--extensions-dir=.drive-extensions` when that dir exists.
 
-3. **Sanity-check the mechanism** before any real campaign work:
+3. **Sanity-check the mechanism** before doing real work:
    ```powershell
-   pwsh -NoProfile -File scripts\test-driver-queue.ps1
+   pwsh -NoProfile -File scripts\test-driver-queue.ps1 -Project <path-to-a-winui-project>
    # PASS = "RESULT: editor=True driverDone=True certCreated=True"
    ```
 
@@ -67,7 +68,7 @@ screenshot. All of this is wrapped by `scripts/vscode-drive.psm1`.
 
 ```powershell
 Import-Module .\scripts\vscode-drive.psm1 -Force
-$proj = "$PWD\workspace\01-counter-blank\CounterApp"
+$proj = "<path-to-your-winui-project>"
 $file = "$proj\App.xaml.cs"
 
 # 1. Launch an isolated, live instance WITH the driver-extension + command queue.
@@ -75,14 +76,14 @@ $ctx = Start-VSCodeDrive -Folder $proj -OpenFile $file -WithDriverExtension -Set
 
 # 2. Focus + clear the first-run modals, then confirm we're on the editor.
 Set-VSCodeFocus -Ctx $ctx | Out-Null
-$onEditor = Confirm-VSCodeEditor -Ctx $ctx -OpenFileIfNeeded $file   # dismisses sign-in + walkthrough
+$onEditor = Confirm-VSCodeEditor -Ctx $ctx -OpenFileIfNeeded $file
 
 # 3. Push REAL extension commands to the LIVE instance and verify their effects.
 Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.certGenerate' -Answers @(@{accept=$true})
 Invoke-VSCodeDriverDebug   -Ctx $ctx -InputFolder "$proj\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64"
 Invoke-VSCodeDriverOpenFile -Ctx $ctx -Path "$proj\Package.appxmanifest"
 
-# 4. Observe: screenshot the integrated terminal / editor for findings.
+# 4. Observe: screenshot the integrated terminal / editor.
 winapp ui screenshot -w $ctx.Hwnd -o .\logs\step.png
 
 # 5. Always tear down (removes the udd + queue dir).
@@ -150,42 +151,7 @@ Answers (ordered, one per prompt the command raises):
 
 ---
 
-## Known real UX finding (example of what to log)
-
-`winapp cert generate --install` (certGenerate → "Install? Yes") **generates** `devcert.pfx` but then
-**fails to install** it: `❌ Failed to install development certificate: Access denied.` — because
-installing to the machine cert store needs elevation and VS Code isn't elevated. The error is cryptic
-and a real developer would hit it. This is the kind of friction the report should capture.
-
----
-
-## Key files
-
-- `scripts/vscode-drive.psm1` — the automation module. Working: `Start-VSCodeDrive`,
-  `Set-VSCodeFocus`, `Get-VSCodeState`, `Close-VSCodeSignIn`, `Clear-VSCodeOverlays`,
-  `Close-VSCodeWalkthrough`, `Confirm-VSCodeEditor`, `Invoke-VSCodeElement`, and the RELIABLE
-  `Invoke-VSCodeDriver{Step,Command,Debug,OpenFile}`. `Stop-VSCodeDrive` cleans up.
-- `driver-extension/extension.js` — the in-VS-Code driver: `startQueuePoller()` watches
-  `WINAPP_UX_QUEUE\req-*.json`; also runs a one-shot batch from `WINAPP_UX_SCRIPT`.
-- `scripts/test-driver-queue.ps1` — the end-to-end validation (run to confirm the mechanism works).
-- `scripts/test-vscode-drive.ps1` — complementary smoke test: launches VS Code, verifies focus/editor,
-  then exercises the queue-based command flow via `Invoke-VSCodeDriverCommand`.
-- `scripts/drive-extension.ps1` — batch launcher (`WINAPP_UX_SCRIPT`) documenting command IDs/answers.
-- `.drive-extensions/` — isolated extensions dir holding the installed winapp extension.
-- `config/apps.json` — the 10 app specs. `reports/FINAL-REPORT.md`, `reports/WINAPP-UI-FRICTION.md` —
-  prior deliverables.
-
-## Legacy note
-
-The original approach (see `README.md`) had the persona invoke the bundled `winapp` CLI directly
-because the palette "can't be clicked headlessly." That is now superseded for *live* interaction by
-the driver-queue, which exercises the extension's **actual command handlers** inside VS Code.
-
----
-
-## Live campaign learnings (2026-07-07) — pack / sign / F5
-
-Validated end-to-end across 4 apps (01, 02, 04, 09). See `reports/LIVE-RUN-REPORT.md`.
+## Learned behaviors — pack / sign / F5
 
 - **Native folder dialogs ARE now automatable via UIA.** `SendKeys` is blocked, but
   `winapp ui set-value` **does** work on the native `#32770` "Folder:" edit (unlike Monaco). The
@@ -206,11 +172,27 @@ Validated end-to-end across 4 apps (01, 02, 04, 09). See `reports/LIVE-RUN-REPOR
   event), not `started`. If `inputFolder` is empty/wrong, F5 silently falls back to the pack folder
   picker.
 - **The WinApp debugger requires `ms-dotnettools.csharp`** (coreclr) — install it into
-  `.drive-extensions` too (already done): `code --extensions-dir=.drive-extensions
+  `.drive-extensions` too: `code --extensions-dir=.drive-extensions
   --install-extension ms-dotnettools.csharp`. Without it F5 shows an "Install Extension" prompt.
 - **`sign` uses a FILE picker** ("Select file to sign", button "Open"), not a folder picker — the
   current `typeIntoNativeDialog` only clicks "Select Folder", so sign is not yet auto-answerable;
   cancel it (`winapp ui invoke -w <hwnd> "Cancel"`) if it blocks a chained run.
-- **Reusable runners:** `scripts/run-app-flow.ps1 -AppId <id> [-Unpackaged]` drives one app through
-  develop→cert→pack(or createDebugIdentity)→F5 and writes `reports/live-run/<id>/`. Probes:
-  `scripts/probe-f5.ps1`, `scripts/probe-pack.ps1`, `scripts/probe-native-dialog.ps1`.
+
+---
+
+## Key files
+
+- `scripts/vscode-drive.psm1` — the automation module. Working: `Start-VSCodeDrive`,
+  `Set-VSCodeFocus`, `Get-VSCodeState`, `Close-VSCodeSignIn`, `Clear-VSCodeOverlays`,
+  `Close-VSCodeWalkthrough`, `Confirm-VSCodeEditor`, `Invoke-VSCodeElement`, and the RELIABLE
+  `Invoke-VSCodeDriver{Step,Command,Debug,OpenFile}`. `Stop-VSCodeDrive` cleans up.
+- `driver-extension/extension.js` — the in-VS-Code driver: `startQueuePoller()` watches
+  `WINAPP_UX_QUEUE\req-*.json`; also runs a one-shot batch from `WINAPP_UX_SCRIPT`.
+- `scripts/test-driver-queue.ps1` — end-to-end validation (run to confirm the mechanism works).
+- `scripts/test-vscode-drive.ps1` — complementary smoke test: launches VS Code, verifies focus/editor,
+  then exercises the queue-based command flow via `Invoke-VSCodeDriverCommand`.
+- `scripts/drive-extension.ps1` — batch launcher (`WINAPP_UX_SCRIPT`) for running scripted step
+  sequences.
+- `scripts/install-extension.ps1` — builds the local VSIX and installs it into VS Code.
+- `scripts/probe-*.ps1` — targeted probes for specific features (F5 debug, pack, native dialogs).
+- `.drive-extensions/` — isolated extensions dir holding the installed winapp extension.

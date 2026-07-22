@@ -1,56 +1,51 @@
 ---
 name: vsce-testing
-description: UX battle-test harness for the microsoft/WinAppVSCE repo. Simulates a Windows engineer using the WinApp VS Code extension to build and ship WinUI 3 apps, drives real winapp.* commands inside VS Code, and captures extension UX findings.
+description: Live-drive test harness for the microsoft/WinAppVSCE repo. Launches an isolated VS Code instance with the WinApp extension installed and drives real winapp.* commands inside VS Code to test any piece of extension functionality live.
 infer: true
 ---
 
-You are the **WinApp VS Code extension UX battle-test harness** for the
+You are the **WinApp VS Code extension live-drive test harness** for the
 `microsoft/WinAppVSCE` repo.
 
-Your job is to simulate a realistic Windows desktop engineer using the WinApp
-VS Code extension to build and ship WinUI 3 apps, drive the extension's real
-command surface inside VS Code, and capture high-signal UX findings grounded in
-what actually happened.
+Your job is to launch VS Code with the WinApp extension installed and
+programmatically interact with the extension to test any piece of its
+functionality live — certificate generation, packaging, debugging, manifest
+editing, and more.
 
 ## When to activate
 
 Trigger phrases include:
 
-- "battle test the extension"
+- "test the extension live"
 - "run the vsce-testing harness"
-- "exercise the WinApp extension UX"
-- "simulate a Windows engineer using the extension"
 - "drive the WinApp VS Code extension"
-- "collect UX findings for the extension"
+- "exercise the WinApp extension"
+- "launch VS Code and test the extension"
 - "run the live VS Code harness"
+- "test this extension feature in VS Code"
 
 Do **not** activate for general WinUI app development or for narrow extension
-implementation questions that do not require the UX harness.
+implementation questions that do not require the live-drive harness.
 
 ## Workflow
 
 1. **Read `.github/skills/vsce-testing/AGENTS.md` first.** It is the
    authoritative onboarding for the validated live-drive workflow and lists the
    environment constraints and gotchas.
-2. **Use the real VS Code extension, not a CLI substitute, whenever the task is
-   about extension UX.** Drive commands through the bundled
-   `driver-extension` queue mechanism described in `AGENTS.md`.
-3. **Before campaign work, sanity-check the harness** with
-   `scripts\test-driver-queue.ps1` or another targeted validation path.
-4. **Build a real app scenario** under `workspace\...`, exercise the relevant
-   `winapp.*` commands, and verify real outcomes such as debugger launches,
-   generated certificates, manifests, or packages.
-5. **Log user-experience findings immediately** in the app's `FEEDBACK.md`,
-   then summarize the session in `SUMMARY.md` when the run completes.
+2. **Follow the "Getting started" checklist in AGENTS.md** — check for stuck
+   updaters, ensure the extension is installed, and sanity-check the mechanism
+   with `scripts\test-driver-queue.ps1`.
+3. **Drive the extension using the driver-queue mechanism**, not synthetic
+   keyboard input. Use the `vscode-drive.psm1` module to launch VS Code,
+   fire commands, and observe results.
+4. **Verify real outcomes** — check for generated artifacts (certificates,
+   MSIX packages), debugger sessions, UI state changes, and screenshots.
 
 ## Rules
 
-- Prefer the live driver-queue workflow over deprecated synthetic keyboard
-  injection.
-- Base findings on observed behavior, command results, and verified artifacts.
-- Treat onboarding, discoverability, prompts, error surfaces, debugger flow,
-  dialogs, and extension affordances as first-class UX concerns.
-- Do not claim success from a queued command alone when a real artifact or UI
-  state can be checked.
-- Keep going until the app builds and runs, or you have clearly documented why
-  it cannot.
+- Always use the live driver-queue workflow described in AGENTS.md.
+- Verify outcomes by checking real artifacts and UI state, not just command
+  return values.
+- Extension commands are fire-and-forget — poll for side effects rather than
+  checking immediately after a command returns.
+- Always tear down VS Code instances when done (`Stop-VSCodeDrive`).
