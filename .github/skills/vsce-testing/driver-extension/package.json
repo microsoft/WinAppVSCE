@@ -10,8 +10,8 @@
   "main": "./extension.js",
   "contributes": {
     "commands": [
-      { "command": "winappUxDriver.runScript", "title": "WinApp UX Driver: Run Script" },
-      { "command": "winappUxDriver.probePrompts", "title": "WinApp UX Driver: Probe Prompt Accept" }
+      { "command": "winappUxDriver.runScript", "title": "Run Script", "category": "WinApp UX Driver" },
+      { "command": "winappUxDriver.probePrompts", "title": "Probe Prompt Accept", "category": "WinApp UX Driver" }
     ]
   }
 }

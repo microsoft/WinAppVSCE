@@ -14,9 +14,16 @@ const delay = (ms) => new Promise(r => setTimeout(r, ms));
 // When a Win32 folder picker (#32770) is foreground we resolve its HWND, set the "Folder:" edit
 // via UIA ValuePattern (winapp ui set-value), then invoke "Select Folder". This is reliable where
 // synthetic keyboard input (SendInput/SendKeys) silently reaches no window.
-function typeIntoNativeDialog(text) {
+function typeIntoNativeDialog(text, dialogType) {
+  // dialogType: 'folder' (default) targets "Folder:" edit + "Select Folder" button
+  //             'file' targets "File name:" edit + "Open" button
+  const kind = dialogType || 'folder';
+  const editLabel = kind === 'file' ? 'File name:' : 'Folder:';
+  const buttonLabel = kind === 'file' ? 'Open' : 'Select Folder';
   return new Promise((resolve) => {
     const escaped = text.replace(/'/g, "''");
+    const escapedEditLabel = editLabel.replace(/'/g, "''");
+    const escapedButtonLabel = buttonLabel.replace(/'/g, "''");
     const ps = `
 $sig = @'
 using System;
@@ -43,11 +50,11 @@ for ($i = 0; $i -lt 30; $i++) {
 if ($fg.Class -ne '#32770') { Write-Output "SKIPPED:$($fg.Class)"; return }
 $hwnd = $fg.Hwnd
 Start-Sleep -Milliseconds 300
-# Resolve the "Folder:" path edit slug via set-value's own disambiguation output.
+# Resolve the path edit slug via set-value's own disambiguation output.
 $editSlug = $null
-$sv = winapp ui set-value -w $hwnd "Folder:" '${escaped}' 2>&1 | Out-String
+$sv = winapp ui set-value -w $hwnd '${escapedEditLabel}' '${escaped}' 2>&1 | Out-String
 foreach ($ln in ($sv -split "\r?\n")) {
-  if ($ln -match 'Edit "Folder:".*->\\s*(\\S+)') { $editSlug = $Matches[1].Trim(); break }
+  if ($ln -match 'Edit "${escapedEditLabel}".*->\\s*(\\S+)') { $editSlug = $Matches[1].Trim(); break }
 }
 if ($editSlug) {
   winapp ui set-value -w $hwnd $editSlug '${escaped}' 2>&1 | Out-Null
@@ -55,7 +62,7 @@ if ($editSlug) {
   # single match already set it
 }
 Start-Sleep -Milliseconds 400
-$inv = winapp ui invoke -w $hwnd "Select Folder" 2>&1 | Out-String
+$inv = winapp ui invoke -w $hwnd '${escapedButtonLabel}' 2>&1 | Out-String
 Write-Output "UIA_SET:$hwnd editSlug=$editSlug invoke=$($inv.Trim())"
 `;
     try {
@@ -75,7 +82,8 @@ async function acceptQuickInput() {
 }
 
 // Run a single command step. Invokes the command WITHOUT awaiting (it blocks on its own prompts),
-// then answers prompts in order: {accept:true} for QuickPick, {nativeDialogPath} for showOpenDialog.
+// then answers prompts in order: {accept:true} for QuickPick, {nativeDialogPath} for folder picker,
+// {nativeFileDialogPath} for file picker.
 async function runCommandStep(step, result) {
   const settle = step.settleMs || 1600;
   appendLog('driver-run.log', `command: ${step.command}`);
@@ -84,7 +92,10 @@ async function runCommandStep(step, result) {
   const log = { type: 'command', command: step.command, answers: [] };
   for (const a of answers) {
     await delay(settle);
-    if (a.nativeDialogPath) {
+    if (a.nativeFileDialogPath) {
+      const r = await typeIntoNativeDialog(a.nativeFileDialogPath, 'file');
+      log.answers.push({ kind: 'nativeFileDialog', path: a.nativeFileDialogPath, dialogResult: r });
+    } else if (a.nativeDialogPath) {
       const r = await typeIntoNativeDialog(a.nativeDialogPath);
       log.answers.push({ kind: 'nativeDialog', path: a.nativeDialogPath, dialogResult: r });
     } else if (a.accept) {
@@ -144,8 +155,9 @@ async function runDebugStep(step, result) {
   // "Select input folder to package" folder picker (+ a cert QuickPick). Answer them
   // concurrently: kick off the dialog answerer, then start debugging.
   let dialogResult = null;
+  let dialogTask = null;
   if (step.answerDialogs !== false) {
-    (async () => {
+    dialogTask = (async () => {
       dialogResult = await typeIntoNativeDialog(step.inputFolder);
       // A cert QuickPick ("Generate and install a development certificate?") may follow.
       await delay(1500);
@@ -154,6 +166,8 @@ async function runDebugStep(step, result) {
   }
   try { started = await vscode.debug.startDebugging(folder, config); }
   catch (e) { err = String(e); }
+  // Ensure dialog answerer has finished before proceeding.
+  if (dialogTask) { try { await dialogTask; } catch (e) { appendLog('driver-run.log', 'dialog answerer error: ' + e); } }
   // Wait briefly to see whether the coreclr child session (i.e. the app launch) appeared.
   await delay(3000);
   let launched = sessionEvents.some(e => e.startsWith('start:coreclr'));
@@ -471,12 +485,12 @@ function startQueuePoller() {
     files.sort();
     for (const f of files) {
       if (seen.has(f)) continue;
-      seen.add(f);
       busy = true;
       const full = path.join(queueDir, f);
       let step;
       try { step = JSON.parse(fs.readFileSync(full, 'utf8')); }
       catch (e) { appendLog('driver-run.log', 'bad queue req ' + f + ': ' + e); busy = false; continue; }
+      seen.add(f);
       const id = step.id || f.replace(/^req-|\.json$/g, '');
       const result = { id, label: 'queue:' + id, startedAt: new Date().toISOString(), steps: [] };
       appendLog('driver-run.log', `queue run ${id}: ${step.type} ${step.command || step.inputFolder || ''}`);
@@ -495,12 +509,19 @@ function startQueuePoller() {
 async function runScript() {
   const scriptPath = process.env.WINAPP_UX_SCRIPT;
   if (!scriptPath || !fs.existsSync(scriptPath)) {
+    const msg = 'WinApp UX Driver: No script found. Set WINAPP_UX_SCRIPT env var to a valid JSON file path.';
     appendLog('driver-run.log', 'no script at ' + scriptPath);
+    vscode.window.showErrorMessage(msg);
     return;
   }
   let script;
   try { script = JSON.parse(fs.readFileSync(scriptPath, 'utf8')); }
-  catch (e) { appendLog('driver-run.log', 'bad script json: ' + e); return; }
+  catch (e) {
+    const msg = `WinApp UX Driver: Invalid script JSON — ${e.message}`;
+    appendLog('driver-run.log', 'bad script json: ' + e);
+    vscode.window.showErrorMessage(msg);
+    return;
+  }
 
   const label = script.label || 'run';
   const result = { label, startedAt: new Date().toISOString(), steps: [] };

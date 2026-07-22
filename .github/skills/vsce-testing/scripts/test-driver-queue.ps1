@@ -62,6 +62,11 @@ try {
     Write-Host "  saved $shot"
 
     Write-Host "RESULT: editor=$onEditor driverDone=$($r.done) certCreated=$made" -ForegroundColor Green
+
+    if (-not $onEditor -or -not $r.done -or -not $made) {
+        Write-Error "FAIL: editor=$onEditor driverDone=$($r.done) certCreated=$made"
+        exit 1
+    }
 }
 finally {
     if ($ctx) { Write-Host "TEARDOWN" -ForegroundColor Magenta; Stop-VSCodeDrive -Ctx $ctx }

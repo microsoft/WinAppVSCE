@@ -142,8 +142,10 @@ Real command IDs: `winapp.getWinappPath`, `winapp.init`, `winapp.restore`, `wina
 
 Answers (ordered, one per prompt the command raises):
 - `@{accept=$true}` — accept the selected QuickPick item (e.g. certGenerate's Install Yes/No).
-- `@{nativeDialogPath='<path>'}` — a `showOpenDialog` folder picker (pack/run/createDebugIdentity).
+- `@{nativeDialogPath='<path>'}` — a `showOpenDialog` folder picker (pack/run).
   Only typed when a `#32770` native dialog is foreground; a Chromium dialog is `SKIPPED`.
+- `@{nativeFileDialogPath='<path>'}` — a `showOpenDialog` file picker (createDebugIdentity,
+  sign, certInstall). Targets the `File name:` edit field and clicks `Open`.
 - Free-text `showInputBox` prompts (e.g. cert password) **cannot** be auto-answered — avoid or accept
   defaults.
 
@@ -174,9 +176,9 @@ Answers (ordered, one per prompt the command raises):
 - **The WinApp debugger requires `ms-dotnettools.csharp`** (coreclr) — install it into
   `.drive-extensions` too: `code --extensions-dir=.drive-extensions
   --install-extension ms-dotnettools.csharp`. Without it F5 shows an "Install Extension" prompt.
-- **`sign` uses a FILE picker** ("Select file to sign", button "Open"), not a folder picker — the
-  current `typeIntoNativeDialog` only clicks "Select Folder", so sign is not yet auto-answerable;
-  cancel it (`winapp ui invoke -w <hwnd> "Cancel"`) if it blocks a chained run.
+- **`sign` uses a FILE picker** ("Select file to sign", button "Open"), not a folder picker — use
+  `@{nativeFileDialogPath='<path-to-msix>'}` to answer it. The `createDebugIdentity` command also
+  uses a file picker ("Select executable") — use `@{nativeFileDialogPath='<path-to-exe>'}`.
 
 ---
 

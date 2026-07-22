@@ -53,6 +53,11 @@ try {
     Write-Host "  saved $shot"
 
     Write-Host "RESULT: focus=$focus editor=$onEditor commandVerified=$commandVerified" -ForegroundColor Green
+
+    if (-not $focus -or -not $onEditor -or -not $commandVerified) {
+        Write-Error "FAIL: focus=$focus editor=$onEditor commandVerified=$commandVerified"
+        exit 1
+    }
 }
 finally {
     if ($ctx) { Write-Host "TEARDOWN" -ForegroundColor Magenta; Stop-VSCodeDrive -Ctx $ctx }
