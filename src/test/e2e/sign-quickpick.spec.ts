@@ -1,8 +1,13 @@
 /**
- * E2E test for the `winapp.sign` command's QuickPick artifact discovery.
+ * E2E tests for the `winapp.sign` command's QuickPick flows.
  *
- * Opens VS Code in a workspace containing a .msix file, runs "WinApp: Sign Package",
- * and asserts that a QuickPick appears listing the artifact and a "Browse…" option.
+ * Test 1 — Artifact QuickPick:
+ *   Opens VS Code in a workspace containing a .msix file, runs "WinApp: Sign Package",
+ *   and asserts that a QuickPick appears listing the artifact and a "Browse…" option.
+ *
+ * Test 2 — Certificate QuickPick:
+ *   Opens VS Code in a workspace containing both a .msix and a .pfx file, selects
+ *   the package, and asserts that a second QuickPick appears for certificate selection.
  */
 
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
@@ -109,6 +114,73 @@ test.describe('winapp.sign command — artifact discovery', () => {
             await page.keyboard.press('Escape');
 
             console.log('✅ PASS: QuickPick appeared with .msix artifact and Browse… option');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    test('shows certificate QuickPick with .pfx file after selecting a package', async () => {
+        // Create a temp workspace containing both a .msix and a .pfx file
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-e2e-cert-'));
+        const msixPath = path.join(tmpDir, 'AppPackages', 'MyApp_1.0.0.0_x64.msix');
+        const pfxPath = path.join(tmpDir, 'certs', 'DevCert.pfx');
+        fs.mkdirSync(path.dirname(msixPath), { recursive: true });
+        fs.writeFileSync(msixPath, Buffer.alloc(1024));
+        fs.mkdirSync(path.dirname(pfxPath), { recursive: true });
+        fs.writeFileSync(pfxPath, Buffer.alloc(512));
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            // Run "WinApp: Sign Package"
+            await runCommandPalette(page, 'WinApp: Sign Package');
+
+            // Wait for the artifact QuickPick to appear
+            const quickInput = page.locator('.quick-input-widget');
+            await expect(
+                quickInput.locator('.quick-input-list .monaco-list-row').first()
+            ).toBeVisible({ timeout: 20_000 });
+
+            // Verify it's the package picker
+            const packageInput = quickInput.locator('.quick-input-filter input[type="text"]');
+            const packagePlaceholder = await packageInput.getAttribute('placeholder');
+            expect(packagePlaceholder).toContain('package to sign');
+
+            // Select the .msix artifact (first item) to advance to cert picker
+            await quickInput.locator('.quick-input-list .monaco-list-row').first().click();
+
+            // Wait for the certificate QuickPick to appear (second picker)
+            await expect(
+                quickInput.locator('.quick-input-list .monaco-list-row').first()
+            ).toBeVisible({ timeout: 20_000 });
+
+            // The placeholder should now mention certificate
+            const certInput = quickInput.locator('.quick-input-filter input[type="text"]');
+            const certPlaceholder = await certInput.getAttribute('placeholder');
+            expect(certPlaceholder).toContain('signing certificate');
+
+            // There should be 2 items: the .pfx file + Browse…
+            const certItems = quickInput.locator('.quick-input-list .monaco-list-row');
+            await expect(certItems).toHaveCount(2, { timeout: 10_000 });
+
+            // First item should be the .pfx certificate
+            const firstCertText = await certItems.nth(0).textContent();
+            expect(firstCertText).toContain('DevCert.pfx');
+
+            // Last item should be "Browse…"
+            const lastCertText = await certItems.nth(1).textContent();
+            expect(lastCertText).toContain('Browse');
+
+            // Dismiss the QuickPick
+            await page.keyboard.press('Escape');
+
+            console.log('✅ PASS: Certificate QuickPick appeared with .pfx file and Browse… option');
         } finally {
             if (app) {
                 await app.close().catch(() => {});

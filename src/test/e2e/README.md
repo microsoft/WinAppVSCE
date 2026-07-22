@@ -44,15 +44,16 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (126 tests)
+## Test inventory (127 tests)
 
-### `sign-quickpick.spec.ts` — 1 test
+### `sign-quickpick.spec.ts` — 2 tests
 
-Validates that `winapp.sign` discovers workspace MSIX artifacts and presents them in a QuickPick.
+Validates that `winapp.sign` discovers workspace MSIX artifacts and certificates, presenting them in QuickPicks.
 
 | # | Test | Validates |
 |---|------|-----------|
 | 1 | shows QuickPick with .msix file and Browse option when artifacts exist | QuickPick appears with artifact rows and Browse… fallback |
+| 2 | shows certificate QuickPick with .pfx file after selecting a package | Certificate QuickPick appears after package selection with .pfx rows and Browse… fallback |
 
 ### `editor-launch.spec.ts` — 11 tests
 
