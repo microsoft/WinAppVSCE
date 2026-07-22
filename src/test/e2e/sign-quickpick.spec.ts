@@ -95,7 +95,7 @@ test.describe('winapp.sign command — artifact discovery', () => {
             // The placeholder text should mention signing
             const inputBox = quickInput.locator('.quick-input-filter input[type="text"]');
             const placeholder = await inputBox.getAttribute('placeholder');
-            expect(placeholder).toContain('MSIX');
+            expect(placeholder).toContain('package to sign');
 
             // There should be at least 2 items: the .msix file + Browse…
             const items = quickInput.locator('.quick-input-list .monaco-list-row');
@@ -154,9 +154,9 @@ test.describe('winapp.sign command — artifact discovery', () => {
                 // If something is visible, check it's not the signing QuickPick
                 const inputBox = quickInput.locator('.quick-input-filter input[type="text"]');
                 const placeholder = await inputBox.getAttribute('placeholder').catch(() => '');
-                // The placeholder for the sign QuickPick is "Select an MSIX package to sign"
+                // The placeholder for the sign QuickPick is "Select a package to sign"
                 // If this placeholder is showing, the test fails — it should have gone to native dialog
-                expect(placeholder).not.toContain('MSIX');
+                expect(placeholder).not.toContain('package to sign');
             }
 
             // The native file dialog opened (we can't interact with it via Playwright,
