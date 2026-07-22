@@ -1,7 +1,5 @@
 import { MANIFEST_NAMESPACES, SchemaAttribute, SchemaElement, SchemaModel, URI_TO_PREFIX } from '../manifest-schema/schema-model';
 import { getXmlContext, splitPrefixedName } from '../manifest-schema/xml-context';
-// Re-export validation from shared module so existing consumers don't break
-export { validateManifestText, findSchemaElementExact, ManifestDiagnostic } from '../manifest-schema/schema-validation';
 
 export type ManifestCompletionKind = 'element' | 'attribute' | 'enumValue' | 'closingTag';
 

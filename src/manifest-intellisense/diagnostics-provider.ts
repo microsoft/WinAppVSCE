@@ -5,7 +5,7 @@
 
 import * as vscode from 'vscode';
 import { SchemaModel } from '../manifest-schema/schema-model';
-import { validateManifestText } from './intellisense-logic';
+import { validateManifestText } from '../manifest-schema/schema-validation';
 
 const MANIFEST_CONFIG_SECTION = 'winapp.manifest';
 const INTELLISENSE_ENABLE_CONFIG_KEY = 'intelliSense.enable';

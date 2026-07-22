@@ -6,7 +6,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { getXmlContext, findParentPath, splitPrefixedName } from '../manifest-intellisense/xml-context';
+import { getXmlContext, findParentPath, splitPrefixedName } from '../manifest-schema/xml-context';
 
 describe('splitPrefixedName', () => {
     it('splits prefixed names', () => {

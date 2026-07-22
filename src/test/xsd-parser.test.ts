@@ -7,8 +7,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'path';
-import { loadSchemaModel } from '../manifest-intellisense/xsd-parser';
-import { MANIFEST_NAMESPACES, SchemaModel } from '../manifest-intellisense/schema-model';
+import { loadSchemaModel } from '../manifest-schema/xsd-parser';
+import { MANIFEST_NAMESPACES, SchemaModel } from '../manifest-schema/schema-model';
 
 const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
 

@@ -8,21 +8,20 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'path';
-import { getXmlContext } from '../manifest-intellisense/xml-context';
+import { getXmlContext } from '../manifest-schema/xml-context';
 import {
     extractDocumentPrefixes,
     findManifestElement,
-    findSchemaElementExact,
     formatManifestHoverMarkdown,
     getAttributeCompletions,
     getAttributeValueCompletions,
     getChildCompletions,
     getManifestCompletions,
     getManifestHover,
-    validateManifestText,
 } from '../manifest-intellisense/intellisense-logic';
-import { loadSchemaModel } from '../manifest-intellisense/xsd-parser';
-import { MANIFEST_NAMESPACES } from '../manifest-intellisense/schema-model';
+import { validateManifestText, findSchemaElementExact } from '../manifest-schema/schema-validation';
+import { loadSchemaModel } from '../manifest-schema/xsd-parser';
+import { MANIFEST_NAMESPACES } from '../manifest-schema/schema-model';
 
 const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
 const FOUNDATION_NS = MANIFEST_NAMESPACES[''];
