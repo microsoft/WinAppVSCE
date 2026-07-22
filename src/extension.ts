@@ -317,12 +317,6 @@ async function runWinappCapture(
 }
 
 /**
- * Browse-option sentinel returned by the QuickPick when the user wants to fall
- * back to the native file dialog instead of picking a discovered artifact.
- */
-const BROWSE_SENTINEL = '__browse__';
-
-/**
  * Search the workspace for MSIX/APPX artifacts and let the user pick one via
  * a QuickPick. When no artifacts are found the function falls back directly to
  * a native file dialog; a "Browse…" entry is always appended so the user can
@@ -352,13 +346,16 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		});
 	}
 
-	const items: vscode.QuickPickItem[] = artifactPaths.map((p) => ({
-		label: path.basename(p),
-		description: path.relative(workspacePath, p),
-		detail: p
-	}));
+	const items: vscode.QuickPickItem[] = artifactPaths.map((p) => {
+		const relDir = path.dirname(path.relative(workspacePath, p));
+		return {
+			label: path.basename(p),
+			description: relDir === '.' ? '' : relDir,
+			detail: p
+		};
+	});
 
-	items.push({ label: '$(folder-opened) Browse…', description: 'Open a file picker', detail: BROWSE_SENTINEL, kind: vscode.QuickPickItemKind.Default });
+	items.push({ label: '$(folder-opened) Browse…', detail: 'Open a file picker' });
 
 	const picked = await vscode.window.showQuickPick(items, {
 		placeHolder: 'Select a package to sign'
@@ -368,7 +365,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		return undefined;
 	}
 
-	if (picked.detail === BROWSE_SENTINEL) {
+	if (picked.detail === 'Open a file picker') {
 		return selectFile('Select file to sign', {
 			'MSIX Packages': ['msix', 'msixbundle', 'appx', 'appxbundle'],
 			'Executables': ['exe', 'dll'],
@@ -406,13 +403,16 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 		});
 	}
 
-	const items: vscode.QuickPickItem[] = certPaths.map((p) => ({
-		label: path.basename(p),
-		description: path.relative(workspacePath, p),
-		detail: p
-	}));
+	const items: vscode.QuickPickItem[] = certPaths.map((p) => {
+		const relDir = path.dirname(path.relative(workspacePath, p));
+		return {
+			label: path.basename(p),
+			description: relDir === '.' ? '' : relDir,
+			detail: p
+		};
+	});
 
-	items.push({ label: '$(folder-opened) Browse…', description: 'Open a file picker', detail: BROWSE_SENTINEL, kind: vscode.QuickPickItemKind.Default });
+	items.push({ label: '$(folder-opened) Browse…', detail: 'Open a file picker' });
 
 	const picked = await vscode.window.showQuickPick(items, {
 		placeHolder: 'Select a signing certificate'
@@ -422,7 +422,7 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 		return undefined;
 	}
 
-	if (picked.detail === BROWSE_SENTINEL) {
+	if (picked.detail === 'Open a file picker') {
 		return selectFile('Select signing certificate', {
 			'Certificates': ['pfx']
 		});
@@ -467,7 +467,7 @@ async function signPackage(
 
 	await runWinappCommand(
 		extensionPath,
-		`sign ${escapePowerShellArg(filePath)} --cert ${escapePowerShellArg(certPath)}`,
+		`sign ${escapePowerShellArg(filePath)} ${escapePowerShellArg(certPath)}`,
 		workspacePath
 	);
 }
