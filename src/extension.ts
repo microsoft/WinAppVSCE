@@ -315,11 +315,100 @@ async function runWinappCapture(
 	);
 }
 
+/** Glob patterns for packaged MSIX/APPX artifacts within a workspace. */
+const SIGNABLE_ARTIFACT_GLOBS = ['**/*.msix', '**/*.msixbundle', '**/*.appx', '**/*.appxbundle'];
+
+/**
+ * Browse-option sentinel returned by the QuickPick when the user wants to fall
+ * back to the native file dialog instead of picking a discovered artifact.
+ */
+const BROWSE_SENTINEL = '__browse__';
+
+/**
+ * Search the workspace for MSIX/APPX artifacts and let the user pick one via
+ * a QuickPick. When no artifacts are found the function falls back directly to
+ * a native file dialog; a "Browse…" entry is always appended so the user can
+ * opt into the dialog even when artifacts *are* discovered.
+ *
+ * @returns The selected file path, or `undefined` if cancelled.
+ */
+async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
+	const artifactPaths = await findWorkspaceArtifacts(workspacePath, SIGNABLE_ARTIFACT_GLOBS);
+
+	if (artifactPaths.length === 0) {
+		return selectFile('Select file to sign', {
+			'MSIX Packages': ['msix', 'msixbundle', 'appx', 'appxbundle'],
+			'Executables': ['exe', 'dll'],
+			'All files': ['*']
+		});
+	}
+
+	const items: vscode.QuickPickItem[] = artifactPaths.map((p) => ({
+		label: path.basename(p),
+		description: path.relative(workspacePath, p),
+		detail: p
+	}));
+
+	items.push({ label: '$(folder-opened) Browse…', description: 'Open a file picker', detail: BROWSE_SENTINEL, kind: vscode.QuickPickItemKind.Default });
+
+	const picked = await vscode.window.showQuickPick(items, {
+		placeHolder: 'Select an MSIX package to sign'
+	});
+
+	if (!picked) {
+		return undefined;
+	}
+
+	if (picked.detail === BROWSE_SENTINEL) {
+		return selectFile('Select file to sign', {
+			'MSIX Packages': ['msix', 'msixbundle', 'appx', 'appxbundle'],
+			'Executables': ['exe', 'dll'],
+			'All files': ['*']
+		});
+	}
+
+	return picked.detail;
+}
+
+/**
+ * Find files matching the given glob patterns within a workspace root.
+ *
+ * Results are sorted by modification time (newest first) so the most recently
+ * packaged artifact appears at the top of the QuickPick.
+ */
+async function findWorkspaceArtifacts(workspacePath: string, patterns: string[]): Promise<string[]> {
+	const results: string[] = [];
+	for (const pattern of patterns) {
+		const matches = await glob(pattern, { cwd: workspacePath, absolute: true, nodir: true });
+		results.push(...matches);
+	}
+
+	// Sort by mtime descending (newest first); if stat fails, push to end.
+	const withStats = await Promise.all(
+		results.map(async (p) => {
+			try {
+				const stat = await fs.promises.stat(p);
+				return { path: p, mtime: stat.mtimeMs };
+			} catch {
+				return { path: p, mtime: 0 };
+			}
+		})
+	);
+	withStats.sort((a, b) => b.mtime - a.mtime);
+	return withStats.map((s) => s.path);
+}
+
 /**
  * Run the code-signing flow for an MSIX/executable. Prompts for the file to
  * sign (unless one is supplied) and the signing certificate, then invokes
  * `winapp sign`. Reused by both the `winapp.sign` command and the post-pack
  * completion notification.
+ *
+ * When invoked without a prefilled path (i.e. from the `winapp.sign` command),
+ * the function searches the workspace for MSIX/APPX artifacts and presents
+ * them in a QuickPick. A "Browse…" option is always available to fall back to
+ * a native file dialog, and the dialog is shown directly when no artifacts are
+ * found in the workspace.
  *
  * @param prefilledFilePath When provided, skips the file picker and signs this
  *   path directly (e.g. the MSIX just produced by pack).
@@ -331,11 +420,7 @@ async function signPackage(
 ): Promise<void> {
 	let filePath = prefilledFilePath;
 	if (!filePath) {
-		filePath = await selectFile('Select file to sign', {
-			'MSIX Packages': ['msix', 'appx'],
-			'Executables': ['exe', 'dll'],
-			'All files': ['*']
-		});
+		filePath = await pickSignableFile(workspacePath);
 	}
 
 	if (!filePath) {
