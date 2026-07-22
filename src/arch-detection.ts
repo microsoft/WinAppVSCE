@@ -17,6 +17,9 @@ export type PackageArch = 'x64' | 'arm64' | 'x86';
  * segment that might appear elsewhere.
  */
 const RID_PATTERNS: { pattern: RegExp; arch: PackageArch }[] = [
+	{ pattern: /^win\d[\d.]*-arm64$/i, arch: 'arm64' },
+	{ pattern: /^win\d[\d.]*-x64$/i, arch: 'x64' },
+	{ pattern: /^win\d[\d.]*-x86$/i, arch: 'x86' },
 	{ pattern: /^win-arm64$/i, arch: 'arm64' },
 	{ pattern: /^win-x64$/i, arch: 'x64' },
 	{ pattern: /^win-x86$/i, arch: 'x86' },
