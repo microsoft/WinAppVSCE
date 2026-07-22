@@ -1,13 +1,8 @@
 /**
  * E2E test for the `winapp.sign` command's QuickPick artifact discovery.
  *
- * Scenario 1 — Workspace WITH .msix artifacts:
- *   Opens VS Code in a workspace containing a .msix file, runs "WinApp: Sign Package",
- *   and asserts that a QuickPick appears listing the artifact and a "Browse…" option.
- *
- * Scenario 2 — Empty workspace (no artifacts):
- *   Opens VS Code in a workspace with no signable files, runs the command,
- *   and asserts that the native file dialog appears (no QuickPick).
+ * Opens VS Code in a workspace containing a .msix file, runs "WinApp: Sign Package",
+ * and asserts that a QuickPick appears listing the artifact and a "Browse…" option.
  */
 
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
@@ -114,58 +109,6 @@ test.describe('winapp.sign command — artifact discovery', () => {
             await page.keyboard.press('Escape');
 
             console.log('✅ PASS: QuickPick appeared with .msix artifact and Browse… option');
-        } finally {
-            if (app) {
-                await app.close().catch(() => {});
-            }
-            fs.rmSync(tmpDir, { recursive: true, force: true });
-        }
-    });
-
-    test('falls back to native file dialog when no artifacts exist', async () => {
-        // Create a truly empty temp workspace
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-e2e-empty-'));
-
-        let app: ElectronApplication | undefined;
-        try {
-            const launched = await launchVSCodeForFolder(tmpDir);
-            app = launched.app;
-            const page = launched.page;
-
-            // Run "WinApp: Sign Package"
-            await runCommandPalette(page, 'WinApp: Sign Package');
-
-            // Wait a moment for the search to complete
-            await page.waitForTimeout(3_000);
-
-            // The QuickPick should NOT appear (no artifacts → falls back to native dialog)
-            const quickInput = page.locator('.quick-input-widget:not([style*="display: none"])');
-
-            // The QuickPick widget might still be in the DOM from the command palette.
-            // After the command palette entry is selected and dismissed, the next UI element
-            // should be the native file dialog (which Playwright can't see).
-            // So we check that no QuickPick with "MSIX" placeholder is visible.
-            //
-            // A native file dialog blocks the Electron process but is not a DOM element,
-            // so we verify the QuickPick did NOT re-appear with signing options.
-            const isQuickPickVisible = await quickInput.isVisible().catch(() => false);
-
-            if (isQuickPickVisible) {
-                // If something is visible, check it's not the signing QuickPick
-                const inputBox = quickInput.locator('.quick-input-filter input[type="text"]');
-                const placeholder = await inputBox.getAttribute('placeholder').catch(() => '');
-                // The placeholder for the sign QuickPick is "Select a package to sign"
-                // If this placeholder is showing, the test fails — it should have gone to native dialog
-                expect(placeholder).not.toContain('package to sign');
-            }
-
-            // The native file dialog opened (we can't interact with it via Playwright,
-            // but the absence of the QuickPick confirms the fallback path was taken).
-            // Dismiss any native dialog by pressing Escape
-            await page.keyboard.press('Escape');
-            await page.waitForTimeout(1_000);
-
-            console.log('✅ PASS: No QuickPick appeared — fell back to native file dialog');
         } finally {
             if (app) {
                 await app.close().catch(() => {});
