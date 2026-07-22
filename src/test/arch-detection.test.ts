@@ -129,6 +129,10 @@ describe('getMachineArch', () => {
 		assert.equal(getMachineArch('i686'), 'x86');
 	});
 
+	it('maps i386 to x86', () => {
+		assert.equal(getMachineArch('i386'), 'x86');
+	});
+
 	it('returns undefined for unknown architectures', () => {
 		assert.equal(getMachineArch('unknown'), undefined);
 	});

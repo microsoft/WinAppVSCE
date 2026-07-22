@@ -70,6 +70,7 @@ export function getMachineArch(machineString?: string): PackageArch | undefined 
 			return 'arm64';
 		case 'x86':
 		case 'ia32':
+		case 'i386':
 		case 'i686':
 			return 'x86';
 		case 'unknown':
