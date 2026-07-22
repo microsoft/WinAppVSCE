@@ -42,7 +42,9 @@ and `unregister` cleanup.
 
 - Windows with VS Code (`code`), .NET SDK with WinUI templates (`dotnet new winui`), and the
   Copilot CLI (`copilot`) on PATH.
+- Node.js (`node`) and `npm` on PATH (used by the Copilot CLI launcher and VSIX build scripts).
 - The `winapp` CLI on PATH and the `winui3-builder` agent + winui3 skills installed.
+- The C# extension (`ms-dotnettools.csharp`) installed in `.drive-extensions` for F5/debugger flows.
 - This directory lives inside the `WinAppVSCE` repo at `.github/skills/vsce-testing/`.
 
 ## Usage

@@ -32,7 +32,7 @@ the user experience of the WinApp VS Code extension** while doing genuine develo
 
 ## How to drive the extension IN VS CODE (this is the whole point)
 You drive the **real extension commands and the WinApp debugger inside VS Code** through a companion
-"driver" extension already built at `..\driver-extension`. You do NOT run `winapp` CLI commands to
+"driver" extension at `{{HARNESS}}\driver-extension`. You do NOT run `winapp` CLI commands to
 simulate the extension — you make VS Code actually execute `winapp.*` commands and launch the app via
 `vscode.debug.startDebugging`, visibly. Use the helper:
 

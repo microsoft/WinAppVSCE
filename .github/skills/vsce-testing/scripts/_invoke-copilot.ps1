@@ -25,8 +25,21 @@ param(
 $ErrorActionPreference = "Stop"
 
 $node = (Get-Command node -ErrorAction Stop).Source
-$loader = Join-Path $env:APPDATA "npm\node_modules\@github\copilot\npm-loader.js"
-if (-not (Test-Path $loader)) { throw "Copilot npm-loader.js not found at $loader" }
+# Try common Copilot CLI install locations
+$loader = $null
+$candidates = @(
+    (Join-Path $env:APPDATA "npm\node_modules\@github\copilot\npm-loader.js"),
+    (Join-Path $env:LOCALAPPDATA "npm\node_modules\@github\copilot\npm-loader.js")
+)
+# Also try resolving via npm root -g
+try {
+    $npmRoot = (& npm root -g 2>$null).Trim()
+    if ($npmRoot) { $candidates += Join-Path $npmRoot "@github\copilot\npm-loader.js" }
+} catch {}
+foreach ($c in $candidates) {
+    if (Test-Path $c) { $loader = $c; break }
+}
+if (-not $loader) { throw "Copilot npm-loader.js not found. Searched: $($candidates -join ', ')" }
 if (-not (Test-Path $PromptFile)) { throw "Prompt file not found: $PromptFile" }
 
 $prompt = Get-Content -Raw -Path $PromptFile
