@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import { glob } from 'glob';
+import { escapePowerShellArg } from './winapp-cli-utils';
 
 /** Glob patterns for packaged MSIX/APPX artifacts within a workspace. */
 export const SIGNABLE_ARTIFACT_GLOBS = ['**/*.msix', '**/*.msixbundle', '**/*.appx', '**/*.appxbundle'];
@@ -8,6 +9,16 @@ export const SIGNABLE_ARTIFACT_GLOBS = ['**/*.msix', '**/*.msixbundle', '**/*.ap
 export const CERTIFICATE_GLOBS = ['**/*.pfx'];
 
 const SIGNABLE_ARTIFACT_IGNORES = ['**/node_modules/**', '**/.git/**'];
+
+/**
+ * Build the CLI argument string for `winapp sign`.
+ *
+ * The CLI expects positional arguments: `sign <file-path> <cert-path>`.
+ * Both paths are escaped for PowerShell.
+ */
+export function buildSignCommand(filePath: string, certPath: string): string {
+	return `sign ${escapePowerShellArg(filePath)} ${escapePowerShellArg(certPath)}`;
+}
 
 /**
  * Find files matching the given glob patterns within a workspace root.

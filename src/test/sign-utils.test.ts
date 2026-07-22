@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { findWorkspaceArtifacts, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS } from '../sign-utils';
+import { findWorkspaceArtifacts, buildSignCommand, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS } from '../sign-utils';
 
 function createTempDir(): string {
 	return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-sign-utils-')));
@@ -157,5 +157,29 @@ describe('findWorkspaceArtifacts with CERTIFICATE_GLOBS', () => {
 		const results = await findWorkspaceArtifacts(tempDir, CERTIFICATE_GLOBS);
 
 		assert.deepEqual(results, [included]);
+	});
+});
+
+describe('buildSignCommand', () => {
+	it('produces positional arguments: sign <file> <cert>', () => {
+		const result = buildSignCommand('C:\\out\\app.msix', 'C:\\certs\\dev.pfx');
+		assert.equal(result, "sign 'C:\\out\\app.msix' 'C:\\certs\\dev.pfx'");
+	});
+
+	it('does not use --cert flag', () => {
+		const result = buildSignCommand('app.msix', 'cert.pfx');
+		assert.ok(!result.includes('--cert'), `Expected no --cert flag, got: ${result}`);
+	});
+
+	it('escapes paths containing single quotes', () => {
+		const result = buildSignCommand("C:\\O'Brien\\app.msix", 'cert.pfx');
+		assert.ok(result.includes('sign'), 'Command should start with sign');
+		assert.ok(result.includes("O''Brien"), 'Single quote in path should be escaped');
+	});
+
+	it('handles paths with spaces', () => {
+		const result = buildSignCommand('C:\\My Apps\\app.msix', 'C:\\My Certs\\dev.pfx');
+		assert.ok(result.includes('My Apps'), 'Space in file path should be preserved');
+		assert.ok(result.includes('My Certs'), 'Space in cert path should be preserved');
 	});
 });

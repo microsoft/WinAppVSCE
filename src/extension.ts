@@ -20,7 +20,7 @@ import {
 	isArtifactWithinRoot,
 	planPackCompletion
 } from './pack-result';
-import { findWorkspaceArtifacts, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS } from './sign-utils';
+import { findWorkspaceArtifacts, buildSignCommand, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS } from './sign-utils';
 import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
@@ -467,7 +467,7 @@ async function signPackage(
 
 	await runWinappCommand(
 		extensionPath,
-		`sign ${escapePowerShellArg(filePath)} ${escapePowerShellArg(certPath)}`,
+		buildSignCommand(filePath, certPath),
 		workspacePath
 	);
 }
