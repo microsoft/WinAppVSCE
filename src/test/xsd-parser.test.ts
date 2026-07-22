@@ -236,4 +236,60 @@ describe('loadSchemaModel', () => {
         assert.ok(displayName, 'DisplayName should be registered as an element');
         assert.equal(displayName.name, 'DisplayName');
     });
+
+    it('parses substitution groups from XSD files', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        assert.ok(model.substitutionGroups.size > 0, 'should have parsed substitution groups');
+    });
+
+    it('populates VisualElementsChoice substitution group', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const group = model.substitutionGroups.get('VisualElementsChoice');
+        assert.ok(group, 'VisualElementsChoice group should exist');
+        assert.ok(group.some(m => m.name === 'VisualElements'),
+            'should include VisualElements as a concrete member');
+    });
+
+    it('populates CapabilityChoice with members from multiple schemas', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const group = model.substitutionGroups.get('CapabilityChoice');
+        assert.ok(group, 'CapabilityChoice group should exist');
+        assert.ok(group.length >= 2, 'should have multiple capability members');
+        assert.ok(group.some(m => m.name === 'Capability'),
+            'should include Capability');
+    });
+
+    it('populates ApplicationExtensionChoice with Extension members', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const group = model.substitutionGroups.get('ApplicationExtensionChoice');
+        assert.ok(group, 'ApplicationExtensionChoice group should exist');
+        assert.ok(group.every(m => m.name === 'Extension'),
+            'all members should be named Extension');
+        assert.ok(group.length >= 2,
+            'should have Extension members from multiple namespaces');
+        const namespaces = new Set(group.map(m => m.namespace));
+        assert.ok(namespaces.size >= 2,
+            'Extension members should span multiple namespaces');
+    });
+
+    it('includes substitution groups not present in the old hardcoded map', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        // These groups exist in the XSD but were missing from the old hardcoded map
+        assert.ok(model.substitutionGroups.has('ExtensionChoice'),
+            'ExtensionChoice (package-level extensions) should be parsed');
+        assert.ok(model.substitutionGroups.has('BackgroundTaskChoice'),
+            'BackgroundTaskChoice should be parsed');
+        assert.ok(model.substitutionGroups.has('CustomCapabilityChoice'),
+            'CustomCapabilityChoice should be parsed');
+    });
+
+    it('does not produce duplicate members in substitution groups', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        for (const [head, members] of model.substitutionGroups.entries()) {
+            const keys = members.map(m => `${m.namespace}|${m.name}`);
+            const uniqueKeys = new Set(keys);
+            assert.equal(keys.length, uniqueKeys.size,
+                `${head} should have no duplicate members`);
+        }
+    });
 });
