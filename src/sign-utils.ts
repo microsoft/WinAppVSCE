@@ -1,9 +1,10 @@
 import * as fs from 'node:fs';
 import { glob } from 'glob';
 import { escapePowerShellArg } from './winapp-cli-utils';
+import { ARTIFACT_GLOBS } from './artifact-types';
 
 /** Glob patterns for packaged MSIX/APPX artifacts within a workspace. */
-export const SIGNABLE_ARTIFACT_GLOBS = ['**/*.msix', '**/*.msixbundle', '**/*.appx', '**/*.appxbundle'];
+export const SIGNABLE_ARTIFACT_GLOBS = ARTIFACT_GLOBS;
 
 /** Glob patterns for PFX certificate files within a workspace. */
 export const CERTIFICATE_GLOBS = ['**/*.pfx'];

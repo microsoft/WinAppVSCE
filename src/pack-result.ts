@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { isArtifactPath, stripArtifactExtension } from './artifact-types';
 
 /**
  * Pure helpers for interpreting the output of `winapp package` and building the
@@ -21,8 +22,8 @@ export type PackCompletionPlan =
 	| { kind: 'error'; message: string }
 	| { kind: 'success'; artifactPath: string; appName: string | undefined; message: string };
 
-/** File extensions the CLI can emit for a packaged artifact. */
-const ARTIFACT_EXTENSIONS = ['.msixbundle', '.msix', '.appxbundle', '.appx'];
+/** File extensions the CLI can emit for a packaged artifact (re-exported for backward compat). */
+export { ARTIFACT_EXTENSIONS } from './artifact-types';
 
 /**
  * Marker the CLI prints immediately before the packaged artifact path.
@@ -42,8 +43,7 @@ function stripMarkers(line: string): string {
 }
 
 function looksLikeArtifactPath(candidate: string): boolean {
-	const lower = candidate.toLowerCase();
-	return ARTIFACT_EXTENSIONS.some((ext) => lower.endsWith(ext));
+	return isArtifactPath(candidate);
 }
 
 /**
@@ -180,9 +180,7 @@ export function planPackCompletion(result: {
  * @returns The inferred app name, or `undefined` if it cannot be determined.
  */
 export function deriveAppNameFromArtifact(artifactPath: string): string | undefined {
-	const base = path
-		.basename(artifactPath)
-		.replace(/\.(msixbundle|msix|appxbundle|appx)$/i, '');
+	const base = stripArtifactExtension(path.basename(artifactPath));
 	const match = base.match(/^(.*?)_\d/);
 	if (match && match[1].length > 0) {
 		return match[1];

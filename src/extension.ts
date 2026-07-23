@@ -21,6 +21,7 @@ import {
 	planPackCompletion
 } from './pack-result';
 import { findWorkspaceArtifacts, buildSignCommand, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS, executeSignFlow, type SignFlowAdapter } from './sign-utils';
+import { ARTIFACT_DIALOG_FILTER } from './artifact-types';
 import {
 	detectArchFromPath,
 	getMachineArch,
@@ -346,7 +347,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 
 	if (artifactPaths.length === 0) {
 		return selectFile('Select file to sign', {
-			'MSIX Packages': ['msix', 'msixbundle', 'appx', 'appxbundle'],
+			...ARTIFACT_DIALOG_FILTER,
 			'Executables': ['exe', 'dll'],
 			'All files': ['*']
 		});
@@ -373,7 +374,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 
 	if (picked.detail === 'Open a file picker') {
 		return selectFile('Select file to sign', {
-			'MSIX Packages': ['msix', 'msixbundle', 'appx', 'appxbundle'],
+			...ARTIFACT_DIALOG_FILTER,
 			'Executables': ['exe', 'dll'],
 			'All files': ['*']
 		});
