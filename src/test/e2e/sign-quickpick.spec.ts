@@ -261,10 +261,10 @@ test.describe('winapp.sign command — artifact discovery', () => {
     });
 
     // ──────────────────────────────────────────────────────
-    // Test 4 — Browse option opens file dialog (issue #79)
+    // Test 4 — Browse smoke test (issue #79)
     // ──────────────────────────────────────────────────────
 
-    test('selecting Browse opens a native file dialog', async () => {
+    test('selecting Browse dismisses the QuickPick in a native-dialog smoke test', async () => {
         const tmpDir = createSignTestWorkspace();
 
         let app: ElectronApplication | undefined;
@@ -289,11 +289,11 @@ test.describe('winapp.sign command — artifact discovery', () => {
             expect(browseText).toContain('Browse');
             await browseItem.click();
 
-            // After clicking Browse, the QuickPick should dismiss and a native
-            // file dialog should open. We can't interact with the native dialog
-            // from Playwright, but we can verify the QuickPick was dismissed
-            // (the quick-input list rows disappear) and no error notification
-            // appeared.
+            // Smoke test only: selecting Browse should dismiss the QuickPick and
+            // trigger the native file dialog path. Playwright cannot interact
+            // with or assert on native OS dialogs, so unit tests provide the
+            // real coverage for the Browse branch while this test verifies the
+            // VS Code-side handoff happens without an immediate error.
             await page.waitForTimeout(2_000);
 
             // The QuickPick list should no longer be visible (replaced by native dialog)
@@ -381,4 +381,3 @@ test.describe('winapp.sign command — artifact discovery', () => {
     // src/test/sign-flow.test.ts via the extracted executeSignFlow function.
     // See issue #83.
 });
-

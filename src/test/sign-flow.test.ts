@@ -6,23 +6,33 @@ import { executeSignFlow, type SignFlowAdapter } from '../sign-flow';
  * Stub adapter that records which methods were called and returns
  * configurable results.
  */
+interface AdapterCallArgs {
+	method: string;
+	args: unknown[];
+}
+
 function createStubAdapter(overrides?: Partial<{
 	pickSignableFileResult: string | undefined;
 	pickCertificateFileResult: string | undefined;
-}>): SignFlowAdapter & { calls: string[] } {
+}>): SignFlowAdapter & { calls: string[]; callArgs: AdapterCallArgs[] } {
 	const calls: string[] = [];
+	const callArgs: AdapterCallArgs[] = [];
 	return {
 		calls,
-		async pickSignableFile(_workspacePath: string): Promise<string | undefined> {
+		callArgs,
+		async pickSignableFile(workspacePath: string): Promise<string | undefined> {
 			calls.push('pickSignableFile');
+			callArgs.push({ method: 'pickSignableFile', args: [workspacePath] });
 			return overrides?.pickSignableFileResult;
 		},
-		async pickCertificateFile(_workspacePath: string): Promise<string | undefined> {
+		async pickCertificateFile(workspacePath: string): Promise<string | undefined> {
 			calls.push('pickCertificateFile');
+			callArgs.push({ method: 'pickCertificateFile', args: [workspacePath] });
 			return overrides?.pickCertificateFileResult;
 		},
-		async runSignCommand(_extensionPath: string, _command: string, _workspacePath: string): Promise<void> {
+		async runSignCommand(extensionPath: string, command: string, workspacePath: string): Promise<void> {
 			calls.push('runSignCommand');
+			callArgs.push({ method: 'runSignCommand', args: [extensionPath, command, workspacePath] });
 		}
 	};
 }
@@ -76,6 +86,16 @@ describe('executeSignFlow', () => {
 				'Command should reference the prefilled artifact');
 			assert.ok(result.commandExecuted!.includes('dev.pfx'),
 				'Command should reference the selected certificate');
+			assert.deepEqual(
+				adapter.callArgs.find((call) => call.method === 'pickCertificateFile')?.args,
+				['/workspace'],
+				'pickCertificateFile should receive the workspace path'
+			);
+			assert.deepEqual(
+				adapter.callArgs.find((call) => call.method === 'runSignCommand')?.args,
+				['/ext', result.commandExecuted, '/workspace'],
+				'runSignCommand should receive the extension path, command, and workspace path'
+			);
 		});
 
 		it('executes the sign command via the adapter', async () => {
@@ -83,12 +103,17 @@ describe('executeSignFlow', () => {
 				pickCertificateFileResult: 'C:\\certs\\dev.pfx'
 			});
 
-			await executeSignFlow(
+			const result = await executeSignFlow(
 				adapter, '/ext', '/workspace', 'C:\\out\\app.msix'
 			);
 
 			assert.ok(adapter.calls.includes('runSignCommand'),
 				'runSignCommand should be called');
+			assert.deepEqual(
+				adapter.callArgs.find((call) => call.method === 'runSignCommand')?.args,
+				['/ext', result.commandExecuted, '/workspace'],
+				'runSignCommand should receive the extension path, command, and workspace path'
+			);
 		});
 
 		it('aborts when certificate picker is cancelled', async () => {
@@ -126,6 +151,11 @@ describe('executeSignFlow', () => {
 				'File picker should be shown');
 			assert.ok(adapter.calls.includes('pickSignableFile'),
 				'pickSignableFile should be called');
+			assert.deepEqual(
+				adapter.callArgs.find((call) => call.method === 'pickSignableFile')?.args,
+				['/workspace'],
+				'pickSignableFile should receive the workspace path'
+			);
 		});
 
 		it('proceeds to certificate picker after file selection', async () => {
