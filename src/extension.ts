@@ -21,6 +21,7 @@ import {
 	planPackCompletion
 } from './pack-result';
 import { findWorkspaceArtifacts, buildSignCommand, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS } from './sign-utils';
+import { executeSignFlow, type SignFlowAdapter } from './sign-flow';
 import {
 	detectArchFromPath,
 	getMachineArch,
@@ -457,25 +458,12 @@ async function signPackage(
 	workspacePath: string,
 	prefilledFilePath?: string
 ): Promise<void> {
-	let filePath = prefilledFilePath;
-	if (!filePath) {
-		filePath = await pickSignableFile(workspacePath);
-	}
-
-	if (!filePath) {
-		return;
-	}
-
-	const certPath = await pickCertificateFile(workspacePath);
-	if (!certPath) {
-		return;
-	}
-
-	await runWinappCommand(
-		extensionPath,
-		buildSignCommand(filePath, certPath),
-		workspacePath
-	);
+	const adapter: SignFlowAdapter = {
+		pickSignableFile: (wp) => pickSignableFile(wp),
+		pickCertificateFile: (wp) => pickCertificateFile(wp),
+		runSignCommand: async (ep, cmd, wp) => { await runWinappCommand(ep, cmd, wp); }
+	};
+	await executeSignFlow(adapter, extensionPath, workspacePath, prefilledFilePath);
 }
 
 /**

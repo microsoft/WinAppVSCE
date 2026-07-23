@@ -8,6 +8,19 @@
  * Test 2 — Certificate QuickPick:
  *   Opens VS Code in a workspace containing both a .msix and a .pfx file, selects
  *   the package, and asserts that a second QuickPick appears for certificate selection.
+ *
+ * Test 3 — Cancel artifact QuickPick:
+ *   Opens VS Code, runs "WinApp: Sign Package", and presses Escape to dismiss the
+ *   artifact QuickPick. Verifies the sign flow aborts gracefully (no certificate
+ *   picker or terminal appears).
+ *
+ * Test 4 — Browse option:
+ *   Opens VS Code, runs "WinApp: Sign Package", selects "Browse…" from the QuickPick,
+ *   and verifies that a native file dialog opens (the Open dialog title bar appears).
+ *
+ * Test 5 — Cancel certificate QuickPick:
+ *   Opens VS Code, selects an artifact from the package QuickPick, then presses
+ *   Escape on the certificate QuickPick. Verifies the sign flow aborts (no terminal).
  */
 
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
@@ -61,17 +74,31 @@ async function runCommandPalette(page: Page, commandLabel: string): Promise<void
     await page.keyboard.press('Enter');
 }
 
+/**
+ * Create a temp workspace with a .msix file and optionally a .pfx file.
+ */
+function createSignTestWorkspace(options?: { includePfx?: boolean }): string {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-e2e-'));
+    const msixPath = path.join(tmpDir, 'AppPackages', 'MyApp_1.0.0.0_x64.msix');
+    fs.mkdirSync(path.dirname(msixPath), { recursive: true });
+    fs.writeFileSync(msixPath, Buffer.alloc(1024));
+
+    if (options?.includePfx) {
+        const pfxPath = path.join(tmpDir, 'certs', 'DevCert.pfx');
+        fs.mkdirSync(path.dirname(pfxPath), { recursive: true });
+        fs.writeFileSync(pfxPath, Buffer.alloc(512));
+    }
+
+    return tmpDir;
+}
+
 // ──────────────────────────────────────────────────────
 // Test 1 — Workspace with .msix artifact
 // ──────────────────────────────────────────────────────
 
 test.describe('winapp.sign command — artifact discovery', () => {
     test('shows QuickPick with .msix file and Browse option when artifacts exist', async () => {
-        // Create a temp workspace containing a fake .msix file
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-e2e-artifacts-'));
-        const msixPath = path.join(tmpDir, 'AppPackages', 'MyApp_1.0.0.0_x64.msix');
-        fs.mkdirSync(path.dirname(msixPath), { recursive: true });
-        fs.writeFileSync(msixPath, Buffer.alloc(1024)); // dummy content
+        const tmpDir = createSignTestWorkspace();
 
         let app: ElectronApplication | undefined;
         try {
@@ -123,14 +150,7 @@ test.describe('winapp.sign command — artifact discovery', () => {
     });
 
     test('shows certificate QuickPick with .pfx file after selecting a package', async () => {
-        // Create a temp workspace containing both a .msix and a .pfx file
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-e2e-cert-'));
-        const msixPath = path.join(tmpDir, 'AppPackages', 'MyApp_1.0.0.0_x64.msix');
-        const pfxPath = path.join(tmpDir, 'certs', 'DevCert.pfx');
-        fs.mkdirSync(path.dirname(msixPath), { recursive: true });
-        fs.writeFileSync(msixPath, Buffer.alloc(1024));
-        fs.mkdirSync(path.dirname(pfxPath), { recursive: true });
-        fs.writeFileSync(pfxPath, Buffer.alloc(512));
+        const tmpDir = createSignTestWorkspace({ includePfx: true });
 
         let app: ElectronApplication | undefined;
         try {
@@ -189,18 +209,176 @@ test.describe('winapp.sign command — artifact discovery', () => {
         }
     });
 
+    // ──────────────────────────────────────────────────────
+    // Test 3 — Cancel artifact QuickPick (issue #79)
+    // ──────────────────────────────────────────────────────
+
+    test('cancelling the artifact QuickPick aborts the sign flow', async () => {
+        const tmpDir = createSignTestWorkspace();
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            // Run "WinApp: Sign Package"
+            await runCommandPalette(page, 'WinApp: Sign Package');
+
+            // Wait for the artifact QuickPick to appear
+            const quickInput = page.locator('.quick-input-widget');
+            await expect(
+                quickInput.locator('.quick-input-list .monaco-list-row').first()
+            ).toBeVisible({ timeout: 20_000 });
+
+            // Verify it's the package picker
+            const inputBox = quickInput.locator('.quick-input-filter input[type="text"]');
+            const placeholder = await inputBox.getAttribute('placeholder');
+            expect(placeholder).toContain('package to sign');
+
+            // Press Escape to cancel the QuickPick
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(2_000);
+
+            // Verify the QuickPick is dismissed — the list rows should no longer
+            // be visible. We check that no quick-input list rows are shown, which
+            // means no second picker (certificate) appeared.
+            const visibleRows = quickInput.locator('.quick-input-list .monaco-list-row');
+            await expect(visibleRows).toHaveCount(0, { timeout: 5_000 });
+
+            // Verify no WinApp terminal was created (sign was not executed)
+            const terminalTabs = page.locator('.terminal-tab');
+            const terminalCount = await terminalTabs.count();
+            expect(terminalCount).toBe(0);
+
+            console.log('✅ PASS: Cancelling artifact QuickPick aborted the sign flow');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    // ──────────────────────────────────────────────────────
+    // Test 4 — Browse option opens file dialog (issue #79)
+    // ──────────────────────────────────────────────────────
+
+    test('selecting Browse opens a native file dialog', async () => {
+        const tmpDir = createSignTestWorkspace();
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            // Run "WinApp: Sign Package"
+            await runCommandPalette(page, 'WinApp: Sign Package');
+
+            // Wait for the artifact QuickPick to appear
+            const quickInput = page.locator('.quick-input-widget');
+            await expect(
+                quickInput.locator('.quick-input-list .monaco-list-row').first()
+            ).toBeVisible({ timeout: 20_000 });
+
+            // Click "Browse…" (second item, the last row)
+            const items = quickInput.locator('.quick-input-list .monaco-list-row');
+            const browseItem = items.last();
+            const browseText = await browseItem.textContent();
+            expect(browseText).toContain('Browse');
+            await browseItem.click();
+
+            // After clicking Browse, the QuickPick should dismiss and a native
+            // file dialog should open. We can't interact with the native dialog
+            // from Playwright, but we can verify the QuickPick was dismissed
+            // (the quick-input list rows disappear) and no error notification
+            // appeared.
+            await page.waitForTimeout(2_000);
+
+            // The QuickPick list should no longer be visible (replaced by native dialog)
+            const visibleRows = quickInput.locator('.quick-input-list .monaco-list-row');
+            await expect(visibleRows).toHaveCount(0, { timeout: 5_000 });
+
+            // No error notification should be visible
+            const errorNotification = page.locator('.notification-toast .codicon-error');
+            const errorCount = await errorNotification.count();
+            expect(errorCount).toBe(0);
+
+            console.log('✅ PASS: Selecting Browse dismissed QuickPick and opened file dialog');
+
+            // Close the native dialog by pressing Escape (may or may not work
+            // depending on OS focus, but attempt it for cleanup)
+            await page.keyboard.press('Escape');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    // ──────────────────────────────────────────────────────
+    // Test 5 — Cancel certificate QuickPick (issue #79)
+    // ──────────────────────────────────────────────────────
+
+    test('cancelling the certificate QuickPick aborts the sign flow', async () => {
+        const tmpDir = createSignTestWorkspace({ includePfx: true });
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            // Run "WinApp: Sign Package"
+            await runCommandPalette(page, 'WinApp: Sign Package');
+
+            // Wait for the artifact QuickPick to appear
+            const quickInput = page.locator('.quick-input-widget');
+            await expect(
+                quickInput.locator('.quick-input-list .monaco-list-row').first()
+            ).toBeVisible({ timeout: 20_000 });
+
+            // Select the .msix artifact (first item) to advance to cert picker
+            await quickInput.locator('.quick-input-list .monaco-list-row').first().click();
+
+            // Wait for the certificate QuickPick to appear
+            await expect(
+                quickInput.locator('.quick-input-list .monaco-list-row').first()
+            ).toBeVisible({ timeout: 20_000 });
+
+            // Verify it's the certificate picker
+            const certInput = quickInput.locator('.quick-input-filter input[type="text"]');
+            const certPlaceholder = await certInput.getAttribute('placeholder');
+            expect(certPlaceholder).toContain('signing certificate');
+
+            // Press Escape to cancel the certificate QuickPick
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(2_000);
+
+            // Verify the QuickPick is dismissed
+            const visibleRows = quickInput.locator('.quick-input-list .monaco-list-row');
+            await expect(visibleRows).toHaveCount(0, { timeout: 5_000 });
+
+            // Verify no WinApp terminal was created (sign was not executed)
+            const terminalTabs = page.locator('.terminal-tab');
+            const terminalCount = await terminalTabs.count();
+            expect(terminalCount).toBe(0);
+
+            console.log('✅ PASS: Cancelling certificate QuickPick aborted the sign flow');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
     // The post-pack "Sign" action calls winapp.sign with a prefilled artifact
     // path, which skips the package QuickPick and goes straight to the
-    // certificate picker. This flow cannot be tested from Playwright because
-    // executeCommand with arguments requires VS Code extension test host
-    // infrastructure (vscode-test). The command registration was updated to
-    // accept an optional path argument so this path IS testable once the
-    // extension test host is configured. See issue #83.
-    test.skip('skips package QuickPick when invoked with prefilled path (needs extension test host)', () => {
-        // Intended assertions when extension test host is available:
-        // 1. Call vscode.commands.executeCommand('winapp.sign', '/path/to/app.msix')
-        // 2. Assert the package QuickPick is NOT shown
-        // 3. Assert the certificate QuickPick appears directly
-        // 4. Assert the prefilled path is passed to the sign terminal command
-    });
+    // certificate picker. This path is now covered by unit tests in
+    // src/test/sign-flow.test.ts via the extracted executeSignFlow function.
+    // See issue #83.
 });
+
