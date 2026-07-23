@@ -35,7 +35,7 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Generate Certificate** | Create a development certificate for signing, with an option to also install (trust) it. Installing prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Install Certificate** | Install (trust) an existing `.pfx` or `.cer` certificate in the machine store. Prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Certificate Info** | Display certificate details (subject, thumbprint, expiry) to verify a certificate matches your manifest. |
-| **WinApp: Sign Package** | Sign an MSIX package or executable with a certificate. |
+| **WinApp: Sign Package** | Sign an MSIX package or executable with a certificate. Searches the workspace for MSIX/APPX artifacts and certificates, presenting them in a QuickPick sorted by newest first; a **Browse…** option falls back to a native file dialog. |
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
 
@@ -51,7 +51,7 @@ When you run a project-context WinApp command — such as **Initialize Project**
 2. **Project at workspace root** — If a recognized project exists at the root, commands run there immediately.
 3. **Automatic scan** — Searches the workspace for compatible projects and prompts if multiple are found.
 
-Commands that already take an explicit target — such as **Run Application**, **Create MSIX Package** (input folder), **Sign Package**, **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
+Commands that already take an explicit target — such as **Run Application**, **Create MSIX Package** (input folder), **Sign Package** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
 **Configuration (optional):**
 
@@ -214,7 +214,7 @@ Use **WinApp: Generate Manifest** to create an `Package.appxmanifest` from a tem
 
 ### Package and sign
 
-Use **WinApp: Create MSIX Package** to package your application. If you choose **self-contained** packaging and the selected build output path appears to target a different architecture than your machine, WinApp shows a warning before continuing so you can avoid bundling the wrong Windows App SDK runtime. When packaging finishes, a completion notification names the built `.msix` and offers three actions: **Reveal in Explorer** (open the package in File Explorer), **Sign** (sign the just-built package, pre-filling its path), and **Install** (sideload it via `Add-AppxPackage`). Pair it with **WinApp: Generate Certificate** and **WinApp: Sign Package** to produce a signed, ready-to-distribute MSIX. Use **WinApp: Certificate Info** to verify a certificate's details (subject, thumbprint, expiry) before signing.
+Use **WinApp: Create MSIX Package** to package your application. If you choose **self-contained** packaging and the selected build output path appears to target a different architecture than your machine, WinApp shows a warning before continuing so you can avoid bundling the wrong Windows App SDK runtime. When packaging finishes, a completion notification names the built `.msix` and offers three actions: **Reveal in Explorer** (open the package in File Explorer), **Sign** (sign the just-built package, pre-filling its path and skipping the artifact QuickPick), and **Install** (sideload it via `Add-AppxPackage`). **WinApp: Sign Package** searches the workspace for MSIX/APPX artifacts and `.pfx` certificates, presenting them in QuickPicks sorted by newest first — a **Browse…** entry always lets you fall back to a native file dialog. Pair it with **WinApp: Generate Certificate** to produce a signed, ready-to-distribute MSIX. Use **WinApp: Certificate Info** to verify a certificate's details (subject, thumbprint, expiry) before signing.
 
 ### Access Windows SDK tools
 
