@@ -25,6 +25,8 @@ import {
     ApplicationData,
     VisualElementsData,
     ResourceData,
+    ExtensionField,
+    ExtensionData,
 } from './manifest-types';
 
 import {
@@ -46,31 +48,106 @@ import {
 
 import { insertChildBeforeClose } from './manifest-xml-ops';
 
-/** Recursively walk a DOM element extracting field labels and values for validation. */
-function walkExtensionElement(element: Element, fields: Array<{ label: string; value: string }>): void {
+/** Descriptions for known extension fields, shown as help text in the editor. */
+const EXTENSION_FIELD_DESCRIPTIONS: Record<string, string> = {
+    // MCP Server / App Extension (windows.appExtension)
+    'AppExtension.Name': 'Extension contract name, use "com.microsoft.windows.ai.mcpServer" to register as an MCP server',
+    'AppExtension.Id': 'Unique identifier for this app extension instance',
+    'AppExtension.DisplayName': 'Display name shown when discovering this extension',
+    'AppExtension.PublicFolder': 'Folder in the package accessible to the host app, typically "Assets" or "Public"',
+    'Registration': 'Path to the MCP server configuration JSON file, relative to the PublicFolder',
+    // COM Server (windows.comServer)
+    'ExeServer.Executable': 'Relative path to the COM server executable inside the package',
+    'ExeServer.DisplayName': 'Name for this COM server, shown in system tools and diagnostics',
+    'Class.Id': 'CLSID (GUID) that uniquely identifies this COM class, format: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}',
+    // App Execution Alias (windows.appExecutionAlias)
+    'ExecutionAlias.Alias': 'Command-line alias users type to launch your app (e.g., "myapp.exe"). Must end in .exe',
+    // Background Tasks (windows.backgroundTasks)
+    'Extension.EntryPoint': 'Activatable class ID for the background task (e.g., "MyApp.BackgroundTask"), or "Windows.FullTrustApplication" for Win32 apps',
+    'Task.Type': 'Background task trigger type (e.g., "timer", "pushNotification", "systemEvent", "general")',
+    // Protocol Activation (windows.protocol)
+    'Protocol.Name': 'URI scheme this app handles (e.g., "myapp"). Users launch your app with myapp://. Lowercase letters, digits, and ".", "+", "-" only',
+    // File Type Association (windows.fileTypeAssociation)
+    'FileTypeAssociation.Name': 'Internal name for this file type association (letters, digits, periods only)',
+    'DisplayName': 'User-friendly display name shown in the Open With dialog',
+    'FileType': 'File extension to associate (must start with ".", e.g., ".txt", ".myext")',
+    // Startup Task (windows.startupTask)
+    'StartupTask.TaskId': 'Unique identifier for this startup task, used to enable/disable it programmatically',
+    'StartupTask.Enabled': 'Whether the task runs automatically at user logon ("true" or "false")',
+    'StartupTask.DisplayName': 'Name shown to the user in Task Manager Startup tab',
+    // Share Target (windows.shareTarget)
+    'DataFormat': 'Data format this share target accepts (e.g., "Text", "URI", "Bitmap", "Html", "StorageItems")',
+    // App Service (windows.appService)
+    'AppService.Name': 'Unique name for this app service that other apps use to connect (e.g., "com.contoso.myservice")',
+    // Toast Notification Activation (windows.toastNotificationActivation)
+    'ToastNotificationActivation.ToastActivatorCLSID': 'COM CLSID for toast activation, format: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}',
+};
+
+/**
+ * Recursively walk a DOM element extracting fields for the extension editor form.
+ * Produces fully enriched fields with descriptions, editability, and text-content flags
+ * so the webview can render them without re-parsing XML.
+ */
+function walkExtensionElement(element: Element, fields: ExtensionField[], isRoot: boolean): void {
     const localName = element.localName || element.nodeName.split(':').pop() || '';
+
+    // Category attribute on root is read-only
+    if (isRoot) {
+        const category = element.getAttribute('Category');
+        if (category) {
+            fields.push({ label: 'Category', value: category, editable: false, description: 'Extension category type' });
+        }
+    }
 
     // Extract attributes as ElementLocalName.AttributeName
     for (let i = 0; i < element.attributes.length; i++) {
         const attr = element.attributes.item(i);
         if (!attr) { continue; }
         const attrName = attr.localName || attr.nodeName;
-        // Skip namespace declarations and the root Extension Category
         if (attrName === 'xmlns' || attr.nodeName.startsWith('xmlns:')) { continue; }
-        if (attrName === 'Category') { continue; }
-        fields.push({ label: `${localName}.${attrName}`, value: attr.value || '' });
+        if (attrName === 'Category' && isRoot) { continue; }
+        const fieldKey = `${localName}.${attrName}`;
+        fields.push({
+            label: fieldKey,
+            value: attr.value || '',
+            editable: true,
+            description: EXTENSION_FIELD_DESCRIPTIONS[fieldKey] || '',
+        });
     }
 
-    // Extract text content from leaf elements (no child elements)
+    // Check for text-content elements (leaf elements with only text children)
     let hasChildElements = false;
+    let textContent = '';
     const childNodes = element.childNodes;
     for (let i = 0; i < childNodes.length; i++) {
-        if (childNodes.item(i)?.nodeType === 1) { hasChildElements = true; break; }
+        const child = childNodes.item(i);
+        if (child?.nodeType === 1) { hasChildElements = true; }
+        else if (child?.nodeType === 3) { textContent += child.nodeValue || ''; }
     }
-    if (!hasChildElements) {
-        const text = (element.textContent || '').trim();
-        if (text) {
-            fields.push({ label: localName, value: text });
+
+    if (!hasChildElements && textContent.trim()) {
+        fields.push({
+            label: localName,
+            value: textContent.trim(),
+            editable: true,
+            description: EXTENSION_FIELD_DESCRIPTIONS[localName] || '',
+            isTextContent: true,
+        });
+    } else if (!hasChildElements && !isRoot) {
+        // Empty leaf element — show as editable blank field if no real attributes
+        let nonXmlnsAttrs = 0;
+        for (let i = 0; i < element.attributes.length; i++) {
+            const attr = element.attributes.item(i);
+            if (attr && !attr.nodeName.startsWith('xmlns')) { nonXmlnsAttrs++; }
+        }
+        if (nonXmlnsAttrs === 0) {
+            fields.push({
+                label: localName,
+                value: '',
+                editable: true,
+                description: EXTENSION_FIELD_DESCRIPTIONS[localName] || '',
+                isTextContent: true,
+            });
         }
     }
 
@@ -78,7 +155,7 @@ function walkExtensionElement(element: Element, fields: Array<{ label: string; v
     for (let i = 0; i < childNodes.length; i++) {
         const child = childNodes.item(i);
         if (child && child.nodeType === 1) {
-            walkExtensionElement(child as Element, fields);
+            walkExtensionElement(child as Element, fields, false);
         }
     }
 }
@@ -310,7 +387,7 @@ function parseApplications(root: Element): ApplicationData[] {
         }
 
         // Gather extension data: raw XML + pre-parsed fields from the DOM
-        const extensions: Array<{ xml: string; fields: Array<{ label: string; value: string }> }> = [];
+        const extensions: ExtensionData[] = [];
         const extEl = getChildByLocalName(appEl, 'Extensions');
         if (extEl) {
             const serializer = new XMLSerializer();
@@ -319,8 +396,8 @@ function parseApplications(root: Element): ApplicationData[] {
                 const child = extChildren[i];
                 if (child.nodeType === 1) {
                     const xml = serializer.serializeToString(child as Element);
-                    const fields: Array<{ label: string; value: string }> = [];
-                    walkExtensionElement(child as Element, fields);
+                    const fields: ExtensionField[] = [];
+                    walkExtensionElement(child as Element, fields, true);
                     extensions.push({ xml, fields });
                 }
             }

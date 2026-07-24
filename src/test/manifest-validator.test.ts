@@ -24,25 +24,31 @@ before(() => {
 
 /** Convert raw extension XML string into ExtensionData with pre-parsed fields. */
 function ext(xml: string): ExtensionData {
-    const fields: Array<{ label: string; value: string }> = [];
+    const fields: ExtensionData['fields'] = [];
     try {
         const { doc } = parseManifestXml(xml);
         if (doc?.documentElement) {
-            walkEl(doc.documentElement, fields);
+            walkEl(doc.documentElement, fields, true);
         }
     } catch { /* empty fields on parse failure */ }
     return { xml, fields };
 }
 
-function walkEl(element: any, fields: Array<{ label: string; value: string }>): void {
+function walkEl(element: any, fields: ExtensionData['fields'], isRoot = false): void {
     const localName = element.localName || element.nodeName.split(':').pop() || '';
+    if (isRoot) {
+        const category = element.getAttribute?.('Category');
+        if (category) {
+            fields.push({ label: 'Category', value: category, editable: false, description: '' });
+        }
+    }
     for (let i = 0; i < element.attributes.length; i++) {
         const attr = element.attributes.item(i);
         if (!attr) continue;
         const attrName = attr.localName || attr.nodeName;
         if (attrName === 'xmlns' || attr.nodeName.startsWith('xmlns:')) continue;
-        if (attrName === 'Category') continue;
-        fields.push({ label: `${localName}.${attrName}`, value: attr.value || '' });
+        if (attrName === 'Category' && isRoot) continue;
+        fields.push({ label: `${localName}.${attrName}`, value: attr.value || '', editable: true, description: '' });
     }
     let hasChildElements = false;
     const childNodes = element.childNodes;
@@ -51,7 +57,7 @@ function walkEl(element: any, fields: Array<{ label: string; value: string }>): 
     }
     if (!hasChildElements) {
         const text = (element.textContent || '').trim();
-        if (text) { fields.push({ label: localName, value: text }); }
+        if (text) { fields.push({ label: localName, value: text, editable: true, description: '', isTextContent: true }); }
     }
     for (let i = 0; i < childNodes.length; i++) {
         const child = childNodes.item(i);

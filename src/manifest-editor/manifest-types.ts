@@ -99,6 +99,12 @@ export interface ExternalDependencyData {
 export interface ExtensionField {
     label: string;
     value: string;
+    /** Whether the field can be edited by the user in the form. */
+    editable: boolean;
+    /** Human-readable help text for this field. */
+    description: string;
+    /** True if the value comes from element text content rather than an attribute. */
+    isTextContent?: boolean;
 }
 
 /** Parsed extension data holding both raw XML and pre-extracted fields. */
