@@ -745,6 +745,28 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// If not set in launch.json, search for folders containing .exe
 			// files and let the user pick one.
 			let inputFolder: string | undefined = config.inputFolder;
+
+			// Validate a user-specified inputFolder before proceeding.
+			if (inputFolder) {
+				const folderExists = await fs.promises.access(inputFolder).then(() => true, () => false);
+				if (!folderExists) {
+					vscode.window.showErrorMessage(
+						`The configured "inputFolder" path does not exist: ${inputFolder}. ` +
+						'Build your project first, or update "inputFolder" in launch.json to point to your build output directory.'
+					);
+					return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
+				}
+
+				const exesInFolder = await glob('*.exe', { cwd: inputFolder, absolute: true, nocase: true });
+				if (exesInFolder.length === 0) {
+					vscode.window.showErrorMessage(
+						`The configured "inputFolder" does not contain any .exe files: ${inputFolder}. ` +
+						'Build your project first, or update "inputFolder" in launch.json to point to the folder containing your built application.'
+					);
+					return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
+				}
+			}
+
 			if (!inputFolder) {
 				const exeMatches = await glob('**/*.exe', {
 					cwd: folder.uri.fsPath,
