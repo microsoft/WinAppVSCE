@@ -483,7 +483,7 @@ async function pickBuildOutputFolder(workspacePath: string): Promise<string | un
 	}
 
 	if (outputFolders.length === 0) {
-		return selectFolder('Select build output folder');
+		return selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
 	}
 
 	const items: Array<vscode.QuickPickItem & { directory?: string }> = outputFolders.map((folderPath) => ({
@@ -503,7 +503,7 @@ async function pickBuildOutputFolder(workspacePath: string): Promise<string | un
 	}
 
 	if (picked.detail === FOLDER_PICKER_DETAIL) {
-		return selectFolder('Select build output folder');
+		return selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
 	}
 
 	return picked.directory;
@@ -698,7 +698,7 @@ async function resolveProjectDirectory(workspacePath: string): Promise<string | 
 			const picked = await vscode.window.showQuickPick([...items, browseItem], { placeHolder });
 			if (!picked) { return undefined; }
 			if (picked.directory === '') {
-				const folder = await selectFolder('Select project folder');
+				const folder = await selectFolder('Select project folder', vscode.Uri.file(workspacePath));
 				if (!folder) { return undefined; }
 				const relative = path.relative(workspacePath, folder);
 				if (relative.startsWith('..') || path.isAbsolute(relative)) {
@@ -758,12 +758,13 @@ async function selectFile(title: string, filters?: { [name: string]: string[] })
 /**
  * Prompt user to select a folder
  */
-async function selectFolder(title: string): Promise<string | undefined> {
+async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<string | undefined> {
 	const result = await vscode.window.showOpenDialog({
 		canSelectFiles: false,
 		canSelectFolders: true,
 		canSelectMany: false,
-		title: title
+		title: title,
+		defaultUri: defaultUri
 	});
 
 	return result?.[0]?.fsPath;
