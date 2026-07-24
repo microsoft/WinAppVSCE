@@ -163,6 +163,22 @@ try
         exit 1
     }
 
+    # Sync manifest schemas from NuGet cache
+    Write-Host "[VSC] Syncing manifest schemas..." -ForegroundColor Blue
+    npm run sync-schemas
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Schema sync failed"
+        Pop-Location
+        exit 1
+    }
+    $schemaFiles = Get-ChildItem -Path "schemas" -Filter "*.xsd" -ErrorAction SilentlyContinue
+    if (-not $schemaFiles -or $schemaFiles.Count -eq 0) {
+        Write-Error "No schema XSD files found in schemas/ after sync. Packaging would produce a broken extension."
+        Pop-Location
+        exit 1
+    }
+    Write-Host "  Found $($schemaFiles.Count) XSD schema files" -ForegroundColor Gray
+
     # Copy CLI binaries from artifacts (skip if source and destination are the same)
     Write-Host "[VSC] Copying CLI binaries to extension..." -ForegroundColor Blue
     $VscBinPath = "bin"

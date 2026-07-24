@@ -6,11 +6,21 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import * as path from 'path';
 import { loadSchemaModel } from '../manifest-schema/xsd-parser';
 import { MANIFEST_NAMESPACES, SchemaModel } from '../manifest-schema/schema-model';
 
 const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
+
+// Skip all tests if schemas are not available (clean clone without sync-schemas)
+const schemaFiles = fs.readdirSync(SCHEMAS_DIR, { withFileTypes: true }).filter(f => f.name.endsWith('.xsd'));
+if (schemaFiles.length === 0) {
+    describe('xsd-parser tests (SKIPPED - no schemas)', () => {
+        it('skipped: run npm run sync-schemas first', { skip: 'schemas/ directory is empty' }, () => {});
+    });
+    process.exit(0);
+}
 
 describe('loadSchemaModel', () => {
     let model: SchemaModel;

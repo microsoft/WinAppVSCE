@@ -539,8 +539,12 @@ function parseAttribute(
         }
     }
 
-    const isQualified = Boolean(resolvedRef?.namespace)
-        || (attr.getAttribute('form') || sourceAttr.getAttribute('form')) === 'qualified';
+    // An attribute is namespace-qualified only if:
+    // 1. It has form="qualified" explicitly set, OR
+    // 2. It is referenced via ref from a DIFFERENT namespace than the current schema's targetNamespace
+    const currentTargetNs = attr.ownerDocument?.documentElement?.getAttribute('targetNamespace') || targetNs;
+    const isQualified = (attr.getAttribute('form') || sourceAttr.getAttribute('form')) === 'qualified'
+        || (resolvedRef !== undefined && resolvedRef.namespace !== '' && resolvedRef.namespace !== currentTargetNs);
     const attributeNamespace = isQualified
         ? resolvedRef?.namespace
             || sourceAttr.ownerDocument?.documentElement?.getAttribute('targetNamespace')

@@ -30,6 +30,9 @@ jobs:
     - name: Compile TypeScript
       run: npm run compile
 
+    - name: Sync manifest schemas
+      run: npm run sync-schemas
+
     - name: Lint
       run: npm run lint
 

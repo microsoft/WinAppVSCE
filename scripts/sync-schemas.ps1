@@ -14,7 +14,10 @@
 #>
 
 [CmdletBinding()]
-param()
+param(
+    [Parameter(HelpMessage = "Path to the winapp CLI executable. If not provided, searches bin/ then PATH.")]
+    [string]$CliPath
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -22,6 +25,22 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $schemasDir = Join-Path $repoRoot 'schemas'
 $winappYaml = Join-Path $repoRoot 'winapp.yaml'
+
+# Resolve winapp CLI location
+if ($CliPath -and (Test-Path $CliPath)) {
+    $winappExe = $CliPath
+} else {
+    # Try bin/ directory first, then fall back to PATH
+    $binPath = Join-Path $repoRoot 'bin' 'winapp.exe'
+    if (Test-Path $binPath) {
+        $winappExe = $binPath
+    } else {
+        $winappExe = (Get-Command 'winapp' -ErrorAction SilentlyContinue)?.Source
+        if (-not $winappExe) {
+            $winappExe = $null
+        }
+    }
+}
 
 # --- Parse winapp.yaml for package versions ---
 if (-not (Test-Path $winappYaml)) {
@@ -61,8 +80,10 @@ $sdkCppBase = Join-Path $nugetCache 'microsoft.windows.sdk.cpp' $sdkCppVersion
 # Auto-download missing packages using winapp restore (or NuGet directly as fallback)
 $needsRestore = (-not (Test-Path $buildToolsBase)) -or (-not (Test-Path $sdkCppBase))
 if ($needsRestore) {
-    Write-Host "Downloading SDK packages via winapp restore..."
-    $restoreResult = & winapp restore $repoRoot --quiet 2>&1
+    if ($winappExe) {
+        Write-Host "Downloading SDK packages via winapp restore..."
+        $restoreResult = & $winappExe restore $repoRoot --quiet 2>&1
+    }
     # winapp restore may fail on cppwinrt projections but still download NuGet packages
     if (-not (Test-Path $buildToolsBase) -or -not (Test-Path $sdkCppBase)) {
         # Fallback: download directly via NuGet

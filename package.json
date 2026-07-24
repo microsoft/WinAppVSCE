@@ -18,6 +18,7 @@
   "activationEvents": [
     "workspaceContains:**/[Aa]ppx[Mm]anifest.xml",
     "workspaceContains:**/*.appxmanifest",
+    "onLanguage:xml",
     "onDebugResolve:winapp",
     "onCommand:winapp.init",
     "onCommand:winapp.restore",

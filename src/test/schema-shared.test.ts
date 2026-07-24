@@ -6,6 +6,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import * as path from 'path';
 import {
     SchemaModel,
@@ -34,6 +35,16 @@ import {
 } from '../manifest-schema/schema-helpers';
 
 const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
+
+// Skip all tests if schemas are not available (clean clone without sync-schemas)
+const schemaFiles = fs.readdirSync(SCHEMAS_DIR, { withFileTypes: true }).filter(f => f.name.endsWith('.xsd'));
+if (schemaFiles.length === 0) {
+    describe('schema-shared tests (SKIPPED - no schemas)', () => {
+        it('skipped: run npm run sync-schemas first', { skip: 'schemas/ directory is empty' }, () => {});
+    });
+    process.exit(0);
+}
+
 const FOUNDATION_NS = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10';
 
 let model: SchemaModel;

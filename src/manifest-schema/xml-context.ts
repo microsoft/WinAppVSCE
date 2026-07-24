@@ -203,27 +203,44 @@ export function findParentPath(textBefore: string): ParentElement[] {
     textBefore = textBefore.replace(/<!--[\s\S]*?-->/g, '');
     const stack: ParentElement[] = [];
 
-    // Simple approach: scan for opening and closing tags
-    const tagRegex = /<\/?([a-zA-Z_][\w.-]*(?::[a-zA-Z_][\w.-]*)?)[^>]*?\/?>/g;
+    // Quote-aware tag scanner: skip '>' inside quoted attribute values
+    const tagRegex = /<(\/?[a-zA-Z_][\w.-]*(?::[a-zA-Z_][\w.-]*)?)(\s[^]*?)?(\/?)\s*>/g;
     let match: RegExpExecArray | null;
+    let searchFrom = 0;
 
-    while ((match = tagRegex.exec(textBefore)) !== null) {
-        const fullMatch = match[0];
-        const tagName = match[1];
-        const { prefix, localName } = splitPrefixedName(tagName);
+    while (searchFrom < textBefore.length) {
+        tagRegex.lastIndex = searchFrom;
+        match = tagRegex.exec(textBefore);
+        if (!match) { break; }
 
-        if (fullMatch.startsWith('</')) {
-            // Closing tag - pop matching element from stack
+        // Validate we didn't stop inside a quoted attribute value
+        const attrPart = match[2] || '';
+        const singleQuotes = (attrPart.match(/'/g) || []).length;
+        const doubleQuotes = (attrPart.match(/"/g) || []).length;
+        if (singleQuotes % 2 !== 0 || doubleQuotes % 2 !== 0) {
+            // Unbalanced quotes — the regex stopped at a > inside a quote
+            // Skip past this match and retry
+            searchFrom = match.index + match[0].length;
+            continue;
+        }
+
+        searchFrom = match.index + match[0].length;
+        const tagNamePart = match[1];
+        const selfClose = match[3] === '/';
+
+        if (tagNamePart.startsWith('/')) {
+            // Closing tag
+            const closeName = tagNamePart.slice(1);
+            const { prefix, localName } = splitPrefixedName(closeName);
             for (let i = stack.length - 1; i >= 0; i--) {
                 if (stack[i].name === localName && stack[i].prefix === prefix) {
                     stack.splice(i, 1);
                     break;
                 }
             }
-        } else if (fullMatch.endsWith('/>')) {
-            // Self-closing — don't push
-        } else {
-            // Opening tag
+        } else if (!selfClose) {
+            // Opening tag (not self-closing)
+            const { prefix, localName } = splitPrefixedName(tagNamePart);
             stack.push({ name: localName, prefix });
         }
     }

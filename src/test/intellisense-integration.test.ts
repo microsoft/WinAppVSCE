@@ -24,6 +24,16 @@ import { loadSchemaModel } from '../manifest-schema/xsd-parser';
 import { MANIFEST_NAMESPACES } from '../manifest-schema/schema-model';
 
 const SCHEMAS_DIR = path.join(__dirname, '..', '..', 'schemas');
+
+// Skip all tests if schemas are not available (clean clone without sync-schemas)
+const schemaFiles = fs.readdirSync(SCHEMAS_DIR, { withFileTypes: true }).filter(f => f.name.endsWith('.xsd'));
+if (schemaFiles.length === 0) {
+    describe('manifest IntelliSense integration (SKIPPED - no schemas)', () => {
+        it('skipped: run npm run sync-schemas first', { skip: 'schemas/ directory is empty' }, () => {});
+    });
+    process.exit(0);
+}
+
 const FOUNDATION_NS = MANIFEST_NAMESPACES[''];
 const UAP_NS = MANIFEST_NAMESPACES['uap'];
 const COM_NS = MANIFEST_NAMESPACES['com'];

@@ -424,19 +424,20 @@ export function activate(context: vscode.ExtensionContext) {
 	// Shared schema model — loaded lazily, shared by both editor and IntelliSense
 	const schemasDir = path.join(extensionPath, 'schemas');
 	let sharedSchema: SchemaModel | undefined;
-	let schemaLoadFailed = false;
+	let schemaWarningShown = false;
 	const getSharedSchema = (): SchemaModel | undefined => {
 		if (sharedSchema) { return sharedSchema; }
-		if (schemaLoadFailed) { return undefined; }
 		try {
 			sharedSchema = loadSchemaModel(schemasDir);
 			return sharedSchema;
 		} catch (err) {
-			schemaLoadFailed = true;
-			const message = err instanceof Error ? err.message : String(err);
-			vscode.window.showWarningMessage(
-				`WinApp: Failed to load manifest schemas: ${message}`
-			);
+			if (!schemaWarningShown) {
+				schemaWarningShown = true;
+				const message = err instanceof Error ? err.message : String(err);
+				vscode.window.showWarningMessage(
+					`WinApp: Failed to load manifest schemas: ${message}. IntelliSense will retry on next manifest open.`
+				);
+			}
 			return undefined;
 		}
 	};
