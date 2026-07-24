@@ -745,11 +745,16 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// If not set in launch.json, search for folders containing .exe
 			// files and let the user pick one.
 			let inputFolder: string | undefined = config.inputFolder;
+			let cwd = folder.uri.fsPath;
+			if (config.workingDirectory) {
+				cwd = config.workingDirectory;
+			}
 
 			// Validate a user-specified inputFolder before proceeding.
 			if (inputFolder) {
-				const folderExists = await fs.promises.access(inputFolder).then(() => true, () => false);
-				if (!folderExists) {
+				const resolvedFolder = path.isAbsolute(inputFolder) ? inputFolder : path.resolve(cwd, inputFolder);
+				const folderStat = await fs.promises.stat(resolvedFolder).catch(() => undefined);
+				if (!folderStat) {
 					vscode.window.showErrorMessage(
 						`The configured "inputFolder" path does not exist: ${inputFolder}. ` +
 						'Build your project first, or update "inputFolder" in launch.json to point to your build output directory.'
@@ -757,7 +762,15 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 					return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
 				}
 
-				const exesInFolder = await glob('*.exe', { cwd: inputFolder, absolute: true, nocase: true });
+				if (!folderStat.isDirectory()) {
+					vscode.window.showErrorMessage(
+						`The configured "inputFolder" is not a directory: ${inputFolder}. ` +
+						'Update "inputFolder" in launch.json to point to the folder containing your built application.'
+					);
+					return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
+				}
+
+				const exesInFolder = await glob('*.exe', { cwd: resolvedFolder, absolute: true, nocase: true });
 				if (exesInFolder.length === 0) {
 					vscode.window.showErrorMessage(
 						`The configured "inputFolder" does not contain any .exe files: ${inputFolder}. ` +
@@ -846,11 +859,6 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				cancellable: false
 			}, async (progress) => {
 				progress.report({ message: 'Running winapp run...' });
-
-				let cwd = folder.uri.fsPath;
-				if (config.workingDirectory) {
-					cwd = config.workingDirectory;
-				}
 
 				return new Promise<{ processId: number; runProcess: ReturnType<typeof spawn> }>((resolve, reject) => {
 					const child = spawn(cliPath, baseSpawnArgs, {
