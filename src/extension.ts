@@ -12,7 +12,6 @@ import {
 } from './winapp-cli-utils';
 import { detectProjects } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
-import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import {
 	PACK_ACTIONS,
@@ -444,13 +443,12 @@ const BUILD_OUTPUT_SEARCH_MAX_DEPTH = 8;
 const BUILD_OUTPUT_EXCLUDE_GLOB = '{**/node_modules/**,**/.git/**,**/AppX/**,**/.winapp/**,**/obj/**,**/.vs/**,**/packages/**}';
 
 /**
- * Search the workspace for build output folders (directories containing .exe
- * files) and let the user pick one via a QuickPick. Falls back to a native
- * folder dialog when none are found; a "Browse…" entry is always appended.
+ * Scan the workspace for build output folders (directories containing .exe
+ * files). Shows a progress notification with cancel support.
  *
- * @returns The selected folder path, or `undefined` if cancelled.
+ * @returns The discovered folder paths sorted by relative path, or undefined if cancelled.
  */
-async function pickBuildOutputFolder(workspacePath: string): Promise<string | undefined> {
+async function findBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
 	let cancelled = false;
 	const outputFolders = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for build output folders...', cancellable: true },
@@ -479,6 +477,22 @@ async function pickBuildOutputFolder(workspacePath: string): Promise<string | un
 	);
 
 	if (cancelled) {
+		return undefined;
+	}
+
+	return outputFolders;
+}
+
+/**
+ * Search the workspace for build output folders and let the user pick one via
+ * a QuickPick. Falls back to a native folder dialog when none are found; a
+ * "Browse…" entry is always appended.
+ *
+ * @returns The selected folder path, or `undefined` if cancelled.
+ */
+async function pickBuildOutputFolder(workspacePath: string): Promise<string | undefined> {
+	const outputFolders = await findBuildOutputFolders(workspacePath);
+	if (!outputFolders) {
 		return undefined;
 	}
 
@@ -841,24 +855,12 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// files and let the user pick one.
 			let inputFolder: string | undefined = config.inputFolder;
 			if (!inputFolder) {
-				const exeMatches = await glob('**/*.exe', {
-					cwd: folder.uri.fsPath,
-					absolute: true,
-					nocase: true,
-					ignore: ['**/node_modules/**', '**/.git/**', '**/AppX/**', '**/.winapp/**', '**/obj/**', '**/.vs/**', '**/packages/**']
-				});
+				const dirs = await findBuildOutputFolders(folder.uri.fsPath);
 
-				// Collect unique parent directories that contain .exe files
-				const dirSet = new Set<string>();
-				for (const exe of exeMatches) {
-					dirSet.add(path.dirname(exe));
-				}
-
-				if (dirSet.size === 0) {
+				if (!dirs || dirs.length === 0) {
 					throw new Error('No folders containing .exe files found in the workspace. Build your project first, or set "inputFolder" in launch.json.');
 				}
 
-				const dirs = [...dirSet].sort();
 				if (dirs.length === 1) {
 					inputFolder = dirs[0];
 				} else {
