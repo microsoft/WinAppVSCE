@@ -697,7 +697,16 @@ async function resolveProjectDirectory(workspacePath: string): Promise<string | 
 			const browseItem = { label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, directory: '' };
 			const picked = await vscode.window.showQuickPick([...items, browseItem], { placeHolder });
 			if (!picked) { return undefined; }
-			if (picked.detail === FOLDER_PICKER_DETAIL) { return selectFolder('Select project folder'); }
+			if (picked.detail === FOLDER_PICKER_DETAIL) {
+				const folder = await selectFolder('Select project folder');
+				if (!folder) { return undefined; }
+				const relative = path.relative(workspacePath, folder);
+				if (relative.startsWith('..') || path.isAbsolute(relative)) {
+					vscode.window.showWarningMessage('Selected folder is outside the workspace and was ignored.');
+					return undefined;
+				}
+				return folder;
+			}
 			return picked.directory || undefined;
 		},
 		scanProjects: async (root) =>
