@@ -20,8 +20,7 @@ import {
 	isArtifactWithinRoot,
 	planPackCompletion
 } from './pack-result';
-import { findWorkspaceArtifacts, buildSignCommand, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS } from './sign-utils';
-import { executeSignFlow, type SignFlowAdapter } from './sign-flow';
+import { findWorkspaceArtifacts, buildSignCommand, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS, executeSignFlow, type SignFlowAdapter } from './sign-utils';
 import {
 	detectArchFromPath,
 	getMachineArch,

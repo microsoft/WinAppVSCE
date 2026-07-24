@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { executeSignFlow, type SignFlowAdapter } from '../sign-flow';
+import { executeSignFlow, type SignFlowAdapter } from '../sign-utils';
 
 /**
  * Stub adapter that records which methods were called and returns
