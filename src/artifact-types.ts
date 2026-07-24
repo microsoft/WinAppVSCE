@@ -7,17 +7,17 @@
  */
 
 /** Supported artifact file extensions (without leading dot). */
-export const ARTIFACT_EXTENSIONS_NO_DOT = ['msix', 'msixbundle', 'appx', 'appxbundle'] as const;
+export const ARTIFACT_EXTENSIONS = ['msix', 'msixbundle', 'appx', 'appxbundle'] as const;
 
-/** Supported artifact file extensions (with leading dot, longest first for greedy matching). */
-export const ARTIFACT_EXTENSIONS = ARTIFACT_EXTENSIONS_NO_DOT.map((ext) => `.${ext}`);
+/** Extensions with leading dot (internal — used by helpers below). */
+const DOTTED_EXTENSIONS = ARTIFACT_EXTENSIONS.map((ext) => `.${ext}`);
 
 /** Glob patterns that match packaged artifacts anywhere in a directory tree. */
-export const ARTIFACT_GLOBS: string[] = ARTIFACT_EXTENSIONS_NO_DOT.map((ext) => `**/*.${ext}`);
+export const ARTIFACT_GLOBS: string[] = ARTIFACT_EXTENSIONS.map((ext) => `**/*.${ext}`);
 
 /** File-dialog filter for MSIX/APPX packages (VS Code `showOpenDialog` format). */
 export const ARTIFACT_DIALOG_FILTER: Record<string, string[]> = {
-	'MSIX Packages': [...ARTIFACT_EXTENSIONS_NO_DOT]
+	'MSIX Packages': [...ARTIFACT_EXTENSIONS]
 };
 
 /**
@@ -26,7 +26,7 @@ export const ARTIFACT_DIALOG_FILTER: Record<string, string[]> = {
  */
 export function isArtifactPath(filePath: string): boolean {
 	const lower = filePath.toLowerCase();
-	return ARTIFACT_EXTENSIONS.some((ext) => lower.endsWith(ext));
+	return DOTTED_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
 /**
@@ -36,7 +36,7 @@ export function isArtifactPath(filePath: string): boolean {
  * extension. The match is case-insensitive.
  */
 export function stripArtifactExtension(name: string): string {
-	return name.replace(artifactExtensionPattern(), '');
+	return name.replace(ARTIFACT_EXTENSION_RE, '');
 }
 
 /**
@@ -44,7 +44,7 @@ export function stripArtifactExtension(name: string): string {
  * (case-insensitive). The alternation is ordered longest-first so that
  * `.msixbundle` is matched before `.msix`.
  */
-export function artifactExtensionPattern(): RegExp {
-	const sorted = [...ARTIFACT_EXTENSIONS_NO_DOT].sort((a, b) => b.length - a.length);
-	return new RegExp(`\\.(${sorted.join('|')})$`, 'i');
-}
+const ARTIFACT_EXTENSION_RE = new RegExp(
+	`\\.(${[...ARTIFACT_EXTENSIONS].sort((a, b) => b.length - a.length).join('|')})$`,
+	'i'
+);

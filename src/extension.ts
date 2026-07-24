@@ -20,8 +20,8 @@ import {
 	isArtifactWithinRoot,
 	planPackCompletion
 } from './pack-result';
-import { findWorkspaceArtifacts, buildSignCommand, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS, executeSignFlow, type SignFlowAdapter } from './sign-utils';
-import { ARTIFACT_DIALOG_FILTER } from './artifact-types';
+import { findWorkspaceArtifacts, buildSignCommand, CERTIFICATE_GLOBS, executeSignFlow, type SignFlowAdapter } from './sign-utils';
+import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
 	detectArchFromPath,
 	getMachineArch,
@@ -337,7 +337,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
 		async (_progress, token) => {
 			token.onCancellationRequested(() => { cancelled = true; });
-			return findWorkspaceArtifacts(workspacePath, SIGNABLE_ARTIFACT_GLOBS);
+			return findWorkspaceArtifacts(workspacePath, ARTIFACT_GLOBS);
 		}
 	);
 

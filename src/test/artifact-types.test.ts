@@ -1,27 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-	ARTIFACT_EXTENSIONS_NO_DOT,
 	ARTIFACT_EXTENSIONS,
 	ARTIFACT_GLOBS,
 	ARTIFACT_DIALOG_FILTER,
 	isArtifactPath,
-	stripArtifactExtension,
-	artifactExtensionPattern
+	stripArtifactExtension
 } from '../artifact-types';
 
-describe('ARTIFACT_EXTENSIONS_NO_DOT', () => {
-	it('contains the four known artifact types', () => {
-		assert.deepEqual([...ARTIFACT_EXTENSIONS_NO_DOT], ['msix', 'msixbundle', 'appx', 'appxbundle']);
-	});
-});
-
 describe('ARTIFACT_EXTENSIONS', () => {
-	it('prepends a dot to each extension', () => {
-		for (const ext of ARTIFACT_EXTENSIONS) {
-			assert.ok(ext.startsWith('.'), `Expected "${ext}" to start with a dot`);
-		}
-		assert.equal(ARTIFACT_EXTENSIONS.length, ARTIFACT_EXTENSIONS_NO_DOT.length);
+	it('contains the four known artifact types (without dots)', () => {
+		assert.deepEqual([...ARTIFACT_EXTENSIONS], ['msix', 'msixbundle', 'appx', 'appxbundle']);
 	});
 });
 
@@ -30,14 +19,14 @@ describe('ARTIFACT_GLOBS', () => {
 		for (const glob of ARTIFACT_GLOBS) {
 			assert.ok(glob.startsWith('**/'), `Expected "${glob}" to start with "**/"`);
 		}
-		assert.equal(ARTIFACT_GLOBS.length, ARTIFACT_EXTENSIONS_NO_DOT.length);
+		assert.equal(ARTIFACT_GLOBS.length, ARTIFACT_EXTENSIONS.length);
 	});
 });
 
 describe('ARTIFACT_DIALOG_FILTER', () => {
 	it('exposes an MSIX Packages filter with all extensions', () => {
 		assert.ok('MSIX Packages' in ARTIFACT_DIALOG_FILTER);
-		assert.deepEqual(ARTIFACT_DIALOG_FILTER['MSIX Packages'], [...ARTIFACT_EXTENSIONS_NO_DOT]);
+		assert.deepEqual(ARTIFACT_DIALOG_FILTER['MSIX Packages'], [...ARTIFACT_EXTENSIONS]);
 	});
 });
 
@@ -84,21 +73,5 @@ describe('stripArtifactExtension', () => {
 
 	it('returns the input unchanged for empty string', () => {
 		assert.equal(stripArtifactExtension(''), '');
-	});
-});
-
-describe('artifactExtensionPattern', () => {
-	it('returns a RegExp that matches artifact extensions', () => {
-		const re = artifactExtensionPattern();
-		assert.ok(re.test('app.msix'));
-		assert.ok(re.test('app.msixbundle'));
-		assert.ok(re.test('app.appx'));
-		assert.ok(re.test('app.appxbundle'));
-	});
-
-	it('does not match non-artifact extensions', () => {
-		const re = artifactExtensionPattern();
-		assert.ok(!re.test('app.exe'));
-		assert.ok(!re.test('app.txt'));
 	});
 });

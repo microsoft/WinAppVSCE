@@ -22,9 +22,6 @@ export type PackCompletionPlan =
 	| { kind: 'error'; message: string }
 	| { kind: 'success'; artifactPath: string; appName: string | undefined; message: string };
 
-/** File extensions the CLI can emit for a packaged artifact (re-exported for backward compat). */
-export { ARTIFACT_EXTENSIONS } from './artifact-types';
-
 /**
  * Marker the CLI prints immediately before the packaged artifact path.
  * The path may follow on the same line or wrap onto subsequent lines, so the
