@@ -623,8 +623,11 @@ async function resolveProjectDirectory(workspacePath: string): Promise<string | 
 			vscode.window.showWarningMessage(message);
 		},
 		pickDirectory: async (items, placeHolder) => {
-			const picked = await vscode.window.showQuickPick(items, { placeHolder });
-			return picked?.directory;
+			const browseItem = { label: '$(folder-opened) Browse…', description: 'Open a folder picker', directory: '' };
+			const picked = await vscode.window.showQuickPick([...items, browseItem], { placeHolder });
+			if (!picked) { return undefined; }
+			if (picked === browseItem) { return selectFolder('Select project folder'); }
+			return picked.directory;
 		},
 		scanProjects: async (root) =>
 			vscode.window.withProgress(
@@ -1075,7 +1078,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const inputFolder = await selectFolder('Select input folder to package');
+			const inputFolder = await resolveProjectDirectory(workspacePath);
 			if (!inputFolder) {
 				return;
 			}
@@ -1136,7 +1139,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const inputFolder = await selectFolder('Select input folder containing the app to run');
+			const inputFolder = await resolveProjectDirectory(workspacePath);
 			if (!inputFolder) {
 				return;
 			}
