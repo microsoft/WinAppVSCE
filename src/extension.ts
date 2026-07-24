@@ -439,7 +439,7 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 }
 
 const FOLDER_PICKER_DETAIL = 'Open a folder picker';
-const BUILD_OUTPUT_SEARCH_MAX_RESULTS = 200;
+const BUILD_OUTPUT_SEARCH_MAX_RESULTS = 10;
 const BUILD_OUTPUT_SEARCH_MAX_DEPTH = 8;
 const BUILD_OUTPUT_EXCLUDE_GLOB = '{**/node_modules/**,**/.git/**,**/AppX/**,**/.winapp/**,**/obj/**,**/.vs/**,**/packages/**}';
 
