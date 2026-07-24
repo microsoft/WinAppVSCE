@@ -697,7 +697,7 @@ async function resolveProjectDirectory(workspacePath: string): Promise<string | 
 			const browseItem = { label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, directory: '' };
 			const picked = await vscode.window.showQuickPick([...items, browseItem], { placeHolder });
 			if (!picked) { return undefined; }
-			if (picked.detail === FOLDER_PICKER_DETAIL) {
+			if (picked.directory === '') {
 				const folder = await selectFolder('Select project folder');
 				if (!folder) { return undefined; }
 				const relative = path.relative(workspacePath, folder);
