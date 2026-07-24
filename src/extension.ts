@@ -718,6 +718,43 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 			return undefined;
 		}
 
+		// Validate a user-specified inputFolder early so we can cleanly
+		// cancel the session (return undefined) before the adapter factory
+		// runs — this avoids showing the debugger toolbar on failure.
+		const inputFolder: string | undefined = config.inputFolder;
+		if (inputFolder) {
+			let cwd = folder.uri.fsPath;
+			if (config.workingDirectory) {
+				cwd = config.workingDirectory;
+			}
+			const resolvedFolder = path.isAbsolute(inputFolder) ? inputFolder : path.resolve(cwd, inputFolder);
+			const folderStat = await fs.promises.stat(resolvedFolder).catch(() => undefined);
+			if (!folderStat) {
+				vscode.window.showErrorMessage(
+					`The configured "inputFolder" path does not exist: ${inputFolder}. ` +
+					'Build your project first, or update "inputFolder" in launch.json to point to your build output directory.'
+				);
+				return undefined;
+			}
+
+			if (!folderStat.isDirectory()) {
+				vscode.window.showErrorMessage(
+					`The configured "inputFolder" is not a directory: ${inputFolder}. ` +
+					'Update "inputFolder" in launch.json to point to the folder containing your built application.'
+				);
+				return undefined;
+			}
+
+			const exesInFolder = await glob('*.exe', { cwd: resolvedFolder, absolute: true, nocase: true });
+			if (exesInFolder.length === 0) {
+				vscode.window.showErrorMessage(
+					`The configured "inputFolder" does not contain any .exe files: ${inputFolder}. ` +
+					'Build your project first, or update "inputFolder" in launch.json to point to the folder containing your built application.'
+				);
+				return undefined;
+			}
+		}
+
 		return config;
 	}
 }
@@ -748,36 +785,6 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			let cwd = folder.uri.fsPath;
 			if (config.workingDirectory) {
 				cwd = config.workingDirectory;
-			}
-
-			// Validate a user-specified inputFolder before proceeding.
-			if (inputFolder) {
-				const resolvedFolder = path.isAbsolute(inputFolder) ? inputFolder : path.resolve(cwd, inputFolder);
-				const folderStat = await fs.promises.stat(resolvedFolder).catch(() => undefined);
-				if (!folderStat) {
-					vscode.window.showErrorMessage(
-						`The configured "inputFolder" path does not exist: ${inputFolder}. ` +
-						'Build your project first, or update "inputFolder" in launch.json to point to your build output directory.'
-					);
-					return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
-				}
-
-				if (!folderStat.isDirectory()) {
-					vscode.window.showErrorMessage(
-						`The configured "inputFolder" is not a directory: ${inputFolder}. ` +
-						'Update "inputFolder" in launch.json to point to the folder containing your built application.'
-					);
-					return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
-				}
-
-				const exesInFolder = await glob('*.exe', { cwd: resolvedFolder, absolute: true, nocase: true });
-				if (exesInFolder.length === 0) {
-					vscode.window.showErrorMessage(
-						`The configured "inputFolder" does not contain any .exe files: ${inputFolder}. ` +
-						'Build your project first, or update "inputFolder" in launch.json to point to the folder containing your built application.'
-					);
-					return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
-				}
 			}
 
 			if (!inputFolder) {
