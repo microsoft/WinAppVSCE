@@ -1,0 +1,45 @@
+{
+	"comments": {
+		"blockComment": ["<!--", "-->"]
+	},
+	"brackets": [
+		["<", ">"],
+		["{", "}"],
+		["(", ")"]
+	],
+	"autoClosingPairs": [
+		{ "open": "<", "close": ">" },
+		{ "open": "\"", "close": "\"" },
+		{ "open": "'", "close": "'" },
+		{ "open": "{", "close": "}" },
+		{ "open": "<!--", "close": " -->" }
+	],
+	"surroundingPairs": [
+		["<", ">"],
+		["\"", "\""],
+		["'", "'"],
+		["{", "}"]
+	],
+	"indentationRules": {
+		"increaseIndentPattern": "<(?!\\?|[^>]*\\/>)[^>]+>(?!.*<\\/)",
+		"decreaseIndentPattern": "^\\s*<\\/"
+	},
+	"folding": {
+		"markers": {
+			"start": "^\\s*<!--\\s*#region\\b",
+			"end": "^\\s*<!--\\s*#endregion\\b"
+		}
+	},
+	"wordPattern": "[\\w\\.:]+",
+	"onEnterRules": [
+		{
+			"beforeText": "<([\\w\\.:]+)[^/>]*(?<!/)>\\s*$",
+			"afterText": "^\\s*</\\1>",
+			"action": { "indent": "indentOutdent" }
+		},
+		{
+			"beforeText": "<([\\w\\.:]+)[^/>]*(?<!/)>\\s*$",
+			"action": { "indent": "indent" }
+		}
+	]
+}

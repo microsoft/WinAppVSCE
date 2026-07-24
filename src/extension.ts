@@ -35,6 +35,7 @@ import {
 	getDebuggerTypeFromChoice
 } from './debugger-resolver';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
+import { activateXamlLanguageServer, deactivateXamlLanguageServer } from './xaml-language-server';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
@@ -967,6 +968,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register the AppxManifest visual editor
 	context.subscriptions.push(ManifestEditorProvider.register(context));
+	activateXamlLanguageServer(context);
 
 	// When an appxmanifest file is opened in the default text editor,
 	// suggest switching to the visual editor.
@@ -1480,7 +1482,8 @@ function parseProcessIdFromJson(output: string): number | undefined {
 	return undefined;
 }
 
-export function deactivate() {
+export async function deactivate() {
+	await deactivateXamlLanguageServer();
 	debuggerLogChannel?.dispose();
 	debuggerLogChannel = undefined;
 }

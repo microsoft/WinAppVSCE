@@ -22,3 +22,5 @@ test-results/**
 playwright.config.ts
 PR_REVIEW.md
 EDITOR_SUPPORT.md
+!syntaxes/**
+!xaml-language-configuration.json

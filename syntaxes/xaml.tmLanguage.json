@@ -1,0 +1,166 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "XAML",
+	"scopeName": "text.xml.xaml",
+	"patterns": [
+		{ "include": "#comment" },
+		{ "include": "#cdata" },
+		{ "include": "#processingInstruction" },
+		{ "include": "#tag" },
+		{ "include": "#entity" }
+	],
+	"repository": {
+		"comment": {
+			"begin": "<!--",
+			"end": "-->",
+			"name": "comment.block.xml.xaml",
+			"captures": {
+				"0": { "name": "punctuation.definition.comment.xml.xaml" }
+			}
+		},
+		"cdata": {
+			"begin": "<!\\[CDATA\\[",
+			"end": "\\]\\]>",
+			"name": "string.unquoted.cdata.xml.xaml"
+		},
+		"processingInstruction": {
+			"begin": "<\\?",
+			"end": "\\?>",
+			"name": "meta.tag.preprocessor.xml.xaml"
+		},
+		"tag": {
+			"patterns": [
+				{ "include": "#selfClosingTag" },
+				{ "include": "#openTag" },
+				{ "include": "#closeTag" }
+			]
+		},
+		"selfClosingTag": {
+			"begin": "(<)(([\\w]+)(:))?([\\w\\.]+)(?=[^>]*/>)",
+			"end": "(/>)",
+			"beginCaptures": {
+				"1": { "name": "punctuation.definition.tag.begin.xml.xaml" },
+				"3": { "name": "entity.name.tag.namespace.xml.xaml" },
+				"4": { "name": "punctuation.separator.namespace.xml.xaml" },
+				"5": { "name": "entity.name.tag.localname.xml.xaml" }
+			},
+			"endCaptures": {
+				"1": { "name": "punctuation.definition.tag.end.xml.xaml" }
+			},
+			"patterns": [
+				{ "include": "#attribute" }
+			]
+		},
+		"openTag": {
+			"begin": "(<)(([\\w]+)(:))?([\\w\\.]+)",
+			"end": "(>)",
+			"beginCaptures": {
+				"1": { "name": "punctuation.definition.tag.begin.xml.xaml" },
+				"3": { "name": "entity.name.tag.namespace.xml.xaml" },
+				"4": { "name": "punctuation.separator.namespace.xml.xaml" },
+				"5": { "name": "entity.name.tag.localname.xml.xaml" }
+			},
+			"endCaptures": {
+				"1": { "name": "punctuation.definition.tag.end.xml.xaml" }
+			},
+			"patterns": [
+				{ "include": "#attribute" }
+			]
+		},
+		"closeTag": {
+			"match": "(</)((\\w+)(:))?(\\w+)(>)",
+			"captures": {
+				"1": { "name": "punctuation.definition.tag.begin.xml.xaml" },
+				"3": { "name": "entity.name.tag.namespace.xml.xaml" },
+				"4": { "name": "punctuation.separator.namespace.xml.xaml" },
+				"5": { "name": "entity.name.tag.localname.xml.xaml" },
+				"6": { "name": "punctuation.definition.tag.end.xml.xaml" }
+			}
+		},
+		"attribute": {
+			"patterns": [
+				{ "include": "#xmlnsAttribute" },
+				{ "include": "#attachedProperty" },
+				{ "include": "#normalAttribute" }
+			]
+		},
+		"xmlnsAttribute": {
+			"match": "(xmlns)(:(\\w+))?\\s*(=)\\s*(\"[^\"]*\"|'[^']*')",
+			"captures": {
+				"1": { "name": "entity.other.attribute-name.namespace.xml.xaml" },
+				"3": { "name": "entity.other.attribute-name.namespace.xml.xaml" },
+				"4": { "name": "punctuation.separator.key-value.xml.xaml" },
+				"5": { "name": "string.quoted.double.xml.xaml" }
+			}
+		},
+		"attachedProperty": {
+			"match": "([\\w]+)\\.([\\w]+)\\s*(=)\\s*",
+			"captures": {
+				"1": { "name": "entity.other.attribute-name.class.xml.xaml" },
+				"2": { "name": "entity.other.attribute-name.localname.xml.xaml" },
+				"3": { "name": "punctuation.separator.key-value.xml.xaml" }
+			}
+		},
+		"normalAttribute": {
+			"begin": "([\\w:]+)\\s*(=)\\s*",
+			"end": "(?<=[\"'])",
+			"beginCaptures": {
+				"1": { "name": "entity.other.attribute-name.localname.xml.xaml" },
+				"2": { "name": "punctuation.separator.key-value.xml.xaml" }
+			},
+			"patterns": [
+				{ "include": "#attributeValue" }
+			]
+		},
+		"attributeValue": {
+			"patterns": [
+				{ "include": "#markupExtension" },
+				{ "include": "#doubleQuotedString" },
+				{ "include": "#singleQuotedString" }
+			]
+		},
+		"markupExtension": {
+			"begin": "\"(\\{)",
+			"end": "(\\})\"",
+			"beginCaptures": {
+				"0": { "name": "string.quoted.double.xml.xaml" },
+				"1": { "name": "punctuation.section.embedded.begin.xaml" }
+			},
+			"endCaptures": {
+				"0": { "name": "string.quoted.double.xml.xaml" },
+				"1": { "name": "punctuation.section.embedded.end.xaml" }
+			},
+			"contentName": "meta.embedded.markup-extension.xaml",
+			"patterns": [
+				{
+					"match": "(StaticResource|ThemeResource|x:Bind|Binding|x:Static|x:Type|x:Null|RelativeSource|TemplateBinding)",
+					"name": "keyword.other.markup-extension.xaml"
+				},
+				{
+					"match": "\\w+",
+					"name": "variable.other.property.xaml"
+				}
+			]
+		},
+		"doubleQuotedString": {
+			"begin": "\"",
+			"end": "\"",
+			"name": "string.quoted.double.xml.xaml",
+			"patterns": [
+				{ "include": "#entity" }
+			]
+		},
+		"singleQuotedString": {
+			"begin": "'",
+			"end": "'",
+			"name": "string.quoted.single.xml.xaml",
+			"patterns": [
+				{ "include": "#entity" }
+			]
+		},
+		"entity": {
+			"match": "&(\\w+|#\\d+|#x[0-9a-fA-F]+);",
+			"name": "constant.character.entity.xml.xaml"
+		}
+	}
+}

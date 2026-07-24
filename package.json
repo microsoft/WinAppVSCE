@@ -16,6 +16,7 @@
     "Other"
   ],
   "activationEvents": [
+    "onLanguage:xaml",
     "onDebugResolve:winapp",
     "onCommand:winapp.init",
     "onCommand:winapp.restore",
@@ -32,11 +33,23 @@
     "onCommand:winapp.getWinappPath",
     "onCommand:winapp.manifestAddAlias",
     "onCommand:winapp.unregister",
-    "onCommand:winapp.certInfo"
+    "onCommand:winapp.certInfo",
+    "onCommand:winapp.xaml.restartLanguageServer",
+    "onCommand:winapp.xaml.reloadMetadata"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "winapp.xaml.restartLanguageServer",
+        "title": "Restart XAML Language Server",
+        "category": "WinApp"
+      },
+      {
+        "command": "winapp.xaml.reloadMetadata",
+        "title": "Reload XAML Metadata",
+        "category": "WinApp"
+      },
       {
         "command": "winapp.init",
         "title": "Initialize Project",
@@ -121,6 +134,27 @@
     "configuration": {
       "title": "WinApp",
       "properties": {
+        "winapp.xaml.languageServer.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the WinApp XAML language server."
+        },
+        "winapp.xaml.diagnostics.level": {
+          "type": "string",
+          "enum": ["off", "error", "warning"],
+          "default": "warning",
+          "description": "Controls how aggressively the WinApp XAML language server reports diagnostics."
+        },
+        "winapp.xaml.trace.server": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable verbose tracing for the WinApp XAML language server."
+        },
+        "winapp.xaml.completion.includeCustomControls": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include custom controls found in the current document in XAML completion lists."
+        },
         "winapp.appDirectories": {
           "type": "array",
           "items": {
@@ -131,6 +165,21 @@
         }
       }
     },
+    "languages": [
+      {
+        "id": "xaml",
+        "aliases": ["XAML", "xaml"],
+        "extensions": [".xaml"],
+        "configuration": "./xaml-language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "xaml",
+        "scopeName": "text.xml.xaml",
+        "path": "./syntaxes/xaml.tmLanguage.json"
+      }
+    ],
     "customEditors": [
       {
         "viewType": "winapp.manifestEditor",
@@ -223,7 +272,10 @@
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.9",
-    "glob": "^13.0.6"
+    "glob": "^13.0.6",
+    "vscode-languageclient": "^10.1.0",
+    "vscode-languageserver": "^10.1.0",
+    "vscode-languageserver-textdocument": "^1.0.13"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
