@@ -9,6 +9,7 @@ out/**
 node_modules/**
 scripts/**
 artifacts/**
+.winapp/**
 .gitignore
 eslint.config.mjs
 esbuild.mjs
