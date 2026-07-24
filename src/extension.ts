@@ -10,7 +10,7 @@ import {
 	isUsableElevatedCliPath,
 	decideElevatedWinappCommand
 } from './winapp-cli-utils';
-import { detectProjects } from './project-detection';
+import { detectProjects, deduplicateBuildOutputFolders, BUILD_OUTPUT_EXCLUDE_GLOB, BUILD_OUTPUT_MAX_RESULTS } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import {
@@ -438,9 +438,6 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 }
 
 const FOLDER_PICKER_DETAIL = 'Open a folder picker';
-const BUILD_OUTPUT_SEARCH_MAX_RESULTS = 10;
-const BUILD_OUTPUT_SEARCH_MAX_DEPTH = 8;
-const BUILD_OUTPUT_EXCLUDE_GLOB = '{**/node_modules/**,**/.git/**,**/AppX/**,**/.winapp/**,**/obj/**,**/.vs/**,**/packages/**}';
 
 /**
  * Scan the workspace for build output folders (directories containing .exe
@@ -457,21 +454,12 @@ async function findBuildOutputFolders(workspacePath: string): Promise<string[] |
 			const exeMatches = await vscode.workspace.findFiles(
 				new vscode.RelativePattern(workspacePath, '**/*.exe'),
 				BUILD_OUTPUT_EXCLUDE_GLOB,
-				BUILD_OUTPUT_SEARCH_MAX_RESULTS
+				BUILD_OUTPUT_MAX_RESULTS
 			);
 
-			const folderSet = new Set<string>();
-			for (const match of exeMatches) {
-				const folderPath = path.dirname(match.fsPath);
-				const relativeFolder = path.relative(workspacePath, folderPath);
-				if (relativeFolder !== '' && relativeFolder.split(path.sep).length > BUILD_OUTPUT_SEARCH_MAX_DEPTH) {
-					continue;
-				}
-				folderSet.add(folderPath);
-			}
-
-			return [...folderSet].sort((left, right) =>
-				path.relative(workspacePath, left).localeCompare(path.relative(workspacePath, right))
+			return deduplicateBuildOutputFolders(
+				exeMatches.map(m => m.fsPath),
+				workspacePath
 			);
 		}
 	);

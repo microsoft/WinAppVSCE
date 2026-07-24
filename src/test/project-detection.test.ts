@@ -7,7 +7,9 @@ import {
 	detectProjects,
 	getProjectLabel,
 	getDisplayFilePath,
-	DetectedProject
+	DetectedProject,
+	deduplicateBuildOutputFolders,
+	BUILD_OUTPUT_MAX_DEPTH
 } from '../project-detection';
 
 /**
@@ -306,6 +308,78 @@ describe('project-detection', () => {
 				projectFileName: 'App.csproj'
 			};
 			assert.strictEqual(getProjectLabel(project), '.NET project (./src/app/App.csproj)');
+		});
+	});
+
+	describe('deduplicateBuildOutputFolders', () => {
+		const sep = path.sep;
+		const root = process.platform === 'win32' ? 'C:\\workspace' : '/workspace';
+
+		it('deduplicates files in the same directory', () => {
+			const files = [
+				path.join(root, 'bin', 'Debug', 'app.exe'),
+				path.join(root, 'bin', 'Debug', 'helper.exe')
+			];
+			const result = deduplicateBuildOutputFolders(files, root);
+			assert.strictEqual(result.length, 1);
+			assert.strictEqual(result[0], path.join(root, 'bin', 'Debug'));
+		});
+
+		it('returns multiple folders for files in different directories', () => {
+			const files = [
+				path.join(root, 'bin', 'Debug', 'app.exe'),
+				path.join(root, 'bin', 'Release', 'app.exe')
+			];
+			const result = deduplicateBuildOutputFolders(files, root);
+			assert.strictEqual(result.length, 2);
+			assert.ok(result.includes(path.join(root, 'bin', 'Debug')));
+			assert.ok(result.includes(path.join(root, 'bin', 'Release')));
+		});
+
+		it('filters out directories exceeding max depth', () => {
+			// Build a path that exceeds the depth limit
+			const segments = Array.from({ length: BUILD_OUTPUT_MAX_DEPTH + 1 }, (_, i) => `d${i}`);
+			const deepPath = path.join(root, ...segments, 'app.exe');
+			const shallowPath = path.join(root, 'bin', 'app.exe');
+			const result = deduplicateBuildOutputFolders([deepPath, shallowPath], root);
+			assert.strictEqual(result.length, 1);
+			assert.strictEqual(result[0], path.join(root, 'bin'));
+		});
+
+		it('respects custom maxDepth parameter', () => {
+			const files = [
+				path.join(root, 'a', 'b', 'c', 'app.exe'),  // depth 3
+				path.join(root, 'x', 'app.exe')              // depth 1
+			];
+			const result = deduplicateBuildOutputFolders(files, root, 2);
+			assert.strictEqual(result.length, 1);
+			assert.strictEqual(result[0], path.join(root, 'x'));
+		});
+
+		it('returns empty array for no input', () => {
+			const result = deduplicateBuildOutputFolders([], root);
+			assert.strictEqual(result.length, 0);
+		});
+
+		it('sorts results by relative path', () => {
+			const files = [
+				path.join(root, 'z-app', 'app.exe'),
+				path.join(root, 'a-app', 'app.exe'),
+				path.join(root, 'm-app', 'app.exe')
+			];
+			const result = deduplicateBuildOutputFolders(files, root);
+			assert.deepStrictEqual(result, [
+				path.join(root, 'a-app'),
+				path.join(root, 'm-app'),
+				path.join(root, 'z-app')
+			]);
+		});
+
+		it('includes files at workspace root (depth 0)', () => {
+			const files = [path.join(root, 'app.exe')];
+			const result = deduplicateBuildOutputFolders(files, root);
+			assert.strictEqual(result.length, 1);
+			assert.strictEqual(result[0], root);
 		});
 	});
 });
