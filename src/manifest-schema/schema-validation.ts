@@ -18,6 +18,8 @@ export interface ManifestDiagnostic {
     line: number;
     col: number;
     endCol: number;
+    /** Schema namespace URI for the element that produced this diagnostic. */
+    schemaUri?: string;
 }
 
 export interface ManifestValidationOptions {
@@ -77,10 +79,6 @@ export function validateManifestText(
  * Validate a single XML element against the schema.
  * Checks required attributes, enum values, patterns, and lengths.
  */
-function formatSchemaSource(ns: string): string {
-    return ns ? `\n\n(${ns})` : '';
-}
-
 function validateElement(
     schema: SchemaModel,
     element: Element,
@@ -108,15 +106,16 @@ function validateElement(
     }
 
     const resolvedAttributes = resolveElementAttributes(element);
-    const schemaSrc = formatSchemaSource(ns);
+    const schemaUri = ns || undefined;
 
     // Check required attributes
     for (const attr of schemaDef.attributes) {
         if (attr.required && !findResolvedAttribute(resolvedAttributes, attr)) {
             const range = getElementRange(element, lines);
             diagnostics.push({
-                message: `Missing required attribute '${attr.name}' on <${localName}>${schemaSrc}`,
+                message: `Missing required attribute '${attr.name}' on <${localName}>`,
                 severity,
+                schemaUri,
                 ...range,
             });
         }
@@ -129,8 +128,9 @@ function validateElement(
         if (resolvedAttribute && !attr.enumerations.includes(resolvedAttribute.value)) {
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
-                message: `Invalid value '${resolvedAttribute.value}' for attribute '${attr.name}'. Expected one of: ${attr.enumerations.slice(0, 10).join(', ')}${schemaSrc}`,
+                message: `Invalid value '${resolvedAttribute.value}' for attribute '${attr.name}'. Expected one of: ${attr.enumerations.slice(0, 10).join(', ')}`,
                 severity,
+                schemaUri,
                 ...range,
             });
         }
@@ -146,8 +146,9 @@ function validateElement(
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             const patternHint = formatPatternHint(attr);
             diagnostics.push({
-                message: `Value '${resolvedAttribute.value}' for attribute '${attr.name}' is invalid${patternHint}${schemaSrc}`,
+                message: `Value '${resolvedAttribute.value}' for attribute '${attr.name}' is invalid${patternHint}`,
                 severity,
+                schemaUri,
                 ...range,
             });
         }
@@ -161,16 +162,18 @@ function validateElement(
         if (attr.minLength !== undefined && resolvedAttribute.value.length < attr.minLength) {
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
-                message: `Value for '${attr.name}' must be at least ${attr.minLength} characters (got ${resolvedAttribute.value.length})${schemaSrc}`,
+                message: `Value for '${attr.name}' must be at least ${attr.minLength} characters (got ${resolvedAttribute.value.length})`,
                 severity,
+                schemaUri,
                 ...range,
             });
         }
         if (attr.maxLength !== undefined && resolvedAttribute.value.length > attr.maxLength) {
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
-                message: `Value for '${attr.name}' exceeds maximum length of ${attr.maxLength} characters (got ${resolvedAttribute.value.length})${schemaSrc}`,
+                message: `Value for '${attr.name}' exceeds maximum length of ${attr.maxLength} characters (got ${resolvedAttribute.value.length})`,
                 severity,
+                schemaUri,
                 ...range,
             });
         }
@@ -194,8 +197,9 @@ function validateElement(
         }
         const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
         diagnostics.push({
-            message: `Attribute '${resolvedAttribute.displayName}' is not declared in the schema for element '${localName}'${schemaSrc}`,
+            message: `Attribute '${resolvedAttribute.displayName}' is not declared in the schema for element '${localName}'`,
             severity: 'hint',
+            schemaUri,
             ...range,
         });
     }
@@ -339,7 +343,6 @@ function validateChildPlacement(
     }
 
     const parentNs = parentElement.namespaceURI || '';
-    const parentSchemaSrc = formatSchemaSource(parentNs);
 
     const childSchemaDef = findSchemaElementExact(schema, childLocalName, childNamespace);
     if (childSchemaDef) {
@@ -349,16 +352,18 @@ function validateChildPlacement(
 
         const range = getElementRange(childElement, lines);
         diagnostics.push({
-            message: `Element '${childLocalName}' is not allowed under <${parentElement.localName || parentElement.nodeName.split(':').pop() || ''}>${parentSchemaSrc}`,
+            message: `Element '${childLocalName}' is not allowed under <${parentElement.localName || parentElement.nodeName.split(':').pop() || ''}>`,
             severity: 'warning',
+            schemaUri: parentNs || undefined,
             ...range,
         });
         return;
     }
     const range = getElementRange(childElement, lines);
     diagnostics.push({
-        message: `Unknown element '${childLocalName}'${formatSchemaSource(childNamespace)}`,
+        message: `Unknown element '${childLocalName}'`,
         severity: 'warning',
+        schemaUri: childNamespace || undefined,
         ...range,
     });
 }

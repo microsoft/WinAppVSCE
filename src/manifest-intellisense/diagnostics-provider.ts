@@ -143,14 +143,19 @@ export class ManifestDiagnosticsProvider {
                     .getConfiguration(MANIFEST_CONFIG_SECTION)
                     .get<boolean>(STRICT_CHILD_PLACEMENT_CONFIG_KEY, false),
             }
-        ).map(diagnostic => new vscode.Diagnostic(
-            new vscode.Range(diagnostic.line, diagnostic.col, diagnostic.line, diagnostic.endCol),
-            diagnostic.message,
-            diagnostic.severity === 'error'
-                ? vscode.DiagnosticSeverity.Error
-                : diagnostic.severity === 'warning'
-                    ? vscode.DiagnosticSeverity.Warning
-                    : vscode.DiagnosticSeverity.Hint
-        ));
+        ).map(d => {
+            const message = d.schemaUri
+                ? `${d.message}\n\n${d.schemaUri}`
+                : d.message;
+            return new vscode.Diagnostic(
+                new vscode.Range(d.line, d.col, d.line, d.endCol),
+                message,
+                d.severity === 'error'
+                    ? vscode.DiagnosticSeverity.Error
+                    : d.severity === 'warning'
+                        ? vscode.DiagnosticSeverity.Warning
+                        : vscode.DiagnosticSeverity.Hint
+            );
+        });
     }
 }
