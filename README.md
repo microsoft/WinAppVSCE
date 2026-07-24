@@ -212,6 +212,7 @@ When you edit an `AppxManifest.xml` or `.appxmanifest` file in the text editor, 
 |---------|-------------|
 | `winapp.manifest.intelliSense.enable` | Enable or disable AppxManifest IntelliSense features. |
 | `winapp.manifest.diagnostics.level` | Set manifest diagnostics severity to `off`, `warning`, or `error`. |
+| `winapp.manifest.intelliSense.diagnostics.strictChildPlacement` | When enabled, report known manifest elements that appear under an unexpected parent even when substitution-group coverage is incomplete. |
 
 ## Scenarios
 

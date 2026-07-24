@@ -16,6 +16,10 @@ export interface SchemaElement {
     attributes: SchemaAttribute[];
     /** The complex type name if this element references a named type. */
     typeName?: string;
+    /** Base simple type name used for the element's text content, if any. */
+    simpleTypeName?: string;
+    /** Namespace URI for the element's base simple type, if any. */
+    simpleTypeNamespace?: string;
     /** Base complex type name if this type extends another type. */
     baseTypeName?: string;
     /** Absolute path to the XSD file where this element is defined. */
@@ -113,6 +117,7 @@ export interface SchemaModel {
 /** Well-known namespace URIs for AppxManifest. */
 export const MANIFEST_NAMESPACES: Record<string, string> = {
     '': 'http://schemas.microsoft.com/appx/manifest/foundation/windows10',
+    'foundation2': 'http://schemas.microsoft.com/appx/manifest/foundation/windows10/2',
     'uap': 'http://schemas.microsoft.com/appx/manifest/uap/windows10',
     'uap2': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/2',
     'uap3': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/3',
@@ -120,12 +125,17 @@ export const MANIFEST_NAMESPACES: Record<string, string> = {
     'uap5': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/5',
     'uap6': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/6',
     'uap7': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/7',
+    'uap8': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/8',
     'uap10': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/10',
+    'uap11': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/11',
+    'uap12': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/12',
+    'uap13': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/13',
     'rescap': 'http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities',
     'desktop': 'http://schemas.microsoft.com/appx/manifest/desktop/windows10',
     'desktop2': 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/2',
     'desktop3': 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/3',
     'com': 'http://schemas.microsoft.com/appx/manifest/com/windows10',
+    'm': 'http://schemas.microsoft.com/appx/2010/manifest',
     't': 'http://schemas.microsoft.com/appx/manifest/types',
 };
 

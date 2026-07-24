@@ -299,11 +299,25 @@ function parseComplexTypeContent(
     const extension = complexContent
         ? getDirectChildrenByLocalName(complexContent, 'extension')[0]
         : undefined;
-    const scope = extension ?? ct;
+    const simpleContent = getDirectChildrenByLocalName(ct, 'simpleContent')[0];
+    const simpleExtension = simpleContent
+        ? getDirectChildrenByLocalName(simpleContent, 'extension')[0]
+        : undefined;
+    const simpleRestriction = simpleContent
+        ? getDirectChildrenByLocalName(simpleContent, 'restriction')[0]
+        : undefined;
+    const simpleContentScope = simpleExtension ?? simpleRestriction;
+    const scope = extension ?? simpleContentScope ?? ct;
 
     if (extension) {
         const baseReference = resolveTypeReference(extension.getAttribute('base'), extension, doc);
         schemaElem.baseTypeName = baseReference?.localName;
+    }
+
+    if (simpleContentScope) {
+        const baseReference = resolveTypeReference(simpleContentScope.getAttribute('base'), simpleContentScope, doc);
+        schemaElem.simpleTypeName = baseReference?.localName;
+        schemaElem.simpleTypeNamespace = baseReference?.namespace;
     }
 
     parseChildElements(scope, targetNs, schemaElem, model, parseContext, doc, filePath);
@@ -647,6 +661,10 @@ function resolveTypeReferences(model: SchemaModel): void {
                 if (!elem.documentation && baseElem.documentation) {
                     elem.documentation = baseElem.documentation;
                 }
+                if (!elem.simpleTypeName && baseElem.simpleTypeName) {
+                    elem.simpleTypeName = baseElem.simpleTypeName;
+                    elem.simpleTypeNamespace = baseElem.simpleTypeNamespace;
+                }
             }
         }
 
@@ -658,6 +676,10 @@ function resolveTypeReferences(model: SchemaModel): void {
                 elem.attributes = cloneAttributes(resolvedType.attributes);
                 if (!elem.documentation && resolvedType.documentation) {
                     elem.documentation = resolvedType.documentation;
+                }
+                if (!elem.simpleTypeName && resolvedType.simpleTypeName) {
+                    elem.simpleTypeName = resolvedType.simpleTypeName;
+                    elem.simpleTypeNamespace = resolvedType.simpleTypeNamespace;
                 }
             }
         }
@@ -687,6 +709,8 @@ function resolveTypeReferences(model: SchemaModel): void {
                 children: cloneChildRefs(resolvedType.children),
                 attributes: cloneAttributes(resolvedType.attributes),
                 typeName: child.typeName,
+                simpleTypeName: resolvedType.simpleTypeName,
+                simpleTypeNamespace: resolvedType.simpleTypeNamespace,
                 sourceFile: resolvedType.sourceFile,
                 sourceLine: resolvedType.sourceLine,
             });

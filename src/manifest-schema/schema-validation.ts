@@ -223,7 +223,7 @@ function validateChildren(
         if (child.nodeType === 1) {
             const childElement = child as Element;
             if (schemaDef) {
-                validateChildPlacement(schema, element, schemaDef, childElement, diagnostics, lines, options);
+                validateChildPlacement(schema, element, schemaDef, childElement, diagnostics, severity, lines, options);
             }
             validateElement(schema, childElement, diagnostics, severity, lines, options, depth + 1);
         }
@@ -333,6 +333,7 @@ function validateChildPlacement(
     schemaDef: SchemaElement,
     childElement: Element,
     diagnostics: ManifestDiagnostic[],
+    severity: 'warning' | 'error',
     lines: string[],
     options: ManifestValidationOptions
 ): void {
@@ -353,7 +354,7 @@ function validateChildPlacement(
         const range = getElementRange(childElement, lines);
         diagnostics.push({
             message: `Element '${childLocalName}' is not allowed under <${parentElement.localName || parentElement.nodeName.split(':').pop() || ''}>`,
-            severity: 'warning',
+            severity,
             schemaUri: parentNs || undefined,
             ...range,
         });
@@ -362,7 +363,7 @@ function validateChildPlacement(
     const range = getElementRange(childElement, lines);
     diagnostics.push({
         message: `Unknown element '${childLocalName}'`,
-        severity: 'warning',
+        severity,
         schemaUri: childNamespace || undefined,
         ...range,
     });

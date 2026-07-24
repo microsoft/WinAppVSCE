@@ -114,6 +114,16 @@ describe('loadSchemaModel', () => {
         assert.ok(displayName.required, 'DisplayName should be required');
     });
 
+    it('preserves attributes on simpleContent elements like uap:FileType', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const fileType = model.elements.get(`${UAP_NS}|FileType`);
+        assert.ok(fileType, 'uap:FileType element should exist');
+        assert.equal(fileType.simpleTypeName, 'ST_FileType');
+        assert.equal(fileType.simpleTypeNamespace, MANIFEST_NAMESPACES['t']);
+        assert.ok(fileType.attributes.length > 0, 'uap:FileType should retain attributes from simpleContent');
+        assert.ok(fileType.attributes.some(attribute => attribute.name === 'ContentType'));
+    });
+
     it('sets up namespacePrefixes map', () => {
         model = loadSchemaModel(SCHEMAS_DIR);
         assert.ok(model.namespacePrefixes.size > 0);
@@ -121,6 +131,19 @@ describe('loadSchemaModel', () => {
             model.namespacePrefixes.get(UAP_NS),
             'uap'
         );
+    });
+
+    it('covers all bundled schema target namespaces in the prefix table', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const schemaTargetNamespaces = schemaFiles.map(file => {
+            const content = fs.readFileSync(path.join(SCHEMAS_DIR, file.name), 'utf8');
+            const match = content.match(/targetNamespace\s*=\s*"([^"]+)"/);
+            return match?.[1];
+        }).filter((namespace): namespace is string => Boolean(namespace));
+
+        for (const namespace of schemaTargetNamespaces) {
+            assert.ok(model.namespacePrefixes.has(namespace), `Missing namespace prefix for ${namespace}`);
+        }
     });
 
     it('resolves referenced attributes on inline complex types', () => {

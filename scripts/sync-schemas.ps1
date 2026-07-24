@@ -31,8 +31,11 @@ if ($CliPath -and (Test-Path $CliPath)) {
     $winappExe = $CliPath
 } else {
     # Try bin/ directory first, then fall back to PATH
+    $ridBinPath = Join-Path $repoRoot 'bin' 'win-x64' 'winapp.exe'
     $binPath = Join-Path $repoRoot 'bin' 'winapp.exe'
-    if (Test-Path $binPath) {
+    if (Test-Path $ridBinPath) {
+        $winappExe = $ridBinPath
+    } elseif (Test-Path $binPath) {
         $winappExe = $binPath
     } else {
         $winappExe = (Get-Command 'winapp' -ErrorAction SilentlyContinue)?.Source
