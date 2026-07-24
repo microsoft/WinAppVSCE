@@ -438,6 +438,77 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 	return picked.detail;
 }
 
+const FOLDER_PICKER_DETAIL = 'Open a folder picker';
+const BUILD_OUTPUT_SEARCH_MAX_RESULTS = 200;
+const BUILD_OUTPUT_SEARCH_MAX_DEPTH = 8;
+const BUILD_OUTPUT_EXCLUDE_GLOB = '{**/node_modules/**,**/.git/**,**/AppX/**,**/.winapp/**,**/obj/**,**/.vs/**,**/packages/**}';
+
+/**
+ * Search the workspace for build output folders (directories containing .exe
+ * files) and let the user pick one via a QuickPick. Falls back to a native
+ * folder dialog when none are found; a "Browse…" entry is always appended.
+ *
+ * @returns The selected folder path, or `undefined` if cancelled.
+ */
+async function pickBuildOutputFolder(workspacePath: string): Promise<string | undefined> {
+	let cancelled = false;
+	const outputFolders = await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: 'Searching for build output folders...', cancellable: true },
+		async (_progress, token) => {
+			token.onCancellationRequested(() => { cancelled = true; });
+			const exeMatches = await vscode.workspace.findFiles(
+				new vscode.RelativePattern(workspacePath, '**/*.exe'),
+				BUILD_OUTPUT_EXCLUDE_GLOB,
+				BUILD_OUTPUT_SEARCH_MAX_RESULTS
+			);
+
+			const folderSet = new Set<string>();
+			for (const match of exeMatches) {
+				const folderPath = path.dirname(match.fsPath);
+				const relativeFolder = path.relative(workspacePath, folderPath);
+				if (relativeFolder !== '' && relativeFolder.split(path.sep).length > BUILD_OUTPUT_SEARCH_MAX_DEPTH) {
+					continue;
+				}
+				folderSet.add(folderPath);
+			}
+
+			return [...folderSet].sort((left, right) =>
+				path.relative(workspacePath, left).localeCompare(path.relative(workspacePath, right))
+			);
+		}
+	);
+
+	if (cancelled) {
+		return undefined;
+	}
+
+	if (outputFolders.length === 0) {
+		return selectFolder('Select build output folder');
+	}
+
+	const items: Array<vscode.QuickPickItem & { directory?: string }> = outputFolders.map((folderPath) => ({
+		label: path.relative(workspacePath, folderPath) || '.',
+		detail: folderPath,
+		directory: folderPath
+	}));
+
+	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL });
+
+	const picked = await vscode.window.showQuickPick(items, {
+		placeHolder: 'Select the build output folder containing your app'
+	});
+
+	if (!picked) {
+		return undefined;
+	}
+
+	if (picked.detail === FOLDER_PICKER_DETAIL) {
+		return selectFolder('Select build output folder');
+	}
+
+	return picked.directory;
+}
+
 /**
  * Run the code-signing flow for an MSIX/executable. Prompts for the file to
  * sign (unless one is supplied) and the signing certificate, then invokes
@@ -623,11 +694,11 @@ async function resolveProjectDirectory(workspacePath: string): Promise<string | 
 			vscode.window.showWarningMessage(message);
 		},
 		pickDirectory: async (items, placeHolder) => {
-			const browseItem = { label: '$(folder-opened) Browse…', description: 'Open a folder picker', directory: '' };
+			const browseItem = { label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, directory: '' };
 			const picked = await vscode.window.showQuickPick([...items, browseItem], { placeHolder });
 			if (!picked) { return undefined; }
-			if (picked === browseItem) { return selectFolder('Select project folder'); }
-			return picked.directory;
+			if (picked.detail === FOLDER_PICKER_DETAIL) { return selectFolder('Select project folder'); }
+			return picked.directory || undefined;
 		},
 		scanProjects: async (root) =>
 			vscode.window.withProgress(
@@ -1078,7 +1149,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const inputFolder = await resolveProjectDirectory(workspacePath);
+			const inputFolder = await pickBuildOutputFolder(workspacePath);
 			if (!inputFolder) {
 				return;
 			}
@@ -1139,7 +1210,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const inputFolder = await resolveProjectDirectory(workspacePath);
+			const inputFolder = await pickBuildOutputFolder(workspacePath);
 			if (!inputFolder) {
 				return;
 			}
