@@ -705,6 +705,17 @@ async function resolveProjectDirectory(workspacePath: string): Promise<string | 
 					vscode.window.showWarningMessage('Selected folder is outside the workspace and was ignored.');
 					return undefined;
 				}
+				try {
+					const realWorkspace = await fs.promises.realpath(workspacePath);
+					const realFolder = await fs.promises.realpath(folder);
+					const realRelative = path.relative(realWorkspace, realFolder);
+					if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
+						vscode.window.showWarningMessage('Selected folder is outside the workspace and was ignored.');
+						return undefined;
+					}
+				} catch {
+					// Target doesn't exist on disk — lexical check above is authoritative
+				}
 				return folder;
 			}
 			return picked.directory || undefined;
