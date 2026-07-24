@@ -32,7 +32,8 @@ import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
 	getDebuggerExtensionRequirement,
-	getDebuggerTypeFromChoice
+	getDebuggerTypeFromChoice,
+	validateInputFolder
 } from './debugger-resolver';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
 
@@ -727,30 +728,9 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 			if (config.workingDirectory) {
 				cwd = config.workingDirectory;
 			}
-			const resolvedFolder = path.isAbsolute(inputFolder) ? inputFolder : path.resolve(cwd, inputFolder);
-			const folderStat = await fs.promises.stat(resolvedFolder).catch(() => undefined);
-			if (!folderStat) {
-				vscode.window.showErrorMessage(
-					`The configured "inputFolder" path does not exist: ${inputFolder}. ` +
-					'Build your project first, or update "inputFolder" in launch.json to point to your build output directory.'
-				);
-				return undefined;
-			}
-
-			if (!folderStat.isDirectory()) {
-				vscode.window.showErrorMessage(
-					`The configured "inputFolder" is not a directory: ${inputFolder}. ` +
-					'Update "inputFolder" in launch.json to point to the folder containing your built application.'
-				);
-				return undefined;
-			}
-
-			const exesInFolder = await glob('*.exe', { cwd: resolvedFolder, absolute: true, nocase: true });
-			if (exesInFolder.length === 0) {
-				vscode.window.showErrorMessage(
-					`The configured "inputFolder" does not contain any .exe files: ${inputFolder}. ` +
-					'Build your project first, or update "inputFolder" in launch.json to point to the folder containing your built application.'
-				);
+			const result = await validateInputFolder(inputFolder, cwd);
+			if (!result.valid) {
+				vscode.window.showErrorMessage(result.message);
 				return undefined;
 			}
 		}
