@@ -159,7 +159,11 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                 const errors = validateManifest(data, schema);
                 webviewPanel.webview.postMessage({ type: 'update', data, errors, forceAll });
             } else {
-                webviewPanel.webview.postMessage({ type: 'update', data, errors: [], forceAll });
+                webviewPanel.webview.postMessage({
+                	type: 'update', data,
+                	errors: [{ field: '_schema', message: 'Manifest schema failed to load. Validation is unavailable.' }],
+                	forceAll,
+                });
             }
         };
 

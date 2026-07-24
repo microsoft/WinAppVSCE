@@ -434,8 +434,8 @@ export function activate(context: vscode.ExtensionContext) {
 			if (!schemaWarningShown) {
 				schemaWarningShown = true;
 				const message = err instanceof Error ? err.message : String(err);
-				vscode.window.showWarningMessage(
-					`WinApp: Failed to load manifest schemas: ${message}. IntelliSense will retry on next manifest open.`
+				vscode.window.showErrorMessage(
+					`WinApp: Failed to load bundled manifest schemas: ${message}. Manifest validation will be unavailable.`
 				);
 			}
 			return undefined;
