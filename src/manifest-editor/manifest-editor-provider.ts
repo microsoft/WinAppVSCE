@@ -20,10 +20,10 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
 
     constructor(
         private readonly context: vscode.ExtensionContext,
-        private readonly getSchema?: () => SchemaModel | undefined,
+        private readonly getSchema: () => SchemaModel,
     ) {}
 
-    public static register(context: vscode.ExtensionContext, getSchema?: () => SchemaModel | undefined): vscode.Disposable {
+    public static register(context: vscode.ExtensionContext, getSchema: () => SchemaModel): vscode.Disposable {
         const provider = new ManifestEditorProvider(context, getSchema);
         return vscode.window.registerCustomEditorProvider(
             ManifestEditorProvider.viewType,
@@ -154,17 +154,8 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                 return;
             }
             if (showingErrorView) { showEditorView(); }
-            const schema = this.getSchema?.();
-            if (schema) {
-                const errors = validateManifest(data, schema);
-                webviewPanel.webview.postMessage({ type: 'update', data, errors, forceAll });
-            } else {
-                webviewPanel.webview.postMessage({
-                	type: 'update', data,
-                	errors: [{ field: '_schema', message: 'Manifest schema failed to load. Validation is unavailable.' }],
-                	forceAll,
-                });
-            }
+            const errors = validateManifest(data, this.getSchema());
+            webviewPanel.webview.postMessage({ type: 'update', data, errors, forceAll });
         };
 
         // Initial load: check if XML is valid

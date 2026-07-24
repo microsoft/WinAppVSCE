@@ -6,7 +6,7 @@ import { getXmlContext, splitPrefixedName } from '../manifest-schema/xml-context
 const XML_NAME_REGEX = /[A-Za-z_][\w.:-]*/;
 
 export class ManifestDefinitionProvider implements vscode.DefinitionProvider {
-    constructor(private readonly getSchema: () => SchemaModel | undefined) {}
+    constructor(private readonly getSchema: () => SchemaModel) {}
 
     provideDefinition(
         document: vscode.TextDocument,
@@ -19,9 +19,6 @@ export class ManifestDefinitionProvider implements vscode.DefinitionProvider {
         }
 
         const schema = this.getSchema();
-        if (!schema) {
-            return undefined;
-        }
 
         const text = document.getText();
         const offset = document.offsetAt(position);

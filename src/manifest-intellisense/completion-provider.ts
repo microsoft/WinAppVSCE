@@ -8,7 +8,7 @@ import { SchemaModel } from '../manifest-schema/schema-model';
 import { getManifestCompletions } from './intellisense-logic';
 
 export class ManifestCompletionProvider implements vscode.CompletionItemProvider {
-    constructor(private readonly getSchema: () => SchemaModel | undefined) {}
+    constructor(private readonly getSchema: () => SchemaModel) {}
 
     provideCompletionItems(
         document: vscode.TextDocument,
@@ -22,9 +22,6 @@ export class ManifestCompletionProvider implements vscode.CompletionItemProvider
         }
 
         const schema = this.getSchema();
-        if (!schema) {
-            return undefined;
-        }
 
         return getManifestCompletions(schema, document.getText(), document.offsetAt(position)).map(suggestion => {
             const kind = suggestion.kind === 'attribute'

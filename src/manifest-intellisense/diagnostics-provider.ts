@@ -18,7 +18,7 @@ export class ManifestDiagnosticsProvider {
     private readonly disposables: vscode.Disposable[] = [];
     private readonly pendingValidations = new Map<string, ReturnType<typeof setTimeout>>();
 
-    constructor(private readonly getSchema: () => SchemaModel | undefined) {
+    constructor(private readonly getSchema: () => SchemaModel) {
         this.diagnosticCollection = vscode.languages.createDiagnosticCollection('winapp-manifest');
     }
 
@@ -95,12 +95,6 @@ export class ManifestDiagnosticsProvider {
             return;
         }
 
-        const schema = this.getSchema();
-        if (!schema) {
-            this.diagnosticCollection.delete(document.uri);
-            return;
-        }
-
         const diagnostics = this.validate(document, level);
         this.diagnosticCollection.set(document.uri, diagnostics);
     }
@@ -129,13 +123,8 @@ export class ManifestDiagnosticsProvider {
 
     /** Validate the manifest document. */
     private validate(document: vscode.TextDocument, level: string): vscode.Diagnostic[] {
-        const schema = this.getSchema();
-        if (!schema) {
-            return [];
-        }
-
         return validateManifestText(
-            schema,
+            this.getSchema(),
             document.getText(),
             level === 'error' ? 'error' : 'warning',
             {

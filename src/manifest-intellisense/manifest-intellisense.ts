@@ -28,7 +28,7 @@ const TRIGGER_CHARACTERS = ['<', ' ', '"', '=', '/'];
  */
 export function registerManifestIntelliSense(
     context: vscode.ExtensionContext,
-    getSchema: () => SchemaModel | undefined
+    getSchema: () => SchemaModel
 ): void {
     // Register completion provider
     const completionProvider = new ManifestCompletionProvider(getSchema);

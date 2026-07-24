@@ -8,7 +8,7 @@ import { SchemaModel } from '../manifest-schema/schema-model';
 import { formatManifestHoverMarkdown, getManifestHover } from './intellisense-logic';
 
 export class ManifestHoverProvider implements vscode.HoverProvider {
-    constructor(private readonly getSchema: () => SchemaModel | undefined) {}
+    constructor(private readonly getSchema: () => SchemaModel) {}
 
     provideHover(
         document: vscode.TextDocument,
@@ -21,9 +21,6 @@ export class ManifestHoverProvider implements vscode.HoverProvider {
         }
 
         const schema = this.getSchema();
-        if (!schema) {
-            return undefined;
-        }
 
         const hover = getManifestHover(schema, document.getText(), document.offsetAt(position));
         if (!hover) { return undefined; }

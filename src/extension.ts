@@ -421,25 +421,15 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.debug.registerDebugAdapterDescriptorFactory(WINAPP_DEBUG_TYPE, factory)
 	);
 
-	// Shared schema model — loaded lazily, shared by both editor and IntelliSense
+	// Shared schema model — loaded lazily, shared by both editor and IntelliSense.
+	// Schemas are bundled at build time (vscode:prepublish runs sync-schemas + verify-schemas),
+	// so loadSchemaModel will always succeed in a properly packaged extension.
 	const schemasDir = path.join(extensionPath, 'schemas');
 	let sharedSchema: SchemaModel | undefined;
-	let schemaWarningShown = false;
-	const getSharedSchema = (): SchemaModel | undefined => {
+	const getSharedSchema = (): SchemaModel => {
 		if (sharedSchema) { return sharedSchema; }
-		try {
-			sharedSchema = loadSchemaModel(schemasDir);
-			return sharedSchema;
-		} catch (err) {
-			if (!schemaWarningShown) {
-				schemaWarningShown = true;
-				const message = err instanceof Error ? err.message : String(err);
-				vscode.window.showErrorMessage(
-					`WinApp: Failed to load bundled manifest schemas: ${message}. Manifest validation will be unavailable.`
-				);
-			}
-			return undefined;
-		}
+		sharedSchema = loadSchemaModel(schemasDir);
+		return sharedSchema;
 	};
 
 	// Register the AppxManifest visual editor (with schema support)
