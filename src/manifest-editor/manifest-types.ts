@@ -95,6 +95,18 @@ export interface ExternalDependencyData {
     optional: string;
 }
 
+/** A single field extracted from an extension element (attribute or text content). */
+export interface ExtensionField {
+    label: string;
+    value: string;
+}
+
+/** Parsed extension data holding both raw XML and pre-extracted fields. */
+export interface ExtensionData {
+    xml: string;
+    fields: ExtensionField[];
+}
+
 export interface ApplicationData {
     id: string;
     executable: string;
@@ -104,7 +116,7 @@ export interface ApplicationData {
     supportsMultipleInstances: string;
     parameters: string;
     visualElements: VisualElementsData;
-    extensions: string[];
+    extensions: ExtensionData[];
 }
 
 export interface VisualElementsData {

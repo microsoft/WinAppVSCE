@@ -80,8 +80,8 @@ export function getApplicationsScript(): string {
                 // Build extensions HTML
                 let extListHtml = '';
                 if (app.extensions && app.extensions.length > 0) {
-                    app.extensions.forEach((extXml, eidx) => {
-                        const fields = parseExtensionFields(extXml);
+                    app.extensions.forEach((ext, eidx) => {
+                        const fields = parseExtensionFields(ext.xml);
                         let fieldsHtml = fields.map(f => {
                             let descHtml = f.description ? '<div class="description">' + escapeHtml(f.description) + '</div>' : '';
                             const textContentAttr = f.isTextContent ? ' data-ext-text-content="true"' : '';

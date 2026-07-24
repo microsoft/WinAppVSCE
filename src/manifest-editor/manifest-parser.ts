@@ -45,6 +45,43 @@ import {
 
 import { insertChildBeforeClose } from './manifest-xml-ops';
 
+/** Recursively walk a DOM element extracting field labels and values for validation. */
+function walkExtensionElement(element: Element, fields: Array<{ label: string; value: string }>): void {
+    const localName = element.localName || element.nodeName.split(':').pop() || '';
+
+    // Extract attributes as ElementLocalName.AttributeName
+    for (let i = 0; i < element.attributes.length; i++) {
+        const attr = element.attributes.item(i);
+        if (!attr) { continue; }
+        const attrName = attr.localName || attr.nodeName;
+        // Skip namespace declarations and the root Extension Category
+        if (attrName === 'xmlns' || attr.nodeName.startsWith('xmlns:')) { continue; }
+        if (attrName === 'Category') { continue; }
+        fields.push({ label: `${localName}.${attrName}`, value: attr.value || '' });
+    }
+
+    // Extract text content from leaf elements (no child elements)
+    let hasChildElements = false;
+    const childNodes = element.childNodes;
+    for (let i = 0; i < childNodes.length; i++) {
+        if (childNodes.item(i)?.nodeType === 1) { hasChildElements = true; break; }
+    }
+    if (!hasChildElements) {
+        const text = (element.textContent || '').trim();
+        if (text) {
+            fields.push({ label: localName, value: text });
+        }
+    }
+
+    // Recurse into child elements
+    for (let i = 0; i < childNodes.length; i++) {
+        const child = childNodes.item(i);
+        if (child && child.nodeType === 1) {
+            walkExtensionElement(child as Element, fields);
+        }
+    }
+}
+
 /**
  * Parse appxmanifest.xml text into a ManifestData object.
  *
@@ -268,8 +305,8 @@ function parseApplications(root: Element): ApplicationData[] {
             }
         }
 
-        // Gather extension raw XML for display and editing
-        const extensions: string[] = [];
+        // Gather extension data: raw XML + pre-parsed fields from the DOM
+        const extensions: Array<{ xml: string; fields: Array<{ label: string; value: string }> }> = [];
         const extEl = getChildByLocalName(appEl, 'Extensions');
         if (extEl) {
             const serializer = new XMLSerializer();
@@ -277,7 +314,10 @@ function parseApplications(root: Element): ApplicationData[] {
             for (let i = 0; i < extChildren.length; i++) {
                 const child = extChildren[i];
                 if (child.nodeType === 1) {
-                    extensions.push(serializer.serializeToString(child as Element));
+                    const xml = serializer.serializeToString(child as Element);
+                    const fields: Array<{ label: string; value: string }> = [];
+                    walkExtensionElement(child as Element, fields);
+                    extensions.push({ xml, fields });
                 }
             }
         }

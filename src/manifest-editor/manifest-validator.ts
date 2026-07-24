@@ -10,8 +10,6 @@
 import { ManifestData, ValidationError } from './manifest-types';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { validateValueAgainstType, matchesSchemaPattern, isValidSchemaColor } from '../manifest-schema/schema-helpers';
-import { DOMParser } from '@xmldom/xmldom';
-import type { Element } from '@xmldom/xmldom';
 
 // BCP-47: language[-script][-region][-variant] (simplified for common MSIX usage)
 // Also accepts private-use tags like "x-generate" used by MSIX tooling
@@ -398,9 +396,8 @@ function validateApplications(data: ManifestData, errors: ValidationError[], sch
 
         if (app.extensions && app.extensions.length > 0) {
             for (let extIdx = 0; extIdx < app.extensions.length; extIdx++) {
-                const extXml = app.extensions[extIdx];
-                const extFields = parseExtensionFieldsFromXml(extXml);
-                for (const field of extFields) {
+                const ext = app.extensions[extIdx];
+                for (const field of ext.fields) {
                     const isRequired = REQUIRED_EXT_FIELDS.has(field.label);
                     const validation = validateExtensionField(field.label, field.value, isRequired, schema);
                     if (validation) {
@@ -509,64 +506,6 @@ export function validateExtensionField(fieldLabel: string, value: string, isRequ
         }
     }
     return null;
-}
-
-/**
- * Parse extension XML and extract editable fields with their labels and values.
- * Uses DOM parsing for correct handling of namespaced elements, single-quoted
- * attributes, and nested structures.
- */
-function parseExtensionFieldsFromXml(xml: string): Array<{ label: string; value: string }> {
-    const fields: Array<{ label: string; value: string }> = [];
-
-    let doc;
-    try {
-        doc = new DOMParser({ onError: () => {} })
-            .parseFromString(xml, 'application/xml');
-    } catch {
-        return fields;
-    }
-    if (!doc || !doc.documentElement) { return fields; }
-
-    walkElement(doc.documentElement, fields);
-    return fields;
-}
-
-/** Recursively walk DOM elements extracting field labels and values. */
-function walkElement(element: Element, fields: Array<{ label: string; value: string }>): void {
-    const localName = element.localName || element.nodeName.split(':').pop() || '';
-
-    // Extract attributes as ElementLocalName.AttributeName
-    for (let i = 0; i < element.attributes.length; i++) {
-        const attr = element.attributes.item(i);
-        if (!attr) { continue; }
-        const attrName = attr.localName || attr.nodeName;
-        // Skip namespace declarations and the root Extension Category
-        if (attrName === 'xmlns' || attr.nodeName.startsWith('xmlns:')) { continue; }
-        if (attrName === 'Category') { continue; }
-        fields.push({ label: `${localName}.${attrName}`, value: attr.value || '' });
-    }
-
-    // Extract text content from leaf elements (no child elements)
-    let hasChildElements = false;
-    const childNodes = element.childNodes;
-    for (let i = 0; i < childNodes.length; i++) {
-        if (childNodes.item(i)?.nodeType === 1) { hasChildElements = true; break; }
-    }
-    if (!hasChildElements) {
-        const text = (element.textContent || '').trim();
-        if (text) {
-            fields.push({ label: localName, value: text });
-        }
-    }
-
-    // Recurse into child elements
-    for (let i = 0; i < childNodes.length; i++) {
-        const child = childNodes.item(i);
-        if (child && child.nodeType === 1) {
-            walkElement(child as Element, fields);
-        }
-    }
 }
 
 /** Compare two version strings. Returns negative if a < b, 0 if equal, positive if a > b. */

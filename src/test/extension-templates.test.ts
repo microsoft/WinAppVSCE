@@ -97,7 +97,7 @@ describe('Extension Templates', () => {
             );
 
             const addedExt = parsed.applications[0].extensions.find(
-                (ext: string) => ext.includes(`Category="${template.category}"`)
+                (ext) => ext.xml.includes(`Category="${template.category}"`)
             );
             assert.ok(addedExt, `Should find an extension with Category="${template.category}" in parsed extensions`);
         });
@@ -206,7 +206,7 @@ describe('Real-world manifest fixtures', () => {
 
                     const parsed = parseManifest(result);
                     const found = parsed.applications[0].extensions.find(
-                        (ext: string) => ext.includes(`Category="${template.category}"`)
+                        (ext) => ext.xml.includes(`Category="${template.category}"`)
                     );
                     assert.ok(found, `Should find "${template.label}" extension after adding to ${filename}`);
                 }
@@ -244,8 +244,8 @@ describe('Fixture-specific parsing', () => {
         const parsed = parseManifest(loadFixture('winui-gallery.appxmanifest'));
         const app = parsed.applications[0];
         assert.ok(app.extensions.length >= 2, 'Should have at least 2 extensions');
-        assert.ok(app.extensions.some((e: string) => e.includes('windows.protocol')), 'Should have protocol extension');
-        assert.ok(app.extensions.some((e: string) => e.includes('windows.appUriHandler')), 'Should have appUriHandler extension');
+        assert.ok(app.extensions.some((e) => e.xml.includes('windows.protocol')), 'Should have protocol extension');
+        assert.ok(app.extensions.some((e) => e.xml.includes('windows.appUriHandler')), 'Should have appUriHandler extension');
         assert.ok(app.visualElements.square310x310Logo, 'Should have Square310x310Logo');
         assert.ok(app.visualElements.square71x71Logo, 'Should have Square71x71Logo');
         assert.ok(app.visualElements.splashScreenImage, 'Should have SplashScreen');
@@ -254,37 +254,37 @@ describe('Fixture-specific parsing', () => {
     it('activation-sample: should parse fileTypeAssociation, protocol, and startupTask extensions', () => {
         const parsed = parseManifest(loadFixture('winui-gallery.appxmanifest'));
         const exts = parsed.applications[0].extensions;
-        assert.ok(exts.some((e: string) => e.includes('windows.fileTypeAssociation')), 'Should have fileTypeAssociation');
-        assert.ok(exts.some((e: string) => e.includes('windows.protocol')), 'Should have protocol');
-        assert.ok(exts.some((e: string) => e.includes('windows.startupTask')), 'Should have startupTask');
+        assert.ok(exts.some((e) => e.xml.includes('windows.fileTypeAssociation')), 'Should have fileTypeAssociation');
+        assert.ok(exts.some((e) => e.xml.includes('windows.protocol')), 'Should have protocol');
+        assert.ok(exts.some((e) => e.xml.includes('windows.startupTask')), 'Should have startupTask');
     });
 
     it('share-target-sample: should parse shareTarget extension', () => {
         const parsed = parseManifest(loadFixture('winui-gallery.appxmanifest'));
         const exts = parsed.applications[0].extensions;
-        assert.ok(exts.some((e: string) => e.includes('windows.shareTarget')), 'Should have shareTarget');
+        assert.ok(exts.some((e) => e.xml.includes('windows.shareTarget')), 'Should have shareTarget');
     });
 
     it('push-notifications-sample: should parse comServer and protocol extensions', () => {
         const parsed = parseManifest(loadFixture('push-notifications-sample.appxmanifest'));
         const exts = parsed.applications[0].extensions;
-        assert.ok(exts.some((e: string) => e.includes('windows.comServer')), 'Should have comServer');
-        assert.ok(exts.some((e: string) => e.includes('windows.protocol')), 'Should have protocol');
+        assert.ok(exts.some((e) => e.xml.includes('windows.comServer')), 'Should have comServer');
+        assert.ok(exts.some((e) => e.xml.includes('windows.protocol')), 'Should have protocol');
         assert.ok(parsed.capabilities.includes('internetClient'), 'Should have internetClient capability');
     });
 
     it('background-task-sample: should parse backgroundTasks and comServer extensions', () => {
         const parsed = parseManifest(loadFixture('background-task-sample.appxmanifest'));
         const exts = parsed.applications[0].extensions;
-        assert.ok(exts.some((e: string) => e.includes('windows.backgroundTasks')), 'Should have backgroundTasks');
-        assert.ok(exts.some((e: string) => e.includes('windows.comServer')), 'Should have comServer');
+        assert.ok(exts.some((e) => e.xml.includes('windows.backgroundTasks')), 'Should have backgroundTasks');
+        assert.ok(exts.some((e) => e.xml.includes('windows.comServer')), 'Should have comServer');
     });
 
     it('widgets-sample: should parse comServer and appExtension extensions', () => {
         const parsed = parseManifest(loadFixture('widgets-sample.appxmanifest'));
         const exts = parsed.applications[0].extensions;
-        assert.ok(exts.some((e: string) => e.includes('windows.comServer')), 'Should have comServer');
-        assert.ok(exts.some((e: string) => e.includes('windows.appExtension')), 'Should have appExtension');
+        assert.ok(exts.some((e) => e.xml.includes('windows.comServer')), 'Should have comServer');
+        assert.ok(exts.some((e) => e.xml.includes('windows.appExtension')), 'Should have appExtension');
     });
 
     it('inline: should parse app with no application-level extensions', () => {

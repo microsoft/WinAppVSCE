@@ -11,8 +11,9 @@ import assert from 'node:assert/strict';
 import { validateManifest, isValidCustomCapability, validateExtensionField } from '../manifest-editor/manifest-validator';
 import { loadSchemaModel } from '../manifest-schema/xsd-parser';
 import { SchemaModel } from '../manifest-schema/schema-model';
-import type { ManifestData, ValidationError } from '../manifest-editor/manifest-types';
+import type { ManifestData, ValidationError, ExtensionData } from '../manifest-editor/manifest-types';
 import * as path from 'path';
+import { DOMParser } from '@xmldom/xmldom';
 
 let schema: SchemaModel;
 before(() => {
@@ -20,6 +21,43 @@ before(() => {
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** Convert raw extension XML string into ExtensionData with pre-parsed fields. */
+function ext(xml: string): ExtensionData {
+    const fields: Array<{ label: string; value: string }> = [];
+    try {
+        const doc = new DOMParser({ onError: () => {} }).parseFromString(xml, 'application/xml');
+        if (doc?.documentElement) {
+            walkEl(doc.documentElement, fields);
+        }
+    } catch { /* empty fields on parse failure */ }
+    return { xml, fields };
+}
+
+function walkEl(element: any, fields: Array<{ label: string; value: string }>): void {
+    const localName = element.localName || element.nodeName.split(':').pop() || '';
+    for (let i = 0; i < element.attributes.length; i++) {
+        const attr = element.attributes.item(i);
+        if (!attr) continue;
+        const attrName = attr.localName || attr.nodeName;
+        if (attrName === 'xmlns' || attr.nodeName.startsWith('xmlns:')) continue;
+        if (attrName === 'Category') continue;
+        fields.push({ label: `${localName}.${attrName}`, value: attr.value || '' });
+    }
+    let hasChildElements = false;
+    const childNodes = element.childNodes;
+    for (let i = 0; i < childNodes.length; i++) {
+        if (childNodes.item(i)?.nodeType === 1) { hasChildElements = true; break; }
+    }
+    if (!hasChildElements) {
+        const text = (element.textContent || '').trim();
+        if (text) { fields.push({ label: localName, value: text }); }
+    }
+    for (let i = 0; i < childNodes.length; i++) {
+        const child = childNodes.item(i);
+        if (child && child.nodeType === 1) { walkEl(child, fields); }
+    }
+}
 
 /** Returns a minimal valid ManifestData. Tests mutate a clone of this. */
 function makeValidManifest(): ManifestData {
@@ -1415,7 +1453,7 @@ describe('Extension Field Validation in validateManifest', () => {
     it('should report error for invalid GUID in Class.Id extension field', () => {
         const m = makeValidManifest();
         m.applications[0].extensions = [
-            '<Extension Category="windows.comServer"><ComServer><ExeServer Executable="server.exe" DisplayName="MyServer"><Class Id="not-a-guid" /></ExeServer></ComServer></Extension>'
+            ext('<Extension Category="windows.comServer"><ComServer><ExeServer Executable="server.exe" DisplayName="MyServer"><Class Id="not-a-guid" /></ExeServer></ComServer></Extension>')
         ];
         const errors = validateManifest(m, schema);
         const extErrors = errors.filter(e => e.field.includes('extensions.0.Class.Id'));
@@ -1426,7 +1464,7 @@ describe('Extension Field Validation in validateManifest', () => {
     it('should not report error for valid GUID in Class.Id extension field', () => {
         const m = makeValidManifest();
         m.applications[0].extensions = [
-            '<Extension Category="windows.comServer"><ComServer><ExeServer Executable="server.exe" DisplayName="MyServer"><Class Id="{12345678-1234-1234-1234-123456789012}" /></ExeServer></ComServer></Extension>'
+            ext('<Extension Category="windows.comServer"><ComServer><ExeServer Executable="server.exe" DisplayName="MyServer"><Class Id="{12345678-1234-1234-1234-123456789012}" /></ExeServer></ComServer></Extension>')
         ];
         const errors = validateManifest(m, schema);
         const extErrors = errors.filter(e => e.field.includes('extensions.0.Class.Id'));
@@ -1436,7 +1474,7 @@ describe('Extension Field Validation in validateManifest', () => {
     it('should report error for invalid protocol name', () => {
         const m = makeValidManifest();
         m.applications[0].extensions = [
-            '<Extension Category="windows.protocol"><Protocol Name="MyProtocol" /></Extension>'
+            ext('<Extension Category="windows.protocol"><Protocol Name="MyProtocol" /></Extension>')
         ];
         const errors = validateManifest(m, schema);
         const extErrors = errors.filter(e => e.field.includes('extensions.0.Protocol.Name'));
@@ -1447,7 +1485,7 @@ describe('Extension Field Validation in validateManifest', () => {
     it('should report warning for non-exe/dll ExeServer.Executable', () => {
         const m = makeValidManifest();
         m.applications[0].extensions = [
-            '<Extension Category="windows.comServer"><ComServer><ExeServer Executable="server.bat" DisplayName="MyServer"><Class Id="{12345678-1234-1234-1234-123456789012}" /></ExeServer></ComServer></Extension>'
+            ext('<Extension Category="windows.comServer"><ComServer><ExeServer Executable="server.bat" DisplayName="MyServer"><Class Id="{12345678-1234-1234-1234-123456789012}" /></ExeServer></ComServer></Extension>')
         ];
         const errors = validateManifest(m, schema);
         const extErrors = errors.filter(e => e.field.includes('extensions.0.ExeServer.Executable'));
@@ -1458,7 +1496,7 @@ describe('Extension Field Validation in validateManifest', () => {
     it('should report no extension errors for valid extension XML', () => {
         const m = makeValidManifest();
         m.applications[0].extensions = [
-            '<Extension Category="windows.protocol"><Protocol Name="myprotocol" /></Extension>'
+            ext('<Extension Category="windows.protocol"><Protocol Name="myprotocol" /></Extension>')
         ];
         const errors = validateManifest(m, schema);
         const extErrors = errors.filter(e => e.field.startsWith('applications.0.extensions.'));
@@ -1468,7 +1506,7 @@ describe('Extension Field Validation in validateManifest', () => {
     it('should validate extension text content fields like FileType', () => {
         const m = makeValidManifest();
         m.applications[0].extensions = [
-            '<Extension Category="windows.fileTypeAssociation"><FileTypeAssociation Name="mytype"><SupportedFileTypes><FileType>txt</FileType></SupportedFileTypes></FileTypeAssociation></Extension>'
+            ext('<Extension Category="windows.fileTypeAssociation"><FileTypeAssociation Name="mytype"><SupportedFileTypes><FileType>txt</FileType></SupportedFileTypes></FileTypeAssociation></Extension>')
         ];
         const errors = validateManifest(m, schema);
         const extErrors = errors.filter(e => e.field.includes('extensions.0.FileType'));
