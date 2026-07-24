@@ -7,9 +7,9 @@
  * (for real-time diagnostics) and manifest-editor (for form validation).
  */
 
-import { DOMParser } from '@xmldom/xmldom';
 import type { Element } from '@xmldom/xmldom';
 import { SchemaElement, SchemaModel, SchemaAttribute } from './schema-model';
+import { parseManifestXml } from './xml-parser';
 
 /** A diagnostic produced by schema validation. */
 export interface ManifestDiagnostic {
@@ -40,23 +40,9 @@ export function validateManifestText(
     const diagnostics: ManifestDiagnostic[] = [];
     const lines = text.split(/\r?\n/);
 
-    const errors: Array<{ message: string; line: number; col: number }> = [];
-    const parser = new DOMParser({
-        onError: (errorLevel: string, message: string) => {
-            if (errorLevel === 'warning') { return; }
-            const lineMatch = /line[:\s]+(\d+)/i.exec(message);
-            const colMatch = /col(?:umn)?[:\s]+(\d+)/i.exec(message);
-            errors.push({
-                message,
-                line: lineMatch ? parseInt(lineMatch[1], 10) - 1 : 0,
-                col: colMatch ? parseInt(colMatch[1], 10) - 1 : 0,
-            });
-        },
-    });
+    const { doc, errors: parseErrors } = parseManifestXml(text);
 
-    const doc = parser.parseFromString(text, 'application/xml');
-
-    for (const err of errors) {
+    for (const err of parseErrors) {
         const safeLine = clamp(err.line, 0, Math.max(lines.length - 1, 0));
         diagnostics.push({
             message: `XML Error: ${err.message}`,
@@ -67,7 +53,7 @@ export function validateManifestText(
         });
     }
 
-    if (errors.length > 0 || !doc?.documentElement) {
+    if (parseErrors.length > 0 || !doc?.documentElement) {
         return diagnostics;
     }
 

@@ -13,7 +13,7 @@ import { loadSchemaModel } from '../manifest-schema/xsd-parser';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import type { ManifestData, ValidationError, ExtensionData } from '../manifest-editor/manifest-types';
 import * as path from 'path';
-import { DOMParser } from '@xmldom/xmldom';
+import { parseManifestXml } from '../manifest-schema/xml-parser';
 
 let schema: SchemaModel;
 before(() => {
@@ -26,7 +26,7 @@ before(() => {
 function ext(xml: string): ExtensionData {
     const fields: Array<{ label: string; value: string }> = [];
     try {
-        const doc = new DOMParser({ onError: () => {} }).parseFromString(xml, 'application/xml');
+        const { doc } = parseManifestXml(xml);
         if (doc?.documentElement) {
             walkEl(doc.documentElement, fields);
         }

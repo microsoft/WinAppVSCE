@@ -6,8 +6,9 @@
 export * from './xml-utils';
 export * from './manifest-xml-ops';
 
-import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
+import { XMLSerializer } from '@xmldom/xmldom';
 import type { Element } from '@xmldom/xmldom';
+import { parseManifestXml } from '../manifest-schema/xml-parser';
 import {
     ManifestData,
     IdentityData,
@@ -92,7 +93,10 @@ function walkExtensionElement(element: Element, fields: Array<{ label: string; v
  * See: https://github.com/microsoft/winappVSCE/issues
  */
 export function parseManifest(xmlText: string): ManifestData {
-    const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+    const { doc, errors } = parseManifestXml(xmlText);
+    if (errors.length > 0) {
+        throw new Error(`XML parse error: ${errors[0].message}`);
+    }
     const root = doc.documentElement;
     if (!root) { throw new Error('Invalid XML: no root element'); }
 
