@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { findWorkspaceArtifacts, buildSignCommand, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS } from '../sign-utils';
+import { findWorkspaceArtifacts, buildSignCommand, CERTIFICATE_GLOBS } from '../sign-utils';
+import { ARTIFACT_GLOBS } from '../artifact-types';
 
 function createTempDir(): string {
 	return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-sign-utils-')));
@@ -39,7 +40,7 @@ describe('findWorkspaceArtifacts', () => {
 		createFile(path.join(tempDir, 'c.appx'));
 		createFile(path.join(tempDir, 'd.appxbundle'));
 
-		const results = await findWorkspaceArtifacts(tempDir, SIGNABLE_ARTIFACT_GLOBS);
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 
 		assert.deepEqual(
 			results.map(filePath => path.basename(filePath)).sort(),
@@ -57,7 +58,7 @@ describe('findWorkspaceArtifacts', () => {
 		createFile(newest, 1_700_000_000_200);
 		createFile(middle, 1_700_000_000_100);
 
-		const results = await findWorkspaceArtifacts(tempDir, SIGNABLE_ARTIFACT_GLOBS);
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 
 		assert.deepEqual(results, [newest, middle, older]);
 	});
@@ -80,7 +81,7 @@ describe('findWorkspaceArtifacts', () => {
 		}) as typeof fs.promises.stat;
 
 		try {
-			const results = await findWorkspaceArtifacts(tempDir, SIGNABLE_ARTIFACT_GLOBS);
+			const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 			assert.deepEqual(results, [stable, missing]);
 		} finally {
 			promisesFs.stat = originalStat;
@@ -91,7 +92,7 @@ describe('findWorkspaceArtifacts', () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
 
-		const results = await findWorkspaceArtifacts(tempDir, SIGNABLE_ARTIFACT_GLOBS);
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 
 		assert.deepEqual(results, []);
 	});
@@ -102,7 +103,7 @@ describe('findWorkspaceArtifacts', () => {
 		const nested = path.join(tempDir, 'artifacts', 'release', 'app.msix');
 		createFile(nested);
 
-		const results = await findWorkspaceArtifacts(tempDir, SIGNABLE_ARTIFACT_GLOBS);
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 
 		assert.deepEqual(results, [nested]);
 	});
@@ -115,7 +116,7 @@ describe('findWorkspaceArtifacts', () => {
 		createFile(path.join(tempDir, 'node_modules', 'pkg', 'ignored.msix'));
 		createFile(path.join(tempDir, '.git', 'objects', 'ignored.appx'));
 
-		const results = await findWorkspaceArtifacts(tempDir, SIGNABLE_ARTIFACT_GLOBS);
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 
 		assert.deepEqual(results, [included]);
 	});

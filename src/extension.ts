@@ -20,7 +20,8 @@ import {
 	isArtifactWithinRoot,
 	planPackCompletion
 } from './pack-result';
-import { findWorkspaceArtifacts, buildSignCommand, SIGNABLE_ARTIFACT_GLOBS, CERTIFICATE_GLOBS, executeSignFlow, type SignFlowAdapter } from './sign-utils';
+import { findWorkspaceArtifacts, buildSignCommand, CERTIFICATE_GLOBS, executeSignFlow, type SignFlowAdapter } from './sign-utils';
+import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
 	detectArchFromPath,
 	getMachineArch,
@@ -336,7 +337,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
 		async (_progress, token) => {
 			token.onCancellationRequested(() => { cancelled = true; });
-			return findWorkspaceArtifacts(workspacePath, SIGNABLE_ARTIFACT_GLOBS);
+			return findWorkspaceArtifacts(workspacePath, ARTIFACT_GLOBS);
 		}
 	);
 
@@ -346,7 +347,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 
 	if (artifactPaths.length === 0) {
 		return selectFile('Select file to sign', {
-			'MSIX Packages': ['msix', 'msixbundle', 'appx', 'appxbundle'],
+			...ARTIFACT_DIALOG_FILTER,
 			'Executables': ['exe', 'dll'],
 			'All files': ['*']
 		});
@@ -373,7 +374,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 
 	if (picked.detail === 'Open a file picker') {
 		return selectFile('Select file to sign', {
-			'MSIX Packages': ['msix', 'msixbundle', 'appx', 'appxbundle'],
+			...ARTIFACT_DIALOG_FILTER,
 			'Executables': ['exe', 'dll'],
 			'All files': ['*']
 		});

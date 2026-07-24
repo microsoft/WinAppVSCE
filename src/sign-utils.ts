@@ -1,9 +1,7 @@
 import * as fs from 'node:fs';
 import { glob } from 'glob';
 import { escapePowerShellArg } from './winapp-cli-utils';
-
-/** Glob patterns for packaged MSIX/APPX artifacts within a workspace. */
-export const SIGNABLE_ARTIFACT_GLOBS = ['**/*.msix', '**/*.msixbundle', '**/*.appx', '**/*.appxbundle'];
+import { ARTIFACT_GLOBS } from './artifact-types';
 
 /** Glob patterns for PFX certificate files within a workspace. */
 export const CERTIFICATE_GLOBS = ['**/*.pfx'];
@@ -28,7 +26,7 @@ export function buildSignCommand(filePath: string, certPath: string): string {
  */
 export async function findWorkspaceArtifacts(
 	workspacePath: string,
-	patterns: string[] = SIGNABLE_ARTIFACT_GLOBS
+	patterns: string[] = ARTIFACT_GLOBS
 ): Promise<string[]> {
 	const results: string[] = [];
 	for (const pattern of patterns) {
