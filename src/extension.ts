@@ -8,7 +8,8 @@ import {
 	escapePowerShellArg,
 	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
-	decideElevatedWinappCommand
+	decideElevatedWinappCommand,
+	resolveWorkingDirectory
 } from './winapp-cli-utils';
 import { detectProjects, deduplicateBuildOutputFolders, BUILD_OUTPUT_EXCLUDE_GLOB, BUILD_OUTPUT_MAX_RESULTS } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
@@ -821,9 +822,15 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		// runs — this avoids showing the debugger toolbar on failure.
 		const inputFolder: string | undefined = config.inputFolder;
 		if (inputFolder) {
-			let cwd = folder.uri.fsPath;
-			if (config.workingDirectory) {
-				cwd = config.workingDirectory;
+			let cwd: string;
+			try {
+				cwd = resolveWorkingDirectory(folder.uri.fsPath, config.workingDirectory);
+			} catch (error) {
+				// An unusable workingDirectory is a launch.json authoring problem, so
+				// surface it here and cancel the session rather than letting the
+				// adapter factory fail later with the debugger toolbar already shown.
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+				return undefined;
 			}
 			const result = await validateInputFolder(inputFolder, cwd);
 			if (!result.valid) {
@@ -859,10 +866,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// If not set in launch.json, search for folders containing .exe
 			// files and let the user pick one.
 			let inputFolder: string | undefined = config.inputFolder;
-			let cwd = folder.uri.fsPath;
-			if (config.workingDirectory) {
-				cwd = config.workingDirectory;
-			}
+			const cwd = resolveWorkingDirectory(folder.uri.fsPath, config.workingDirectory);
 
 			if (!inputFolder) {
 				const dirs = await findBuildOutputFolders(folder.uri.fsPath);
