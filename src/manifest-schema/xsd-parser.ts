@@ -334,10 +334,19 @@ function parseChildElements(
     filePath: string
 ): void {
     for (const container of collectParticleContainers(scope)) {
+        // If the container is an xs:choice with minOccurs="0", all children inside
+        // are effectively optional — cap their minOccurs at 0.
+        const containerLocalName = getLocalName(container);
+        const containerMinOccurs = parseInt(container.getAttribute('minOccurs') || '1', 10);
+        const isOptionalChoice = containerLocalName === 'choice' && containerMinOccurs === 0;
+
         const childElements = getDirectChildrenByLocalName(container, 'element');
         for (const childElem of childElements) {
             const childRef = parseChildRef(childElem, targetNs, doc);
             if (childRef) {
+                if (isOptionalChoice) {
+                    childRef.minOccurs = 0;
+                }
                 mergeChild(schemaElem.children, childRef);
             }
 

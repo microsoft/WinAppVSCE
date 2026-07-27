@@ -400,7 +400,15 @@ describe('manifest diagnostics logic', () => {
     // Pure logic tests in this file cover the core IntelliSense and diagnostics behavior for now.
     it('returns no diagnostics for a valid minimal manifest', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
-  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />`));
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test Publisher</PublisherDisplayName>
+    <Logo>Assets\\StoreLogo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>`));
         assert.equal(diagnostics.length, 0);
     });
 

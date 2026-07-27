@@ -45,6 +45,25 @@ export function parseManifestXml(xmlText: string): XmlParseResult {
         },
     });
 
-    const doc = parser.parseFromString(xmlText, 'application/xml');
+    let doc: Document;
+    try {
+        doc = parser.parseFromString(xmlText, 'application/xml');
+    } catch (e: unknown) {
+        // fatalError (e.g. unclosed elements) throws after calling onError.
+        // The error is already captured via onError above; if not, add it now.
+        if (errors.length === 0) {
+            const msg = e instanceof Error ? e.message : String(e);
+            const lineMatch = /line[:\s]+(\d+)/i.exec(msg);
+            const colMatch = /col(?:umn)?[:\s]+(\d+)/i.exec(msg);
+            errors.push({
+                message: msg,
+                line: lineMatch ? parseInt(lineMatch[1], 10) - 1 : 0,
+                col: colMatch ? parseInt(colMatch[1], 10) - 1 : 0,
+            });
+        }
+        // Return a minimal empty document so callers can still inspect errors
+        doc = new DOMParser().parseFromString('<_/>', 'application/xml');
+    }
+
     return { doc, errors };
 }

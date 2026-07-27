@@ -214,6 +214,74 @@ function validateChildren(
             validateElement(schema, childElement, diagnostics, severity, lines, options, depth + 1);
         }
     }
+
+    // Check for required child elements that are missing
+    if (schemaDef) {
+        validateRequiredChildren(schema, element, schemaDef, diagnostics, severity, lines);
+    }
+}
+
+function validateRequiredChildren(
+    schema: SchemaModel,
+    element: Element,
+    schemaDef: SchemaElement,
+    diagnostics: ManifestDiagnostic[],
+    severity: 'warning' | 'error',
+    lines: string[]
+): void {
+    // Build a map of child name → minimum minOccurs across all entries.
+    // When the same child name appears under different namespaces (from choice groups
+    // in different XSD versions), treat the minimum as the effective requirement.
+    const effectiveMinOccurs = new Map<string, number>();
+    for (const childRef of schemaDef.children) {
+        const existing = effectiveMinOccurs.get(childRef.name);
+        if (existing === undefined) {
+            effectiveMinOccurs.set(childRef.name, childRef.minOccurs);
+        } else {
+            effectiveMinOccurs.set(childRef.name, Math.min(existing, childRef.minOccurs));
+        }
+    }
+
+    // Only validate children that are unambiguously required
+    const checked = new Set<string>();
+    for (const childRef of schemaDef.children) {
+        if (checked.has(childRef.name)) { continue; }
+        checked.add(childRef.name);
+
+        const minOccurs = effectiveMinOccurs.get(childRef.name) ?? 0;
+        if (minOccurs <= 0) { continue; }
+
+        // Check if at least one instance of this required child exists
+        let found = false;
+        const children = element.childNodes;
+        for (let i = 0; i < children.length; i++) {
+            const child = children[i];
+            if (child.nodeType !== 1) { continue; }
+            const childEl = child as Element;
+            const localName = childEl.localName || childEl.nodeName.split(':').pop() || '';
+            if (localName === childRef.name) {
+                found = true;
+                break;
+            }
+            // Also check substitution group members
+            const subs = schema.substitutionGroups.get(childRef.name);
+            if (subs?.some(s => s.name === localName)) {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            const range = getElementRange(element, lines);
+            const parentName = element.localName || element.nodeName.split(':').pop() || '';
+            diagnostics.push({
+                message: `Missing required element <${childRef.name}> in <${parentName}>`,
+                severity,
+                schemaUri: childRef.namespace || undefined,
+                ...range,
+            });
+        }
+    }
 }
 
 /**
