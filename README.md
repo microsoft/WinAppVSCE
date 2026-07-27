@@ -28,14 +28,14 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Run Application** | Run your app as a loose-layout packaged application with full package identity — great for testing APIs that require identity. |
 | **WinApp: Create Debug Identity** | Add sparse package identity to an existing executable so you can launch and debug it directly from VS Code with identity. |
 | **WinApp: Unregister Package** | Unregister a sideloaded development package (e.g., one registered via Run or Create Debug Identity). |
-| **WinApp: Create MSIX Package** | Package your application into an MSIX, with options to generate a certificate and bundle the runtime self-contained. |
+| **WinApp: Create MSIX Package** | Package your application into an MSIX, with options to generate a certificate and bundle the runtime self-contained. If self-contained packaging appears to target a different architecture than your machine, WinApp shows a warning before continuing. On completion, a notification names the built package and offers **Reveal in Explorer**, **Sign**, and **Install** actions. |
 | **WinApp: Generate Manifest** | Generate an `AppxManifest.xml` from a template (packaged or sparse). |
 | **WinApp: Add Manifest Execution Alias** | Add an execution alias to the manifest so the packaged app can be launched from the command line. |
 | **WinApp: Update Manifest Assets** | Auto-generate all required app icon assets from a single source image (PNG, JPG, GIF, or BMP). |
-| **WinApp: Generate Certificate** | Create a development certificate for signing, with an option to install it immediately. |
-| **WinApp: Install Certificate** | Install an existing `.pfx` or `.cer` certificate. (requires Admin elevation) |
+| **WinApp: Generate Certificate** | Create a development certificate for signing, with an option to also install (trust) it. Installing prompts for admin via a UAC window when VS Code isn't elevated. |
+| **WinApp: Install Certificate** | Install (trust) an existing `.pfx` or `.cer` certificate in the machine store. Prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Certificate Info** | Display certificate details (subject, thumbprint, expiry) to verify a certificate matches your manifest. |
-| **WinApp: Sign Package** | Sign an MSIX package or executable with a certificate. |
+| **WinApp: Sign Package** | Sign an MSIX package or executable with a certificate. Searches the workspace for MSIX/APPX artifacts and certificates, presenting them in a QuickPick sorted by newest first; a **Browse…** option falls back to a native file dialog. |
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
 
@@ -51,7 +51,7 @@ When you run a project-context WinApp command — such as **Initialize Project**
 2. **Project at workspace root** — If a recognized project exists at the root, commands run there immediately.
 3. **Automatic scan** — Searches the workspace for compatible projects and prompts if multiple are found.
 
-Commands that already take an explicit target — such as **Run Application**, **Create MSIX Package** (input folder), **Sign Package**, **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
+Commands that already take an explicit target — such as **Run Application**, **Create MSIX Package** (input folder), **Sign Package** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
 **Configuration (optional):**
 
@@ -133,9 +133,11 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 
 | `debuggerType` | Language | Required Extension |
 |----------------|----------|--------------------|
-| `coreclr` (default) | C# / .NET | [C# Dev Kit](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csharp) |
+| `coreclr` | C# / .NET | [C#](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csharp) |
 | `cppvsdbg` | C / C++ | [C/C++](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools) |
 | `node` | Node.js / Electron | Built-in |
+
+> On your first debug session, if the extension for the selected `debuggerType` isn't installed, WinApp offers to install it and continues the session automatically — no manual reload needed in most cases. If no `debuggerType` is set and none is installed yet, WinApp lets you pick the debugger that matches your project (C#, C/C++, or built-in Node.js/Electron).
 
 **Example `launch.json`:**
 
@@ -158,7 +160,7 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 |----------|------|---------|-------------|
 | `inputFolder` | string | | Path to the build output folder containing your app binaries (e.g., `${workspaceFolder}/bin/Debug/net8.0-windows10.0.22621`). If not set, you will be prompted to select a folder. |
 | `manifest` | string | | Path to the `AppxManifest.xml` file. If not set, the CLI auto-detects from the input folder or current directory. |
-| `debuggerType` | string | `coreclr` | Underlying debugger to use (`coreclr`, `cppvsdbg`, or `node`). |
+| `debuggerType` | string | | Optional underlying debugger override (`coreclr`, `cppvsdbg`, or `node`). If omitted, WinApp reuses an installed debugger or prompts you to pick one. |
 | `workingDirectory` | string | workspace folder | Working directory for the application. |
 | `args` | string | | Command-line arguments to pass to the application. |
 | `outputAppxDirectory` | string | | Output directory for the loose-layout package. Defaults to an `AppX` folder inside the input folder. |
@@ -238,7 +240,7 @@ Use **WinApp: Generate Manifest** to create an `Package.appxmanifest` from a tem
 
 ### Package and sign
 
-Use **WinApp: Create MSIX Package** to package your application. Pair it with **WinApp: Generate Certificate** and **WinApp: Sign Package** to produce a signed, ready-to-distribute MSIX. Use **WinApp: Certificate Info** to verify a certificate's details (subject, thumbprint, expiry) before signing.
+Use **WinApp: Create MSIX Package** to package your application. If you choose **self-contained** packaging and the selected build output path appears to target a different architecture than your machine, WinApp shows a warning before continuing so you can avoid bundling the wrong Windows App SDK runtime. When packaging finishes, a completion notification names the built `.msix` and offers three actions: **Reveal in Explorer** (open the package in File Explorer), **Sign** (sign the just-built package, pre-filling its path and skipping the artifact QuickPick), and **Install** (sideload it via `Add-AppxPackage`). **WinApp: Sign Package** searches the workspace for MSIX/APPX artifacts and `.pfx` certificates, presenting them in QuickPicks sorted by newest first — a **Browse…** entry always lets you fall back to a native file dialog. Pair it with **WinApp: Generate Certificate** to produce a signed, ready-to-distribute MSIX. Use **WinApp: Certificate Info** to verify a certificate's details (subject, thumbprint, expiry) before signing.
 
 ### Access Windows SDK tools
 
@@ -271,8 +273,8 @@ For debugging, install the debugger extension that matches your app's language (
 | **"No folders containing .exe files found in the workspace..."** or **"No build output folder selected..."** when pressing F5 | The project hasn't been built yet, or the build output is in an unexpected location. | Build your project first (e.g., `dotnet build`), or set `inputFolder` in `launch.json` to point to the folder containing your `.exe`. |
 | **Debugger doesn't attach** | The required debugger extension isn't installed. | Install the matching extension for your language — see [Supported debuggers](#integrated-debugging). |
 | **App launches but changes aren't visible** | The `winapp` debug type does not build the project automatically. | Rebuild your project before pressing F5, or add a `preLaunchTask` to automate it (see the tip in [Integrated Debugging](#integrated-debugging)). |
-| **Certificate trust error when running** | The development certificate isn't installed or has expired. | Run **WinApp: Generate Certificate** and choose to install it, or run **WinApp: Install Certificate** with your existing `.pfx` file. (requires Admin elevation) |
-| **"Access denied" or permission errors** | Some operations (certificate install, package registration) require elevation. | Run VS Code as Administrator, or use an elevated terminal for the failing command. |
+| **Certificate trust error when running** | The development certificate isn't installed or has expired. | Run **WinApp: Generate Certificate** and choose to also install it, or run **WinApp: Install Certificate** with your existing `.pfx` file. Both prompt for admin (UAC) when VS Code isn't elevated. |
+| **"Access denied" or permission errors** | Some operations (package registration) require elevation. Certificate install now prompts for admin automatically. | Approve the UAC prompt when it appears, or run VS Code as Administrator. |
 
 ## Feedback and Support
 

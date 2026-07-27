@@ -1,6 +1,9 @@
-# Manifest Editor – End-to-End Tests
+# End-to-End Tests
 
-Automated Playwright tests that launch VS Code as an Electron app, open an AppxManifest file in the custom WinApp editor, and interact with every tab and control in the webview UI.
+Automated Playwright tests that launch VS Code as an Electron app. The suite covers:
+
+- **Manifest editor** — opens an AppxManifest file in the custom WinApp editor and interacts with every tab and control in the webview UI.
+- **Sign command** — verifies the `winapp.sign` QuickPick artifact discovery flow.
 
 ## Quick start
 
@@ -41,7 +44,17 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (125 tests)
+## Test inventory (127 tests)
+
+### `sign-quickpick.spec.ts` — 3 tests (2 active, 1 skipped)
+
+Validates that `winapp.sign` discovers workspace MSIX artifacts and certificates, presenting them in QuickPicks.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | shows QuickPick with .msix file and Browse option when artifacts exist | QuickPick appears with artifact rows and Browse… fallback |
+| 2 | shows certificate QuickPick with .pfx file after selecting a package | Certificate QuickPick appears after package selection with .pfx rows and Browse… fallback |
+| 3 | *(skipped)* skips package QuickPick when invoked with prefilled path | Needs VS Code extension test host — see [#83](https://github.com/microsoft/WinAppVSCE/issues/83) |
 
 ### `editor-launch.spec.ts` — 11 tests
 

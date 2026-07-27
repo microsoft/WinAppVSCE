@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: write  # delete + save the VSIX size baseline cache on push to main
 
 jobs:
   build-and-test:
@@ -20,7 +21,7 @@ jobs:
         fetch-depth: 0
 
     - name: Setup Node.js
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@v7
       with:
         node-version: '24'
 
@@ -49,6 +50,17 @@ jobs:
         New-Item -ItemType Directory -Path artifacts -Force | Out-Null
         npx vsce package --no-dependencies -o artifacts/winapp-dev.vsix
 
+    # --- VSIX size metrics ---
+    # Measure the packaged VSIX so PRs can report the download size delta vs.
+    # the main baseline. The `vsix` key is stable and is the allowlist key the
+    # post-vsix-comment workflow renders.
+    - name: Measure VSIX size
+      run: |
+        $bytes = (Get-Item artifacts/winapp-dev.vsix).Length
+        $sizes = [ordered]@{ vsix = $bytes }
+        $sizes | ConvertTo-Json | Set-Content artifacts/vsix-sizes.json
+        Write-Host "VSIX size: $([math]::Round($bytes / 1MB, 2)) MB ($bytes bytes)"
+
     - name: Upload VSIX artifact
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v7
@@ -56,3 +68,85 @@ jobs:
         name: vscode-extension
         path: artifacts/*.vsix
         if-no-files-found: error
+
+    # On push to main, save the current VSIX size as the baseline future PRs
+    # compare against. Caches are immutable, so delete the old entry first.
+    - name: Prepare VSIX baseline
+      if: github.ref == 'refs/heads/main'
+      run: |
+        New-Item -ItemType Directory -Path vsix-baseline -Force | Out-Null
+        Copy-Item artifacts/vsix-sizes.json vsix-baseline/sizes.json -Force
+
+    - name: Delete old VSIX baseline cache
+      if: github.ref == 'refs/heads/main'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh cache delete "winappvsce-vsix-baseline" --repo $env:GITHUB_REPOSITORY 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "Old baseline cache deleted"
+        } else {
+          Write-Host "No existing baseline cache to delete (expected on first run)"
+        }
+        exit 0
+
+    - name: Save VSIX baseline cache
+      if: github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: vsix-baseline
+        key: winappvsce-vsix-baseline
+
+    # On PRs, restore the baseline and stage current size + baseline + PR
+    # context into a single `metrics-data` artifact. A separate workflow
+    # (post-vsix-comment.yml, triggered by workflow_run) downloads it and posts
+    # the comment. This split is required because PRs from forks don't grant
+    # GITHUB_TOKEN write access during `pull_request`, but workflow_run runs in
+    # the base repo with full write permissions.
+    - name: Restore VSIX baseline cache
+      if: github.event_name == 'pull_request'
+      id: vsix-baseline
+      uses: actions/cache/restore@v4
+      with:
+        path: vsix-baseline
+        key: winappvsce-vsix-baseline
+
+    - name: Stage VSIX metrics data
+      if: github.event_name == 'pull_request'
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        $stage = "metrics-data"
+        New-Item -ItemType Directory -Path $stage -Force | Out-Null
+        # Current size (produced by the Measure VSIX size step)
+        Copy-Item artifacts/vsix-sizes.json "$stage/vsix-sizes.json" -Force
+        # Baseline (restored from cache above; missing on the first-ever PR)
+        if (Test-Path vsix-baseline/sizes.json) {
+          New-Item -ItemType Directory -Path "$stage/baseline" -Force | Out-Null
+          Copy-Item vsix-baseline/sizes.json "$stage/baseline/sizes.json" -Force
+        }
+        # PR context (debug only — the post workflow re-derives PR identity from
+        # workflow_run metadata for security; never trusts these fields).
+        $ctx = [ordered]@{
+          pr_number = [int]$env:PR_NUMBER
+          head_sha  = $env:HEAD_SHA
+          run_id    = [int64]$env:RUN_ID
+        }
+        $ctx | ConvertTo-Json | Set-Content "$stage/pr-context.json"
+        # Fail loudly if the current size file is missing so we never publish an
+        # empty report from the privileged post-vsix-comment workflow.
+        if (-not (Test-Path "$stage/vsix-sizes.json")) {
+          Write-Error "metrics staging is missing vsix-sizes.json. Did the Measure VSIX size step run?"
+          exit 1
+        }
+
+    - name: Upload metrics-data artifact
+      if: github.event_name == 'pull_request'
+      uses: actions/upload-artifact@v7
+      with:
+        name: metrics-data
+        path: metrics-data
+        if-no-files-found: error
+        retention-days: 7
