@@ -198,7 +198,7 @@
       "commandPalette": [
         {
           "command": "winapp.openManifestEditor",
-          "when": "resourceFilename =~ /[Aa]ppx[Mm]anifest\\.xml$/ || resourceExtname == .appxmanifest"
+          "when": "(resourceFilename =~ /[Aa]ppx[Mm]anifest\\.xml$/ || resourceExtname == .appxmanifest) && activeCustomEditorId != winapp.manifestEditor"
         }
       ]
     },

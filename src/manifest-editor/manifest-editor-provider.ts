@@ -249,6 +249,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             const imgPath = message.imagePath;
                             const manifestDirPath = path.dirname(document.uri.fsPath);
                             const resolved = path.resolve(manifestDirPath, imgPath);
+                            const usesWorkspaceFallback = imgPath.startsWith('..\\') || imgPath.startsWith('../');
                             const isWithinRoot = (candidatePath: string, rootPath: string): boolean => {
                                 const relativePath = path.relative(rootPath, candidatePath);
                                 return relativePath !== ''
@@ -290,8 +291,9 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                 return;
                             }
 
-                            // Check relative to workspace folders
-                            if (vscode.workspace.workspaceFolders) {
+                            // Only fall back to workspace-root resolution for paths that
+                            // explicitly escape the manifest folder (for example ..\Assets\logo.png).
+                            if (usesWorkspaceFallback && vscode.workspace.workspaceFolders) {
                                 for (const wf of vscode.workspace.workspaceFolders) {
                                     const candidate = path.resolve(wf.uri.fsPath, imgPath);
                                     if (fs.existsSync(candidate)) {

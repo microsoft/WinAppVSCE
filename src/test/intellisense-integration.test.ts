@@ -68,6 +68,88 @@ function assertValidSourceLocation(
     assert.match(sourceLines[sourceLine], expectedLinePattern, `${label} source line should point at the expected XSD declaration`);
 }
 
+function offsetAtText(text: string, pos: { line: number; character: number }): number {
+    const lines = text.split('\n');
+    let total = 0;
+    for (let i = 0; i < pos.line; i++) {
+        total += lines[i].length + 1;
+    }
+    return total + pos.character;
+}
+
+function positionAtText(text: string, value: number): { line: number; character: number } {
+    const before = text.substring(0, value);
+    const lines = before.split('\n');
+    return { line: lines.length - 1, character: lines[lines.length - 1].length };
+}
+
+function createMockDocument(text: string) {
+    return {
+        getText: (range?: { start: { line: number; character: number }; end: { line: number; character: number } }) => {
+            if (!range) { return text; }
+            const startOffset = offsetAtText(text, range.start);
+            const endOffset = offsetAtText(text, range.end);
+            return text.slice(startOffset, endOffset);
+        },
+        offsetAt: (pos: { line: number; character: number }) => offsetAtText(text, pos),
+        getWordRangeAtPosition: (pos: { line: number; character: number }) => {
+            const wordOffset = offsetAtText(text, pos);
+            let start = wordOffset;
+            let end = wordOffset;
+            while (start > 0 && /[A-Za-z0-9_.:-]/.test(text[start - 1])) { start--; }
+            while (end < text.length && /[A-Za-z0-9_.:-]/.test(text[end])) { end++; }
+            return { start: positionAtText(text, start), end: positionAtText(text, end) };
+        },
+    };
+}
+
+async function getDefinitionLocation(text: string, targetText: string): Promise<any> {
+    const originalLoad = (Module as unknown as { _load: Function })._load;
+    const mockVscode = {
+        workspace: {
+            getConfiguration: () => ({
+                get: <T>(_key: string, fallback: T) => fallback,
+            }),
+        },
+        Position: class Position {
+            constructor(public line: number, public character: number) {}
+        },
+        Range: class Range {
+            public start: { line: number; character: number };
+            public end: { line: number; character: number };
+            constructor(startLine: number, startCharacter: number, endLine: number, endCharacter: number) {
+                this.start = { line: startLine, character: startCharacter };
+                this.end = { line: endLine, character: endCharacter };
+            }
+        },
+        Location: class Location {
+            constructor(public uri: { fsPath: string }, public position: { line: number; character: number }) {}
+        },
+        Uri: {
+            file: (fsPath: string) => ({ fsPath }),
+        },
+    };
+
+    (Module as unknown as { _load: Function })._load = function(request: string, parent: unknown, isMain: boolean) {
+        if (request === 'vscode') {
+            return mockVscode;
+        }
+        return originalLoad.call(this, request, parent, isMain);
+    };
+
+    try {
+        const { ManifestDefinitionProvider } = await import('../manifest-intellisense/definition-provider.js');
+        const targetOffset = text.indexOf(targetText);
+        assert.notEqual(targetOffset, -1, `Expected to find "${targetText}" in test document`);
+
+        const provider = new ManifestDefinitionProvider(() => model);
+        const position = positionAtText(text, targetOffset + 1);
+        return provider.provideDefinition(createMockDocument(text) as any, position as any, {} as any) as any;
+    } finally {
+        (Module as unknown as { _load: Function })._load = originalLoad;
+    }
+}
+
 describe('manifest completion logic', () => {
     it('returns expected Package child completions', () => {
         const items = getChildCompletions(model, 'Package', undefined, makeManifest(''));
@@ -705,90 +787,40 @@ describe('schema and context integration', () => {
     });
 
     it('returns a definition location for a known element name', async () => {
-        const originalLoad = (Module as unknown as { _load: Function })._load;
-        const mockVscode = {
-            workspace: {
-                getConfiguration: () => ({
-                    get: <T>(_key: string, fallback: T) => fallback,
-                }),
-            },
-            Position: class Position {
-                constructor(public line: number, public character: number) {}
-            },
-            Range: class Range {
-                public start: { line: number; character: number };
-                public end: { line: number; character: number };
-                constructor(startLine: number, startCharacter: number, endLine: number, endCharacter: number) {
-                    this.start = { line: startLine, character: startCharacter };
-                    this.end = { line: endLine, character: endCharacter };
-                }
-            },
-            Location: class Location {
-                constructor(public uri: { fsPath: string }, public position: { line: number; character: number }) {}
-            },
-            Uri: {
-                file: (fsPath: string) => ({ fsPath }),
-            },
-        };
+        const location = await getDefinitionLocation(
+            makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />`),
+            'Identity'
+        );
 
-        (Module as unknown as { _load: Function })._load = function(request: string, parent: unknown, isMain: boolean) {
-            if (request === 'vscode') {
-                return mockVscode;
-            }
-            return originalLoad.call(this, request, parent, isMain);
-        };
+        assert.ok(location);
+        assertValidSourceLocation('Identity definition', location.uri.fsPath, location.position.line, /<xs:element name="Identity"/);
+    });
 
-        try {
-            const { ManifestDefinitionProvider } = await import('../manifest-intellisense/definition-provider.js');
-            const text = makeManifest(`
-  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />`);
-            const offset = text.indexOf('Identity') + 2;
-            const position = { line: text.substring(0, offset).split('\n').length - 1, character: offset - text.lastIndexOf('\n', offset - 1) - 1 };
+    it('returns a definition location for a prefixed element name', async () => {
+        const location = await getDefinitionLocation(
+            makeManifest(`
+  <Applications>
+    <Application Id="App">
+      <uap:VisualElements DisplayName="App" Description="App" BackgroundColor="transparent" Square150x150Logo="logo.png" Square44x44Logo="small.png" />
+    </Application>
+  </Applications>`),
+            'uap:VisualElements'
+        );
 
-            const document = {
-                getText: (range?: { start: { line: number; character: number }; end: { line: number; character: number } }) => {
-                    if (!range) { return text; }
-                    const startOffset = offsetAt(range.start);
-                    const endOffset = offsetAt(range.end);
-                    return text.slice(startOffset, endOffset);
-                },
-                offsetAt,
-                getWordRangeAtPosition: (pos: { line: number; character: number }) => {
-                    const wordOffset = offsetAt(pos);
-                    let start = wordOffset;
-                    let end = wordOffset;
-                    while (start > 0 && /[A-Za-z0-9_.:-]/.test(text[start - 1])) { start--; }
-                    while (end < text.length && /[A-Za-z0-9_.:-]/.test(text[end])) { end++; }
-                    const startPos = positionAt(start);
-                    const endPos = positionAt(end);
-                    return { start: startPos, end: endPos };
-                },
-            };
+        assert.ok(location);
+        assertValidSourceLocation('uap:VisualElements definition', location.uri.fsPath, location.position.line, /<xs:element name="VisualElements"/);
+    });
 
-            function offsetAt(pos: { line: number; character: number }): number {
-                const lines = text.split('\n');
-                let total = 0;
-                for (let i = 0; i < pos.line; i++) {
-                    total += lines[i].length + 1;
-                }
-                return total + pos.character;
-            }
+    it('returns a definition location for an attribute name', async () => {
+        const location = await getDefinitionLocation(
+            makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />`),
+            'Name'
+        );
 
-            function positionAt(value: number): { line: number; character: number } {
-                const before = text.substring(0, value);
-                const lines = before.split('\n');
-                return { line: lines.length - 1, character: lines[lines.length - 1].length };
-            }
-
-            const provider = new ManifestDefinitionProvider(() => model);
-            const location = provider.provideDefinition(document as any, position as any, {} as any) as any;
-
-            assert.ok(location);
-            assert.ok(location.uri.fsPath.endsWith('.xsd'));
-            assert.equal(typeof location.position.line, 'number');
-        } finally {
-            (Module as unknown as { _load: Function })._load = originalLoad;
-        }
+        assert.ok(location);
+        assertValidSourceLocation('Identity.Name definition', location.uri.fsPath, location.position.line, /<xs:attribute name="Name"/);
     });
 
     it('detects attribute name context in multi-line tags', () => {
