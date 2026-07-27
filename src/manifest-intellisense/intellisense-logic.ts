@@ -402,7 +402,9 @@ export function findManifestElement(
 }
 
 export function extractDocumentPrefixes(text: string): Map<string, string> {
-    text = text.replace(/<!--[\s\S]*?-->/g, '');
+    // Strip XML comments (loop handles edge cases where removal reveals new comment patterns)
+    let prev: string;
+    do { prev = text; text = text.replace(/<!--[\s\S]*?-->/g, ''); } while (text !== prev);
     const prefixes = new Map<string, string>();
     const regex = /xmlns(?::([a-zA-Z][\w]*))?\s*=\s*["']([^"']+)["']/g;
     let match: RegExpExecArray | null;

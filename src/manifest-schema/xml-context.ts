@@ -200,7 +200,9 @@ function checkClosingTag(before: string): XmlContext | null {
  * Returns the stack of open (unclosed) elements.
  */
 export function findParentPath(textBefore: string): ParentElement[] {
-    textBefore = textBefore.replace(/<!--[\s\S]*?-->/g, '');
+    // Strip XML comments (loop handles edge cases where removal reveals new comment patterns)
+    let prev: string;
+    do { prev = textBefore; textBefore = textBefore.replace(/<!--[\s\S]*?-->/g, ''); } while (textBefore !== prev);
     const stack: ParentElement[] = [];
 
     // Quote-aware tag scanner: skip '>' inside quoted attribute values
