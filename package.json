@@ -139,7 +139,8 @@
       {
         "command": "winapp.openManifestEditor",
         "title": "Open Manifest Editor",
-        "category": "WinApp"
+        "category": "WinApp",
+        "icon": "$(preview)"
       }
     ],
     "configuration": {
@@ -186,6 +187,15 @@
         "priority": "option"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "winapp.openManifestEditor",
+          "when": "resourceFilename =~ /[Aa]ppx[Mm]anifest\\.xml$/ || resourceExtname == .appxmanifest",
+          "group": "navigation"
+        }
+      ]
+    },
     "debuggers": [
       {
         "type": "winapp",

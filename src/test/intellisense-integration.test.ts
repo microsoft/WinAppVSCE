@@ -368,14 +368,15 @@ describe('manifest hover logic', () => {
 });
 
 describe('manifest diagnostics integration boundaries', () => {
-    it('validateManifestText honors warning and error severity modes', () => {
+    it('validateManifestText uses error severity for schema violations', () => {
         const text = makeManifest(`
   <Identity />`);
 
         const warningDiagnostics = validateManifestText(model, text, 'warning');
         const errorDiagnostics = validateManifestText(model, text, 'error');
 
-        assert.ok(warningDiagnostics.some(diagnostic => diagnostic.severity === 'warning'));
+        // Schema violations are now always 'error' severity regardless of level param
+        assert.ok(warningDiagnostics.some(diagnostic => diagnostic.severity === 'error'));
         assert.ok(errorDiagnostics.some(diagnostic => diagnostic.severity === 'error'));
     });
 

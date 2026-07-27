@@ -105,14 +105,14 @@ describe('schema-validation shared functions', () => {
         assert.ok(diags.some(d => d.message.includes("Root element 'UnknownRoot' not recognized in schema") && d.severity === 'warning'));
     });
 
-    it('validateManifestText reports undeclared attributes as hints', () => {
+    it('validateManifestText reports undeclared attributes as warnings', () => {
         model = loadSchemaModel(SCHEMAS_DIR);
         const xml = `<?xml version="1.0"?>
 <Package xmlns="${FOUNDATION_NS}">
   <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" ExtraAttribute="value" />
 </Package>`;
         const diags = validateManifestText(model, xml);
-        assert.ok(diags.some(d => d.message.includes("Attribute 'ExtraAttribute' is not declared") && d.severity === 'hint'));
+        assert.ok(diags.some(d => d.message.includes("Attribute 'ExtraAttribute' is not declared") && d.severity === 'warning'));
     });
 
     it('validateManifestText preserves relaxed child placement by default for known schema elements', () => {
@@ -140,7 +140,7 @@ describe('schema-validation shared functions', () => {
   </Applications>
 </Package>`;
         const diags = validateManifestText(model, xml, 'warning', { strictChildPlacement: true });
-        assert.ok(diags.some(d => d.message.includes("Element 'Identity' is not allowed under <Application>") && d.severity === 'warning'));
+        assert.ok(diags.some(d => d.message.includes("Element 'Identity' is not allowed under <Application>") && d.severity === 'error'));
     });
 
     it('findSchemaElementExact finds Package element', () => {

@@ -200,7 +200,7 @@ When you edit an `AppxManifest.xml` or `.appxmanifest` file in the text editor, 
 - **Attribute completions** — valid attributes for the current element
 - **Attribute value completions** — allowed enum values from XSD restrictions
 - **Hover documentation** — element and attribute descriptions from XSD annotations
-- **Diagnostics** — warnings for missing required attributes and invalid enum values
+- **Diagnostics** — errors for missing required attributes/elements, invalid values, and pattern violations; warnings for undeclared attributes
 - **Go to Definition** — **F12** / **Ctrl+Click** jumps to the relevant schema definition
 
 **Supported files:**
@@ -208,12 +208,35 @@ When you edit an `AppxManifest.xml` or `.appxmanifest` file in the text editor, 
 - `**/[Aa]ppx[Mm]anifest.xml`
 - `**/*.appxmanifest`
 
+**Switching between text and visual editors:**
+
+When viewing a manifest in the text editor, click the **preview icon** (📋) in the editor title bar to switch to the visual editor. From the visual editor, click **View XML** to switch back.
+
+**Disabling IntelliSense:**
+
+If you prefer to use the extension's other features (run, pack, sign, etc.) without IntelliSense, you can disable it in your settings:
+
+```jsonc
+// .vscode/settings.json or User Settings
+{
+  "winapp.manifest.intelliSense.enable": false
+}
+```
+
+You can also disable just the diagnostic underlines while keeping completions and hover:
+
+```jsonc
+{
+  "winapp.manifest.diagnostics.level": "off"
+}
+```
+
 **Configuration:**
 
 | Setting | Description |
 |---------|-------------|
-| `winapp.manifest.intelliSense.enable` | Enable or disable AppxManifest IntelliSense features. |
-| `winapp.manifest.diagnostics.level` | Set manifest diagnostics severity to `off`, `warning`, or `error`. |
+| `winapp.manifest.intelliSense.enable` | Enable or disable all IntelliSense features (completions, hover, diagnostics, Go to Definition). Default: `true`. |
+| `winapp.manifest.diagnostics.level` | Set manifest diagnostics to `off`, `warning`, or `error`. Set to `off` to disable validation underlines only. Default: `warning`. |
 | `winapp.manifest.intelliSense.diagnostics.strictChildPlacement` | When enabled, report known manifest elements that appear under an unexpected parent even when substitution-group coverage is incomplete. |
 
 ## Scenarios

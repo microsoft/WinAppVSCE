@@ -100,7 +100,7 @@ function validateElement(
             const range = getElementRange(element, lines);
             diagnostics.push({
                 message: `Missing required attribute '${attr.name}' on <${localName}>`,
-                severity,
+                severity: 'error',
                 schemaUri,
                 ...range,
             });
@@ -115,7 +115,7 @@ function validateElement(
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
                 message: `Invalid value '${resolvedAttribute.value}' for attribute '${attr.name}'. Expected one of: ${attr.enumerations.slice(0, 10).join(', ')}`,
-                severity,
+                severity: 'error',
                 schemaUri,
                 ...range,
             });
@@ -133,7 +133,7 @@ function validateElement(
             const patternHint = formatPatternHint(attr);
             diagnostics.push({
                 message: `Value '${resolvedAttribute.value}' for attribute '${attr.name}' is invalid${patternHint}`,
-                severity,
+                severity: 'error',
                 schemaUri,
                 ...range,
             });
@@ -149,7 +149,7 @@ function validateElement(
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
                 message: `Value for '${attr.name}' must be at least ${attr.minLength} characters (got ${resolvedAttribute.value.length})`,
-                severity,
+                severity: 'error',
                 schemaUri,
                 ...range,
             });
@@ -158,7 +158,7 @@ function validateElement(
             const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
             diagnostics.push({
                 message: `Value for '${attr.name}' exceeds maximum length of ${attr.maxLength} characters (got ${resolvedAttribute.value.length})`,
-                severity,
+                severity: 'error',
                 schemaUri,
                 ...range,
             });
@@ -184,7 +184,7 @@ function validateElement(
         const range = getAttributeValueRange(element, resolvedAttribute.displayName, lines);
         diagnostics.push({
             message: `Attribute '${resolvedAttribute.displayName}' is not declared in the schema for element '${localName}'`,
-            severity: 'hint',
+            severity: 'warning',
             schemaUri,
             ...range,
         });
@@ -276,7 +276,7 @@ function validateRequiredChildren(
             const parentName = element.localName || element.nodeName.split(':').pop() || '';
             diagnostics.push({
                 message: `Missing required element <${childRef.name}> in <${parentName}>`,
-                severity,
+                severity: 'error',
                 schemaUri: childRef.namespace || undefined,
                 ...range,
             });
@@ -399,7 +399,7 @@ function validateChildPlacement(
     schemaDef: SchemaElement,
     childElement: Element,
     diagnostics: ManifestDiagnostic[],
-    severity: 'warning' | 'error',
+    _severity: 'warning' | 'error',
     lines: string[],
     options: ManifestValidationOptions
 ): void {
@@ -420,7 +420,7 @@ function validateChildPlacement(
         const range = getElementRange(childElement, lines);
         diagnostics.push({
             message: `Element '${childLocalName}' is not allowed under <${parentElement.localName || parentElement.nodeName.split(':').pop() || ''}>`,
-            severity,
+            severity: 'error',
             schemaUri: parentNs || undefined,
             ...range,
         });
@@ -436,7 +436,7 @@ function validateChildPlacement(
     const range = getElementRange(childElement, lines);
     diagnostics.push({
         message: `Unknown element '${childLocalName}'`,
-        severity,
+        severity: 'error',
         schemaUri: childNamespace || undefined,
         ...range,
     });
