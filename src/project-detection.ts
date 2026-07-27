@@ -132,6 +132,54 @@ export async function detectProjects(root: string, maxProjects: number = 10): Pr
 	return results;
 }
 
+/** Directories to exclude from build-output scanning. */
+export const BUILD_OUTPUT_SKIP_DIRS = new Set([
+	'node_modules', '.git', 'appx', '.winapp', 'obj', '.vs', 'packages'
+]);
+
+/**
+ * Maximum depth (in path segments relative to root) for build-output results.
+ */
+export const BUILD_OUTPUT_MAX_DEPTH = 8;
+
+/**
+ * Maximum number of executable matches to consider before stopping.
+ */
+export const BUILD_OUTPUT_MAX_RESULTS = 10;
+
+/**
+ * Given a list of absolute file paths (typically .exe matches) and a workspace
+ * root, returns the unique parent directories sorted by relative path. Filters
+ * out directories deeper than `maxDepth` segments from the root.
+ *
+ * This is the pure logic extracted from the VS Code build-output scan so it
+ * can be unit tested without the VS Code API.
+ */
+export function deduplicateBuildOutputFolders(
+	filePaths: string[],
+	workspacePath: string,
+	maxDepth: number = BUILD_OUTPUT_MAX_DEPTH
+): string[] {
+	const folderSet = new Set<string>();
+	for (const filePath of filePaths) {
+		const folderPath = path.dirname(filePath);
+		const relativeFolder = path.relative(workspacePath, folderPath);
+		if (relativeFolder !== '' && relativeFolder.split(path.sep).length > maxDepth) {
+			continue;
+		}
+		folderSet.add(folderPath);
+	}
+
+	return [...folderSet].sort((left, right) =>
+		path.relative(workspacePath, left).localeCompare(path.relative(workspacePath, right))
+	);
+}
+
+/**
+ * VS Code-compatible glob exclude pattern for build-output scanning.
+ */
+export const BUILD_OUTPUT_EXCLUDE_GLOB = `{${[...BUILD_OUTPUT_SKIP_DIRS].map(d => `**/${d}/**`).join(',')}}`;
+
 async function fileExists(filePath: string): Promise<boolean> {
 	try {
 		await fsp.access(filePath);
