@@ -823,6 +823,19 @@ describe('schema and context integration', () => {
         assertValidSourceLocation('Identity.Name definition', location.uri.fsPath, location.position.line, /<xs:attribute name="Name"/);
     });
 
+    it('resolves definition for a prefixed attribute', async () => {
+        const location = await getDefinitionLocation(
+            makeManifest(`
+  <Applications>
+    <Application Id="App" uap10:TrustLevel="mediumIL" />
+  </Applications>`, ` xmlns:uap10="${MANIFEST_NAMESPACES['uap10']}"`),
+            'uap10:TrustLevel'
+        );
+
+        assert.ok(location);
+        assertValidSourceLocation('Application.uap10:TrustLevel definition', location.uri.fsPath, location.position.line, /<xs:attribute name="TrustLevel"/);
+    });
+
     it('detects attribute name context in multi-line tags', () => {
         const text = makeOpenManifest(`
   <Identity
