@@ -228,6 +228,18 @@ export function findSchemaElementExact(
 }
 
 /**
+ * Check if the schema model has any element definitions for a given namespace.
+ * Used to distinguish "element from an unbundled namespace" (skip) from
+ * "element in a known namespace but not defined" (flag as unknown).
+ */
+function hasNamespace(schema: SchemaModel, namespace: string): boolean {
+    for (const key of schema.elements.keys()) {
+        if (key.startsWith(namespace + '|')) { return true; }
+    }
+    return false;
+}
+
+/**
  * Test an attribute value against its schema-defined pattern constraints.
  * Returns true if valid (or no patterns), false if it fails any required pattern set.
  * Useful for manifest-editor to validate individual field values against XSD patterns.
@@ -346,6 +358,13 @@ function validateChildPlacement(
         });
         return;
     }
+
+    // If the element belongs to a namespace not covered by our bundled schemas,
+    // skip the diagnostic — we simply don't have validation rules for it.
+    if (childNamespace && !hasNamespace(schema, childNamespace)) {
+        return;
+    }
+
     const range = getElementRange(childElement, lines);
     diagnostics.push({
         message: `Unknown element '${childLocalName}'`,
