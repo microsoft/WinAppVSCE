@@ -409,7 +409,12 @@ function parseApplications(root: Element): ApplicationData[] {
             entryPoint: appEl.getAttribute('EntryPoint') ?? '',
             trustLevel: appEl.getAttribute('uap10:TrustLevel') ?? appEl.getAttribute('TrustLevel') ?? '',
             runtimeBehavior: appEl.getAttribute('uap10:RuntimeBehavior') ?? appEl.getAttribute('RuntimeBehavior') ?? '',
-            supportsMultipleInstances: appEl.getAttribute('uap10:SupportsMultipleInstances') ?? appEl.getAttribute('desktop4:SupportsMultipleInstances') ?? '',
+            supportsMultipleInstances:
+                appEl.getAttribute('uap4:SupportsMultipleInstances')
+                ?? appEl.getAttribute('uap10:SupportsMultipleInstances')
+                ?? appEl.getAttribute('desktop4:SupportsMultipleInstances')
+                ?? appEl.getAttribute('iot2:SupportsMultipleInstances')
+                ?? '',
             parameters: appEl.getAttribute('uap10:Parameters') ?? '',
             visualElements: {
                 displayName: visualEl?.getAttribute('DisplayName') ?? '',
@@ -837,6 +842,15 @@ function applyResourcesChangeString(xml: string, field: string, value: string, i
 }
 
 function applyApplicationChangeString(xml: string, field: string, value: string, index: number): string {
+    const supportsMultipleInstancesAttrs = [
+        { qName: 'uap4:SupportsMultipleInstances', prefix: 'uap4', uri: NS.uap4 },
+        { qName: 'uap10:SupportsMultipleInstances', prefix: 'uap10', uri: NS.uap10 },
+        { qName: 'desktop4:SupportsMultipleInstances', prefix: 'desktop4', uri: NS.desktop4 },
+        { qName: 'iot2:SupportsMultipleInstances', prefix: 'iot2', uri: NS.iot2 },
+    ];
+    const getExistingSupportsMultipleInstancesAttr = (elementText: string): typeof supportsMultipleInstancesAttrs[number] | undefined =>
+        supportsMultipleInstancesAttrs.find(attr => new RegExp(`(?:^|\\s)${escapeRegex(attr.qName)}\\s*=`).test(elementText));
+
     // Top-level Application attributes
     const appAttrMap: Record<string, string> = {
         id: 'Id',
@@ -858,6 +872,28 @@ function applyApplicationChangeString(xml: string, field: string, value: string,
         while ((match = regex.exec(xml)) !== null) {
             if (count === index) {
                 const elemRegex = new RegExp(escapeRegex(match[0]));
+                if (field === 'supportsMultipleInstances') {
+                    const existingAttr = getExistingSupportsMultipleInstancesAttr(match[0]) ?? supportsMultipleInstancesAttrs[1];
+                    if (!value) {
+                        return removeAttribute(xml, elemRegex, existingAttr.qName);
+                    }
+
+                    let workXml = ensureNamespace(xml, existingAttr.prefix, existingAttr.uri);
+                    const regex2 = /<Application\b[^>]*>/gs;
+                    let m2: RegExpExecArray | null;
+                    let c2 = 0;
+                    while ((m2 = regex2.exec(workXml)) !== null) {
+                        if (c2 === index) {
+                            const elemRegex2 = new RegExp(escapeRegex(m2[0]));
+                            const result = replaceAttribute(workXml, elemRegex2, existingAttr.qName, value);
+                            if (result !== null) { return result; }
+                            return addAttributeToElement(workXml, elemRegex2, existingAttr.qName, value);
+                        }
+                        c2++;
+                    }
+                    return workXml;
+                }
+
                 // Optional attrs: remove when empty
                 if (optionalAppAttrs[field] && !value) {
                     return removeAttribute(xml, elemRegex, attr);

@@ -223,6 +223,7 @@ function parseElements(
         const schemaElem: SchemaElement = {
             name,
             namespace: targetNs,
+            abstract: elem.getAttribute('abstract') === 'true',
             documentation: extractDocumentation(elem),
             children: [],
             attributes: [],
@@ -359,6 +360,7 @@ function parseChildElements(
                         const inlineElem: SchemaElement = {
                             name: childName,
                             namespace: targetNs,
+                            abstract: childElem.getAttribute('abstract') === 'true',
                             documentation: extractDocumentation(childElem),
                             children: [],
                             attributes: [],
@@ -376,6 +378,7 @@ function parseChildElements(
                     const simpleElem: SchemaElement = {
                         name: childName,
                         namespace: targetNs,
+                        abstract: childElem.getAttribute('abstract') === 'true',
                         documentation: extractDocumentation(childElem),
                         children: [],
                         attributes: [],
@@ -714,6 +717,7 @@ function resolveTypeReferences(model: SchemaModel): void {
             model.elements.set(childKey, {
                 name: child.name,
                 namespace: child.namespace,
+                abstract: resolvedType.abstract,
                 documentation: resolvedType.documentation,
                 children: cloneChildRefs(resolvedType.children),
                 attributes: cloneAttributes(resolvedType.attributes),

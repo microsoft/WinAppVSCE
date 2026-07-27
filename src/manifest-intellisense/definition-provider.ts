@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { findAttribute, findManifestElement } from './intellisense-logic';
+import { extractDocumentPrefixes, findAttribute, findManifestElement } from './intellisense-logic';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { getXmlContext, splitPrefixedName } from '../manifest-schema/xml-context';
 
@@ -21,15 +21,16 @@ export class ManifestDefinitionProvider implements vscode.DefinitionProvider {
         const schema = this.getSchema();
 
         const text = document.getText();
+        const docPrefixes = extractDocumentPrefixes(text);
         const offset = document.offsetAt(position);
         const context = getXmlContext(text, offset);
         const wordRange = document.getWordRangeAtPosition(position, XML_NAME_REGEX);
         const word = wordRange ? document.getText(wordRange) : undefined;
 
         if (context.type === 'attributeName' && context.currentElement && word) {
-            const element = findManifestElement(schema, context.currentElement, context.currentPrefix || undefined, text);
+            const element = findManifestElement(schema, context.currentElement, context.currentPrefix || undefined, text, docPrefixes);
             if (element) {
-                const attribute = findAttribute(element.attributes, word, text);
+                const attribute = findAttribute(element.attributes, word, text, docPrefixes);
                 if (attribute?.sourceFile && attribute.sourceLine !== undefined) {
                     return new vscode.Location(
                         vscode.Uri.file(attribute.sourceFile),
@@ -44,7 +45,7 @@ export class ManifestDefinitionProvider implements vscode.DefinitionProvider {
         }
 
         const { prefix, localName } = splitPrefixedName(word);
-        const element = findManifestElement(schema, localName, prefix || undefined, text);
+        const element = findManifestElement(schema, localName, prefix || undefined, text, docPrefixes);
         if (!element?.sourceFile || element.sourceLine === undefined) {
             return undefined;
         }

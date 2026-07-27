@@ -123,7 +123,7 @@ export class ManifestDiagnosticsProvider {
 
     /** Validate the manifest document. */
     private validate(document: vscode.TextDocument, level: string): vscode.Diagnostic[] {
-        return validateManifestText(
+        const diagnostics = validateManifestText(
             this.getSchema(),
             document.getText(),
             level === 'error' ? 'error' : 'warning',
@@ -132,7 +132,13 @@ export class ManifestDiagnosticsProvider {
                     .getConfiguration(MANIFEST_CONFIG_SECTION)
                     .get<boolean>(STRICT_CHILD_PLACEMENT_CONFIG_KEY, false),
             }
-        ).map(d => {
+        );
+
+        const filteredDiagnostics = level === 'error'
+            ? diagnostics.filter(diagnostic => diagnostic.severity === 'error')
+            : diagnostics;
+
+        return filteredDiagnostics.map(d => {
             const message = d.schemaUri
                 ? `${d.message}\n\n${d.schemaUri}`
                 : d.message;

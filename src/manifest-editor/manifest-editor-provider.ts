@@ -249,11 +249,28 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             const imgPath = message.imagePath;
                             const manifestDirPath = path.dirname(document.uri.fsPath);
                             const resolved = path.resolve(manifestDirPath, imgPath);
+                            const isWithinRoot = (candidatePath: string, rootPath: string): boolean => {
+                                const relativePath = path.relative(rootPath, candidatePath);
+                                return relativePath !== ''
+                                    && !relativePath.startsWith('..')
+                                    && !path.isAbsolute(relativePath);
+                            };
+                            const workspaceRoot = vscode.workspace.workspaceFolders?.find(wf =>
+                                resolved.toLowerCase() === wf.uri.fsPath.toLowerCase()
+                                || isWithinRoot(resolved, wf.uri.fsPath)
+                            )?.uri.fsPath;
 
                             // Check if the resolved path is inside the package directory AND exists
                             const normalizedResolved = resolved.toLowerCase();
                             const normalizedManifestDir = manifestDirPath.toLowerCase() + path.sep;
                             if (normalizedResolved.startsWith(normalizedManifestDir) && fs.existsSync(resolved)) {
+                                const dims = getImageDimensions(resolved);
+                                const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
+                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
+                                return;
+                            }
+
+                            if (workspaceRoot && fs.existsSync(resolved)) {
                                 const dims = getImageDimensions(resolved);
                                 const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
                                 webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
@@ -277,8 +294,10 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             if (vscode.workspace.workspaceFolders) {
                                 for (const wf of vscode.workspace.workspaceFolders) {
                                     const candidate = path.resolve(wf.uri.fsPath, imgPath);
-                                    if (fs.existsSync(candidate) && !candidate.toLowerCase().startsWith(normalizedManifestDir)) {
-                                        webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', sourcePath: candidate });
+                                    if (fs.existsSync(candidate)) {
+                                        const dims = getImageDimensions(candidate);
+                                        const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
+                                        webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
                                         return;
                                     }
                                 }

@@ -7,6 +7,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
+import Module from 'node:module';
 import * as path from 'path';
 import { getXmlContext } from '../manifest-schema/xml-context';
 import {
@@ -85,6 +86,15 @@ describe('manifest completion logic', () => {
         const items = getChildCompletions(model, 'Package', undefined, makeManifest(''));
         const capabilities = items.filter(item => item.label === 'Capabilities');
         assert.equal(capabilities.length, 1);
+    });
+
+    it('skips abstract placeholder elements and undeclared-prefix children in completions', () => {
+        const items = getChildCompletions(model, 'Package', undefined, makeManifest(''));
+        const labels = items.map(item => item.label);
+
+        assert.ok(!labels.includes('AccessControlChoice'));
+        assert.ok(!labels.includes('ApplicationDataChoice'));
+        assert.ok(!labels.includes('UpdateWhileInUse'));
     });
 
     it('resolves substitution groups to concrete children for Application', () => {
@@ -692,6 +702,93 @@ describe('schema and context integration', () => {
         const implementedCategories = findManifestElement(model, 'ImplementedCategories', 'com', docText);
         assert.ok(implementedCategories);
         assert.ok(implementedCategories.children.some(child => child.name === 'ImplementedCategory'));
+    });
+
+    it('returns a definition location for a known element name', async () => {
+        const originalLoad = (Module as unknown as { _load: Function })._load;
+        const mockVscode = {
+            workspace: {
+                getConfiguration: () => ({
+                    get: <T>(_key: string, fallback: T) => fallback,
+                }),
+            },
+            Position: class Position {
+                constructor(public line: number, public character: number) {}
+            },
+            Range: class Range {
+                public start: { line: number; character: number };
+                public end: { line: number; character: number };
+                constructor(startLine: number, startCharacter: number, endLine: number, endCharacter: number) {
+                    this.start = { line: startLine, character: startCharacter };
+                    this.end = { line: endLine, character: endCharacter };
+                }
+            },
+            Location: class Location {
+                constructor(public uri: { fsPath: string }, public position: { line: number; character: number }) {}
+            },
+            Uri: {
+                file: (fsPath: string) => ({ fsPath }),
+            },
+        };
+
+        (Module as unknown as { _load: Function })._load = function(request: string, parent: unknown, isMain: boolean) {
+            if (request === 'vscode') {
+                return mockVscode;
+            }
+            return originalLoad.call(this, request, parent, isMain);
+        };
+
+        try {
+            const { ManifestDefinitionProvider } = await import('../manifest-intellisense/definition-provider.js');
+            const text = makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />`);
+            const offset = text.indexOf('Identity') + 2;
+            const position = { line: text.substring(0, offset).split('\n').length - 1, character: offset - text.lastIndexOf('\n', offset - 1) - 1 };
+
+            const document = {
+                getText: (range?: { start: { line: number; character: number }; end: { line: number; character: number } }) => {
+                    if (!range) { return text; }
+                    const startOffset = offsetAt(range.start);
+                    const endOffset = offsetAt(range.end);
+                    return text.slice(startOffset, endOffset);
+                },
+                offsetAt,
+                getWordRangeAtPosition: (pos: { line: number; character: number }) => {
+                    const wordOffset = offsetAt(pos);
+                    let start = wordOffset;
+                    let end = wordOffset;
+                    while (start > 0 && /[A-Za-z0-9_.:-]/.test(text[start - 1])) { start--; }
+                    while (end < text.length && /[A-Za-z0-9_.:-]/.test(text[end])) { end++; }
+                    const startPos = positionAt(start);
+                    const endPos = positionAt(end);
+                    return { start: startPos, end: endPos };
+                },
+            };
+
+            function offsetAt(pos: { line: number; character: number }): number {
+                const lines = text.split('\n');
+                let total = 0;
+                for (let i = 0; i < pos.line; i++) {
+                    total += lines[i].length + 1;
+                }
+                return total + pos.character;
+            }
+
+            function positionAt(value: number): { line: number; character: number } {
+                const before = text.substring(0, value);
+                const lines = before.split('\n');
+                return { line: lines.length - 1, character: lines[lines.length - 1].length };
+            }
+
+            const provider = new ManifestDefinitionProvider(() => model);
+            const location = provider.provideDefinition(document as any, position as any, {} as any) as any;
+
+            assert.ok(location);
+            assert.ok(location.uri.fsPath.endsWith('.xsd'));
+            assert.equal(typeof location.position.line, 'number');
+        } finally {
+            (Module as unknown as { _load: Function })._load = originalLoad;
+        }
     });
 
     it('detects attribute name context in multi-line tags', () => {

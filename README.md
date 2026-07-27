@@ -35,6 +35,7 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Generate Certificate** | Create a development certificate for signing, with an option to also install (trust) it. Installing prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Install Certificate** | Install (trust) an existing `.pfx` or `.cer` certificate in the machine store. Prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Certificate Info** | Display certificate details (subject, thumbprint, expiry) to verify a certificate matches your manifest. |
+| **WinApp: Open Manifest Editor** | Switch from manifest text editor to the visual editor |
 | **WinApp: Sign Package** | Sign an MSIX package or executable with a certificate. Searches the workspace for MSIX/APPX artifacts and certificates, presenting them in a QuickPick sorted by newest first; a **Browse…** option falls back to a native file dialog. |
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
@@ -236,7 +237,7 @@ You can also disable just the diagnostic underlines while keeping completions an
 | Setting | Description |
 |---------|-------------|
 | `winapp.manifest.intelliSense.enable` | Enable or disable all IntelliSense features (completions, hover, diagnostics, Go to Definition). Default: `true`. |
-| `winapp.manifest.diagnostics.level` | Set manifest diagnostics to `off`, `warning`, or `error`. Set to `off` to disable validation underlines only. Default: `warning`. |
+| `winapp.manifest.diagnostics.level` | Filter manifest diagnostics: `off` disables validation, `warning` shows all diagnostics, and `error` shows only errors. Default: `warning`. |
 | `winapp.manifest.intelliSense.diagnostics.strictChildPlacement` | When enabled, report known manifest elements that appear under an unexpected parent even when substitution-group coverage is incomplete. |
 
 ## Scenarios

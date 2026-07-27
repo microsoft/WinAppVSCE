@@ -283,6 +283,17 @@ describe('loadSchemaModel', () => {
             'should include VisualElements as a concrete member');
     });
 
+    it('tracks abstract schema elements used as substitution-group placeholders', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const visualElementsChoice = model.elements.get(`${FOUNDATION_NS}|VisualElementsChoice`);
+        assert.ok(visualElementsChoice, 'VisualElementsChoice element should exist');
+        assert.equal(visualElementsChoice.abstract, true);
+
+        const visualElements = model.elements.get(`${UAP_NS}|VisualElements`);
+        assert.ok(visualElements, 'VisualElements element should exist');
+        assert.notEqual(visualElements.abstract, true);
+    });
+
     it('populates CapabilityChoice with members from multiple schemas', () => {
         model = loadSchemaModel(SCHEMAS_DIR);
         const group = model.substitutionGroups.get('CapabilityChoice');

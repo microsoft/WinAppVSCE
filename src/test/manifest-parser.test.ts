@@ -370,6 +370,32 @@ describe('applyFieldChange — Applications', () => {
         const parsed = parseManifest(result);
         assert.equal(parsed.applications[0].visualElements.square44x44Logo, 'Assets\\New44.png');
     });
+
+    for (const [qualifiedName, namespaceDecl] of [
+        ['uap4:SupportsMultipleInstances', 'xmlns:uap4="http://schemas.microsoft.com/appx/manifest/uap/windows10/4"'],
+        ['uap10:SupportsMultipleInstances', 'xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"'],
+        ['desktop4:SupportsMultipleInstances', 'xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"'],
+        ['iot2:SupportsMultipleInstances', 'xmlns:iot2="http://schemas.microsoft.com/appx/manifest/iot/windows10/2"'],
+    ] as const) {
+        it(`parses and preserves ${qualifiedName} when editing supportsMultipleInstances`, () => {
+            const manifestWithAttr = BASE_MANIFEST
+                .replace('xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"', `xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"\n  ${namespaceDecl}`)
+                .replace(
+                    '<Application Id="App" Executable="TestApp.exe" EntryPoint="Windows.FullTrustApplication">',
+                    `<Application Id="App" Executable="TestApp.exe" EntryPoint="Windows.FullTrustApplication" ${qualifiedName}="true">`
+                );
+
+            const parsed = parseManifest(manifestWithAttr);
+            assert.equal(parsed.applications[0].supportsMultipleInstances, 'true');
+
+            const updated = applyFieldChange(manifestWithAttr, 'applications', 'supportsMultipleInstances', 'false', 0);
+            assert.ok(updated.includes(`${qualifiedName}="false"`));
+            assert.equal((updated.match(/SupportsMultipleInstances=/g) || []).length, 1);
+
+            const removed = applyFieldChange(updated, 'applications', 'supportsMultipleInstances', '', 0);
+            assert.ok(!removed.includes('SupportsMultipleInstances='));
+        });
+    }
 });
 
 // ─── 7. applyFieldChange — Resources Section ───────────────────────────────

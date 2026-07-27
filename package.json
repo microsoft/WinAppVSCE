@@ -163,7 +163,7 @@
           "type": "string",
           "enum": ["off", "warning", "error"],
           "default": "warning",
-          "description": "Severity level for manifest schema diagnostics. Set to 'off' to disable validation."
+          "description": "Diagnostic filter for manifest schema validation. Set to 'off' to disable validation, 'warning' to show all diagnostics, or 'error' to show only errors."
         },
         "winapp.manifest.intelliSense.diagnostics.strictChildPlacement": {
           "type": "boolean",
@@ -191,8 +191,14 @@
       "editor/title": [
         {
           "command": "winapp.openManifestEditor",
-          "when": "resourceFilename =~ /[Aa]ppx[Mm]anifest\\.xml$/ || resourceExtname == .appxmanifest",
+          "when": "(resourceFilename =~ /[Aa]ppx[Mm]anifest\\.xml$/ || resourceExtname == .appxmanifest) && activeCustomEditorId != winapp.manifestEditor",
           "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "winapp.openManifestEditor",
+          "when": "resourceFilename =~ /[Aa]ppx[Mm]anifest\\.xml$/ || resourceExtname == .appxmanifest"
         }
       ]
     },

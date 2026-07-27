@@ -10,11 +10,15 @@ export const NS = {
     default: MANIFEST_NAMESPACES[''],
     uap: MANIFEST_NAMESPACES['uap'],
     uap3: MANIFEST_NAMESPACES['uap3'],
+    uap4: MANIFEST_NAMESPACES['uap4'],
     uap5: MANIFEST_NAMESPACES['uap5'],
     uap7: MANIFEST_NAMESPACES['uap7'],
     uap10: MANIFEST_NAMESPACES['uap10'],
     rescap: MANIFEST_NAMESPACES['rescap'],
     desktop: MANIFEST_NAMESPACES['desktop'],
+    desktop4: MANIFEST_NAMESPACES['desktop4'],
+    desktop6: MANIFEST_NAMESPACES['desktop6'],
+    iot2: MANIFEST_NAMESPACES['iot2'],
     // These don't exist in the IntelliSense schema set — keep as literals
     win32dependencies: 'http://schemas.microsoft.com/appx/manifest/win32dependencies/windows10',
     systemai: 'http://schemas.microsoft.com/appx/manifest/systemai/windows10',
@@ -293,7 +297,7 @@ export function ensureNamespace(xmlText: string, prefix: string, uri: string): s
     // Detect the indent of the <Package line itself
     let pkgLineStart = pkgStart;
     while (pkgLineStart > 0 && xmlText[pkgLineStart - 1] !== '\n') { pkgLineStart--; }
-    const pkgIndent = xmlText.substring(pkgLineStart, pkgStart);
+    const pkgIndent = pkgLineStart === 0 ? '' : xmlText.substring(pkgLineStart, pkgStart);
     // Use one extra level of indent for attributes (tab or two spaces based on file)
     const tabInFile = xmlText.includes('\t');
     const attrIndent = pkgIndent + (tabInFile ? '\t' : '  ');

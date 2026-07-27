@@ -27,7 +27,10 @@ $schemasDir = Join-Path $repoRoot 'schemas'
 $winappYaml = Join-Path $repoRoot 'winapp.yaml'
 
 # Resolve winapp CLI location
-if ($CliPath -and (Test-Path $CliPath)) {
+if ($CliPath) {
+    if (-not (Test-Path $CliPath)) {
+        throw "The provided -CliPath does not exist: $CliPath"
+    }
     $winappExe = $CliPath
 } else {
     # Try bin/ directory first, then fall back to PATH
@@ -39,8 +42,8 @@ if ($CliPath -and (Test-Path $CliPath)) {
         $winappExe = $binPath
     } else {
         $winappExe = (Get-Command 'winapp' -ErrorAction SilentlyContinue)?.Source
-        if (-not $winappExe) {
-            $winappExe = $null
+        if ($winappExe) {
+            Write-Warning "Using PATH-resolved winapp executable at '$winappExe'. CI/release builds should pass -CliPath or pre-populate bin\."
         }
     }
 }
@@ -83,35 +86,61 @@ $sdkCppBase = Join-Path $nugetCache 'microsoft.windows.sdk.cpp' $sdkCppVersion
 # Auto-download missing packages using winapp restore (or NuGet directly as fallback)
 $needsRestore = (-not (Test-Path $buildToolsBase)) -or (-not (Test-Path $sdkCppBase))
 if ($needsRestore) {
-    if ($winappExe) {
-        Write-Host "Downloading SDK packages via winapp restore..."
-        $restoreResult = & $winappExe restore $repoRoot --quiet 2>&1
+    if (-not $winappExe) {
+        throw "Required SDK schema packages are missing and winapp.exe could not be resolved. Pass -CliPath or restore the CLI into bin\ before running sync-schemas."
     }
-    # winapp restore may fail on cppwinrt projections but still download NuGet packages
-    if (-not (Test-Path $buildToolsBase) -or -not (Test-Path $sdkCppBase)) {
-        # Fallback: download directly via NuGet
-        Write-Host "Falling back to direct NuGet install..."
-        $tempDir = Join-Path $env:TEMP "winapp-schema-restore"
-        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-        if (-not (Test-Path $buildToolsBase)) {
-            & nuget install Microsoft.Windows.SDK.BuildTools -Version $buildToolsVersion -OutputDirectory $tempDir -Source "https://api.nuget.org/v3/index.json" -NonInteractive 2>&1 | Out-Null
-            $downloadedPkg = Join-Path $tempDir "Microsoft.Windows.SDK.BuildTools.$buildToolsVersion"
-            if (Test-Path $downloadedPkg) {
+
+    Write-Host "Downloading SDK packages via winapp restore..."
+    & $winappExe restore $repoRoot --quiet 2>&1 | Out-Null
+    $restoreExitCode = $LASTEXITCODE
+
+    if ((-not (Test-Path $buildToolsBase) -or -not (Test-Path $sdkCppBase))) {
+        if ($env:CI) {
+            throw "Required schema packages are missing after 'winapp restore' in CI. Pre-restore packages before running sync-schemas."
+        }
+
+        if ($restoreExitCode -eq 0) {
+            throw "Required schema packages are still missing after 'winapp restore'. Run 'winapp restore' again or pass a valid -CliPath."
+        }
+
+        $nugetExe = (Get-Command 'nuget' -ErrorAction SilentlyContinue)?.Source
+        if (-not $nugetExe) {
+            throw "winapp restore failed and NuGet.exe was not found on PATH. Install NuGet for local development or pre-restore packages."
+        }
+
+        Write-Warning "Using PATH-resolved NuGet executable at '$nugetExe'. This fallback is for local development only and must not be used in CI/release builds."
+        # Development-only fallback: copy packages from an explicit NuGet download when
+        # winapp restore fails locally. CI/release builds should always use pre-restored
+        # packages from `winapp restore`.
+        Write-Host "Falling back to direct NuGet install for local development..."
+        $downloadRoot = Join-Path $repoRoot '.schema-restore'
+        New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+
+        try {
+            if (-not (Test-Path $buildToolsBase)) {
+                & $nugetExe install Microsoft.Windows.SDK.BuildTools -Version $buildToolsVersion -OutputDirectory $downloadRoot -Source "https://api.nuget.org/v3/index.json" -NonInteractive 2>&1 | Out-Null
+                $downloadedPkg = Join-Path $downloadRoot "Microsoft.Windows.SDK.BuildTools.$buildToolsVersion"
+                if (-not (Test-Path $downloadedPkg)) {
+                    throw "NuGet download did not produce $downloadedPkg"
+                }
                 $destDir = Split-Path $buildToolsBase -Parent
                 New-Item -ItemType Directory -Path $destDir -Force | Out-Null
                 Copy-Item $downloadedPkg -Destination $buildToolsBase -Recurse -Force
             }
-        }
-        if (-not (Test-Path $sdkCppBase)) {
-            & nuget install Microsoft.Windows.SDK.CPP -Version $sdkCppVersion -OutputDirectory $tempDir -Source "https://api.nuget.org/v3/index.json" -NonInteractive 2>&1 | Out-Null
-            $downloadedPkg = Join-Path $tempDir "Microsoft.Windows.SDK.CPP.$sdkCppVersion"
-            if (Test-Path $downloadedPkg) {
+            if (-not (Test-Path $sdkCppBase)) {
+                & $nugetExe install Microsoft.Windows.SDK.CPP -Version $sdkCppVersion -OutputDirectory $downloadRoot -Source "https://api.nuget.org/v3/index.json" -NonInteractive 2>&1 | Out-Null
+                $downloadedPkg = Join-Path $downloadRoot "Microsoft.Windows.SDK.CPP.$sdkCppVersion"
+                if (-not (Test-Path $downloadedPkg)) {
+                    throw "NuGet download did not produce $downloadedPkg"
+                }
                 $destDir = Split-Path $sdkCppBase -Parent
                 New-Item -ItemType Directory -Path $destDir -Force | Out-Null
                 Copy-Item $downloadedPkg -Destination $sdkCppBase -Recurse -Force
             }
         }
-        Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        finally {
+            Remove-Item $downloadRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -206,4 +235,5 @@ Write-Host "   SDK.CPP:    $sdkCppVersion ($sdkCppXsdDir)"
 if ($errors.Count -gt 0) {
     Write-Warning "Some files were not found:"
     $errors | ForEach-Object { Write-Warning "  $_" }
+    throw "Schema sync is incomplete; missing $($errors.Count) required XSD file(s)."
 }

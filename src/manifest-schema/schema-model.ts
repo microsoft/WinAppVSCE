@@ -8,6 +8,8 @@ export interface SchemaElement {
     name: string;
     /** Namespace URI this element belongs to. */
     namespace: string;
+    /** True when the schema element is abstract and not directly valid in manifests. */
+    abstract?: boolean;
     /** Documentation from xs:annotation/xs:documentation. */
     documentation?: string;
     /** Child elements allowed inside this element. */
@@ -130,11 +132,17 @@ export const MANIFEST_NAMESPACES: Record<string, string> = {
     'uap11': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/11',
     'uap12': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/12',
     'uap13': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/13',
+    'uap15': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/15',
+    'uap16': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/16',
+    'uap17': 'http://schemas.microsoft.com/appx/manifest/uap/windows10/17',
     'rescap': 'http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities',
     'desktop': 'http://schemas.microsoft.com/appx/manifest/desktop/windows10',
     'desktop2': 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/2',
     'desktop3': 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/3',
+    'desktop4': 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/4',
+    'desktop6': 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/6',
     'com': 'http://schemas.microsoft.com/appx/manifest/com/windows10',
+    'iot2': 'http://schemas.microsoft.com/appx/manifest/iot/windows10/2',
     'm': 'http://schemas.microsoft.com/appx/2010/manifest',
     't': 'http://schemas.microsoft.com/appx/manifest/types',
 };

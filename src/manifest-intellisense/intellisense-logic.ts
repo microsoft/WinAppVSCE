@@ -33,16 +33,17 @@ export function getManifestCompletions(
     offset: number
 ): ManifestCompletionSuggestion[] {
     const ctx = getXmlContext(text, offset);
+    const docPrefixes = extractDocumentPrefixes(text);
 
     switch (ctx.type) {
         case 'elementOpen':
-            return completeElementOrAttributes(schema, ctx.parentElement, ctx.parentPrefix, ctx.partialText || '', text);
+            return completeElementOrAttributes(schema, ctx.parentElement, ctx.parentPrefix, ctx.partialText || '', text, docPrefixes);
         case 'attributeName':
-            return getAttributeCompletions(schema, ctx.currentElement, ctx.currentPrefix, ctx.existingAttributes, text);
+            return getAttributeCompletions(schema, ctx.currentElement, ctx.currentPrefix, ctx.existingAttributes, text, docPrefixes);
         case 'attributeValue':
-            return getAttributeValueCompletions(schema, ctx.currentElement, ctx.currentPrefix, ctx.currentAttribute, text);
+            return getAttributeValueCompletions(schema, ctx.currentElement, ctx.currentPrefix, ctx.currentAttribute, text, docPrefixes);
         case 'text':
-            return getChildCompletions(schema, ctx.parentElement, ctx.parentPrefix, text).map(item => ({
+            return getChildCompletions(schema, ctx.parentElement, ctx.parentPrefix, text, docPrefixes).map(item => ({
                 ...item,
                 insertText: `<${item.insertText}`,
                 filterText: `<${item.filterText || item.label}`,
@@ -59,16 +60,17 @@ function completeElementOrAttributes(
     parentName: string | undefined,
     parentPrefix: string | undefined,
     partial: string,
-    docText: string
+    docText: string,
+    docPrefixes: Map<string, string>
 ): ManifestCompletionSuggestion[] {
     const items: ManifestCompletionSuggestion[] = [];
 
     if (partial) {
         const { prefix, localName } = splitPrefixedName(partial);
-        const elem = findManifestElement(schema, localName, prefix || undefined, docText);
+        const elem = findManifestElement(schema, localName, prefix || undefined, docText, docPrefixes);
         if (elem) {
             // User typed a known element name — show only attribute completions
-            const attrItems = getAttributeCompletions(schema, localName, prefix || undefined, [], docText);
+            const attrItems = getAttributeCompletions(schema, localName, prefix || undefined, [], docText, docPrefixes);
             items.push(...attrItems.map(attr => ({
                 ...attr,
                 insertText: ` ${attr.insertText}`,
@@ -80,7 +82,7 @@ function completeElementOrAttributes(
 
     // No partial or partial doesn't match an element — show child elements
     if (parentName) {
-        items.push(...getChildCompletions(schema, parentName, parentPrefix, docText));
+        items.push(...getChildCompletions(schema, parentName, parentPrefix, docText, docPrefixes));
     }
 
     return items;
@@ -90,23 +92,23 @@ export function getChildCompletions(
     schema: SchemaModel,
     parentName: string | undefined,
     parentPrefix: string | undefined,
-    docText: string
+    docText: string,
+    docPrefixes: Map<string, string> = extractDocumentPrefixes(docText)
 ): ManifestCompletionSuggestion[] {
     if (!parentName) { return []; }
 
     const items: ManifestCompletionSuggestion[] = [];
-    const parentElem = findManifestElement(schema, parentName, parentPrefix, docText);
+    const parentElem = findManifestElement(schema, parentName, parentPrefix, docText, docPrefixes);
     if (!parentElem) { return items; }
 
-    const docPrefixes = extractDocumentPrefixes(docText);
     const seen = new Set<string>();
 
     for (const child of parentElem.children) {
         const substitutions = schema.substitutionGroups.get(child.name);
         if (substitutions) {
             for (const sub of substitutions) {
-                const subPrefix = getPrefixForNamespace(sub.namespace, docPrefixes);
-                const subDisplayName = subPrefix ? `${subPrefix}:${sub.name}` : sub.name;
+                const subDisplayName = getInsertableElementName(sub.name, sub.namespace, docPrefixes);
+                if (!subDisplayName) { continue; }
                 if (seen.has(subDisplayName)) { continue; }
                 seen.add(subDisplayName);
 
@@ -115,7 +117,7 @@ export function getChildCompletions(
                     kind: 'element',
                     label: subDisplayName,
                     insertText: buildElementSnippet(subDisplayName, subElem),
-                    detail: `(${subPrefix || sub.namespace})`,
+                    detail: `(${URI_TO_PREFIX.get(sub.namespace) || sub.namespace})`,
                     documentation: subElem?.documentation,
                     sortText: `0_${sub.name}`,
                 });
@@ -124,8 +126,9 @@ export function getChildCompletions(
         }
 
         const childElem = schema.elements.get(`${child.namespace}|${child.name}`);
-        const prefix = getPrefixForNamespace(child.namespace, docPrefixes);
-        const displayName = prefix ? `${prefix}:${child.name}` : child.name;
+        if (childElem?.abstract) { continue; }
+        const displayName = getInsertableElementName(child.name, child.namespace, docPrefixes);
+        if (!displayName) { continue; }
         if (seen.has(displayName)) { continue; }
         seen.add(displayName);
 
@@ -147,15 +150,15 @@ export function getAttributeCompletions(
     elementName: string | undefined,
     prefix: string | undefined,
     existingAttrs: string[] | undefined,
-    docText: string
+    docText: string,
+    docPrefixes: Map<string, string> = extractDocumentPrefixes(docText)
 ): ManifestCompletionSuggestion[] {
     if (!elementName) { return []; }
 
-    const elem = findManifestElement(schema, elementName, prefix, docText);
+    const elem = findManifestElement(schema, elementName, prefix, docText, docPrefixes);
     if (!elem) { return []; }
 
     const existing = new Set(existingAttrs || []);
-    const docPrefixes = extractDocumentPrefixes(docText);
     const items: ManifestCompletionSuggestion[] = [];
 
     for (const attr of elem.attributes) {
@@ -191,14 +194,15 @@ export function getAttributeValueCompletions(
     elementName: string | undefined,
     prefix: string | undefined,
     attrName: string | undefined,
-    docText: string
+    docText: string,
+    docPrefixes: Map<string, string> = extractDocumentPrefixes(docText)
 ): ManifestCompletionSuggestion[] {
     if (!elementName || !attrName) { return []; }
 
-    const elem = findManifestElement(schema, elementName, prefix, docText);
+    const elem = findManifestElement(schema, elementName, prefix, docText, docPrefixes);
     if (!elem) { return []; }
 
-    const attr = findAttribute(elem.attributes, attrName, docText);
+    const attr = findAttribute(elem.attributes, attrName, docText, docPrefixes);
     if (!attr?.enumerations) { return []; }
 
     return attr.enumerations.map((value, idx) => ({
@@ -225,12 +229,13 @@ export function getClosingTagCompletions(
 export function getManifestHover(schema: SchemaModel, text: string, offset: number): ManifestHoverInfo | undefined {
     const word = getWordAtOffset(text, offset);
     if (!word) { return undefined; }
+    const docPrefixes = extractDocumentPrefixes(text);
 
     const lineInfo = getLineInfo(text, offset);
     const lineBeforeWord = lineInfo.text.substring(0, word.start - lineInfo.start);
 
     if (lineBeforeWord.match(/<\/?$/)) {
-        return getElementHover(schema, word.value, text);
+        return getElementHover(schema, word.value, text, docPrefixes);
     }
 
     const beforeOffset = text.substring(0, offset);
@@ -243,26 +248,27 @@ export function getManifestHover(schema: SchemaModel, text: string, offset: numb
                 const elemName = elemMatch[1];
                 const { localName } = splitPrefixedName(elemName);
                 if (word.value !== elemName && word.value !== localName) {
-                    return getAttributeHover(schema, word.value, elemName, text) || getElementHover(schema, word.value, text);
+                    return getAttributeHover(schema, word.value, elemName, text, docPrefixes)
+                        || getElementHover(schema, word.value, text, docPrefixes);
                 }
-                return getElementHover(schema, elemName, text);
+                return getElementHover(schema, elemName, text, docPrefixes);
             }
         }
     }
 
-    return getElementHover(schema, word.value, text);
+    return getElementHover(schema, word.value, text, docPrefixes);
 }
 
 export function getElementHover(
     schema: SchemaModel,
     name: string,
-    docText: string
+    docText: string,
+    docPrefixes: Map<string, string> = extractDocumentPrefixes(docText)
 ): ManifestHoverInfo | undefined {
     const { prefix, localName } = splitPrefixedName(name);
-    const elem = findManifestElement(schema, localName, prefix || undefined, docText);
+    const elem = findManifestElement(schema, localName, prefix || undefined, docText, docPrefixes);
     if (!elem) { return undefined; }
 
-    const docPrefixes = extractDocumentPrefixes(docText);
     const requiredAttributes = elem.attributes
         .filter(a => a.required)
         .map(a => formatAttributeName(a, docPrefixes, schema))
@@ -297,16 +303,16 @@ export function getAttributeHover(
     schema: SchemaModel,
     attrName: string,
     elementName: string,
-    docText: string
+    docText: string,
+    docPrefixes: Map<string, string> = extractDocumentPrefixes(docText)
 ): ManifestHoverInfo | undefined {
     const { prefix, localName } = splitPrefixedName(elementName);
-    const elem = findManifestElement(schema, localName, prefix || undefined, docText);
+    const elem = findManifestElement(schema, localName, prefix || undefined, docText, docPrefixes);
     if (!elem) { return undefined; }
 
-    const attr = findAttribute(elem.attributes, attrName, docText);
+    const attr = findAttribute(elem.attributes, attrName, docText, docPrefixes);
     if (!attr) { return undefined; }
 
-    const docPrefixes = extractDocumentPrefixes(docText);
     return {
         kind: 'attribute',
         name: formatAttributeName(attr, docPrefixes, schema) || attrName,
@@ -369,9 +375,9 @@ export function findManifestElement(
     schema: SchemaModel,
     name: string,
     prefix: string | undefined,
-    docText: string
+    docText: string,
+    docPrefixes: Map<string, string> = extractDocumentPrefixes(docText)
 ): SchemaElement | undefined {
-    const docPrefixes = extractDocumentPrefixes(docText);
     const ns = resolveNamespaceFromPrefix(prefix || '', docPrefixes);
 
     const key = `${ns}|${name}`;
@@ -430,6 +436,24 @@ export function getPrefixForNamespace(ns: string, docPrefixes: Map<string, strin
     return URI_TO_PREFIX.get(ns) || '';
 }
 
+function getInsertableElementName(
+    name: string,
+    namespace: string,
+    docPrefixes: Map<string, string>
+): string | undefined {
+    const defaultNamespace = docPrefixes.get('') || '';
+    if (namespace === defaultNamespace) {
+        return name;
+    }
+
+    const declaredPrefix = getDeclaredPrefixForNamespace(namespace, docPrefixes);
+    if (!declaredPrefix) {
+        return undefined;
+    }
+
+    return `${declaredPrefix}:${name}`;
+}
+
 function buildElementSnippet(displayName: string, element: SchemaElement | undefined): string {
     let snippet = displayName;
     let attrIndex = 1;
@@ -452,14 +476,19 @@ function buildElementSnippet(displayName: string, element: SchemaElement | undef
     return snippet;
 }
 
-export function findAttribute(attributes: SchemaAttribute[], attrName: string, docText: string): SchemaAttribute | undefined {
+export function findAttribute(
+    attributes: SchemaAttribute[],
+    attrName: string,
+    docText: string,
+    docPrefixes: Map<string, string> = extractDocumentPrefixes(docText)
+): SchemaAttribute | undefined {
     const { prefix, localName } = splitPrefixedName(attrName);
     if (!prefix) {
         return attributes.find(attribute => !attribute.qualified && attribute.name === attrName)
             || attributes.find(attribute => attribute.name === attrName);
     }
 
-    const namespace = resolveNamespaceFromPrefix(prefix, extractDocumentPrefixes(docText));
+    const namespace = resolveNamespaceFromPrefix(prefix, docPrefixes);
     return attributes.find(attribute =>
         attribute.name === localName
         && attribute.qualified
