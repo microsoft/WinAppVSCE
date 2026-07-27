@@ -621,3 +621,100 @@ describe('bug #124: elements from unbundled namespaces are not flagged as unknow
             'Unknown elements in bundled namespaces should still be flagged');
     });
 });
+
+// ============================================================================
+// Diagnostic severity assignments
+// ============================================================================
+
+describe('diagnostic severity levels', () => {
+    it('missing required attribute is error severity', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>`));
+
+        const missingName = diagnostics.find(d => d.message.includes("Missing required attribute 'Name'"));
+        assert.ok(missingName, 'Should flag missing Name attribute');
+        assert.equal(missingName.severity, 'error', 'Missing required attribute should be error severity');
+    });
+
+    it('invalid enum value is error severity', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" ProcessorArchitecture="invalid" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>`));
+
+        const invalidEnum = diagnostics.find(d => d.message.includes("Invalid value 'invalid'"));
+        assert.ok(invalidEnum, 'Should flag invalid enum value');
+        assert.equal(invalidEnum.severity, 'error', 'Invalid enum value should be error severity');
+    });
+
+    it('pattern violation is error severity', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="bad-version" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>`));
+
+        const patternViolation = diagnostics.find(d => d.message.includes("'Version'") && d.message.includes('is invalid'));
+        assert.ok(patternViolation, 'Should flag invalid pattern');
+        assert.equal(patternViolation.severity, 'error', 'Pattern violation should be error severity');
+    });
+
+    it('missing required child element is error severity', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>`));
+
+        const missingChild = diagnostics.find(d => d.message.includes("Missing required element <DisplayName>"));
+        assert.ok(missingChild, 'Should flag missing DisplayName');
+        assert.equal(missingChild.severity, 'error', 'Missing required child should be error severity');
+    });
+
+    it('undeclared attribute is warning severity', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" NotARealAttr="hello" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>`));
+
+        const undeclared = diagnostics.find(d => d.message.includes("Attribute 'NotARealAttr' is not declared"));
+        assert.ok(undeclared, 'Should flag undeclared attribute');
+        assert.equal(undeclared.severity, 'warning', 'Undeclared attribute should be warning severity');
+    });
+
+    it('XML parse error is error severity', () => {
+        const diagnostics = validateManifestText(model, '<Package><Broken');
+        assert.ok(diagnostics.length > 0, 'Should produce parse error diagnostics');
+        assert.ok(diagnostics.every(d => d.severity === 'error'),
+            'All XML parse errors should be error severity');
+    });
+});
