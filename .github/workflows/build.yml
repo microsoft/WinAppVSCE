@@ -89,7 +89,7 @@ jobs:
 
     - name: Save VSIX baseline cache
       if: github.ref == 'refs/heads/main'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: vsix-baseline
         key: winappvsce-vsix-baseline
@@ -103,7 +103,7 @@ jobs:
     - name: Restore VSIX baseline cache
       if: github.event_name == 'pull_request'
       id: vsix-baseline
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: vsix-baseline
         key: winappvsce-vsix-baseline
