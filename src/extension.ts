@@ -32,7 +32,8 @@ import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
 	getDebuggerExtensionRequirement,
-	getDebuggerTypeFromChoice
+	getDebuggerTypeFromChoice,
+	validateInputFolder
 } from './debugger-resolver';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
 
@@ -718,6 +719,22 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 			return undefined;
 		}
 
+		// Validate a user-specified inputFolder early so we can cleanly
+		// cancel the session (return undefined) before the adapter factory
+		// runs — this avoids showing the debugger toolbar on failure.
+		const inputFolder: string | undefined = config.inputFolder;
+		if (inputFolder) {
+			let cwd = folder.uri.fsPath;
+			if (config.workingDirectory) {
+				cwd = config.workingDirectory;
+			}
+			const result = await validateInputFolder(inputFolder, cwd);
+			if (!result.valid) {
+				vscode.window.showErrorMessage(result.message);
+				return undefined;
+			}
+		}
+
 		return config;
 	}
 }
@@ -745,6 +762,11 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// If not set in launch.json, search for folders containing .exe
 			// files and let the user pick one.
 			let inputFolder: string | undefined = config.inputFolder;
+			let cwd = folder.uri.fsPath;
+			if (config.workingDirectory) {
+				cwd = config.workingDirectory;
+			}
+
 			if (!inputFolder) {
 				const exeMatches = await glob('**/*.exe', {
 					cwd: folder.uri.fsPath,
@@ -824,11 +846,6 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				cancellable: false
 			}, async (progress) => {
 				progress.report({ message: 'Running winapp run...' });
-
-				let cwd = folder.uri.fsPath;
-				if (config.workingDirectory) {
-					cwd = config.workingDirectory;
-				}
 
 				return new Promise<{ processId: number; runProcess: ReturnType<typeof spawn> }>((resolve, reject) => {
 					const child = spawn(cliPath, baseSpawnArgs, {

@@ -1,6 +1,60 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { glob } from 'glob';
+
 export interface DebuggerExtensionRequirement {
 	id: string;
 	name: string;
+}
+
+export type InputFolderValidation = {
+	valid: true;
+} | {
+	valid: false;
+	reason: 'not-found' | 'not-directory' | 'no-exe';
+	message: string;
+};
+
+/**
+ * Validates that an inputFolder path is suitable for a debug launch:
+ * - The path must exist
+ * - It must be a directory
+ * - It must contain at least one .exe file
+ *
+ * Relative paths are resolved against the provided cwd.
+ */
+export async function validateInputFolder(inputFolder: string, cwd: string): Promise<InputFolderValidation> {
+	const resolvedFolder = path.isAbsolute(inputFolder) ? inputFolder : path.resolve(cwd, inputFolder);
+	const folderStat = await fs.promises.stat(resolvedFolder).catch(() => undefined);
+	if (!folderStat) {
+		return {
+			valid: false,
+			reason: 'not-found',
+			message: `The configured "inputFolder" path does not exist: ${inputFolder}. `
+				+ 'Build your project first, or update "inputFolder" in launch.json to point to your build output directory.'
+		};
+	}
+
+	if (!folderStat.isDirectory()) {
+		return {
+			valid: false,
+			reason: 'not-directory',
+			message: `The configured "inputFolder" is not a directory: ${inputFolder}. `
+				+ 'Update "inputFolder" in launch.json to point to the folder containing your built application.'
+		};
+	}
+
+	const exesInFolder = await glob('*.exe', { cwd: resolvedFolder, absolute: true, nocase: true });
+	if (exesInFolder.length === 0) {
+		return {
+			valid: false,
+			reason: 'no-exe',
+			message: `The configured "inputFolder" does not contain any .exe files: ${inputFolder}. `
+				+ 'Build your project first, or update "inputFolder" in launch.json to point to the folder containing your built application.'
+		};
+	}
+
+	return { valid: true };
 }
 
 /**
