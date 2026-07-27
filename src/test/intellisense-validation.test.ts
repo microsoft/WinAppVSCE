@@ -438,3 +438,186 @@ describe('regression tests', () => {
         assert.ok(nameDiag.endCol > nameDiag.col, 'Diagnostic should have a non-zero width');
     });
 });
+
+// ============================================================================
+// Bug regression tests (#124, #125, #126)
+// ============================================================================
+
+describe('bug #126: unclosed element shows parse error', () => {
+    it('reports a parse error for an unclosed element tag', () => {
+        const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="${FOUNDATION_NS}">
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName`;
+        const diagnostics = validateManifestText(model, xml);
+        assert.ok(diagnostics.length > 0, 'Should report at least one diagnostic');
+        assert.ok(diagnostics.some(d => d.severity === 'error'),
+            'At least one diagnostic should be severity "error"');
+    });
+
+    it('reports a parse error for a missing closing tag', () => {
+        const xml = makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>`);
+        // Properties is never closed (Package closing tag will mismatch)
+        const brokenXml = xml.replace('</Package>', '');
+        const diagnostics = validateManifestText(model, brokenXml);
+        assert.ok(diagnostics.some(d => d.severity === 'error'),
+            'Should report an error for unclosed element');
+    });
+
+    it('still validates correctly when XML is well-formed', () => {
+        const xml = makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Pub</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>`);
+        const diagnostics = validateManifestText(model, xml);
+        const errors = diagnostics.filter(d => d.severity === 'error');
+        assert.equal(errors.length, 0, 'Well-formed XML should have no parse errors');
+    });
+});
+
+describe('bug #125: missing required child elements produce diagnostics', () => {
+    it('flags missing DisplayName in Properties', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>`));
+
+        assert.ok(diagnostics.some(d => d.message.includes("Missing required element <DisplayName>")),
+            'Should flag missing DisplayName');
+    });
+
+    it('flags missing Identity in Package', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>`));
+
+        assert.ok(diagnostics.some(d => d.message.includes("Missing required element <Identity>")),
+            'Should flag missing Identity');
+    });
+
+    it('flags missing Dependencies in Package', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>`));
+
+        assert.ok(diagnostics.some(d => d.message.includes("Missing required element <Dependencies>")),
+            'Should flag missing Dependencies');
+    });
+
+    it('flags missing TargetDeviceFamily in Dependencies', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+  </Dependencies>`));
+
+        assert.ok(diagnostics.some(d => d.message.includes("Missing required element <TargetDeviceFamily>")),
+            'Should flag missing TargetDeviceFamily');
+    });
+
+    it('does not flag optional children as missing', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>`));
+
+        // Applications, Capabilities, Extensions are all optional
+        assert.ok(!diagnostics.some(d => d.message.includes("Missing required element <Applications>")),
+            'Should not flag optional Applications');
+        assert.ok(!diagnostics.some(d => d.message.includes("Missing required element <Capabilities>")),
+            'Should not flag optional Capabilities');
+        assert.ok(!diagnostics.some(d => d.message.includes("Missing required element <Extensions>")),
+            'Should not flag optional Extensions');
+    });
+
+    it('does not flag choice group children as required (PackageDependency in Dependencies)', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>`));
+
+        assert.ok(!diagnostics.some(d => d.message.includes("Missing required element <PackageDependency>")),
+            'Should not flag PackageDependency (from xs:choice minOccurs=0)');
+        assert.ok(!diagnostics.some(d => d.message.includes("Missing required element <HostRuntimeDependency>")),
+            'Should not flag HostRuntimeDependency (from xs:choice minOccurs=0)');
+    });
+});
+
+describe('bug #124: elements from unbundled namespaces are not flagged as unknown', () => {
+    it('does not flag rescap:Capability as unknown', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+  <Capabilities>
+    <rescap:Capability Name="broadFileSystemAccess" />
+  </Capabilities>`, ` xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"`));
+
+        assert.ok(!diagnostics.some(d => d.message.includes("Unknown element 'Capability'")),
+            'rescap:Capability should not be flagged as unknown');
+    });
+
+    it('still flags unknown elements in bundled namespaces', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+  <FakeElement />`), 'warning', { strictChildPlacement: true });
+
+        assert.ok(diagnostics.some(d => d.message.includes("Unknown element 'FakeElement'")),
+            'Unknown elements in bundled namespaces should still be flagged');
+    });
+});
