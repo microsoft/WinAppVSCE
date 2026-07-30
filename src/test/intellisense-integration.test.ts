@@ -499,6 +499,9 @@ describe('manifest diagnostics logic', () => {
     <PublisherDisplayName>Test Publisher</PublisherDisplayName>
     <Logo>Assets\\StoreLogo.png</Logo>
   </Properties>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
   </Dependencies>`));

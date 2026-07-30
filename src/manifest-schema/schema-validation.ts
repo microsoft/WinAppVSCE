@@ -9,6 +9,7 @@
 
 import type { Element } from '@xmldom/xmldom';
 import { SchemaElement, SchemaModel, SchemaAttribute } from './schema-model';
+import { validateSemanticRules } from './semantic-validation';
 import { parseManifestXml } from './xml-parser';
 
 /** A diagnostic produced by schema validation. */
@@ -58,6 +59,7 @@ export function validateManifestText(
     }
 
     validateElement(schema, doc.documentElement, diagnostics, level, lines, options, 0);
+    diagnostics.push(...validateSemanticRules(doc, lines));
     return diagnostics;
 }
 
