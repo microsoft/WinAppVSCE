@@ -1097,10 +1097,18 @@ describe('Applications Validation', () => {
     });
 
     // --- executable ---
-    it('should error when executable is empty', () => {
+    it('should error when executable is empty for non-full-trust app', () => {
         const m = makeValidManifest();
         m.applications[0].executable = '';
+        m.applications[0].entryPoint = 'App.App'; // non-full-trust entry point
         expectError(validateManifest(m, schema), 'applications.0.executable');
+    });
+
+    it('should not error when executable is empty for full-trust app', () => {
+        const m = makeValidManifest();
+        m.applications[0].executable = '';
+        m.applications[0].entryPoint = 'Windows.FullTrustApplication';
+        expectNoError(validateManifest(m, schema), 'applications.0.executable');
     });
 
     it('should error when executable does not end in .exe', () => {
@@ -1122,7 +1130,7 @@ describe('Applications Validation', () => {
     });
 
     // --- entryPoint ---
-    it('should error when entryPoint is empty', () => {
+    it('should error when entryPoint is empty and executable is set', () => {
         const m = makeValidManifest();
         m.applications[0].entryPoint = '';
         expectError(validateManifest(m, schema), 'applications.0.entryPoint');

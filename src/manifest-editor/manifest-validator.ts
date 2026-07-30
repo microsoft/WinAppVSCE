@@ -10,6 +10,12 @@
 import { ManifestData, ValidationError } from './manifest-types';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { validateValueAgainstType, matchesSchemaPattern, isValidSchemaColor } from '../manifest-schema/schema-helpers';
+import {
+    applicationRequiresExecutable,
+    executableRequiresEntryPoint,
+    hasStartPageExecutableConflict,
+    hasStartPageEntryPointConflict,
+} from '../manifest-schema/semantic-validation';
 
 // BCP-47: language[-script][-region][-variant] (simplified for common MSIX usage)
 // Also accepts private-use tags like "x-generate" used by MSIX tooling
@@ -352,14 +358,24 @@ function validateApplications(data: ManifestData, errors: ValidationError[], sch
             }
         }
 
-        if (!app.executable) {
-            errors.push({ field: `${prefix}.executable`, message: 'Executable path is required.', severity: 'error' });
-        } else if (!app.executable.toLowerCase().endsWith('.exe')) {
+        // Use shared predicates for Executable/EntryPoint/StartPage checks
+        // so the visual editor uses the same nuanced rules as the XML IntelliSense.
+        if (hasStartPageExecutableConflict(null, app.executable)) {
+            // Editor doesn't currently expose StartPage, but guard for future use
+        }
+
+        if (applicationRequiresExecutable(app.entryPoint || null, null, null)) {
+            if (!app.executable) {
+                errors.push({ field: `${prefix}.executable`, message: 'Executable path is required.', severity: 'error' });
+            }
+        }
+
+        if (app.executable && !app.executable.toLowerCase().endsWith('.exe')) {
             errors.push({ field: `${prefix}.executable`, message: 'Executable must be an .exe file.', severity: 'error' });
         }
 
-        if (!app.entryPoint) {
-            errors.push({ field: `${prefix}.entryPoint`, message: 'Entry point is required.', severity: 'error' });
+        if (app.executable && !app.entryPoint && executableRequiresEntryPoint(app.runtimeBehavior || null)) {
+            errors.push({ field: `${prefix}.entryPoint`, message: 'Entry point is required when Executable is specified.', severity: 'error' });
         }
 
         if (!app.visualElements.displayName) {

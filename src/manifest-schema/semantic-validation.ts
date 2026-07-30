@@ -1,7 +1,10 @@
 import type { Document, Element } from '@xmldom/xmldom';
 import type { ManifestDiagnostic } from './schema-validation';
 
-const EXTENSION_CATEGORY_CHILD_MAP: Record<string, string> = {
+// ── Shared rule predicates (usable by both XML validator and form editor) ──
+
+/** Maps known extension category values to their expected child element name. */
+export const EXTENSION_CATEGORY_CHILD_MAP: Record<string, string> = {
     'windows.protocol': 'Protocol',
     'windows.fileTypeAssociation': 'FileTypeAssociation',
     'windows.shareTarget': 'ShareTarget',
@@ -28,6 +31,62 @@ const EXTENSION_CATEGORY_CHILD_MAP: Record<string, string> = {
     'windows.comInterface': 'ComInterface',
     'windows.comServer': 'ComServer',
 };
+
+// ── Shared application-level rule predicates ──────────────────────────────
+// Both the XML-based semantic validator and the form-based manifest editor
+// validator call these so the rules are defined in exactly one place.
+
+/** Entry points that indicate a full-trust or partial-trust application. */
+const FULL_TRUST_ENTRY_POINTS = new Set([
+    'Windows.FullTrustApplication',
+    'Windows.PartialTrustApplication',
+]);
+
+/**
+ * Whether an Application element requires an Executable attribute.
+ * Full-trust, partial-trust, and hosted apps (with HostId) are exempt.
+ */
+export function applicationRequiresExecutable(
+    entryPoint: string | null | undefined,
+    hostId: string | null | undefined,
+    startPage: string | null | undefined,
+): boolean {
+    if (startPage) { return false; } // web apps use StartPage instead
+    if (entryPoint && FULL_TRUST_ENTRY_POINTS.has(entryPoint)) { return false; }
+    if (hostId) { return false; }
+    return true;
+}
+
+/**
+ * Whether an Application with Executable also needs an EntryPoint.
+ * Only required when runtimeBehavior is "windowsApp" (the default).
+ */
+export function executableRequiresEntryPoint(
+    runtimeBehavior: string | null | undefined,
+): boolean {
+    const effective = (runtimeBehavior ?? 'windowsApp').trim();
+    return effective === 'windowsApp';
+}
+
+/**
+ * Whether StartPage and Executable conflict.
+ */
+export function hasStartPageExecutableConflict(
+    startPage: string | null | undefined,
+    executable: string | null | undefined,
+): boolean {
+    return !!(startPage && executable);
+}
+
+/**
+ * Whether StartPage and EntryPoint conflict.
+ */
+export function hasStartPageEntryPointConflict(
+    startPage: string | null | undefined,
+    entryPoint: string | null | undefined,
+): boolean {
+    return !!(startPage && entryPoint);
+}
 
 interface AttributeMatch {
     name: string;
@@ -69,9 +128,10 @@ function validateApplicationAttributes(
         const startPage = getAttributeAnyNS(application, 'StartPage');
         const executable = getAttributeAnyNS(application, 'Executable');
         const entryPoint = getAttributeAnyNS(application, 'EntryPoint');
-        const runtimeBehavior = (getAttributeAnyNS(application, 'RuntimeBehavior') ?? 'windowsApp').trim();
+        const runtimeBehavior = getAttributeAnyNS(application, 'RuntimeBehavior');
+        const hostId = getAttributeAnyNS(application, 'HostId');
 
-        if (startPage && executable) {
+        if (hasStartPageExecutableConflict(startPage, executable)) {
             pushAttributeDiagnostic(
                 diagnostics,
                 application,
@@ -81,7 +141,7 @@ function validateApplicationAttributes(
             );
         }
 
-        if (startPage && entryPoint) {
+        if (hasStartPageEntryPointConflict(startPage, entryPoint)) {
             pushAttributeDiagnostic(
                 diagnostics,
                 application,
@@ -91,7 +151,7 @@ function validateApplicationAttributes(
             );
         }
 
-        if (executable && !entryPoint && runtimeBehavior === 'windowsApp') {
+        if (executable && !entryPoint && executableRequiresEntryPoint(runtimeBehavior)) {
             pushAttributeDiagnostic(
                 diagnostics,
                 application,
@@ -101,12 +161,7 @@ function validateApplicationAttributes(
             );
         }
 
-        // Full-trust / partial-trust apps (e.g., EntryPoint="Windows.FullTrustApplication")
-        // and hosted apps (with HostId) don't need Executable or StartPage.
-        const hostId = getAttributeAnyNS(application, 'HostId');
-        const isFullTrustOrPartialTrust = entryPoint === 'Windows.FullTrustApplication' ||
-            entryPoint === 'Windows.PartialTrustApplication';
-        if (!executable && !startPage && !isFullTrustOrPartialTrust && !hostId) {
+        if (!executable && !startPage && applicationRequiresExecutable(entryPoint, hostId, startPage)) {
             pushElementDiagnostic(
                 diagnostics,
                 application,
