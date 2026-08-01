@@ -445,6 +445,9 @@ function validateChildPlacement(
 }
 
 function isAllowedChild(schema: SchemaModel, schemaDef: SchemaElement, childName: string, childNamespace: string): boolean {
+    if (schemaDef.allowsAnyChildren) {
+        return true;
+    }
     return schemaDef.children.some(child => {
         if (child.name === childName && child.namespace === childNamespace) {
             return true;

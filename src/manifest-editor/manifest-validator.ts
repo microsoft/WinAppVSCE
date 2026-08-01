@@ -11,10 +11,7 @@ import { ManifestData, ValidationError } from './manifest-types';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { validateValueAgainstType, matchesSchemaPattern, isValidSchemaColor } from '../manifest-schema/schema-helpers';
 import {
-    applicationRequiresExecutable,
     executableRequiresEntryPoint,
-    hasStartPageExecutableConflict,
-    hasStartPageEntryPointConflict,
 } from '../manifest-schema/semantic-validation';
 
 // BCP-47: language[-script][-region][-variant] (simplified for common MSIX usage)
@@ -355,18 +352,6 @@ function validateApplications(data: ManifestData, errors: ValidationError[], sch
             const reservedField = idFields.find(f => RESERVED_NAMES.has(f.toUpperCase()));
             if (reservedField) {
                 errors.push({ field: `${prefix}.id`, message: `Application Id cannot use reserved name "${reservedField}" as a field value.`, severity: 'error' });
-            }
-        }
-
-        // Use shared predicates for Executable/EntryPoint/StartPage checks
-        // so the visual editor uses the same nuanced rules as the XML IntelliSense.
-        if (hasStartPageExecutableConflict(null, app.executable)) {
-            // Editor doesn't currently expose StartPage, but guard for future use
-        }
-
-        if (applicationRequiresExecutable(app.entryPoint || null, null, null)) {
-            if (!app.executable) {
-                errors.push({ field: `${prefix}.executable`, message: 'Executable path is required.', severity: 'error' });
             }
         }
 

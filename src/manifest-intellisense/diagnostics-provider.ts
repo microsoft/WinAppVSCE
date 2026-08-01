@@ -139,18 +139,26 @@ export class ManifestDiagnosticsProvider {
             : diagnostics;
 
         return filteredDiagnostics.map(d => {
-            const message = d.schemaUri
-                ? `${d.message}\n\n${d.schemaUri}`
-                : d.message;
-            return new vscode.Diagnostic(
-                new vscode.Range(d.line, d.col, d.line, d.endCol),
-                message,
+            const range = new vscode.Range(d.line, d.col, d.line, d.endCol);
+            const diagnostic = new vscode.Diagnostic(
+                range,
+                d.message,
                 d.severity === 'error'
                     ? vscode.DiagnosticSeverity.Error
                     : d.severity === 'warning'
                         ? vscode.DiagnosticSeverity.Warning
                         : vscode.DiagnosticSeverity.Hint
             );
+            diagnostic.source = 'Manifest Schema';
+            if (d.schemaUri) {
+                diagnostic.relatedInformation = [
+                    new vscode.DiagnosticRelatedInformation(
+                        new vscode.Location(document.uri, range),
+                        `Schema namespace: ${d.schemaUri}`
+                    ),
+                ];
+            }
+            return diagnostic;
         });
     }
 }

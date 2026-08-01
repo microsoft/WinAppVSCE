@@ -1097,11 +1097,11 @@ describe('Applications Validation', () => {
     });
 
     // --- executable ---
-    it('should error when executable is empty for non-full-trust app', () => {
+    it('should not require executable when it is empty', () => {
         const m = makeValidManifest();
         m.applications[0].executable = '';
         m.applications[0].entryPoint = 'App.App'; // non-full-trust entry point
-        expectError(validateManifest(m, schema), 'applications.0.executable');
+        expectNoError(validateManifest(m, schema), 'applications.0.executable');
     });
 
     it('should not error when executable is empty for full-trust app', () => {

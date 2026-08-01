@@ -34,6 +34,11 @@ interface SchemaParseContext {
     documentFiles: Map<Document, string>;
 }
 
+interface ParticleContainer {
+    element: Element;
+    inheritedMinOccurs: number;
+}
+
 /**
  * Load and parse all XSD files from the schemas/ directory.
  * Returns a populated SchemaModel.
@@ -334,18 +339,19 @@ function parseChildElements(
     doc: Document,
     filePath: string
 ): void {
-    for (const container of collectParticleContainers(scope)) {
-        // If the container is an xs:choice with minOccurs="0", all children inside
-        // are effectively optional — cap their minOccurs at 0.
+    for (const particle of collectParticleContainers(scope)) {
+        const container = particle.element;
         const containerLocalName = getLocalName(container);
-        const containerMinOccurs = parseInt(container.getAttribute('minOccurs') || '1', 10);
-        const isOptionalChoice = containerLocalName === 'choice' && containerMinOccurs === 0;
+        if (containerLocalName === 'any') {
+            schemaElem.allowsAnyChildren = true;
+            continue;
+        }
 
         const childElements = getDirectChildrenByLocalName(container, 'element');
         for (const childElem of childElements) {
             const childRef = parseChildRef(childElem, targetNs, doc);
             if (childRef) {
-                if (isOptionalChoice) {
+                if (particle.inheritedMinOccurs === 0) {
                     childRef.minOccurs = 0;
                 }
                 mergeChild(schemaElem.children, childRef);
@@ -665,6 +671,7 @@ function resolveTypeReferences(model: SchemaModel): void {
                 const mergedChildren = cloneChildRefs(baseElem.children);
                 mergeChildren(mergedChildren, localChildren);
                 elem.children = mergedChildren;
+                elem.allowsAnyChildren = elem.allowsAnyChildren || baseElem.allowsAnyChildren;
 
                 const localAttributes = cloneAttributes(elem.attributes);
                 const mergedAttributes = cloneAttributes(baseElem.attributes);
@@ -685,6 +692,7 @@ function resolveTypeReferences(model: SchemaModel): void {
             if (typeMatch) {
                 const resolvedType = resolveElementByKey(typeMatch.key) || typeMatch.element;
                 elem.children = cloneChildRefs(resolvedType.children);
+                elem.allowsAnyChildren = resolvedType.allowsAnyChildren;
                 elem.attributes = cloneAttributes(resolvedType.attributes);
                 if (!elem.documentation && resolvedType.documentation) {
                     elem.documentation = resolvedType.documentation;
@@ -720,6 +728,7 @@ function resolveTypeReferences(model: SchemaModel): void {
                 abstract: resolvedType.abstract,
                 documentation: resolvedType.documentation,
                 children: cloneChildRefs(resolvedType.children),
+                allowsAnyChildren: resolvedType.allowsAnyChildren,
                 attributes: cloneAttributes(resolvedType.attributes),
                 typeName: child.typeName,
                 simpleTypeName: resolvedType.simpleTypeName,
@@ -857,18 +866,22 @@ function getDirectChildrenByLocalName(parent: Element, localName: string): Eleme
     return getDirectChildElements(parent).filter(child => getLocalName(child) === localName);
 }
 
-function collectParticleContainers(scope: Element): Element[] {
-    const containers: Element[] = [];
+function collectParticleContainers(scope: Element): ParticleContainer[] {
+    const containers: ParticleContainer[] = [];
 
-    const visit = (node: Element): void => {
+    const visit = (node: Element, inheritedMinOccurs = 1): void => {
         for (const child of getDirectChildElements(node)) {
             const localName = getLocalName(child);
             if (localName === 'element') {
                 continue;
             }
-            if (localName === 'all' || localName === 'sequence' || localName === 'choice') {
-                containers.push(child);
-                visit(child);
+            if (localName === 'all' || localName === 'sequence' || localName === 'choice' || localName === 'any') {
+                const childMinOccurs = parseInt(child.getAttribute('minOccurs') || '1', 10);
+                const effectiveMinOccurs = inheritedMinOccurs === 0 || childMinOccurs === 0 ? 0 : 1;
+                containers.push({ element: child, inheritedMinOccurs: effectiveMinOccurs });
+                if (localName !== 'any') {
+                    visit(child, effectiveMinOccurs);
+                }
             }
         }
     };

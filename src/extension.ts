@@ -1000,11 +1000,11 @@ export function activate(context: vscode.ExtensionContext) {
 			if (context.globalState.get<boolean>(dismissedKey)) { return; }
 
 			vscode.window.showInformationMessage(
-				'This file can be opened with the WinApp visual manifest editor for a richer editing experience.',
-				'Open with AppxManifest Editor',
+				'This file can be opened with the Manifest Editor for a richer editing experience.',
+				'Open Manifest Editor',
 				"Don't Show Again",
 			).then(choice => {
-				if (choice === 'Open with AppxManifest Editor') {
+				if (choice === 'Open Manifest Editor') {
 					vscode.commands.executeCommand('vscode.openWith', editor.document.uri, ManifestEditorProvider.viewType);
 				} else if (choice === "Don't Show Again") {
 					context.globalState.update(dismissedKey, true);
@@ -1017,7 +1017,7 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('winapp.openManifestEditor', async () => {
 			const editor = vscode.window.activeTextEditor;
 			if (!editor || editor.document.uri.scheme !== 'file' || !isManifestPath(editor.document.uri.fsPath)) {
-				vscode.window.showWarningMessage('Open an AppxManifest.xml file to use the WinApp manifest editor.');
+				vscode.window.showWarningMessage('Open an .appxmanifest or AppxManifest.xml file to use the Manifest Editor.');
 				return;
 			}
 

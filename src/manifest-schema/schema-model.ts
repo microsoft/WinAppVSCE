@@ -14,6 +14,8 @@ export interface SchemaElement {
     documentation?: string;
     /** Child elements allowed inside this element. */
     children: SchemaChildRef[];
+    /** True when this element allows wildcard xs:any children. */
+    allowsAnyChildren?: boolean;
     /** Attributes defined on this element. */
     attributes: SchemaAttribute[];
     /** The complex type name if this element references a named type. */
