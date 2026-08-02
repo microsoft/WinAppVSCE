@@ -83,6 +83,45 @@ function completeElementOrAttributes(
     // No partial or partial doesn't match an element — show child elements
     if (parentName) {
         items.push(...getChildCompletions(schema, parentName, parentPrefix, docText, docPrefixes));
+    } else {
+        items.push(...getRootElementCompletions(schema, partial, docPrefixes));
+    }
+
+    return items;
+}
+
+function getRootElementCompletions(
+    schema: SchemaModel,
+    partial: string,
+    docPrefixes: Map<string, string>
+): ManifestCompletionSuggestion[] {
+    const normalizedPartial = partial.trim().toLowerCase();
+    const items: ManifestCompletionSuggestion[] = [];
+    const seen = new Set<string>();
+
+    for (const [, element] of schema.elements) {
+        if (element.abstract || element.name !== 'Package') {
+            continue;
+        }
+
+        const displayName = getInsertableElementName(element.name, element.namespace, docPrefixes)
+            || (element.namespace === MANIFEST_NAMESPACES[''] ? element.name : undefined);
+        if (!displayName || seen.has(displayName)) {
+            continue;
+        }
+        if (normalizedPartial && !displayName.toLowerCase().startsWith(normalizedPartial)) {
+            continue;
+        }
+
+        seen.add(displayName);
+        items.push({
+            kind: 'element',
+            label: displayName,
+            insertText: buildElementSnippet(displayName, element),
+            detail: element.namespace ? `(${URI_TO_PREFIX.get(element.namespace) || element.namespace})` : undefined,
+            documentation: element.documentation,
+            sortText: `0_${element.name}`,
+        });
     }
 
     return items;

@@ -585,6 +585,60 @@ describe('bug #125: missing required child elements produce diagnostics', () => 
         assert.ok(!diagnostics.some(d => d.message.includes("Missing required element <HostRuntimeDependency>")),
             'Should not flag HostRuntimeDependency (from xs:choice minOccurs=0)');
     });
+
+    it('accepts any satisfied required xs:choice branch for package Extensions', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+  <Extensions>
+    <Extension Category="windows.certificates">
+      <Certificates />
+    </Extension>
+  </Extensions>`));
+
+        assert.ok(!diagnostics.some(d => d.message.includes('InProcessServer')));
+        assert.ok(!diagnostics.some(d => d.message.includes('OutOfProcessServer')));
+        assert.ok(!diagnostics.some(d => d.message.includes('ProxyStub')));
+        assert.ok(!diagnostics.some(d => d.message.includes('GameExplorer')));
+    });
+
+    it('does not let a child from the wrong namespace satisfy a required element', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+  <Identity Name="Test" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>Test</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>logo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+  <Applications>
+    <Application Id="App">
+      <fake:VisualElements DisplayName="App" Description="App" BackgroundColor="transparent" Square150x150Logo="logo.png" Square44x44Logo="small.png" />
+    </Application>
+  </Applications>`, ` xmlns:fake="https://example.com/fake"`));
+
+        assert.ok(diagnostics.some(d => d.message.includes('Missing required element <VisualElementsChoice>')),
+            'Expected required VisualElementsChoice diagnostic when only a wrong-namespace element is present');
+    });
+
+    it('stops recursive validation before deeply nested input overflows the stack', () => {
+        const nested = '<Wrapper>'.repeat(130) + '</Wrapper>'.repeat(130);
+        const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="${FOUNDATION_NS}">
+${nested}
+</Package>`;
+
+        assert.doesNotThrow(() => validateManifestText(model, xml));
+    });
 });
 
 describe('bug #124: elements from unbundled namespaces are not flagged as unknown', () => {

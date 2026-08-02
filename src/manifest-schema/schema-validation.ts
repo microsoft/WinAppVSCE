@@ -8,9 +8,11 @@
  */
 
 import type { Element } from '@xmldom/xmldom';
-import { SchemaElement, SchemaModel, SchemaAttribute } from './schema-model';
+import { SchemaElement, SchemaModel, SchemaAttribute, SchemaChildRef } from './schema-model';
 import { validateSemanticRules } from './semantic-validation';
 import { parseManifestXml } from './xml-parser';
+
+const MAX_VALIDATION_DEPTH = 100;
 
 /** A diagnostic produced by schema validation. */
 export interface ManifestDiagnostic {
@@ -76,6 +78,10 @@ function validateElement(
     options: ManifestValidationOptions,
     depth: number
 ): void {
+    if (depth > MAX_VALIDATION_DEPTH) {
+        return;
+    }
+
     const localName = element.localName || element.nodeName.split(':').pop() || '';
     const ns = element.namespaceURI || '';
 
@@ -231,58 +237,54 @@ function validateRequiredChildren(
     severity: 'warning' | 'error',
     lines: string[]
 ): void {
-    // Build a map of child name → minimum minOccurs across all entries.
-    // When the same child name appears under different namespaces (from choice groups
-    // in different XSD versions), treat the minimum as the effective requirement.
-    const effectiveMinOccurs = new Map<string, number>();
-    for (const childRef of schemaDef.children) {
-        const existing = effectiveMinOccurs.get(childRef.name);
-        if (existing === undefined) {
-            effectiveMinOccurs.set(childRef.name, childRef.minOccurs);
-        } else {
-            effectiveMinOccurs.set(childRef.name, Math.min(existing, childRef.minOccurs));
+    const directChildren: Element[] = [];
+    for (let i = 0; i < element.childNodes.length; i++) {
+        const child = element.childNodes[i];
+        if (child.nodeType === 1) {
+            directChildren.push(child as Element);
         }
     }
 
-    // Only validate children that are unambiguously required
+    const choiceGroups = new Map<string, SchemaChildRef[]>();
+    for (const childRef of schemaDef.children) {
+        if (childRef.groupKind === 'choice' && childRef.groupId) {
+            const existing = choiceGroups.get(childRef.groupId) || [];
+            existing.push(childRef);
+            choiceGroups.set(childRef.groupId, existing);
+        }
+    }
+
     const checked = new Set<string>();
     for (const childRef of schemaDef.children) {
-        if (checked.has(childRef.name)) { continue; }
-        checked.add(childRef.name);
-
-        const minOccurs = effectiveMinOccurs.get(childRef.name) ?? 0;
-        if (minOccurs <= 0) { continue; }
-
-        // Check if at least one instance of this required child exists
-        let found = false;
-        const children = element.childNodes;
-        for (let i = 0; i < children.length; i++) {
-            const child = children[i];
-            if (child.nodeType !== 1) { continue; }
-            const childEl = child as Element;
-            const localName = childEl.localName || childEl.nodeName.split(':').pop() || '';
-            if (localName === childRef.name) {
-                found = true;
-                break;
-            }
-            // Also check substitution group members
-            const subs = schema.substitutionGroups.get(childRef.name);
-            if (subs?.some(s => s.name === localName)) {
-                found = true;
-                break;
-            }
+        if (childRef.groupKind === 'choice' && childRef.groupId) {
+            continue;
         }
 
-        if (!found) {
-            const range = getElementRange(element, lines);
-            const parentName = element.localName || element.nodeName.split(':').pop() || '';
-            diagnostics.push({
-                message: `Missing required element <${childRef.name}> in <${parentName}>`,
-                severity: 'error',
-                schemaUri: childRef.namespace || undefined,
-                ...range,
-            });
+        const requirementKey = `${childRef.namespace}|${childRef.name}|${childRef.groupId ?? ''}`;
+        if (checked.has(requirementKey)) { continue; }
+        checked.add(requirementKey);
+
+        if (childRef.minOccurs <= 0) { continue; }
+        if (hasMatchingRequiredChild(schema, directChildren, childRef)) { continue; }
+
+        pushMissingRequiredChildDiagnostic(element, childRef, diagnostics, lines);
+    }
+
+    for (const group of choiceGroups.values()) {
+        const groupMinOccurs = Math.max(...group.map(childRef => childRef.groupMinOccurs ?? childRef.minOccurs));
+        if (groupMinOccurs <= 0) { continue; }
+        if (group.some(childRef => hasMatchingRequiredChild(schema, directChildren, childRef))) {
+            continue;
         }
+
+        const range = getElementRange(element, lines);
+        const parentName = element.localName || element.nodeName.split(':').pop() || '';
+        diagnostics.push({
+            message: `Missing one of required elements ${group.map(childRef => `<${childRef.name}>`).join(', ')} in <${parentName}>`,
+            severity: 'error',
+            schemaUri: group.find(childRef => childRef.namespace)?.namespace || undefined,
+            ...range,
+        });
     }
 }
 
@@ -455,6 +457,42 @@ function isAllowedChild(schema: SchemaModel, schemaDef: SchemaElement, childName
         return (schema.substitutionGroups.get(child.name) || []).some(substitution =>
             substitution.name === childName && substitution.namespace === childNamespace
         );
+    });
+}
+
+function hasMatchingRequiredChild(
+    schema: SchemaModel,
+    children: Element[],
+    childRef: SchemaChildRef
+): boolean {
+    return children.some(child => matchesChildRef(schema, child, childRef));
+}
+
+function matchesChildRef(schema: SchemaModel, childElement: Element, childRef: SchemaChildRef): boolean {
+    const childLocalName = childElement.localName || childElement.nodeName.split(':').pop() || '';
+    const childNamespace = childElement.namespaceURI || '';
+    if (childLocalName === childRef.name && childNamespace === childRef.namespace) {
+        return true;
+    }
+
+    return (schema.substitutionGroups.get(childRef.name) || []).some(substitution =>
+        substitution.name === childLocalName && substitution.namespace === childNamespace
+    );
+}
+
+function pushMissingRequiredChildDiagnostic(
+    element: Element,
+    childRef: SchemaChildRef,
+    diagnostics: ManifestDiagnostic[],
+    lines: string[]
+): void {
+    const range = getElementRange(element, lines);
+    const parentName = element.localName || element.nodeName.split(':').pop() || '';
+    diagnostics.push({
+        message: `Missing required element <${childRef.name}> in <${parentName}>`,
+        severity: 'error',
+        schemaUri: childRef.namespace || undefined,
+        ...range,
     });
 }
 

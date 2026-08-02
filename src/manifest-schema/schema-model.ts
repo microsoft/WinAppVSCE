@@ -32,6 +32,8 @@ export interface SchemaElement {
     sourceLine?: number;
 }
 
+export type SchemaChildGroupKind = 'all' | 'sequence' | 'choice';
+
 /** Reference to a child element within a parent. */
 export interface SchemaChildRef {
     /** Local name of the child element. */
@@ -44,6 +46,12 @@ export interface SchemaChildRef {
     maxOccurs: number;
     /** Named complex type referenced by the child element, if any. */
     typeName?: string;
+    /** Compositor that directly contains this child, when known. */
+    groupKind?: SchemaChildGroupKind;
+    /** Stable identifier for the compositor group that contains this child. */
+    groupId?: string;
+    /** Effective minOccurs for the containing compositor group. */
+    groupMinOccurs?: number;
 }
 
 /** Represents an attribute on an element. */

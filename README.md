@@ -35,7 +35,7 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Generate Certificate** | Create a development certificate for signing, with an option to also install (trust) it. Installing prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Install Certificate** | Install (trust) an existing `.pfx` or `.cer` certificate in the machine store. Prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Certificate Info** | Display certificate details (subject, thumbprint, expiry) to verify a certificate matches your manifest. |
-| **WinApp: Open Manifest Editor** | Switch from manifest text editor to the visual editor |
+| **WinApp: Open Manifest Editor** | Switch from manifest text editor to the Manifest Editor |
 | **WinApp: Sign Package** | Sign an MSIX package or executable with a certificate. Searches the workspace for MSIX/APPX artifacts and certificates, presenting them in a QuickPick sorted by newest first; a **Browse…** option falls back to a native file dialog. |
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
@@ -166,9 +166,9 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 | `args` | string | | Command-line arguments to pass to the application. |
 | `outputAppxDirectory` | string | | Output directory for the loose-layout package. Defaults to an `AppX` folder inside the input folder. |
 
-### AppxManifest Visual Editor
+### Manifest Editor
 
-The extension includes a **visual editor** for `AppxManifest.xml` and `.appxmanifest` files. Instead of hand-editing XML, you get a form-based UI organized into tabs:
+The extension includes a **Manifest Editor** for `AppxManifest.xml` and `.appxmanifest` files. Instead of hand-editing XML, you get a form-based UI organized into tabs:
 
 | Tab | What you can edit |
 |-----|-------------------|

@@ -27,6 +27,7 @@ describe('loadSchemaModel', () => {
     const FOUNDATION_NS = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10';
     const UAP_NS = 'http://schemas.microsoft.com/appx/manifest/uap/windows10';
     const COM_NS = 'http://schemas.microsoft.com/appx/manifest/com/windows10';
+    const APPX_NS = MANIFEST_NAMESPACES['m'];
 
     it('loads without throwing', () => {
         model = loadSchemaModel(SCHEMAS_DIR);
@@ -195,6 +196,21 @@ describe('loadSchemaModel', () => {
         assert.ok(exeServerClass.attributes.some(attribute => attribute.name === 'Id'));
         assert.ok(exeServerClass.attributes.some(attribute => attribute.name === 'DisplayName'));
         assert.ok(exeServerClass.children.some(child => child.name === 'DefaultIcon'));
+    });
+
+    it('preserves choice group metadata for package Extension children', () => {
+        model = loadSchemaModel(SCHEMAS_DIR);
+        const extension = model.elements.get(`${APPX_NS}|Extension`);
+        assert.ok(extension, 'Extension element should exist');
+
+        const choiceChildren = extension.children.filter(child => child.groupKind === 'choice');
+        assert.ok(choiceChildren.length >= 5, 'Extension should include its choice-group children');
+        assert.ok(choiceChildren.every(child => child.groupId), 'Choice children should include a group id');
+        assert.ok(choiceChildren.every(child => child.groupMinOccurs === 1), 'Choice children should preserve required choice minOccurs');
+        assert.deepEqual(
+            choiceChildren.map(child => child.name).sort(),
+            ['Certificates', 'GameExplorer', 'InProcessServer', 'OutOfProcessServer', 'ProxyStub'].sort()
+        );
     });
 
     it('tracks sourceFile and sourceLine for elements', () => {

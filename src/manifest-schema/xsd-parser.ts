@@ -12,6 +12,7 @@ import {
     SchemaElement,
     SchemaAttribute,
     SchemaChildRef,
+    SchemaChildGroupKind,
     SchemaEnumType,
     SchemaPatternType,
     URI_TO_PREFIX,
@@ -37,6 +38,7 @@ interface SchemaParseContext {
 interface ParticleContainer {
     element: Element;
     inheritedMinOccurs: number;
+    order: number;
 }
 
 /**
@@ -347,10 +349,16 @@ function parseChildElements(
             continue;
         }
 
+        const groupKind = containerLocalName as SchemaChildGroupKind;
+        const groupId = `${filePath}:${getNodeSourceLine(container) ?? particle.order}:${particle.order}:${groupKind}`;
+
         const childElements = getDirectChildrenByLocalName(container, 'element');
         for (const childElem of childElements) {
             const childRef = parseChildRef(childElem, targetNs, doc);
             if (childRef) {
+                childRef.groupKind = groupKind;
+                childRef.groupId = groupId;
+                childRef.groupMinOccurs = particle.inheritedMinOccurs;
                 if (particle.inheritedMinOccurs === 0) {
                     childRef.minOccurs = 0;
                 }
@@ -868,6 +876,7 @@ function getDirectChildrenByLocalName(parent: Element, localName: string): Eleme
 
 function collectParticleContainers(scope: Element): ParticleContainer[] {
     const containers: ParticleContainer[] = [];
+    let order = 0;
 
     const visit = (node: Element, inheritedMinOccurs = 1): void => {
         for (const child of getDirectChildElements(node)) {
@@ -878,7 +887,7 @@ function collectParticleContainers(scope: Element): ParticleContainer[] {
             if (localName === 'all' || localName === 'sequence' || localName === 'choice' || localName === 'any') {
                 const childMinOccurs = parseInt(child.getAttribute('minOccurs') || '1', 10);
                 const effectiveMinOccurs = inheritedMinOccurs === 0 || childMinOccurs === 0 ? 0 : 1;
-                containers.push({ element: child, inheritedMinOccurs: effectiveMinOccurs });
+                containers.push({ element: child, inheritedMinOccurs: effectiveMinOccurs, order: order++ });
                 if (localName !== 'any') {
                     visit(child, effectiveMinOccurs);
                 }
@@ -933,7 +942,12 @@ function mergeChildren(target: SchemaChildRef[], source: SchemaChildRef[]): void
 }
 
 function mergeChild(target: SchemaChildRef[], source: SchemaChildRef): void {
-    const existing = target.find(child => child.name === source.name && child.namespace === source.namespace);
+    const existing = target.find(child =>
+        child.name === source.name
+        && child.namespace === source.namespace
+        && child.groupKind === source.groupKind
+        && child.groupId === source.groupId
+    );
     if (!existing) {
         target.push({ ...source });
         return;
@@ -944,6 +958,13 @@ function mergeChild(target: SchemaChildRef[], source: SchemaChildRef): void {
         ? -1
         : Math.max(existing.maxOccurs, source.maxOccurs);
     existing.typeName = existing.typeName || source.typeName;
+    existing.groupKind = existing.groupKind || source.groupKind;
+    existing.groupId = existing.groupId || source.groupId;
+    if (existing.groupMinOccurs === undefined) {
+        existing.groupMinOccurs = source.groupMinOccurs;
+    } else if (source.groupMinOccurs !== undefined) {
+        existing.groupMinOccurs = Math.min(existing.groupMinOccurs, source.groupMinOccurs);
+    }
 }
 
 function cloneAttributes(attributes: SchemaAttribute[]): SchemaAttribute[] {

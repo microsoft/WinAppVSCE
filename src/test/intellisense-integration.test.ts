@@ -329,6 +329,14 @@ describe('manifest completion logic', () => {
         assert.ok(items.some(item => item.label === 'Publisher' && item.sortText === '2_Publisher'));
     });
 
+    it('offers Package completion at the document root', () => {
+        const items = getManifestCompletions(model, '<', 1);
+        const packageItem = items.find(item => item.label === 'Package');
+
+        assert.ok(packageItem);
+        assert.match(packageItem.insertText, /^Package>/);
+    });
+
     it('offers closing tag completions with prefixes preserved', () => {
         const text = makeOpenManifest(`
   <Applications>

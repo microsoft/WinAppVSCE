@@ -1,6 +1,8 @@
 import type { Document, Element } from '@xmldom/xmldom';
 import type { ManifestDiagnostic } from './schema-validation';
 
+const MAX_DESCENDANT_SEARCH_DEPTH = 100;
+
 // ── Shared rule predicates (usable by both XML validator and form editor) ──
 
 /** Maps known extension category values to their expected child element name. */
@@ -427,7 +429,11 @@ function findChildElements(parent: Element, localName: string): Element[] {
     return result;
 }
 
-function findDescendantElements(parent: Element, localName: string): Element[] {
+function findDescendantElements(parent: Element, localName: string, depth = 0): Element[] {
+    if (depth > MAX_DESCENDANT_SEARCH_DEPTH) {
+        return [];
+    }
+
     const result: Element[] = [];
 
     for (let i = 0; i < parent.childNodes.length; i++) {
@@ -441,7 +447,7 @@ function findDescendantElements(parent: Element, localName: string): Element[] {
             result.push(childElement);
         }
 
-        result.push(...findDescendantElements(childElement, localName));
+        result.push(...findDescendantElements(childElement, localName, depth + 1));
     }
 
     return result;
