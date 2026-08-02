@@ -983,14 +983,14 @@ export function activate(context: vscode.ExtensionContext) {
 		return sharedSchema;
 	};
 
-	// Register the AppxManifest visual editor (with schema support)
+	// Register the Manifest Editor (with schema support)
 	context.subscriptions.push(ManifestEditorProvider.register(context, getSharedSchema));
 
 	// Register AppxManifest IntelliSense (completion, hover, diagnostics) — shares the same schema
 	registerManifestIntelliSense(context, getSharedSchema);
 
 	// When an appxmanifest file is opened in the default text editor,
-	// suggest switching to the visual editor.
+	// suggest switching to the Manifest Editor.
 	const dismissedKey = 'winapp.manifestEditorNotificationDismissed';
 
 	context.subscriptions.push(

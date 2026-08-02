@@ -189,7 +189,7 @@ The extension includes a **Manifest Editor** for `AppxManifest.xml` and `.appxma
 
 **How to open:**
 
-When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer the visual editor as an option alongside the default text editor. You can switch between them at any time by right clicking on the file and selecting the **Open With…** command.
+When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer the Manifest Editor as an option alongside the default text editor. You can switch between them at any time by right clicking on the file and selecting the **Open With…** command.
 
 ### AppxManifest IntelliSense
 
@@ -209,9 +209,9 @@ When you edit an `AppxManifest.xml` or `.appxmanifest` file in the text editor, 
 - `**/[Aa]ppx[Mm]anifest.xml`
 - `**/*.appxmanifest`
 
-**Switching between text and visual editors:**
+**Switching between text and Manifest Editor:**
 
-When viewing a manifest in the text editor, click the **preview icon** (📋) in the editor title bar to switch to the visual editor. From the visual editor, click **View XML** to switch back.
+When viewing a manifest in the text editor, click the **preview icon** (📋) in the editor title bar to switch to the Manifest Editor. From the Manifest Editor, click **View XML** to switch back.
 
 **Disabling IntelliSense:**
 

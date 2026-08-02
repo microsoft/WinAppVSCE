@@ -42,7 +42,7 @@ test('shows error view for malformed XML', async () => {
     await ctx.page.waitForTimeout(1_500);
     await ctx.page.keyboard.press('Enter');
     await ctx.page.waitForTimeout(2_000);
-    await ctx.page.keyboard.type('AppxManifest Editor', { delay: 30 });
+    await ctx.page.keyboard.type('Manifest Editor', { delay: 30 });
     await ctx.page.waitForTimeout(1_000);
     await ctx.page.keyboard.press('Enter');
     await ctx.page.waitForTimeout(5_000);
