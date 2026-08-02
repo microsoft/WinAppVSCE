@@ -290,6 +290,10 @@ function validateExtensionCategories(
             continue;
         }
 
+        // Note: We compare local name only (not namespace) because the category-to-child
+        // mapping is inherently tied to the Extension's owning namespace. A wrong-namespace
+        // child with the same local name is already caught by schema-level child placement
+        // validation. The OS native validator also uses local-name-only matching here.
         if (getLocalName(firstChild) !== expectedChild) {
             pushAttributeDiagnostic(
                 diagnostics,

@@ -507,7 +507,7 @@ function buildElementSnippet(displayName: string, element: SchemaElement | undef
     if (element && element.children.length > 0) {
         snippet += `>\n\t\${${attrIndex}}\n</${displayName}>`;
     } else if (element && element.children.length === 0 && element.attributes.length > 0) {
-        snippet += ' />\${0}';
+        snippet += ' />$0';
     } else {
         snippet += `>\${${attrIndex}}</${displayName}>`;
     }
