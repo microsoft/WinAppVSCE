@@ -86,8 +86,8 @@ export async function openManifestEditor(page: Page): Promise<FrameLocator> {
     await page.keyboard.press('Enter');
     await page.waitForTimeout(2_000);
 
-    // Now the editor picker appears — select "Manifest Editor"
-    await page.keyboard.type('Manifest Editor', { delay: 30 });
+    // Now the editor picker appears — select "AppxManifest Editor"
+    await page.keyboard.type('AppxManifest Editor', { delay: 30 });
     await page.waitForTimeout(1_000);
     await page.keyboard.press('Enter');
     await page.waitForTimeout(5_000);

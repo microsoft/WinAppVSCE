@@ -36,7 +36,7 @@ export function getParseErrorContent(webview: vscode.Webview, nonce: string, err
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manifest Editor</title>
+    <title>AppxManifest Editor</title>
 ${getErrorPageStyles(nonce)}
 </head>
 <body>
@@ -44,7 +44,7 @@ ${getErrorPageStyles(nonce)}
         <div class="error-icon">⚠</div>
         <div class="error-title">Unable to Open Manifest Editor</div>
         <div class="error-message">
-            The appxmanifest file contains XML syntax errors that prevent the Manifest Editor from loading.
+            The appxmanifest file contains XML syntax errors that prevent the AppxManifest Editor from loading.
             Please open the file in the text editor to fix the errors, then reopen this editor.
         </div>
         <div class="error-detail">${errorMessage.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
@@ -78,7 +78,7 @@ export function getWebviewContent(webview: vscode.Webview, nonce: string, manife
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manifest Editor</title>
+    <title>AppxManifest Editor</title>
 ${getEditorStyles(nonce)}
 </head>
 <body>

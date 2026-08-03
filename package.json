@@ -175,7 +175,7 @@
     "customEditors": [
       {
         "viewType": "winapp.manifestEditor",
-        "displayName": "Manifest Editor",
+        "displayName": "AppxManifest Editor",
         "selector": [
           {
             "filenamePattern": "**/[Aa]ppx[Mm]anifest.xml"
