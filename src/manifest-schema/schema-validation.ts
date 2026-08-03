@@ -94,6 +94,14 @@ function validateElement(
                 severity: 'warning',
                 ...range,
             });
+        } else if (ns && !hasNamespace(schema, ns)) {
+            const range = getElementRange(element, lines);
+            diagnostics.push({
+                message: `No schema available for '${localName}' (namespace '${ns}'). Cannot validate this element.`,
+                severity: 'hint',
+                schemaUri: ns,
+                ...range,
+            });
         }
         validateChildren(schema, element, undefined, diagnostics, severity, lines, options, depth);
         return;
@@ -432,7 +440,7 @@ function validateChildPlacement(
     }
 
     // If the element belongs to a namespace not covered by our bundled schemas,
-    // skip the diagnostic — we simply don't have validation rules for it.
+    // skip the error — validateElement will emit a hint for it instead.
     if (childNamespace && !hasNamespace(schema, childNamespace)) {
         return;
     }
