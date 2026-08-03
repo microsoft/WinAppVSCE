@@ -106,3 +106,71 @@ export function buildElevatedTerminalCommand(cliPath: string, cliArgs: string, w
 	const innerCommand = `Set-Location -LiteralPath ${escapePowerShellArg(workingDirectory)}; & ${escapePowerShellArg(cliPath)} ${cliArgs}`.trim();
 	return `Start-Process -FilePath ${escapePowerShellArg(launcherPath)} -Verb RunAs -ArgumentList '-NoExit', '-Command', ${escapePowerShellArg(innerCommand)}`;
 }
+
+/**
+ * Matches a fully qualified Windows path: a drive letter, a colon, and a
+ * separator (`C:\out`, `c:/out`). Drive-relative values like `C:out` have no
+ * separator after the colon and deliberately do not match.
+ */
+const WINDOWS_FULLY_QUALIFIED = /^[a-zA-Z]:[\\/]/;
+
+/** Matches a Windows drive-relative path such as `C:out` or `D:..\sibling`. */
+const WINDOWS_DRIVE_RELATIVE = /^[a-zA-Z]:(?![\\/])/;
+
+/**
+ * Resolves the debug session's working directory against the workspace folder.
+ *
+ * `workingDirectory` comes straight from launch.json, so it may be relative
+ * (`"./out"`), root-relative (`"\out"`), fully qualified (`"C:\out"`), or
+ * drive-relative (`"C:out"`). Passing a relative value to `spawn` resolves it
+ * against the extension host's `process.cwd()` rather than the workspace, so
+ * the app launches from an unrelated directory.
+ *
+ * Only fully qualified paths are returned untouched. Root-relative paths keep
+ * their leading separator but are anchored to the workspace drive, since
+ * `path.isAbsolute('\\out')` is true on Windows even though the value names no
+ * drive and would otherwise follow whichever drive the extension host happens
+ * to be on.
+ *
+ * Drive-relative paths are rejected: `C:out` means "the current directory of
+ * drive C:", which is per-process state this extension cannot observe or
+ * control, so any resolution would be a guess that silently differs from what
+ * the user typed.
+ *
+ * @param workspacePath Absolute path to the workspace folder.
+ * @param workingDirectory The launch.json `workingDirectory` value, if set.
+ * @returns An absolute directory to use as the spawn cwd.
+ * @throws If `workingDirectory` is drive-relative.
+ */
+export function resolveWorkingDirectory(workspacePath: string, workingDirectory?: string): string {
+	if (!workingDirectory) {
+		return workspacePath;
+	}
+
+	// POSIX: isAbsolute is enough. Windows: require a drive so that "\out"
+	// falls through to be re-anchored on the workspace drive below.
+	if (path.sep === '/') {
+		if (path.isAbsolute(workingDirectory)) {
+			return workingDirectory;
+		}
+		return path.resolve(workspacePath, workingDirectory);
+	}
+
+	if (WINDOWS_FULLY_QUALIFIED.test(workingDirectory)) {
+		return workingDirectory;
+	}
+
+	if (WINDOWS_DRIVE_RELATIVE.test(workingDirectory)) {
+		throw new Error(
+			`launch.json "workingDirectory" value "${workingDirectory}" is drive-relative. ` +
+			'Drive-relative paths depend on the per-process current directory of that drive, ' +
+			'so they cannot be resolved reliably. Use a path relative to the workspace ' +
+			`(for example "${workingDirectory.slice(2) || '.'}") or a fully qualified path ` +
+			`(for example "${workingDirectory.slice(0, 2)}\\${workingDirectory.slice(2)}").`
+		);
+	}
+
+	// Root-relative ("\out") and plain relative ("out", "../sibling") values both
+	// resolve against the workspace, which pins the drive to the workspace drive.
+	return path.resolve(workspacePath, workingDirectory);
+}
