@@ -8,11 +8,11 @@ import {
 	escapePowerShellArg,
 	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
-	decideElevatedWinappCommand
+	decideElevatedWinappCommand,
+	resolveWorkingDirectory
 } from './winapp-cli-utils';
-import { detectProjects } from './project-detection';
+import { detectProjects, deduplicateBuildOutputFolders, BUILD_OUTPUT_EXCLUDE_GLOB, BUILD_OUTPUT_MAX_RESULTS } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
-import { glob } from 'glob';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
 import { SchemaModel } from './manifest-schema/schema-model';
@@ -35,7 +35,8 @@ import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
 	getDebuggerExtensionRequirement,
-	getDebuggerTypeFromChoice
+	getDebuggerTypeFromChoice,
+	validateInputFolder
 } from './debugger-resolver';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
 
@@ -441,6 +442,80 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 	return picked.detail;
 }
 
+const FOLDER_PICKER_DETAIL = 'Open a folder picker';
+
+/**
+ * Scan the workspace for build output folders (directories containing .exe
+ * files). Shows a progress notification with cancel support.
+ *
+ * @returns The discovered folder paths sorted by relative path, or undefined if cancelled.
+ */
+async function findBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
+	let cancelled = false;
+	const outputFolders = await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: 'Searching for build output folders...', cancellable: true },
+		async (_progress, token) => {
+			token.onCancellationRequested(() => { cancelled = true; });
+			const exeMatches = await vscode.workspace.findFiles(
+				new vscode.RelativePattern(workspacePath, '**/*.exe'),
+				BUILD_OUTPUT_EXCLUDE_GLOB,
+				BUILD_OUTPUT_MAX_RESULTS
+			);
+
+			return deduplicateBuildOutputFolders(
+				exeMatches.map(m => m.fsPath),
+				workspacePath
+			);
+		}
+	);
+
+	if (cancelled) {
+		return undefined;
+	}
+
+	return outputFolders;
+}
+
+/**
+ * Search the workspace for build output folders and let the user pick one via
+ * a QuickPick. Falls back to a native folder dialog when none are found; a
+ * "Browse…" entry is always appended.
+ *
+ * @returns The selected folder path, or `undefined` if cancelled.
+ */
+async function pickBuildOutputFolder(workspacePath: string): Promise<string | undefined> {
+	const outputFolders = await findBuildOutputFolders(workspacePath);
+	if (!outputFolders) {
+		return undefined;
+	}
+
+	if (outputFolders.length === 0) {
+		return selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
+	}
+
+	const items: Array<vscode.QuickPickItem & { directory?: string }> = outputFolders.map((folderPath) => ({
+		label: path.relative(workspacePath, folderPath) || '.',
+		detail: folderPath,
+		directory: folderPath
+	}));
+
+	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL });
+
+	const picked = await vscode.window.showQuickPick(items, {
+		placeHolder: 'Select the build output folder containing your app'
+	});
+
+	if (!picked) {
+		return undefined;
+	}
+
+	if (picked.detail === FOLDER_PICKER_DETAIL) {
+		return selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
+	}
+
+	return picked.directory;
+}
+
 /**
  * Run the code-signing flow for an MSIX/executable. Prompts for the file to
  * sign (unless one is supplied) and the signing certificate, then invokes
@@ -626,8 +701,31 @@ async function resolveProjectDirectory(workspacePath: string): Promise<string | 
 			vscode.window.showWarningMessage(message);
 		},
 		pickDirectory: async (items, placeHolder) => {
-			const picked = await vscode.window.showQuickPick(items, { placeHolder });
-			return picked?.directory;
+			const browseItem = { label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, directory: '' };
+			const picked = await vscode.window.showQuickPick([...items, browseItem], { placeHolder });
+			if (!picked) { return undefined; }
+			if (picked.directory === '') {
+				const folder = await selectFolder('Select project folder', vscode.Uri.file(workspacePath));
+				if (!folder) { return undefined; }
+				const relative = path.relative(workspacePath, folder);
+				if (relative.startsWith('..') || path.isAbsolute(relative)) {
+					vscode.window.showWarningMessage('Selected folder is outside the workspace and was ignored.');
+					return undefined;
+				}
+				try {
+					const realWorkspace = await fs.promises.realpath(workspacePath);
+					const realFolder = await fs.promises.realpath(folder);
+					const realRelative = path.relative(realWorkspace, realFolder);
+					if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
+						vscode.window.showWarningMessage('Selected folder is outside the workspace and was ignored.');
+						return undefined;
+					}
+				} catch {
+					// Target doesn't exist on disk — lexical check above is authoritative
+				}
+				return folder;
+			}
+			return picked.directory || undefined;
 		},
 		scanProjects: async (root) =>
 			vscode.window.withProgress(
@@ -667,12 +765,13 @@ async function selectFile(title: string, filters?: { [name: string]: string[] })
 /**
  * Prompt user to select a folder
  */
-async function selectFolder(title: string): Promise<string | undefined> {
+async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<string | undefined> {
 	const result = await vscode.window.showOpenDialog({
 		canSelectFiles: false,
 		canSelectFolders: true,
 		canSelectMany: false,
-		title: title
+		title: title,
+		defaultUri: defaultUri
 	});
 
 	return result?.[0]?.fsPath;
@@ -725,6 +824,28 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 			return undefined;
 		}
 
+		// Validate a user-specified inputFolder early so we can cleanly
+		// cancel the session (return undefined) before the adapter factory
+		// runs — this avoids showing the debugger toolbar on failure.
+		const inputFolder: string | undefined = config.inputFolder;
+		if (inputFolder) {
+			let cwd: string;
+			try {
+				cwd = resolveWorkingDirectory(folder.uri.fsPath, config.workingDirectory);
+			} catch (error) {
+				// An unusable workingDirectory is a launch.json authoring problem, so
+				// surface it here and cancel the session rather than letting the
+				// adapter factory fail later with the debugger toolbar already shown.
+				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+				return undefined;
+			}
+			const result = await validateInputFolder(inputFolder, cwd);
+			if (!result.valid) {
+				vscode.window.showErrorMessage(result.message);
+				return undefined;
+			}
+		}
+
 		return config;
 	}
 }
@@ -752,25 +873,15 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// If not set in launch.json, search for folders containing .exe
 			// files and let the user pick one.
 			let inputFolder: string | undefined = config.inputFolder;
+			const cwd = resolveWorkingDirectory(folder.uri.fsPath, config.workingDirectory);
+
 			if (!inputFolder) {
-				const exeMatches = await glob('**/*.exe', {
-					cwd: folder.uri.fsPath,
-					absolute: true,
-					nocase: true,
-					ignore: ['**/node_modules/**', '**/.git/**', '**/AppX/**', '**/.winapp/**', '**/obj/**', '**/.vs/**', '**/packages/**']
-				});
+				const dirs = await findBuildOutputFolders(folder.uri.fsPath);
 
-				// Collect unique parent directories that contain .exe files
-				const dirSet = new Set<string>();
-				for (const exe of exeMatches) {
-					dirSet.add(path.dirname(exe));
-				}
-
-				if (dirSet.size === 0) {
+				if (!dirs || dirs.length === 0) {
 					throw new Error('No folders containing .exe files found in the workspace. Build your project first, or set "inputFolder" in launch.json.');
 				}
 
-				const dirs = [...dirSet].sort();
 				if (dirs.length === 1) {
 					inputFolder = dirs[0];
 				} else {
@@ -831,11 +942,6 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				cancellable: false
 			}, async (progress) => {
 				progress.report({ message: 'Running winapp run...' });
-
-				let cwd = folder.uri.fsPath;
-				if (config.workingDirectory) {
-					cwd = config.workingDirectory;
-				}
 
 				return new Promise<{ processId: number; runProcess: ReturnType<typeof spawn> }>((resolve, reject) => {
 					const child = spawn(cliPath, baseSpawnArgs, {
@@ -1107,7 +1213,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const inputFolder = await selectFolder('Select input folder to package');
+			const inputFolder = await pickBuildOutputFolder(workspacePath);
 			if (!inputFolder) {
 				return;
 			}
@@ -1168,7 +1274,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const inputFolder = await selectFolder('Select input folder containing the app to run');
+			const inputFolder = await pickBuildOutputFolder(workspacePath);
 			if (!inputFolder) {
 				return;
 			}

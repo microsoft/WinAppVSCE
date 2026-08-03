@@ -1,10 +1,14 @@
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import {
 	DEBUGGER_CHOICE_LABELS,
 	chooseInstalledDebuggerType,
 	getDebuggerExtensionRequirement,
-	getDebuggerTypeFromChoice
+	getDebuggerTypeFromChoice,
+	validateInputFolder
 } from '../debugger-resolver';
 
 describe('debugger resolver helpers', () => {
@@ -64,5 +68,72 @@ describe('debugger resolver helpers', () => {
 			assert.equal(getDebuggerTypeFromChoice(undefined), undefined);
 			assert.equal(getDebuggerTypeFromChoice('Cancel'), undefined);
 		});
+	});
+});
+
+describe('validateInputFolder', () => {
+	let tmpDir: string;
+	let validDir: string;
+	let emptyDir: string;
+	let aFile: string;
+
+	before(async () => {
+		tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'inputfolder-test-'));
+		validDir = path.join(tmpDir, 'with-exe');
+		emptyDir = path.join(tmpDir, 'no-exe');
+		await fs.promises.mkdir(validDir);
+		await fs.promises.mkdir(emptyDir);
+		await fs.promises.writeFile(path.join(validDir, 'MyApp.exe'), '');
+		aFile = path.join(tmpDir, 'not-a-dir.txt');
+		await fs.promises.writeFile(aFile, 'hello');
+	});
+
+	after(async () => {
+		await fs.promises.rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it('returns valid for a directory containing an .exe file', async () => {
+		const result = await validateInputFolder(validDir, tmpDir);
+		assert.equal(result.valid, true);
+	});
+
+	it('returns not-found when the path does not exist', async () => {
+		const result = await validateInputFolder('C:\\does\\not\\exist', tmpDir);
+		assert.equal(result.valid, false);
+		if (!result.valid) {
+			assert.equal(result.reason, 'not-found');
+			assert.match(result.message, /does not exist/);
+		}
+	});
+
+	it('returns not-directory when the path is a file', async () => {
+		const result = await validateInputFolder(aFile, tmpDir);
+		assert.equal(result.valid, false);
+		if (!result.valid) {
+			assert.equal(result.reason, 'not-directory');
+			assert.match(result.message, /not a directory/);
+		}
+	});
+
+	it('returns no-exe when the directory has no .exe files', async () => {
+		const result = await validateInputFolder(emptyDir, tmpDir);
+		assert.equal(result.valid, false);
+		if (!result.valid) {
+			assert.equal(result.reason, 'no-exe');
+			assert.match(result.message, /does not contain any \.exe files/);
+		}
+	});
+
+	it('resolves relative paths against the provided cwd', async () => {
+		const result = await validateInputFolder('with-exe', tmpDir);
+		assert.equal(result.valid, true);
+	});
+
+	it('rejects relative paths that do not exist against the cwd', async () => {
+		const result = await validateInputFolder('nonexistent-subdir', tmpDir);
+		assert.equal(result.valid, false);
+		if (!result.valid) {
+			assert.equal(result.reason, 'not-found');
+		}
 	});
 });
