@@ -6,7 +6,7 @@ import {
 	executeWinappToolTask,
 	parseToolArguments,
 	resolveWinappToolInvocation
-} from '../tool-command';
+} from '../tool-command-utils';
 import { WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 
 describe('parseToolArguments', () => {

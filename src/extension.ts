@@ -42,7 +42,7 @@ import {
 	parseToolArguments,
 	resolveWinappToolInvocation,
 	type WinappToolTaskSpec
-} from './tool-command';
+} from './tool-command-utils';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
