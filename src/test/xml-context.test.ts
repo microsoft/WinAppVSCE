@@ -67,6 +67,12 @@ describe('findParentPath', () => {
         const path = findParentPath(xml);
         assert.deepEqual(path.map(element => element.name), ['Package', 'Properties']);
     });
+
+    it('ignores unterminated CDATA sections when building the parent stack', () => {
+        const xml = '<Package><![CDATA[<Applications><Properties>';
+        const path = findParentPath(xml);
+        assert.deepEqual(path.map(element => element.name), ['Package']);
+    });
 });
 
 describe('getXmlContext', () => {

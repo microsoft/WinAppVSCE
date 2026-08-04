@@ -530,6 +530,35 @@ function getTextContentRange(element: Element, lines: string[]): { line: number;
     if (gtIndex >= 0 && closingIndex > gtIndex) {
         return { line, col: gtIndex + 1, endCol: closingIndex };
     }
+
+    if (gtIndex >= 0) {
+        const inlineText = lineText.slice(gtIndex + 1);
+        const inlineTextMatch = /\S.*\S|\S/.exec(inlineText);
+        if (inlineTextMatch) {
+            const col = gtIndex + 1 + inlineTextMatch.index;
+            return { line, col, endCol: col + inlineTextMatch[0].length };
+        }
+
+        for (let i = line + 1; i < lines.length; i++) {
+            const currentLine = lines[i] || '';
+            const currentClosingIndex = currentLine.indexOf('</');
+            const contentPortion = currentClosingIndex >= 0
+                ? currentLine.slice(0, currentClosingIndex)
+                : currentLine;
+            const contentMatch = /\S.*\S|\S/.exec(contentPortion);
+            if (contentMatch) {
+                return {
+                    line: i,
+                    col: contentMatch.index,
+                    endCol: contentMatch.index + contentMatch[0].length,
+                };
+            }
+            if (currentClosingIndex >= 0) {
+                break;
+            }
+        }
+    }
+
     return { line, col: 0, endCol: getLineLength(lines, line) };
 }
 

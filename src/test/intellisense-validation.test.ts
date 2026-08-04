@@ -836,6 +836,38 @@ describe('element text content validation', () => {
         assert.ok(textErrors[0].message.includes('FileType'));
     });
 
+    it('positions multiline text content diagnostics on the text line', () => {
+        const text = makeManifest(`
+            <Applications>
+                <Application Id="App" Executable="app.exe" EntryPoint="App">
+                    <uap:VisualElements DisplayName="Test" Description="Test"
+                        BackgroundColor="transparent" Square150x150Logo="l.png" Square44x44Logo="s.png" />
+                    <Extensions>
+                        <uap:Extension Category="windows.shareTarget">
+                            <uap:ShareTarget>
+                                <uap:SupportedFileTypes>
+                                    <uap:FileType>
+                                        txt
+                                    </uap:FileType>
+                                </uap:SupportedFileTypes>
+                                <uap:DataFormat>text</uap:DataFormat>
+                            </uap:ShareTarget>
+                        </uap:Extension>
+                    </Extensions>
+                </Application>
+            </Applications>
+        `);
+        const diagnostics = validateManifestText(model, text);
+        const textError = diagnostics.find(d => d.message.includes('<FileType>'));
+        assert.ok(textError, 'Should flag invalid multiline FileType text');
+
+        const lines = text.split(/\r?\n/);
+        const textLine = lines.findIndex(line => line.includes('txt'));
+        assert.equal(textError.line, textLine, 'Diagnostic should point to the text content line');
+        assert.equal(textError.col, lines[textLine].indexOf('txt'));
+        assert.equal(textError.endCol, lines[textLine].indexOf('txt') + 'txt'.length);
+    });
+
     it('accepts valid FileType text content (.txt)', () => {
         const diagnostics = validateManifestText(model, makeManifest(`
             <Applications>

@@ -204,6 +204,8 @@ export function findParentPath(textBefore: string): ParentElement[] {
     let prev: string;
     do { prev = textBefore; textBefore = textBefore.replace(/<!--[\s\S]*?-->/g, ''); } while (textBefore !== prev);
     textBefore = textBefore.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '');
+    // Also strip unterminated CDATA (cursor may be inside one)
+    textBefore = textBefore.replace(/<!\[CDATA\[[\s\S]*/g, '');
     const stack: ParentElement[] = [];
 
     // Quote-aware tag scanner: skip '>' inside quoted attribute values
