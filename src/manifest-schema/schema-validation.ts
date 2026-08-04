@@ -371,11 +371,12 @@ export function validateAttributeValueEnum(attr: SchemaAttribute, value: string)
 export function getAttributeValueRange(element: Element, attrName: string, lines: string[]): { line: number; col: number; endCol: number } {
     const elemLine = (element as unknown as { lineNumber?: number }).lineNumber;
     const startLine = typeof elemLine === 'number' ? elemLine - 1 : 0;
+    const escapedAttrName = escapeRegExp(attrName);
 
     const searchEnd = Math.min(startLine + 10, lines.length);
     for (let i = startLine; i < searchEnd; i++) {
         const lineText = lines[i];
-        const regex = new RegExp(`${attrName}\\s*=\\s*(['"])([^'"]*?)\\1`);
+        const regex = new RegExp(`${escapedAttrName}\\s*=\\s*(['"])([^'"]*?)\\1`);
         const match = regex.exec(lineText);
         if (match) {
             const valueStart = match.index + match[0].indexOf(match[2]);
@@ -400,6 +401,10 @@ function getLineLength(lines: string[], line: number): number {
 
 function clamp(value: number, min: number, max: number): number {
     return Math.min(Math.max(value, min), max);
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 interface ResolvedElementAttribute {
@@ -442,14 +447,15 @@ function validateTextContent(
 
     const typeKey = `${schemaDef.simpleTypeNamespace}|${schemaDef.simpleTypeName}`;
     const localName = element.localName || element.nodeName.split(':').pop() || '';
+    const value = textContent;
 
     // Check enum constraints
     const enumType = schema.enumTypes.get(typeKey);
     if (enumType && enumType.values.length > 0) {
-        if (!enumType.values.includes(textContent.trim())) {
+        if (!enumType.values.includes(value)) {
             const range = getTextContentRange(element, lines);
             diagnostics.push({
-                message: `Invalid text content '${textContent.trim()}' for <${localName}>. Expected one of: ${enumType.values.slice(0, 10).join(', ')}`,
+                message: `Invalid text content '${value}' for <${localName}>. Expected one of: ${enumType.values.slice(0, 10).join(', ')}`,
                 severity: 'error',
                 schemaUri,
                 ...range,
@@ -461,7 +467,6 @@ function validateTextContent(
     // Check pattern constraints
     const resolved = resolvePatternConstraints(typeKey, schema);
     if (resolved) {
-        const value = textContent.trim();
         if (resolved.patternSets.length > 0) {
             const allPatternsMatch = resolved.patternSets.every(patternSet =>
                 patternSet.some(pattern => {

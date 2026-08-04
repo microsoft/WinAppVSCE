@@ -203,6 +203,7 @@ export function findParentPath(textBefore: string): ParentElement[] {
     // Strip XML comments (loop handles edge cases where removal reveals new comment patterns)
     let prev: string;
     do { prev = textBefore; textBefore = textBefore.replace(/<!--[\s\S]*?-->/g, ''); } while (textBefore !== prev);
+    textBefore = textBefore.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '');
     const stack: ParentElement[] = [];
 
     // Quote-aware tag scanner: skip '>' inside quoted attribute values

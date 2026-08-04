@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'path';
 import { loadSchemaModel } from '../manifest-schema/xsd-parser';
-import { MANIFEST_NAMESPACES } from '../manifest-schema/schema-model';
+import { MANIFEST_NAMESPACES, type SchemaModel } from '../manifest-schema/schema-model';
 import {
     validateManifestText,
     validateAttributeValuePattern,
@@ -38,6 +38,37 @@ function makeManifest(body: string, extraNamespaces = ''): string {
 <Package xmlns="${FOUNDATION_NS}" xmlns:uap="${UAP_NS}"${extraNamespaces}>
 ${body}
 </Package>`;
+}
+
+function createTextContentTestModel(): SchemaModel {
+    return {
+        elements: new Map([
+            [`${FOUNDATION_NS}|Package`, {
+                name: 'Package',
+                namespace: FOUNDATION_NS,
+                children: [{ name: 'Mode', namespace: FOUNDATION_NS, minOccurs: 0, maxOccurs: 1 }],
+                attributes: [],
+            }],
+            [`${FOUNDATION_NS}|Mode`, {
+                name: 'Mode',
+                namespace: FOUNDATION_NS,
+                children: [],
+                attributes: [],
+                simpleTypeName: 'ModeType',
+                simpleTypeNamespace: FOUNDATION_NS,
+            }],
+        ]),
+        enumTypes: new Map([
+            [`${FOUNDATION_NS}|ModeType`, {
+                name: 'ModeType',
+                namespace: FOUNDATION_NS,
+                values: ['Alpha', 'Beta'],
+            }],
+        ]),
+        patternTypes: new Map(),
+        namespacePrefixes: new Map([[FOUNDATION_NS, '']]),
+        substitutionGroups: new Map(),
+    };
 }
 
 // ============================================================================
@@ -851,6 +882,64 @@ describe('element text content validation', () => {
         assert.equal(textErrors.length, 0, 'Empty text content should not be flagged');
     });
 
+    it('uses the original text content for pattern validation instead of trimming whitespace', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+            <Applications>
+                <Application Id="App" Executable="app.exe" EntryPoint="App">
+                    <uap:VisualElements DisplayName="Test" Description="Test"
+                        BackgroundColor="transparent" Square150x150Logo="l.png" Square44x44Logo="s.png" />
+                    <Extensions>
+                        <uap:Extension Category="windows.shareTarget">
+                            <uap:ShareTarget>
+                                <uap:SupportedFileTypes>
+                                    <uap:FileType> .txt </uap:FileType>
+                                </uap:SupportedFileTypes>
+                                <uap:DataFormat>text</uap:DataFormat>
+                            </uap:ShareTarget>
+                        </uap:Extension>
+                    </Extensions>
+                </Application>
+            </Applications>
+        `));
+
+        const textError = diagnostics.find(d => d.message.includes("Text content ' .txt ' in <FileType> is invalid"));
+        assert.ok(textError, 'Whitespace-padded FileType text should be validated without trimming');
+    });
+
+    it('flags invalid enum-constrained text content', () => {
+        const diagnostics = validateManifestText(createTextContentTestModel(), `<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="${FOUNDATION_NS}">
+  <Mode>Gamma</Mode>
+</Package>`);
+
+        const enumError = diagnostics.find(d => d.message.includes("Invalid text content 'Gamma' for <Mode>. Expected one of: Alpha, Beta"));
+        assert.ok(enumError, 'Should flag invalid enum text content');
+    });
+
+    it('flags text content that exceeds maxLength', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+            <Applications>
+                <Application Id="App" Executable="app.exe" EntryPoint="App">
+                    <uap:VisualElements DisplayName="Test" Description="Test"
+                        BackgroundColor="transparent" Square150x150Logo="l.png" Square44x44Logo="s.png" />
+                    <Extensions>
+                        <uap:Extension Category="windows.shareTarget">
+                            <uap:ShareTarget>
+                                <uap:SupportedFileTypes>
+                                    <uap:FileType>.${'a'.repeat(64)}</uap:FileType>
+                                </uap:SupportedFileTypes>
+                                <uap:DataFormat>text</uap:DataFormat>
+                            </uap:ShareTarget>
+                        </uap:Extension>
+                    </Extensions>
+                </Application>
+            </Applications>
+        `));
+
+        const lengthError = diagnostics.find(d => d.message.includes('Text content in <FileType> exceeds maximum length of 64 characters (got 65)'));
+        assert.ok(lengthError, 'Should flag text content that exceeds maxLength');
+    });
+
     it('elements without simpleTypeName skip text validation', () => {
         // <Application> has no simpleTypeName — its text content (if any) should not be validated
         const diagnostics = validateManifestText(model, makeManifest(`
@@ -863,5 +952,21 @@ describe('element text content validation', () => {
         `));
         const textErrors = diagnostics.filter(d => d.message.includes('Text content'));
         assert.equal(textErrors.length, 0);
+    });
+
+    it('returns parse diagnostics for an empty manifest', () => {
+        const diagnostics = validateManifestText(model, '');
+        assert.ok(diagnostics.length > 0, 'Empty manifest should produce diagnostics');
+    });
+
+    it('returns parse diagnostics for a whitespace-only manifest', () => {
+        const diagnostics = validateManifestText(model, '   ');
+        assert.ok(diagnostics.length > 0, 'Whitespace-only manifest should produce diagnostics');
+    });
+
+    it('handles a minimal manifest without crashing', () => {
+        assert.doesNotThrow(() => validateManifestText(model, `<?xml version="1.0" encoding="utf-8"?><Package xmlns="${FOUNDATION_NS}" />`));
+        const diagnostics = validateManifestText(model, `<?xml version="1.0" encoding="utf-8"?><Package xmlns="${FOUNDATION_NS}" />`);
+        assert.ok(Array.isArray(diagnostics));
     });
 });

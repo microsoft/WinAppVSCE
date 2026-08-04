@@ -122,7 +122,7 @@ function walkExtensionElement(element: Element, fields: ExtensionField[], isRoot
     for (let i = 0; i < childNodes.length; i++) {
         const child = childNodes.item(i);
         if (child?.nodeType === 1) { hasChildElements = true; }
-        else if (child?.nodeType === 3) { textContent += child.nodeValue || ''; }
+        else if (child?.nodeType === 3 || child?.nodeType === 4) { textContent += child.nodeValue || ''; }
     }
 
     if (!hasChildElements && textContent.trim()) {

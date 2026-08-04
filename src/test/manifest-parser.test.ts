@@ -1125,3 +1125,45 @@ describe('updateExtensionField', () => {
         assert.equal(result, XML_WITH_EXT, 'Should return unchanged XML for invalid fieldPath');
     });
 });
+
+describe('extension text content parsing', () => {
+    it('reads CDATA text content from extension leaf elements', () => {
+        const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10">
+  <Identity Name="TestApp" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>TestApp</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>Assets\\StoreLogo.png</Logo>
+  </Properties>
+  <Applications>
+    <Application Id="App" Executable="TestApp.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="TestApp"
+        Description="Test application"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\\Square150x150Logo.png"
+        Square44x44Logo="Assets\\Square44x44Logo.png" />
+      <Extensions>
+        <uap:Extension Category="windows.shareTarget">
+          <uap:ShareTarget>
+            <uap:SupportedFileTypes>
+              <uap:FileType><![CDATA[.txt]]></uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:ShareTarget>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>`;
+
+        const parsed = parseManifest(xml);
+        assert.equal(parsed.applications[0].extensions.length, 1);
+        const fileTypeField = parsed.applications[0].extensions[0].fields.find(field => field.label === 'FileType');
+        assert.ok(fileTypeField);
+        assert.equal(fileTypeField.value, '.txt');
+        assert.equal(fileTypeField.isTextContent, true);
+    });
+});
