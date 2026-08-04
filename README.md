@@ -36,7 +36,7 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Install Certificate** | Install (trust) an existing `.pfx` or `.cer` certificate in the machine store. Prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Certificate Info** | Display certificate details (subject, thumbprint, expiry) to verify a certificate matches your manifest. |
 | **WinApp: Open Manifest Editor** | Switch from manifest text editor to the AppxManifest Editor |
-| **WinApp: Sign File** | Sign an MSIX package, executable, or library with a certificate. Searches the workspace for MSIX/APPX packages and `.exe`/`.dll` files, prioritizing conventional build-output paths while retaining custom output folders as fallbacks. Presents up to 10 results with packages first and binaries second; a **Browse…** option falls back to a native file dialog. |
+| **WinApp: Sign File** | Sign an MSIX/APPX package, executable, or library with a certificate. |
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
 
@@ -264,7 +264,7 @@ Use **WinApp: Generate Manifest** to create an `Package.appxmanifest` from a tem
 
 ### Package and sign
 
-Use **WinApp: Create MSIX Package** to package your application. If you choose **self-contained** packaging and the selected build output path appears to target a different architecture than your machine, WinApp shows a warning before continuing so you can avoid bundling the wrong Windows App SDK runtime. When packaging finishes, a completion notification names the built `.msix` and offers three actions: **Reveal in Explorer** (open the package in File Explorer), **Sign** (sign the just-built package, pre-filling its path and skipping the artifact QuickPick), and **Install** (sideload it via `Add-AppxPackage`). **WinApp: Sign File** discovers MSIX/APPX packages plus `.exe` and `.dll` files, prioritizing conventional build, publish, configuration, and architecture paths while retaining shallow custom output folders as fallbacks. It then presents at most 10 artifacts with packages grouped before binaries. A **Browse…** entry always lets you fall back to a native file dialog, and the subsequent certificate picker discovers `.pfx` files. Pair it with **WinApp: Generate Certificate** to produce signed packages and binaries. Use **WinApp: Certificate Info** to verify a certificate's details (subject, thumbprint, expiry) before signing.
+Use **WinApp: Create MSIX Package** to package your application. If you choose **self-contained** packaging and the selected build output path appears to target a different architecture than your machine, WinApp shows a warning before continuing so you can avoid bundling the wrong Windows App SDK runtime. When packaging finishes, a completion notification names the built `.msix` and offers three actions: **Reveal in Explorer** (open the package in File Explorer), **Sign** (sign the just-built package), and **Install** (sideload it via `Add-AppxPackage`). Use **WinApp: Sign File** to sign MSIX/APPX packages, `.exe` files, and `.dll` files with a `.pfx` certificate.
 
 ### Access Windows SDK tools
 

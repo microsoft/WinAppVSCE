@@ -11,14 +11,7 @@ import {
 	decideElevatedWinappCommand,
 	resolveWorkingDirectory
 } from './winapp-cli-utils';
-import {
-	detectProjects,
-	BUILD_OUTPUT_EXCLUDE_GLOB,
-	BUILD_OUTPUT_MAX_RESULTS,
-	discoverBuildOutputFiles,
-	discoverBuildOutputFolders,
-	rankBuildOutputFiles
-} from './project-detection';
+import { detectProjects, deduplicateBuildOutputFolders, BUILD_OUTPUT_EXCLUDE_GLOB, BUILD_OUTPUT_MAX_RESULTS } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
@@ -35,11 +28,10 @@ import {
 	findWorkspaceArtifacts,
 	buildSignCommand,
 	CERTIFICATE_GLOBS,
-	discoverSignableFilesWithCancellation,
+	EXECUTABLE_GLOBS,
 	executeSignFlow,
 	type SignFlowAdapter
 } from './sign-utils';
-import { runWithCancellation } from './cancellation';
 import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
 	detectArchFromPath,
@@ -58,6 +50,7 @@ import { NoOpDebugAdapter } from './noop-debug-adapter';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
+const MAX_SIGNABLE_FILES = 10;
 
 /**
  * Output channel for debugger-related activity (e.g. auto-installed extensions),
@@ -344,71 +337,46 @@ async function runWinappCapture(
 }
 
 /**
- * Search the workspace for MSIX/APPX packages and build-output EXE/DLL files,
- * then let the user pick one via a QuickPick. When no files are found the
- * function falls back directly to a native file dialog; a "Browse…" entry is
- * always appended so the user can opt into the dialog after discovery.
+ * Search the workspace for signable packages, executables, and libraries and
+ * let the user pick one via
+ * a QuickPick. When no artifacts are found the function falls back directly to
+ * a native file dialog; a "Browse…" entry is always appended so the user can
+ * opt into the dialog even when artifacts *are* discovered.
  *
  * @returns The selected file path, or `undefined` if cancelled.
  */
 async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
-	const discovery = await vscode.window.withProgress(
+	let cancelled = false;
+	const artifactPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
-		(_progress, token) => discoverSignableFilesWithCancellation(
-			token,
-			signal => findWorkspaceArtifacts(
-				workspacePath,
-				ARTIFACT_GLOBS,
-				signal
-			),
-			remainingSlots => findBuildOutputFiles(
-				workspacePath,
-				'exe',
-				remainingSlots,
-				token
-			),
-			remainingSlots => findBuildOutputFiles(
-				workspacePath,
-				'dll',
-				remainingSlots,
-				token
-			),
-			(paths, remainingSlots) => rankBuildOutputFiles(paths, workspacePath, remainingSlots)
-		)
+		async (_progress, token) => {
+			token.onCancellationRequested(() => { cancelled = true; });
+			const packagePaths = await findWorkspaceArtifacts(workspacePath, ARTIFACT_GLOBS);
+			const executablePaths = await findWorkspaceArtifacts(workspacePath, EXECUTABLE_GLOBS);
+			return [...packagePaths, ...executablePaths].slice(0, MAX_SIGNABLE_FILES);
+		}
 	);
 
-	if (discovery.cancelled) {
+	if (cancelled) {
 		return undefined;
 	}
-	const signableFiles = discovery.value;
 
-	if (signableFiles.packagePaths.length === 0 && signableFiles.binaryPaths.length === 0) {
+	if (artifactPaths.length === 0) {
 		return selectFile('Select file to sign', {
 			...ARTIFACT_DIALOG_FILTER,
-			'Executables and libraries': ['exe', 'dll'],
+			'Executables': ['exe', 'dll'],
 			'All files': ['*']
 		});
 	}
 
-	const createFileItem = (filePath: string): vscode.QuickPickItem => {
-		const relDir = path.dirname(path.relative(workspacePath, filePath));
+	const items: vscode.QuickPickItem[] = artifactPaths.map((p) => {
+		const relDir = path.dirname(path.relative(workspacePath, p));
 		return {
-			label: path.basename(filePath),
+			label: path.basename(p),
 			description: relDir === '.' ? '' : relDir,
-			detail: filePath
+			detail: p
 		};
-	};
-
-	const items: vscode.QuickPickItem[] = [];
-	if (signableFiles.packagePaths.length > 0 && signableFiles.binaryPaths.length > 0) {
-		items.push({ label: 'Packages', kind: vscode.QuickPickItemKind.Separator });
-	}
-	items.push(...signableFiles.packagePaths.map(createFileItem));
-
-	if (signableFiles.packagePaths.length > 0 && signableFiles.binaryPaths.length > 0) {
-		items.push({ label: 'Executables and libraries', kind: vscode.QuickPickItemKind.Separator });
-	}
-	items.push(...signableFiles.binaryPaths.map(createFileItem));
+	});
 
 	items.push({ label: '$(folder-opened) Browse…', detail: 'Open a file picker' });
 
@@ -423,7 +391,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 	if (picked.detail === 'Open a file picker') {
 		return selectFile('Select file to sign', {
 			...ARTIFACT_DIALOG_FILTER,
-			'Executables and libraries': ['exe', 'dll'],
+			'Executables': ['exe', 'dll'],
 			'All files': ['*']
 		});
 	}
@@ -439,18 +407,18 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
  * @returns The selected certificate path, or `undefined` if cancelled.
  */
 async function pickCertificateFile(workspacePath: string): Promise<string | undefined> {
-	const discovery = await vscode.window.withProgress(
+	let cancelled = false;
+	const certPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for certificates...', cancellable: true },
-		(_progress, token) => runWithCancellation(
-			token,
-			signal => findWorkspaceArtifacts(workspacePath, CERTIFICATE_GLOBS, signal)
-		)
+		async (_progress, token) => {
+			token.onCancellationRequested(() => { cancelled = true; });
+			return findWorkspaceArtifacts(workspacePath, CERTIFICATE_GLOBS);
+		}
 	);
 
-	if (discovery.cancelled) {
+	if (cancelled) {
 		return undefined;
 	}
-	const certPaths = discovery.value;
 
 	if (certPaths.length === 0) {
 		return selectFile('Select signing certificate', {
@@ -488,50 +456,11 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 
 const FOLDER_PICKER_DETAIL = 'Open a folder picker';
 
-async function findBuildOutputFiles(
-	workspacePath: string,
-	extension: 'exe' | 'dll',
-	maxResults: number,
-	cancellationToken?: vscode.CancellationToken
-): Promise<string[]> {
-	return discoverBuildOutputFiles(
-		workspacePath,
-		extension,
-		maxResults,
-		async (includeGlob, scanLimit) => {
-			const matches = await vscode.workspace.findFiles(
-				new vscode.RelativePattern(workspacePath, includeGlob),
-				BUILD_OUTPUT_EXCLUDE_GLOB,
-				scanLimit,
-				cancellationToken
-			);
-			return matches.map(match => match.fsPath);
-		},
-		() => cancellationToken?.isCancellationRequested ?? false
-	);
-}
-
-function escapeGlobPath(relativePath: string): string {
-	return relativePath.replace(/[[\]{}*?,]/g, character => `[${character}]`);
-}
-
-function getBuildOutputExcludeGlob(workspacePath: string, excludedFolders: string[]): string {
-	if (excludedFolders.length === 0) {
-		return BUILD_OUTPUT_EXCLUDE_GLOB;
-	}
-
-	const folderExclusions = excludedFolders.map(folder => {
-		const relativeFolder = path.relative(workspacePath, folder).split(path.sep).join('/');
-		return relativeFolder ? `${escapeGlobPath(relativeFolder)}/*.exe` : '*.exe';
-	});
-	return `{${BUILD_OUTPUT_EXCLUDE_GLOB.slice(1, -1)},${folderExclusions.join(',')}}`;
-}
-
 /**
  * Scan the workspace for build output folders (directories containing .exe
  * files). Shows a progress notification with cancel support.
  *
- * @returns The discovered folder paths ranked by relevance, or undefined if cancelled.
+ * @returns The discovered folder paths sorted by relative path, or undefined if cancelled.
  */
 async function findBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
 	let cancelled = false;
@@ -539,19 +468,15 @@ async function findBuildOutputFolders(workspacePath: string): Promise<string[] |
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for build output folders...', cancellable: true },
 		async (_progress, token) => {
 			token.onCancellationRequested(() => { cancelled = true; });
-			return discoverBuildOutputFolders(
-				workspacePath,
-				BUILD_OUTPUT_MAX_RESULTS,
-				async (includeGlob, scanLimit, excludedFolders = []) => {
-					const matches = await vscode.workspace.findFiles(
-						new vscode.RelativePattern(workspacePath, includeGlob),
-						getBuildOutputExcludeGlob(workspacePath, excludedFolders),
-						scanLimit,
-						token
-					);
-					return matches.map(match => match.fsPath);
-				},
-				() => token.isCancellationRequested
+			const exeMatches = await vscode.workspace.findFiles(
+				new vscode.RelativePattern(workspacePath, '**/*.exe'),
+				BUILD_OUTPUT_EXCLUDE_GLOB,
+				BUILD_OUTPUT_MAX_RESULTS
+			);
+
+			return deduplicateBuildOutputFolders(
+				exeMatches.map(m => m.fsPath),
+				workspacePath
 			);
 		}
 	);
