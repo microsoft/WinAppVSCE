@@ -339,15 +339,14 @@ async function runWinappCapture(
  * @returns The selected file path, or `undefined` if cancelled.
  */
 async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
-	const discovery = await vscode.window.withProgress(
+	const artifactPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
 		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, ARTIFACT_GLOBS, token)
 	);
 
-	if (discovery.cancelled) {
+	if (!artifactPaths) {
 		return undefined;
 	}
-	const artifactPaths = discovery.paths;
 
 	if (artifactPaths.length === 0) {
 		return selectFile('Select file to sign', {
@@ -395,15 +394,14 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
  * @returns The selected certificate path, or `undefined` if cancelled.
  */
 async function pickCertificateFile(workspacePath: string): Promise<string | undefined> {
-	const discovery = await vscode.window.withProgress(
+	const certPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for certificates...', cancellable: true },
 		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, CERTIFICATE_GLOBS, token)
 	);
 
-	if (discovery.cancelled) {
+	if (!certPaths) {
 		return undefined;
 	}
-	const certPaths = discovery.paths;
 
 	if (certPaths.length === 0) {
 		return selectFile('Select signing certificate', {
@@ -443,7 +441,7 @@ async function findWorkspaceArtifactsWithCancellation(
 	workspacePath: string,
 	patterns: string[],
 	token: vscode.CancellationToken
-): Promise<{ paths: string[]; cancelled: boolean }> {
+): Promise<string[] | undefined> {
 	const abortController = new AbortController();
 	const cancellation = token.onCancellationRequested(() => abortController.abort());
 	if (token.isCancellationRequested) {
@@ -468,7 +466,7 @@ async function findWorkspaceArtifactsWithCancellation(
 			patterns,
 			abortController.signal
 		);
-		return { paths, cancelled: token.isCancellationRequested };
+		return token.isCancellationRequested ? undefined : paths;
 	} finally {
 		cancellation.dispose();
 	}

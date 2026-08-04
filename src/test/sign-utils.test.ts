@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { glob } from 'glob';
 import {
-	findWorkspaceArtifacts,
+	findWorkspaceArtifacts as findWorkspaceArtifactsCore,
 	buildSignCommand,
-	CERTIFICATE_GLOBS,
-	type WorkspaceFileFinder
+	CERTIFICATE_GLOBS
 } from '../sign-utils';
 import { ARTIFACT_GLOBS } from '../artifact-types';
 
@@ -30,8 +30,17 @@ function createFile(filePath: string, mtimeMs?: number): void {
 
 const tempDirs: string[] = [];
 
-function findFiles(...filePaths: string[]): WorkspaceFileFinder {
-	return async () => filePaths;
+function findWorkspaceArtifacts(
+	workspacePath: string,
+	patterns: string[] = ARTIFACT_GLOBS,
+	signal?: AbortSignal
+): Promise<string[]> {
+	return findWorkspaceArtifactsCore(
+		workspacePath,
+		includePattern => glob(includePattern, { cwd: workspacePath, absolute: true, nodir: true }),
+		patterns,
+		signal
+	);
 }
 
 afterEach(() => {
@@ -44,15 +53,12 @@ describe('findWorkspaceArtifacts', () => {
 	it('discovers .msix, .msixbundle, .appx, and .appxbundle files', async () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
-		const files = [
-			path.join(tempDir, 'a.msix'),
-			path.join(tempDir, 'b.msixbundle'),
-			path.join(tempDir, 'c.appx'),
-			path.join(tempDir, 'd.appxbundle')
-		];
-		files.forEach(filePath => createFile(filePath));
+		createFile(path.join(tempDir, 'a.msix'));
+		createFile(path.join(tempDir, 'b.msixbundle'));
+		createFile(path.join(tempDir, 'c.appx'));
+		createFile(path.join(tempDir, 'd.appxbundle'));
 
-		const results = await findWorkspaceArtifacts(tempDir, findFiles(...files), ARTIFACT_GLOBS);
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 
 		assert.deepEqual(
 			results.map(filePath => path.basename(filePath)).sort(),
@@ -70,11 +76,7 @@ describe('findWorkspaceArtifacts', () => {
 		createFile(newest, 1_700_000_000_200);
 		createFile(middle, 1_700_000_000_100);
 
-		const results = await findWorkspaceArtifacts(
-			tempDir,
-			findFiles(older, newest, middle),
-			ARTIFACT_GLOBS
-		);
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 
 		assert.deepEqual(results, [newest, middle, older]);
 	});
@@ -97,11 +99,7 @@ describe('findWorkspaceArtifacts', () => {
 		}) as typeof fs.promises.stat;
 
 		try {
-			const results = await findWorkspaceArtifacts(
-				tempDir,
-				findFiles(stable, missing),
-				ARTIFACT_GLOBS
-			);
+			const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 			assert.deepEqual(results, [stable, missing]);
 		} finally {
 			promisesFs.stat = originalStat;
@@ -112,7 +110,7 @@ describe('findWorkspaceArtifacts', () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
 
-		const results = await findWorkspaceArtifacts(tempDir, findFiles(), ARTIFACT_GLOBS);
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 
 		assert.deepEqual(results, []);
 	});
@@ -123,7 +121,7 @@ describe('findWorkspaceArtifacts', () => {
 		const nested = path.join(tempDir, 'artifacts', 'release', 'app.msix');
 		createFile(nested);
 
-		const results = await findWorkspaceArtifacts(tempDir, findFiles(nested), ARTIFACT_GLOBS);
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 
 		assert.deepEqual(results, [nested]);
 	});
@@ -133,16 +131,10 @@ describe('findWorkspaceArtifacts', () => {
 		tempDirs.push(tempDir);
 		const included = path.join(tempDir, 'out', 'app.msix');
 		createFile(included);
-		const dependency = path.join(tempDir, 'node_modules', 'pkg', 'ignored.msix');
-		const repositoryMetadata = path.join(tempDir, '.git', 'objects', 'ignored.appx');
-		createFile(dependency);
-		createFile(repositoryMetadata);
+		createFile(path.join(tempDir, 'node_modules', 'pkg', 'ignored.msix'));
+		createFile(path.join(tempDir, '.git', 'objects', 'ignored.appx'));
 
-		const results = await findWorkspaceArtifacts(
-			tempDir,
-			findFiles(included, dependency, repositoryMetadata),
-			ARTIFACT_GLOBS
-		);
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 
 		assert.deepEqual(results, [included]);
 	});
@@ -153,7 +145,7 @@ describe('findWorkspaceArtifacts', () => {
 		let receivedPattern: string | undefined;
 		let calls = 0;
 
-		await findWorkspaceArtifacts(
+		await findWorkspaceArtifactsCore(
 			tempDir,
 			async (includePattern) => {
 				calls++;
@@ -174,7 +166,7 @@ describe('findWorkspaceArtifacts', () => {
 		controller.abort();
 		let called = false;
 
-		const results = await findWorkspaceArtifacts(
+		const results = await findWorkspaceArtifactsCore(
 			tempDir,
 			async () => {
 				called = true;
@@ -192,7 +184,7 @@ describe('findWorkspaceArtifacts', () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
 		const controller = new AbortController();
-		const search = findWorkspaceArtifacts(
+		const search = findWorkspaceArtifactsCore(
 			tempDir,
 			(_includePattern, signal) => new Promise((_resolve, reject) => {
 				signal?.addEventListener('abort', () => {
@@ -226,9 +218,9 @@ describe('findWorkspaceArtifacts', () => {
 		}) as typeof fs.promises.stat;
 
 		try {
-			const results = await findWorkspaceArtifacts(
+			const results = await findWorkspaceArtifactsCore(
 				tempDir,
-				findFiles(first, second),
+				async () => [first, second],
 				ARTIFACT_GLOBS,
 				controller.signal
 			);
@@ -244,7 +236,7 @@ describe('findWorkspaceArtifacts', () => {
 		tempDirs.push(tempDir);
 
 		await assert.rejects(
-			findWorkspaceArtifacts(
+			findWorkspaceArtifactsCore(
 				tempDir,
 				async () => { throw new Error('search failed'); },
 				ARTIFACT_GLOBS
@@ -258,13 +250,10 @@ describe('findWorkspaceArtifacts with CERTIFICATE_GLOBS', () => {
 	it('discovers .pfx certificate files', async () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
-		const files = [
-			path.join(tempDir, 'devcert.pfx'),
-			path.join(tempDir, 'certs', 'prod.pfx')
-		];
-		files.forEach(filePath => createFile(filePath));
+		createFile(path.join(tempDir, 'devcert.pfx'));
+		createFile(path.join(tempDir, 'certs', 'prod.pfx'));
 
-		const results = await findWorkspaceArtifacts(tempDir, findFiles(...files), CERTIFICATE_GLOBS);
+		const results = await findWorkspaceArtifacts(tempDir, CERTIFICATE_GLOBS);
 
 		assert.deepEqual(
 			results.map(filePath => path.basename(filePath)).sort(),
@@ -278,7 +267,7 @@ describe('findWorkspaceArtifacts with CERTIFICATE_GLOBS', () => {
 		createFile(path.join(tempDir, 'app.msix'));
 		createFile(path.join(tempDir, 'cert.pem'));
 
-		const results = await findWorkspaceArtifacts(tempDir, findFiles(), CERTIFICATE_GLOBS);
+		const results = await findWorkspaceArtifacts(tempDir, CERTIFICATE_GLOBS);
 
 		assert.deepEqual(results, []);
 	});
@@ -288,14 +277,9 @@ describe('findWorkspaceArtifacts with CERTIFICATE_GLOBS', () => {
 		tempDirs.push(tempDir);
 		const included = path.join(tempDir, 'devcert.pfx');
 		createFile(included);
-		const dependency = path.join(tempDir, 'node_modules', 'pkg', 'test.pfx');
-		createFile(dependency);
+		createFile(path.join(tempDir, 'node_modules', 'pkg', 'test.pfx'));
 
-		const results = await findWorkspaceArtifacts(
-			tempDir,
-			findFiles(included, dependency),
-			CERTIFICATE_GLOBS
-		);
+		const results = await findWorkspaceArtifacts(tempDir, CERTIFICATE_GLOBS);
 
 		assert.deepEqual(results, [included]);
 	});
