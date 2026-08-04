@@ -21,6 +21,10 @@ import {
 } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
+import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
+import { SchemaModel } from './manifest-schema/schema-model';
+import { loadSchemaModel } from './manifest-schema/xsd-parser';
+import { isManifestPath } from './manifest-schema/manifest-path';
 import {
 	PACK_ACTIONS,
 	getPackNotificationAction,
@@ -1157,31 +1161,56 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.debug.registerDebugAdapterDescriptorFactory(WINAPP_DEBUG_TYPE, factory)
 	);
 
-	// Register the AppxManifest visual editor
-	context.subscriptions.push(ManifestEditorProvider.register(context));
+	// Shared schema model — loaded lazily, shared by both editor and IntelliSense.
+	// Schemas are bundled at build time (vscode:prepublish runs sync-schemas + verify-schemas),
+	// so loadSchemaModel will always succeed in a properly packaged extension.
+	const schemasDir = path.join(extensionPath, 'schemas');
+	let sharedSchema: SchemaModel | undefined;
+	const getSharedSchema = (): SchemaModel => {
+		if (sharedSchema) { return sharedSchema; }
+		sharedSchema = loadSchemaModel(schemasDir);
+		return sharedSchema;
+	};
+
+	// Register the Manifest Editor (with schema support)
+	context.subscriptions.push(ManifestEditorProvider.register(context, getSharedSchema));
+
+	// Register AppxManifest IntelliSense (completion, hover, diagnostics) — shares the same schema
+	registerManifestIntelliSense(context, getSharedSchema);
 
 	// When an appxmanifest file is opened in the default text editor,
-	// suggest switching to the visual editor.
-	const MANIFEST_PATTERN = /(?:^|[\\/])appxmanifest\.xml$|\.appxmanifest$/i;
+	// suggest switching to the Manifest Editor.
 	const dismissedKey = 'winapp.manifestEditorNotificationDismissed';
 
 	context.subscriptions.push(
 		vscode.window.onDidChangeActiveTextEditor(editor => {
 			if (!editor || editor.document.uri.scheme !== 'file') { return; }
-			if (!MANIFEST_PATTERN.test(editor.document.uri.fsPath)) { return; }
+			if (!isManifestPath(editor.document.uri.fsPath)) { return; }
 			if (context.globalState.get<boolean>(dismissedKey)) { return; }
 
 			vscode.window.showInformationMessage(
-				'This file can be opened with the WinApp visual manifest editor for a richer editing experience.',
-				'Open with AppxManifest Editor',
+				'This file can be opened with the Manifest Editor for a richer editing experience.',
+				'Open Manifest Editor',
 				"Don't Show Again",
 			).then(choice => {
-				if (choice === 'Open with AppxManifest Editor') {
+				if (choice === 'Open Manifest Editor') {
 					vscode.commands.executeCommand('vscode.openWith', editor.document.uri, ManifestEditorProvider.viewType);
 				} else if (choice === "Don't Show Again") {
 					context.globalState.update(dismissedKey, true);
 				}
 			});
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('winapp.openManifestEditor', async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor || editor.document.uri.scheme !== 'file' || !isManifestPath(editor.document.uri.fsPath)) {
+				vscode.window.showWarningMessage('Open an .appxmanifest or AppxManifest.xml file to use the Manifest Editor.');
+				return;
+			}
+
+			await vscode.commands.executeCommand('vscode.openWith', editor.document.uri, ManifestEditorProvider.viewType);
 		})
 	);
 

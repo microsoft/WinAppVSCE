@@ -46,7 +46,7 @@ try {
 
     # Step 1: Download CLI binaries
     if (-not $SkipDownload) {
-        Write-Host "[1/5] Downloading CLI binaries..." -ForegroundColor Blue
+        Write-Host "[1/6] Downloading CLI binaries..." -ForegroundColor Blue
         $downloadScript = Join-Path $PSScriptRoot "download-cli.ps1"
         & $downloadScript -Tag $CliTag
         if ($LASTEXITCODE -ne 0) {
@@ -54,7 +54,7 @@ try {
             exit 1
         }
     } else {
-        Write-Host "[1/5] Skipping CLI download (using existing bin/)" -ForegroundColor Gray
+        Write-Host "[1/6] Skipping CLI download (using existing bin/)" -ForegroundColor Gray
         if (-not (Test-Path "bin/win-x64/winapp.exe")) {
             Write-Warning "bin/win-x64/winapp.exe not found. Run without -SkipDownload or run: npm run download-cli"
         }
@@ -62,34 +62,44 @@ try {
 
     # Step 2: Install dependencies
     Write-Host ""
-    Write-Host "[2/5] Installing dependencies..." -ForegroundColor Blue
+    Write-Host "[2/6] Installing dependencies..." -ForegroundColor Blue
     npm ci
     if ($LASTEXITCODE -ne 0) {
         Write-Error "npm ci failed"
         exit 1
     }
 
-    # Step 3: Compile TypeScript
+    # Step 3: Sync XSD schemas from Windows SDK
     Write-Host ""
-    Write-Host "[3/5] Compiling TypeScript..." -ForegroundColor Blue
+    Write-Host "[3/6] Syncing manifest schemas..." -ForegroundColor Blue
+    $syncScript = Join-Path $PSScriptRoot "sync-schemas.ps1"
+    & $syncScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Schema sync failed. Run 'winapp restore' to download SDK packages."
+        exit 1
+    }
+
+    # Step 4: Compile TypeScript
+    Write-Host ""
+    Write-Host "[4/6] Compiling TypeScript..." -ForegroundColor Blue
     npm run compile
     if ($LASTEXITCODE -ne 0) {
         Write-Error "TypeScript compilation failed"
         exit 1
     }
 
-    # Step 4: Lint
+    # Step 5: Lint
     Write-Host ""
-    Write-Host "[4/5] Running linter..." -ForegroundColor Blue
+    Write-Host "[5/6] Running linter..." -ForegroundColor Blue
     npm run lint
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "Lint found issues (non-blocking)"
     }
 
-    # Step 5: Unit tests
+    # Step 6: Unit tests
     if (-not $SkipTests) {
         Write-Host ""
-        Write-Host "[5/5] Running unit tests..." -ForegroundColor Blue
+        Write-Host "[6/6] Running unit tests..." -ForegroundColor Blue
         npm run test:unit
         if ($LASTEXITCODE -ne 0) {
             Write-Error "Unit tests failed"
@@ -97,7 +107,7 @@ try {
         }
     } else {
         Write-Host ""
-        Write-Host "[5/5] Skipping tests" -ForegroundColor Gray
+        Write-Host "[6/6] Skipping tests" -ForegroundColor Gray
     }
 
     # Optional: Package VSIX

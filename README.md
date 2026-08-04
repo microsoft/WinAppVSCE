@@ -35,6 +35,7 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Generate Certificate** | Create a development certificate for signing, with an option to also install (trust) it. Installing prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Install Certificate** | Install (trust) an existing `.pfx` or `.cer` certificate in the machine store. Prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Certificate Info** | Display certificate details (subject, thumbprint, expiry) to verify a certificate matches your manifest. |
+| **WinApp: Open Manifest Editor** | Switch from manifest text editor to the AppxManifest Editor |
 | **WinApp: Sign File** | Sign an MSIX package, executable, or library with a certificate. Searches the workspace for MSIX/APPX packages and `.exe`/`.dll` files, prioritizing conventional build-output paths while retaining custom output folders as fallbacks. Presents up to 10 results with packages first and binaries second; a **Browse…** option falls back to a native file dialog. |
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
@@ -189,6 +190,55 @@ The extension includes a **visual editor** for `AppxManifest.xml` and `.appxmani
 **How to open:**
 
 When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer the visual editor as an option alongside the default text editor. You can switch between them at any time by right clicking on the file and selecting the **Open With…** command.
+
+### AppxManifest IntelliSense
+
+When you edit an `AppxManifest.xml` or `.appxmanifest` file in the text editor, the extension provides schema-aware IntelliSense powered by bundled AppxManifest XSD schemas from the Windows SDK. That means completions, hovers, validation, and navigation are based on the same schema definitions used by Windows manifests.
+
+**What you get:**
+
+- **Element completions** — context-aware child element suggestions for the current XML location
+- **Attribute completions** — valid attributes for the current element
+- **Attribute value completions** — allowed enum values from XSD restrictions
+- **Hover documentation** — element and attribute descriptions from XSD annotations
+- **Diagnostics** — errors for missing required attributes/elements, invalid values, and pattern violations; warnings for undeclared attributes
+- **Go to Definition** — **F12** / **Ctrl+Click** jumps to the relevant schema definition
+
+**Supported files:**
+
+- `**/[Aa]ppx[Mm]anifest.xml`
+- `**/*.appxmanifest`
+
+**Switching between text and visual editors:**
+
+When viewing a manifest in the text editor, click the **preview icon** (📋) in the editor title bar to switch to the visual editor. From the visual editor, click **View XML** to switch back.
+
+**Disabling IntelliSense:**
+
+If you prefer to use the extension's other features (run, pack, sign, etc.) without IntelliSense, you can disable it in your settings:
+
+```jsonc
+// .vscode/settings.json or User Settings
+{
+  "winapp.manifest.intelliSense.enable": false
+}
+```
+
+You can also disable just the diagnostic underlines while keeping completions and hover:
+
+```jsonc
+{
+  "winapp.manifest.diagnostics.level": "off"
+}
+```
+
+**Configuration:**
+
+| Setting | Description |
+|---------|-------------|
+| `winapp.manifest.intelliSense.enable` | Enable or disable all IntelliSense features (completions, hover, diagnostics, Go to Definition). Default: `true`. |
+| `winapp.manifest.diagnostics.level` | Filter manifest diagnostics: `off` disables validation, `warning` shows all diagnostics, and `error` shows only errors. Default: `warning`. |
+| `winapp.manifest.intelliSense.diagnostics.strictChildPlacement` | When enabled, report known manifest elements that appear under an unexpected parent even when substitution-group coverage is incomplete. |
 
 ## Scenarios
 

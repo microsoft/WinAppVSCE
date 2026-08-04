@@ -1,6 +1,14 @@
-import { describe, it } from 'node:test';
+import { describe, it, before } from 'node:test';
 import assert from 'node:assert';
 import { validateManifest } from '../manifest-editor/manifest-validator';
+import { loadSchemaModel } from '../manifest-schema/xsd-parser';
+import { SchemaModel } from '../manifest-schema/schema-model';
+import * as path from 'path';
+
+let schema: SchemaModel;
+before(() => {
+    schema = loadSchemaModel(path.join(__dirname, '..', '..', 'schemas'));
+});
 
 describe('ReDoS prevention', () => {
     it('pathological publisher DN completes in under 1 second', () => {
@@ -16,7 +24,7 @@ describe('ReDoS prevention', () => {
             capabilities: { list: [] },
         };
         const start = Date.now();
-        const errors = validateManifest(data as any);
+        const errors = validateManifest(data as any, schema);
         const elapsed = Date.now() - start;
         assert.ok(elapsed < 1000, `Took ${elapsed}ms — possible ReDoS`);
         // Should produce a validation error (invalid DN)

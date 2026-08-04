@@ -80,8 +80,8 @@ export function getApplicationsScript(): string {
                 // Build extensions HTML
                 let extListHtml = '';
                 if (app.extensions && app.extensions.length > 0) {
-                    app.extensions.forEach((extXml, eidx) => {
-                        const fields = parseExtensionFields(extXml);
+                    app.extensions.forEach((ext, eidx) => {
+                        const fields = ext.fields;
                         let fieldsHtml = fields.map(f => {
                             let descHtml = f.description ? '<div class="description">' + escapeHtml(f.description) + '</div>' : '';
                             const textContentAttr = f.isTextContent ? ' data-ext-text-content="true"' : '';
@@ -567,88 +567,5 @@ export function getApplicationsScript(): string {
             });
         }
 
-        function parseExtensionFields(xml) {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(xml, 'application/xml');
-            const root = doc.documentElement;
-            if (!root) return [{ label: 'Raw XML', value: xml, editable: false, description: '' }];
-
-            // Descriptions for known extension fields
-            const fieldDescriptions = {
-                // MCP Server / App Extension (windows.appExtension)
-                'AppExtension.Name': 'Extension contract name, use "com.microsoft.windows.ai.mcpServer" to register as an MCP server',
-                'AppExtension.Id': 'Unique identifier for this app extension instance',
-                'AppExtension.DisplayName': 'Display name shown when discovering this extension',
-                'AppExtension.PublicFolder': 'Folder in the package accessible to the host app, typically "Assets" or "Public"',
-                'Registration': 'Path to the MCP server configuration JSON file, relative to the PublicFolder',
-                // COM Server (windows.comServer)
-                'ExeServer.Executable': 'Relative path to the COM server executable inside the package',
-                'ExeServer.DisplayName': 'Name for this COM server, shown in system tools and diagnostics',
-                'Class.Id': 'CLSID (GUID) that uniquely identifies this COM class, format: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}',
-                // App Execution Alias (windows.appExecutionAlias)
-                'ExecutionAlias.Alias': 'Command-line alias users type to launch your app (e.g., "myapp.exe"). Must end in .exe',
-                // Background Tasks (windows.backgroundTasks)
-                'Extension.EntryPoint': 'Activatable class ID for the background task (e.g., "MyApp.BackgroundTask"), or "Windows.FullTrustApplication" for Win32 apps',
-                'Task.Type': 'Background task trigger type (e.g., "timer", "pushNotification", "systemEvent", "general")',
-                // Protocol Activation (windows.protocol)
-                'Protocol.Name': 'URI scheme this app handles (e.g., "myapp"). Users launch your app with myapp://. Lowercase letters, digits, and ".", "+", "-" only',
-                // File Type Association (windows.fileTypeAssociation)
-                'FileTypeAssociation.Name': 'Internal name for this file type association (letters, digits, periods only)',
-                'DisplayName': 'User-friendly display name shown in the Open With dialog',
-                'FileType': 'File extension to associate (must start with ".", e.g., ".txt", ".myext")',
-                // Startup Task (windows.startupTask)
-                'StartupTask.TaskId': 'Unique identifier for this startup task, used to enable/disable it programmatically',
-                'StartupTask.Enabled': 'Whether the task runs automatically at user logon ("true" or "false")',
-                'StartupTask.DisplayName': 'Name shown to the user in Task Manager Startup tab',
-                // Share Target (windows.shareTarget)
-                'DataFormat': 'Data format this share target accepts (e.g., "Text", "URI", "Bitmap", "Html", "StorageItems")',
-                // App Service (windows.appService)
-                'AppService.Name': 'Unique name for this app service that other apps use to connect (e.g., "com.contoso.myservice")',
-                // Toast Notification Activation (windows.toastNotificationActivation)
-                'ToastNotificationActivation.ToastActivatorCLSID': 'COM CLSID for toast activation, format: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}',
-            };
-
-            const fields = [];
-            const category = root.getAttribute('Category');
-            if (category) fields.push({ label: 'Category', value: category, editable: false, description: 'Extension category type' });
-            function walk(el, depth) {
-                for (let i = 0; i < el.attributes.length; i++) {
-                    const attr = el.attributes[i];
-                    if (attr.name === 'Category' && el === root) continue;
-                    if (attr.name.startsWith('xmlns')) continue;
-                    const fieldKey = (el.localName || el.nodeName) + '.' + attr.name;
-                    const desc = fieldDescriptions[fieldKey] || '';
-                    fields.push({ label: fieldKey, value: attr.value, editable: true, description: desc });
-                }
-                // Check for text-content elements (leaf elements with only text children)
-                let hasElementChildren = false;
-                let textContent = '';
-                const children = el.childNodes;
-                for (let j = 0; j < children.length; j++) {
-                    if (children[j].nodeType === 1) { hasElementChildren = true; }
-                    else if (children[j].nodeType === 3) { textContent += children[j].nodeValue || ''; }
-                }
-                if (!hasElementChildren && textContent.trim()) {
-                    const elName = el.localName || el.nodeName;
-                    const desc = fieldDescriptions[elName] || '';
-                    fields.push({ label: elName, value: textContent.trim(), editable: true, description: desc, isTextContent: true });
-                } else if (!hasElementChildren && el !== root) {
-                    // Empty leaf element (ignoring xmlns attrs) — show as editable blank field
-                    let nonXmlnsAttrs = 0;
-                    for (let k = 0; k < el.attributes.length; k++) {
-                        if (!el.attributes[k].name.startsWith('xmlns')) nonXmlnsAttrs++;
-                    }
-                    if (nonXmlnsAttrs > 0) return; // has real attributes, already handled above
-                    const elName = el.localName || el.nodeName;
-                    const desc = fieldDescriptions[elName] || '';
-                    fields.push({ label: elName, value: '', editable: true, description: desc, isTextContent: true });
-                }
-                for (let j = 0; j < children.length; j++) {
-                    if (children[j].nodeType === 1) walk(children[j], depth + 1);
-                }
-            }
-            walk(root, 0);
-            return fields;
-        }
 `;
 }
