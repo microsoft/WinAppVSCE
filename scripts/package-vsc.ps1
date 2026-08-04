@@ -178,6 +178,23 @@ try
         Copy-Item "$CliBinariesPath\win-arm64\*.exe" "$VscBinPath\win-arm64\" -Force
     }
 
+    # Sync manifest schemas from NuGet cache after the CLI binaries are available
+    Write-Host "[VSC] Syncing manifest schemas..." -ForegroundColor Blue
+    $SyncCliPath = Join-Path $VscBinPath 'win-x64\winapp.exe'
+    & $PSScriptRoot\sync-schemas.ps1 -CliPath $SyncCliPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Schema sync failed"
+        Pop-Location
+        exit 1
+    }
+    $schemaFiles = Get-ChildItem -Path "schemas" -Filter "*.xsd" -ErrorAction SilentlyContinue
+    if (-not $schemaFiles -or $schemaFiles.Count -eq 0) {
+        Write-Error "No schema XSD files found in schemas/ after sync. Packaging would produce a broken extension."
+        Pop-Location
+        exit 1
+    }
+    Write-Host "  Found $($schemaFiles.Count) XSD schema files" -ForegroundColor Gray
+
     # In the monorepo, LICENSE was copied from project root into the VSC subdirectory.
     # In this standalone repo, LICENSE already lives at the project root — no copy needed.
 

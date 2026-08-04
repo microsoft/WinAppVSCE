@@ -1,7 +1,7 @@
 {
   "name": "winapp",
   "displayName": "WinApp",
-  "description": "WinApp extension for Visual Studio Code to assist in building, debugging, and packaging Windows applications using the WinAppCLI.",
+  "description": "WinApp extension for Visual Studio Code to assist in building, debugging, and packaging Windows applications. Includes schema-aware IntelliSense for AppxManifest.xml files.",
   "publisher": "Microsoft-WinAppCLI",
   "icon": "images/icon.png",
   "version": "0.2.2",
@@ -16,6 +16,9 @@
     "Other"
   ],
   "activationEvents": [
+    "workspaceContains:**/[Aa]ppx[Mm]anifest.xml",
+    "workspaceContains:**/*.appxmanifest",
+    "onLanguage:xml",
     "onDebugResolve:winapp",
     "onCommand:winapp.init",
     "onCommand:winapp.restore",
@@ -32,10 +35,26 @@
     "onCommand:winapp.getWinappPath",
     "onCommand:winapp.manifestAddAlias",
     "onCommand:winapp.unregister",
-    "onCommand:winapp.certInfo"
+    "onCommand:winapp.certInfo",
+    "onCommand:winapp.openManifestEditor"
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "languages": [
+      {
+        "id": "xml",
+        "extensions": [
+          ".appxmanifest"
+        ],
+        "filenames": [
+          "AppxManifest.xml",
+          "appxmanifest.xml"
+        ],
+        "aliases": [
+          "AppxManifest"
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "winapp.init",
@@ -116,6 +135,12 @@
         "command": "winapp.certInfo",
         "title": "Certificate Info",
         "category": "WinApp"
+      },
+      {
+        "command": "winapp.openManifestEditor",
+        "title": "Open Manifest Editor",
+        "category": "WinApp",
+        "icon": "$(preview)"
       }
     ],
     "configuration": {
@@ -128,6 +153,22 @@
           },
           "default": [],
           "description": "Relative paths (from the workspace root) to app project directories. When set, WinApp commands target these directories instead of auto-scanning. If multiple entries are provided, you'll be prompted to choose."
+        },
+        "winapp.manifest.intelliSense.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable IntelliSense (completion, hover, diagnostics, and Go to Definition/navigation) for AppxManifest.xml files."
+        },
+        "winapp.manifest.diagnostics.level": {
+          "type": "string",
+          "enum": ["off", "warning", "error"],
+          "default": "warning",
+          "description": "Diagnostic filter for manifest schema validation. Set to 'off' to disable validation, 'warning' to show all diagnostics, or 'error' to show only errors."
+        },
+        "winapp.manifest.intelliSense.diagnostics.strictChildPlacement": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, report known manifest elements that appear under an unexpected parent even when substitution-group coverage is incomplete."
         }
       }
     },
@@ -146,6 +187,21 @@
         "priority": "option"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "winapp.openManifestEditor",
+          "when": "(resourceFilename =~ /[Aa]ppx[Mm]anifest\\.xml$/ || resourceExtname == .appxmanifest) && activeCustomEditorId != winapp.manifestEditor",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "winapp.openManifestEditor",
+          "when": "(resourceFilename =~ /[Aa]ppx[Mm]anifest\\.xml$/ || resourceExtname == .appxmanifest) && activeCustomEditorId != winapp.manifestEditor"
+        }
+      ]
+    },
     "debuggers": [
       {
         "type": "winapp",
@@ -207,7 +263,7 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run package",
+    "vscode:prepublish": "npm run sync-schemas && npm run verify-schemas && npm run package",
     "compile": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "package": "node esbuild.mjs --production",
@@ -219,14 +275,16 @@
     "clean": "node -e \"require('fs').rmSync('bin', {recursive: true, force: true}); require('fs').rmSync('out', {recursive: true, force: true}); require('fs').rmSync('dist', {recursive: true, force: true});\"",
     "download-cli": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1\"",
     "download-cli:latest": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1 -Tag latest\"",
-    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && npx tsx --test src/test/artifact-types.test.ts src/test/arch-detection.test.ts src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-validator.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/noop-debug-adapter.test.ts src/test/pack-result.test.ts src/test/sign-utils.test.ts src/test/sign-flow.test.ts src/test/tool-command-utils.test.ts src/test/working-directory.test.ts"
+    "sync-schemas": "pwsh -NoProfile -Command \"& ./scripts/sync-schemas.ps1\"",
+    "verify-schemas": "node -e \"const fs=require('fs'),p=require('path'),d=p.join(__dirname,'schemas');if(!fs.existsSync(d)||fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length===0){console.error('ERROR: schemas/ contains no XSD files. Run npm run sync-schemas first.');process.exit(1);}console.log('schemas/ verified:',fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length,'XSD files');\"",
+    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && npx tsx --test src/test/artifact-types.test.ts src/test/arch-detection.test.ts src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-path.test.ts src/test/manifest-validator.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/noop-debug-adapter.test.ts src/test/pack-result.test.ts src/test/sign-utils.test.ts src/test/sign-flow.test.ts src/test/tool-command-utils.test.ts src/test/xsd-parser.test.ts src/test/xml-context.test.ts src/test/intellisense-integration.test.ts src/test/intellisense-validation.test.ts src/test/schema-shared.test.ts src/test/semantic-validation.test.ts src/test/working-directory.test.ts"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.9",
     "glob": "^13.0.6"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.0",
+    "@playwright/test": "^1.62.1",
     "@types/mocha": "^10.0.10",
     "@types/node": "26.x",
     "@types/vscode": "^1.109.0",

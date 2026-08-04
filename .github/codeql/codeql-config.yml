@@ -1,0 +1,7 @@
+name: "WinAppVSCE CodeQL Configuration"
+
+# Exclude false-positive query for XML namespace URI constants that CodeQL
+# incorrectly flags as incomplete hostname regular expressions.
+query-filters:
+  - exclude:
+      id: js/incomplete-hostname-regexp
