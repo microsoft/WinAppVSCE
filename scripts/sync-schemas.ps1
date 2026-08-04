@@ -83,7 +83,7 @@ $nugetCache = Join-Path $env:USERPROFILE '.nuget' 'packages'
 $buildToolsBase = Join-Path $nugetCache 'microsoft.windows.sdk.buildtools' $buildToolsVersion
 $sdkCppBase = Join-Path $nugetCache 'microsoft.windows.sdk.cpp' $sdkCppVersion
 
-# Auto-download missing packages using winapp restore (or NuGet directly as fallback)
+# Auto-download missing packages using winapp restore
 $needsRestore = (-not (Test-Path $buildToolsBase)) -or (-not (Test-Path $sdkCppBase))
 if ($needsRestore) {
     if (-not $winappExe) {
@@ -95,52 +95,7 @@ if ($needsRestore) {
     $restoreExitCode = $LASTEXITCODE
 
     if ((-not (Test-Path $buildToolsBase) -or -not (Test-Path $sdkCppBase))) {
-        if ($env:CI) {
-            throw "Required schema packages are missing after 'winapp restore' in CI. Pre-restore packages before running sync-schemas."
-        }
-
-        if ($restoreExitCode -eq 0) {
-            throw "Required schema packages are still missing after 'winapp restore'. Run 'winapp restore' again or pass a valid -CliPath."
-        }
-
-        $nugetExe = (Get-Command 'nuget' -ErrorAction SilentlyContinue)?.Source
-        if (-not $nugetExe) {
-            throw "winapp restore failed and NuGet.exe was not found on PATH. Install NuGet for local development or pre-restore packages."
-        }
-
-        Write-Warning "Using PATH-resolved NuGet executable at '$nugetExe'. This fallback is for local development only and must not be used in CI/release builds."
-        # Development-only fallback: copy packages from an explicit NuGet download when
-        # winapp restore fails locally. CI/release builds should always use pre-restored
-        # packages from `winapp restore`.
-        Write-Host "Falling back to direct NuGet install for local development..."
-        $downloadRoot = Join-Path $repoRoot '.schema-restore'
-        New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
-
-        try {
-            if (-not (Test-Path $buildToolsBase)) {
-                & $nugetExe install Microsoft.Windows.SDK.BuildTools -Version $buildToolsVersion -OutputDirectory $downloadRoot -Source "https://api.nuget.org/v3/index.json" -NonInteractive 2>&1 | Out-Null
-                $downloadedPkg = Join-Path $downloadRoot "Microsoft.Windows.SDK.BuildTools.$buildToolsVersion"
-                if (-not (Test-Path $downloadedPkg)) {
-                    throw "NuGet download did not produce $downloadedPkg"
-                }
-                $destDir = Split-Path $buildToolsBase -Parent
-                New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-                Copy-Item $downloadedPkg -Destination $buildToolsBase -Recurse -Force
-            }
-            if (-not (Test-Path $sdkCppBase)) {
-                & $nugetExe install Microsoft.Windows.SDK.CPP -Version $sdkCppVersion -OutputDirectory $downloadRoot -Source "https://api.nuget.org/v3/index.json" -NonInteractive 2>&1 | Out-Null
-                $downloadedPkg = Join-Path $downloadRoot "Microsoft.Windows.SDK.CPP.$sdkCppVersion"
-                if (-not (Test-Path $downloadedPkg)) {
-                    throw "NuGet download did not produce $downloadedPkg"
-                }
-                $destDir = Split-Path $sdkCppBase -Parent
-                New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-                Copy-Item $downloadedPkg -Destination $sdkCppBase -Recurse -Force
-            }
-        }
-        finally {
-            Remove-Item $downloadRoot -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        throw "Required schema packages are missing after 'winapp restore' (exit code $restoreExitCode). Run 'winapp restore' manually or pass a valid -CliPath."
     }
 }
 
