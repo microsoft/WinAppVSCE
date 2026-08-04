@@ -2,6 +2,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
+const { executeCommandStep } = require('./command-step');
 
 const LOG_DIR = path.join(__dirname, '..', 'logs');
 
@@ -85,25 +86,31 @@ async function acceptQuickInput() {
 // then answers prompts in order: {accept:true} for QuickPick, {nativeDialogPath} for folder picker,
 // {nativeFileDialogPath} for file picker.
 async function runCommandStep(step, result) {
-  const settle = step.settleMs || 1600;
   appendLog('driver-run.log', `command: ${step.command}`);
-  Promise.resolve(vscode.commands.executeCommand(step.command)).catch(e => appendLog('driver-run.log', `cmd ${step.command} threw: ${e}`));
-  const answers = step.answers || [];
-  const log = { type: 'command', command: step.command, answers: [] };
-  for (const a of answers) {
-    await delay(settle);
-    if (a.nativeFileDialogPath) {
-      const r = await typeIntoNativeDialog(a.nativeFileDialogPath, 'file');
-      log.answers.push({ kind: 'nativeFileDialog', path: a.nativeFileDialogPath, dialogResult: r });
-    } else if (a.nativeDialogPath) {
-      const r = await typeIntoNativeDialog(a.nativeDialogPath);
-      log.answers.push({ kind: 'nativeDialog', path: a.nativeDialogPath, dialogResult: r });
-    } else if (a.accept) {
-      const r = await acceptQuickInput();
-      log.answers.push({ kind: 'accept', result: r });
+  const log = await executeCommandStep(step, {
+    tasks: vscode.tasks,
+    timers: { setTimeout, clearTimeout },
+    executeCommand: (...args) => vscode.commands.executeCommand(...args),
+    resolveCommandArg,
+    delay,
+    answer: async (answer) => {
+      if (answer.nativeFileDialogPath) {
+        const dialogResult = await typeIntoNativeDialog(answer.nativeFileDialogPath, 'file');
+        return { kind: 'nativeFileDialog', path: answer.nativeFileDialogPath, dialogResult };
+      }
+      if (answer.nativeDialogPath) {
+        const dialogResult = await typeIntoNativeDialog(answer.nativeDialogPath);
+        return { kind: 'nativeDialog', path: answer.nativeDialogPath, dialogResult };
+      }
+      if (answer.accept) {
+        return { kind: 'accept', result: await acceptQuickInput() };
+      }
+      return { kind: 'unknown' };
     }
+  });
+  if (log.error) {
+    appendLog('driver-run.log', `cmd ${step.command} threw: ${log.error}`);
   }
-  await delay(step.afterMs || 4000);
   result.steps.push(log);
 }
 
@@ -345,18 +352,6 @@ async function saveDocumentStep(step, result) {
   result.steps.push({ type: 'saveDocument', saved });
 }
 
-async function commandArgsStep(step, result) {
-  let err = null;
-  let value = null;
-  try {
-    value = await vscode.commands.executeCommand(step.command, ...(step.args || []).map(resolveCommandArg));
-  } catch (e) {
-    err = String(e);
-  }
-  await delay(step.afterMs || 800);
-  result.steps.push({ type: 'commandArgs', command: step.command, result: value, error: err });
-}
-
 async function queryCompletionsStep(step, result) {
   const editor = requireActiveEditor();
   const position = toPosition(step.line, step.character);
@@ -454,7 +449,6 @@ async function runStep(step, result) {
     case 'setDocumentText': await setDocumentTextStep(step, result); break;
     case 'replaceText': await replaceTextStep(step, result); break;
     case 'saveDocument': await saveDocumentStep(step, result); break;
-    case 'commandArgs': await commandArgsStep(step, result); break;
     case 'queryCompletions': await queryCompletionsStep(step, result); break;
     case 'queryHover': await queryHoverStep(step, result); break;
     case 'queryDefinition': await queryDefinitionStep(step, result); break;

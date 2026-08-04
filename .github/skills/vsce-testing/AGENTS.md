@@ -140,6 +140,13 @@ Real command IDs: `winapp.getWinappPath`, `winapp.init`, `winapp.restore`, `wina
 `winapp.certGenerate`, `winapp.pack`, `winapp.run`, `winapp.createDebugIdentity`, `winapp.sign`,
 `winapp.certInstall`, `winapp.unregister`, `winapp.manifestAddAlias`, …
 
+For commands that accept programmatic arguments, pass `-CommandArgs`. For example,
+`winapp.tool` can be driven without automating its free-text inputs:
+```powershell
+Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.tool' `
+  -CommandArgs @(@{toolName='makeappx'; argumentText='/?'})
+```
+
 Answers (ordered, one per prompt the command raises):
 - `@{accept=$true}` — accept the selected QuickPick item (e.g. certGenerate's Install Yes/No).
 - `@{nativeDialogPath='<path>'}` — a `showOpenDialog` folder picker (pack/run).
@@ -190,6 +197,12 @@ Answers (ordered, one per prompt the command raises):
   `Invoke-VSCodeDriver{Step,Command,Debug,OpenFile}`. `Stop-VSCodeDrive` cleans up.
 - `driver-extension/extension.js` — the in-VS-Code driver: `startQueuePoller()` watches
   `WINAPP_UX_QUEUE\req-*.json`; also runs a one-shot batch from `WINAPP_UX_SCRIPT`.
+- `driver-extension/command-step.js` — executes command steps, supplies arguments and prompt answers,
+  and optionally tracks the exact launched task through VS Code task-completion events with a timeout.
+- `driver-extension/command-step.test.js` — unit tests for command execution, answer handling, exact
+  task-event correlation, cancellation, and timeout behavior.
+- `scripts/vscode-drive.test.ps1` — tests driver timeout calculation and command-plan serialization,
+  plus the tool-injection probe's path escaping.
 - `scripts/test-driver-queue.ps1` — end-to-end validation (run to confirm the mechanism works).
 - `scripts/test-vscode-drive.ps1` — complementary smoke test: launches VS Code, verifies focus/editor,
   then exercises the queue-based command flow via `Invoke-VSCodeDriverCommand`.
@@ -197,4 +210,9 @@ Answers (ordered, one per prompt the command raises):
   sequences.
 - `scripts/install-extension.ps1` — builds the local VSIX and installs it into VS Code.
 - `scripts/probe-*.ps1` — targeted probes for specific features (F5 debug, pack, native dialogs).
+- `scripts/probe-tool-injection.ps1` — manual Windows/VS Code probe that waits for SDK-tool task
+  completion, verifies an argument-dependent artifact, and checks that shell-injection text has no
+  effect. The non-UI command registration, process adapter, and driver `commandArgs` transport tests
+  run under `npm run test:unit`; the live probe remains manual because it requires an interactive
+  desktop, an isolated VS Code instance, and an installed Windows SDK.
 - `.drive-extensions/` — isolated extensions dir holding the installed winapp extension.
