@@ -44,17 +44,21 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (127 tests)
+## Test inventory (128 tests)
 
-### `sign-quickpick.spec.ts` — 3 tests (2 active, 1 skipped)
+### `sign-quickpick.spec.ts` — 7 active tests
 
-Validates that `winapp.sign` discovers workspace MSIX artifacts and certificates, presenting them in QuickPicks.
+Validates that `winapp.sign` discovers workspace packages, build-output binaries, and certificates, presenting at most 10 artifacts with packages first.
 
 | # | Test | Validates |
 |---|------|-----------|
-| 1 | shows QuickPick with .msix file and Browse option when artifacts exist | QuickPick appears with artifact rows and Browse… fallback |
+| 1 | shows packages before executable and library artifacts | QuickPick groups MSIX/APPX packages before build-output `.exe`/`.dll` rows and retains Browse… |
 | 2 | shows certificate QuickPick with .pfx file after selecting a package | Certificate QuickPick appears after package selection with .pfx rows and Browse… fallback |
-| 3 | *(skipped)* skips package QuickPick when invoked with prefilled path | Needs VS Code extension test host — see [#83](https://github.com/microsoft/WinAppVSCE/issues/83) |
+| 3 | cancelling the artifact QuickPick aborts the sign flow | Dismissing artifact selection does not open a certificate picker or terminal |
+| 4 | selecting Browse dismisses the QuickPick in a native-dialog smoke test | Browse… hands off to the native file dialog without an error |
+| 5 | cancelling the certificate QuickPick aborts the sign flow | Dismissing certificate selection does not open a terminal |
+| 6 | shows a DLL-only workspace without a package group and retains Browse | DLL-only discovery works without an empty Packages group and keeps Browse… available |
+| 7 | caps selectable artifacts at 10 while keeping packages before binaries | Exactly 10 artifact rows are selectable (excluding separators and Browse…), with packages preceding binaries |
 
 ### `editor-launch.spec.ts` — 11 tests
 

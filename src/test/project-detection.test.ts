@@ -8,8 +8,20 @@ import {
 	getProjectLabel,
 	getDisplayFilePath,
 	DetectedProject,
+	filterBuildOutputFiles,
 	deduplicateBuildOutputFolders,
-	BUILD_OUTPUT_MAX_DEPTH
+	BUILD_OUTPUT_EXECUTABLE_GLOB,
+	BUILD_OUTPUT_LIBRARY_GLOB,
+	BUILD_OUTPUT_CONVENTIONAL_EXECUTABLE_GLOB,
+	BUILD_OUTPUT_CONVENTIONAL_LIBRARY_GLOB,
+	BUILD_OUTPUT_MAX_DEPTH,
+	BUILD_OUTPUT_MAX_RESULTS,
+	BUILD_OUTPUT_MAX_SCAN_RESULTS,
+	discoverBuildOutputFiles,
+	discoverBuildOutputFolders,
+	getBuildOutputScanLimit,
+	rankBuildOutputFiles,
+	rankBuildOutputFolders
 } from '../project-detection';
 
 /**
@@ -380,6 +392,252 @@ describe('project-detection', () => {
 			const result = deduplicateBuildOutputFolders(files, root);
 			assert.strictEqual(result.length, 1);
 			assert.strictEqual(result[0], root);
+		});
+	});
+
+	describe('filterBuildOutputFiles', () => {
+		const root = process.platform === 'win32' ? 'C:\\workspace' : '/workspace';
+
+		it('preserves files whose parent folders are within the maximum depth', () => {
+			const shallow = path.join(root, 'bin', 'app.dll');
+			const atLimit = path.join(
+				root,
+				...Array.from({ length: BUILD_OUTPUT_MAX_DEPTH }, (_, index) => `d${index}`),
+				'app.exe'
+			);
+			const tooDeep = path.join(
+				root,
+				...Array.from({ length: BUILD_OUTPUT_MAX_DEPTH + 1 }, (_, index) => `d${index}`),
+				'app.dll'
+			);
+
+			assert.deepStrictEqual(filterBuildOutputFiles([shallow, atLimit, tooDeep], root), [shallow, atLimit]);
+		});
+	});
+
+	describe('rankBuildOutputFiles', () => {
+		const root = process.platform === 'win32' ? 'C:\\workspace' : '/workspace';
+
+		it('keeps relevant build outputs ahead of unrelated root and tool binaries under the cap', () => {
+			const unrelated = [
+				...Array.from({ length: 6 }, (_, index) => path.join(root, `tool-${index}.exe`)),
+				...Array.from({ length: 6 }, (_, index) => path.join(root, 'tools', `helper-${index}.exe`))
+			];
+			const buildOutputs = [
+				path.join(root, 'src', 'App', 'bin', 'Debug', 'net8.0-windows', 'App.exe'),
+				path.join(root, 'out', 'x64', 'Release', 'NativeApp.exe')
+			];
+
+			const result = rankBuildOutputFiles([...unrelated, ...buildOutputs], root, 10);
+
+			assert.deepStrictEqual(result.slice(0, 2), buildOutputs);
+			assert.strictEqual(result.length, 10);
+		});
+
+		it('retains arbitrary shallow output folders as fallback results', () => {
+			const conventional = path.join(root, 'bin', 'Release', 'App.dll');
+			const custom = path.join(root, 'deliverables', 'Custom.dll');
+			const rootBinary = path.join(root, 'helper.dll');
+
+			assert.deepStrictEqual(
+				rankBuildOutputFiles([rootBinary, custom, conventional], root, 3),
+				[conventional, custom, rootBinary]
+			);
+		});
+
+		it('uses EXE only as a tie-breaker after build-output relevance', () => {
+			const relevantLibrary = path.join(root, 'bin', 'Release', 'App.dll');
+			const lessRelevantExecutable = path.join(root, 'deliverables', 'Helper.exe');
+			const tiedExecutable = path.join(root, 'bin', 'Release', 'App.exe');
+
+			assert.deepStrictEqual(
+				rankBuildOutputFiles([lessRelevantExecutable, relevantLibrary], root, 2),
+				[relevantLibrary, lessRelevantExecutable]
+			);
+			assert.deepStrictEqual(
+				rankBuildOutputFiles([relevantLibrary, tiedExecutable], root, 2),
+				[tiedExecutable, relevantLibrary]
+			);
+		});
+
+		it('uses a bounded overfetch limit before ranking', () => {
+			assert.strictEqual(getBuildOutputScanLimit(1), 25);
+			assert.strictEqual(getBuildOutputScanLimit(10), BUILD_OUTPUT_MAX_SCAN_RESULTS);
+			assert.strictEqual(getBuildOutputScanLimit(100), BUILD_OUTPUT_MAX_SCAN_RESULTS);
+		});
+	});
+
+	describe('discoverBuildOutputFiles', () => {
+		const root = process.platform === 'win32' ? 'C:\\workspace' : '/workspace';
+
+		for (const extension of ['exe', 'dll'] as const) {
+			it(`surfaces conventional ${extension.toUpperCase()} outputs before a full unrelated fallback`, async () => {
+				const preferred = path.join(root, 'src', 'App', 'bin', 'Release', `App.${extension}`);
+				const unrelated = Array.from(
+					{ length: BUILD_OUTPUT_MAX_SCAN_RESULTS },
+					(_, index) => path.join(root, 'deliverables', `unrelated-${index}.${extension}`)
+				);
+				const calls: string[] = [];
+
+				const result = await discoverBuildOutputFiles(
+					root,
+					extension,
+					10,
+					async includeGlob => {
+						calls.push(includeGlob);
+						return calls.length === 1 ? [preferred] : unrelated;
+					}
+				);
+
+				assert.strictEqual(
+					calls[0],
+					extension === 'exe'
+						? BUILD_OUTPUT_CONVENTIONAL_EXECUTABLE_GLOB
+						: BUILD_OUTPUT_CONVENTIONAL_LIBRARY_GLOB
+				);
+				assert.strictEqual(calls[1], extension === 'exe'
+					? BUILD_OUTPUT_EXECUTABLE_GLOB
+					: BUILD_OUTPUT_LIBRARY_GLOB);
+				assert.strictEqual(result[0], preferred);
+				assert.strictEqual(result.length, 10);
+			});
+		}
+
+		it('skips fallback discovery when cancellation occurs during the conventional query', async () => {
+			let cancelled = false;
+			let calls = 0;
+
+			const result = await discoverBuildOutputFiles(
+				root,
+				'exe',
+				10,
+				async () => {
+					calls++;
+					cancelled = true;
+					return [path.join(root, 'bin', 'App.exe')];
+				},
+				() => cancelled
+			);
+
+			assert.deepStrictEqual(result, []);
+			assert.strictEqual(calls, 1);
+		});
+	});
+
+	describe('rankBuildOutputFolders', () => {
+		const root = process.platform === 'win32' ? 'C:\\workspace' : '/workspace';
+
+		it('deduplicates before applying the folder cap', () => {
+			const crowdedFolder = path.join(root, 'bin', 'Debug');
+			const files = [
+				...Array.from({ length: 20 }, (_, index) => path.join(crowdedFolder, `App-${index}.exe`)),
+				path.join(root, 'out', 'Release', 'Native.exe'),
+				path.join(root, 'build', 'x64', 'Tool.exe')
+			];
+
+			assert.deepStrictEqual(rankBuildOutputFolders(files, root, 3), [
+				crowdedFolder,
+				path.join(root, 'out', 'Release'),
+				path.join(root, 'build', 'x64')
+			]);
+		});
+	});
+
+	describe('discoverBuildOutputFolders', () => {
+		const root = process.platform === 'win32' ? 'C:\\workspace' : '/workspace';
+
+		it('discovers unique folders when one conventional folder contains more than 50 executables', async () => {
+			const crowdedFolder = path.join(root, 'bin', 'Debug');
+			const conventionalFolders = [
+				crowdedFolder,
+				path.join(root, 'src', 'App2', 'bin', 'Release'),
+				path.join(root, 'src', 'App3', 'bin', 'x64'),
+				path.join(root, 'src', 'App4', 'bin', 'arm64')
+			];
+			const fallbackFolders = Array.from(
+				{ length: 12 },
+				(_, index) => path.join(root, 'deliverables', `app-${index}`)
+			);
+			const conventionalFiles = [
+				...Array.from(
+					{ length: 55 },
+					(_, index) => path.join(crowdedFolder, `App-${index}.exe`)
+				),
+				...conventionalFolders.slice(1).map(folder => path.join(folder, 'App.exe'))
+			];
+			const fallbackFiles = fallbackFolders.map(folder => path.join(folder, 'App.exe'));
+			const searches: Array<{ glob: string; excludedFolders: string[] }> = [];
+
+			const result = await discoverBuildOutputFolders(
+				root,
+				BUILD_OUTPUT_MAX_RESULTS + 5,
+				async (includeGlob, scanLimit, excludedFolders = []) => {
+					searches.push({ glob: includeGlob, excludedFolders });
+					const candidates = includeGlob === BUILD_OUTPUT_CONVENTIONAL_EXECUTABLE_GLOB
+						? conventionalFiles
+						: fallbackFiles;
+					return candidates
+						.filter(file => !excludedFolders.includes(path.dirname(file)))
+						.slice(0, scanLimit);
+				}
+			);
+
+			assert.strictEqual(result.length, BUILD_OUTPUT_MAX_RESULTS);
+			assert.strictEqual(new Set(result).size, BUILD_OUTPUT_MAX_RESULTS);
+			for (const folder of conventionalFolders) {
+				assert.ok(result.includes(folder));
+			}
+			assert.ok(result.some(folder => fallbackFolders.includes(folder)));
+			assert.deepStrictEqual(searches[0].excludedFolders, []);
+			assert.deepStrictEqual(searches[1].excludedFolders, [crowdedFolder]);
+			assert.strictEqual(searches[2].glob, BUILD_OUTPUT_EXECUTABLE_GLOB);
+		});
+
+		it('stops and discards candidates when folder discovery is cancelled', async () => {
+			let cancelled = false;
+			let calls = 0;
+
+			const result = await discoverBuildOutputFolders(
+				root,
+				10,
+				async () => {
+					calls++;
+					cancelled = true;
+					return [path.join(root, 'bin', 'App.exe')];
+				},
+				() => cancelled
+			);
+
+			assert.deepStrictEqual(result, []);
+			assert.strictEqual(calls, 1);
+		});
+	});
+
+	describe('build output binary globs', () => {
+		const executableAlternatives = BUILD_OUTPUT_EXECUTABLE_GLOB.slice(1, -1).split(',');
+		const libraryAlternatives = BUILD_OUTPUT_LIBRARY_GLOB.slice(1, -1).split(',');
+
+		it('separates EXE and DLL files while covering root and maximum depth', () => {
+			assert.ok(executableAlternatives.includes('*.exe'));
+			assert.ok(executableAlternatives.includes(`${'*/'.repeat(BUILD_OUTPUT_MAX_DEPTH)}*.exe`));
+			assert.ok(!executableAlternatives.some(pattern => pattern.endsWith('.dll')));
+			assert.ok(libraryAlternatives.includes('*.dll'));
+			assert.ok(libraryAlternatives.includes(`${'*/'.repeat(BUILD_OUTPUT_MAX_DEPTH)}*.dll`));
+			assert.ok(!libraryAlternatives.some(pattern => pattern.endsWith('.exe')));
+		});
+
+		it('does not express paths beyond the maximum depth', () => {
+			assert.strictEqual(executableAlternatives.length, BUILD_OUTPUT_MAX_DEPTH + 1);
+			assert.strictEqual(libraryAlternatives.length, BUILD_OUTPUT_MAX_DEPTH + 1);
+			assert.ok(!executableAlternatives.includes(`${'*/'.repeat(BUILD_OUTPUT_MAX_DEPTH + 1)}*.exe`));
+			assert.ok(!libraryAlternatives.includes(`${'*/'.repeat(BUILD_OUTPUT_MAX_DEPTH + 1)}*.dll`));
+		});
+
+		it('targets conventional path segments with depth-bounded patterns', () => {
+			assert.ok(BUILD_OUTPUT_CONVENTIONAL_EXECUTABLE_GLOB.includes('{bin,out,build,publish}'));
+			assert.ok(BUILD_OUTPUT_CONVENTIONAL_LIBRARY_GLOB.includes('{bin,out,build,publish}'));
+			assert.ok(!BUILD_OUTPUT_CONVENTIONAL_EXECUTABLE_GLOB.includes('**'));
+			assert.ok(!BUILD_OUTPUT_CONVENTIONAL_LIBRARY_GLOB.includes('**'));
 		});
 	});
 });
