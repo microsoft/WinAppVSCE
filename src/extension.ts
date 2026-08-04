@@ -20,7 +20,13 @@ import {
 	isArtifactWithinRoot,
 	planPackCompletion
 } from './pack-result';
-import { findWorkspaceArtifacts, buildSignCommand, CERTIFICATE_GLOBS, executeSignFlow, type SignFlowAdapter } from './sign-utils';
+import {
+	findWorkspaceArtifacts,
+	buildSignCommand,
+	CERTIFICATE_GLOBS,
+	executeSignFlow,
+	type SignFlowAdapter
+} from './sign-utils';
 import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
 	detectArchFromPath,
@@ -333,18 +339,15 @@ async function runWinappCapture(
  * @returns The selected file path, or `undefined` if cancelled.
  */
 async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
-	let cancelled = false;
-	const artifactPaths = await vscode.window.withProgress(
+	const discovery = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
-		async (_progress, token) => {
-			token.onCancellationRequested(() => { cancelled = true; });
-			return findWorkspaceArtifacts(workspacePath, ARTIFACT_GLOBS);
-		}
+		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, ARTIFACT_GLOBS, token)
 	);
 
-	if (cancelled) {
+	if (discovery.cancelled) {
 		return undefined;
 	}
+	const artifactPaths = discovery.paths;
 
 	if (artifactPaths.length === 0) {
 		return selectFile('Select file to sign', {
@@ -392,18 +395,15 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
  * @returns The selected certificate path, or `undefined` if cancelled.
  */
 async function pickCertificateFile(workspacePath: string): Promise<string | undefined> {
-	let cancelled = false;
-	const certPaths = await vscode.window.withProgress(
+	const discovery = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for certificates...', cancellable: true },
-		async (_progress, token) => {
-			token.onCancellationRequested(() => { cancelled = true; });
-			return findWorkspaceArtifacts(workspacePath, CERTIFICATE_GLOBS);
-		}
+		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, CERTIFICATE_GLOBS, token)
 	);
 
-	if (cancelled) {
+	if (discovery.cancelled) {
 		return undefined;
 	}
+	const certPaths = discovery.paths;
 
 	if (certPaths.length === 0) {
 		return selectFile('Select signing certificate', {
@@ -437,6 +437,41 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 	}
 
 	return picked.detail;
+}
+
+async function findWorkspaceArtifactsWithCancellation(
+	workspacePath: string,
+	patterns: string[],
+	token: vscode.CancellationToken
+): Promise<{ paths: string[]; cancelled: boolean }> {
+	const abortController = new AbortController();
+	const cancellation = token.onCancellationRequested(() => abortController.abort());
+	if (token.isCancellationRequested) {
+		abortController.abort();
+	}
+
+	try {
+		const paths = await findWorkspaceArtifacts(
+			workspacePath,
+			async (includePattern, signal) => {
+				if (signal?.aborted) {
+					return [];
+				}
+				const matches = await vscode.workspace.findFiles(
+					new vscode.RelativePattern(workspacePath, includePattern),
+					null,
+					undefined,
+					token
+				);
+				return matches.map(uri => uri.fsPath);
+			},
+			patterns,
+			abortController.signal
+		);
+		return { paths, cancelled: token.isCancellationRequested };
+	} finally {
+		cancellation.dispose();
+	}
 }
 
 const FOLDER_PICKER_DETAIL = 'Open a folder picker';
