@@ -72,7 +72,6 @@ vsce-testing/
     probe-f5.ps1                # F5 debug feature probe
     probe-pack.ps1              # pack feature probe
     probe-native-dialog.ps1     # native dialog automation probe
-    probe-tool-injection.ps1    # manual Windows/VS Code winapp.tool process probe
   logs/                         # driver output logs (gitignored)
   .drive-extensions/            # isolated VS Code extensions dir (gitignored)
 ```

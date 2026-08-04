@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
 import { spawn, execFile } from 'child_process';
 import {
 	getWinappCliPath,
@@ -41,9 +40,7 @@ import {
 	createWinappToolTaskSpec,
 	executeWinappToolTask,
 	parseToolArguments,
-	resolveWinappToolCorrelationId,
 	resolveWinappToolInvocation,
-	type WinappToolCommandOptions,
 	type WinappToolTaskSpec
 } from './tool-command';
 
@@ -1428,15 +1425,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.tool command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.tool', async (options?: WinappToolCommandOptions) => {
+		vscode.commands.registerCommand('winapp.tool', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
 			}
-			const correlationId = resolveWinappToolCorrelationId(options, randomUUID);
-
 			const invocation = await resolveWinappToolInvocation(
-				options,
 				getWinappCliPath(extensionPath),
 				workspacePath,
 				{
@@ -1461,8 +1455,7 @@ export function activate(context: vscode.ExtensionContext) {
 							}
 						}
 					})
-				},
-				correlationId
+				}
 			);
 			if (!invocation) {
 				return;

@@ -5,7 +5,6 @@ import {
 	createWinappToolTaskSpec,
 	executeWinappToolTask,
 	parseToolArguments,
-	resolveWinappToolCorrelationId,
 	resolveWinappToolInvocation
 } from '../tool-command';
 import { WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
@@ -91,67 +90,17 @@ describe('buildWinappToolArgs', () => {
 			['tool', 'custom tool', '--input', 'C:\\my app']
 		);
 	});
-	it('maps programmatic options to exact argv', () => {
-		const options = {
-			toolName: 'mt',
-			argumentText: '-manifest "\\\\server\\share\\app.manifest"'
-		};
+	it('maps a tool and argument text to exact argv', () => {
 		assert.deepEqual(
-			buildWinappToolArgs(options.toolName, options.argumentText),
+			buildWinappToolArgs('mt', '-manifest "\\\\server\\share\\app.manifest"'),
 			['tool', 'mt', '-manifest', '\\\\server\\share\\app.manifest']
 		);
 	});
 });
 
 describe('winapp.tool flow', () => {
-	it('preserves a supplied correlation ID and generates one when omitted', () => {
-		assert.equal(
-			resolveWinappToolCorrelationId(
-				{ toolName: 'mt', correlationId: 'driver-correlation' },
-				() => 'generated-correlation'
-			),
-			'driver-correlation'
-		);
-		assert.equal(
-			resolveWinappToolCorrelationId({ toolName: 'mt' }, () => 'generated-correlation'),
-			'generated-correlation'
-		);
-		assert.equal(
-			resolveWinappToolCorrelationId(undefined, () => 'interactive-correlation'),
-			'interactive-correlation'
-		);
-	});
-
-	it('uses programmatic options without prompting and returns exact invocation details', async () => {
-		const failPrompt = async () => {
-			throw new Error('programmatic options must bypass prompts');
-		};
-		const invocation = await resolveWinappToolInvocation(
-			{
-				toolName: 'mt',
-				argumentText: '-manifest "\\\\server\\share\\app.manifest"'
-			},
-			'C:\\extension\\bin\\winapp.exe',
-			'C:\\workspace',
-			{
-				selectTool: failPrompt,
-				promptForToolName: failPrompt,
-				promptForArguments: failPrompt
-			},
-			'driver-correlation'
-		);
-
-		assert.deepEqual(invocation, {
-			cliPath: 'C:\\extension\\bin\\winapp.exe',
-			cwd: 'C:\\workspace',
-			args: ['tool', 'mt', '-manifest', '\\\\server\\share\\app.manifest'],
-			correlationId: 'driver-correlation'
-		});
-	});
-
 	it('resolves interactive tool selection and arguments', async () => {
 		const invocation = await resolveWinappToolInvocation(
-			undefined,
 			'C:\\winapp.exe',
 			'C:\\workspace',
 			{
@@ -163,8 +112,7 @@ describe('winapp.tool flow', () => {
 					assert.equal(toolName, 'makeappx');
 					return '/?';
 				}
-			},
-			'interactive-correlation'
+			}
 		);
 
 		assert.deepEqual(invocation?.args, ['tool', 'makeappx', '/?']);
@@ -172,7 +120,6 @@ describe('winapp.tool flow', () => {
 
 	it('accepts an empty interactive argument response', async () => {
 		const invocation = await resolveWinappToolInvocation(
-			undefined,
 			'C:\\winapp.exe',
 			'C:\\workspace',
 			{
@@ -184,21 +131,18 @@ describe('winapp.tool flow', () => {
 					assert.equal(toolName, 'makeappx');
 					return '';
 				}
-			},
-			'interactive-correlation'
+			}
 		);
 
 		assert.deepEqual(invocation, {
 			cliPath: 'C:\\winapp.exe',
 			cwd: 'C:\\workspace',
-			args: ['tool', 'makeappx'],
-			correlationId: 'interactive-correlation'
+			args: ['tool', 'makeappx']
 		});
 	});
 
 	it('resolves a custom tool selection and arguments', async () => {
 		const invocation = await resolveWinappToolInvocation(
-			undefined,
 			'C:\\winapp.exe',
 			'C:\\workspace',
 			{
@@ -208,15 +152,13 @@ describe('winapp.tool flow', () => {
 					assert.equal(toolName, 'custom-tool');
 					return '--input "C:\\my app"';
 				}
-			},
-			'interactive-correlation'
+			}
 		);
 
 		assert.deepEqual(invocation, {
 			cliPath: 'C:\\winapp.exe',
 			cwd: 'C:\\workspace',
-			args: ['tool', 'custom-tool', '--input', 'C:\\my app'],
-			correlationId: 'interactive-correlation'
+			args: ['tool', 'custom-tool', '--input', 'C:\\my app']
 		});
 	});
 
@@ -225,15 +167,13 @@ describe('winapp.tool flow', () => {
 			throw new Error('no later prompt should execute');
 		};
 		const invocation = await resolveWinappToolInvocation(
-			undefined,
 			'C:\\winapp.exe',
 			'C:\\workspace',
 			{
 				selectTool: async () => undefined,
 				promptForToolName: failLaterPrompt,
 				promptForArguments: failLaterPrompt
-			},
-			'interactive-correlation'
+			}
 		);
 
 		assert.equal(invocation, undefined);
@@ -241,7 +181,6 @@ describe('winapp.tool flow', () => {
 
 	it('stops prompting when the custom tool name is cancelled', async () => {
 		const invocation = await resolveWinappToolInvocation(
-			undefined,
 			'C:\\winapp.exe',
 			'C:\\workspace',
 			{
@@ -250,8 +189,7 @@ describe('winapp.tool flow', () => {
 				promptForArguments: async () => {
 					throw new Error('argument prompt should not execute');
 				}
-			},
-			'interactive-correlation'
+			}
 		);
 
 		assert.equal(invocation, undefined);
@@ -259,7 +197,6 @@ describe('winapp.tool flow', () => {
 
 	it('returns no invocation when the argument prompt is cancelled', async () => {
 		const invocation = await resolveWinappToolInvocation(
-			undefined,
 			'C:\\winapp.exe',
 			'C:\\workspace',
 			{
@@ -271,8 +208,7 @@ describe('winapp.tool flow', () => {
 					assert.equal(toolName, 'makeappx');
 					return undefined;
 				}
-			},
-			'interactive-correlation'
+			}
 		);
 
 		assert.equal(invocation, undefined);
@@ -282,8 +218,7 @@ describe('winapp.tool flow', () => {
 		const spec = createWinappToolTaskSpec({
 			cliPath: 'C:\\winapp.exe',
 			cwd: 'C:\\workspace',
-			args: ['tool', 'mt', '-manifest', 'input.manifest'],
-			correlationId: 'correlation-123'
+			args: ['tool', 'mt', '-manifest', 'input.manifest']
 		}, WINAPP_CLI_CALLER_VALUE);
 
 		assert.deepEqual(spec, {
@@ -293,8 +228,7 @@ describe('winapp.tool flow', () => {
 				options: {
 					cwd: 'C:\\workspace',
 					env: {
-						WINAPP_CLI_CALLER: 'vscode-extension',
-						WINAPP_TASK_CORRELATION_ID: 'correlation-123'
+						WINAPP_CLI_CALLER: 'vscode-extension'
 					}
 				}
 			},
@@ -316,8 +250,7 @@ describe('winapp.tool flow', () => {
 		const spec = createWinappToolTaskSpec({
 			cliPath: 'C:\\winapp.exe',
 			cwd: 'C:\\workspace',
-			args: ['tool', 'mt', '-manifest', 'input.manifest'],
-			correlationId: 'correlation-456'
+			args: ['tool', 'mt', '-manifest', 'input.manifest']
 		}, WINAPP_CLI_CALLER_VALUE);
 		const calls: Array<[string, unknown]> = [];
 		const processExecution = { kind: 'ProcessExecution' };
@@ -350,8 +283,7 @@ describe('winapp.tool flow', () => {
 				options: {
 					cwd: 'C:\\workspace',
 					env: {
-						WINAPP_CLI_CALLER: 'vscode-extension',
-						WINAPP_TASK_CORRELATION_ID: 'correlation-456'
+						WINAPP_CLI_CALLER: 'vscode-extension'
 					}
 				}
 			}],

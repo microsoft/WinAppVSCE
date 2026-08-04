@@ -33,8 +33,7 @@
     NOTES on answers (verified empirically):
       - QuickPick prompts: {"accept":true} accepts the HIGHLIGHTED (first/default) item. There is no
         reliable way to type-filter, so list answers in prompt order and rely on sensible defaults.
-      - showInputBox text cannot be auto-typed. For winapp.tool, bypass its prompts with programmatic
-        args/CommandArgs support; skip other input boxes such as winapp.certInfo password.
+      - showInputBox prompts (winapp.tool args, winapp.certInfo password) CANNOT be auto-typed - skip them.
       - showOpenDialog prompts (winapp.pack/run/createDebugIdentity) use {"nativeDialogPath":...};
         the driver SendKeys the path ONLY when a Win32 dialog (#32770) is foreground (guarded).
       - The WinApp debugger launches the app but its coreclr attach currently detaches immediately

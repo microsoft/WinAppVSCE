@@ -1,9 +1,3 @@
-export interface WinappToolCommandOptions {
-	toolName: string;
-	argumentText?: string;
-	correlationId?: string;
-}
-
 export interface WinappToolPrompts {
 	selectTool: () => PromiseLike<string | undefined>;
 	promptForToolName: () => PromiseLike<string | undefined>;
@@ -14,7 +8,6 @@ export interface WinappToolInvocation {
 	cliPath: string;
 	cwd: string;
 	args: string[];
-	correlationId: string;
 }
 
 export interface WinappToolTaskSpec {
@@ -57,13 +50,6 @@ export interface WinappToolTaskRuntime<TExecution, TTask, TResult> {
 		presentation: { reveal: 'always'; panel: 'dedicated'; clear: boolean }
 	) => void;
 	executeTask: (task: TTask) => PromiseLike<TResult>;
-}
-
-export function resolveWinappToolCorrelationId(
-	options: WinappToolCommandOptions | undefined,
-	createCorrelationId: () => string
-): string {
-	return options?.correlationId || createCorrelationId();
 }
 
 /**
@@ -145,13 +131,11 @@ export function buildWinappToolArgs(toolName: string, argumentText?: string): st
 }
 
 export async function resolveWinappToolInvocation(
-	options: WinappToolCommandOptions | undefined,
 	cliPath: string,
 	cwd: string,
-	prompts: WinappToolPrompts,
-	correlationId: string
+	prompts: WinappToolPrompts
 ): Promise<WinappToolInvocation | undefined> {
-	const toolSelection = options?.toolName || await prompts.selectTool();
+	const toolSelection = await prompts.selectTool();
 	if (!toolSelection) {
 		return undefined;
 	}
@@ -163,18 +147,15 @@ export async function resolveWinappToolInvocation(
 		return undefined;
 	}
 
-	const argumentText = options
-		? options.argumentText
-		: await prompts.promptForArguments(toolName);
-	if (argumentText === undefined && !options) {
+	const argumentText = await prompts.promptForArguments(toolName);
+	if (argumentText === undefined) {
 		return undefined;
 	}
 
 	return {
 		cliPath,
 		cwd,
-		args: buildWinappToolArgs(toolName, argumentText),
-		correlationId
+		args: buildWinappToolArgs(toolName, argumentText)
 	};
 }
 
@@ -189,8 +170,7 @@ export function createWinappToolTaskSpec(
 			options: {
 				cwd: invocation.cwd,
 				env: {
-					WINAPP_CLI_CALLER: callerValue,
-					WINAPP_TASK_CORRELATION_ID: invocation.correlationId
+					WINAPP_CLI_CALLER: callerValue
 				}
 			}
 		},

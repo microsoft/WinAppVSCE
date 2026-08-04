@@ -479,80 +479,15 @@ function Invoke-VSCodeDriverStep {
 
 # Fire a winapp.* (or any) command by ID; answers is an ordered list of @{accept=$true} /
 # @{nativeDialogPath='...'} to satisfy the command's prompts.
-function Get-VSCodeDriverCommandTimeout {
-    param(
-        [bool]$WaitForTask,
-        [int]$TaskTimeoutSec,
-        [int]$TimeoutSec
-    )
-    if ($TaskTimeoutSec -le 0) {
-        throw 'TaskTimeoutSec must be greater than zero.'
-    }
-    if ($TimeoutSec -le 0) {
-        return $(if ($WaitForTask) { $TaskTimeoutSec + 10 } else { 120 })
-    }
-    if ($WaitForTask) {
-        return [Math]::Max($TimeoutSec, $TaskTimeoutSec + 10)
-    }
-    return $TimeoutSec
-}
-
-function New-VSCodeDriverCommandPlan {
-    param(
-        [string]$CommandId,
-        [object[]]$CommandArgs,
-        [object[]]$Answers,
-        [bool]$WaitForTask,
-        [string]$TaskName,
-        [string]$TaskSource,
-        [int]$TaskTimeoutSec,
-        [int]$SettleMs,
-        [int]$TimeoutSec
-    )
-    $effectiveTimeout = Get-VSCodeDriverCommandTimeout `
-        -WaitForTask $WaitForTask `
-        -TaskTimeoutSec $TaskTimeoutSec `
-        -TimeoutSec $TimeoutSec
-    return @{
-        TimeoutSec = $effectiveTimeout
-        Step = @{
-            type = 'command'
-            command = $CommandId
-            args = $CommandArgs
-            answers = $Answers
-            waitForTask = $WaitForTask
-            taskName = $TaskName
-            taskSource = $TaskSource
-            taskTimeoutMs = $TaskTimeoutSec * 1000
-            settleMs = $SettleMs
-        }
-    }
-}
-
 function Invoke-VSCodeDriverCommand {
     param(
         [Parameter(Mandatory)]$Ctx,
         [Parameter(Mandatory)][string]$CommandId,
-        [object[]]$CommandArgs = @(),
         [object[]]$Answers = @(),
-        [switch]$WaitForTask,
-        [string]$TaskName = 'Run SDK Tool',
-        [string]$TaskSource = '',
-        [int]$TaskTimeoutSec = 120,
         [int]$SettleMs = 1600,
-        [int]$TimeoutSec = 0
+        [int]$TimeoutSec = 120
     )
-    $plan = New-VSCodeDriverCommandPlan `
-        -CommandId $CommandId `
-        -CommandArgs $CommandArgs `
-        -Answers $Answers `
-        -WaitForTask ([bool]$WaitForTask) `
-        -TaskName $TaskName `
-        -TaskSource $TaskSource `
-        -TaskTimeoutSec $TaskTimeoutSec `
-        -SettleMs $SettleMs `
-        -TimeoutSec $TimeoutSec
-    return Invoke-VSCodeDriverStep -Ctx $Ctx -Step $plan.Step -TimeoutSec $plan.TimeoutSec
+    return Invoke-VSCodeDriverStep -Ctx $Ctx -Step @{ type = 'command'; command = $CommandId; answers = $Answers; settleMs = $SettleMs } -TimeoutSec $TimeoutSec
 }
 
 # Launch the app via the WinApp DEBUGGER (vscode.debug.startDebugging).
