@@ -1,0 +1,14 @@
+# WinApp SDK configuration for the VS Code extension.
+# The extension uses AppxManifest XSD schema files from the Windows SDK
+# for IntelliSense and manifest validation.
+#
+# Run `winapp restore` to download these packages, then `npm run sync-schemas`
+# to copy the XSD files into the schemas/ directory.
+#
+# To update SDK versions: `winapp update`
+
+packages:
+  - name: Microsoft.Windows.SDK.BuildTools
+    version: 10.0.28000.2270
+  - name: Microsoft.Windows.SDK.CPP
+    version: 10.0.28000.2270

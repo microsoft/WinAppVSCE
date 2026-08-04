@@ -95,6 +95,24 @@ export interface ExternalDependencyData {
     optional: string;
 }
 
+/** A single field extracted from an extension element (attribute or text content). */
+export interface ExtensionField {
+    label: string;
+    value: string;
+    /** Whether the field can be edited by the user in the form. */
+    editable: boolean;
+    /** Human-readable help text for this field. */
+    description: string;
+    /** True if the value comes from element text content rather than an attribute. */
+    isTextContent?: boolean;
+}
+
+/** Parsed extension data holding both raw XML and pre-extracted fields. */
+export interface ExtensionData {
+    xml: string;
+    fields: ExtensionField[];
+}
+
 export interface ApplicationData {
     id: string;
     executable: string;
@@ -104,7 +122,7 @@ export interface ApplicationData {
     supportsMultipleInstances: string;
     parameters: string;
     visualElements: VisualElementsData;
-    extensions: string[];
+    extensions: ExtensionData[];
 }
 
 export interface VisualElementsData {

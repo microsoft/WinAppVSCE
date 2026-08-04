@@ -9,6 +9,7 @@ out/**
 node_modules/**
 scripts/**
 artifacts/**
+.winapp/**
 .gitignore
 eslint.config.mjs
 esbuild.mjs
@@ -22,3 +23,4 @@ test-results/**
 playwright.config.ts
 PR_REVIEW.md
 EDITOR_SUPPORT.md
+winapp.yaml

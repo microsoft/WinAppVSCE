@@ -370,6 +370,32 @@ describe('applyFieldChange — Applications', () => {
         const parsed = parseManifest(result);
         assert.equal(parsed.applications[0].visualElements.square44x44Logo, 'Assets\\New44.png');
     });
+
+    for (const [qualifiedName, namespaceDecl] of [
+        ['uap4:SupportsMultipleInstances', 'xmlns:uap4="http://schemas.microsoft.com/appx/manifest/uap/windows10/4"'],
+        ['uap10:SupportsMultipleInstances', 'xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"'],
+        ['desktop4:SupportsMultipleInstances', 'xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"'],
+        ['iot2:SupportsMultipleInstances', 'xmlns:iot2="http://schemas.microsoft.com/appx/manifest/iot/windows10/2"'],
+    ] as const) {
+        it(`parses and preserves ${qualifiedName} when editing supportsMultipleInstances`, () => {
+            const manifestWithAttr = BASE_MANIFEST
+                .replace('xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"', `xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"\n  ${namespaceDecl}`)
+                .replace(
+                    '<Application Id="App" Executable="TestApp.exe" EntryPoint="Windows.FullTrustApplication">',
+                    `<Application Id="App" Executable="TestApp.exe" EntryPoint="Windows.FullTrustApplication" ${qualifiedName}="true">`
+                );
+
+            const parsed = parseManifest(manifestWithAttr);
+            assert.equal(parsed.applications[0].supportsMultipleInstances, 'true');
+
+            const updated = applyFieldChange(manifestWithAttr, 'applications', 'supportsMultipleInstances', 'false', 0);
+            assert.ok(updated.includes(`${qualifiedName}="false"`));
+            assert.equal((updated.match(/SupportsMultipleInstances=/g) || []).length, 1);
+
+            const removed = applyFieldChange(updated, 'applications', 'supportsMultipleInstances', '', 0);
+            assert.ok(!removed.includes('SupportsMultipleInstances='));
+        });
+    }
 });
 
 // ─── 7. applyFieldChange — Resources Section ───────────────────────────────
@@ -1097,5 +1123,47 @@ describe('updateExtensionField', () => {
     it('should return original XML when fieldPath has no dot (attribute mode)', () => {
         const result = updateExtensionField(XML_WITH_EXT, 0, 0, 'NoDotField', 'value');
         assert.equal(result, XML_WITH_EXT, 'Should return unchanged XML for invalid fieldPath');
+    });
+});
+
+describe('extension text content parsing', () => {
+    it('reads CDATA text content from extension leaf elements', () => {
+        const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10">
+  <Identity Name="TestApp" Publisher="CN=Test" Version="1.0.0.0" />
+  <Properties>
+    <DisplayName>TestApp</DisplayName>
+    <PublisherDisplayName>Test</PublisherDisplayName>
+    <Logo>Assets\\StoreLogo.png</Logo>
+  </Properties>
+  <Applications>
+    <Application Id="App" Executable="TestApp.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="TestApp"
+        Description="Test application"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\\Square150x150Logo.png"
+        Square44x44Logo="Assets\\Square44x44Logo.png" />
+      <Extensions>
+        <uap:Extension Category="windows.shareTarget">
+          <uap:ShareTarget>
+            <uap:SupportedFileTypes>
+              <uap:FileType><![CDATA[.txt]]></uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:ShareTarget>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>`;
+
+        const parsed = parseManifest(xml);
+        assert.equal(parsed.applications[0].extensions.length, 1);
+        const fileTypeField = parsed.applications[0].extensions[0].fields.find(field => field.label === 'FileType');
+        assert.ok(fileTypeField);
+        assert.equal(fileTypeField.value, '.txt');
+        assert.equal(fileTypeField.isTextContent, true);
     });
 });
