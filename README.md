@@ -268,7 +268,7 @@ Use **WinApp: Create MSIX Package** to package your application. If you choose *
 
 ### Access Windows SDK tools
 
-**WinApp: Run SDK Tool** gives you direct access to `makeappx`, `signtool`, `mt`, and `makepri` — no need to find SDK installation paths or open a separate Developer Command Prompt.
+**WinApp: Run SDK Tool** gives you direct access to `makeappx`, `signtool`, `mt`, and `makepri` — no need to find SDK installation paths or open a separate Developer Command Prompt. Arguments are passed directly to the selected tool without shell interpretation; double-quote values that contain spaces.
 
 ## Supported Frameworks
 

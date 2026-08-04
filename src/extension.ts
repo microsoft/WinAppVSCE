@@ -47,6 +47,13 @@ import {
 	validateInputFolder
 } from './debugger-resolver';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
+import {
+	createWinappToolTaskSpec,
+	executeWinappToolTask,
+	parseToolArguments,
+	resolveWinappToolInvocation,
+	type WinappToolTaskSpec
+} from './tool-command-utils';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
@@ -225,6 +232,28 @@ async function runWinappCommand(extensionPath: string, command: string, cwd: str
 
 	terminal.sendText(`& ${escapePowerShellArg(cliPath)} ${command}`);
 	return '';
+}
+
+/**
+ * Run a Windows SDK tool through winapp without a command shell. ProcessExecution
+ * keeps the output visible in a VS Code terminal while preserving argument
+ * boundaries all the way to winapp.exe.
+ */
+async function runWinappTool(spec: WinappToolTaskSpec): Promise<vscode.TaskExecution> {
+	return executeWinappToolTask(spec, {
+		createProcessExecution: (executable, args, options) =>
+			new vscode.ProcessExecution(executable, args, options),
+		createTask: (definition, _scope, name, source, execution) =>
+			new vscode.Task(definition, vscode.TaskScope.Workspace, name, source, execution),
+		setPresentation: (task, presentation) => {
+			task.presentationOptions = {
+				reveal: vscode.TaskRevealKind.Always,
+				panel: vscode.TaskPanelKind.Dedicated,
+				clear: presentation.clear
+			};
+		},
+		executeTask: task => vscode.tasks.executeTask(task)
+	});
 }
 
 /**
@@ -1460,45 +1489,41 @@ export function activate(context: vscode.ExtensionContext) {
 			if (!workspacePath) {
 				return;
 			}
-
-			const toolSelection = await vscode.window.showQuickPick(
-				['makeappx', 'signtool', 'mt', 'makepri', 'other'],
-				{ placeHolder: 'Select Windows SDK tool' }
+			const invocation = await resolveWinappToolInvocation(
+				getWinappCliPath(extensionPath),
+				workspacePath,
+				{
+					selectTool: () => vscode.window.showQuickPick(
+						['makeappx', 'signtool', 'mt', 'makepri', 'other'],
+						{ placeHolder: 'Select Windows SDK tool' }
+					),
+					promptForToolName: () => vscode.window.showInputBox({
+						prompt: 'Enter the Windows SDK tool name',
+						placeHolder: 'e.g., custom-tool'
+					}),
+					promptForArguments: (toolName) => vscode.window.showInputBox({
+						prompt: `Enter arguments for ${toolName}. Arguments are passed without shell interpretation; ` +
+							'double-quote values that contain spaces.',
+						placeHolder: 'e.g., /?',
+						validateInput: (value) => {
+							try {
+								parseToolArguments(value);
+								return undefined;
+							} catch (error) {
+								return error instanceof Error ? error.message : String(error);
+							}
+						}
+					})
+				}
 			);
-
-			if (!toolSelection) {
+			if (!invocation) {
 				return;
 			}
 
-			let toolName: string;
-			if (toolSelection === 'other') {
-				const customTool = await vscode.window.showInputBox({
-					prompt: 'Enter the Windows SDK tool name',
-					placeHolder: 'e.g., custom-tool'
-				});
-
-				if (!customTool) {
-					return;
-				}
-				toolName = customTool;
-			} else {
-				toolName = toolSelection;
-			}
-
-			const args = await vscode.window.showInputBox({
-				prompt: `Enter arguments for ${toolName}`,
-				placeHolder: 'e.g., --help'
-			});
-
-			let command = `tool ${escapePowerShellArg(toolName)}`;
-			if (args) {
-				// args is a raw, multi-token passthrough for the selected tool
-				// (e.g. "--foo bar /p:baz"), so it is intentionally not quoted as a
-				// single literal. toolName is escaped above because it is a single value.
-				command += ` ${args}`;
-			}
-
-			await runWinappCommand(extensionPath, command, workspacePath);
+			return runWinappTool(createWinappToolTaskSpec(
+				invocation,
+				WINAPP_CLI_CALLER_VALUE
+			));
 		})
 	);
 
