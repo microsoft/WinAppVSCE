@@ -20,7 +20,19 @@ import {
 	isArtifactWithinRoot,
 	planPackCompletion
 } from './pack-result';
-import { findWorkspaceArtifacts, buildSignCommand, CERTIFICATE_GLOBS, executeSignFlow, type SignFlowAdapter } from './sign-utils';
+import {
+	findWorkspaceArtifacts,
+	buildSignCommand,
+	CERTIFICATE_GLOBS,
+	executeSignFlow,
+	coordinateWorkspaceSignFileSelection,
+	discoverSignFilesWithFallback,
+	runWithCancellation,
+	runWithCancellationSource,
+	type SignFileDiscovery,
+	type SignFlowAdapter,
+	type WorkspaceFileFinder
+} from './sign-utils';
 import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
 	detectArchFromPath,
@@ -326,117 +338,122 @@ async function runWinappCapture(
 
 /**
  * Search the workspace for MSIX/APPX artifacts and let the user pick one via
- * a QuickPick. When no artifacts are found the function falls back directly to
- * a native file dialog; a "Browse…" entry is always appended so the user can
- * opt into the dialog even when artifacts *are* discovered.
+ * a QuickPick. When no artifacts are found the function falls back to a native
+ * file dialog; if the bounded workspace search produced only filtered results,
+ * the handoff is surfaced explicitly first. A "Browse…" entry is always
+ * appended so the user can opt into the dialog even when artifacts *are*
+ * discovered.
  *
  * @returns The selected file path, or `undefined` if cancelled.
  */
 async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
-	let cancelled = false;
-	const artifactPaths = await vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
-		async (_progress, token) => {
-			token.onCancellationRequested(() => { cancelled = true; });
-			return findWorkspaceArtifacts(workspacePath, ARTIFACT_GLOBS);
-		}
-	);
-
-	if (cancelled) {
-		return undefined;
-	}
-
-	if (artifactPaths.length === 0) {
-		return selectFile('Select file to sign', {
-			...ARTIFACT_DIALOG_FILTER,
-			'Executables': ['exe', 'dll'],
-			'All files': ['*']
-		});
-	}
-
-	const items: vscode.QuickPickItem[] = artifactPaths.map((p) => {
-		const relDir = path.dirname(path.relative(workspacePath, p));
-		return {
-			label: path.basename(p),
-			description: relDir === '.' ? '' : relDir,
-			detail: p
-		};
+	return pickWorkspaceSignFile(workspacePath, {
+		patterns: ARTIFACT_GLOBS,
+		progressTitle: 'Searching for signable artifacts...',
+		searchContext: 'signable artifacts',
+		placeHolder: 'Select a package to sign',
+		selectManualFile: selectArtifactFile
 	});
-
-	items.push({ label: '$(folder-opened) Browse…', detail: 'Open a file picker' });
-
-	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select a package to sign'
-	});
-
-	if (!picked) {
-		return undefined;
-	}
-
-	if (picked.detail === 'Open a file picker') {
-		return selectFile('Select file to sign', {
-			...ARTIFACT_DIALOG_FILTER,
-			'Executables': ['exe', 'dll'],
-			'All files': ['*']
-		});
-	}
-
-	return picked.detail;
 }
 
 /**
  * Search the workspace for PFX certificate files and let the user pick one
- * via a QuickPick. Falls back to a native file dialog when none are found;
- * a "Browse…" entry is always appended.
+ * via a QuickPick. Falls back to a native file dialog when none are found; if
+ * the bounded workspace search produced only filtered results, the handoff is
+ * surfaced explicitly first. A "Browse…" entry is always appended.
  *
  * @returns The selected certificate path, or `undefined` if cancelled.
  */
 async function pickCertificateFile(workspacePath: string): Promise<string | undefined> {
-	let cancelled = false;
-	const certPaths = await vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title: 'Searching for certificates...', cancellable: true },
-		async (_progress, token) => {
-			token.onCancellationRequested(() => { cancelled = true; });
-			return findWorkspaceArtifacts(workspacePath, CERTIFICATE_GLOBS);
-		}
+	return pickWorkspaceSignFile(workspacePath, {
+		patterns: CERTIFICATE_GLOBS,
+		progressTitle: 'Searching for certificates...',
+		searchContext: 'signing certificates',
+		placeHolder: 'Select a signing certificate',
+		selectManualFile: selectCertificateFile
+	});
+}
+
+interface WorkspaceSignFilePickerOptions {
+	patterns: string[];
+	progressTitle: string;
+	searchContext: string;
+	placeHolder: string;
+	selectManualFile: () => Promise<string | undefined>;
+}
+
+async function pickWorkspaceSignFile(
+	workspacePath: string,
+	options: WorkspaceSignFilePickerOptions
+): Promise<string | undefined> {
+	const discovery = await discoverSignFiles(
+		workspacePath,
+		options.patterns,
+		options.progressTitle,
+		options.searchContext
 	);
-
-	if (cancelled) {
-		return undefined;
-	}
-
-	if (certPaths.length === 0) {
-		return selectFile('Select signing certificate', {
-			'Certificates': ['pfx']
-		});
-	}
-
-	const items: vscode.QuickPickItem[] = certPaths.map((p) => {
-		const relDir = path.dirname(path.relative(workspacePath, p));
-		return {
-			label: path.basename(p),
-			description: relDir === '.' ? '' : relDir,
-			detail: p
-		};
+	return coordinateWorkspaceSignFileSelection(workspacePath, discovery, {
+		searchContext: options.searchContext,
+		placeHolder: options.placeHolder,
+		selectManualFile: options.selectManualFile,
+		showWarning: message => vscode.window.showWarningMessage(message, 'Browse…'),
+		showQuickPick: (items, quickPickOptions) => vscode.window.showQuickPick(items, quickPickOptions)
 	});
+}
 
-	items.push({ label: '$(folder-opened) Browse…', detail: 'Open a file picker' });
+async function discoverSignFiles(
+	workspacePath: string,
+	patterns: string[],
+	progressTitle: string,
+	searchContext: string
+): Promise<SignFileDiscovery> {
+	return discoverSignFilesWithFallback(
+		searchContext,
+		() => vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: true },
+			async (_progress, token) =>
+				runWithCancellation(token, signal =>
+					findWorkspaceArtifacts(
+						workspacePath,
+						createWorkspaceFileFinder(workspacePath),
+						patterns,
+						signal
+					)
+				)
+		),
+		message => vscode.window.showWarningMessage(message, 'Browse…')
+	);
+}
 
-	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select a signing certificate'
+function selectArtifactFile(): Promise<string | undefined> {
+	return selectFile('Select file to sign', {
+		...ARTIFACT_DIALOG_FILTER,
+		'Executables': ['exe', 'dll'],
+		'All files': ['*']
 	});
+}
 
-	if (!picked) {
-		return undefined;
-	}
+function selectCertificateFile(): Promise<string | undefined> {
+	return selectFile('Select signing certificate', {
+		'Certificates': ['pfx']
+	});
+}
 
-	if (picked.detail === 'Open a file picker') {
-		return selectFile('Select signing certificate', {
-			'Certificates': ['pfx']
-		});
-	}
-
-	return picked.detail;
+function createWorkspaceFileFinder(workspacePath: string): WorkspaceFileFinder {
+	return (includePattern, signal, maxResults) =>
+		runWithCancellationSource(
+			signal,
+			() => new vscode.CancellationTokenSource(),
+			async token => {
+				const matches = await vscode.workspace.findFiles(
+					new vscode.RelativePattern(workspacePath, includePattern),
+					null,
+					maxResults,
+					token
+				);
+				return matches.map(uri => uri.fsPath);
+			}
+		);
 }
 
 const FOLDER_PICKER_DETAIL = 'Open a folder picker';
