@@ -477,17 +477,18 @@ function Invoke-VSCodeDriverStep {
     return [pscustomobject]@{ id = $id; done = $false; error = 'timeout' }
 }
 
-# Fire a winapp.* (or any) command by ID; answers is an ordered list of @{accept=$true} /
-# @{nativeDialogPath='...'} to satisfy the command's prompts.
+# Fire a winapp.* (or any) command by ID. Arguments are passed to
+# vscode.commands.executeCommand; answers satisfy prompts in order.
 function Invoke-VSCodeDriverCommand {
     param(
         [Parameter(Mandatory)]$Ctx,
         [Parameter(Mandatory)][string]$CommandId,
         [object[]]$Answers = @(),
         [int]$SettleMs = 1600,
-        [int]$TimeoutSec = 120
+        [int]$TimeoutSec = 120,
+        [object[]]$Arguments = @()
     )
-    return Invoke-VSCodeDriverStep -Ctx $Ctx -Step @{ type = 'command'; command = $CommandId; answers = $Answers; settleMs = $SettleMs } -TimeoutSec $TimeoutSec
+    return Invoke-VSCodeDriverStep -Ctx $Ctx -Step @{ type = 'command'; command = $CommandId; args = $Arguments; answers = $Answers; settleMs = $SettleMs } -TimeoutSec $TimeoutSec
 }
 
 # Launch the app via the WinApp DEBUGGER (vscode.debug.startDebugging).

@@ -8,6 +8,9 @@
   "categories": ["Other"],
   "activationEvents": ["onStartupFinished"],
   "main": "./extension.js",
+  "scripts": {
+    "test": "node --test extension.test.js"
+  },
   "contributes": {
     "commands": [
       { "command": "winappUxDriver.runScript", "title": "Run Script", "category": "WinApp UX Driver" },
