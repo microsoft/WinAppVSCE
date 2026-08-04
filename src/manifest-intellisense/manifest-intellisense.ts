@@ -5,16 +5,11 @@
 
 import * as vscode from 'vscode';
 import { SchemaModel } from '../manifest-schema/schema-model';
+import { MANIFEST_SELECTOR } from '../manifest-schema/manifest-path';
 import { ManifestCompletionProvider } from './completion-provider';
 import { ManifestHoverProvider } from './hover-provider';
 import { ManifestDiagnosticsProvider } from './diagnostics-provider';
 import { ManifestDefinitionProvider } from './definition-provider';
-
-/** Document selector for manifest files. */
-const MANIFEST_SELECTOR: vscode.DocumentSelector = [
-    { language: 'xml', pattern: '**/[Aa]ppx[Mm]anifest.xml' },
-    { language: 'xml', pattern: '**/*.appxmanifest' },
-];
 
 /** Trigger characters for completions. */
 const TRIGGER_CHARACTERS = ['<', ' ', '"', '=', '/'];

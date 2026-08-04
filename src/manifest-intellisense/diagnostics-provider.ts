@@ -6,6 +6,7 @@
 import * as vscode from 'vscode';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { validateManifestText } from '../manifest-schema/schema-validation';
+import { isManifestPath } from '../manifest-schema/manifest-path';
 
 const MANIFEST_CONFIG_SECTION = 'winapp.manifest';
 const INTELLISENSE_ENABLE_CONFIG_KEY = 'intelliSense.enable';
@@ -117,8 +118,7 @@ export class ManifestDiagnosticsProvider {
     /** Check if a document is a manifest file. */
     private isManifestFile(document: vscode.TextDocument): boolean {
         if (document.uri.scheme !== 'file') { return false; }
-        const fsPath = document.uri.fsPath.toLowerCase();
-        return fsPath.endsWith('appxmanifest.xml') || fsPath.endsWith('.appxmanifest');
+        return isManifestPath(document.uri.fsPath);
     }
 
     /** Validate the manifest document. */

@@ -17,6 +17,7 @@ import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provid
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
 import { SchemaModel } from './manifest-schema/schema-model';
 import { loadSchemaModel } from './manifest-schema/xsd-parser';
+import { isManifestPath } from './manifest-schema/manifest-path';
 import {
 	PACK_ACTIONS,
 	getPackNotificationAction,
@@ -775,10 +776,6 @@ async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<str
 	});
 
 	return result?.[0]?.fsPath;
-}
-
-function isManifestPath(fsPath: string): boolean {
-	return /(?:^|[\\/])appxmanifest\.xml$|\.appxmanifest$/i.test(fsPath);
 }
 
 class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
