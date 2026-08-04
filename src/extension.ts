@@ -14,6 +14,10 @@ import {
 import { detectProjects, deduplicateBuildOutputFolders, BUILD_OUTPUT_EXCLUDE_GLOB, BUILD_OUTPUT_MAX_RESULTS } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
+import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
+import { SchemaModel } from './manifest-schema/schema-model';
+import { loadSchemaModel } from './manifest-schema/xsd-parser';
+import { isManifestPath } from './manifest-schema/manifest-path';
 import {
 	PACK_ACTIONS,
 	getPackNotificationAction,
@@ -24,6 +28,7 @@ import {
 	findWorkspaceArtifacts,
 	buildSignCommand,
 	CERTIFICATE_GLOBS,
+	EXECUTABLE_GLOBS,
 	executeSignFlow,
 	type SignFlowAdapter
 } from './sign-utils';
@@ -42,9 +47,17 @@ import {
 	validateInputFolder
 } from './debugger-resolver';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
+import {
+	createWinappToolTaskSpec,
+	executeWinappToolTask,
+	parseToolArguments,
+	resolveWinappToolInvocation,
+	type WinappToolTaskSpec
+} from './tool-command-utils';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
+const MAX_SIGNABLE_FILES = 10;
 
 /**
  * Output channel for debugger-related activity (e.g. auto-installed extensions),
@@ -222,6 +235,28 @@ async function runWinappCommand(extensionPath: string, command: string, cwd: str
 }
 
 /**
+ * Run a Windows SDK tool through winapp without a command shell. ProcessExecution
+ * keeps the output visible in a VS Code terminal while preserving argument
+ * boundaries all the way to winapp.exe.
+ */
+async function runWinappTool(spec: WinappToolTaskSpec): Promise<vscode.TaskExecution> {
+	return executeWinappToolTask(spec, {
+		createProcessExecution: (executable, args, options) =>
+			new vscode.ProcessExecution(executable, args, options),
+		createTask: (definition, _scope, name, source, execution) =>
+			new vscode.Task(definition, vscode.TaskScope.Workspace, name, source, execution),
+		setPresentation: (task, presentation) => {
+			task.presentationOptions = {
+				reveal: vscode.TaskRevealKind.Always,
+				panel: vscode.TaskPanelKind.Dedicated,
+				clear: presentation.clear
+			};
+		},
+		executeTask: task => vscode.tasks.executeTask(task)
+	});
+}
+
+/**
  * Shared output channel for capture-based winapp commands (e.g. pack). Created
  * lazily and reused so repeated runs don't leak channels.
  */
@@ -331,7 +366,8 @@ async function runWinappCapture(
 }
 
 /**
- * Search the workspace for MSIX/APPX artifacts and let the user pick one via
+ * Search the workspace for signable packages, executables, and libraries and
+ * let the user pick one via
  * a QuickPick. When no artifacts are found the function falls back directly to
  * a native file dialog; a "Browse…" entry is always appended so the user can
  * opt into the dialog even when artifacts *are* discovered.
@@ -341,7 +377,17 @@ async function runWinappCapture(
 async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
 	const artifactPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
-		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, ARTIFACT_GLOBS, token)
+		async (_progress, token) => {
+			const packagePaths = await findWorkspaceArtifactsWithCancellation(workspacePath, ARTIFACT_GLOBS, token);
+			if (!packagePaths) {
+				return undefined;
+			}
+			const executablePaths = await findWorkspaceArtifactsWithCancellation(workspacePath, EXECUTABLE_GLOBS, token);
+			if (!executablePaths) {
+				return undefined;
+			}
+			return [...packagePaths, ...executablePaths].slice(0, MAX_SIGNABLE_FILES);
+		}
 	);
 
 	if (!artifactPaths) {
@@ -368,7 +414,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 	items.push({ label: '$(folder-opened) Browse…', detail: 'Open a file picker' });
 
 	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select a package to sign'
+		placeHolder: 'Select a file to sign'
 	});
 
 	if (!picked) {
@@ -451,10 +497,7 @@ async function findWorkspaceArtifactsWithCancellation(
 	try {
 		const paths = await findWorkspaceArtifacts(
 			workspacePath,
-			async (includePattern, signal) => {
-				if (signal?.aborted) {
-					return [];
-				}
+			async includePattern => {
 				const matches = await vscode.workspace.findFiles(
 					new vscode.RelativePattern(workspacePath, includePattern),
 					null,
@@ -867,7 +910,26 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 			}
 			const result = await validateInputFolder(inputFolder, cwd);
 			if (!result.valid) {
-				vscode.window.showErrorMessage(result.message);
+				const openDebugConfigurationAction = 'Open debug configuration';
+				void vscode.window.showErrorMessage(result.message, openDebugConfigurationAction).then(
+					action => {
+						if (action === openDebugConfigurationAction) {
+							void vscode.commands.executeCommand('workbench.action.debug.configure').then(
+								undefined,
+								error => {
+									void vscode.window.showErrorMessage(
+										`Failed to open debug configuration: ${error instanceof Error ? error.message : String(error)}`
+									).then(undefined, () => {});
+								}
+							);
+						}
+					},
+					error => {
+						void vscode.window.showErrorMessage(
+							`Failed to show inputFolder validation error: ${error instanceof Error ? error.message : String(error)}`
+						).then(undefined, () => {});
+					}
+				);
 				return undefined;
 			}
 		}
@@ -1104,31 +1166,56 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.debug.registerDebugAdapterDescriptorFactory(WINAPP_DEBUG_TYPE, factory)
 	);
 
-	// Register the AppxManifest visual editor
-	context.subscriptions.push(ManifestEditorProvider.register(context));
+	// Shared schema model — loaded lazily, shared by both editor and IntelliSense.
+	// Schemas are bundled at build time (vscode:prepublish runs sync-schemas + verify-schemas),
+	// so loadSchemaModel will always succeed in a properly packaged extension.
+	const schemasDir = path.join(extensionPath, 'schemas');
+	let sharedSchema: SchemaModel | undefined;
+	const getSharedSchema = (): SchemaModel => {
+		if (sharedSchema) { return sharedSchema; }
+		sharedSchema = loadSchemaModel(schemasDir);
+		return sharedSchema;
+	};
+
+	// Register the Manifest Editor (with schema support)
+	context.subscriptions.push(ManifestEditorProvider.register(context, getSharedSchema));
+
+	// Register AppxManifest IntelliSense (completion, hover, diagnostics) — shares the same schema
+	registerManifestIntelliSense(context, getSharedSchema);
 
 	// When an appxmanifest file is opened in the default text editor,
-	// suggest switching to the visual editor.
-	const MANIFEST_PATTERN = /(?:^|[\\/])appxmanifest\.xml$|\.appxmanifest$/i;
+	// suggest switching to the Manifest Editor.
 	const dismissedKey = 'winapp.manifestEditorNotificationDismissed';
 
 	context.subscriptions.push(
 		vscode.window.onDidChangeActiveTextEditor(editor => {
 			if (!editor || editor.document.uri.scheme !== 'file') { return; }
-			if (!MANIFEST_PATTERN.test(editor.document.uri.fsPath)) { return; }
+			if (!isManifestPath(editor.document.uri.fsPath)) { return; }
 			if (context.globalState.get<boolean>(dismissedKey)) { return; }
 
 			vscode.window.showInformationMessage(
-				'This file can be opened with the WinApp visual manifest editor for a richer editing experience.',
-				'Open with AppxManifest Editor',
+				'This file can be opened with the Manifest Editor for a richer editing experience.',
+				'Open Manifest Editor',
 				"Don't Show Again",
 			).then(choice => {
-				if (choice === 'Open with AppxManifest Editor') {
+				if (choice === 'Open Manifest Editor') {
 					vscode.commands.executeCommand('vscode.openWith', editor.document.uri, ManifestEditorProvider.viewType);
 				} else if (choice === "Don't Show Again") {
 					context.globalState.update(dismissedKey, true);
 				}
 			});
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('winapp.openManifestEditor', async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor || editor.document.uri.scheme !== 'file' || !isManifestPath(editor.document.uri.fsPath)) {
+				vscode.window.showWarningMessage('Open an .appxmanifest or AppxManifest.xml file to use the Manifest Editor.');
+				return;
+			}
+
+			await vscode.commands.executeCommand('vscode.openWith', editor.document.uri, ManifestEditorProvider.viewType);
 		})
 	);
 
@@ -1434,45 +1521,41 @@ export function activate(context: vscode.ExtensionContext) {
 			if (!workspacePath) {
 				return;
 			}
-
-			const toolSelection = await vscode.window.showQuickPick(
-				['makeappx', 'signtool', 'mt', 'makepri', 'other'],
-				{ placeHolder: 'Select Windows SDK tool' }
+			const invocation = await resolveWinappToolInvocation(
+				getWinappCliPath(extensionPath),
+				workspacePath,
+				{
+					selectTool: () => vscode.window.showQuickPick(
+						['makeappx', 'signtool', 'mt', 'makepri', 'other'],
+						{ placeHolder: 'Select Windows SDK tool' }
+					),
+					promptForToolName: () => vscode.window.showInputBox({
+						prompt: 'Enter the Windows SDK tool name',
+						placeHolder: 'e.g., custom-tool'
+					}),
+					promptForArguments: (toolName) => vscode.window.showInputBox({
+						prompt: `Enter arguments for ${toolName}. Arguments are passed without shell interpretation; ` +
+							'double-quote values that contain spaces.',
+						placeHolder: 'e.g., /?',
+						validateInput: (value) => {
+							try {
+								parseToolArguments(value);
+								return undefined;
+							} catch (error) {
+								return error instanceof Error ? error.message : String(error);
+							}
+						}
+					})
+				}
 			);
-
-			if (!toolSelection) {
+			if (!invocation) {
 				return;
 			}
 
-			let toolName: string;
-			if (toolSelection === 'other') {
-				const customTool = await vscode.window.showInputBox({
-					prompt: 'Enter the Windows SDK tool name',
-					placeHolder: 'e.g., custom-tool'
-				});
-
-				if (!customTool) {
-					return;
-				}
-				toolName = customTool;
-			} else {
-				toolName = toolSelection;
-			}
-
-			const args = await vscode.window.showInputBox({
-				prompt: `Enter arguments for ${toolName}`,
-				placeHolder: 'e.g., --help'
-			});
-
-			let command = `tool ${escapePowerShellArg(toolName)}`;
-			if (args) {
-				// args is a raw, multi-token passthrough for the selected tool
-				// (e.g. "--foo bar /p:baz"), so it is intentionally not quoted as a
-				// single literal. toolName is escaped above because it is a single value.
-				command += ` ${args}`;
-			}
-
-			await runWinappCommand(extensionPath, command, workspacePath);
+			return runWinappTool(createWinappToolTaskSpec(
+				invocation,
+				WINAPP_CLI_CALLER_VALUE
+			));
 		})
 	);
 

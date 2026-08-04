@@ -225,6 +225,14 @@ describe('ensureNamespace', () => {
         const result = ensureNamespace(xml, 'uap', 'http://schemas.microsoft.com/appx/manifest/uap/windows10');
         assert.ok(result.includes('xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"'));
     });
+
+    it('does not inject the XML declaration text into single-line first-line Package tags', () => {
+        const xml = '<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"></Package>';
+        const result = ensureNamespace(xml, 'uap', 'http://schemas.microsoft.com/appx/manifest/uap/windows10');
+        assert.match(result, /^<\?xml version="1\.0" encoding="utf-8"\?><Package /);
+        assert.ok(!result.includes('utf-8"?><Package xmlns:uap'));
+        assert.ok(result.includes('xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"'));
+    });
 });
 
 // ---------------------------------------------------------------------------

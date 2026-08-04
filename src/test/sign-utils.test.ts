@@ -7,7 +7,8 @@ import { glob } from 'glob';
 import {
 	findWorkspaceArtifacts as findWorkspaceArtifactsCore,
 	buildSignCommand,
-	CERTIFICATE_GLOBS
+	CERTIFICATE_GLOBS,
+	EXECUTABLE_GLOBS
 } from '../sign-utils';
 import { ARTIFACT_GLOBS } from '../artifact-types';
 
@@ -139,7 +140,22 @@ describe('findWorkspaceArtifacts', () => {
 		assert.deepEqual(results, [included]);
 	});
 
-	it('searches all artifact extensions in one call', async () => {
+	it('discovers executable and library files outside excluded directories', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const executable = path.join(tempDir, 'bin', 'app.exe');
+		const library = path.join(tempDir, 'bin', 'app.dll');
+		createFile(executable);
+		createFile(library);
+		createFile(path.join(tempDir, 'node_modules', 'pkg', 'ignored.dll'));
+		createFile(path.join(tempDir, '.git', 'ignored.exe'));
+
+		const results = await findWorkspaceArtifacts(tempDir, EXECUTABLE_GLOBS);
+
+		assert.deepEqual(results.sort(), [executable, library].sort());
+	});
+
+	it('searches all requested extensions in one call', async () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
 		let receivedPattern: string | undefined;
@@ -147,7 +163,7 @@ describe('findWorkspaceArtifacts', () => {
 
 		await findWorkspaceArtifactsCore(
 			tempDir,
-			async (includePattern) => {
+			async includePattern => {
 				calls++;
 				receivedPattern = includePattern;
 				return [];

@@ -6,6 +6,9 @@ import { ARTIFACT_GLOBS } from './artifact-types';
 /** Glob patterns for PFX certificate files within a workspace. */
 export const CERTIFICATE_GLOBS = ['**/*.pfx'];
 
+/** Glob patterns for executable files that can be signed. */
+export const EXECUTABLE_GLOBS = ['**/*.exe', '**/*.dll'];
+
 const SIGNABLE_ARTIFACT_IGNORES = new Set(['node_modules', '.git']);
 
 export type WorkspaceFileFinder = (

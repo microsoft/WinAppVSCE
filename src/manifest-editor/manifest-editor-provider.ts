@@ -13,14 +13,18 @@ import { validateManifest } from './manifest-validator';
 import { getWebviewContent, getParseErrorContent } from './webview-content';
 import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
+import { SchemaModel } from '../manifest-schema/schema-model';
 
 export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'winapp.manifestEditor';
 
-    constructor(private readonly context: vscode.ExtensionContext) {}
+    constructor(
+        private readonly context: vscode.ExtensionContext,
+        private readonly getSchema: () => SchemaModel,
+    ) {}
 
-    public static register(context: vscode.ExtensionContext): vscode.Disposable {
-        const provider = new ManifestEditorProvider(context);
+    public static register(context: vscode.ExtensionContext, getSchema: () => SchemaModel): vscode.Disposable {
+        const provider = new ManifestEditorProvider(context, getSchema);
         return vscode.window.registerCustomEditorProvider(
             ManifestEditorProvider.viewType,
             provider,
@@ -150,7 +154,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                 return;
             }
             if (showingErrorView) { showEditorView(); }
-            const errors = validateManifest(data);
+            const errors = validateManifest(data, this.getSchema());
             webviewPanel.webview.postMessage({ type: 'update', data, errors, forceAll });
         };
 
@@ -245,11 +249,29 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             const imgPath = message.imagePath;
                             const manifestDirPath = path.dirname(document.uri.fsPath);
                             const resolved = path.resolve(manifestDirPath, imgPath);
+                            const usesWorkspaceFallback = imgPath.startsWith('..\\') || imgPath.startsWith('../');
+                            const isWithinRoot = (candidatePath: string, rootPath: string): boolean => {
+                                const relativePath = path.relative(rootPath, candidatePath);
+                                return relativePath !== ''
+                                    && !relativePath.startsWith('..')
+                                    && !path.isAbsolute(relativePath);
+                            };
+                            const workspaceRoot = vscode.workspace.workspaceFolders?.find(wf =>
+                                resolved.toLowerCase() === wf.uri.fsPath.toLowerCase()
+                                || isWithinRoot(resolved, wf.uri.fsPath)
+                            )?.uri.fsPath;
 
                             // Check if the resolved path is inside the package directory AND exists
                             const normalizedResolved = resolved.toLowerCase();
                             const normalizedManifestDir = manifestDirPath.toLowerCase() + path.sep;
                             if (normalizedResolved.startsWith(normalizedManifestDir) && fs.existsSync(resolved)) {
+                                const dims = getImageDimensions(resolved);
+                                const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
+                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
+                                return;
+                            }
+
+                            if (!path.isAbsolute(imgPath) && usesWorkspaceFallback && workspaceRoot && fs.existsSync(resolved)) {
                                 const dims = getImageDimensions(resolved);
                                 const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
                                 webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
@@ -269,12 +291,15 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                 return;
                             }
 
-                            // Check relative to workspace folders
-                            if (vscode.workspace.workspaceFolders) {
+                            // Only fall back to workspace-root resolution for paths that
+                            // explicitly escape the manifest folder (for example ..\Assets\logo.png).
+                            if (usesWorkspaceFallback && vscode.workspace.workspaceFolders) {
                                 for (const wf of vscode.workspace.workspaceFolders) {
                                     const candidate = path.resolve(wf.uri.fsPath, imgPath);
-                                    if (fs.existsSync(candidate) && !candidate.toLowerCase().startsWith(normalizedManifestDir)) {
-                                        webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', sourcePath: candidate });
+                                    if (fs.existsSync(candidate)) {
+                                        const dims = getImageDimensions(candidate);
+                                        const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
+                                        webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
                                         return;
                                     }
                                 }

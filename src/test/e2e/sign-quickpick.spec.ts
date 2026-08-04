@@ -2,7 +2,7 @@
  * E2E tests for the `winapp.sign` command's QuickPick flows.
  *
  * Test 1 — Artifact QuickPick:
- *   Opens VS Code in a workspace containing a .msix file, runs "WinApp: Sign Package",
+ *   Opens VS Code in a workspace containing a .msix file, runs "WinApp: Sign File",
  *   and asserts that a QuickPick appears listing the artifact and a "Browse…" option.
  *
  * Test 2 — Certificate QuickPick:
@@ -10,12 +10,12 @@
  *   the package, and asserts that a second QuickPick appears for certificate selection.
  *
  * Test 3 — Cancel artifact QuickPick:
- *   Opens VS Code, runs "WinApp: Sign Package", and presses Escape to dismiss the
+ *   Opens VS Code, runs "WinApp: Sign File", and presses Escape to dismiss the
  *   artifact QuickPick. Verifies the sign flow aborts gracefully (no certificate
  *   picker or terminal appears).
  *
  * Test 4 — Browse option:
- *   Opens VS Code, runs "WinApp: Sign Package", selects "Browse…" from the QuickPick,
+ *   Opens VS Code, runs "WinApp: Sign File", selects "Browse…" from the QuickPick,
  *   and verifies that a native file dialog opens (the Open dialog title bar appears).
  *
  * Test 5 — Cancel certificate QuickPick:
@@ -77,7 +77,7 @@ async function runCommandPalette(page: Page, commandLabel: string): Promise<void
 /**
  * Create a temp workspace with a .msix file and optionally a .pfx file.
  */
-function createSignTestWorkspace(options?: { includePfx?: boolean }): string {
+function createSignTestWorkspace(options?: { includePfx?: boolean; additionalFiles?: string[] }): string {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-e2e-'));
     const msixPath = path.join(tmpDir, 'AppPackages', 'MyApp_1.0.0.0_x64.msix');
     fs.mkdirSync(path.dirname(msixPath), { recursive: true });
@@ -87,6 +87,12 @@ function createSignTestWorkspace(options?: { includePfx?: boolean }): string {
         const pfxPath = path.join(tmpDir, 'certs', 'DevCert.pfx');
         fs.mkdirSync(path.dirname(pfxPath), { recursive: true });
         fs.writeFileSync(pfxPath, Buffer.alloc(512));
+    }
+
+    for (const relativePath of options?.additionalFiles ?? []) {
+        const filePath = path.join(tmpDir, relativePath);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, Buffer.alloc(1024));
     }
 
     return tmpDir;
@@ -116,8 +122,8 @@ test.describe('winapp.sign command — artifact discovery', () => {
             app = launched.app;
             const page = launched.page;
 
-            // Run "WinApp: Sign Package"
-            await runCommandPalette(page, 'WinApp: Sign Package');
+            // Run "WinApp: Sign File"
+            await runCommandPalette(page, 'WinApp: Sign File');
 
             // The QuickPick should appear. Wait for the quick-input widget to
             // become visible. VS Code keeps the widget in the DOM with
@@ -132,7 +138,7 @@ test.describe('winapp.sign command — artifact discovery', () => {
             // The placeholder text should mention signing
             const inputBox = quickInput.locator('.quick-input-filter input[type="text"]');
             const placeholder = await inputBox.getAttribute('placeholder');
-            expect(placeholder).toContain('package to sign');
+            expect(placeholder).toContain('file to sign');
 
             // There should be at least 2 items: the .msix file + Browse…
             const items = quickInput.locator('.quick-input-list .monaco-list-row');
@@ -159,6 +165,40 @@ test.describe('winapp.sign command — artifact discovery', () => {
         }
     });
 
+    test('shows packages before executables and limits discovered files to 10', async () => {
+        const tmpDir = createSignTestWorkspace({
+            additionalFiles: [
+                'AppPackages/MyBundle.msixbundle',
+                ...Array.from({ length: 10 }, (_, index) => `bin/App${index}.exe`),
+                'bin/App.dll',
+            ],
+        });
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Sign File');
+
+            const items = page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
+            await expect(items.first()).toBeVisible({ timeout: 20_000 });
+            await expect(items.first()).toHaveAttribute('aria-setsize', '11');
+
+            const itemText = await items.allTextContents();
+            expect(itemText.slice(0, 2).every(text => /\.(msix|msixbundle)/i.test(text))).toBe(true);
+            expect(itemText.slice(2).every(text => /\.(exe|dll)/i.test(text))).toBe(true);
+
+            await page.keyboard.press('Escape');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
     test('ignores files.exclude without showing dependency artifacts', async () => {
         const tmpDir = createSignTestWorkspace();
         configureFilesExclude(tmpDir);
@@ -172,11 +212,11 @@ test.describe('winapp.sign command — artifact discovery', () => {
             app = launched.app;
             const page = launched.page;
 
-            await runCommandPalette(page, 'WinApp: Sign Package');
+            await runCommandPalette(page, 'WinApp: Sign File');
 
             const quickInput = page.locator('.quick-input-widget');
             const inputBox = quickInput.locator('.quick-input-filter input[type="text"]');
-            await expect(inputBox).toHaveAttribute('placeholder', /package to sign/, { timeout: 20_000 });
+            await expect(inputBox).toHaveAttribute('placeholder', /file to sign/, { timeout: 20_000 });
             const itemText = await quickInput.locator('.quick-input-list .monaco-list-row').allTextContents();
             expect(itemText.join(' ')).toContain('MyApp_1.0.0.0_x64.msix');
             expect(itemText.join(' ')).not.toContain('Ignored.msix');
@@ -199,8 +239,8 @@ test.describe('winapp.sign command — artifact discovery', () => {
             app = launched.app;
             const page = launched.page;
 
-            // Run "WinApp: Sign Package"
-            await runCommandPalette(page, 'WinApp: Sign Package');
+            // Run "WinApp: Sign File"
+            await runCommandPalette(page, 'WinApp: Sign File');
 
             // Wait for the artifact QuickPick to appear
             const quickInput = page.locator('.quick-input-widget');
@@ -211,7 +251,7 @@ test.describe('winapp.sign command — artifact discovery', () => {
             // Verify it's the package picker
             const packageInput = quickInput.locator('.quick-input-filter input[type="text"]');
             const packagePlaceholder = await packageInput.getAttribute('placeholder');
-            expect(packagePlaceholder).toContain('package to sign');
+            expect(packagePlaceholder).toContain('file to sign');
 
             // Select the .msix artifact (first item) to advance to cert picker
             await quickInput.locator('.quick-input-list .monaco-list-row').first().click();
@@ -263,8 +303,8 @@ test.describe('winapp.sign command — artifact discovery', () => {
             app = launched.app;
             const page = launched.page;
 
-            // Run "WinApp: Sign Package"
-            await runCommandPalette(page, 'WinApp: Sign Package');
+            // Run "WinApp: Sign File"
+            await runCommandPalette(page, 'WinApp: Sign File');
 
             // Wait for the artifact QuickPick to appear
             const quickInput = page.locator('.quick-input-widget');
@@ -275,7 +315,7 @@ test.describe('winapp.sign command — artifact discovery', () => {
             // Verify it's the package picker
             const inputBox = quickInput.locator('.quick-input-filter input[type="text"]');
             const placeholder = await inputBox.getAttribute('placeholder');
-            expect(placeholder).toContain('package to sign');
+            expect(placeholder).toContain('file to sign');
 
             // Press Escape to cancel the QuickPick
             await page.keyboard.press('Escape');
@@ -314,8 +354,8 @@ test.describe('winapp.sign command — artifact discovery', () => {
             app = launched.app;
             const page = launched.page;
 
-            // Run "WinApp: Sign Package"
-            await runCommandPalette(page, 'WinApp: Sign Package');
+            // Run "WinApp: Sign File"
+            await runCommandPalette(page, 'WinApp: Sign File');
 
             // Wait for the artifact QuickPick to appear
             const quickInput = page.locator('.quick-input-widget');
@@ -372,8 +412,8 @@ test.describe('winapp.sign command — artifact discovery', () => {
             app = launched.app;
             const page = launched.page;
 
-            // Run "WinApp: Sign Package"
-            await runCommandPalette(page, 'WinApp: Sign Package');
+            // Run "WinApp: Sign File"
+            await runCommandPalette(page, 'WinApp: Sign File');
 
             // Wait for the artifact QuickPick to appear
             const quickInput = page.locator('.quick-input-widget');
