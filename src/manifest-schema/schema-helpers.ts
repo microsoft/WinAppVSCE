@@ -4,6 +4,7 @@
 
 import { SchemaModel, SchemaAttribute, SchemaPatternType } from './schema-model';
 import { validateAttributeValuePattern, validateAttributeValueLength, TYPE_DESCRIPTIONS } from './schema-validation';
+import { resolvePatternConstraints } from './xsd-parser';
 
 const TYPES_NS = 'http://schemas.microsoft.com/appx/manifest/types';
 
@@ -17,52 +18,16 @@ export function getPatternType(schema: SchemaModel, typeName: string): SchemaPat
 
 /**
  * Build a minimal SchemaAttribute from a pattern type for use with the
- * shared validation functions. Resolves the full inheritance chain to
- * collect all applicable patterns, minLength, and maxLength.
+ * shared validation functions. Delegates to the shared
+ * resolvePatternConstraints() walker in xsd-parser.ts to avoid duplicating
+ * the inheritance-chain traversal logic.
  */
 export function buildAttributeFromPatternType(
     schema: SchemaModel,
     typeName: string
 ): SchemaAttribute | undefined {
-    const patternSets: string[][] = [];
-    let minLength: number | undefined;
-    let maxLength: number | undefined;
-
-    let currentKey: string | undefined = `${TYPES_NS}|${typeName}`;
-    const visited = new Set<string>();
-
-    while (currentKey && !visited.has(currentKey)) {
-        visited.add(currentKey);
-        const pt = schema.patternTypes.get(currentKey);
-        if (!pt) { break; }
-
-        if (pt.patterns.length > 0) {
-            patternSets.push([...pt.patterns]);
-        }
-
-        if (pt.minLength !== undefined) {
-            minLength = minLength !== undefined ? Math.max(minLength, pt.minLength) : pt.minLength;
-        }
-        if (pt.maxLength !== undefined) {
-            maxLength = maxLength !== undefined ? Math.min(maxLength, pt.maxLength) : pt.maxLength;
-        }
-
-        if (pt.baseType) {
-            const ns: string = currentKey.split('|')[0];
-            const baseKey = `${ns}|${pt.baseType}`;
-            if (schema.patternTypes.has(baseKey)) {
-                currentKey = baseKey;
-            } else {
-                currentKey = schema.patternTypes.has(`${TYPES_NS}|${pt.baseType}`)
-                    ? `${TYPES_NS}|${pt.baseType}`
-                    : undefined;
-            }
-        } else {
-            currentKey = undefined;
-        }
-    }
-
-    if (patternSets.length === 0 && minLength === undefined && maxLength === undefined) {
+    const resolved = resolvePatternConstraints(`${TYPES_NS}|${typeName}`, schema);
+    if (!resolved) {
         return undefined;
     }
 
@@ -70,10 +35,12 @@ export function buildAttributeFromPatternType(
         name: typeName,
         required: false,
         typeName,
-        patterns: patternSets[0] ? [...patternSets[0]] : undefined,
-        patternSets: patternSets.length > 0 ? patternSets : undefined,
-        minLength,
-        maxLength,
+        patterns: resolved.patternSets[0] ? [...resolved.patternSets[0]] : undefined,
+        patternSets: resolved.patternSets.length > 0
+            ? resolved.patternSets.map(set => [...set])
+            : undefined,
+        minLength: resolved.minLength,
+        maxLength: resolved.maxLength,
     };
 }
 

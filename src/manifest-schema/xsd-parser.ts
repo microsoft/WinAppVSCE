@@ -612,7 +612,7 @@ function parseAttribute(
 /** Resolve all pattern/length constraints for a type, walking the inheritance chain.
  * Returns patternSets: each set is the patterns from one restriction level (OR within, AND between).
  */
-function resolvePatternConstraints(
+export function resolvePatternConstraints(
     typeKey: string,
     model: SchemaModel
 ): { patternSets: string[][]; minLength?: number; maxLength?: number } | null {
