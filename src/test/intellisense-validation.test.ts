@@ -775,3 +775,93 @@ describe('diagnostic severity levels', () => {
             'All XML parse errors should be error severity');
     });
 });
+
+// ============================================================================
+// Element text content validation
+// ============================================================================
+
+describe('element text content validation', () => {
+    it('flags FileType text content that violates pattern (missing dot prefix)', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+            <Applications>
+                <Application Id="App" Executable="app.exe" EntryPoint="App">
+                    <uap:VisualElements DisplayName="Test" Description="Test"
+                        BackgroundColor="transparent" Square150x150Logo="l.png" Square44x44Logo="s.png" />
+                    <Extensions>
+                        <uap:Extension Category="windows.shareTarget">
+                            <uap:ShareTarget>
+                                <uap:SupportedFileTypes>
+                                    <uap:FileType>txt</uap:FileType>
+                                </uap:SupportedFileTypes>
+                                <uap:DataFormat>text</uap:DataFormat>
+                            </uap:ShareTarget>
+                        </uap:Extension>
+                    </Extensions>
+                </Application>
+            </Applications>
+        `));
+        const textErrors = diagnostics.filter(d => d.message.includes('Text content'));
+        assert.ok(textErrors.length > 0, 'Should flag "txt" as invalid FileType text (missing dot)');
+        assert.ok(textErrors[0].message.includes('FileType'));
+    });
+
+    it('accepts valid FileType text content (.txt)', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+            <Applications>
+                <Application Id="App" Executable="app.exe" EntryPoint="App">
+                    <uap:VisualElements DisplayName="Test" Description="Test"
+                        BackgroundColor="transparent" Square150x150Logo="l.png" Square44x44Logo="s.png" />
+                    <Extensions>
+                        <uap:Extension Category="windows.shareTarget">
+                            <uap:ShareTarget>
+                                <uap:SupportedFileTypes>
+                                    <uap:FileType>.txt</uap:FileType>
+                                </uap:SupportedFileTypes>
+                                <uap:DataFormat>text</uap:DataFormat>
+                            </uap:ShareTarget>
+                        </uap:Extension>
+                    </Extensions>
+                </Application>
+            </Applications>
+        `));
+        const textErrors = diagnostics.filter(d => d.message.includes('Text content'));
+        assert.equal(textErrors.length, 0, 'Valid FileType ".txt" should not be flagged');
+    });
+
+    it('does not flag empty text content', () => {
+        const diagnostics = validateManifestText(model, makeManifest(`
+            <Applications>
+                <Application Id="App" Executable="app.exe" EntryPoint="App">
+                    <uap:VisualElements DisplayName="Test" Description="Test"
+                        BackgroundColor="transparent" Square150x150Logo="l.png" Square44x44Logo="s.png" />
+                    <Extensions>
+                        <uap:Extension Category="windows.shareTarget">
+                            <uap:ShareTarget>
+                                <uap:SupportedFileTypes>
+                                    <uap:FileType></uap:FileType>
+                                </uap:SupportedFileTypes>
+                                <uap:DataFormat>text</uap:DataFormat>
+                            </uap:ShareTarget>
+                        </uap:Extension>
+                    </Extensions>
+                </Application>
+            </Applications>
+        `));
+        const textErrors = diagnostics.filter(d => d.message.includes('Text content'));
+        assert.equal(textErrors.length, 0, 'Empty text content should not be flagged');
+    });
+
+    it('elements without simpleTypeName skip text validation', () => {
+        // <Application> has no simpleTypeName — its text content (if any) should not be validated
+        const diagnostics = validateManifestText(model, makeManifest(`
+            <Applications>
+                <Application Id="App" Executable="app.exe" EntryPoint="App">
+                    <uap:VisualElements DisplayName="Test" Description="Test"
+                        BackgroundColor="transparent" Square150x150Logo="l.png" Square44x44Logo="s.png" />
+                </Application>
+            </Applications>
+        `));
+        const textErrors = diagnostics.filter(d => d.message.includes('Text content'));
+        assert.equal(textErrors.length, 0);
+    });
+});

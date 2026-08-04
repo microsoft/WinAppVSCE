@@ -11,6 +11,7 @@ import type { Element } from '@xmldom/xmldom';
 import { SchemaElement, SchemaModel, SchemaAttribute, SchemaChildRef } from './schema-model';
 import { validateSemanticRules } from './semantic-validation';
 import { parseManifestXml } from './xml-parser';
+import { resolvePatternConstraints } from './xsd-parser';
 
 const MAX_VALIDATION_DEPTH = 100;
 
@@ -205,6 +206,9 @@ function validateElement(
             ...range,
         });
     }
+
+    // Validate element text content against simple type constraints
+    validateTextContent(schema, element, schemaDef, diagnostics, lines, schemaUri);
 
     validateChildren(schema, element, schemaDef, diagnostics, severity, lines, options, depth);
 }
@@ -403,6 +407,125 @@ interface ResolvedElementAttribute {
     localName: string;
     namespace?: string;
     value: string;
+}
+
+/**
+ * Validate an element's text content against its simple type constraints.
+ * Only fires for elements that have a simpleTypeName (from simpleContent or
+ * simple type reference in the XSD).
+ */
+function validateTextContent(
+    schema: SchemaModel,
+    element: Element,
+    schemaDef: SchemaElement,
+    diagnostics: ManifestDiagnostic[],
+    lines: string[],
+    schemaUri: string | undefined
+): void {
+    if (!schemaDef.simpleTypeName || !schemaDef.simpleTypeNamespace) {
+        return;
+    }
+
+    // Collect text content (text nodes only, skip child elements)
+    let textContent = '';
+    for (let i = 0; i < element.childNodes.length; i++) {
+        const child = element.childNodes[i];
+        if (child.nodeType === 3 || child.nodeType === 4) { // TEXT_NODE or CDATA_SECTION_NODE
+            textContent += child.nodeValue || '';
+        }
+    }
+
+    // Don't validate empty text — required-ness is a separate concern
+    if (textContent.trim().length === 0) {
+        return;
+    }
+
+    const typeKey = `${schemaDef.simpleTypeNamespace}|${schemaDef.simpleTypeName}`;
+    const localName = element.localName || element.nodeName.split(':').pop() || '';
+
+    // Check enum constraints
+    const enumType = schema.enumTypes.get(typeKey);
+    if (enumType && enumType.values.length > 0) {
+        if (!enumType.values.includes(textContent.trim())) {
+            const range = getTextContentRange(element, lines);
+            diagnostics.push({
+                message: `Invalid text content '${textContent.trim()}' for <${localName}>. Expected one of: ${enumType.values.slice(0, 10).join(', ')}`,
+                severity: 'error',
+                schemaUri,
+                ...range,
+            });
+        }
+        return; // enum check is sufficient
+    }
+
+    // Check pattern constraints
+    const resolved = resolvePatternConstraints(typeKey, schema);
+    if (resolved) {
+        const value = textContent.trim();
+        if (resolved.patternSets.length > 0) {
+            const allPatternsMatch = resolved.patternSets.every(patternSet =>
+                patternSet.some(pattern => {
+                    try {
+                        return new RegExp(`^(?:${pattern})$`).test(value);
+                    } catch {
+                        return true;
+                    }
+                })
+            );
+            if (!allPatternsMatch) {
+                const range = getTextContentRange(element, lines);
+                const typeName = schemaDef.simpleTypeName;
+                const hint = TYPE_DESCRIPTIONS[typeName] ? ` (${TYPE_DESCRIPTIONS[typeName]})` : '';
+                diagnostics.push({
+                    message: `Text content '${value}' in <${localName}> is invalid${hint}`,
+                    severity: 'error',
+                    schemaUri,
+                    ...range,
+                });
+            }
+        }
+
+        // Check length constraints
+        if (resolved.minLength !== undefined && value.length < resolved.minLength) {
+            const range = getTextContentRange(element, lines);
+            diagnostics.push({
+                message: `Text content in <${localName}> must be at least ${resolved.minLength} characters (got ${value.length})`,
+                severity: 'error',
+                schemaUri,
+                ...range,
+            });
+        }
+        if (resolved.maxLength !== undefined && value.length > resolved.maxLength) {
+            const range = getTextContentRange(element, lines);
+            diagnostics.push({
+                message: `Text content in <${localName}> exceeds maximum length of ${resolved.maxLength} characters (got ${value.length})`,
+                severity: 'error',
+                schemaUri,
+                ...range,
+            });
+        }
+    }
+}
+
+/**
+ * Get the line range for an element's text content.
+ * Falls back to the element's own range if text position can't be determined.
+ */
+function getTextContentRange(element: Element, lines: string[]): { line: number; col: number; endCol: number } {
+    // The text content is between the opening tag close (>) and the closing tag (</)
+    const elemLine = (element as unknown as { lineNumber?: number }).lineNumber;
+    if (elemLine === undefined) {
+        return getElementRange(element, lines);
+    }
+    const line = clamp(elemLine - 1, 0, Math.max(lines.length - 1, 0));
+    const lineText = lines[line] || '';
+    // Try to find the text content region: after ">" and before "</"
+    const gtIndex = lineText.indexOf('>');
+    const closingIndex = lineText.indexOf('</');
+    if (gtIndex >= 0 && closingIndex > gtIndex) {
+        return { line, col: gtIndex + 1, endCol: closingIndex };
+    }
+    return { line, col: 0, endCol: getLineLength(lines, line) };
 }
 
 function validateChildPlacement(
