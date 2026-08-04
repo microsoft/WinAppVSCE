@@ -31,7 +31,7 @@ export async function validateInputFolder(inputFolder: string, cwd: string): Pro
 			valid: false,
 			reason: 'not-found',
 			message: `The configured "inputFolder" path does not exist: ${inputFolder}. `
-				+ 'Build your project first, or update "inputFolder" in the debug configuration to point to your build output directory.'
+				+ 'Build your project first, or update "inputFolder" in launch.json to point to your build output directory.'
 		};
 	}
 
@@ -40,7 +40,7 @@ export async function validateInputFolder(inputFolder: string, cwd: string): Pro
 			valid: false,
 			reason: 'not-directory',
 			message: `The configured "inputFolder" is not a directory: ${inputFolder}. `
-				+ 'Update "inputFolder" in the debug configuration to point to the folder containing your built application.'
+				+ 'Update "inputFolder" in launch.json to point to the folder containing your built application.'
 		};
 	}
 
@@ -50,7 +50,7 @@ export async function validateInputFolder(inputFolder: string, cwd: string): Pro
 			valid: false,
 			reason: 'no-exe',
 			message: `The configured "inputFolder" does not contain any .exe files: ${inputFolder}. `
-				+ 'Build your project first, or update "inputFolder" in the debug configuration to point to the folder containing your built application.'
+				+ 'Build your project first, or update "inputFolder" in launch.json to point to the folder containing your built application.'
 		};
 	}
 

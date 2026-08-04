@@ -105,7 +105,7 @@ describe('validateInputFolder', () => {
 			assert.equal(
 				result.message,
 				'The configured "inputFolder" path does not exist: C:\\does\\not\\exist. '
-					+ 'Build your project first, or update "inputFolder" in the debug configuration to point to your build output directory.'
+					+ 'Build your project first, or update "inputFolder" in launch.json to point to your build output directory.'
 			);
 		}
 	});
@@ -118,7 +118,7 @@ describe('validateInputFolder', () => {
 			assert.equal(
 				result.message,
 				`The configured "inputFolder" is not a directory: ${aFile}. `
-					+ 'Update "inputFolder" in the debug configuration to point to the folder containing your built application.'
+					+ 'Update "inputFolder" in launch.json to point to the folder containing your built application.'
 			);
 		}
 	});
@@ -131,7 +131,7 @@ describe('validateInputFolder', () => {
 			assert.equal(
 				result.message,
 				`The configured "inputFolder" does not contain any .exe files: ${emptyDir}. `
-					+ 'Build your project first, or update "inputFolder" in the debug configuration to point to the folder containing your built application.'
+					+ 'Build your project first, or update "inputFolder" in launch.json to point to the folder containing your built application.'
 			);
 		}
 	});
