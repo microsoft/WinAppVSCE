@@ -102,7 +102,11 @@ describe('validateInputFolder', () => {
 		assert.equal(result.valid, false);
 		if (!result.valid) {
 			assert.equal(result.reason, 'not-found');
-			assert.match(result.message, /does not exist/);
+			assert.equal(
+				result.message,
+				'The configured "inputFolder" path does not exist: C:\\does\\not\\exist. '
+					+ 'Build your project first, or update "inputFolder" in the debug configuration to point to your build output directory.'
+			);
 		}
 	});
 
@@ -111,7 +115,11 @@ describe('validateInputFolder', () => {
 		assert.equal(result.valid, false);
 		if (!result.valid) {
 			assert.equal(result.reason, 'not-directory');
-			assert.match(result.message, /not a directory/);
+			assert.equal(
+				result.message,
+				`The configured "inputFolder" is not a directory: ${aFile}. `
+					+ 'Update "inputFolder" in the debug configuration to point to the folder containing your built application.'
+			);
 		}
 	});
 
@@ -120,7 +128,11 @@ describe('validateInputFolder', () => {
 		assert.equal(result.valid, false);
 		if (!result.valid) {
 			assert.equal(result.reason, 'no-exe');
-			assert.match(result.message, /does not contain any \.exe files/);
+			assert.equal(
+				result.message,
+				`The configured "inputFolder" does not contain any .exe files: ${emptyDir}. `
+					+ 'Build your project first, or update "inputFolder" in the debug configuration to point to the folder containing your built application.'
+			);
 		}
 	});
 

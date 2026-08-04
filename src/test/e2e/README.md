@@ -44,7 +44,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (127 tests)
+## Test inventory (128 tests)
 
 ### `sign-quickpick.spec.ts` — 3 tests (2 active, 1 skipped)
 
@@ -55,6 +55,14 @@ Validates that `winapp.sign` discovers workspace MSIX artifacts and certificates
 | 1 | shows QuickPick with .msix file and Browse option when artifacts exist | QuickPick appears with artifact rows and Browse… fallback |
 | 2 | shows certificate QuickPick with .pfx file after selecting a package | Certificate QuickPick appears after package selection with .pfx rows and Browse… fallback |
 | 3 | *(skipped)* skips package QuickPick when invoked with prefilled path | Needs VS Code extension test host — see [#83](https://github.com/microsoft/WinAppVSCE/issues/83) |
+
+### `input-folder-validation.spec.ts` — 1 test
+
+Validates that an invalid configured `inputFolder` offers to open its owning debug configuration.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | invalid inputFolder offers to open its debug configuration | Validation cancels debugging, shows the resource-neutral action, and opens the correct folder `launch.json` with its unique configuration content |
 
 ### `editor-launch.spec.ts` — 11 tests
 

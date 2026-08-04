@@ -834,7 +834,26 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 			}
 			const result = await validateInputFolder(inputFolder, cwd);
 			if (!result.valid) {
-				vscode.window.showErrorMessage(result.message);
+				const openDebugConfigurationAction = 'Open debug configuration';
+				void vscode.window.showErrorMessage(result.message, openDebugConfigurationAction).then(
+					action => {
+						if (action === openDebugConfigurationAction) {
+							void vscode.commands.executeCommand('workbench.action.debug.configure').then(
+								undefined,
+								error => {
+									void vscode.window.showErrorMessage(
+										`Failed to open debug configuration: ${error instanceof Error ? error.message : String(error)}`
+									).then(undefined, () => {});
+								}
+							);
+						}
+					},
+					error => {
+						void vscode.window.showErrorMessage(
+							`Failed to show inputFolder validation error: ${error instanceof Error ? error.message : String(error)}`
+						).then(undefined, () => {});
+					}
+				);
 				return undefined;
 			}
 		}
