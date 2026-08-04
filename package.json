@@ -108,7 +108,7 @@
       },
       {
         "command": "winapp.sign",
-        "title": "Sign Package",
+        "title": "Sign File",
         "category": "WinApp"
       },
       {

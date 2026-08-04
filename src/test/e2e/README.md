@@ -46,15 +46,18 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ## Test inventory (128 tests)
 
-### `sign-quickpick.spec.ts` — 3 tests (2 active, 1 skipped)
+### `sign-quickpick.spec.ts` — 6 tests
 
-Validates that `winapp.sign` discovers workspace MSIX artifacts and certificates, presenting them in QuickPicks.
+Validates that `winapp.sign` discovers signable files and certificates in workspace QuickPicks.
 
 | # | Test | Validates |
 |---|------|-----------|
 | 1 | shows QuickPick with .msix file and Browse option when artifacts exist | QuickPick appears with artifact rows and Browse… fallback |
-| 2 | shows certificate QuickPick with .pfx file after selecting a package | Certificate QuickPick appears after package selection with .pfx rows and Browse… fallback |
-| 3 | *(skipped)* skips package QuickPick when invoked with prefilled path | Needs VS Code extension test host — see [#83](https://github.com/microsoft/WinAppVSCE/issues/83) |
+| 2 | shows packages before executables and limits discovered files to 10 | Package-first ordering and the discovery cap |
+| 3 | shows certificate QuickPick with .pfx file after selecting a package | Certificate QuickPick appears after package selection with .pfx rows and Browse… fallback |
+| 4 | cancelling the artifact QuickPick aborts the sign flow | Cancelling before file selection stops signing |
+| 5 | selecting Browse dismisses the QuickPick in a native-dialog smoke test | Browse hands off to the native file picker |
+| 6 | cancelling the certificate QuickPick aborts the sign flow | Cancelling before certificate selection stops signing |
 
 ### `input-folder-validation.spec.ts` — 1 test
 

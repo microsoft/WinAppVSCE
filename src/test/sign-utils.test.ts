@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { findWorkspaceArtifacts, buildSignCommand, CERTIFICATE_GLOBS } from '../sign-utils';
+import { findWorkspaceArtifacts, buildSignCommand, CERTIFICATE_GLOBS, EXECUTABLE_GLOBS } from '../sign-utils';
 import { ARTIFACT_GLOBS } from '../artifact-types';
 
 function createTempDir(): string {
@@ -119,6 +119,21 @@ describe('findWorkspaceArtifacts', () => {
 		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
 
 		assert.deepEqual(results, [included]);
+	});
+
+	it('discovers executable and library files outside excluded directories', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const executable = path.join(tempDir, 'bin', 'app.exe');
+		const library = path.join(tempDir, 'bin', 'app.dll');
+		createFile(executable);
+		createFile(library);
+		createFile(path.join(tempDir, 'node_modules', 'pkg', 'ignored.dll'));
+		createFile(path.join(tempDir, '.git', 'ignored.exe'));
+
+		const results = await findWorkspaceArtifacts(tempDir, EXECUTABLE_GLOBS);
+
+		assert.deepEqual(results.sort(), [executable, library].sort());
 	});
 });
 

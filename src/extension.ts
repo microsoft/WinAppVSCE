@@ -24,7 +24,14 @@ import {
 	isArtifactWithinRoot,
 	planPackCompletion
 } from './pack-result';
-import { findWorkspaceArtifacts, buildSignCommand, CERTIFICATE_GLOBS, executeSignFlow, type SignFlowAdapter } from './sign-utils';
+import {
+	findWorkspaceArtifacts,
+	buildSignCommand,
+	CERTIFICATE_GLOBS,
+	EXECUTABLE_GLOBS,
+	executeSignFlow,
+	type SignFlowAdapter
+} from './sign-utils';
 import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
 	detectArchFromPath,
@@ -43,6 +50,7 @@ import { NoOpDebugAdapter } from './noop-debug-adapter';
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
+const MAX_SIGNABLE_FILES = 10;
 
 /**
  * Output channel for debugger-related activity (e.g. auto-installed extensions),
@@ -329,7 +337,8 @@ async function runWinappCapture(
 }
 
 /**
- * Search the workspace for MSIX/APPX artifacts and let the user pick one via
+ * Search the workspace for signable packages, executables, and libraries and
+ * let the user pick one via
  * a QuickPick. When no artifacts are found the function falls back directly to
  * a native file dialog; a "Browse…" entry is always appended so the user can
  * opt into the dialog even when artifacts *are* discovered.
@@ -342,7 +351,9 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
 		async (_progress, token) => {
 			token.onCancellationRequested(() => { cancelled = true; });
-			return findWorkspaceArtifacts(workspacePath, ARTIFACT_GLOBS);
+			const packagePaths = await findWorkspaceArtifacts(workspacePath, ARTIFACT_GLOBS);
+			const executablePaths = await findWorkspaceArtifacts(workspacePath, EXECUTABLE_GLOBS);
+			return [...packagePaths, ...executablePaths].slice(0, MAX_SIGNABLE_FILES);
 		}
 	);
 
@@ -370,7 +381,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 	items.push({ label: '$(folder-opened) Browse…', detail: 'Open a file picker' });
 
 	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select a package to sign'
+		placeHolder: 'Select a file to sign'
 	});
 
 	if (!picked) {
