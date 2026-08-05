@@ -17,8 +17,7 @@ import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provid
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
 import { SchemaModel } from './manifest-schema/schema-model';
 import { loadSchemaModel } from './manifest-schema/xsd-parser';
-import { isManifestPath } from './manifest-schema/manifest-path';
-import { openManifestEditor } from './manifest-editor/open-manifest-editor';
+import { isManifestPath, MANIFEST_SELECTOR } from './manifest-schema/manifest-path';
 import {
 	PACK_ACTIONS,
 	getPackNotificationAction,
@@ -1210,17 +1209,49 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.openManifestEditor', async () => {
-			await openManifestEditor({
-				findFiles: (include, exclude) => vscode.workspace.findFiles(include, exclude),
-				workspaceFolderCount: () => vscode.workspace.workspaceFolders?.length ?? 0,
-				asRelativePath: (uri, includeWorkspaceFolder) =>
-					vscode.workspace.asRelativePath(uri, includeWorkspaceFolder),
-				showQuickPick: (items, options) => vscode.window.showQuickPick(items, options),
-				showOpenDialog: options => vscode.window.showOpenDialog(options),
-				showWarningMessage: message => vscode.window.showWarningMessage(message),
-				openManifestEditor: uri =>
-					vscode.commands.executeCommand('vscode.openWith', uri, ManifestEditorProvider.viewType)
+			const manifests = (await Promise.all(
+				MANIFEST_SELECTOR.map(selector => vscode.workspace.findFiles(selector.pattern as string))
+			)).flat();
+			const browseItem = {
+				label: '$(folder-opened) Browse…',
+				description: 'Select a manifest file',
+				uri: undefined as vscode.Uri | undefined
+			};
+			const includeWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
+			const items = manifests
+				.map(uri => ({
+					uri,
+					relativePath: vscode.workspace.asRelativePath(uri, includeWorkspaceFolder)
+				}))
+				.sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+				.map(({ uri, relativePath }) => ({
+					label: `$(file-code) ${path.basename(uri.fsPath)}`,
+					description: path.dirname(relativePath),
+					uri
+				}));
+			const picked = await vscode.window.showQuickPick([...items, browseItem], {
+				placeHolder: 'Select an app manifest to open'
 			});
+			if (!picked) { return; }
+
+			let manifestUri = picked.uri;
+			if (!manifestUri) {
+				const selected = await vscode.window.showOpenDialog({
+					canSelectFiles: true,
+					canSelectFolders: false,
+					canSelectMany: false,
+					title: 'Select an app manifest',
+					filters: { 'App manifests': ['appxmanifest', 'xml'] }
+				});
+				manifestUri = selected?.[0];
+			}
+			if (!manifestUri) { return; }
+			if (!isManifestPath(manifestUri.fsPath)) {
+				vscode.window.showWarningMessage('Select an .appxmanifest or AppxManifest.xml file.');
+				return;
+			}
+
+			await vscode.commands.executeCommand('vscode.openWith', manifestUri, ManifestEditorProvider.viewType);
 		})
 	);
 

@@ -16,8 +16,8 @@
     "Other"
   ],
   "activationEvents": [
-    "workspaceContains:**/[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt].[Xx][Mm][Ll]",
-    "workspaceContains:**/*.[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt]",
+    "workspaceContains:**/[Aa]ppx[Mm]anifest.xml",
+    "workspaceContains:**/*.appxmanifest",
     "onLanguage:xml",
     "onDebugResolve:winapp",
     "onCommand:winapp.init",
@@ -49,10 +49,6 @@
         "filenames": [
           "AppxManifest.xml",
           "appxmanifest.xml"
-        ],
-        "filenamePatterns": [
-          "**/[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt].[Xx][Mm][Ll]",
-          "**/*.[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt]"
         ],
         "aliases": [
           "AppxManifest"
@@ -182,10 +178,10 @@
         "displayName": "AppxManifest Editor",
         "selector": [
           {
-            "filenamePattern": "**/[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt].[Xx][Mm][Ll]"
+            "filenamePattern": "**/[Aa]ppx[Mm]anifest.xml"
           },
           {
-            "filenamePattern": "**/*.[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt]"
+            "filenamePattern": "**/*.appxmanifest"
           }
         ],
         "priority": "option"
@@ -195,7 +191,7 @@
       "editor/title": [
         {
           "command": "winapp.openManifestEditor",
-          "when": "(resourceFilename =~ /appxmanifest\\.xml$/i || resourceExtname =~ /^\\.appxmanifest$/i) && activeCustomEditorId != winapp.manifestEditor",
+          "when": "(resourceFilename =~ /[Aa]ppx[Mm]anifest\\.xml$/ || resourceExtname == .appxmanifest) && activeCustomEditorId != winapp.manifestEditor",
           "group": "navigation"
         }
       ],
