@@ -316,82 +316,31 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                         case 'copyToAssets': {
                             const manifestDirPath2 = path.dirname(document.uri.fsPath);
                             const assetsDir = path.join(manifestDirPath2, 'Assets');
-
-                            // Atomically claim the token so an overlapping copyToAssets request
-                            // for the same still-valid token (a rapid double-click, or a
-                            // duplicated webview message) can't race this one into a second,
-                            // concurrent confirmation + fs.copyFileSync.
-                            const claim = assetCopyTokens.beginCopy(message.copyToken);
-                            if (claim.status === 'pending') {
-                                // A copy against this token is already in flight — ignore the
-                                // duplicate rather than surface it as an error.
-                                return;
-                            }
-                            if (claim.status === 'invalid') {
-                                // The token is unknown, expired, or was evicted for capacity —
-                                // most likely the webview link just sat idle past the token's
-                                // TTL. Recover instead of dead-ending on an error: force a full
-                                // re-render, which re-issues checkImagePath for every field and
-                                // hands the (still-rendered) link a fresh token, so the user's
-                                // next click on it just works.
+                            const sourcePath = assetCopyTokens.consume(message.copyToken);
+                            if (!sourcePath) {
                                 updateWebview(true);
                                 return;
                             }
-                            const sourcePath = claim.sourcePath;
                             const fileName = path.basename(sourcePath);
 
-                            // A token only proves the extension previously resolved this path
-                            // during checkImagePath — it is not, by itself, user authorization to
-                            // copy a file from outside the workspace. A compromised webview could
-                            // drive checkImagePath + copyToAssets end-to-end without any genuine
-                            // user click, so require an explicit native confirmation here. This
-                            // dialog can only be triggered/answered by the user in VS Code's UI,
-                            // not by webview script.
-                            const confirmation = await vscode.window.showWarningMessage(
-                                `Copy "${fileName}" into the Assets folder?`,
-                                {
-                                    modal: true,
-                                    detail: `This file is outside the manifest's package directory:\n${sourcePath}`,
-                                },
-                                'Copy File',
-                            );
-                            if (confirmation !== 'Copy File') {
-                                // Release the claim (not the token) so a re-click on the same
-                                // still-rendered link retries against the same authorization.
-                                assetCopyTokens.endCopy(message.copyToken);
-                                return;
-                            }
-
                             let destName = fileName;
-                            try {
-                                // Create Assets folder if it doesn't exist
-                                if (!fs.existsSync(assetsDir)) {
-                                    fs.mkdirSync(assetsDir, { recursive: true });
-                                }
-
-                                // Handle name collision
-                                let destPath = path.join(assetsDir, destName);
-                                if (fs.existsSync(destPath)) {
-                                    const ext = path.extname(fileName);
-                                    const base = path.basename(fileName, ext);
-                                    let counter = 1;
-                                    while (fs.existsSync(destPath)) {
-                                        destName = `${base}_${counter}${ext}`;
-                                        destPath = path.join(assetsDir, destName);
-                                        counter++;
-                                    }
-                                }
-
-                                fs.copyFileSync(sourcePath, destPath);
-                            } catch (copyErr) {
-                                // Release the claim so the user can retry (e.g. after a
-                                // permissions or disk-full error) without needing a fresh
-                                // checkImagePath round-trip for a new token.
-                                assetCopyTokens.endCopy(message.copyToken);
-                                throw copyErr;
+                            if (!fs.existsSync(assetsDir)) {
+                                fs.mkdirSync(assetsDir, { recursive: true });
                             }
-                            // Only invalidate the token once the copy has actually succeeded.
-                            assetCopyTokens.consume(message.copyToken);
+
+                            let destPath = path.join(assetsDir, destName);
+                            if (fs.existsSync(destPath)) {
+                                const ext = path.extname(fileName);
+                                const base = path.basename(fileName, ext);
+                                let counter = 1;
+                                while (fs.existsSync(destPath)) {
+                                    destName = `${base}_${counter}${ext}`;
+                                    destPath = path.join(assetsDir, destName);
+                                    counter++;
+                                }
+                            }
+
+                            fs.copyFileSync(sourcePath, destPath);
                             const newRelPath = `Assets\\${destName}`;
 
                             // Apply the field change with the new path
