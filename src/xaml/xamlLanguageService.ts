@@ -365,7 +365,7 @@ function resolveServer(
   }
   const candidates =
     process.env.WINUI_XAML_REQUIRE_BUNDLED === "1"
-      ? [bundledServer(context)]
+      ? [configuredServer || bundledServer(context)]
       : [
           configuredServer,
           process.env.WINUI_XAML_SERVER_PATH ?? "",
