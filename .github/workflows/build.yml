@@ -45,15 +45,21 @@ jobs:
     - name: Run unit tests
       run: npm run test:unit
 
-    - name: Locate VS Code
+    - name: Download VS Code
       shell: pwsh
       run: |
-        $code = (Get-Command code -ErrorAction Stop).Source
-        if ($code.EndsWith('.cmd', [StringComparison]::OrdinalIgnoreCase)) {
-          $code = Join-Path (Split-Path $code) 'Code.exe'
-        }
+        $vscodeVersion = "1.109.5"
+        $vscodeDir = Join-Path $env:RUNNER_TEMP "vscode"
+        $vscodeZip = Join-Path $env:RUNNER_TEMP "vscode.zip"
+        Invoke-WebRequest `
+          -Uri "https://update.code.visualstudio.com/$vscodeVersion/win32-x64-archive/stable" `
+          -OutFile $vscodeZip `
+          -UseBasicParsing
+        Expand-Archive -Path $vscodeZip -DestinationPath $vscodeDir -Force
+
+        $code = Join-Path $vscodeDir "Code.exe"
         if (-not (Test-Path $code)) {
-          throw "VS Code executable not found at $code"
+          throw "Downloaded VS Code executable not found at $code"
         }
         "VSCODE_PATH=$code" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
