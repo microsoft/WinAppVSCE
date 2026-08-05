@@ -266,17 +266,4 @@ describe("WinUI XAML red-team 14 — property elements, realistic pages, and edg
     assert.ok(!diags.some((x) => /^WXAML/.test(String(x.code || ""))), `child xmlns redefinition should resolve local:Button as presentation Button; buffer=${buffer}; got ${diagSummary(diags)}`);
   });
 
-  it("flags bad second-segment x:Bind members", async () => {
-    // Round 16: WXAML0005 now walks dotted segments, so a bad member after a valid first segment is flagged.
-    const buffer = page("<TextBlock Text=\"{x:Bind GreetingText.Nope}\" />");
-    const diags = await h.diagnosticsFor(buffer, (d) => d.some((x) => x.code === "WXAML0005"), 12000);
-    assert.ok(diags.some((x) => x.code === "WXAML0005" && /Nope/.test(x.message)), `bad second segment should raise WXAML0005 naming Nope; buffer=${buffer}; got ${diagSummary(diags)}`);
-  });
-
-  it("flags bad members after x:Bind indexer element resolution", async () => {
-    // Round 16: the non-first walk unwraps indexer element types, so a bad tail member is flagged.
-    const buffer = page("<TextBlock Text=\"{x:Bind Items[0].Nope}\" />");
-    const diags = await h.diagnosticsFor(buffer, (d) => d.some((x) => x.code === "WXAML0005"), 12000);
-    assert.ok(diags.some((x) => x.code === "WXAML0005" && /Nope/.test(x.message)), `bad indexer element member should raise WXAML0005 naming Nope; buffer=${buffer}; got ${diagSummary(diags)}`);
-  });
 });

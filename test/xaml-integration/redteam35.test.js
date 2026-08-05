@@ -266,7 +266,7 @@ describe("WinUI XAML red-team 35 — document highlights", function () {
     assertTextsKinds(hls, ["Brush1", "Brush1", "Brush1", "Brush1"], [WRITE, READ, READ, READ], "resource usage caret");
   });
 
-  it("does not blend resource keys that share a prefix", async () => {
+  it("highlights do not blend resource keys that share a prefix", async () => {
     const hls = await h.highlightsAt(page([
       "<Page.Resources>",
       "  <SolidColorBrush x:Key=\"Bru|sh1\" Color=\"Red\" />",

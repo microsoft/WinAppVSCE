@@ -159,7 +159,7 @@ describe("WinUI XAML red-team 34 — references (Shift+F12)", function () {
     }
   });
 
-  it("does not blend resource keys that share a prefix", async () => {
+  it("references do not blend resource keys that share a prefix", async () => {
     const refs = await h.referencesAt(page([
       "<Page.Resources>",
       "  <SolidColorBrush x:Key=\"Bru|sh1\" Color=\"Red\" />",
