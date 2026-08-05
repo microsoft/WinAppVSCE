@@ -16,6 +16,7 @@ import {
 } from "./degradedNotification";
 import { getWindowsServerRid } from "./serverArchitecture";
 import { ServerLifecycle } from "./serverLifecycle";
+import { registerXamlEditorFeatures } from "./xamlEditorFeatures";
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
@@ -60,6 +61,7 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
   lifecycle.reset();
   output = vscode.window.createOutputChannel("WinUI XAML");
   context.subscriptions.push(output);
+  registerXamlEditorFeatures(context);
   log("WinUI XAML Tools activating…");
 
   context.subscriptions.push(

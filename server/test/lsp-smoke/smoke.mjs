@@ -27,7 +27,7 @@ const EXPECTED_CODE_BEHIND = "smokepage.xaml.cs";
 const EXPECTED_HANDLER_LINE = 26; // OnGo_Click is on line 27 (1-based) of SmokePage.xaml.cs
 const EXPECTED_GREETING_LINE = 15; // GreetingText is on line 16 (1-based) of SmokePage.xaml.cs
 const EXPECTED_APP_XAML = "app.xaml";
-const EXPECTED_ACCENT_KEY_LINE = 13; // <SolidColorBrush x:Key="SmokeAccentBrush"> is on line 14 (1-based) of App.xaml
+const EXPECTED_ACCENT_KEY_LINE = 14; // <SolidColorBrush x:Key="SmokeAccentBrush"> is on line 15 (1-based) of App.xaml
 
 let server;
 

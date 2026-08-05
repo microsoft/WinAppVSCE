@@ -183,4 +183,63 @@ public class XamlFormatterTests
         var edits = XamlFormatter.Format(doc, new FormattingOptions { TabSize = 2, InsertSpaces = true });
         Assert.Empty(edits);
     }
+
+    [Fact]
+    public void OnTypeFormatting_ReindentsOnlyCompletedTagLine()
+    {
+        var input = Lines("<Page>", "<Grid>", "<Button />", "</Grid>", "</Page>");
+        var doc = new TextDocument("file:///test.xaml", input);
+
+        var edits = XamlFormatter.FormatOnType(
+            doc,
+            new FormattingOptions { TabSize = 2, InsertSpaces = true },
+            new Position(2, 10),
+            ">");
+
+        Assert.Equal(Lines("<Page>", "<Grid>", "    <Button />", "</Grid>", "</Page>"), Apply(input, edits, doc));
+    }
+
+    [Fact]
+    public void OnTypeFormatting_CompletedEndTagOutdentsCurrentLine()
+    {
+        var input = Lines("<Page>", "  <Grid>", "    </Grid>", "</Page>");
+        var doc = new TextDocument("file:///test.xaml", input);
+
+        var edits = XamlFormatter.FormatOnType(
+            doc,
+            new FormattingOptions { TabSize = 2, InsertSpaces = true },
+            new Position(2, 11),
+            ">");
+
+        Assert.Equal(Lines("<Page>", "  <Grid>", "  </Grid>", "</Page>"), Apply(input, edits, doc));
+    }
+
+    [Fact]
+    public void OnTypeFormatting_IgnoresOtherCharacters()
+    {
+        var doc = new TextDocument("file:///test.xaml", Lines("<Page>", "<Grid />", "</Page>"));
+
+        Assert.Empty(XamlFormatter.FormatOnType(
+            doc,
+            new FormattingOptions(),
+            new Position(1, 1),
+            "/"));
+    }
+
+    [Theory]
+    [InlineData("<Page xml:space=\"preserve\">\n<Button />\n</Page>")]
+    [InlineData("<Page>\n<TextBlock>Hello\n<Button />\n</TextBlock>\n</Page>")]
+    public void OnTypeFormatting_PreservesSignificantWhitespace(string input)
+    {
+        var doc = new TextDocument("file:///test.xaml", input);
+        int buttonLine = input.Split('\n').ToList().FindIndex(line => line.Contains("<Button"));
+
+        var edits = XamlFormatter.FormatOnType(
+            doc,
+            new FormattingOptions { TabSize = 2, InsertSpaces = true },
+            new Position(buttonLine, "<Button />".Length),
+            ">");
+
+        Assert.Empty(edits);
+    }
 }

@@ -72,15 +72,13 @@ internal static class XamlFormatter
                 // firstNonWs advanced over spaces/tabs only; the guard makes that invariant explicit.
                 bool leadingIsWhitespace = current.All(c => c == ' ' || c == '\t');
 
-                if (leadingIsWhitespace &&
-                    !string.Equals(current, desired, StringComparison.Ordinal) &&
-                    (range is null || IntersectsRange(line, range.Value)))
+                if (leadingIsWhitespace && (range is null || IntersectsRange(line, range.Value)))
                 {
-                    edits.Add(new TextEdit
+                    var edit = CreateIndentEdit(line, leadingLength, current, desired);
+                    if (edit is not null)
                     {
-                        Range = new Lsp.Range(new Position(line, 0), new Position(line, leadingLength)),
-                        NewText = desired,
-                    });
+                        edits.Add(edit);
+                    }
                 }
             }
 
@@ -90,6 +88,104 @@ internal static class XamlFormatter
 
         return edits;
     }
+
+    /// <summary>
+    /// Reindents only the line whose tag was completed by typing <c>&gt;</c>. Other characters produce no
+    /// edits, keeping the on-type path bounded and avoiding document-wide work on each keystroke.
+    /// </summary>
+    public static List<TextEdit> FormatOnType(
+        TextDocument doc,
+        FormattingOptions options,
+        Position position,
+        string character)
+    {
+        if (!string.Equals(character, ">", StringComparison.Ordinal))
+        {
+            return new List<TextEdit>();
+        }
+
+        int completedOffset = doc.OffsetAt(position) - 1;
+        if (completedOffset < 0)
+        {
+            return new List<TextEdit>();
+        }
+
+        XamlElement? element = null;
+        for (var node = doc.Parsed.FindNode(completedOffset); node is not null; node = node.Parent)
+        {
+            if (node is XamlElement candidate &&
+                (candidate.OpenTagSpan.Contains(completedOffset) ||
+                 candidate.EndTagSpan is { } endTag && endTag.Contains(completedOffset)))
+            {
+                element = candidate;
+                break;
+            }
+        }
+
+        if (element is null)
+        {
+            return new List<TextEdit>();
+        }
+
+        bool isEndTag = element.EndTagSpan is { } endSpan && endSpan.Contains(completedOffset);
+        int depth = 0;
+        for (var ancestor = element.Parent; ancestor is not null; ancestor = ancestor.Parent)
+        {
+            if (ancestor is XamlElement parent)
+            {
+                if (!IsContentSafe(parent))
+                {
+                    return new List<TextEdit>();
+                }
+
+                depth++;
+            }
+        }
+
+        if (isEndTag && !IsContentSafe(element))
+        {
+            return new List<TextEdit>();
+        }
+
+        int lineStart = doc.OffsetAt(new Position(position.Line, 0));
+        int firstNonWhitespace = lineStart;
+        while (firstNonWhitespace < doc.Text.Length &&
+               doc.Text[firstNonWhitespace] is ' ' or '\t')
+        {
+            firstNonWhitespace++;
+        }
+
+        int tokenStart = isEndTag ? element.EndTagSpan!.Value.Start : element.OpenTagSpan.Start;
+        if (firstNonWhitespace != tokenStart)
+        {
+            return new List<TextEdit>();
+        }
+
+        string unit = options.InsertSpaces ? new string(' ', Math.Max(1, options.TabSize)) : "\t";
+        string desired = Repeat(unit, depth);
+        string current = doc.Text.Substring(lineStart, firstNonWhitespace - lineStart);
+        var edit = CreateIndentEdit(
+            position.Line,
+            firstNonWhitespace - lineStart,
+            current,
+            desired);
+        return edit is null ? new List<TextEdit>() : new List<TextEdit> { edit };
+    }
+
+    private static TextEdit? CreateIndentEdit(
+        int line,
+        int leadingLength,
+        string current,
+        string desired) =>
+        string.Equals(current, desired, StringComparison.Ordinal)
+            ? null
+            : new TextEdit
+            {
+                Range = new Lsp.Range(
+                    new Position(line, 0),
+                    new Position(line, leadingLength)),
+                NewText = desired,
+            };
 
     /// <summary>
     /// Records, for every structural token whose leading indentation is safe to normalize, its desired

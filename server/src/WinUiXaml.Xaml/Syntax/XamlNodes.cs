@@ -34,9 +34,26 @@ namespace WinUiXaml.Xaml
             }
 
             var children = ChildNodes;
-            for (int i = 0; i < children.Count; i++)
+            int low = 0;
+            int high = children.Count - 1;
+            int candidate = -1;
+            while (low <= high)
             {
-                var hit = children[i].FindNode(position);
+                int mid = low + ((high - low) / 2);
+                if (children[mid].Span.Start <= position)
+                {
+                    candidate = mid;
+                    low = mid + 1;
+                }
+                else
+                {
+                    high = mid - 1;
+                }
+            }
+
+            if (candidate >= 0)
+            {
+                var hit = children[candidate].FindNode(position);
                 if (hit != null)
                 {
                     return hit;

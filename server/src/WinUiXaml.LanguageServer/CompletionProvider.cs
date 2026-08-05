@@ -2568,7 +2568,7 @@ internal static class CompletionProvider
             {
                 var designContext = element.Attributes.FirstOrDefault(a =>
                     !a.IsNamespaceDeclaration && a.Name.HasPrefix && a.Name.LocalName == "DataContext"
-                    && scope.TryResolvePrefix(a.Name.Prefix, out var uri) && IsDesignTimeNamespace(uri));
+                    && scope.TryResolvePrefix(a.Name.Prefix, out var uri) && XamlNamespaces.IsDesignTime(uri));
                 if (designContext is not null)
                 {
                     var value = designContext.Value?.Text;
@@ -2594,13 +2594,6 @@ internal static class CompletionProvider
         return classic ? null : pageClass;
     }
 
-    private const string DesignTimeNamespace2008 = "http://schemas.microsoft.com/expression/blend/2008";
-    private const string DesignTimeNamespace2006 = "http://schemas.microsoft.com/expression/blend/2006";
-    private const string MarkupCompatibilityNamespace = "http://schemas.openxmlformats.org/markup-compatibility/2006";
-
-    private static bool IsDesignTimeNamespace(string? uri) =>
-        uri == DesignTimeNamespace2008 || uri == DesignTimeNamespace2006;
-
     /// <summary>
     /// True when <paramref name="attributeName"/> is the <c>mc:Ignorable</c> markup-compatibility directive —
     /// matched by the RESOLVED namespace URI (so a custom prefix mapped to the markup-compatibility URI works,
@@ -2621,7 +2614,7 @@ internal static class CompletionProvider
 
         return string.Equals(attributeName.Substring(colon + 1), "Ignorable", StringComparison.Ordinal)
             && scope.TryResolvePrefix(attributeName.Substring(0, colon), out var uri)
-            && string.Equals(uri, MarkupCompatibilityNamespace, StringComparison.Ordinal);
+            && string.Equals(uri, XamlNamespaces.MarkupCompatibility, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2658,7 +2651,7 @@ internal static class CompletionProvider
         {
             var prefix = declaration.Key;
             if (string.IsNullOrEmpty(prefix) ||
-                !IsDesignTimeNamespace(declaration.Value) ||
+                !XamlNamespaces.IsDesignTime(declaration.Value) ||
                 listed.Contains(prefix) ||
                 !StartsWith(prefix, currentToken))
             {
@@ -2832,7 +2825,7 @@ internal static class CompletionProvider
         var prefix = PrefixPart(name);
         return prefix.Length > 0
             && scope.TryResolvePrefix(prefix, out var uri)
-            && IsDesignTimeNamespace(uri);
+            && XamlNamespaces.IsDesignTime(uri);
     }
 
     /// <summary>Splits a markup-extension argument into (name, value) on its first TOP-LEVEL <c>=</c>;
@@ -3308,8 +3301,8 @@ internal static class CompletionProvider
     {
         (XamlTypeSystem.PresentationNamespace, "WinUI presentation namespace"),
         (XamlTypeSystem.XamlLanguageNamespace, "XAML language namespace (x:)"),
-        (DesignTimeNamespace2008, "Design-time namespace (d:)"),
-        (MarkupCompatibilityNamespace, "Markup compatibility namespace (mc:)"),
+        (XamlNamespaces.DesignTime2008, "Design-time namespace (d:)"),
+        (XamlNamespaces.MarkupCompatibility, "Markup compatibility namespace (mc:)"),
     };
 
     /// <summary>
@@ -3785,7 +3778,7 @@ internal static class CompletionProvider
     {
         if (string.IsNullOrEmpty(ctx.BindPrefixPath) ||
             !scope.TryResolvePrefix(ctx.BindPrefixPath!, out var uri) ||
-            !IsDesignTimeNamespace(uri))
+            !XamlNamespaces.IsDesignTime(uri))
         {
             return new CompletionList();
         }

@@ -80,6 +80,7 @@ internal sealed class ServerCapabilities
     [JsonPropertyName("documentSymbolProvider")] public bool DocumentSymbolProvider { get; set; }
     [JsonPropertyName("documentFormattingProvider")] public bool DocumentFormattingProvider { get; set; }
     [JsonPropertyName("documentRangeFormattingProvider")] public bool DocumentRangeFormattingProvider { get; set; }
+    [JsonPropertyName("documentOnTypeFormattingProvider")] public DocumentOnTypeFormattingOptions? DocumentOnTypeFormattingProvider { get; set; }
     [JsonPropertyName("foldingRangeProvider")] public bool FoldingRangeProvider { get; set; }
     [JsonPropertyName("colorProvider")] public bool ColorProvider { get; set; }
     [JsonPropertyName("selectionRangeProvider")] public bool SelectionRangeProvider { get; set; }
@@ -338,6 +339,20 @@ internal sealed class DocumentRangeFormattingParams
     [JsonPropertyName("textDocument")] public TextDocumentIdentifier TextDocument { get; set; } = new();
     [JsonPropertyName("range")] public Range Range { get; set; } = new();
     [JsonPropertyName("options")] public FormattingOptions Options { get; set; } = new();
+}
+
+internal sealed class DocumentOnTypeFormattingParams
+{
+    [JsonPropertyName("textDocument")] public TextDocumentIdentifier TextDocument { get; set; } = new();
+    [JsonPropertyName("position")] public Position Position { get; set; }
+    [JsonPropertyName("ch")] public string Character { get; set; } = string.Empty;
+    [JsonPropertyName("options")] public FormattingOptions Options { get; set; } = new();
+}
+
+internal sealed class DocumentOnTypeFormattingOptions
+{
+    [JsonPropertyName("firstTriggerCharacter")] public string FirstTriggerCharacter { get; set; } = ">";
+    [JsonPropertyName("moreTriggerCharacter")] public string[]? MoreTriggerCharacter { get; set; }
 }
 
 // --- Folding ranges ---------------------------------------------------------

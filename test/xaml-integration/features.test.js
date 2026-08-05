@@ -7,10 +7,12 @@
 
 const assert = require("node:assert");
 const path = require("node:path");
+const vscode = require("vscode");
 const h = require("./helper");
 
 const CS = "SmokePage.xaml.cs";
 const APP = "App.xaml";
+const MERGED_RESOURCES = "MergedResources.xaml";
 
 // A <Page> header with x:Class so the server resolves the real SmokeFixture project (types,
 // x:Bind targets, event handlers, App.xaml resources).
@@ -108,6 +110,7 @@ describe("WinUI XAML — completion", function () {
     // key is offered, and a framework Style key (TitleTextBlockStyle) is filtered out by type.
     const brushItems = await h.completionsAt(page('<Grid Background="{StaticResource |}" />'));
     assert.ok(brushItems.includes("SmokeAccentBrush"), "expected project key SmokeAccentBrush from App.xaml");
+    assert.ok(brushItems.includes("MergedAccentBrush"), "expected project key from App.xaml merged dictionaries");
     assert.ok(
       brushItems.some((i) => i.includes("AccentFillColorDefaultBrush")),
       `expected a framework theme brush key; got ${brushItems.slice(0, 20).join(", ")}`
@@ -123,6 +126,52 @@ describe("WinUI XAML — completion", function () {
       styleItems.some((i) => i.includes("TitleTextBlockStyle")),
       `expected a framework theme style key on a Style property; got ${styleItems.slice(0, 20).join(", ")}`
     );
+  });
+
+  it("navigates to and describes resources from App.xaml merged dictionaries", async () => {
+    const defs = await h.definitionsAt(page('<Grid Background="{StaticResource MergedAccent|Brush}" />'));
+    assert.ok(defs.length > 0, "expected a definition for the merged resource");
+    assert.strictEqual(path.basename(defs[0].fsPath), MERGED_RESOURCES);
+
+    const md = await h.hoverAt(page('<Grid Background="{StaticResource MergedAccent|Brush}" />'));
+    assert.match(md, /SolidColorBrush/);
+    assert.match(md, /MergedResources\.xaml/);
+  });
+
+  it("uses unsaved merged-dictionary contents", async () => {
+    const smokeDoc = h.getDoc();
+    const mergedDoc = await vscode.workspace.openTextDocument(
+      vscode.Uri.file(path.join(h.FIXTURE_DIR, MERGED_RESOURCES))
+    );
+    const originalText = mergedDoc.getText();
+    const mergedEditor = await vscode.window.showTextDocument(mergedDoc, { preview: false });
+    const original = "MergedAccentBrush";
+    const offset = mergedDoc.getText().indexOf(original);
+    assert.ok(offset >= 0, "merged resource fixture should contain the original key");
+    const changed = await mergedEditor.edit((builder) =>
+      builder.replace(
+        new vscode.Range(mergedDoc.positionAt(offset), mergedDoc.positionAt(offset + original.length)),
+        "UnsavedAccentBrush"
+      )
+    );
+    assert.ok(changed, "expected unsaved merged resource edit to apply");
+
+    try {
+      await vscode.window.showTextDocument(smokeDoc, { preview: false });
+      const items = await h.completionsAt(page('<Grid Background="{StaticResource |}" />'));
+      assert.ok(items.includes("UnsavedAccentBrush"), "expected the unsaved merged resource key");
+      assert.ok(!items.includes(original), "stale on-disk key should not remain in completion");
+    } finally {
+      const cleanupEditor = await vscode.window.showTextDocument(mergedDoc, { preview: false });
+      const cleaned = await cleanupEditor.edit((builder) =>
+        builder.replace(
+          new vscode.Range(mergedDoc.positionAt(0), mergedDoc.positionAt(mergedDoc.getText().length)),
+          originalText
+        )
+      );
+      assert.ok(cleaned, "expected merged resource fixture cleanup to apply");
+      await vscode.window.showTextDocument(smokeDoc, { preview: false });
+    }
   });
 
   it("Storyboard.TargetProperty parenthesized (Owner.Property) qualifiers complete the explicit owner's members (round 77)", async () => {
@@ -1303,6 +1352,25 @@ describe("WinUI XAML — diagnostics", function () {
       "expected zero diagnostics for valid markup"
     );
   });
+
+  it("publishes binding and directive parity diagnostics through VS Code", async () => {
+    const buffer = `<Page ${h.NS}\n    x:Class="SmokeFixture.SmokePage" mc:Ignorable="d missing">\n` +
+      '  <TextBlock Text="{x:Bind (Grid.Rwo)}" />\n' +
+      '  <TextBlock Text="{x:Bind OnGo_Click()}" />\n' +
+      '  <Grid d:DataContext="{d:DesignInstance Type=local:Missing}" />\n' +
+      "</Page>";
+    const expected = new Set(["WXAML0004", "WXAML0009", "WXAML0010", "WXAML0011"]);
+    const diagnostics = await h.diagnosticsFor(
+      buffer,
+      (items) => [...expected].every((code) => items.some((item) =>
+          (typeof item.code === "object" ? String(item.code.value) : String(item.code)) === code))
+    );
+    const codes = new Set(diagnostics.map((item) =>
+      typeof item.code === "object" ? String(item.code.value) : String(item.code)));
+    for (const code of expected) {
+      assert.ok(codes.has(code), `expected ${code}; got ${JSON.stringify([...codes])}`);
+    }
+  });
 });
 
 describe("WinUI XAML — references (Shift+F12)", function () {
@@ -1684,6 +1752,74 @@ describe("WinUI XAML — document formatting", function () {
     const { formatted, editCount } = await h.formatDoc(clean);
     assert.strictEqual(editCount, 0, `expected no edits on an already-formatted doc; got ${editCount}`);
     assert.strictEqual(formatted, clean);
+  });
+
+  it("provides on-type indentation after a completed tag", async () => {
+    const source = "<Page>\n<Grid>";
+    await h.setBuffer(source);
+    const edits = await vscode.commands.executeCommand(
+      "vscode.executeFormatOnTypeProvider",
+      h.getDoc().uri,
+      new vscode.Position(1, 6),
+      ">",
+      { tabSize: 2, insertSpaces: true }
+    );
+    assert.ok(
+      (edits || []).some((edit) => edit.newText === "  "),
+      `expected an on-type indentation edit; got ${JSON.stringify(edits || [])}`
+    );
+  });
+});
+
+describe("WinUI XAML — editor refactors", function () {
+  this.timeout(180000);
+  before(async () => { await h.warmUp(); });
+  after(async () => { await h.revertProbe(); });
+
+  it("surrounds every non-empty selection and contributes selection refactors", async () => {
+    const source = "<Page>\n  <TextBlock />\n  <Button />\n</Page>";
+    await h.setBuffer(source);
+    const editor = await vscode.window.showTextDocument(h.getDoc(), { preview: false });
+    editor.selections = [
+      new vscode.Selection(1, 2, 1, 15),
+      new vscode.Selection(2, 2, 2, 12),
+    ];
+
+    const actions = await vscode.commands.executeCommand(
+      "vscode.executeCodeActionProvider",
+      h.getDoc().uri,
+      editor.selections[0],
+      "refactor.surround"
+    );
+    assert.ok((actions || []).some((action) => action.title === "Surround with Border"));
+
+    await vscode.commands.executeCommand("winui-xaml.surroundWith", "Border");
+    const result = h.getDoc().getText();
+    assert.strictEqual((result.match(/<Border>/g) || []).length, 2);
+    assert.match(result, /<Border>\r?\n\s*<TextBlock \/>\r?\n\s*<\/Border>/);
+    assert.match(result, /<Border>\r?\n\s*<Button \/>\r?\n\s*<\/Border>/);
+  });
+
+  it("offers surround refactors in untitled XAML documents", async () => {
+    const smokeDoc = h.getDoc();
+    const untitled = await vscode.workspace.openTextDocument({
+      language: "xaml",
+      content: "<Button />",
+    });
+    const editor = await vscode.window.showTextDocument(untitled, { preview: false });
+    editor.selection = new vscode.Selection(0, 0, 0, untitled.getText().length);
+
+    try {
+      const actions = await vscode.commands.executeCommand(
+        "vscode.executeCodeActionProvider",
+        untitled.uri,
+        editor.selection,
+        "refactor.surround"
+      );
+      assert.ok((actions || []).some((action) => action.title === "Surround with Grid"));
+    } finally {
+      await vscode.window.showTextDocument(smokeDoc, { preview: false });
+    }
   });
 });
 
@@ -2150,6 +2286,31 @@ describe("WinUI XAML — code actions", function () {
   after(async () => { await h.revertProbe(); });
 
   const titles = (r) => JSON.stringify(r.actions.map((a) => a.title));
+
+  it("removes only unused root namespaces through source.organizeImports", async () => {
+    const buffer =
+      '<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"\n' +
+      '      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"\n' +
+      '      xmlns:local="using:SmokeFixture"\n' +
+      '      xmlns:unused="using:Unused">\n' +
+      '  <local:SmokePage x:Name="kept" />\n' +
+      "</Page>";
+    await h.setBuffer(buffer);
+    const doc = h.getDoc();
+    const actions = await vscode.commands.executeCommand(
+      "vscode.executeCodeActionProvider",
+      doc.uri,
+      new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)),
+      vscode.CodeActionKind.SourceOrganizeImports.value
+    );
+    const action = (actions || []).find((candidate) =>
+      candidate.title === "Remove unused XAML namespaces");
+    assert.ok(action && action.edit, "expected the namespace organization source action");
+    assert.ok(await vscode.workspace.applyEdit(action.edit), "expected namespace edit to apply");
+    assert.ok(!doc.getText().includes("xmlns:unused"), "unused namespace should be removed");
+    assert.ok(doc.getText().includes("xmlns:local"), "used namespace should be preserved");
+    assert.ok(doc.getText().includes("xmlns:x"), "XAML namespace should be preserved");
+  });
 
   it("offers a 'Did you mean?' fix for an unknown element type", async () => {
     const r = await h.codeActionsAt(page("<Buton />"), "WXAML0002", "Buton");

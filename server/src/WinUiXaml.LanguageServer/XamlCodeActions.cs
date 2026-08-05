@@ -33,68 +33,88 @@ internal static class XamlCodeActions
     // an author-chosen using: target we never guess.
     private static readonly Dictionary<string, string> WellKnownNamespaces = new(StringComparer.Ordinal)
     {
-        ["x"] = "http://schemas.microsoft.com/winfx/2006/xaml",
-        ["d"] = "http://schemas.microsoft.com/expression/blend/2008",
-        ["mc"] = "http://schemas.openxmlformats.org/markup-compatibility/2006",
+        ["x"] = XamlTypeSystem.XamlLanguageNamespace,
+        ["d"] = XamlNamespaces.DesignTime2008,
+        ["mc"] = XamlNamespaces.MarkupCompatibility,
     };
 
     public static List<CodeAction> Compute(string uri, TextDocument? doc, CodeActionContext context, XamlTypeSystem? typeSystem = null)
     {
         var actions = new List<CodeAction>();
-        if (context is null || !QuickFixKindAllowed(context.Only))
+        if (context is null)
         {
             return actions;
         }
 
-        var seenXmlnsDeclarations = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var diagnostic in context.Diagnostics)
+        if (QuickFixKindAllowed(context.Only))
         {
-            if (diagnostic.Code is null)
+            var seenXmlnsDeclarations = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var diagnostic in context.Diagnostics)
             {
-                continue;
-            }
+                if (diagnostic.Code is null)
+                {
+                    continue;
+                }
 
-            // Undeclared prefix (WXAML0001): offer to add the missing xmlns declaration on the root — the
-            // standard URI for a well-known prefix (x/d/mc), or an inferred using: for a custom prefix that
-            // names one of the project's own types.
-            if (string.Equals(diagnostic.Code, XamlValidator.UndeclaredPrefixCode, StringComparison.Ordinal))
-            {
-                AddUndeclaredPrefixFixes(actions, uri, doc, diagnostic, typeSystem, seenXmlnsDeclarations);
-                continue;
-            }
+                // Undeclared prefix (WXAML0001): offer to add the missing xmlns declaration on the root — the
+                // standard URI for a well-known prefix (x/d/mc), or an inferred using: for a custom prefix that
+                // names one of the project's own types.
+                if (string.Equals(diagnostic.Code, XamlValidator.UndeclaredPrefixCode, StringComparison.Ordinal))
+                {
+                    AddUndeclaredPrefixFixes(actions, uri, doc, diagnostic, typeSystem, seenXmlnsDeclarations);
+                    continue;
+                }
 
-            if (!SuggestibleCodes.Contains(diagnostic.Code))
-            {
-                continue;
-            }
+                if (!SuggestibleCodes.Contains(diagnostic.Code))
+                {
+                    continue;
+                }
 
-            var (bad, suggestions) = ReadSuggestions(diagnostic.Data);
-            if (suggestions.Count == 0)
-            {
-                continue;
-            }
+                var (bad, suggestions) = ReadSuggestions(diagnostic.Data);
+                if (suggestions.Count == 0)
+                {
+                    continue;
+                }
 
-            // The stored token is authoritative; fall back to the live span only if it is somehow absent.
-            if (bad.Length == 0 && doc is not null)
-            {
-                bad = RangeText(doc, diagnostic.Range);
-            }
+                // The stored token is authoritative; fall back to the live span only if it is somehow absent.
+                if (bad.Length == 0 && doc is not null)
+                {
+                    bad = RangeText(doc, diagnostic.Range);
+                }
 
-            for (int i = 0; i < suggestions.Count; i++)
+                for (int i = 0; i < suggestions.Count; i++)
+                {
+                    var suggestion = suggestions[i];
+                    actions.Add(new CodeAction
+                    {
+                        Title = bad.Length == 0 ? $"Change to '{suggestion}'" : $"Change '{bad}' to '{suggestion}'",
+                        Kind = "quickfix",
+                        Diagnostics = new List<Diagnostic> { diagnostic },
+                        IsPreferred = i == 0 ? true : null,
+                        Edit = new WorkspaceEdit
+                        {
+                            Changes = new Dictionary<string, List<TextEdit>>
+                            {
+                                [uri] = new List<TextEdit> { new() { Range = EditRange(doc, diagnostic.Range, bad), NewText = suggestion } },
+                            },
+                        },
+                    });
+                }
+            }
+        }
+
+        if (doc is not null && KindAllowed(context.Only, "source.organizeImports"))
+        {
+            var edits = XamlNamespaceActions.RemoveUnusedRootNamespaces(doc);
+            if (edits.Count > 0)
             {
-                var suggestion = suggestions[i];
                 actions.Add(new CodeAction
                 {
-                    Title = bad.Length == 0 ? $"Change to '{suggestion}'" : $"Change '{bad}' to '{suggestion}'",
-                    Kind = "quickfix",
-                    Diagnostics = new List<Diagnostic> { diagnostic },
-                    IsPreferred = i == 0 ? true : null,
+                    Title = "Remove unused XAML namespaces",
+                    Kind = "source.organizeImports",
                     Edit = new WorkspaceEdit
                     {
-                        Changes = new Dictionary<string, List<TextEdit>>
-                        {
-                            [uri] = new List<TextEdit> { new() { Range = EditRange(doc, diagnostic.Range, bad), NewText = suggestion } },
-                        },
+                        Changes = new Dictionary<string, List<TextEdit>> { [uri] = edits },
                     },
                 });
             }
@@ -106,6 +126,9 @@ internal static class XamlCodeActions
     /// <summary>LSP kind gate: a <c>quickfix</c> is offered when the client sends no <c>only</c> filter, or
     /// an entry that equals <c>quickfix</c> or is one of its parent kinds.</summary>
     internal static bool QuickFixKindAllowed(string[]? only)
+        => KindAllowed(only, "quickfix");
+
+    private static bool KindAllowed(string[]? only, string target)
     {
         if (only is null || only.Length == 0)
         {
@@ -114,8 +137,8 @@ internal static class XamlCodeActions
 
         foreach (var kind in only)
         {
-            if (kind.Length == 0 || string.Equals(kind, "quickfix", StringComparison.Ordinal) ||
-                "quickfix".StartsWith(kind + ".", StringComparison.Ordinal))
+            if (kind.Length == 0 || string.Equals(kind, target, StringComparison.Ordinal) ||
+                target.StartsWith(kind + ".", StringComparison.Ordinal))
             {
                 return true;
             }

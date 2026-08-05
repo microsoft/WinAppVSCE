@@ -69,6 +69,9 @@ function caretPosition(text) {
 }
 
 async function setBuffer(text) {
+  if (!editor || !vscode.window.visibleTextEditors.includes(editor)) {
+    editor = await vscode.window.showTextDocument(doc, { preview: false });
+  }
   const whole = new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
   const ok = await editor.edit((b) => b.replace(whole, text));
   assert.ok(ok, "failed to apply probe edit to the buffer");

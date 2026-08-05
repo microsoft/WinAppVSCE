@@ -28,7 +28,7 @@ internal sealed class XamlLanguageServer
     private readonly XamlProjectResolver _resolver;
     private readonly ConcurrentDictionary<string, TextDocument> _documents = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, XamlTypeSystem> _typeSystems = new();
-    private readonly ConcurrentDictionary<string, (System.DateTime Stamp, string[] Keys)> _appResourceCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly XamlResourceGraph _resourceGraph = new();
     private readonly AsyncLocal<CancellationToken> _requestCancellation = new();
     private int _msbuildUnavailableNotified;
     private bool _shuttingDown;
@@ -76,6 +76,7 @@ internal sealed class XamlLanguageServer
         "textDocument/documentSymbol" => Task.FromResult<object?>(DocumentSymbols(Deserialize<DocumentSymbolParams>(@params))),
         "textDocument/formatting" => FormatDocumentAsync(Deserialize<DocumentFormattingParams>(@params)),
         "textDocument/rangeFormatting" => FormatRangeAsync(Deserialize<DocumentRangeFormattingParams>(@params)),
+        "textDocument/onTypeFormatting" => FormatOnTypeAsync(Deserialize<DocumentOnTypeFormattingParams>(@params)),
         "textDocument/foldingRange" => FoldingRangeAsync(Deserialize<FoldingRangeParams>(@params)),
         "textDocument/documentColor" => DocumentColorAsync(Deserialize<DocumentColorParams>(@params)),
         "textDocument/colorPresentation" => ColorPresentationAsync(Deserialize<ColorPresentationParams>(@params)),
@@ -131,6 +132,10 @@ internal sealed class XamlLanguageServer
             DocumentSymbolProvider = true,
             DocumentFormattingProvider = true,
             DocumentRangeFormattingProvider = true,
+            DocumentOnTypeFormattingProvider = new DocumentOnTypeFormattingOptions
+            {
+                FirstTriggerCharacter = ">",
+            },
             FoldingRangeProvider = true,
             ColorProvider = true,
             SelectionRangeProvider = true,
@@ -147,7 +152,10 @@ internal sealed class XamlLanguageServer
                 Full = true,
                 Range = true,
             },
-            CodeActionProvider = new CodeActionOptions { CodeActionKinds = new[] { "quickfix" } },
+            CodeActionProvider = new CodeActionOptions
+            {
+                CodeActionKinds = new[] { "quickfix", "source.organizeImports" },
+            },
             CompletionProvider = new CompletionOptions
             {
                 // Re-trigger on start-tag, the attribute gap, the attached-property dot, the prefix
@@ -508,11 +516,11 @@ internal sealed class XamlLanguageServer
             }
         }
 
-        // The App.xaml resource-key cache is timestamp-guarded, but a delete/rename won't bump a stamp
-        // we still hold; drop it wholesale on any watched change (it repopulates lazily and cheaply).
+        // A delete/rename will not update the timestamp of the path retained by the resource graph, so
+        // invalidate the graph whenever a project-affecting watched file changes.
         if (invalidateAllProjects || projectsToInvalidate.Count > 0)
         {
-            _appResourceCache.Clear();
+            _resourceGraph.Clear();
         }
 
         return Task.CompletedTask;
@@ -760,6 +768,10 @@ internal sealed class XamlLanguageServer
             {
                 text = System.IO.File.ReadAllText(canonicalFile);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (System.Exception ex)
             {
                 System.Console.Error.WriteLine($"[winui-xaml-ls] xref read '{canonicalFile}': {ex.Message}");
@@ -890,6 +902,21 @@ internal sealed class XamlLanguageServer
         }
 
         return Task.FromResult<object?>(XamlFormatter.Format(doc, p.Options, p.Range));
+    }
+
+    /// <summary>
+    /// Handles <c>textDocument/onTypeFormatting</c>. A completed tag is enough for the tolerant parser to
+    /// determine the structural depth, so only the line containing the typed <c>&gt;</c> is reindented.
+    /// </summary>
+    private Task<object?> FormatOnTypeAsync(DocumentOnTypeFormattingParams p)
+    {
+        if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc))
+        {
+            return Task.FromResult<object?>(null);
+        }
+
+        return Task.FromResult<object?>(
+            XamlFormatter.FormatOnType(doc, p.Options, p.Position, p.Character));
     }
 
     private Task<object?> FoldingRangeAsync(FoldingRangeParams p)
@@ -1632,7 +1659,7 @@ internal sealed class XamlLanguageServer
                 "this file");
         }
 
-        // 2) The project's App.xaml (parsed off disk; only reached for keys not declared locally).
+        // 2) The project's App.xaml and every reachable merged ResourceDictionary.
         var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
         if (context == null)
         {
@@ -1645,29 +1672,28 @@ internal sealed class XamlLanguageServer
             return null;
         }
 
-        string appText;
-        try
+        var projectRoot = System.IO.Path.GetDirectoryName(context.Value.Resolution.ProjectPath)!;
+        foreach (var resourceFile in ReadResourceGraph(appXaml, projectRoot))
         {
-            appText = System.IO.File.ReadAllText(appXaml);
-        }
-        catch (System.Exception ex)
-        {
-            System.Console.Error.WriteLine($"[winui-xaml-ls] resource ref: {ex.Message}");
-            return null;
+            var declaration = FindResourceDeclaration(resourceFile.Parsed, key);
+            if (declaration is null)
+            {
+                continue;
+            }
+
+            return new ResourceReferenceHit(
+                key,
+                referenceRange,
+                new Lsp.Location
+                {
+                    Uri = PathToUri(resourceFile.Path),
+                    Range = SpanToRange(resourceFile.Text, declaration.Value.NavSpan),
+                },
+                declaration.Value.TypeName,
+                System.IO.Path.GetFileName(resourceFile.Path));
         }
 
-        var app = FindResourceDeclaration(XamlParser.Parse(appText), key);
-        if (app == null)
-        {
-            return null;
-        }
-
-        return new ResourceReferenceHit(
-            key,
-            referenceRange,
-            new Lsp.Location { Uri = PathToUri(appXaml), Range = SpanToRange(appText, app.Value.NavSpan) },
-            app.Value.TypeName,
-            System.IO.Path.GetFileName(appXaml));
+        return null;
     }
 
     // --- Named-element references (ElementName / Storyboard.TargetName) ------
@@ -3323,9 +3349,8 @@ internal sealed class XamlLanguageServer
     }
 
     /// <summary>
-    /// Collects the <c>x:Key</c> resource keys declared in the project's App.xaml (found next to the
-    /// project file), cached by last-write time. Returns an empty set when there is no App.xaml. These
-    /// feed <c>{StaticResource}</c>/<c>{ThemeResource}</c> key completion alongside document-local keys.
+    /// Collects the <c>x:Key</c> resource keys declared in the project's App.xaml and its reachable merged
+    /// dictionaries. Returns an empty set when there is no App.xaml.
     /// </summary>
     private string[] GetAppResourceKeys(XamlResolution resolution)
     {
@@ -3337,22 +3362,69 @@ internal sealed class XamlLanguageServer
                 return System.Array.Empty<string>();
             }
 
-            var stamp = System.IO.File.GetLastWriteTimeUtc(appXaml);
-            if (_appResourceCache.TryGetValue(appXaml, out var cached) && cached.Stamp == stamp)
-            {
-                return cached.Keys;
-            }
-
-            var parsed = XamlParser.Parse(System.IO.File.ReadAllText(appXaml));
-            var keys = CompletionProvider.CollectResourceKeys(parsed).ToArray();
-            _appResourceCache[appXaml] = (stamp, keys);
-            return keys;
+            var projectRoot = System.IO.Path.GetDirectoryName(resolution.ProjectPath)!;
+            return ReadResourceGraph(appXaml, projectRoot)
+                .SelectMany(file => file.Keys)
+                .Distinct(System.StringComparer.Ordinal)
+                .ToArray();
         }
+
         catch (System.Exception ex)
         {
             System.Console.Error.WriteLine($"[winui-xaml-ls] app resources: {ex.Message}");
             return System.Array.Empty<string>();
         }
+    }
+
+    private IReadOnlyList<XamlResourceGraph.ResourceFile> ReadResourceGraph(string rootPath, string projectRoot)
+    {
+        var canonicalProjectRoot = CanonicalizePath(projectRoot);
+        return _resourceGraph.ReadReachable(
+            rootPath,
+            canonicalProjectRoot,
+            path =>
+            {
+                if (!TryGetAllowedRoot(path, out var canonical, out _) ||
+                    !string.Equals(System.IO.Path.GetExtension(canonical), ".xaml", StringComparison.OrdinalIgnoreCase) ||
+                    !PathIsWithin(canonical, canonicalProjectRoot))
+                {
+                    return null;
+                }
+
+                return System.IO.File.Exists(canonical) || GetOpenDocumentText(canonical) is not null
+                    ? canonical
+                    : null;
+            },
+            message => System.Console.Error.WriteLine($"[winui-xaml-ls] {message}"),
+            GetOpenDocumentText,
+            _requestCancellation.Value);
+    }
+
+    private string? GetOpenDocumentText(string canonicalPath)
+    {
+        foreach (var document in _documents.Values)
+        {
+            var path = LspUri.ToPath(document.Uri);
+            if (path is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (string.Equals(CanonicalizePath(path), canonicalPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return document.Text;
+                }
+            }
+            catch (Exception ex) when (ex is ArgumentException or System.IO.IOException or
+                System.IO.PathTooLongException or UnauthorizedAccessException)
+            {
+                // Ignore an invalid or inaccessible open-document URI and continue with disk content.
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

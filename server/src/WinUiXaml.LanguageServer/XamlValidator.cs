@@ -23,7 +23,7 @@ namespace WinUiXaml.LanguageServer;
 /// <item>Unknown-type/attribute is only reported for namespaces the type system actually understands
 /// (<see cref="XamlTypeSystem.IsKnownNamespace"/>), so design-time/third-party namespaces stay silent.</item>
 /// <item>Attribute validation covers simple unprefixed names and <c>Owner.Member</c> attached
-/// properties; language directives (<c>x:</c>, <c>d:</c>, <c>mc:</c>) are left for future work.</item>
+/// properties; supported design-time and markup-compatibility directives receive dedicated checks.</item>
 /// </list>
 /// </remarks>
 internal static class XamlValidator
@@ -52,9 +52,17 @@ internal static class XamlValidator
     /// <summary>Two resources share an <c>x:Key</c> in the same <c>ResourceDictionary</c> — a compile error.</summary>
     public const string DuplicateKeyCode = "WXAML0008";
 
+    /// <summary>A design-time directive names a type that cannot be resolved.</summary>
+    public const string UnknownDirectiveTypeCode = "WXAML0009";
+
+    /// <summary>An <c>mc:Ignorable</c> entry does not name a declared namespace prefix.</summary>
+    public const string UnknownIgnorablePrefixCode = "WXAML0010";
+
+    /// <summary>An <c>x:Bind</c> function has no overload accepting the supplied argument count.</summary>
+    public const string InvalidBindFunctionCode = "WXAML0011";
+
     private const int SeverityError = 1;
     private const int SeverityWarning = 2;
-
     // Prefixes that are always in scope and never need an xmlns declaration.
     private static readonly HashSet<string> ReservedPrefixes = new(System.StringComparer.Ordinal)
     {
@@ -124,6 +132,8 @@ internal static class XamlValidator
                 ReportUndeclaredPrefix(attribute.Name, scope, doc, diagnostics);
             }
         }
+
+        ValidateDirectives(element, scope, typeSystem, doc, diagnostics);
 
         var name = element.Name;
         if (name is null)
@@ -356,7 +366,7 @@ internal static class XamlValidator
     /// each resolved hop). A leading cast (<c>(ns:Type)Member.Member</c>) rebinds the root to the cast
     /// target type and its member chain is checked against that type. Deliberately conservative: only closed
     /// <c>x:Bind</c> extensions, only plain identifier or indexed-member segments (function-arg expressions
-    /// and attached-property steps are skipped; an <c>Items[0]</c> segment validates the <c>Items</c> base
+    /// and complex function-arg expressions are skipped; an <c>Items[0]</c> segment validates the <c>Items</c> base
     /// then unwraps the element type), an unresolved cast target is skipped, and the full bindable surface —
     /// inherited, non-public root, and method members — counts as a match. The walk stops silently the
     /// moment a hop's type can't be resolved. Empty paths (which bind the root itself) are ignored.
@@ -380,6 +390,11 @@ internal static class XamlValidator
             a => (!a.IsNamed && a.NestedExtension is null && a.Value is not null) ||
                  (a.IsNamed && a.Name?.LocalName == "Path" && a.Value is not null));
         if (pathArg?.Value is not { } path || pathArg.ValueSpan is not { } valueSpan)
+        {
+            return;
+        }
+
+        if (ValidateLeadingAttachedBindPath(path, valueSpan, scope, typeSystem, doc, diagnostics))
         {
             return;
         }
@@ -422,6 +437,107 @@ internal static class XamlValidator
         diagnostics.Add(Diag(doc, valueSpan, SeverityWarning, UnknownBindMemberCode,
             $"'{segment}' is not a member of '{bindRoot.Name}' bound by x:Bind.",
             SuggestData(segment, typeSystem.GetBindableMembers(bindRoot, includeRootNonPublic: true).Select(m => m.Name))));
+    }
+
+    /// <summary>
+    /// Validates a leading attached-property binding step such as <c>(Grid.Row)</c> and continues through
+    /// any ordinary tail (<c>(Grid.Row).Value</c>). Returns true when the path had attached-property shape,
+    /// including unresolved/malformed cases that should remain silent rather than fall through as casts.
+    /// </summary>
+    private static bool ValidateLeadingAttachedBindPath(
+        string path,
+        TextSpan valueSpan,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        int open = 0;
+        while (open < path.Length && (path[open] == '!' || char.IsWhiteSpace(path[open])))
+        {
+            open++;
+        }
+
+        if (open >= path.Length || path[open] != '(')
+        {
+            return false;
+        }
+
+        int close = path.IndexOf(')', open + 1);
+        if (close < 0)
+        {
+            return true;
+        }
+
+        var inner = path.Substring(open + 1, close - open - 1).Trim();
+        int dot = inner.LastIndexOf('.');
+        if (dot <= 0 || dot >= inner.Length - 1)
+        {
+            return false; // a cast, not an attached-property step
+        }
+
+        var ownerName = inner.Substring(0, dot).Trim();
+        var memberName = inner.Substring(dot + 1).Trim();
+        if (!IsIdentifier(memberName))
+        {
+            return true;
+        }
+
+        var owner = ResolveTypeName(ownerName, scope, typeSystem);
+        if (owner is null)
+        {
+            return true;
+        }
+
+        var memberType = typeSystem.GetAttachedMemberType(owner, memberName);
+        if (memberType is null)
+        {
+            int memberOffset = path.IndexOf(memberName, open + 1, System.StringComparison.Ordinal);
+            var memberSpan = memberOffset >= 0
+                ? new TextSpan(valueSpan.Start + memberOffset, valueSpan.Start + memberOffset + memberName.Length)
+                : valueSpan;
+            diagnostics.Add(Diag(doc, memberSpan, SeverityWarning, UnknownAttachedPropertyCode,
+                $"'{memberName}' is not an attached property of '{owner.Name}'.",
+                SuggestData(memberName, typeSystem.GetAttachedProperties(owner).Select(m => m.Name))));
+            return true;
+        }
+
+        int tailStart = close + 1;
+        while (tailStart < path.Length && char.IsWhiteSpace(path[tailStart]))
+        {
+            tailStart++;
+        }
+
+        if (tailStart >= path.Length)
+        {
+            return true;
+        }
+
+        if (path[tailStart] != '.')
+        {
+            return true;
+        }
+
+        tailStart++;
+        while (tailStart < path.Length && char.IsWhiteSpace(path[tailStart]))
+        {
+            tailStart++;
+        }
+
+        if (tailStart < path.Length)
+        {
+            ValidateMemberChain(
+                memberType,
+                path.Substring(tailStart).Split('.'),
+                tailStart,
+                valueSpan,
+                skipFirst: false,
+                typeSystem,
+                doc,
+                diagnostics);
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -614,13 +730,33 @@ internal static class XamlValidator
         // Find the matching close paren for the argument list.
         int depth = 0;
         int close = -1;
+        char closeScanQuote = '\0';
         for (int j = open; j < path.Length; j++)
         {
-            if (path[j] == '(')
+            char c = path[j];
+            if (closeScanQuote != '\0')
+            {
+                if (c == '\\')
+                {
+                    j++;
+                }
+                else if (c == closeScanQuote)
+                {
+                    closeScanQuote = '\0';
+                }
+
+                continue;
+            }
+
+            if (c is '\'' or '"')
+            {
+                closeScanQuote = c;
+            }
+            else if (c == '(')
             {
                 depth++;
             }
-            else if (path[j] == ')')
+            else if (c == ')')
             {
                 depth--;
                 if (depth == 0)
@@ -637,11 +773,33 @@ internal static class XamlValidator
         }
 
         // Split the argument list on top-level commas (nested parens/indexers do not split).
+        var argumentRanges = new List<(int Start, int End)>();
         int argStart = open + 1;
         int d = 0;
+        char quote = '\0';
         for (int j = open + 1; j < close; j++)
         {
             char c = path[j];
+            if (quote != '\0')
+            {
+                if (c == '\\')
+                {
+                    j++;
+                }
+                else if (c == quote)
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (c is '\'' or '"')
+            {
+                quote = c;
+                continue;
+            }
+
             if (c is '(' or '[')
             {
                 d++;
@@ -655,12 +813,97 @@ internal static class XamlValidator
             }
             else if (c == ',' && d == 0)
             {
-                ValidateBindFunctionArg(path, argStart, j, valueSpan, bindRoot, typeSystem, doc, diagnostics);
+                argumentRanges.Add((argStart, j));
                 argStart = j + 1;
             }
         }
 
-        ValidateBindFunctionArg(path, argStart, close, valueSpan, bindRoot, typeSystem, doc, diagnostics);
+        if (ContainsNonWhitespace(path, argStart, close) || argumentRanges.Count > 0)
+        {
+            argumentRanges.Add((argStart, close));
+        }
+
+        var functionPath = path.Substring(start, open - start).Trim();
+        var functionName = functionPath;
+        ITypeSymbol receiverType = bindRoot;
+        bool includeReceiverNonPublic = true;
+        int receiverSeparator = functionPath.LastIndexOf('.');
+        if (receiverSeparator >= 0)
+        {
+            var receiverSegments = functionPath.Substring(0, receiverSeparator).Split('.');
+            ValidateMemberChain(
+                bindRoot,
+                receiverSegments,
+                start,
+                valueSpan,
+                skipFirst: false,
+                typeSystem,
+                doc,
+                diagnostics);
+            foreach (var receiverSegment in receiverSegments)
+            {
+                var next = CompletionProvider.ResolveBindSegmentType(
+                    typeSystem,
+                    receiverType,
+                    receiverSegment,
+                    includeReceiverNonPublic);
+                if (next is null)
+                {
+                    return;
+                }
+
+                receiverType = next;
+                includeReceiverNonPublic = false;
+            }
+
+            functionName = functionPath.Substring(receiverSeparator + 1);
+        }
+
+        var overloads = typeSystem.GetBindableMethods(receiverType, includeReceiverNonPublic)
+            .Where(m => string.Equals(m.Name, functionName, System.StringComparison.Ordinal))
+            .ToList();
+        if (overloads.Count == 0)
+        {
+            var functionSpan = new TextSpan(valueSpan.Start + start, valueSpan.Start + open);
+            diagnostics.Add(Diag(doc, functionSpan, SeverityWarning, InvalidBindFunctionCode,
+                $"'{functionName}' is not a callable method on '{receiverType.Name}'."));
+        }
+        else if (!overloads.Any(m => AcceptsArgumentCount(m, argumentRanges.Count)))
+        {
+            var functionSpan = new TextSpan(valueSpan.Start + start, valueSpan.Start + open);
+            diagnostics.Add(Diag(doc, functionSpan, SeverityWarning, InvalidBindFunctionCode,
+                $"No overload of '{functionName}' accepts {argumentRanges.Count} argument(s)."));
+        }
+
+        foreach (var (argumentStart, argumentEnd) in argumentRanges)
+        {
+            ValidateBindFunctionArg(
+                path, argumentStart, argumentEnd, valueSpan, bindRoot, typeSystem, doc, diagnostics);
+        }
+    }
+
+    private static bool AcceptsArgumentCount(IMethodSymbol method, int argumentCount)
+    {
+        int required = method.Parameters.Count(p => !p.IsOptional && !p.IsParams);
+        if (argumentCount < required)
+        {
+            return false;
+        }
+
+        return method.Parameters.Any(p => p.IsParams) || argumentCount <= method.Parameters.Length;
+    }
+
+    private static bool ContainsNonWhitespace(string value, int start, int end)
+    {
+        for (int i = start; i < end; i++)
+        {
+            if (!char.IsWhiteSpace(value[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Validates a single function-binding argument spanning <c>[from, to)</c> of <paramref name="path"/>
@@ -855,6 +1098,89 @@ internal static class XamlValidator
 
         var byDefault = scope.TryResolvePrefix(null, out var defaultUri) ? typeSystem.ResolveType(defaultUri, text) : null;
         return byDefault ?? typeSystem.ResolveMetadataType(text);
+    }
+
+    private static void ValidateDirectives(
+        XamlElement element,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        foreach (var attribute in element.Attributes)
+        {
+            if (attribute.IsNamespaceDeclaration ||
+                !attribute.Name.HasPrefix ||
+                !scope.TryResolvePrefix(attribute.Name.Prefix, out var attributeUri))
+            {
+                continue;
+            }
+
+            if (XamlNamespaces.IsDesignTime(attributeUri) &&
+                attribute.Name.LocalName == "DataContext" &&
+                attribute.Value is { } designValue &&
+                designValue.MarkupExtension is { Name.LocalName: "DesignInstance" } extension &&
+                extension.Name.HasPrefix &&
+                scope.TryResolvePrefix(extension.Name.Prefix, out var extensionUri) &&
+                XamlNamespaces.IsDesignTime(extensionUri))
+            {
+                var typeName = CompletionProvider.ParseDesignInstanceType(designValue.Text);
+                if (!string.IsNullOrWhiteSpace(typeName) &&
+                    ResolveTypeName(typeName, scope, typeSystem) is null)
+                {
+                    int relative = designValue.Text.IndexOf(typeName, System.StringComparison.Ordinal);
+                    var span = relative >= 0
+                        ? new TextSpan(designValue.InnerSpan.Start + relative, designValue.InnerSpan.Start + relative + typeName.Length)
+                        : designValue.InnerSpan;
+                    diagnostics.Add(Diag(doc, span, SeverityWarning, UnknownDirectiveTypeCode,
+                        $"The design-time type '{typeName}' could not be resolved."));
+                }
+            }
+
+            if (attributeUri == XamlNamespaces.MarkupCompatibility &&
+                attribute.Name.LocalName == "Ignorable" &&
+                attribute.Value is { MarkupExtension: null } ignorableValue)
+            {
+                ValidateIgnorablePrefixes(ignorableValue.Text, ignorableValue.InnerSpan, scope, doc, diagnostics);
+            }
+        }
+    }
+
+    private static void ValidateIgnorablePrefixes(
+        string value,
+        TextSpan valueSpan,
+        XamlNamespaceScope scope,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        int i = 0;
+        while (i < value.Length)
+        {
+            while (i < value.Length && char.IsWhiteSpace(value[i]))
+            {
+                i++;
+            }
+
+            int start = i;
+            while (i < value.Length && !char.IsWhiteSpace(value[i]))
+            {
+                i++;
+            }
+
+            if (start < i)
+            {
+                var prefix = value.Substring(start, i - start);
+                if (!ReservedPrefixes.Contains(prefix) && !scope.TryResolvePrefix(prefix, out _))
+                {
+                    diagnostics.Add(Diag(
+                        doc,
+                        new TextSpan(valueSpan.Start + start, valueSpan.Start + i),
+                        SeverityWarning,
+                        UnknownIgnorablePrefixCode,
+                        $"The namespace prefix '{prefix}' listed in mc:Ignorable is not declared."));
+                }
+            }
+        }
     }
 
     // --- Structural uniqueness: duplicate x:Name / x:Key --------------------------------------------

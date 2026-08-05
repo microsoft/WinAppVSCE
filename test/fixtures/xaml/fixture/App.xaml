@@ -8,6 +8,7 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <ResourceDictionary Source="MergedResources.xaml" />
                 <!-- App-level merged dictionary holding the shared accent brush used by
                      Title, AttachedProbe background, and the Repeater item template (resource-cascade test). -->
                 <ResourceDictionary>

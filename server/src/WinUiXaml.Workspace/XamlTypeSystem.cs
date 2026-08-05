@@ -718,41 +718,7 @@ namespace WinUiXaml.Workspace
         /// members that happen to declare only one public accessor.
         /// </summary>
         public bool HasAttachedMember(INamedTypeSymbol owner, string member)
-        {
-            if (owner is null || string.IsNullOrEmpty(member))
-            {
-                return false;
-            }
-
-            for (INamedTypeSymbol? t = owner; t is not null; t = t.BaseType)
-            {
-                foreach (var method in t.GetMembers().OfType<IMethodSymbol>())
-                {
-                    if (!method.IsStatic || method.DeclaredAccessibility != Accessibility.Public)
-                    {
-                        continue;
-                    }
-
-                    if (method.Name.Length == member.Length + 3 &&
-                        string.CompareOrdinal(method.Name, 3, member, 0, member.Length) == 0)
-                    {
-                        if (method.Name.StartsWith("Get", StringComparison.Ordinal) &&
-                            method.Parameters.Length == 1 && !method.ReturnsVoid)
-                        {
-                            return true;
-                        }
-
-                        if (method.Name.StartsWith("Set", StringComparison.Ordinal) &&
-                            method.Parameters.Length == 2 && method.ReturnsVoid)
-                        {
-                            return true;
-                        }
-                    }
-                }
-            }
-
-            return false;
-        }
+            => GetAttachedMemberType(owner, member) is not null;
 
         /// <summary>
         /// Enumerates the members bindable via <c>{x:Bind}</c> on <paramref name="type"/>: public
@@ -806,6 +772,81 @@ namespace WinUiXaml.Workspace
 
                 isRoot = false;
             }
+        }
+
+        /// <summary>
+        /// Enumerates every callable method available to an <c>x:Bind</c> root, preserving overloads so
+        /// function-binding validation can check argument counts. Non-public methods are allowed only on
+        /// the root type, matching <see cref="GetBindableMembers"/>.
+        /// </summary>
+        public IEnumerable<IMethodSymbol> GetBindableMethods(ITypeSymbol? type, bool includeRootNonPublic = false)
+        {
+            if (type is null)
+            {
+                yield break;
+            }
+
+            var seenNames = new HashSet<string>(StringComparer.Ordinal);
+            bool isRoot = true;
+            foreach (var t in SelfAndBases(type))
+            {
+                bool allowNonPublic = includeRootNonPublic && isRoot;
+                var methods = t.GetMembers().OfType<IMethodSymbol>()
+                    .Where(method =>
+                        method.MethodKind == MethodKind.Ordinary &&
+                        !method.IsStatic &&
+                        !method.IsImplicitlyDeclared &&
+                        (method.DeclaredAccessibility == Accessibility.Public || allowNonPublic))
+                    .ToArray();
+                foreach (var method in methods)
+                {
+                    if (!seenNames.Contains(method.Name))
+                    {
+                        yield return method;
+                    }
+                }
+
+                foreach (var name in methods.Select(method => method.Name))
+                {
+                    seenNames.Add(name);
+                }
+
+                isRoot = false;
+            }
+        }
+
+        /// <summary>Returns the value type of an attached-property accessor, accepting either accessor half.</summary>
+        public ITypeSymbol? GetAttachedMemberType(INamedTypeSymbol owner, string member)
+        {
+            if (owner is null || string.IsNullOrEmpty(member))
+            {
+                return null;
+            }
+
+            for (INamedTypeSymbol? t = owner; t is not null; t = t.BaseType)
+            {
+                foreach (var method in t.GetMembers())
+                {
+                    if (method is not IMethodSymbol { IsStatic: true, DeclaredAccessibility: Accessibility.Public } m)
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(m.Name, "Get" + member, StringComparison.Ordinal) &&
+                        m.Parameters.Length == 1 && !m.ReturnsVoid)
+                    {
+                        return m.ReturnType;
+                    }
+
+                    if (string.Equals(m.Name, "Set" + member, StringComparison.Ordinal) &&
+                        m.Parameters.Length == 2 && m.ReturnsVoid)
+                    {
+                        return m.Parameters[1].Type;
+                    }
+                }
+            }
+
+            return null;
         }
 
         /// <summary>The value type produced by a bindable member (property/field type, or method return).</summary>
