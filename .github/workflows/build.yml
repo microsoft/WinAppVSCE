@@ -64,7 +64,7 @@ jobs:
         "VSCODE_PATH=$code" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
     - name: Run E2E tests
-      run: npm run test:e2e -- --grep-invert "adding empty custom capability|adding invalid custom capability|adding valid custom capability|custom capability appears in the custom capabilities list|invalid inputFolder|cancelling the artifact QuickPick|selecting Browse|cancelling the certificate QuickPick"
+      run: npm run test:e2e -- --grep-invert "adding empty custom capability|adding invalid format custom capability|adding valid custom capability|custom capability appears in the custom capabilities list|invalid inputFolder|cancelling the artifact QuickPick|selecting Browse|cancelling the certificate QuickPick"
 
     - name: Upload Playwright report
       if: ${{ !cancelled() }}
