@@ -284,7 +284,7 @@
     "glob": "^13.0.6"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "1.62.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "26.x",
     "@types/vscode": "^1.109.0",
@@ -299,6 +299,7 @@
     "typescript-eslint": "^8.65.0"
   },
   "overrides": {
+    "brace-expansion": "5.0.8",
     "diff": "^8.0.3",
     "fast-uri": "3.1.0"
   }
