@@ -3,6 +3,7 @@
     <Project Path="src/WinUiXaml.Xaml/WinUiXaml.Xaml.csproj" />
     <Project Path="src/WinUiXaml.Workspace/WinUiXaml.Workspace.csproj" />
     <Project Path="src/WinUiXaml.LanguageServer/WinUiXaml.LanguageServer.csproj" />
+    <Project Path="src/WinUiXaml.DotnetHost/WinUiXaml.DotnetHost.csproj" />
   </Folder>
   <Folder Name="/test/">
     <Project Path="test/WinUiXaml.Xaml.Tests/WinUiXaml.Xaml.Tests.csproj" />

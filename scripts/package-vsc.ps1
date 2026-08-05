@@ -39,11 +39,10 @@ param(
 $ProjectRoot = $PSScriptRoot | Split-Path -Parent
 Push-Location $ProjectRoot
 
-# Track whether we set WINUI_REUSE_SIGNED_SERVER so the finally block can restore the caller's
-# process environment. Leaking it would make a later bare `vsce package` in the same shell wrongly
-# reuse an existing (possibly stale/unsigned) dist/server.
-$ReuseSignedServerSet = $false
-$PriorReuseSignedServer = $env:WINUI_REUSE_SIGNED_SERVER
+# Track the bundle mode so a later local package in the same shell cannot accidentally reuse an
+# existing signed artifact.
+$ServerBundleModeSet = $false
+$PriorServerBundleMode = $env:WINUI_XAML_SERVER_BUNDLE_MODE
 
 try
 {
@@ -177,29 +176,22 @@ try
     }
 
     # Ensure the WinUI XAML language server (.NET) is published into dist/server so it ships in the VSIX.
-    # The single publish path is vscode:prepublish -> ensure-server-bundle.mjs (triggered by `vsce package`
-    # below), which builds a fresh dist/server by default. In CI the server is published + signed as
-    # separate, earlier steps; passing -SkipServerBuild reuses that pre-published/signed output (via
-    # WINUI_REUSE_SIGNED_SERVER) instead of rebuilding over the signatures here.
+    # The single local publish path is vscode:prepublish -> ensure-server-bundle.mjs (triggered by
+    # `vsce package` below). In release builds, -SkipServerBuild requires the downloaded, signed
+    # pipeline artifact and switches ensure-server-bundle.mjs to artifact mode.
     if ($SkipServerBuild) {
         Write-Host "[VSC] Skipping server build; reusing pre-published dist/server..." -ForegroundColor Blue
-        if (-not (Test-Path "dist\server\WinUiXaml.LanguageServer.dll")) {
-            Write-Error "SkipServerBuild was set but dist\server\WinUiXaml.LanguageServer.dll was not found. Publish the language server first."
-            Pop-Location
-            exit 1
-        }
-        # The `vsce package` step below triggers vscode:prepublish -> ensure-server-bundle.mjs, which
-        # publishes a fresh server by default. In CI the dist/server DLLs are already ESRP-signed, so
-        # opt into reuse to preserve those signatures instead of rebuilding over them. This is
-        # restored in the finally block so it never leaks into the caller's shell.
-        $env:WINUI_REUSE_SIGNED_SERVER = "1"
-        $ReuseSignedServerSet = $true
+        # Preserve the downloaded ESRP signatures instead of rebuilding over them. The mode is
+        # restored in the finally block so it never leaks into the caller's shell. The prepublish
+        # helper is the canonical completeness check and fails closed if either RID is missing.
+        $env:WINUI_XAML_SERVER_BUNDLE_MODE = "artifact"
+        $ServerBundleModeSet = $true
     } else {
         # Normal packaging: DON'T publish the server here. The `vsce package` step below triggers
-        # vscode:prepublish -> ensure-server-bundle.mjs, which publishes a FRESH dist/server by default
-        # (WINUI_REUSE_SIGNED_SERVER is only set under -SkipServerBuild). Publishing here too would build
-        # the server twice for every package. The VSIX-contents assertion at the end still guards against
-        # the server going missing.
+        # vscode:prepublish -> ensure-server-bundle.mjs publishes a fresh self-contained dist/server.
+        # Publishing here too would build the server twice for every package.
+        $env:WINUI_XAML_SERVER_BUNDLE_MODE = "source"
+        $ServerBundleModeSet = $true
         Write-Host "[VSC] WinUI XAML language server will be published by vscode:prepublish (ensure-server-bundle)." -ForegroundColor Blue
     }
 
@@ -316,28 +308,9 @@ try
         Write-Warning "VSIX was created but could not be located in $OutputPath"
     }
 
-    # Assert the WinUI XAML language server actually shipped in the VSIX. Catches packaging drift
-    # (e.g. a prepublish/ignore change that silently drops dist/server) before it reaches users.
     if ($CreatedVsix) {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($CreatedVsix.FullName)
-        try {
-            $serverEntry = $zip.Entries | Where-Object { $_.FullName -ieq 'extension/dist/server/WinUiXaml.LanguageServer.dll' }
-            # The Roslyn MSBuild BuildHost (a *BuildHost.exe under dist/server) serves WinUI 3 projects;
-            # a too-broad .vscodeignore exe exclude would silently drop it, so assert one ships.
-            $buildHostEntry = $zip.Entries | Where-Object { $_.FullName -imatch '^extension/dist/server/.*BuildHost\.exe$' }
-        } finally {
-            $zip.Dispose()
-        }
-        if (-not $serverEntry) {
-            Write-Error "VSIX is missing extension/dist/server/WinUiXaml.LanguageServer.dll — the language server was not bundled."
-            exit 1
-        }
-        if (-not $buildHostEntry) {
-            Write-Error "VSIX is missing a dist/server BuildHost.exe — project resolution for WinUI 3 projects would be broken."
-            exit 1
-        }
-        Write-Host "[VALIDATE] VSIX contains the WinUI XAML language server and MSBuild BuildHost." -ForegroundColor Green
+        & (Join-Path $PSScriptRoot "validate-vsix-server.ps1") -VsixPath $CreatedVsix.FullName
+        if (-not $?) { exit 1 }
     }
 
     Write-Host "[DONE] VS Code extension packaging complete!" -ForegroundColor Green
@@ -347,13 +320,11 @@ finally
     # Restore original working directory
     Pop-Location
 
-    # Restore WINUI_REUSE_SIGNED_SERVER so the reuse opt-in does not persist in the caller's shell
-    # (a later bare `vsce package` must not silently reuse a stale/unsigned dist/server).
-    if ($ReuseSignedServerSet) {
-        if ($null -eq $PriorReuseSignedServer) {
-            Remove-Item Env:\WINUI_REUSE_SIGNED_SERVER -ErrorAction SilentlyContinue
+    if ($ServerBundleModeSet) {
+        if ($null -eq $PriorServerBundleMode) {
+            Remove-Item Env:\WINUI_XAML_SERVER_BUNDLE_MODE -ErrorAction SilentlyContinue
         } else {
-            $env:WINUI_REUSE_SIGNED_SERVER = $PriorReuseSignedServer
+            $env:WINUI_XAML_SERVER_BUNDLE_MODE = $PriorServerBundleMode
         }
     }
 }

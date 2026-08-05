@@ -2,22 +2,23 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	buildDegradedNotification,
-	DOTNET_DOWNLOAD_URL,
 	SERVER_SETTINGS_QUERY,
 } from '../xaml/degradedNotification';
 
 // G7: the degraded-notification message + action buttons must be asserted so a regression that drops
 // or rewires an action is caught. buildDegradedNotification is the pure decision the runtime executes.
 describe('buildDegradedNotification', () => {
-	it('server cause: offers Open Settings / Show Output / Install .NET wired to the right targets', () => {
-		const { message, actions } = buildDegradedNotification('server');
+	it('server cause: offers Open Settings and Show Output wired to the right targets', () => {
+		const detail = "Configured language server not found: C:\\missing\\server.exe.";
+		const { message, actions } = buildDegradedNotification('server', detail);
 
 		assert.match(message, /language server not started/i);
 		assert.match(message, /syntax-only/i);
+		assert.match(message, /C:\\missing\\server\.exe/);
 
 		assert.deepEqual(
 			actions.map((a) => a.label),
-			['Open Settings', 'Show Output', 'Install .NET']
+			['Open Settings', 'Show Output']
 		);
 
 		const openSettings = actions.find((a) => a.label === 'Open Settings');
@@ -31,12 +32,6 @@ describe('buildDegradedNotification', () => {
 		assert.equal(showOutput.showOutput, true);
 		assert.equal(showOutput.command, undefined);
 		assert.equal(showOutput.url, undefined);
-
-		const installDotnet = actions.find((a) => a.label === 'Install .NET');
-		assert.ok(installDotnet);
-		assert.equal(installDotnet.url, DOTNET_DOWNLOAD_URL);
-		assert.equal(installDotnet.url, 'https://dotnet.microsoft.com/download');
-		assert.equal(installDotnet.command, undefined);
 	});
 
 	it('untrusted cause: offers a single Manage Workspace Trust action with a version fallback', () => {

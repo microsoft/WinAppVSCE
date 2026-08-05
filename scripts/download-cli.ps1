@@ -10,6 +10,8 @@
     The release tag to download (e.g., "v0.3.2").
     Use "latest" to download the latest stable release.
     Defaults to "latest".
+.PARAMETER DestinationPath
+    Directory that receives win-x64 and win-arm64. Defaults to the repository bin directory.
 .EXAMPLE
     .\scripts\download-cli.ps1
     .\scripts\download-cli.ps1 -Tag v0.3.2
@@ -18,13 +20,29 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$Tag = "latest"
+    [string]$Tag,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DestinationPath
 )
 
 $ErrorActionPreference = "Stop"
 $repo = "microsoft/winappcli"
 $projectRoot = Split-Path $PSScriptRoot -Parent
-$binDir = Join-Path $projectRoot "bin"
+$Tag = if ([string]::IsNullOrWhiteSpace($Tag)) {
+    if ([string]::IsNullOrWhiteSpace($env:WINAPP_CLI_RELEASE_TAG)) { "latest" }
+    else { $env:WINAPP_CLI_RELEASE_TAG }
+} else {
+    $Tag
+}
+if ($Tag -notmatch '^(latest|v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+    throw "Invalid WinApp CLI release tag: '$Tag'"
+}
+$binDir = if ([string]::IsNullOrWhiteSpace($DestinationPath)) {
+    Join-Path $projectRoot "bin"
+} else {
+    [System.IO.Path]::GetFullPath($DestinationPath)
+}
 
 # Resolve "latest" to actual tag
 if ($Tag -eq "latest") {

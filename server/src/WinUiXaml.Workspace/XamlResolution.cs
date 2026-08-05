@@ -16,7 +16,9 @@ namespace WinUiXaml.Workspace
             string? className,
             INamedTypeSymbol? classSymbol,
             Compilation compilation,
-            ImmutableArray<IAssemblySymbol> referencedAssemblies)
+            ImmutableArray<IAssemblySymbol> referencedAssemblies,
+            ImmutableArray<string> xamlFiles,
+            string? applicationDefinitionPath)
         {
             XamlPath = xamlPath;
             ProjectPath = projectPath;
@@ -24,6 +26,8 @@ namespace WinUiXaml.Workspace
             ClassSymbol = classSymbol;
             Compilation = compilation;
             ReferencedAssemblies = referencedAssemblies;
+            XamlFiles = xamlFiles;
+            ApplicationDefinitionPath = applicationDefinitionPath;
         }
 
         /// <summary>Absolute, normalized path to the <c>.xaml</c> file.</summary>
@@ -49,5 +53,11 @@ namespace WinUiXaml.Workspace
         /// the XAML type-system provider (#5): the set of types that can appear in the document.
         /// </summary>
         public ImmutableArray<IAssemblySymbol> ReferencedAssemblies { get; }
+
+        /// <summary>Evaluated Page and ApplicationDefinition files owned by the project.</summary>
+        public ImmutableArray<string> XamlFiles { get; }
+
+        /// <summary>The evaluated ApplicationDefinition file, if the project has one.</summary>
+        public string? ApplicationDefinitionPath { get; }
     }
 }

@@ -22,7 +22,7 @@ parameters:
     type: boolean
     default: false
   - name: DoEsrp
-    displayName: Sign the VSIX package (DoEsrp)
+    displayName: Sign the language server, VSIX, and publisher manifest (required to publish)
     type: boolean
     default: true
 
@@ -41,11 +41,12 @@ extends:
         image: windows-latest
         os: windows
     stages:
-    - stage: Build
+    - stage: Build_Server
+      displayName: Build and sign WinUI XAML server
       variables:
       - group: signingIdentity
       jobs:
-      - job: Build
+      - job: BuildServer
         pool:
           name: Azure-Pipelines-1ESPT-ExDShared
           image: windows-latest
@@ -53,108 +54,42 @@ extends:
           hostArchitecture: amd64
         steps:
           - checkout: self
+          - task: UseDotNet@2
+            displayName: Setup .NET SDK 10.0
+            inputs:
+              packageType: sdk
+              version: 10.0.x
           - task: UseNode@1
             displayName: Setup Node.js 24
             inputs:
               version: '24.x'
-          - task: UseDotNet@2
-            displayName: Setup .NET SDK 10.0 (build WinUI XAML language server)
+          - task: PowerShell@2
+            displayName: Test WinUI XAML language server
             inputs:
-              packageType: sdk
-              version: 10.0.x
+              pwsh: true
+              errorActionPreference: 'stop'
+              targetType: 'inline'
+              script: |
+                dotnet test "$(System.DefaultWorkingDirectory)/server/WinUiXaml.slnx" -c Release --nologo
+                if ($LASTEXITCODE -ne 0) { Write-Error "WinUI XAML language server tests failed"; exit 1 }
+          - task: PowerShell@2
+            displayName: Publish self-contained WinUI XAML language servers
+            inputs:
+              pwsh: true
+              errorActionPreference: 'stop'
+              targetType: 'inline'
+              script: |
+                $env:WINUI_XAML_SERVER_OUTPUT = "$(Build.ArtifactStagingDirectory)/server-bundle"
+                node "$(System.DefaultWorkingDirectory)/scripts/ensure-server-bundle.mjs"
+                if ($LASTEXITCODE -ne 0) { Write-Error "Server publish failed"; exit 1 }
           - ${{ if eq(parameters.DoEsrp, 'true') }}:
             - task: UseDotNet@2
               displayName: Setup .NET 8.0 (For ESRP Task)
               inputs:
                 packageType: runtime
                 version: 8.0.x
-          - task: PowerShell@2
-            displayName: Download public CLI release for VS Code extension
-            env:
-              GH_TOKEN: $(GITHUB_TOKEN)
-            inputs:
-              pwsh: true
-              errorActionPreference: 'stop'
-              targetType: 'inline'
-              script: |
-                $cliReleaseTag = "${{ parameters.CliReleaseTag }}"
-                $repo = "microsoft/winappcli"
-
-                if ([string]::IsNullOrWhiteSpace($cliReleaseTag)) {
-                    Write-Host "No CLI release tag specified, finding latest stable release..."
-                    $releases = gh release list --repo $repo --limit 10 --json tagName,isPrerelease,isDraft | ConvertFrom-Json
-                    $stableRelease = $releases | Where-Object { -not $_.isPrerelease -and -not $_.isDraft } | Select-Object -First 1
-                    if (-not $stableRelease) {
-                        Write-Error "No stable release found for $repo"
-                        exit 1
-                    }
-                    $cliReleaseTag = $stableRelease.tagName
-                    Write-Host "Found latest stable release: $cliReleaseTag"
-                } else {
-                    Write-Host "Using specified CLI release tag: $cliReleaseTag"
-                }
-
-                Write-Host "##vso[task.setvariable variable=CliReleaseTag]$cliReleaseTag"
-
-                # Download x64 and arm64 CLI zips using gh CLI
-                $cliDir = "$(System.DefaultWorkingDirectory)/artifacts/public-cli"
-
-                New-Item -ItemType Directory -Path "$cliDir/win-x64" -Force | Out-Null
-                New-Item -ItemType Directory -Path "$cliDir/win-arm64" -Force | Out-Null
-
-                Write-Host "Downloading CLI binaries from release $cliReleaseTag..."
-                gh release download $cliReleaseTag --repo $repo --pattern "winappcli-x64.zip" --dir $cliDir
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Error "Failed to download winappcli-x64.zip from release $cliReleaseTag"
-                    exit 1
-                }
-
-                gh release download $cliReleaseTag --repo $repo --pattern "winappcli-arm64.zip" --dir $cliDir
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Error "Failed to download winappcli-arm64.zip from release $cliReleaseTag"
-                    exit 1
-                }
-
-                # Extract
-                Expand-Archive -Path "$cliDir/winappcli-x64.zip" -DestinationPath "$cliDir/win-x64" -Force
-                Expand-Archive -Path "$cliDir/winappcli-arm64.zip" -DestinationPath "$cliDir/win-arm64" -Force
-
-                # Validate
-                if (-not (Test-Path "$cliDir/win-x64/winapp.exe")) {
-                    Write-Error "winapp.exe not found in extracted x64 archive"
-                    exit 1
-                }
-                if (-not (Test-Path "$cliDir/win-arm64/winapp.exe")) {
-                    Write-Error "winapp.exe not found in extracted arm64 archive"
-                    exit 1
-                }
-
-                Write-Host "CLI binaries ($cliReleaseTag) downloaded and validated successfully"
-          - task: PowerShell@2
-            displayName: Publish WinUI XAML language server
-            inputs:
-              pwsh: true
-              errorActionPreference: 'stop'
-              targetType: 'inline'
-              script: |
-                # Build + publish the .NET language server into dist/server so it is bundled in the VSIX.
-                # package-vsc.ps1 runs below with -SkipServerBuild to reuse this (signed) output.
-                # NuGet restore uses the feed pinned in server/nuget.config (public nuget.org by
-                # default). If this pool blocks public NuGet egress, switch server/nuget.config to the
-                # approved internal mirror first — see docs/RELEASE.md ("Package feed").
-                dotnet publish `
-                  "$(System.DefaultWorkingDirectory)/server/src/WinUiXaml.LanguageServer/WinUiXaml.LanguageServer.csproj" `
-                  -c Release `
-                  -o "$(System.DefaultWorkingDirectory)/dist/server"
-                if ($LASTEXITCODE -ne 0) { Write-Error "WinUI XAML language server publish failed"; exit 1 }
-                if (-not (Test-Path "$(System.DefaultWorkingDirectory)/dist/server/WinUiXaml.LanguageServer.dll")) {
-                    Write-Error "dist/server/WinUiXaml.LanguageServer.dll not found after publish"
-                    exit 1
-                }
-                Write-Host "WinUI XAML language server published to dist/server"
-          - ${{ if eq(parameters.DoEsrp, 'true') }}:
             - task: EsrpCodeSigning@6
-              displayName: Code Sign ESRP - WinUI XAML language server DLLs
+              displayName: Code Sign ESRP - WinUI XAML language server
               inputs:
                 ConnectedServiceName: $(SigningServiceName)
                 AppRegistrationClientId: $(SigningAppId)
@@ -162,15 +97,10 @@ extends:
                 AuthAKVName: $(SigningAKVName)
                 AuthCertName: $(SigningAuthCertName)
                 AuthSignCertName: $(SigningSignCertName)
-                FolderPath: '$(System.DefaultWorkingDirectory)/dist/server'
-                # Sign only our own assemblies. The bundled Roslyn/MSBuild/System.* DLLs are already
-                # Microsoft-signed + strong-named; re-signing them is unnecessary and can break validation.
-                Pattern: 'WinUiXaml.LanguageServer.dll;WinUiXaml.Workspace.dll;WinUiXaml.Xaml.dll'
-                UseMinimatch: false
+                FolderPath: '$(Build.ArtifactStagingDirectory)/server-bundle'
+                Pattern: '**/{WinUiXaml*,dotnet}.{dll,exe}'
+                UseMinimatch: true
                 signConfigType: inlineSignParams
-                # Authenticode KeyCode CP-230012 is an accepted, documented release decision — see the
-                # "DLL code signing (ESRP)" section of docs/RELEASE.md. The VSIX/publisher tasks below use
-                # CP-401405 (OPC + VSCodePublisher operations); loose .NET DLLs use Authenticode SigntoolSign.
                 inlineOperation: |
                   [
                       {
@@ -194,6 +124,60 @@ extends:
                           "ToolVersion": "1.0"
                       }
                   ]
+          - task: 1ES.PublishPipelineArtifact@1
+            displayName: Upload server artifact
+            inputs:
+              path: '$(Build.ArtifactStagingDirectory)/server-bundle'
+              artifactName: winui-xaml-server
+
+    - stage: Build
+      dependsOn: Build_Server
+      variables:
+      - group: signingIdentity
+      jobs:
+      - job: Build
+        pool:
+          name: Azure-Pipelines-1ESPT-ExDShared
+          image: windows-latest
+          os: windows
+          hostArchitecture: amd64
+        templateContext:
+          inputs:
+          - input: pipelineArtifact
+            artifactName: winui-xaml-server
+            targetPath: $(Pipeline.Workspace)/winui-xaml-server
+        steps:
+          - checkout: self
+          - task: UseNode@1
+            displayName: Setup Node.js 24
+            inputs:
+              version: '24.x'
+          - task: PowerShell@2
+            displayName: Download public CLI release for VS Code extension
+            env:
+              GH_TOKEN: $(GITHUB_TOKEN)
+              WINAPP_CLI_RELEASE_TAG: ${{ parameters.CliReleaseTag }}
+            inputs:
+              pwsh: true
+              errorActionPreference: 'stop'
+              filePath: $(System.DefaultWorkingDirectory)\scripts\download-cli.ps1
+              arguments: "-DestinationPath '$(System.DefaultWorkingDirectory)/artifacts/public-cli'"
+          - task: PowerShell@2
+            displayName: Install signed WinUI XAML server artifact
+            inputs:
+              pwsh: true
+              errorActionPreference: 'stop'
+              filePath: $(System.DefaultWorkingDirectory)\scripts\download-server.ps1
+              arguments: "-ArtifactPath '$(Pipeline.Workspace)/winui-xaml-server'"
+          - task: PowerShell@2
+            displayName: Smoke signed WinUI XAML server apphost
+            inputs:
+              targetType: inline
+              pwsh: true
+              errorActionPreference: 'stop'
+              script: |
+                dotnet restore "$(System.DefaultWorkingDirectory)\test\fixtures\xaml\fixture\SmokeFixture.csproj" -p:Platform=x64
+                node "$(System.DefaultWorkingDirectory)\scripts\test-self-contained-server.mjs"
           - task: PowerShell@2
             displayName: Create temporary .npmrc for Build
             inputs:
@@ -312,31 +296,31 @@ extends:
                           "ToolVersion": "1.0"
                       }
                   ]
-          - task: PowerShell@2
-            displayName: Generate extension manifest for publisher signing
-            inputs:
-              pwsh: true
-              targetType: inline
-              workingDirectory: '$(System.DefaultWorkingDirectory)'
-              script: |
-                $artifactsDir = "$(System.DefaultWorkingDirectory)/artifacts"
-                $vsix = Get-ChildItem -Path $artifactsDir -Filter "winapp-*.vsix" |
-                    Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                if (-not $vsix) {
-                    Write-Error "No VSIX found in $artifactsDir"
-                    exit 1
-                }
-                Write-Host "Generating publisher manifest for $($vsix.Name)"
-                # Uses the @vscode/vsce devDependency installed by package-vsc.ps1 (offline, no public registry)
-                npx vsce generate-manifest -i "$($vsix.FullName)" -o "$artifactsDir/extension.manifest"
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Error "vsce generate-manifest failed"
-                    exit 1
-                }
-                # ESRP signs this file in place to produce the publisher signature
-                Copy-Item "$artifactsDir/extension.manifest" "$artifactsDir/extension.signature.p7s" -Force
-                Write-Host "Created extension.manifest and extension.signature.p7s"
           - ${{ if eq(parameters.DoEsrp, 'true') }}:
+            - task: PowerShell@2
+              displayName: Generate extension manifest for publisher signing
+              inputs:
+                pwsh: true
+                targetType: inline
+                workingDirectory: '$(System.DefaultWorkingDirectory)'
+                script: |
+                  $artifactsDir = "$(System.DefaultWorkingDirectory)/artifacts"
+                  $vsix = Get-ChildItem -Path $artifactsDir -Filter "winapp-*.vsix" |
+                      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                  if (-not $vsix) {
+                      Write-Error "No VSIX found in $artifactsDir"
+                      exit 1
+                  }
+                  Write-Host "Generating publisher manifest for $($vsix.Name)"
+                  # Uses the @vscode/vsce devDependency installed by package-vsc.ps1 (offline, no public registry)
+                  npx vsce generate-manifest -i "$($vsix.FullName)" -o "$artifactsDir/extension.manifest"
+                  if ($LASTEXITCODE -ne 0) {
+                      Write-Error "vsce generate-manifest failed"
+                      exit 1
+                  }
+                  # ESRP signs this file in place to produce the publisher signature
+                  Copy-Item "$artifactsDir/extension.manifest" "$artifactsDir/extension.signature.p7s" -Force
+                  Write-Host "Created extension.manifest and extension.signature.p7s"
             - task: EsrpCodeSigning@6
               displayName: Code Sign ESRP - VS Code Publisher Signature
               inputs:
@@ -364,11 +348,17 @@ extends:
             displayName: Copy Artifacts - VS Code Extension
             inputs:
               sourceFolder: '$(System.DefaultWorkingDirectory)/artifacts/'
-              contents: |
-                *.vsix
-                extension.manifest
-                extension.signature.p7s
+              contents: '*.vsix'
               targetFolder: '$(Build.ArtifactStagingDirectory)/vscode-extension'
+          - ${{ if eq(parameters.DoEsrp, 'true') }}:
+            - task: CopyFiles@2
+              displayName: Copy Publisher Signature
+              inputs:
+                sourceFolder: '$(System.DefaultWorkingDirectory)/artifacts/'
+                contents: |
+                  extension.manifest
+                  extension.signature.p7s
+                targetFolder: '$(Build.ArtifactStagingDirectory)/vscode-extension'
           - task: 1ES.PublishPipelineArtifact@1
             displayName: Upload Artifact - VS Code Extension
             inputs:
@@ -378,7 +368,7 @@ extends:
     - stage: Release_VSC
       displayName: Publish VS Code Extension
       dependsOn: Build
-      condition: and(succeeded(), eq('${{ parameters.SkipPublish }}', 'false'))
+      condition: and(succeeded(), eq('${{ parameters.SkipPublish }}', 'false'), eq('${{ parameters.DoEsrp }}', 'true'))
       variables:
       - group: signingIdentity
       jobs:

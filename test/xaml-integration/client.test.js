@@ -7,7 +7,7 @@
 //
 // Note on scope: the harness normally resolves a real server DLL (via WINUI_XAML_SERVER_DLL and the
 // repo-relative Debug build). Two graceful-degradation paths are covered here: (1) the missing-DLL
-// path, forced deterministically via the WINUI_XAML_FORCE_NO_SERVER test seam (resolveServerDll
+// path, forced deterministically via the WINUI_XAML_FORCE_NO_SERVER test seam (resolveServer
 // returns undefined → notifyDegraded → syntax-only); and (2) the bad-dotnetPath path, which drives
 // doStart's catch → notify → return. Both prove activation stays syntax-only and never throws.
 
@@ -74,7 +74,7 @@ describe("WinUI XAML — client commands & lifecycle", function () {
   });
 
   it("degrades to syntax-only when the server DLL is absent (no throw)", async function () {
-    // Force resolveServerDll to find no DLL (test-only seam), reproducing the missing-server branch
+    // Force resolveServer to find no server (test-only seam), reproducing the missing-server branch
     // that resolves undefined → notifyDegraded → syntax-only, without a real running server.
     process.env.WINUI_XAML_FORCE_NO_SERVER = "1";
     try {
@@ -107,6 +107,9 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     // The trust gate ignores workspace-provided dotnetPath in untrusted workspaces, so the bad value
     // would have no effect there — only assert the degraded behavior when the workspace is trusted.
     const config = () => vscode.workspace.getConfiguration(EXT);
+    const debugDll = process.env.WINUI_XAML_TEST_DLL;
+    assert.ok(debugDll, "harness must expose a Debug server DLL for the dotnet fallback test");
+    await config().update("server.path", debugDll, vscode.ConfigurationTarget.Global);
     await config().update(
       "server.dotnetPath",
       "winui-xaml-nonexistent-dotnet",
@@ -130,12 +133,37 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     } finally {
       // Recover: restore the default dotnet and restart so the server comes back for later tests.
       await config().update("server.dotnetPath", undefined, vscode.ConfigurationTarget.Global);
+      await config().update("server.path", undefined, vscode.ConfigurationTarget.Global);
       await vscode.commands.executeCommand("winui-xaml.restartServer");
       await h.warmUp();
     }
 
     const recovered = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
     assert.ok(recovered.includes("Button"), "server should recover after restoring dotnetPath");
+  });
+
+  it("automatically restarts when server path settings change", async function () {
+    const config = () => vscode.workspace.getConfiguration(EXT);
+    const debugDll = process.env.WINUI_XAML_TEST_DLL;
+    assert.ok(debugDll, "harness must expose a Debug server DLL");
+    await config().update("server.path", debugDll, vscode.ConfigurationTarget.Global);
+    await config().update(
+      "server.dotnetPath",
+      "winui-xaml-nonexistent-dotnet",
+      vscode.ConfigurationTarget.Global
+    );
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const degraded = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+      assert.ok(!degraded.includes("Button"), "configuration change should stop the old server");
+    } finally {
+      await config().update("server.dotnetPath", undefined, vscode.ConfigurationTarget.Global);
+      await config().update("server.path", undefined, vscode.ConfigurationTarget.Global);
+      await h.warmUp();
+    }
+
+    const recovered = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+    assert.ok(recovered.includes("Button"), "clearing settings should automatically restart the server");
   });
 
   it("degrades to syntax-only when the workspace is untrusted, then recovers (WINUI_XAML_FORCE_UNTRUSTED)", async function () {
@@ -172,8 +200,8 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     // never hit (they rely on the WINUI_XAML_SERVER_DLL env / repo-relative fallback). Point server.path
     // at the freshly-built Debug DLL (the value the harness normally passes via the env var) and clear
     // the env so the explicit setting is the ONLY thing that can resolve the server.
-    const debugDll = process.env.WINUI_XAML_SERVER_DLL;
-    assert.ok(debugDll, "harness must expose the Debug server DLL via WINUI_XAML_SERVER_DLL");
+    const debugDll = process.env.WINUI_XAML_TEST_DLL;
+    assert.ok(debugDll, "harness must expose the Debug server DLL via WINUI_XAML_TEST_DLL");
     const config = () => vscode.workspace.getConfiguration(EXT);
     delete process.env.WINUI_XAML_SERVER_DLL;
     await config().update("server.path", debugDll, vscode.ConfigurationTarget.Global);

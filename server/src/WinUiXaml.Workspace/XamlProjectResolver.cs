@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
@@ -21,13 +22,13 @@ namespace WinUiXaml.Workspace
     /// </summary>
     public sealed class XamlProjectResolver : IDisposable
     {
-        // WinUI apps only define x86/x64/ARM64 (no AnyCPU), so a design-time build needs an explicit
-        // platform. Debug|x64 matches the fixture's known-good configuration.
+        // WinUI apps only define x86/x64/ARM64 (no AnyCPU), so use the native server architecture for
+        // design-time evaluation instead of forcing x64 on ARM64 machines.
         private static readonly IReadOnlyDictionary<string, string> DefaultGlobalProperties =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["Configuration"] = "Debug",
-                ["Platform"] = "x64",
+                ["Platform"] = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "ARM64" : "x64",
             };
 
         private readonly object _gate = new object();
@@ -46,7 +47,7 @@ namespace WinUiXaml.Workspace
         /// and returning the nearest ancestor directory that contains a single project file. Returns
         /// null if no project is found.
         /// </summary>
-        public static string? FindOwningProject(string xamlPath)
+        public static string? FindOwningProject(string xamlPath, string? searchRoot = null)
         {
             if (string.IsNullOrEmpty(xamlPath))
             {
@@ -56,6 +57,14 @@ namespace WinUiXaml.Workspace
             var directory = Directory.Exists(xamlPath)
                 ? new DirectoryInfo(xamlPath)
                 : new FileInfo(xamlPath).Directory;
+            var boundary = string.IsNullOrEmpty(searchRoot)
+                ? null
+                : new DirectoryInfo(Path.GetFullPath(searchRoot));
+
+            if (directory == null || (boundary != null && !IsWithin(directory.FullName, boundary.FullName)))
+            {
+                return null;
+            }
 
             for (var dir = directory; dir != null; dir = dir.Parent)
             {
@@ -67,12 +76,12 @@ namespace WinUiXaml.Workspace
 
                 if (candidates.Length > 1)
                 {
-                    // Ambiguous: pick deterministically. A future refinement can read each project's
-                    // item groups to find which one actually includes this .xaml.
-                    return candidates
-                        .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
-                        .First()
-                        .FullName;
+                    return null;
+                }
+
+                if (boundary != null && PathsEqual(dir.FullName, boundary.FullName))
+                {
+                    break;
                 }
             }
 
@@ -83,14 +92,17 @@ namespace WinUiXaml.Workspace
         /// Associates <paramref name="xamlPath"/> with its project and resolves its <c>x:Class</c>
         /// type and referenced assembly set. Returns null if no owning project is found.
         /// </summary>
-        public async Task<XamlResolution?> ResolveAsync(string xamlPath, CancellationToken cancellationToken = default)
+        public async Task<XamlResolution?> ResolveAsync(
+            string xamlPath,
+            string? searchRoot = null,
+            CancellationToken cancellationToken = default)
         {
             if (xamlPath == null)
             {
                 throw new ArgumentNullException(nameof(xamlPath));
             }
 
-            var projectPath = FindOwningProject(xamlPath);
+            var projectPath = FindOwningProject(xamlPath, searchRoot);
             if (projectPath == null)
             {
                 return null;
@@ -99,7 +111,9 @@ namespace WinUiXaml.Workspace
             var normalizedXaml = Path.GetFullPath(xamlPath);
             var className = TryReadClassName(normalizedXaml);
 
-            var workspace = await GetOrLoadAsync(projectPath, cancellationToken).ConfigureAwait(false);
+            var workspace = await GetOrLoadAsync(projectPath, cancellationToken)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
 
             var compilation = await workspace.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
             if (compilation == null)
@@ -109,15 +123,32 @@ namespace WinUiXaml.Workspace
 
             var classSymbol = className != null ? compilation.GetTypeByMetadataName(className) : null;
             var referencedAssemblies = compilation.SourceModule.ReferencedAssemblySymbols;
-
             return new XamlResolution(
                 normalizedXaml,
                 Path.GetFullPath(projectPath),
                 className,
                 classSymbol,
                 compilation,
-                referencedAssemblies);
+                referencedAssemblies,
+                workspace.XamlFiles,
+                workspace.ApplicationDefinitionPath);
         }
+
+        private static bool IsWithin(string path, string root)
+        {
+            var relative = Path.GetRelativePath(root, path);
+            return relative.Length == 0
+                || (!Path.IsPathRooted(relative)
+                    && !relative.Equals("..", StringComparison.Ordinal)
+                    && !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                    && !relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal));
+        }
+
+        private static bool PathsEqual(string left, string right) =>
+            string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
+                StringComparison.OrdinalIgnoreCase);
 
         /// <summary>Drops the cached workspace for a project so the next resolve reloads it.</summary>
         public void Invalidate(string projectPath)
@@ -139,6 +170,22 @@ namespace WinUiXaml.Workspace
             }
 
             DisposeWhenComplete(removed);
+        }
+
+        /// <summary>Drops every cached workspace after a shared imported MSBuild file changes.</summary>
+        public void InvalidateAll()
+        {
+            List<Task<RoslynProjectWorkspace>> removed;
+            lock (_gate)
+            {
+                removed = _projects.Values.ToList();
+                _projects.Clear();
+            }
+
+            foreach (var task in removed)
+            {
+                DisposeWhenComplete(task);
+            }
         }
 
         private Task<RoslynProjectWorkspace> GetOrLoadAsync(string projectPath, CancellationToken cancellationToken)

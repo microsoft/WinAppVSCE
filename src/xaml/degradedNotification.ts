@@ -6,12 +6,9 @@
 /**
  * Why the language server is not running:
  *  - "untrusted": the workspace is not trusted, so the semantic server is intentionally disabled.
- *  - "server": the server could not be located or launched (missing DLL, bad dotnet path, etc.).
+ *  - "server": the bundled server could not be located or launched.
  */
 export type DegradedCause = "untrusted" | "server";
-
-/** The .NET runtime download page offered by the "Install .NET" action. */
-export const DOTNET_DOWNLOAD_URL = "https://dotnet.microsoft.com/download";
 
 /** Settings query the "Open Settings" action focuses (the WinUI XAML server settings). */
 export const SERVER_SETTINGS_QUERY = "winui-xaml.server";
@@ -44,7 +41,10 @@ export interface DegradedNotification {
  * Builds the warning message and action buttons for a degradation {@link DegradedCause}. Pure: no
  * side effects, deterministic, and independent of the VS Code API.
  */
-export function buildDegradedNotification(cause: DegradedCause): DegradedNotification {
+export function buildDegradedNotification(
+  cause: DegradedCause,
+  detail?: string
+): DegradedNotification {
   if (cause === "untrusted") {
     return {
       message:
@@ -64,11 +64,11 @@ export function buildDegradedNotification(cause: DegradedCause): DegradedNotific
   return {
     message:
       "WinUI XAML: language server not started — XAML is syntax-only. " +
-      "IntelliSense, diagnostics, and navigation are unavailable.",
+      "IntelliSense, diagnostics, and navigation are unavailable." +
+      (detail ? ` ${detail}` : ""),
     actions: [
       { label: "Open Settings", command: "workbench.action.openSettings", commandArg: SERVER_SETTINGS_QUERY },
       { label: "Show Output", showOutput: true },
-      { label: "Install .NET", url: DOTNET_DOWNLOAD_URL },
     ],
   };
 }

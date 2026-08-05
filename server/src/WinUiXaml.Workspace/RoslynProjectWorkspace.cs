@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
@@ -18,14 +20,22 @@ namespace WinUiXaml.Workspace
     {
         private readonly MSBuildWorkspace _workspace;
 
-        private RoslynProjectWorkspace(MSBuildWorkspace workspace, Project project)
+        private RoslynProjectWorkspace(
+            MSBuildWorkspace workspace,
+            Project project,
+            ImmutableArray<string> xamlFiles,
+            string? applicationDefinitionPath)
         {
             _workspace = workspace;
             Project = project;
+            XamlFiles = xamlFiles;
+            ApplicationDefinitionPath = applicationDefinitionPath;
         }
 
         /// <summary>The loaded project.</summary>
         public Project Project { get; }
+        public ImmutableArray<string> XamlFiles { get; }
+        public string? ApplicationDefinitionPath { get; }
 
         /// <summary>Non-fatal diagnostics produced while loading the project (design-time build warnings, etc.).</summary>
         public ImmutableList<WorkspaceDiagnostic> LoadDiagnostics => _workspace.Diagnostics;
@@ -63,12 +73,46 @@ namespace WinUiXaml.Workspace
                 var project = await workspace
                     .OpenProjectAsync(projectPath, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
-                return new RoslynProjectWorkspace(workspace, project);
+                cancellationToken.ThrowIfCancellationRequested();
+                var (xamlFiles, applicationDefinitionPath) =
+                    EvaluateXamlItems(projectPath, properties);
+                cancellationToken.ThrowIfCancellationRequested();
+                return new RoslynProjectWorkspace(
+                    workspace, project, xamlFiles, applicationDefinitionPath);
             }
+
             catch
             {
                 workspace.Dispose();
                 throw;
+            }
+        }
+
+        private static (ImmutableArray<string> Files, string? ApplicationDefinition) EvaluateXamlItems(
+            string projectPath,
+            IDictionary<string, string> globalProperties)
+        {
+            using var projects = new Microsoft.Build.Evaluation.ProjectCollection(globalProperties);
+            var project = projects.LoadProject(projectPath);
+            var applicationDefinitions = project.GetItems("ApplicationDefinition")
+                .Select(GetFullPath)
+                .Where(File.Exists)
+                .ToArray();
+            var files = project.GetItems("Page")
+                .Select(GetFullPath)
+                .Concat(applicationDefinitions)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToImmutableArray();
+            return (files, applicationDefinitions.FirstOrDefault());
+
+            string GetFullPath(Microsoft.Build.Evaluation.ProjectItem item)
+            {
+                var fullPath = item.GetMetadataValue("FullPath");
+                return Path.GetFullPath(
+                    string.IsNullOrWhiteSpace(fullPath)
+                        ? Path.Combine(Path.GetDirectoryName(projectPath)!, item.EvaluatedInclude)
+                        : fullPath);
             }
         }
 

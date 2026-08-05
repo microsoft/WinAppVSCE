@@ -29,6 +29,8 @@ internal sealed class XamlLanguageServer
     private readonly ConcurrentDictionary<string, TextDocument> _documents = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, XamlTypeSystem> _typeSystems = new();
     private readonly ConcurrentDictionary<string, (System.DateTime Stamp, string[] Keys)> _appResourceCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly AsyncLocal<CancellationToken> _requestCancellation = new();
+    private int _msbuildUnavailableNotified;
     private bool _shuttingDown;
 
     // Workspace-trust boundary (defense-in-depth): normalized absolute directories the client trusts.
@@ -45,7 +47,24 @@ internal sealed class XamlLanguageServer
         _connection.OnNotification = HandleNotificationAsync;
     }
 
-    private Task<object?> HandleRequestAsync(string method, JsonElement? @params) => method switch
+    private async Task<object?> HandleRequestAsync(
+        string method,
+        JsonElement? @params,
+        CancellationToken cancellationToken)
+    {
+        var previous = _requestCancellation.Value;
+        _requestCancellation.Value = cancellationToken;
+        try
+        {
+            return await DispatchRequestAsync(method, @params).ConfigureAwait(false);
+        }
+        finally
+        {
+            _requestCancellation.Value = previous;
+        }
+    }
+
+    private Task<object?> DispatchRequestAsync(string method, JsonElement? @params) => method switch
     {
         "initialize" => Task.FromResult<object?>(Initialize(Deserialize<InitializeParams>(@params))),
         "shutdown" => Shutdown(),
@@ -214,18 +233,19 @@ internal sealed class XamlLanguageServer
     /// An empty allow-list always returns false (no project evaluation). Comparison is case-insensitive
     /// and separator-boundary aware so "C:\root" never matches "C:\rootEvil".
     /// </summary>
-    private bool IsPathUnderAllowedRoot(string path)
+    private bool TryGetAllowedRoot(string path, out string canonicalPath, out string allowedRoot)
     {
+        canonicalPath = string.Empty;
+        allowedRoot = string.Empty;
         var roots = _allowedRoots;
         if (roots.Length == 0)
         {
             return false;
         }
 
-        string full;
         try
         {
-            full = CanonicalizePath(path);
+            canonicalPath = CanonicalizePath(path);
         }
         catch (System.Exception)
         {
@@ -234,8 +254,9 @@ internal sealed class XamlLanguageServer
 
         foreach (var root in roots)
         {
-            if (PathIsWithin(full, root))
+            if (PathIsWithin(canonicalPath, root))
             {
+                allowedRoot = root;
                 return true;
             }
         }
@@ -360,12 +381,12 @@ internal sealed class XamlLanguageServer
     /// </summary>
     private Task<XamlResolution?> ResolveIfAllowedAsync(string path)
     {
-        if (!IsPathUnderAllowedRoot(path))
+        if (!TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot))
         {
             return Task.FromResult<XamlResolution?>(null);
         }
 
-        return _resolver.ResolveAsync(path);
+        return _resolver.ResolveAsync(canonicalPath, allowedRoot, _requestCancellation.Value);
     }
 
     private Task<object?> Shutdown()
@@ -408,11 +429,11 @@ internal sealed class XamlLanguageServer
     }
 
     /// <summary>
-    /// Reacts to on-disk changes reported by the client's <c>**/*.{csproj,xaml}</c> watcher by dropping
+    /// Reacts to on-disk changes reported by the client's <c>**/*.{cs,csproj,xaml,props,targets}</c> watcher by dropping
     /// stale cached Roslyn project/type data. Without this, a project reference or file added on disk
     /// stays invisible until the server is restarted.
     /// <para>
-    /// A <c>.csproj</c> change, or a <c>.xaml</c> file being created/deleted, alters the project's
+    /// A C# source or <c>.csproj</c> change, or a <c>.xaml</c> file being created/deleted, alters the project's
     /// type/reference set, so the owning project's cached workspace is invalidated (the next resolve
     /// reloads it). A plain <c>.xaml</c> content save is already reflected through the open buffer and
     /// the timestamp-guarded App.xaml resource cache, so it does not force a full project reload.
@@ -426,6 +447,7 @@ internal sealed class XamlLanguageServer
         }
 
         var projectsToInvalidate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var invalidateAllProjects = false;
         foreach (var change in p.Changes)
         {
             var path = UriToPath(change.Uri);
@@ -435,36 +457,60 @@ internal sealed class XamlLanguageServer
             }
 
             var ext = System.IO.Path.GetExtension(path);
+            var isCs = ext.Equals(".cs", StringComparison.OrdinalIgnoreCase);
             var isCsproj = ext.Equals(".csproj", StringComparison.OrdinalIgnoreCase);
             var isXaml = ext.Equals(".xaml", StringComparison.OrdinalIgnoreCase);
-            if (!isCsproj && !isXaml)
+            var isImportedBuildFile =
+                ext.Equals(".props", StringComparison.OrdinalIgnoreCase) ||
+                ext.Equals(".targets", StringComparison.OrdinalIgnoreCase);
+            if (!isCs && !isCsproj && !isXaml && !isImportedBuildFile)
             {
                 continue;
             }
 
             // Structural change: a project-file edit, or a page added/removed. A plain .xaml content
             // save (Changed) does not change the project's type/reference graph, so skip the reload.
-            var structural = isCsproj || change.Type != FileChangeType.Changed;
+            var structural = isCs || isCsproj || change.Type != FileChangeType.Changed;
             if (!structural)
             {
                 continue;
             }
 
-            var owning = isCsproj ? path : XamlProjectResolver.FindOwningProject(path);
+            if (!TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot))
+            {
+                continue;
+            }
+
+            if (isImportedBuildFile)
+            {
+                invalidateAllProjects = true;
+                continue;
+            }
+
+            var owning = isCsproj
+                ? canonicalPath
+                : XamlProjectResolver.FindOwningProject(canonicalPath, allowedRoot);
             if (owning != null)
             {
                 projectsToInvalidate.Add(owning);
             }
         }
 
-        foreach (var project in projectsToInvalidate)
+        if (invalidateAllProjects)
         {
-            _resolver.Invalidate(project);
+            _resolver.InvalidateAll();
+        }
+        else
+        {
+            foreach (var project in projectsToInvalidate)
+            {
+                _resolver.Invalidate(project);
+            }
         }
 
         // The App.xaml resource-key cache is timestamp-guarded, but a delete/rename won't bump a stamp
         // we still hold; drop it wholesale on any watched change (it repopulates lazily and cheaply).
-        if (projectsToInvalidate.Count > 0)
+        if (invalidateAllProjects || projectsToInvalidate.Count > 0)
         {
             _appResourceCache.Clear();
         }
@@ -691,19 +737,20 @@ internal sealed class XamlLanguageServer
             return;
         }
 
-        var projectDir = System.IO.Path.GetDirectoryName(context.Value.Resolution.ProjectPath);
-        if (string.IsNullOrEmpty(projectDir))
-        {
-            return;
-        }
-
         var currentPath = UriToPath(currentUri) is { } cp ? System.IO.Path.GetFullPath(cp) : null;
+        var cancellationToken = _requestCancellation.Value;
 
-        foreach (var file in EnumerateProjectXamlFiles(projectDir))
+        foreach (var file in context.Value.Resolution.XamlFiles)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryGetAllowedRoot(file, out var canonicalFile, out _))
+            {
+                continue;
+            }
+
             // The open document was already collected from its (possibly unsaved) buffer; skip its disk copy.
             if (currentPath != null &&
-                string.Equals(System.IO.Path.GetFullPath(file), currentPath, System.StringComparison.OrdinalIgnoreCase))
+                string.Equals(canonicalFile, currentPath, System.StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -711,11 +758,11 @@ internal sealed class XamlLanguageServer
             string text;
             try
             {
-                text = System.IO.File.ReadAllText(file);
+                text = System.IO.File.ReadAllText(canonicalFile);
             }
             catch (System.Exception ex)
             {
-                System.Console.Error.WriteLine($"[winui-xaml-ls] xref read '{file}': {ex.Message}");
+                System.Console.Error.WriteLine($"[winui-xaml-ls] xref read '{canonicalFile}': {ex.Message}");
                 continue;
             }
 
@@ -729,11 +776,11 @@ internal sealed class XamlLanguageServer
             TextDocument fileDoc;
             try
             {
-                fileDoc = new TextDocument(PathToUri(file), text);
+                fileDoc = new TextDocument(PathToUri(canonicalFile), text);
             }
             catch (System.Exception ex)
             {
-                System.Console.Error.WriteLine($"[winui-xaml-ls] xref parse '{file}': {ex.Message}");
+                System.Console.Error.WriteLine($"[winui-xaml-ls] xref parse '{canonicalFile}': {ex.Message}");
                 continue;
             }
 
@@ -754,48 +801,6 @@ internal sealed class XamlLanguageServer
                 locations.Add(new Lsp.Location { Uri = fileDoc.Uri, Range = occurrence.Range });
             }
         }
-    }
-
-    /// <summary>
-    /// The project's <c>.xaml</c> files under <paramref name="projectDir"/>, excluding build output
-    /// (<c>bin</c>/<c>obj</c>). Empty when the directory cannot be enumerated (best-effort).
-    /// </summary>
-    private static List<string> EnumerateProjectXamlFiles(string projectDir)
-    {
-        var result = new List<string>();
-        try
-        {
-            foreach (var file in System.IO.Directory.EnumerateFiles(
-                projectDir, "*.xaml", System.IO.SearchOption.AllDirectories))
-            {
-                if (!IsUnderBuildOutput(file))
-                {
-                    result.Add(file);
-                }
-            }
-        }
-        catch (System.Exception ex)
-        {
-            System.Console.Error.WriteLine($"[winui-xaml-ls] xref enumerate '{projectDir}': {ex.Message}");
-        }
-
-        return result;
-    }
-
-    /// <summary>True when <paramref name="path"/> lies under a <c>bin</c> or <c>obj</c> directory segment
-    /// (build output, whose copied XAML must never be surfaced as a real source reference).</summary>
-    private static bool IsUnderBuildOutput(string path)
-    {
-        foreach (var segment in path.Split(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar))
-        {
-            if (string.Equals(segment, "bin", System.StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(segment, "obj", System.StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /// <summary>
@@ -1255,7 +1260,9 @@ internal sealed class XamlLanguageServer
 
         var docPath = UriToPath(p.TextDocument.Uri);
         var documentDirectory = docPath == null ? null : System.IO.Path.GetDirectoryName(docPath);
-        var projectPath = docPath == null ? null : XamlProjectResolver.FindOwningProject(docPath);
+        var projectPath = docPath != null && TryGetAllowedRoot(docPath, out var canonicalPath, out var allowedRoot)
+            ? XamlProjectResolver.FindOwningProject(canonicalPath, allowedRoot)
+            : null;
         var projectDirectory = projectPath == null ? null : System.IO.Path.GetDirectoryName(projectPath);
 
         return Task.FromResult<object?>(XamlDocumentLinks.Collect(doc, documentDirectory, projectDirectory));
@@ -3349,10 +3356,10 @@ internal sealed class XamlLanguageServer
     }
 
     /// <summary>
-    /// Returns the path to the project's App.xaml (located next to the project file), or null when the
-    /// project path is unknown or no App.xaml exists beside it.
+    /// Returns the project's explicit <c>ApplicationDefinition</c>, falling back to conventional
+    /// <c>App.xaml</c> beside the project for SDK-default item inclusion.
     /// </summary>
-    private static string? FindAppXamlPath(XamlResolution resolution)
+    private string? FindAppXamlPath(XamlResolution resolution)
     {
         var dir = System.IO.Path.GetDirectoryName(resolution.ProjectPath);
         if (string.IsNullOrEmpty(dir))
@@ -3360,8 +3367,18 @@ internal sealed class XamlLanguageServer
             return null;
         }
 
+        if (resolution.ApplicationDefinitionPath is { } evaluated &&
+            System.IO.File.Exists(evaluated) &&
+            TryGetAllowedRoot(evaluated, out var canonicalApplication, out _))
+        {
+            return canonicalApplication;
+        }
+
         var appXaml = System.IO.Path.Combine(dir, "App.xaml");
-        return System.IO.File.Exists(appXaml) ? appXaml : null;
+        return System.IO.File.Exists(appXaml) &&
+            TryGetAllowedRoot(appXaml, out var canonicalFallback, out _)
+            ? canonicalFallback
+            : null;
     }
 
     /// <summary>
@@ -3388,6 +3405,15 @@ internal sealed class XamlLanguageServer
         try
         {
             resolution = await ResolveIfAllowedAsync(path).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (MsBuildUnavailableException ex)
+        {
+            await NotifyMsBuildUnavailableAsync(ex).ConfigureAwait(false);
+            return null;
         }
         catch (Exception ex)
         {
@@ -3433,6 +3459,15 @@ internal sealed class XamlLanguageServer
         try
         {
             resolution = await ResolveIfAllowedAsync(path).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (MsBuildUnavailableException ex)
+        {
+            await NotifyMsBuildUnavailableAsync(ex).ConfigureAwait(false);
+            return (null, target);
         }
         catch (Exception ex)
         {
@@ -3483,6 +3518,21 @@ internal sealed class XamlLanguageServer
         }
 
         return (FindMember(currentType, target.Value.Name), target);
+    }
+
+    private Task NotifyMsBuildUnavailableAsync(MsBuildUnavailableException exception)
+    {
+        Console.Error.WriteLine($"[winui-xaml-ls] {exception.Message}");
+        return Interlocked.Exchange(ref _msbuildUnavailableNotified, 1) == 0
+            ? _connection.SendNotificationAsync(
+                "window/showMessage",
+                new
+                {
+                    type = 2,
+                    message = exception.Message +
+                        " The language server remains available for project-independent XAML features.",
+                })
+            : Task.CompletedTask;
     }
 
     /// <summary>The named type a member evaluates to (a property/field's type or a method's return type), or null.</summary>
@@ -3868,7 +3918,7 @@ internal sealed class XamlLanguageServer
 
         // Only warm up (which triggers project discovery + MSBuild evaluation) for documents under a
         // trusted workspace root. Out-of-root / empty-window files are served project-less.
-        if (!IsPathUnderAllowedRoot(path))
+        if (!TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot))
         {
             return;
         }
@@ -3878,7 +3928,7 @@ internal sealed class XamlLanguageServer
         {
             try
             {
-                await _resolver.ResolveAsync(path).ConfigureAwait(false);
+                await _resolver.ResolveAsync(canonicalPath, allowedRoot).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

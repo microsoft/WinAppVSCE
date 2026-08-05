@@ -19,8 +19,9 @@ const SERVER_DLL = resolve(
   here,
   "../../src/WinUiXaml.LanguageServer/bin/Debug/net10.0/WinUiXaml.LanguageServer.dll"
 );
-// Allow pointing the smoke test at an alternate build (e.g. the bundled Release publish).
-const serverDll = process.env.WINUI_XAML_SERVER_DLL || SERVER_DLL;
+// Allow pointing the smoke test at an alternate DLL or a self-contained packaged apphost.
+const serverPath =
+  process.env.WINUI_XAML_SERVER_PATH || process.env.WINUI_XAML_SERVER_DLL || SERVER_DLL;
 const XAML = process.env.WINUI_XAML_FIXTURE_XAML || resolve(here, "../../../test/fixtures/xaml/fixture/SmokePage.xaml");
 const EXPECTED_CODE_BEHIND = "smokepage.xaml.cs";
 const EXPECTED_HANDLER_LINE = 26; // OnGo_Click is on line 27 (1-based) of SmokePage.xaml.cs
@@ -37,7 +38,7 @@ function fail(msg) {
   process.exit();
 }
 
-if (!existsSync(serverDll)) fail(`server not built: ${serverDll}`);
+if (!existsSync(serverPath)) fail(`server not built: ${serverPath}`);
 if (!existsSync(XAML)) fail(`fixture not found: ${XAML}`);
 
 const xamlText = readFileSync(XAML, "utf8");
@@ -73,7 +74,11 @@ if (resIdx < 0) fail("could not find {StaticResource SmokeAccentBrush} in the fi
 const resCaretOffset = xamlText.indexOf("SmokeAccentBrush", resIdx) + 3;
 const resCaret = offsetToPosition(xamlText, resCaretOffset);
 
-server = spawn("dotnet", [serverDll], { stdio: ["pipe", "pipe", "inherit"] });
+const isDll = serverPath.toLowerCase().endsWith(".dll");
+server = spawn(isDll ? "dotnet" : serverPath, isDll ? [serverPath] : [], {
+  stdio: ["pipe", "pipe", "inherit"],
+  cwd: dirname(serverPath),
+});
 
 // --- LSP framing ---
 let buffer = Buffer.alloc(0);
@@ -3721,7 +3726,44 @@ async function main() {
   }
   console.log(`[ok] generate event handler (#3): missing handler -> cross-file stub into the user code-behind; existing/non-event/markup values offer nothing`);
 
-  // 555) workspace/didChangeWatchedFiles null/empty-changes guard (regression): a client may send this
+  // 555) A real C# change invalidates the cached Roslyn workspace. The next request must see the new
+  // source member without restarting the server.
+  {
+    const codeBehind = resolve(dirname(XAML), "SmokePage.xaml.cs");
+    const original = readFileSync(codeBehind, "utf8");
+    const changed = original.replace(
+      /\r?\n}\s*$/,
+      `\n\n    public string WatcherAddedText { get; } = "updated";\n}\n`
+    );
+    let labels = [];
+    let found = false;
+    try {
+      writeFileSync(codeBehind, changed, "utf8");
+      send({
+        method: "workspace/didChangeWatchedFiles",
+        params: { changes: [{ uri: pathToFileURL(codeBehind).href, type: 2 }] },
+      });
+      const items = await completeItemsWith(
+        555,
+        pageCls(`<TextBlock Text="{x:Bind WatcherAdded|}" />`),
+        "csharp-watch-invalidation"
+      );
+      labels = items.map((item) => item.label);
+      found = items.some((item) => (item.textEdit?.newText || item.label) === "WatcherAddedText");
+    } finally {
+      writeFileSync(codeBehind, original, "utf8");
+      send({
+        method: "workspace/didChangeWatchedFiles",
+        params: { changes: [{ uri: pathToFileURL(codeBehind).href, type: 2 }] },
+      });
+    }
+    if (!found) {
+      fail(`C# watcher invalidation did not expose WatcherAddedText: ${JSON.stringify(labels)}`);
+    }
+  }
+  console.log(`[ok] workspace/didChangeWatchedFiles: a C# edit invalidates cached Roslyn symbols`);
+
+  // 556) workspace/didChangeWatchedFiles null/empty-changes guard (regression): a client may send this
   // notification with an omitted, null, or empty `changes` array. The server must treat it as a no-op
   // and stay fully responsive to subsequent requests (never throw / drop the connection).
   send({ method: "workspace/didChangeWatchedFiles", params: {} }); // omitted changes
@@ -3729,7 +3771,7 @@ async function main() {
   send({ method: "workspace/didChangeWatchedFiles", params: { changes: [] } }); // empty changes
   {
     const stillAlive = await docSymbols(
-      560,
+      561,
       `<Page ${NS}>\n  <Grid>\n    <Button x:Name="WatchProbe" Content="Go" />\n  </Grid>\n</Page>`,
       "post-didChangeWatchedFiles"
     );
@@ -3738,7 +3780,7 @@ async function main() {
   }
   console.log(`[ok] workspace/didChangeWatchedFiles: omitted/null/empty changes are a no-op; server stays responsive`);
 
-  // 556) workspace-trust boundary (behavioral negative): a document OUTSIDE every allowedRoot must be
+  // 562) workspace-trust boundary (behavioral negative): a document OUTSIDE every allowedRoot must be
   // served project-less — the server must NOT reach the project resolver / MSBuild for it. We open a
   // real .xaml under the OS temp dir (guaranteed outside the fixture root that was passed as the only
   // allowedRoot) with an x:Class + event handler, and assert F12 on the handler yields NO location.
@@ -3806,4 +3848,3 @@ async function main() {
 }
 
 main().catch((err) => fail(err.message));
-

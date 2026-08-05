@@ -253,7 +253,8 @@ describe("WinUI XAML — red-team 49 (custom using: inference)", function () {
 
   it("does not throw on an unterminated source-type element and offers only the valid custom using fix", async () => {
     const buffer = page("<zzz:SmokePage");
-    const actions = await directActionsAfterSettling(buffer);
+    const result = await h.codeActionsAt(buffer, "WXAML0001", "zzz");
+    const actions = titles(result);
     assert.deepStrictEqual(
       actions.filter((title) => /^Add xmlns:zzz=/.test(title)),
       ['Add xmlns:zzz="using:SmokeFixture"'],

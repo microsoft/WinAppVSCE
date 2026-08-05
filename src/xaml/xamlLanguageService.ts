@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as fs from "fs";
 import * as vscode from "vscode";
 import {
   LanguageClient,
@@ -13,6 +14,8 @@ import {
   DegradedAction,
   DegradedCause,
 } from "./degradedNotification";
+import { getWindowsServerRid } from "./serverArchitecture";
+import { ServerLifecycle } from "./serverLifecycle";
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
@@ -26,19 +29,11 @@ let fileWatcher: vscode.FileSystemWatcher | undefined;
 // stop fully completes before the next start begins — two servers can never run at once, and a
 // restart can never tear down a still-pending start. Each op runs regardless of the previous op's
 // outcome, and the chain itself never rejects (callers still observe their own op's result).
-let lifecycle: Promise<void> = Promise.resolve();
-
-function runExclusive(op: () => Promise<void>): Promise<void> {
-  const next = lifecycle.then(op, op);
-  lifecycle = next.catch(() => {});
-  return next;
-}
+const lifecycle = new ServerLifecycle();
 
 // Set synchronously at the very start of deactivateXaml, before any await. Once true, doStart
 // no-ops so no queued or later start (a racing restartServer, or a deferred trust-grant restart)
 // can resurrect the language server after the extension has begun shutting down.
-let disposing = false;
-
 // One non-nagging "degraded to syntax-only" warning per DISTINCT cause. Reset on a successful start
 // so a later failure notifies again. Cause-aware so an untrusted→server transition (or vice versa)
 // still surfaces the new, correct guidance once instead of being suppressed by a prior warning.
@@ -62,7 +57,7 @@ function log(message: string): void {
 export async function activateXaml(context: vscode.ExtensionContext): Promise<void> {
   // Clear any state left from a prior deactivate in the same host process so a re-activation can
   // start the server again.
-  disposing = false;
+  lifecycle.reset();
   output = vscode.window.createOutputChannel("WinUI XAML");
   context.subscriptions.push(output);
   log("WinUI XAML Tools activating…");
@@ -75,23 +70,44 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
           : "WinUI XAML Tools — syntax only; language server not started."
       );
     }),
-    vscode.commands.registerCommand("winui-xaml.restartServer", () => restartClient(context)),
+    vscode.commands.registerCommand("winui-xaml.restartServer", () => restartClient(context, true)),
     // The server is not started at all while the workspace is untrusted (see doStart). Once trust is
     // granted, restart so the semantic server starts and workspace-provided paths can take effect.
     vscode.workspace.onDidGrantWorkspaceTrust(() => {
-      log("Workspace trust granted — restarting language server.");
-      return restartClient(context);
+      if (vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")) {
+        log("Workspace trust granted — restarting language server.");
+        return restartClient(context);
+      }
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (
+        (event.affectsConfiguration("winui-xaml.server.path") ||
+          event.affectsConfiguration("winui-xaml.server.dotnetPath")) &&
+        (client || vscode.workspace.textDocuments.some((document) => document.languageId === "xaml"))
+      ) {
+        return restartClient(context);
+      }
     })
   );
 
-  await startClient(context);
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument((document) => {
+      if (document.languageId === "xaml") {
+        return startClient(context);
+      }
+    })
+  );
+
+  if (vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")) {
+    await startClient(context);
+  }
 }
 
 export async function deactivateXaml(): Promise<void> {
   // Set synchronously (before any await) so a start already queued behind this — or one enqueued
   // by a racing restartServer/trust-grant after we begin — no-ops in doStart and can't resurrect
   // the server after shutdown. We still stop any running client below.
-  disposing = true;
+  lifecycle.beginDisposal();
   await stopClient();
 }
 
@@ -100,7 +116,7 @@ export async function deactivateXaml(): Promise<void> {
  * with a stop. Safe to call when a client is already running (it becomes a no-op).
  */
 async function startClient(context: vscode.ExtensionContext): Promise<void> {
-  return runExclusive(() => doStart(context));
+  return lifecycle.runExclusive(() => doStart(context));
 }
 
 /**
@@ -109,19 +125,22 @@ async function startClient(context: vscode.ExtensionContext): Promise<void> {
  * deactivate) can interleave between them. If deactivation has begun, the start is skipped so the
  * server is not resurrected.
  */
-async function restartClient(context: vscode.ExtensionContext): Promise<void> {
-  return runExclusive(async () => {
+async function restartClient(
+  context: vscode.ExtensionContext,
+  showRestartNotification = false
+): Promise<void> {
+  return lifecycle.runExclusive(async () => {
     await doStop();
-    if (!disposing) {
-      await doStart(context);
+    if (!lifecycle.isDisposing) {
+      await doStart(context, showRestartNotification);
     }
   });
 }
 
-async function doStart(context: vscode.ExtensionContext): Promise<void> {
+async function doStart(context: vscode.ExtensionContext, userInitiated = false): Promise<void> {
   // Deactivation has begun — never start (or resurrect) the server after shutdown, even if this
   // start was queued before deactivateXaml ran or enqueued by a racing restart/trust-grant.
-  if (disposing) {
+  if (lifecycle.isDisposing) {
     return;
   }
 
@@ -146,7 +165,8 @@ async function doStart(context: vscode.ExtensionContext): Promise<void> {
   if (forceUntrusted || !vscode.workspace.isTrusted) {
     notifyDegraded(
       "Workspace is untrusted — language server not started (syntax-only until trust is granted).",
-      "untrusted"
+      "untrusted",
+      userInitiated
     );
     return;
   }
@@ -154,25 +174,36 @@ async function doStart(context: vscode.ExtensionContext): Promise<void> {
   // Machine-scoped settings already block a workspace overriding server/dotnet paths; re-checking
   // isTrusted here is defense in depth and also covers the deferred-trust restart path.
   const config = vscode.workspace.getConfiguration("winui-xaml");
-  const configuredDll = config.get<string>("server.path", "").trim();
+  const configuredServer = config.get<string>("server.path", "").trim();
   const dotnet = config.get<string>("server.dotnetPath", "dotnet");
-
-  const dllPath = resolveServerDll(context, configuredDll);
-  if (!dllPath) {
+  if (configuredServer && !fs.existsSync(configuredServer)) {
     notifyDegraded(
-      "Language server assembly not found. Set 'winui-xaml.server.path' to WinUiXaml.LanguageServer.dll " +
-        "to enable IntelliSense, diagnostics, and navigation. Syntax highlighting remains available."
+      `Configured language server not found: ${configuredServer}. ` +
+        "Update or clear 'winui-xaml.server.path'. Syntax highlighting remains available.",
+      "server",
+      userInitiated
     );
     return;
   }
 
-  log(`Starting language server: ${dotnet} ${dllPath}`);
+  const server = resolveServer(context, configuredServer, dotnet);
+  if (!server) {
+    notifyDegraded(
+      "Language server executable not found. Set 'winui-xaml.server.path' to a server executable or DLL " +
+        "to enable IntelliSense, diagnostics, and navigation. Syntax highlighting remains available.",
+      "server",
+      userInitiated
+    );
+    return;
+  }
+
+  log(`Starting language server: ${server.command} ${server.args.join(" ")}`);
 
   const executable: Executable = {
-    command: dotnet,
-    args: [dllPath],
+    command: server.command,
+    args: server.args,
     transport: TransportKind.stdio,
-    options: { cwd: path.dirname(dllPath) },
+    options: { cwd: server.cwd },
   };
 
   const serverOptions: ServerOptions = { run: executable, debug: executable };
@@ -183,7 +214,7 @@ async function doStart(context: vscode.ExtensionContext): Promise<void> {
   const allowedRoots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
 
   // Retained so doStop can dispose it (vscode-languageclient never disposes caller-supplied watchers).
-  fileWatcher = vscode.workspace.createFileSystemWatcher("**/*.{csproj,xaml}");
+  fileWatcher = vscode.workspace.createFileSystemWatcher("**/*.{cs,csproj,xaml,props,targets}");
 
   const clientOptions: LanguageClientOptions = {
     documentSelector: [
@@ -209,6 +240,9 @@ async function doStart(context: vscode.ExtensionContext): Promise<void> {
     client = candidate;
     lastDegradedCause = undefined;
     log("Language server started.");
+    if (userInitiated) {
+      void vscode.window.showInformationMessage("WinUI XAML language server restarted.");
+    }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     // Best-effort cleanup of the half-started client so it doesn't linger.
@@ -221,9 +255,11 @@ async function doStart(context: vscode.ExtensionContext): Promise<void> {
     // runs when there is a tracked client to stop).
     disposeFileWatcher();
     notifyDegraded(
-      `Failed to start language server (${dotnet}): ${detail}. ` +
-        "Ensure the .NET runtime is installed or set 'winui-xaml.server.dotnetPath'. " +
-        "Syntax highlighting remains available."
+      `Failed to start language server (${server.command}): ${detail}. ` +
+        "Check 'winui-xaml.server.path' if you configured a custom server. " +
+        "Syntax highlighting remains available.",
+      "server",
+      userInitiated
     );
   }
 }
@@ -242,7 +278,7 @@ function disposeFileWatcher(): void {
  * logged (important during shutdown).
  */
 async function stopClient(): Promise<void> {
-  return runExclusive(doStop);
+  return lifecycle.runExclusive(doStop);
 }
 
 async function doStop(): Promise<void> {
@@ -267,14 +303,18 @@ async function doStop(): Promise<void> {
  * {@link buildDegradedNotification} (unit-tested), and kept non-nagging (per distinct
  * {@link DegradedCause}) via {@link lastDegradedCause}.
  */
-function notifyDegraded(reason: string, cause: DegradedCause = "server"): void {
+function notifyDegraded(
+  reason: string,
+  cause: DegradedCause = "server",
+  forceNotification = false
+): void {
   log(reason);
-  if (cause === lastDegradedCause) {
+  if (!forceNotification && cause === lastDegradedCause) {
     return;
   }
   lastDegradedCause = cause;
 
-  const { message, actions } = buildDegradedNotification(cause);
+  const { message, actions } = buildDegradedNotification(cause, reason);
   void vscode.window
     .showWarningMessage(message, ...actions.map((a) => a.label))
     .then((choice) => {
@@ -308,27 +348,50 @@ function runDegradedAction(action: DegradedAction): Thenable<unknown> | void {
 }
 
 /**
- * Locates WinUiXaml.LanguageServer.dll. Priority: explicit setting (trusted workspaces only —
- * see {@link doStart}), environment variable, the server bundled into the packaged extension
- * (`dist/server`), then a repo-relative dev build (`server/src/.../bin/<config>/net10.0`).
+ * Locates the self-contained bundled executable, or a developer-provided DLL. Priority: explicit
+ * setting (trusted workspaces only — see {@link doStart}), environment variable, architecture-
+ * appropriate bundled executable, then repo-relative dev builds.
  */
-function resolveServerDll(
+function resolveServer(
   context: vscode.ExtensionContext,
-  configuredDll: string
-): string | undefined {
+  configuredServer: string,
+  dotnet: string
+): { command: string; args: string[]; cwd: string } | undefined {
   // Test-only seam (N4): when WINUI_XAML_FORCE_NO_SERVER=1, behave as if no server DLL exists so the
   // missing-DLL degradation path (notifyDegraded → syntax-only) can be covered deterministically.
   // No effect on normal users: the env var is never set outside the integration harness.
   if (process.env.WINUI_XAML_FORCE_NO_SERVER === "1") {
     return undefined;
   }
-  return firstExistingPath([
-    configuredDll,
-    process.env.WINUI_XAML_SERVER_DLL ?? "",
-    path.join(context.extensionPath, "dist", "server", "WinUiXaml.LanguageServer.dll"),
-    repoRelativeServer(context, "Debug"),
-    repoRelativeServer(context, "Release"),
-  ]);
+  const candidates =
+    process.env.WINUI_XAML_REQUIRE_BUNDLED === "1"
+      ? [bundledServer(context)]
+      : [
+          configuredServer,
+          process.env.WINUI_XAML_SERVER_PATH ?? "",
+          process.env.WINUI_XAML_SERVER_DLL ?? "",
+          bundledServer(context),
+          repoRelativeServer(context, "Debug"),
+          repoRelativeServer(context, "Release"),
+        ];
+  const serverPath = firstExistingPath(candidates);
+  if (!serverPath) {
+    return undefined;
+  }
+  return path.extname(serverPath).toLowerCase() === ".dll"
+    ? { command: dotnet, args: [serverPath], cwd: path.dirname(serverPath) }
+    : { command: serverPath, args: [], cwd: path.dirname(serverPath) };
+}
+
+function bundledServer(context: vscode.ExtensionContext): string {
+  const rid = getWindowsServerRid();
+  return path.join(
+    context.extensionPath,
+    "dist",
+    "server",
+    rid,
+    "WinUiXaml.LanguageServer.exe"
+  );
 }
 
 function repoRelativeServer(context: vscode.ExtensionContext, configuration: string): string {

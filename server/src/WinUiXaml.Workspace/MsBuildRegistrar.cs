@@ -3,10 +3,22 @@ using Microsoft.Build.Locator;
 
 namespace WinUiXaml.Workspace
 {
+    public sealed class MsBuildUnavailableException : InvalidOperationException
+    {
+        public MsBuildUnavailableException(Exception innerException)
+            : base(
+                "Project-aware XAML features require the MSBuild toolset from Visual Studio, " +
+                "Visual Studio Build Tools, or a compatible .NET SDK.",
+                innerException)
+        {
+        }
+    }
+
     /// <summary>
-    /// Registers the installed .NET SDK's MSBuild with <see cref="MSBuildLocator"/> exactly once.
-    /// This must run before any <c>Microsoft.Build.*</c> assembly is loaded, i.e. before the first
-    /// use of <c>MSBuildWorkspace</c>.
+    /// Registers an available MSBuild with <see cref="MSBuildLocator"/> exactly once, immediately
+    /// before project evaluation. Keeping registration lazy lets the self-contained language server
+    /// start and provide project-independent XAML features even when no SDK or Visual Studio
+    /// installation is available.
     /// </summary>
     public static class MsBuildRegistrar
     {
@@ -50,7 +62,14 @@ namespace WinUiXaml.Workspace
                     }
                     else
                     {
-                        MSBuildLocator.RegisterDefaults();
+                        try
+                        {
+                            MSBuildLocator.RegisterDefaults();
+                        }
+                        catch (InvalidOperationException ex)
+                        {
+                            throw new MsBuildUnavailableException(ex);
+                        }
                     }
                 }
 

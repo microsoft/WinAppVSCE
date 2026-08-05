@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 
@@ -14,8 +15,9 @@ internal sealed class MethodNotFoundException : Exception
 
 /// <summary>
 /// A minimal JSON-RPC 2.0 connection over the LSP base protocol (Content-Length framed messages).
-/// Messages are processed sequentially, which is sufficient for a language server driven by a
-/// single client. Handlers are supplied via <see cref="OnRequest"/> and <see cref="OnNotification"/>;
+/// Notifications are processed in wire order, while requests run concurrently so a slow semantic
+/// operation cannot block document updates, cancellation, or shutdown. Handlers are supplied via
+/// <see cref="OnRequest"/> and <see cref="OnNotification"/>;
 /// outbound server-to-client notifications go through <see cref="SendNotificationAsync"/>.
 /// </summary>
 internal sealed class JsonRpcConnection
@@ -25,6 +27,9 @@ internal sealed class JsonRpcConnection
     private readonly Stream _input;
     private readonly Stream _output;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _requestCancellations = new();
+    private readonly ConcurrentDictionary<long, Task> _inflightRequests = new();
+    private long _nextRequestSequence;
 
     public JsonRpcConnection(Stream input, Stream output)
     {
@@ -33,7 +38,7 @@ internal sealed class JsonRpcConnection
     }
 
     /// <summary>Handles a request (id + method). Return value is serialized as the JSON-RPC result.</summary>
-    public Func<string, JsonElement?, Task<object?>>? OnRequest { get; set; }
+    public Func<string, JsonElement?, CancellationToken, Task<object?>>? OnRequest { get; set; }
 
     /// <summary>Handles a notification (method, no id).</summary>
     public Func<string, JsonElement?, Task>? OnNotification { get; set; }
@@ -41,15 +46,23 @@ internal sealed class JsonRpcConnection
     /// <summary>Reads and dispatches messages until the input stream ends.</summary>
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
-        while (!cancellationToken.IsCancellationRequested)
+        using var connectionCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        while (!connectionCancellation.IsCancellationRequested)
         {
-            var body = await ReadMessageAsync(cancellationToken).ConfigureAwait(false);
+            var body = await ReadMessageAsync(connectionCancellation.Token).ConfigureAwait(false);
             if (body == null)
             {
-                return; // stream closed
+                connectionCancellation.Cancel();
+                break;
             }
 
-            await DispatchAsync(body).ConfigureAwait(false);
+            await DispatchAsync(body, connectionCancellation.Token).ConfigureAwait(false);
+        }
+
+        if (_inflightRequests.Count > 0)
+        {
+            await Task.WhenAll(_inflightRequests.Values).ConfigureAwait(false);
         }
     }
 
@@ -64,7 +77,7 @@ internal sealed class JsonRpcConnection
         return WriteMessageAsync(payload);
     }
 
-    private async Task DispatchAsync(byte[] body)
+    private async Task DispatchAsync(byte[] body, CancellationToken connectionToken)
     {
         IncomingMessage? message;
         try
@@ -84,7 +97,18 @@ internal sealed class JsonRpcConnection
 
         if (message.Id is { } id)
         {
-            await HandleRequestAsync(id, message.Method, message.Params).ConfigureAwait(false);
+            var sequence = Interlocked.Increment(ref _nextRequestSequence);
+            var task = HandleRequestAsync(id, message.Method, message.Params, connectionToken);
+            _inflightRequests[sequence] = task;
+            _ = task.ContinueWith(
+                completed => _inflightRequests.TryRemove(sequence, out _),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+        else if (message.Method == "$/cancelRequest")
+        {
+            CancelRequest(message.Params);
         }
         else if (OnNotification != null)
         {
@@ -99,25 +123,41 @@ internal sealed class JsonRpcConnection
         }
     }
 
-    private async Task HandleRequestAsync(JsonElement id, string method, JsonElement? @params)
+    private async Task HandleRequestAsync(
+        JsonElement id,
+        string method,
+        JsonElement? @params,
+        CancellationToken connectionToken)
     {
         object? result = null;
         ResponseError? error = null;
+        var requestKey = id.GetRawText();
+        using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(connectionToken);
+        _requestCancellations[requestKey] = requestCancellation;
 
         try
         {
             result = OnRequest != null
-                ? await OnRequest(method, @params).ConfigureAwait(false)
+                ? await OnRequest(method, @params, requestCancellation.Token).ConfigureAwait(false)
                 : throw new MethodNotFoundException(method);
         }
         catch (MethodNotFoundException)
         {
             error = new ResponseError(-32601, $"Method not found: {method}");
         }
+        catch (OperationCanceledException) when (requestCancellation.IsCancellationRequested)
+        {
+            error = new ResponseError(-32800, $"Request cancelled: {method}");
+        }
         catch (Exception ex)
         {
             Log($"request '{method}' failed: {ex}");
             error = new ResponseError(-32603, ex.Message);
+        }
+
+        finally
+        {
+            _requestCancellations.TryRemove(requestKey, out _);
         }
 
         var payload = new Dictionary<string, object?>
@@ -135,6 +175,20 @@ internal sealed class JsonRpcConnection
         }
 
         await WriteMessageAsync(payload).ConfigureAwait(false);
+    }
+
+    private void CancelRequest(JsonElement? @params)
+    {
+        if (@params is not { ValueKind: JsonValueKind.Object } value
+            || !value.TryGetProperty("id", out var id))
+        {
+            return;
+        }
+
+        if (_requestCancellations.TryGetValue(id.GetRawText(), out var cancellation))
+        {
+            cancellation.Cancel();
+        }
     }
 
     private async Task<byte[]?> ReadMessageAsync(CancellationToken cancellationToken)

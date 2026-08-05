@@ -38,6 +38,26 @@ namespace WinUiXaml.Workspace.Tests
         }
 
         [Fact]
+        public void SearchRootStopsParentProjectDiscovery()
+        {
+            Touch("Outer.csproj");
+            var trustedRoot = Path.Combine(_root, "Trusted");
+            var xaml = Touch("Trusted", "Views", "Page.xaml");
+
+            Assert.Null(XamlProjectResolver.FindOwningProject(xaml, trustedRoot));
+        }
+
+        [Fact]
+        public void SearchRootIncludesProjectAtBoundary()
+        {
+            var project = Touch("Trusted", "App.csproj");
+            var trustedRoot = Path.Combine(_root, "Trusted");
+            var xaml = Touch("Trusted", "Views", "Page.xaml");
+
+            Assert.Equal(project, XamlProjectResolver.FindOwningProject(xaml, trustedRoot));
+        }
+
+        [Fact]
         public void NearestProjectWins()
         {
             Touch("App", "Outer.csproj");
@@ -56,15 +76,14 @@ namespace WinUiXaml.Workspace.Tests
         }
 
         [Fact]
-        public void MultipleProjectsInDirectory_PicksDeterministically()
+        public void MultipleProjectsInDirectory_ReturnsNullWhenAmbiguous()
         {
             var b = Touch("App", "Bravo.csproj");
             Touch("App", "Alpha.csproj");
             var xaml = Touch("App", "Page.xaml");
 
-            // Ambiguous folder resolves alphabetically (Alpha before Bravo) for determinism.
             var result = XamlProjectResolver.FindOwningProject(xaml);
-            Assert.Equal(Path.Combine(Path.GetDirectoryName(b)!, "Alpha.csproj"), result);
+            Assert.Null(result);
         }
 
         [Fact]

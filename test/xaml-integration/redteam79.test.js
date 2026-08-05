@@ -53,9 +53,16 @@ async function referencesAt(text, includeDeclaration) {
 
 async function lspReferencesAt(text, includeDeclaration) {
   const { clean, position } = caretPosition(text);
-  const serverDll = process.env.WINUI_XAML_SERVER_DLL;
-  assert.ok(serverDll && fs.existsSync(serverDll), `WINUI_XAML_SERVER_DLL must point at the Debug server; got ${serverDll}`);
-  const child = cp.spawn("dotnet", [serverDll], { cwd: path.dirname(serverDll), stdio: ["pipe", "pipe", "pipe"] });
+  const serverPath =
+    process.env.WINUI_XAML_TEST_SERVER_PATH ||
+    process.env.WINUI_XAML_SERVER_PATH ||
+    process.env.WINUI_XAML_SERVER_DLL;
+  assert.ok(serverPath && fs.existsSync(serverPath), `A test server must exist; got ${serverPath}`);
+  const isDll = serverPath.toLowerCase().endsWith(".dll");
+  const child = cp.spawn(isDll ? "dotnet" : serverPath, isDll ? [serverPath] : [], {
+    cwd: path.dirname(serverPath),
+    stdio: ["pipe", "pipe", "pipe"],
+  });
   let nextId = 1;
   let buffer = Buffer.alloc(0);
   const pending = new Map();

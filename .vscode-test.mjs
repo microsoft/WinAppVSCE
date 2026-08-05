@@ -8,8 +8,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 // genuine project (types, x:Bind targets, App.xaml resources) — exactly like the stdio smoke test.
 const fixture = path.resolve(here, "test", "fixtures", "xaml", "fixture");
 
-// Force the freshly-built Debug server (candidate #2 in resolveServerDll) so it wins over any
-// bundled Release copy under dist/server.
+// Local tests use the freshly-built Debug DLL. CI sets WINUI_XAML_TEST_BUNDLED after publishing the
+// self-contained bundle so the extension client's bundled-apphost resolution is exercised too.
 const debugServerDll = path.resolve(
   here,
   "server",
@@ -19,6 +19,13 @@ const debugServerDll = path.resolve(
   "Debug",
   "net10.0",
   "WinUiXaml.LanguageServer.dll"
+);
+const bundledServerExe = path.resolve(
+  here,
+  "dist",
+  "server",
+  process.arch === "arm64" ? "win-arm64" : "win-x64",
+  "WinUiXaml.LanguageServer.exe"
 );
 
 export default defineConfig({
@@ -30,7 +37,13 @@ export default defineConfig({
   // the semantic server; production behavior is unchanged (the trust gate is only bypassed here).
   launchArgs: ["--disable-extensions", "--disable-workspace-trust"],
   env: {
-    WINUI_XAML_SERVER_DLL: debugServerDll,
+    ...(process.env.WINUI_XAML_TEST_BUNDLED === "1"
+      ? {
+          WINUI_XAML_TEST_SERVER_PATH: bundledServerExe,
+          WINUI_XAML_REQUIRE_BUNDLED: "1",
+        }
+      : { WINUI_XAML_SERVER_DLL: debugServerDll }),
+    WINUI_XAML_TEST_DLL: debugServerDll,
     WINUI_XAML_TEST: "1",
     WINUI_XAML_FIXTURE_DIR: fixture,
     WINUI_XAML_LOG: path.resolve(here, "server-test.log"),
