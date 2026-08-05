@@ -18,6 +18,7 @@ import { registerManifestIntelliSense } from './manifest-intellisense/manifest-i
 import { SchemaModel } from './manifest-schema/schema-model';
 import { loadSchemaModel } from './manifest-schema/xsd-parser';
 import { isManifestPath } from './manifest-schema/manifest-path';
+import { openManifestEditor } from './manifest-editor/open-manifest-editor';
 import {
 	PACK_ACTIONS,
 	getPackNotificationAction,
@@ -1209,13 +1210,17 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.openManifestEditor', async () => {
-			const editor = vscode.window.activeTextEditor;
-			if (!editor || editor.document.uri.scheme !== 'file' || !isManifestPath(editor.document.uri.fsPath)) {
-				vscode.window.showWarningMessage('Open an .appxmanifest or AppxManifest.xml file to use the Manifest Editor.');
-				return;
-			}
-
-			await vscode.commands.executeCommand('vscode.openWith', editor.document.uri, ManifestEditorProvider.viewType);
+			await openManifestEditor({
+				findFiles: (include, exclude) => vscode.workspace.findFiles(include, exclude),
+				workspaceFolderCount: () => vscode.workspace.workspaceFolders?.length ?? 0,
+				asRelativePath: (uri, includeWorkspaceFolder) =>
+					vscode.workspace.asRelativePath(uri, includeWorkspaceFolder),
+				showQuickPick: (items, options) => vscode.window.showQuickPick(items, options),
+				showOpenDialog: options => vscode.window.showOpenDialog(options),
+				showWarningMessage: message => vscode.window.showWarningMessage(message),
+				openManifestEditor: uri =>
+					vscode.commands.executeCommand('vscode.openWith', uri, ManifestEditorProvider.viewType)
+			});
 		})
 	);
 

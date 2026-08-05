@@ -16,8 +16,8 @@
     "Other"
   ],
   "activationEvents": [
-    "workspaceContains:**/[Aa]ppx[Mm]anifest.xml",
-    "workspaceContains:**/*.appxmanifest",
+    "workspaceContains:**/[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt].[Xx][Mm][Ll]",
+    "workspaceContains:**/*.[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt]",
     "onLanguage:xml",
     "onDebugResolve:winapp",
     "onCommand:winapp.init",
@@ -49,6 +49,10 @@
         "filenames": [
           "AppxManifest.xml",
           "appxmanifest.xml"
+        ],
+        "filenamePatterns": [
+          "**/[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt].[Xx][Mm][Ll]",
+          "**/*.[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt]"
         ],
         "aliases": [
           "AppxManifest"
@@ -178,10 +182,10 @@
         "displayName": "AppxManifest Editor",
         "selector": [
           {
-            "filenamePattern": "**/[Aa]ppx[Mm]anifest.xml"
+            "filenamePattern": "**/[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt].[Xx][Mm][Ll]"
           },
           {
-            "filenamePattern": "**/*.appxmanifest"
+            "filenamePattern": "**/*.[Aa][Pp][Pp][Xx][Mm][Aa][Nn][Ii][Ff][Ee][Ss][Tt]"
           }
         ],
         "priority": "option"
@@ -191,14 +195,13 @@
       "editor/title": [
         {
           "command": "winapp.openManifestEditor",
-          "when": "(resourceFilename =~ /[Aa]ppx[Mm]anifest\\.xml$/ || resourceExtname == .appxmanifest) && activeCustomEditorId != winapp.manifestEditor",
+          "when": "(resourceFilename =~ /appxmanifest\\.xml$/i || resourceExtname =~ /^\\.appxmanifest$/i) && activeCustomEditorId != winapp.manifestEditor",
           "group": "navigation"
         }
       ],
       "commandPalette": [
         {
-          "command": "winapp.openManifestEditor",
-          "when": "(resourceFilename =~ /[Aa]ppx[Mm]anifest\\.xml$/ || resourceExtname == .appxmanifest) && activeCustomEditorId != winapp.manifestEditor"
+          "command": "winapp.openManifestEditor"
         }
       ]
     },
