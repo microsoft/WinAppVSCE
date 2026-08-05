@@ -14,6 +14,7 @@ import { getWebviewContent, getParseErrorContent } from './webview-content';
 import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
+import { AssetCopyTokenStore } from './asset-copy-token-store';
 
 export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'winapp.manifestEditor';
@@ -67,6 +68,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         // Track whether we're currently applying an edit to avoid feedback loops
         let isApplyingEdit = false;
         let showingErrorView = false;
+        const assetCopyTokens = new AssetCopyTokenStore();
 
         /** Try to parse — if it fails, show error view; if it succeeds, show/update editor. */
         const tryParseOrShowError = (text: string): boolean => {
@@ -281,13 +283,15 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             // The path resolves outside the package dir (e.g., ..\..\Downloads\img.png)
                             // or is an absolute path — check if the file exists at the resolved location
                             if (fs.existsSync(resolved)) {
-                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', sourcePath: resolved });
+                                const copyToken = assetCopyTokens.issue(resolved);
+                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', copyToken });
                                 return;
                             }
 
                             // Check if it's an absolute path that exists
                             if (path.isAbsolute(imgPath) && fs.existsSync(imgPath)) {
-                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', sourcePath: imgPath });
+                                const copyToken = assetCopyTokens.issue(imgPath);
+                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', copyToken });
                                 return;
                             }
 
@@ -312,29 +316,82 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                         case 'copyToAssets': {
                             const manifestDirPath2 = path.dirname(document.uri.fsPath);
                             const assetsDir = path.join(manifestDirPath2, 'Assets');
-                            const sourcePath = message.sourcePath;
+
+                            // Atomically claim the token so an overlapping copyToAssets request
+                            // for the same still-valid token (a rapid double-click, or a
+                            // duplicated webview message) can't race this one into a second,
+                            // concurrent confirmation + fs.copyFileSync.
+                            const claim = assetCopyTokens.beginCopy(message.copyToken);
+                            if (claim.status === 'pending') {
+                                // A copy against this token is already in flight — ignore the
+                                // duplicate rather than surface it as an error.
+                                return;
+                            }
+                            if (claim.status === 'invalid') {
+                                // The token is unknown, expired, or was evicted for capacity —
+                                // most likely the webview link just sat idle past the token's
+                                // TTL. Recover instead of dead-ending on an error: force a full
+                                // re-render, which re-issues checkImagePath for every field and
+                                // hands the (still-rendered) link a fresh token, so the user's
+                                // next click on it just works.
+                                updateWebview(true);
+                                return;
+                            }
+                            const sourcePath = claim.sourcePath;
                             const fileName = path.basename(sourcePath);
 
-                            // Create Assets folder if it doesn't exist
-                            if (!fs.existsSync(assetsDir)) {
-                                fs.mkdirSync(assetsDir, { recursive: true });
+                            // A token only proves the extension previously resolved this path
+                            // during checkImagePath — it is not, by itself, user authorization to
+                            // copy a file from outside the workspace. A compromised webview could
+                            // drive checkImagePath + copyToAssets end-to-end without any genuine
+                            // user click, so require an explicit native confirmation here. This
+                            // dialog can only be triggered/answered by the user in VS Code's UI,
+                            // not by webview script.
+                            const confirmation = await vscode.window.showWarningMessage(
+                                `Copy "${fileName}" into the Assets folder?`,
+                                {
+                                    modal: true,
+                                    detail: `This file is outside the manifest's package directory:\n${sourcePath}`,
+                                },
+                                'Copy File',
+                            );
+                            if (confirmation !== 'Copy File') {
+                                // Release the claim (not the token) so a re-click on the same
+                                // still-rendered link retries against the same authorization.
+                                assetCopyTokens.endCopy(message.copyToken);
+                                return;
                             }
 
-                            // Handle name collision
                             let destName = fileName;
-                            let destPath = path.join(assetsDir, destName);
-                            if (fs.existsSync(destPath)) {
-                                const ext = path.extname(fileName);
-                                const base = path.basename(fileName, ext);
-                                let counter = 1;
-                                while (fs.existsSync(destPath)) {
-                                    destName = `${base}_${counter}${ext}`;
-                                    destPath = path.join(assetsDir, destName);
-                                    counter++;
+                            try {
+                                // Create Assets folder if it doesn't exist
+                                if (!fs.existsSync(assetsDir)) {
+                                    fs.mkdirSync(assetsDir, { recursive: true });
                                 }
-                            }
 
-                            fs.copyFileSync(sourcePath, destPath);
+                                // Handle name collision
+                                let destPath = path.join(assetsDir, destName);
+                                if (fs.existsSync(destPath)) {
+                                    const ext = path.extname(fileName);
+                                    const base = path.basename(fileName, ext);
+                                    let counter = 1;
+                                    while (fs.existsSync(destPath)) {
+                                        destName = `${base}_${counter}${ext}`;
+                                        destPath = path.join(assetsDir, destName);
+                                        counter++;
+                                    }
+                                }
+
+                                fs.copyFileSync(sourcePath, destPath);
+                            } catch (copyErr) {
+                                // Release the claim so the user can retry (e.g. after a
+                                // permissions or disk-full error) without needing a fresh
+                                // checkImagePath round-trip for a new token.
+                                assetCopyTokens.endCopy(message.copyToken);
+                                throw copyErr;
+                            }
+                            // Only invalidate the token once the copy has actually succeeded.
+                            assetCopyTokens.consume(message.copyToken);
                             const newRelPath = `Assets\\${destName}`;
 
                             // Apply the field change with the new path

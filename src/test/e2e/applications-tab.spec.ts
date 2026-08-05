@@ -883,6 +883,14 @@ test('copy to assets copies file and updates field path', async () => {
     const copyLink = formGroup.locator('.copy-to-assets-link');
     if (await copyLink.count() > 0 && await copyLink.isVisible()) {
         await copyLink.click();
+
+        // The copy itself is gated behind a native, user-answerable confirmation
+        // dialog (issue #71 / H1) — it must be explicitly confirmed before the
+        // file is actually copied.
+        const dialog = ctx.page.locator('.monaco-dialog-box');
+        await expect(dialog).toBeVisible({ timeout: 10_000 });
+        await expect(dialog).toContainText('test-asset.png');
+        await dialog.getByRole('button', { name: 'Copy File' }).click();
         await ctx.page.waitForTimeout(2_000);
 
         // Verify file was copied to Assets folder
@@ -898,6 +906,7 @@ test('copy to assets copies file and updates field path', async () => {
 
     // Clean up
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(path.join(ctx.workspacePath, 'Assets', 'test-asset.png'), { force: true });
 });
 
 test('no warning shown for resource key paths', async () => {

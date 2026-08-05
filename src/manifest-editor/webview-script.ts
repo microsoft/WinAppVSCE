@@ -614,7 +614,7 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     } else if (msg.status === 'external') {
                         fg.classList.add('has-warning');
                         vmsg.classList.add('warning');
-                        vmsg.innerHTML = 'Image not in package directory. <a href="#" class="copy-to-assets-link" data-source="' + escapeHtml(msg.sourcePath) + '" data-field="' + escapeHtml(msg.field) + '" data-index="' + (msg.index !== undefined ? msg.index : '') + '">Copy to Assets folder?</a>';
+                        vmsg.innerHTML = 'Image not in package directory. <a href="#" class="copy-to-assets-link" data-copy-token="' + escapeHtml(msg.copyToken) + '" data-field="' + escapeHtml(msg.field) + '" data-index="' + (msg.index !== undefined ? msg.index : '') + '">Copy to Assets folder?</a>';
                     } else {
                         fg.classList.add('has-warning');
                         vmsg.classList.add('warning');
@@ -679,13 +679,13 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             const link = e.target.closest('.copy-to-assets-link');
             if (!link) return;
             e.preventDefault();
-            const sourcePath = link.getAttribute('data-source');
+            const copyToken = link.getAttribute('data-copy-token');
             const field = link.getAttribute('data-field');
             const idx = link.getAttribute('data-index');
             const section = field === 'logo' ? 'properties' : 'applications';
             vscode.postMessage({
                 type: 'copyToAssets',
-                sourcePath: sourcePath,
+                copyToken: copyToken,
                 section: section,
                 field: field,
                 index: idx !== '' ? parseInt(idx, 10) : undefined

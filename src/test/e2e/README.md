@@ -4,6 +4,7 @@ Automated Playwright tests that launch VS Code as an Electron app. The suite cov
 
 - **Manifest editor** — opens an AppxManifest file in the custom WinApp editor and interacts with every tab and control in the webview UI.
 - **Sign command** — verifies the `winapp.sign` QuickPick artifact discovery flow.
+- **Asset copy confirmation** — verifies the native modal gate on copying external images into the workspace's `Assets` folder (issue #71).
 
 ## Quick start
 
@@ -18,6 +19,8 @@ npm run test:e2e
 ```
 
 > **Prerequisites** – VS Code must be installed at the default location and all other VS Code windows must be closed before running (Playwright needs exclusive access to the Electron process).
+
+> **`@playwright/test` version** – pinned with a caret range starting at `1.61.1` (not `1.62.1`) because the approved package feed does not mirror a stable `1.62.1` for `@playwright/test`/`playwright`/`playwright-core` (only prereleases). `^1.61.1` still resolves through that feed and picks up newer compatible stable releases (e.g. `1.62.0`) as they land, without requiring a version the feed can't serve.
 
 ## Architecture
 
@@ -44,7 +47,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (128 tests)
+## Test inventory (132 tests)
 
 ### `sign-quickpick.spec.ts` — 6 tests
 
@@ -187,6 +190,17 @@ Validates application cards, sub-tabs (Info, Extensions, Visual Assets), extensi
 | 16 | can add a new application | Adding an app increases card count |
 | 17 | can remove the newly added application | Removing an app decreases card count |
 | 18 | browse executable button is visible | Executable browse button exists |
+
+### `asset-copy-confirmation.spec.ts` — 4 tests
+
+Validates the native confirmation gate on copying an external image into the workspace's `Assets` folder (issue #71): the `checkImagePath`/`copyToAssets` webview messages alone must never be enough to authorize the copy, and cancelling the dialog must not consume the token behind the still-rendered link.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | external image path shows a native confirmation dialog naming the file before copying | Clicking the "Copy to Assets folder?" link opens a native modal naming the file and its full external path |
+| 2 | cancelling the confirmation copies nothing and leaves the logo path unchanged | Dismissing the dialog performs no filesystem copy and leaves the field value untouched |
+| 3 | cancelling once, then re-clicking the same link still copies the file (H1 regression) | The token behind the link survives a cancelled confirmation, so a re-click succeeds instead of failing with a stale-token error |
+| 4 | confirming the dialog copies the file into Assets and rewrites the logo path | Confirming performs the copy and updates the manifest field to the new `Assets\...` path |
 
 ### `capabilities-tab.spec.ts` — 16 tests
 
