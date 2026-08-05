@@ -144,6 +144,72 @@ extends:
               pwsh: true
               filePath: $(System.DefaultWorkingDirectory)\scripts\package-vsc.ps1
               arguments: "-Stable -CliBinariesPath '$(System.DefaultWorkingDirectory)/artifacts/public-cli'"
+          - task: PowerShell@2
+            displayName: Run E2E tests
+            inputs:
+              pwsh: true
+              targetType: inline
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              script: |
+                $vscodeVersion = "1.109.5"
+                $vscodeDir = Join-Path "$(Agent.TempDirectory)" "vscode"
+                $vscodeZip = Join-Path "$(Agent.TempDirectory)" "vscode.zip"
+                Invoke-WebRequest `
+                    -Uri "https://update.code.visualstudio.com/$vscodeVersion/win32-x64-archive/stable" `
+                    -OutFile $vscodeZip `
+                    -UseBasicParsing
+                Expand-Archive -Path $vscodeZip -DestinationPath $vscodeDir -Force
+
+                $codePath = Join-Path $vscodeDir "Code.exe"
+                if (-not (Test-Path $codePath)) {
+                    Write-Error "Downloaded VS Code executable not found at $codePath"
+                    exit 1
+                }
+
+                $vsix = Get-ChildItem -Path "$(System.DefaultWorkingDirectory)/artifacts" -Filter "winapp-*.vsix" |
+                    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                if (-not $vsix) {
+                    Write-Error "No packaged VSIX found for E2E testing"
+                    exit 1
+                }
+
+                & $codePath --user-data-dir "$(Agent.TempDirectory)/vscode-install-profile" `
+                    --extensions-dir "$(Agent.TempDirectory)/vscode-extensions" `
+                    --install-extension $vsix.FullName --force
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "Failed to install packaged VSIX"
+                    exit $LASTEXITCODE
+                }
+
+                $env:VSCODE_PATH = $codePath
+                $env:E2E_USE_INSTALLED_EXTENSION = "1"
+                npm run test:e2e
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "E2E tests failed"
+                    exit $LASTEXITCODE
+                }
+          - task: PowerShell@2
+            displayName: Stage Playwright diagnostics
+            condition: not(canceled())
+            inputs:
+              pwsh: true
+              targetType: inline
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              script: |
+                $stage = "$(Build.ArtifactStagingDirectory)/playwright-report"
+                New-Item -ItemType Directory -Path $stage -Force | Out-Null
+                if (Test-Path "playwright-report") {
+                    Copy-Item "playwright-report" "$stage/playwright-report" -Recurse -Force
+                }
+                if (Test-Path "test-results") {
+                    Copy-Item "test-results" "$stage/test-results" -Recurse -Force
+                }
+          - task: 1ES.PublishPipelineArtifact@1
+            displayName: Upload Playwright report
+            condition: not(canceled())
+            inputs:
+              path: '$(Build.ArtifactStagingDirectory)/playwright-report'
+              artifactName: playwright-report
           - ${{ if eq(parameters.DoEsrp, 'true') }}:
             - task: EsrpCodeSigning@6
               displayName: Code Sign ESRP - VSIX Package
@@ -309,4 +375,3 @@ extends:
                 echo "Publishing $VSIX to VS Code Marketplace with publisher signature..."
 
                 vsce publish --packagePath "$VSIX" --manifestPath "$MANIFEST" --signaturePath "$SIGNATURE" --azure-credential
-

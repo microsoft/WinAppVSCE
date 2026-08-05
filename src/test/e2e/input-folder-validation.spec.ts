@@ -13,6 +13,9 @@ const VSCODE_EXE =
 	process.env.VSCODE_PATH ??
 	path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
+const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
+	? []
+	: [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
 const pendingApps = new Set<ElectronApplication>();
 const pendingDirectories = new Set<string>();
 
@@ -96,7 +99,7 @@ test('invalid inputFolder offers to open its debug configuration', async () => {
 			readmePath,
 			'--new-window',
 			`--user-data-dir=${userDataPath}`,
-			`--extensionDevelopmentPath=${EXTENSION_ROOT}`,
+			...EXTENSION_ARGS,
 			'--disable-telemetry',
 			'--skip-release-notes',
 			'--disable-workspace-trust'
