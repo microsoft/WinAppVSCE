@@ -274,9 +274,14 @@ async function warmUp(timeoutMs = 170000) {
   let lastErr;
   while (Date.now() - started < timeoutMs) {
     try {
-      const items = await completionsAt(`<Page ${NS}>\n  <But|\n</Page>`);
-      if (items.includes("Button")) return;
-      lastErr = new Error(`element completion did not yet include Button (got ${items.length} items)`);
+      const items = await completionItemsAt(`<Page ${NS}>\n  <But|\n</Page>`);
+      if (items.some((item) =>
+        item.label === "Button" &&
+        typeof item.detail === "string" &&
+        item.detail.startsWith("Microsoft.UI.Xaml"))) {
+        return;
+      }
+      lastErr = new Error(`semantic element completion did not yet include Button (got ${items.length} items)`);
     } catch (e) {
       lastErr = e;
     }

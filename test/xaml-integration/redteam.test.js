@@ -132,7 +132,7 @@ describe("WinUI XAML red-team — definition (F12)", function () {
     const defs = await h.definitionsAt(page('<Grid Background="{ThemeResource SmokeAccent|Brush}" />'));
     assert.ok(defs.length > 0, "expected a definition");
     assert.strictEqual(path.basename(defs[0].fsPath), APP, `expected ${APP}; got ${defs[0].fsPath}`);
-    assert.strictEqual(defs[0].line, 13, `expected SmokeAccentBrush at 0-based line 13; got ${defs[0].line}`);
+    assert.strictEqual(defs[0].line, 14, `expected SmokeAccentBrush at 0-based line 14; got ${defs[0].line}`);
   });
 
   it.skip("GAP: property-element F12 is not implemented", async () => {

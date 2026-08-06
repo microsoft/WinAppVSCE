@@ -17,6 +17,17 @@ const h = require("./helper");
 
 const EXT = "winui-xaml";
 
+async function hasSemanticButtonCompletion() {
+  const items = await h.completionItemsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+  return {
+    found: items.some((item) =>
+      item.label === "Button" &&
+      typeof item.detail === "string" &&
+      item.detail.startsWith("Microsoft.UI.Xaml")),
+    labels: items.slice(0, 20).map((item) => `${item.label}${item.detail ? ` (${item.detail})` : ""}`),
+  };
+}
+
 describe("WinUI XAML — client commands & lifecycle", function () {
   this.timeout(180000);
 
@@ -86,10 +97,10 @@ describe("WinUI XAML — client commands & lifecycle", function () {
 
       if (vscode.workspace.isTrusted) {
         // With no server, element-name completion no longer produces "Button".
-        const items = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+        const items = await hasSemanticButtonCompletion();
         assert.ok(
-          !items.includes("Button"),
-          `expected syntax-only degradation (no Button) but got: ${items.slice(0, 20).join(", ")}`
+          !items.found,
+          `expected syntax-only degradation (no semantic Button) but got: ${items.labels.join(", ")}`
         );
       }
     } finally {
@@ -124,10 +135,10 @@ describe("WinUI XAML — client commands & lifecycle", function () {
 
       if (vscode.workspace.isTrusted) {
         // With no running server, the element-name completion no longer produces "Button".
-        const items = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+        const items = await hasSemanticButtonCompletion();
         assert.ok(
-          !items.includes("Button"),
-          `expected syntax-only degradation (no Button) but got: ${items.slice(0, 20).join(", ")}`
+          !items.found,
+          `expected syntax-only degradation (no semantic Button) but got: ${items.labels.join(", ")}`
         );
       }
     } finally {
@@ -154,8 +165,8 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     );
     try {
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      const degraded = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
-      assert.ok(!degraded.includes("Button"), "configuration change should stop the old server");
+      const degraded = await hasSemanticButtonCompletion();
+      assert.ok(!degraded.found, `configuration change should stop the old server; got: ${degraded.labels.join(", ")}`);
     } finally {
       await config().update("server.dotnetPath", undefined, vscode.ConfigurationTarget.Global);
       await config().update("server.path", undefined, vscode.ConfigurationTarget.Global);
@@ -179,10 +190,10 @@ describe("WinUI XAML — client commands & lifecycle", function () {
         () => vscode.commands.executeCommand("winui-xaml.restartServer"),
         "restartServer must not reject when the workspace is untrusted"
       );
-      const degraded = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+      const degraded = await hasSemanticButtonCompletion();
       assert.ok(
-        !degraded.includes("Button"),
-        `expected syntax-only degradation while untrusted (no Button) but got: ${degraded.slice(0, 20).join(", ")}`
+        !degraded.found,
+        `expected syntax-only degradation while untrusted (no semantic Button) but got: ${degraded.labels.join(", ")}`
       );
     } finally {
       // (b) Simulate trust being granted: clear the seam and restart, which must start the server.
@@ -238,10 +249,10 @@ describe("WinUI XAML — client commands & lifecycle", function () {
         "restartServer must not reject when server.path is an invalid DLL"
       );
       if (vscode.workspace.isTrusted) {
-        const items = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
+        const items = await hasSemanticButtonCompletion();
         assert.ok(
-          !items.includes("Button"),
-          `expected syntax-only degradation for an invalid server.path but got: ${items.slice(0, 20).join(", ")}`
+          !items.found,
+          `expected syntax-only degradation for an invalid server.path but got: ${items.labels.join(", ")}`
         );
       }
     } finally {

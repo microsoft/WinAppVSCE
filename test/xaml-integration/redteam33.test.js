@@ -118,14 +118,25 @@ describe("WinUI XAML red-team 33 — cast-path x:Bind typo diagnostics", functio
     await assertOneWxaml0005OnToken(buffer, "TotallyBogus33", "only the real cast member typo should be diagnosed");
   });
 
-  it("keeps attached-property-shaped paths with dotted tails silent", async () => {
+  it("validates dotted tails after attached-property path steps", async () => {
     const buffer = page([
       "<StackPanel>",
       "  <TextBlock Text=\"{x:Bind (Grid.Row).NopeShouldNotBeCast33}\" />",
       "  <TextBlock Tag=\"{x:Bind (Canvas.Left).NopeShouldNotBeCast33}\" />",
       "</StackPanel>",
     ].join("\n  "));
-    await assertNoWxaml0005(buffer, "attached-property-shaped parenthesized steps must not be treated as casts");
+    const diags = await h.diagnosticsFor(
+      buffer,
+      (items) => wxaml0005(items).length === 2,
+      12000
+    );
+    const hits = wxaml0005(diags);
+    assert.strictEqual(hits.length, 2, `each invalid attached-property tail should be diagnosed; got ${summary(diags)}`);
+    assert.deepStrictEqual(
+      hits.map(diagText),
+      ["NopeShouldNotBeCast33", "NopeShouldNotBeCast33"],
+      `diagnostics should underline only the invalid tail members; got ${summary(diags)}`
+    );
   });
 
   it("keeps unresolved and malformed cast shapes silent", async () => {
