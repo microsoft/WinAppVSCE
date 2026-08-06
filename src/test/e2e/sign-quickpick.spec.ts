@@ -98,6 +98,16 @@ function createSignTestWorkspace(options?: { includePfx?: boolean; additionalFil
     return tmpDir;
 }
 
+function configureFilesExclude(workspacePath: string): void {
+    const settingsPath = path.join(workspacePath, '.vscode', 'settings.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({
+        'files.exclude': {
+            '**/AppPackages': true
+        }
+    }));
+}
+
 // ──────────────────────────────────────────────────────
 // Test 1 — Workspace with .msix artifact
 // ──────────────────────────────────────────────────────
@@ -179,6 +189,37 @@ test.describe('winapp.sign command — artifact discovery', () => {
             const itemText = await items.allTextContents();
             expect(itemText.slice(0, 2).every(text => /\.(msix|msixbundle)/i.test(text))).toBe(true);
             expect(itemText.slice(2).every(text => /\.(exe|dll)/i.test(text))).toBe(true);
+
+            await page.keyboard.press('Escape');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    test('ignores files.exclude without showing dependency artifacts', async () => {
+        const tmpDir = createSignTestWorkspace();
+        configureFilesExclude(tmpDir);
+        const ignoredArtifact = path.join(tmpDir, 'node_modules', 'pkg', 'Ignored.msix');
+        fs.mkdirSync(path.dirname(ignoredArtifact), { recursive: true });
+        fs.writeFileSync(ignoredArtifact, Buffer.alloc(128));
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Sign File');
+
+            const quickInput = page.locator('.quick-input-widget');
+            const inputBox = quickInput.locator('.quick-input-filter input[type="text"]');
+            await expect(inputBox).toHaveAttribute('placeholder', /file to sign/, { timeout: 20_000 });
+            const itemText = await quickInput.locator('.quick-input-list .monaco-list-row').allTextContents();
+            expect(itemText.join(' ')).toContain('MyApp_1.0.0.0_x64.msix');
+            expect(itemText.join(' ')).not.toContain('Ignored.msix');
 
             await page.keyboard.press('Escape');
         } finally {
