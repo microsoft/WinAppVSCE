@@ -14,7 +14,7 @@ export function isManifestPath(fsPath: string): boolean {
 }
 
 /** VS Code document selector for manifest XML files. */
-export const MANIFEST_SELECTOR: vscode.DocumentSelector = [
+export const MANIFEST_SELECTOR: vscode.DocumentFilter[] = [
     { language: 'xml', pattern: '**/[Aa]ppx[Mm]anifest.xml' },
     { language: 'xml', pattern: '**/*.appxmanifest' },
 ];
