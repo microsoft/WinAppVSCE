@@ -49,7 +49,8 @@ pwsh -NoProfile -File scripts\test-driver-queue.ps1 -Project <path-to-winui-proj
 # 3. Use the automation module interactively (see AGENTS.md for the full workflow)
 Import-Module .\scripts\vscode-drive.psm1 -Force
 $ctx = Start-VSCodeDrive -Folder <project> -OpenFile <file> -WithDriverExtension -SettleSec 24
-# ... drive commands, observe, screenshot ...
+Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'some.command' -Arguments @('value', 42)
+# Add -Answers @(@{ accept = $true }) when the command raises prompts.
 Stop-VSCodeDrive -Ctx $ctx
 ```
 
@@ -83,6 +84,9 @@ The harness launches VS Code with a companion **driver-extension** that exposes 
 extension runs the command via `vscode.commands.executeCommand` /
 `vscode.debug.startDebugging` → writes `res-<id>.json` with the result. This
 exercises the **real extension command handlers** inside a live VS Code instance.
+Command steps accept an optional `args` array. Argument descriptors with
+`kind: activeDocumentUri`, `fileUri`, or `position` are resolved to VS Code API
+objects; legacy `commandArgs` steps remain supported.
 
 UIA (`winapp ui`) is used for clicking, reading UI state, and taking screenshots —
 but NOT for typing, since synthetic keyboard input is blocked in this environment.
