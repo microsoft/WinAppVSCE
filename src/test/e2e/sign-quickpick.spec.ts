@@ -37,6 +37,9 @@ const VSCODE_EXE =
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
 
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
+const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
+    ? []
+    : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
 
 /**
  * Launch VS Code with our extension loaded, opening the given folder.
@@ -47,7 +50,7 @@ async function launchVSCodeForFolder(folderPath: string): Promise<{ app: Electro
         args: [
             folderPath,
             '--new-window',
-            `--extensionDevelopmentPath=${EXTENSION_ROOT}`,
+            ...EXTENSION_ARGS,
             '--disable-telemetry',
             '--skip-release-notes',
             '--disable-workspace-trust',
