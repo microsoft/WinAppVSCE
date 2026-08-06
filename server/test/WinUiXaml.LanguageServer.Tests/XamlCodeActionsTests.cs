@@ -1,0 +1,415 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using WinUiXaml.LanguageServer;
+using WinUiXaml.LanguageServer.Lsp;
+using WinUiXaml.Workspace;
+using Xunit;
+using Range = WinUiXaml.LanguageServer.Lsp.Range;
+using Diagnostic = WinUiXaml.LanguageServer.Lsp.Diagnostic;
+
+namespace WinUiXaml.LanguageServer.Tests;
+
+/// <summary>
+/// Hermetic coverage for <see cref="XamlCodeActions"/> (textDocument/codeAction). Feeds the pure
+/// <see cref="XamlCodeActions.Compute"/> synthetic diagnostics carrying <see cref="DiagnosticData"/> and
+/// asserts the resulting quick fixes: exact-span replace edits, title/kind/isPreferred, multi-suggestion
+/// ordering, the <c>only</c> kind filter, the code allow-list, and that the payload is read from both the
+/// in-process <see cref="DiagnosticData"/> and the round-tripped <see cref="JsonElement"/> wire shape.
+/// </summary>
+public class XamlCodeActionsTests
+{
+    private const string Uri = "file:///C:/proj/Page.xaml";
+
+    private static Diagnostic Diag(string code, Range range, object? data) => new()
+    {
+        Code = code,
+        Range = range,
+        Severity = 2,
+        Message = "unknown name",
+        Data = data,
+    };
+
+    private static Range R(int line, int startChar, int endChar) =>
+        new(new Position(line, startChar), new Position(line, endChar));
+
+    private static CodeActionContext Context(params Diagnostic[] diagnostics) =>
+        new() { Diagnostics = diagnostics.ToList() };
+
+    private static DiagnosticData Data(string bad, params string[] suggestions) =>
+        new() { Bad = bad, Suggestions = suggestions };
+
+    [Fact]
+    public void UnknownType_ProducesReplaceQuickFix()
+    {
+        var range = R(0, 1, 5);
+        var ctx = Context(Diag(XamlValidator.UnknownTypeCode, range, Data("Bttn", "Button")));
+
+        var actions = XamlCodeActions.Compute(Uri, null, ctx);
+
+        var action = Assert.Single(actions);
+        Assert.Equal("Change 'Bttn' to 'Button'", action.Title);
+        Assert.Equal("quickfix", action.Kind);
+        Assert.True(action.IsPreferred);
+        Assert.Same(ctx.Diagnostics[0], Assert.Single(action.Diagnostics!));
+
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+        Assert.Equal("Button", edit.NewText);
+        Assert.Equal(range.Start, edit.Range.Start);
+        Assert.Equal(range.End, edit.Range.End);
+    }
+
+    [Fact]
+    public void MultipleSuggestions_OnlyFirstIsPreferred_OrderPreserved()
+    {
+        var ctx = Context(Diag(XamlValidator.UnknownAttributeCode, R(2, 8, 15), Data("Contnt", "Content", "ContextFlyout")));
+
+        var actions = XamlCodeActions.Compute(Uri, null, ctx);
+
+        Assert.Equal(2, actions.Count);
+        Assert.Equal("Change 'Contnt' to 'Content'", actions[0].Title);
+        Assert.True(actions[0].IsPreferred);
+        Assert.Equal("Change 'Contnt' to 'ContextFlyout'", actions[1].Title);
+        Assert.Null(actions[1].IsPreferred);
+    }
+
+    [Theory]
+    [InlineData("WXAML9999")] // unknown code
+    [InlineData("WXAML0007")] // duplicate x:Name
+    public void NonSuggestibleCode_ProducesNoActions(string code)
+    {
+        var ctx = Context(Diag(code, R(0, 1, 5), Data("Bttn", "Button")));
+        Assert.Empty(XamlCodeActions.Compute(Uri, null, ctx));
+    }
+
+    [Fact]
+    public void AllSuggestibleCodes_AreHandled()
+    {
+        foreach (var code in new[]
+                 {
+                     XamlValidator.UnknownTypeCode,
+                     XamlValidator.UnknownAttributeCode,
+                     XamlValidator.UnknownAttachedPropertyCode,
+                     XamlValidator.UnknownPropertyElementCode,
+                     XamlValidator.UnknownBindMemberCode,
+                 })
+        {
+            var ctx = Context(Diag(code, R(0, 1, 5), Data("Foo", "Bar")));
+            Assert.Single(XamlCodeActions.Compute(Uri, null, ctx));
+        }
+    }
+
+    [Fact]
+    public void UnknownBindMember_ProducesReplaceQuickFix()
+    {
+        // A single-segment x:Bind path: the diagnostic span IS the token, so the edit replaces it whole.
+        var doc = new TextDocument(Uri, "GreetingTexx");
+        var ctx = Context(Diag(XamlValidator.UnknownBindMemberCode, R(0, 0, 12), Data("GreetingTexx", "GreetingText")));
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx));
+        Assert.Equal("Change 'GreetingTexx' to 'GreetingText'", action.Title);
+        Assert.True(action.IsPreferred);
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+        Assert.Equal("GreetingText", edit.NewText);
+        Assert.Equal(new Position(0, 0), edit.Range.Start);
+        Assert.Equal(new Position(0, 12), edit.Range.End);
+    }
+
+    [Fact]
+    public void UnknownBindMember_WideValueSpan_NarrowsEditToFirstSegment()
+    {
+        // The first-segment x:Bind diagnostic underlines the WHOLE value (GreetingTexx.Foo); the fix must
+        // replace only the bad first segment so the trailing ".Foo" survives.
+        var doc = new TextDocument(Uri, "GreetingTexx.Foo");
+        var ctx = Context(Diag(XamlValidator.UnknownBindMemberCode, R(0, 0, 16), Data("GreetingTexx", "GreetingText")));
+
+        var edit = Assert.Single(Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx)).Edit!.Changes[Uri]);
+        Assert.Equal("GreetingText", edit.NewText);
+        Assert.Equal(new Position(0, 0), edit.Range.Start);
+        Assert.Equal(new Position(0, 12), edit.Range.End); // exactly "GreetingTexx", not the ".Foo" tail
+    }
+
+    [Fact]
+    public void UnknownBindMember_LeadingNegation_PreservesBang()
+    {
+        // A negated path (!GreetingTexx) squiggles the whole value; the fix must keep the leading '!'.
+        var doc = new TextDocument(Uri, "!GreetingTexx");
+        var ctx = Context(Diag(XamlValidator.UnknownBindMemberCode, R(0, 0, 13), Data("GreetingTexx", "GreetingText")));
+
+        var edit = Assert.Single(Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx)).Edit!.Changes[Uri]);
+        Assert.Equal("GreetingText", edit.NewText);
+        Assert.Equal(new Position(0, 1), edit.Range.Start); // starts AFTER the '!'
+        Assert.Equal(new Position(0, 13), edit.Range.End);
+    }
+
+    [Fact]
+    public void NullData_ProducesNoActions()
+    {
+        var ctx = Context(Diag(XamlValidator.UnknownTypeCode, R(0, 1, 5), data: null));
+        Assert.Empty(XamlCodeActions.Compute(Uri, null, ctx));
+    }
+
+    [Fact]
+    public void EmptySuggestions_ProduceNoActions()
+    {
+        var ctx = Context(Diag(XamlValidator.UnknownTypeCode, R(0, 1, 5), Data("Bttn")));
+        Assert.Empty(XamlCodeActions.Compute(Uri, null, ctx));
+    }
+
+    [Fact]
+    public void OnlyFilter_QuickfixRequested_ReturnsActions()
+    {
+        var ctx = new CodeActionContext
+        {
+            Diagnostics = new List<Diagnostic> { Diag(XamlValidator.UnknownTypeCode, R(0, 1, 5), Data("Bttn", "Button")) },
+            Only = new[] { "quickfix" },
+        };
+        Assert.Single(XamlCodeActions.Compute(Uri, null, ctx));
+    }
+
+    [Fact]
+    public void OnlyFilter_UnrelatedKind_ReturnsNothing()
+    {
+        var ctx = new CodeActionContext
+        {
+            Diagnostics = new List<Diagnostic> { Diag(XamlValidator.UnknownTypeCode, R(0, 1, 5), Data("Bttn", "Button")) },
+            Only = new[] { "refactor.extract" },
+        };
+        Assert.Empty(XamlCodeActions.Compute(Uri, null, ctx));
+    }
+
+    [Fact]
+    public void OnlyFilter_EmptyArray_ReturnsActions()
+    {
+        var ctx = new CodeActionContext
+        {
+            Diagnostics = new List<Diagnostic> { Diag(XamlValidator.UnknownTypeCode, R(0, 1, 5), Data("Bttn", "Button")) },
+            Only = System.Array.Empty<string>(),
+        };
+        Assert.Single(XamlCodeActions.Compute(Uri, null, ctx));
+    }
+
+    [Fact]
+    public void MissingBad_FallsBackToDocumentRangeText()
+    {
+        // No 'bad' in the payload -> the title text is read from the document over the diagnostic range.
+        var doc = new TextDocument(Uri, "<Bttn />\n");
+        var ctx = Context(Diag(XamlValidator.UnknownTypeCode, R(0, 1, 5), Data("", "Button")));
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx));
+        Assert.Equal("Change 'Bttn' to 'Button'", action.Title);
+    }
+
+    [Fact]
+    public void WireShape_DataAsJsonElement_IsReadIdentically()
+    {
+        // Simulate the client round-trip: Diagnostic.Data comes back as a JsonElement, not a DiagnosticData.
+        var json = JsonSerializer.SerializeToElement(Data("Bttn", "Button"), LspJson.Options);
+        var ctx = Context(Diag(XamlValidator.UnknownTypeCode, R(0, 1, 5), json));
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, null, ctx));
+        Assert.Equal("Change 'Bttn' to 'Button'", action.Title);
+        Assert.Equal("Button", Assert.Single(action.Edit!.Changes[Uri]).NewText);
+    }
+
+    [Fact]
+    public void MultipleDiagnostics_EachContributeIndependently()
+    {
+        var ctx = Context(
+            Diag(XamlValidator.UnknownTypeCode, R(0, 1, 5), Data("Bttn", "Button")),
+            Diag("WXAML0001", R(1, 1, 5), Data("x", "y")),               // needs a doc to fix; null doc -> ignored
+            Diag(XamlValidator.UnknownAttributeCode, R(2, 3, 9), Data("Contnt", "Content")));
+
+        var actions = XamlCodeActions.Compute(Uri, null, ctx);
+        Assert.Equal(2, actions.Count);
+        Assert.Contains(actions, a => a.Title == "Change 'Bttn' to 'Button'");
+        Assert.Contains(actions, a => a.Title == "Change 'Contnt' to 'Content'");
+    }
+
+    // ── WXAML0001: "Add xmlns:… declaration" quick fix ──────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("d", "http://schemas.microsoft.com/expression/blend/2008")]
+    [InlineData("x", "http://schemas.microsoft.com/winfx/2006/xaml")]
+    [InlineData("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006")]
+    public void UndeclaredWellKnownPrefix_AddsXmlnsAfterExisting(string prefix, string uri)
+    {
+        // Root already declares the default xmlns -> the new declaration groups right after it (just
+        // before the root's '>'), as a single zero-width insertion.
+        var xaml = $"<Page xmlns=\"P\"><{prefix}:Foo /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int prefixAt = xaml.IndexOf($"<{prefix}:") + 1;
+        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + prefix.Length), data: null));
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx));
+        Assert.Equal($"Add xmlns:{prefix} declaration", action.Title);
+        Assert.Equal("quickfix", action.Kind);
+        Assert.True(action.IsPreferred);
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+        Assert.Equal($" xmlns:{prefix}=\"{uri}\"", edit.NewText);
+        Assert.Equal(edit.Range.Start, edit.Range.End);                    // zero-width insertion
+        Assert.Equal(xaml.IndexOf('>'), doc.OffsetAt(edit.Range.Start));   // after xmlns="P", before '>'
+    }
+
+    [Fact]
+    public void UndeclaredPrefix_NoExistingXmlns_InsertsAfterRootName()
+    {
+        // No xmlns on the root -> the declaration lands right after the element name.
+        var xaml = "<Page><d:Foo /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int prefixAt = xaml.IndexOf("<d:") + 1;
+        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 1), data: null));
+
+        var edit = Assert.Single(Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx)).Edit!.Changes[Uri]);
+        Assert.Equal(" xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\"", edit.NewText);
+        Assert.Equal(xaml.IndexOf('>'), doc.OffsetAt(edit.Range.Start));   // after "Page", before '>'
+    }
+
+    [Fact]
+    public void UndeclaredCustomPrefix_ProducesNoAction()
+    {
+        // A custom prefix (local) has no unambiguous namespace to add -> no fix, no guess.
+        var xaml = "<Page xmlns=\"P\"><local:Foo /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int prefixAt = xaml.IndexOf("<local:") + 1;
+        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 5), data: null));
+
+        Assert.Empty(XamlCodeActions.Compute(Uri, doc, ctx));
+    }
+
+    [Fact]
+    public void UndeclaredPrefix_NullDoc_ProducesNoAction()
+    {
+        // The fix needs the document to locate the insertion point; with none, it stays silent.
+        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, 1, 2), data: null));
+        Assert.Empty(XamlCodeActions.Compute(Uri, null, ctx));
+    }
+
+    [Fact]
+    public void UndeclaredPrefix_RootlessDoc_ProducesNoAction()
+    {
+        // No root element -> nowhere to hang the declaration -> no action (defensive guard).
+        var doc = new TextDocument(Uri, "d");
+        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, 0, 1), data: null));
+        Assert.Empty(XamlCodeActions.Compute(Uri, doc, ctx));
+    }
+
+    [Fact]
+    public void UndeclaredPrefix_SamePrefixTwice_ProducesSingleAction()
+    {
+        // Two uses of the same undeclared prefix -> one declaration fixes both, so offer it once.
+        var xaml = "<Page xmlns=\"P\"><d:Foo /><d:Bar /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int firstAt = xaml.IndexOf("<d:") + 1;
+        int secondAt = xaml.IndexOf("<d:", firstAt) + 1;
+        var ctx = Context(
+            Diag(XamlValidator.UndeclaredPrefixCode, R(0, firstAt, firstAt + 1), data: null),
+            Diag(XamlValidator.UndeclaredPrefixCode, R(0, secondAt, secondAt + 1), data: null));
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx));
+        Assert.Equal("Add xmlns:d declaration", action.Title);
+    }
+
+    // ── WXAML0001: custom-prefix using: inference (needs the type system) ────────────────────────────
+
+    private static XamlTypeSystem BuildTypeSystem(string source)
+    {
+        // A minimal source-only compilation is enough: FindNamespacesForTypeName searches the compilation's
+        // declaration table (source types), never referenced metadata.
+        var compilation = CSharpCompilation.Create(
+            "TestApp",
+            new[] { CSharpSyntaxTree.ParseText(source) },
+            new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        return XamlTypeSystem.FromCompilation(compilation, ImmutableArray<IAssemblySymbol>.Empty);
+    }
+
+    [Fact]
+    public void UndeclaredCustomPrefix_WithTypeSystem_InfersUsingForSourceType()
+    {
+        // local:MyPanel names one of the project's own source types -> offer xmlns:local="using:<ns>".
+        var ts = BuildTypeSystem("namespace SampleApp { public class MyPanel { } }");
+        var xaml = "<Page xmlns=\"P\"><local:MyPanel /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int prefixAt = xaml.IndexOf("<local:") + 1;
+        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 5), data: null));
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx, ts));
+        Assert.Equal("Add xmlns:local=\"using:SampleApp\"", action.Title);
+        Assert.Equal("quickfix", action.Kind);
+        Assert.True(action.IsPreferred);                                  // single candidate -> preferred
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+        Assert.Equal(" xmlns:local=\"using:SampleApp\"", edit.NewText);
+        Assert.Equal(edit.Range.Start, edit.Range.End);                   // zero-width insertion
+        Assert.Equal(xaml.IndexOf('>'), doc.OffsetAt(edit.Range.Start));  // grouped after xmlns="P"
+    }
+
+    [Fact]
+    public void UndeclaredCustomPrefix_WithTypeSystem_TwoNamespaces_OffersEachNotPreferred()
+    {
+        // The same simple name is declared in two namespaces -> offer both, neither preferred (ambiguous).
+        var ts = BuildTypeSystem(
+            "namespace Alpha { public class Widget { } } namespace Beta { public class Widget { } }");
+        var xaml = "<Page xmlns=\"P\"><local:Widget /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int prefixAt = xaml.IndexOf("<local:") + 1;
+        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 5), data: null));
+
+        var actions = XamlCodeActions.Compute(Uri, doc, ctx, ts);
+        Assert.Equal(2, actions.Count);
+        var alpha = actions.Single(a => a.Title.Contains("Alpha"));
+        var beta = actions.Single(a => a.Title.Contains("Beta"));
+        Assert.Equal("Add xmlns:local=\"using:Alpha\"", alpha.Title);
+        Assert.Equal("Add xmlns:local=\"using:Beta\"", beta.Title);
+        Assert.Equal(" xmlns:local=\"using:Alpha\"", Assert.Single(alpha.Edit!.Changes[Uri]).NewText);
+        Assert.All(actions, a => Assert.NotEqual(true, a.IsPreferred));   // ambiguous -> none preferred
+    }
+
+    [Fact]
+    public void UndeclaredCustomPrefix_WithTypeSystem_UnknownType_ProducesNoAction()
+    {
+        // The prefixed element names no source type -> nothing to infer, no action (never guesses a namespace).
+        var ts = BuildTypeSystem("namespace SampleApp { public class MyPanel { } }");
+        var xaml = "<Page xmlns=\"P\"><local:Nope /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int prefixAt = xaml.IndexOf("<local:") + 1;
+        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 5), data: null));
+
+        Assert.Empty(XamlCodeActions.Compute(Uri, doc, ctx, ts));
+    }
+
+    [Fact]
+    public void UndeclaredCustomPrefix_OnAttribute_WithTypeSystem_ProducesNoAction()
+    {
+        // A custom prefix on an ATTRIBUTE names a member, not a type -> no using: inference even when a
+        // source type of that name exists (the fix is offered only for element/type usages).
+        var ts = BuildTypeSystem("namespace SampleApp { public class Tag { } }");
+        var xaml = "<Page xmlns=\"P\" local:Tag=\"x\"></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int prefixAt = xaml.IndexOf("local:");
+        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 5), data: null));
+
+        Assert.Empty(XamlCodeActions.Compute(Uri, doc, ctx, ts));
+    }
+
+    [Fact]
+    public void UndeclaredWellKnownPrefix_WithTypeSystem_StillUsesStandardDeclaration()
+    {
+        // A well-known prefix stays the standard declaration form even with a type system available
+        // (never re-interpreted as a using: guess).
+        var ts = BuildTypeSystem("namespace SampleApp { public class Foo { } }");
+        var xaml = "<Page xmlns=\"P\"><d:Foo /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int prefixAt = xaml.IndexOf("<d:") + 1;
+        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 1), data: null));
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx, ts));
+        Assert.Equal("Add xmlns:d declaration", action.Title);
+        Assert.Equal(
+            " xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\"",
+            Assert.Single(action.Edit!.Changes[Uri]).NewText);
+    }
+}

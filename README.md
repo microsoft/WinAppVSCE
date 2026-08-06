@@ -18,7 +18,8 @@ Try the WinApp extension today: [**VS Code Markplace**](https://marketplace.visu
 
 ### Command Palette
 
-All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **WinApp** to see the full list.
+All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **WinApp** for CLI and
+packaging commands, or **WinUI XAML** for language-service commands.
 
 | Command | Description |
 |---------|-------------|
@@ -39,6 +40,9 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Sign File** | Sign an MSIX/APPX package, executable, or library with a certificate. |
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
+| **WinUI XAML: Show Info** | Show whether the WinUI XAML language server is running or the editor is in syntax-only mode. |
+| **WinUI XAML: Restart Language Server** | Restart the WinUI XAML language server (e.g. after changing server settings). |
+| **WinUI XAML: Surround With...** | Wrap the selected XAML in a `Border`, `Grid`, or `StackPanel`. |
 
 #### Workspace & Multi-Project Support
 
@@ -191,6 +195,24 @@ The extension includes a **visual editor** for `AppxManifest.xml` and `.appxmani
 
 When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer the visual editor as an option alongside the default text editor. You can switch between them at any time by right clicking on the file and selecting the **Open With…** command.
 
+### WinUI XAML Language Service
+
+The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, powered by a bundled .NET language server. Beyond syntax highlighting, it provides project-aware editing that understands your app's types, `x:Class`, `x:Bind` targets, and `App.xaml` resources:
+
+| Feature | What it does |
+|---------|--------------|
+| **Completion / IntelliSense** | Element names, properties, events, attached properties, enum/bool values, markup extensions, and resource keys — resolved against your project's referenced assemblies. |
+| **Hover** | Type and member information for elements, properties, and resource references. |
+| **Go to Definition (F12)** | Jump from an event handler or member name to its C# declaration on the page's `x:Class` type, and from resource references to their declaration. |
+| **Diagnostics** | Syntactic diagnostics as you type, plus semantic validation against the resolved type system. |
+| **Find All References** | Locate references to names and resource keys. |
+| **Rename** | Rename symbols with a prepare-rename validity check. |
+| **Formatting** | Whole-document and range formatting. |
+| **Semantic tokens** | Richer, type-aware colorization layered on top of the TextMate grammar. |
+| **Snippets and refactoring** | Structural snippets (`xgrid`, `xbind`, `xresource`, `xstyle`, and `xdatatemplate`), selection-based surround-with actions, namespace cleanup, and on-type indentation. |
+
+The self-contained language server starts automatically when you open a `.xaml` file. No separate .NET 10 runtime or SDK is required to launch it. Project-aware features use the MSBuild toolset from your WinUI build environment (Visual Studio, Visual Studio Build Tools, or a compatible SDK); if that toolset is unavailable, the server reports the missing prerequisite and keeps project-independent XAML features available. If the bundled server cannot start, XAML gracefully degrades to **syntax highlighting only** and the rest of the extension is unaffected. Use **WinUI XAML: Show Info** to check the server status and **WinUI XAML: Restart Language Server** to restart it.
+
 ### AppxManifest IntelliSense
 
 When you edit an `AppxManifest.xml` or `.appxmanifest` file in the text editor, the extension provides schema-aware IntelliSense powered by bundled AppxManifest XSD schemas from the Windows SDK. That means completions, hovers, validation, and navigation are based on the same schema definitions used by Windows manifests.
@@ -285,6 +307,7 @@ The winapp CLI (and this extension) works with any Windows app framework:
 
 - Windows 10 or later
 - Visual Studio Code 1.109.0 or later
+- The WinUI XAML language server is bundled as self-contained `win-x64` and `win-arm64` executables, so users do not need to install .NET 10. Project-aware features require the MSBuild toolset already used to build the WinUI project. To run a developer build instead, set `winui-xaml.server.path` to a `WinUiXaml.LanguageServer.exe` or `.dll`; `winui-xaml.server.dotnetPath` is used only for a custom DLL. Both settings are machine-scoped and ignored in untrusted workspaces.
 
 The winapp CLI is bundled with the extension — no separate installation required.
 

@@ -29,12 +29,21 @@ param(
     [switch]$Stable = $false,
 
     [Parameter(Mandatory=$false)]
-    [string]$CliBinariesPath
+    [string]$CliBinariesPath,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$SkipServerBuild = $false
 )
 
 # Ensure we're running from the project root
 $ProjectRoot = $PSScriptRoot | Split-Path -Parent
 Push-Location $ProjectRoot
+
+# Track the bundle mode so a later local package in the same shell cannot accidentally reuse an
+# existing signed artifact.
+$ServerBundleModeSet = $false
+$PriorServerBundleMode = $env:WINUI_XAML_SERVER_BUNDLE_MODE
+
 try
 {
     # Define standard paths
@@ -139,9 +148,12 @@ try
 
     Push-Location $VscProjectPath
 
-    # Clean out and dist directories (preserve bin/ which may contain downloaded CLI binaries)
+    # Clean out and dist directories (preserve bin/ which may contain downloaded CLI binaries).
+    # Under -SkipServerBuild the language server has already been published (and signed) into
+    # dist/server by a prior pipeline step, so preserve dist/ and only clean out/.
     Write-Host "[VSC] Cleaning build artifacts..." -ForegroundColor Blue
-    @("out", "dist") | ForEach-Object {
+    $CleanTargets = if ($SkipServerBuild) { @("out") } else { @("out", "dist") }
+    $CleanTargets | ForEach-Object {
         if (Test-Path $_) { Remove-Item $_ -Recurse -Force }
     }
 
@@ -161,6 +173,26 @@ try
         Write-Error "TypeScript compilation failed"
         Pop-Location
         exit 1
+    }
+
+    # Ensure the WinUI XAML language server (.NET) is published into dist/server so it ships in the VSIX.
+    # The single local publish path is vscode:prepublish -> ensure-server-bundle.mjs (triggered by
+    # `vsce package` below). In release builds, -SkipServerBuild requires the downloaded, signed
+    # pipeline artifact and switches ensure-server-bundle.mjs to artifact mode.
+    if ($SkipServerBuild) {
+        Write-Host "[VSC] Skipping server build; reusing pre-published dist/server..." -ForegroundColor Blue
+        # Preserve the downloaded ESRP signatures instead of rebuilding over them. The mode is
+        # restored in the finally block so it never leaks into the caller's shell. The prepublish
+        # helper is the canonical completeness check and fails closed if either RID is missing.
+        $env:WINUI_XAML_SERVER_BUNDLE_MODE = "artifact"
+        $ServerBundleModeSet = $true
+    } else {
+        # Normal packaging: DON'T publish the server here. The `vsce package` step below triggers
+        # vscode:prepublish -> ensure-server-bundle.mjs publishes a fresh self-contained dist/server.
+        # Publishing here too would build the server twice for every package.
+        $env:WINUI_XAML_SERVER_BUNDLE_MODE = "source"
+        $ServerBundleModeSet = $true
+        Write-Host "[VSC] WinUI XAML language server will be published by vscode:prepublish (ensure-server-bundle)." -ForegroundColor Blue
     }
 
     # Copy CLI binaries from artifacts (skip if source and destination are the same)
@@ -276,10 +308,23 @@ try
         Write-Warning "VSIX was created but could not be located in $OutputPath"
     }
 
+    if ($CreatedVsix) {
+        & (Join-Path $PSScriptRoot "validate-vsix-server.ps1") -VsixPath $CreatedVsix.FullName
+        if (-not $?) { exit 1 }
+    }
+
     Write-Host "[DONE] VS Code extension packaging complete!" -ForegroundColor Green
 }
 finally
 {
     # Restore original working directory
     Pop-Location
+
+    if ($ServerBundleModeSet) {
+        if ($null -eq $PriorServerBundleMode) {
+            Remove-Item Env:\WINUI_XAML_SERVER_BUNDLE_MODE -ErrorAction SilentlyContinue
+        } else {
+            $env:WINUI_XAML_SERVER_BUNDLE_MODE = $PriorServerBundleMode
+        }
+    }
 }

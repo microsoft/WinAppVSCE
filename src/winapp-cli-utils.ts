@@ -5,6 +5,15 @@ import * as os from 'os';
 export const WINAPP_CLI_CALLER_VALUE = 'vscode-extension';
 
 /**
+ * Return the first candidate path that exists on disk, or `undefined` when none do.
+ * Empty/blank candidates are skipped. Shared by the CLI and the XAML language-server
+ * resolvers so bundled-asset lookup logic lives in one place.
+ */
+export function firstExistingPath(candidates: readonly string[]): string | undefined {
+	return candidates.find((p) => !!p && fs.existsSync(p));
+}
+
+/**
  * Get the path to the bundled winapp CLI executable.
  * Looks in the extension's bin/ directory first (by architecture),
  * then falls back to development paths and the system PATH.
@@ -20,7 +29,7 @@ export function getWinappCliPath(extensionPath: string): string {
 	];
 
 	// Return the first on-disk path that exists, otherwise fall back to 'winapp' on the system PATH
-	return onDiskPaths.find((p) => fs.existsSync(p)) || 'winapp';
+	return firstExistingPath(onDiskPaths) || 'winapp';
 }
 
 /**
