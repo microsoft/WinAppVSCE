@@ -898,6 +898,7 @@ test('copy to assets copies file and updates field path', async () => {
 
     // Clean up
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(path.join(ctx.workspacePath, 'Assets', 'test-asset.png'), { force: true });
 });
 
 test('no warning shown for resource key paths', async () => {

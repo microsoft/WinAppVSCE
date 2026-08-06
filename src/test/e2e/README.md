@@ -19,6 +19,8 @@ npm run test:e2e
 
 > **Prerequisites** – VS Code must be installed at the default location and all other VS Code windows must be closed before running (Playwright needs exclusive access to the Electron process).
 
+> **`@playwright/test` version** – pinned with a caret range starting at `1.61.1` (not `1.62.1`) because the approved package feed does not mirror a stable `1.62.1` for `@playwright/test`/`playwright`/`playwright-core` (only prereleases). `^1.61.1` still resolves through that feed and picks up newer compatible stable releases (e.g. `1.62.0`) as they land, without requiring a version the feed can't serve.
+
 ## Architecture
 
 | File | Purpose |

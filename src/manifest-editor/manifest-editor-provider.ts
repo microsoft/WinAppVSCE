@@ -14,6 +14,7 @@ import { getWebviewContent, getParseErrorContent } from './webview-content';
 import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
+import { AssetCopyTokenStore } from './asset-copy-token-store';
 
 export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'winapp.manifestEditor';
@@ -67,6 +68,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         // Track whether we're currently applying an edit to avoid feedback loops
         let isApplyingEdit = false;
         let showingErrorView = false;
+        const assetCopyTokens = new AssetCopyTokenStore();
 
         /** Try to parse — if it fails, show error view; if it succeeds, show/update editor. */
         const tryParseOrShowError = (text: string): boolean => {
@@ -281,13 +283,15 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             // The path resolves outside the package dir (e.g., ..\..\Downloads\img.png)
                             // or is an absolute path — check if the file exists at the resolved location
                             if (fs.existsSync(resolved)) {
-                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', sourcePath: resolved });
+                                const copyToken = assetCopyTokens.issue(resolved);
+                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', copyToken });
                                 return;
                             }
 
                             // Check if it's an absolute path that exists
                             if (path.isAbsolute(imgPath) && fs.existsSync(imgPath)) {
-                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', sourcePath: imgPath });
+                                const copyToken = assetCopyTokens.issue(imgPath);
+                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', copyToken });
                                 return;
                             }
 
@@ -312,16 +316,18 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                         case 'copyToAssets': {
                             const manifestDirPath2 = path.dirname(document.uri.fsPath);
                             const assetsDir = path.join(manifestDirPath2, 'Assets');
-                            const sourcePath = message.sourcePath;
+                            const sourcePath = assetCopyTokens.consume(message.copyToken);
+                            if (!sourcePath) {
+                                updateWebview(true);
+                                return;
+                            }
                             const fileName = path.basename(sourcePath);
 
-                            // Create Assets folder if it doesn't exist
+                            let destName = fileName;
                             if (!fs.existsSync(assetsDir)) {
                                 fs.mkdirSync(assetsDir, { recursive: true });
                             }
 
-                            // Handle name collision
-                            let destName = fileName;
                             let destPath = path.join(assetsDir, destName);
                             if (fs.existsSync(destPath)) {
                                 const ext = path.extname(fileName);
