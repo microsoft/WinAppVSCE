@@ -80,6 +80,7 @@ $onEditor = Confirm-VSCodeEditor -Ctx $ctx -OpenFileIfNeeded $file
 
 # 3. Push REAL extension commands to the LIVE instance and verify their effects.
 Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.certGenerate' -Answers @(@{accept=$true})
+Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'some.command' -Arguments @('value', 42)
 Invoke-VSCodeDriverDebug   -Ctx $ctx -InputFolder "$proj\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64"
 Invoke-VSCodeDriverOpenFile -Ctx $ctx -Path "$proj\Package.appxmanifest"
 
@@ -148,6 +149,10 @@ Answers (ordered, one per prompt the command raises):
   sign, certInstall). Targets the `File name:` edit field and clicks `Open`.
 - Free-text `showInputBox` prompts (e.g. cert password) **cannot** be auto-answered — avoid or accept
   defaults.
+
+Command arguments are passed with `-Arguments`; queue/script JSON uses `args`. Descriptors with
+`kind: activeDocumentUri`, `fileUri`, or `position` resolve to the corresponding VS Code API object.
+Legacy steps with `type: commandArgs` remain supported.
 
 `debug` steps use `launch.json`'s `inputFolder` (the app's built `win-x64` output). No dialogs.
 

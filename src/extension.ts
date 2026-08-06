@@ -375,18 +375,22 @@ async function runWinappCapture(
  * @returns The selected file path, or `undefined` if cancelled.
  */
 async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
-	let cancelled = false;
 	const artifactPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
 		async (_progress, token) => {
-			token.onCancellationRequested(() => { cancelled = true; });
-			const packagePaths = await findWorkspaceArtifacts(workspacePath, ARTIFACT_GLOBS);
-			const executablePaths = await findWorkspaceArtifacts(workspacePath, EXECUTABLE_GLOBS);
+			const packagePaths = await findWorkspaceArtifactsWithCancellation(workspacePath, ARTIFACT_GLOBS, token);
+			if (!packagePaths) {
+				return undefined;
+			}
+			const executablePaths = await findWorkspaceArtifactsWithCancellation(workspacePath, EXECUTABLE_GLOBS, token);
+			if (!executablePaths) {
+				return undefined;
+			}
 			return [...packagePaths, ...executablePaths].slice(0, MAX_SIGNABLE_FILES);
 		}
 	);
 
-	if (cancelled) {
+	if (!artifactPaths) {
 		return undefined;
 	}
 
@@ -436,16 +440,12 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
  * @returns The selected certificate path, or `undefined` if cancelled.
  */
 async function pickCertificateFile(workspacePath: string): Promise<string | undefined> {
-	let cancelled = false;
 	const certPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for certificates...', cancellable: true },
-		async (_progress, token) => {
-			token.onCancellationRequested(() => { cancelled = true; });
-			return findWorkspaceArtifacts(workspacePath, CERTIFICATE_GLOBS);
-		}
+		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, CERTIFICATE_GLOBS, token)
 	);
 
-	if (cancelled) {
+	if (!certPaths) {
 		return undefined;
 	}
 
@@ -481,6 +481,38 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 	}
 
 	return picked.detail;
+}
+
+async function findWorkspaceArtifactsWithCancellation(
+	workspacePath: string,
+	patterns: string[],
+	token: vscode.CancellationToken
+): Promise<string[] | undefined> {
+	const abortController = new AbortController();
+	const cancellation = token.onCancellationRequested(() => abortController.abort());
+	if (token.isCancellationRequested) {
+		abortController.abort();
+	}
+
+	try {
+		const paths = await findWorkspaceArtifacts(
+			workspacePath,
+			async includePattern => {
+				const matches = await vscode.workspace.findFiles(
+					new vscode.RelativePattern(workspacePath, includePattern),
+					null,
+					undefined,
+					token
+				);
+				return matches.map(uri => uri.fsPath);
+			},
+			patterns,
+			abortController.signal
+		);
+		return token.isCancellationRequested ? undefined : paths;
+	} finally {
+		cancellation.dispose();
+	}
 }
 
 const FOLDER_PICKER_DETAIL = 'Open a folder picker';

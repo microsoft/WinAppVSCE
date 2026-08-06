@@ -81,13 +81,28 @@ async function acceptQuickInput() {
   catch (e) { return 'accept-error:' + String(e); }
 }
 
-// Run a single command step. Invokes the command WITHOUT awaiting (it blocks on its own prompts),
-// then answers prompts in order: {accept:true} for QuickPick, {nativeDialogPath} for folder picker,
-// {nativeFileDialogPath} for file picker.
-async function runCommandStep(step, result) {
+// Run a command step. Ordinary command steps are not awaited because the command may block on
+// prompts; legacy commandArgs steps are awaited so existing scripted provider queries keep results.
+async function executeCommandStep(step, result) {
   const settle = step.settleMs || 1600;
+  const args = (step.args || []).map(resolveCommandArg);
+  const isLegacyCommandArgs = step.type === 'commandArgs';
   appendLog('driver-run.log', `command: ${step.command}`);
-  Promise.resolve(vscode.commands.executeCommand(step.command)).catch(e => appendLog('driver-run.log', `cmd ${step.command} threw: ${e}`));
+  if (isLegacyCommandArgs) {
+    let error = null;
+    let value = null;
+    try {
+      value = await vscode.commands.executeCommand(step.command, ...args);
+    } catch (e) {
+      error = String(e);
+    }
+    await delay(step.afterMs || 800);
+    result.steps.push({ type: 'commandArgs', command: step.command, result: value, error });
+    return;
+  }
+
+  Promise.resolve(vscode.commands.executeCommand(step.command, ...args))
+    .catch(e => appendLog('driver-run.log', `cmd ${step.command} threw: ${e}`));
   const answers = step.answers || [];
   const log = { type: 'command', command: step.command, answers: [] };
   for (const a of answers) {
@@ -345,18 +360,6 @@ async function saveDocumentStep(step, result) {
   result.steps.push({ type: 'saveDocument', saved });
 }
 
-async function commandArgsStep(step, result) {
-  let err = null;
-  let value = null;
-  try {
-    value = await vscode.commands.executeCommand(step.command, ...(step.args || []).map(resolveCommandArg));
-  } catch (e) {
-    err = String(e);
-  }
-  await delay(step.afterMs || 800);
-  result.steps.push({ type: 'commandArgs', command: step.command, result: value, error: err });
-}
-
 async function queryCompletionsStep(step, result) {
   const editor = requireActiveEditor();
   const position = toPosition(step.line, step.character);
@@ -445,7 +448,8 @@ async function revealDefinitionStep(step, result) {
 
 async function runStep(step, result) {
   switch (step.type) {
-    case 'command': await runCommandStep(step, result); break;
+    case 'command':
+    case 'commandArgs': await executeCommandStep(step, result); break;
     case 'debug': await runDebugStep(step, result); break;
     case 'stopDebug': await stopDebugStep(step, result); break;
     case 'openManifest': await openManifestStep(step, result); break;
@@ -454,7 +458,6 @@ async function runStep(step, result) {
     case 'setDocumentText': await setDocumentTextStep(step, result); break;
     case 'replaceText': await replaceTextStep(step, result); break;
     case 'saveDocument': await saveDocumentStep(step, result); break;
-    case 'commandArgs': await commandArgsStep(step, result); break;
     case 'queryCompletions': await queryCompletionsStep(step, result); break;
     case 'queryHover': await queryHoverStep(step, result); break;
     case 'queryDefinition': await queryDefinitionStep(step, result); break;
@@ -553,4 +556,8 @@ function activate(context) {
   }
 }
 function deactivate() {}
-module.exports = { activate, deactivate };
+module.exports = {
+  activate,
+  deactivate,
+  _test: { executeCommandStep, resolveCommandArg }
+};

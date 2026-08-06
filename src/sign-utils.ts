@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import { glob } from 'glob';
+import * as path from 'node:path';
 import { escapePowerShellArg } from './winapp-cli-utils';
 import { ARTIFACT_GLOBS } from './artifact-types';
 
@@ -9,7 +9,12 @@ export const CERTIFICATE_GLOBS = ['**/*.pfx'];
 /** Glob patterns for executable files that can be signed. */
 export const EXECUTABLE_GLOBS = ['**/*.exe', '**/*.dll'];
 
-const SIGNABLE_ARTIFACT_IGNORES = ['**/node_modules/**', '**/.git/**'];
+const SIGNABLE_ARTIFACT_IGNORES = new Set(['node_modules', '.git']);
+
+export type WorkspaceFileFinder = (
+	includePattern: string,
+	signal?: AbortSignal
+) => Promise<string[]>;
 
 /**
  * Build the CLI argument string for `winapp sign`.
@@ -29,32 +34,60 @@ export function buildSignCommand(filePath: string, certPath: string): string {
  */
 export async function findWorkspaceArtifacts(
 	workspacePath: string,
-	patterns: string[] = ARTIFACT_GLOBS
+	findFiles: WorkspaceFileFinder,
+	patterns: string[] = ARTIFACT_GLOBS,
+	signal?: AbortSignal
 ): Promise<string[]> {
-	const results: string[] = [];
-	for (const pattern of patterns) {
-		const matches = await glob(pattern, {
-			cwd: workspacePath,
-			absolute: true,
-			nodir: true,
-			ignore: SIGNABLE_ARTIFACT_IGNORES
-		});
-		results.push(...matches);
+	if (signal?.aborted) {
+		return [];
+	}
+
+	const includePattern = patterns.length === 1 ? patterns[0] : `{${patterns.join(',')}}`;
+	let results: string[];
+	try {
+		results = await findFiles(includePattern, signal);
+	} catch (error) {
+		if (signal?.aborted && isCancellationError(error)) {
+			return [];
+		}
+		throw error;
 	}
 
 	// Sort by mtime descending (newest first); if stat fails, push to end.
-	const withStats = await Promise.all(
-		results.map(async (p) => {
-			try {
-				const stat = await fs.promises.stat(p);
-				return { path: p, mtime: stat.mtimeMs };
-			} catch {
-				return { path: p, mtime: 0 };
-			}
-		})
-	);
+	const withStats: Array<{ path: string; mtime: number }> = [];
+	for (const filePath of results) {
+		if (signal?.aborted) {
+			return [];
+		}
+		if (isIgnoredWorkspacePath(workspacePath, filePath)) {
+			continue;
+		}
+		try {
+			const stat = await fs.promises.stat(filePath);
+			withStats.push({ path: filePath, mtime: stat.mtimeMs });
+		} catch {
+			withStats.push({ path: filePath, mtime: 0 });
+		}
+	}
+
 	withStats.sort((a, b) => b.mtime - a.mtime);
 	return withStats.map((s) => s.path);
+}
+
+function isIgnoredWorkspacePath(workspacePath: string, filePath: string): boolean {
+	return path.relative(workspacePath, filePath)
+		.split(path.sep)
+		.some(segment => SIGNABLE_ARTIFACT_IGNORES.has(
+			process.platform === 'win32' ? segment.toLowerCase() : segment
+		));
+}
+
+function isCancellationError(error: unknown): boolean {
+	if (typeof error !== 'object' || error === null || !('name' in error)) {
+		return false;
+	}
+	const name = (error as { name?: unknown }).name;
+	return name === 'AbortError' || name === 'Canceled' || name === 'CancellationError';
 }
 
 // ──────────────────────────────────────────────────────
