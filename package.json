@@ -4,7 +4,7 @@
   "description": "WinApp extension for Visual Studio Code to assist in building, debugging, and packaging Windows applications. Includes schema-aware IntelliSense for AppxManifest.xml files.",
   "publisher": "Microsoft-WinAppCLI",
   "icon": "images/icon.png",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/microsoft/WinAppVSCE.git"
@@ -161,7 +161,11 @@
         },
         "winapp.manifest.diagnostics.level": {
           "type": "string",
-          "enum": ["off", "warning", "error"],
+          "enum": [
+            "off",
+            "warning",
+            "error"
+          ],
           "default": "warning",
           "description": "Diagnostic filter for manifest schema validation. Set to 'off' to disable validation, 'warning' to show all diagnostics, or 'error' to show only errors."
         },
