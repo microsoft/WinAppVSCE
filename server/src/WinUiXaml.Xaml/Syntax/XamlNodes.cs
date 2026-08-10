@@ -21,11 +21,7 @@ namespace WinUiXaml.Xaml
         /// <summary>All structural child nodes in source order (attributes precede content on elements).</summary>
         public abstract IReadOnlyList<XamlNode> ChildNodes { get; }
 
-        /// <summary>
-        /// Returns the innermost node whose span contains <paramref name="position"/>, or null when
-        /// the position falls outside this node. Uses inclusive end bounds so a caret sitting at the
-        /// end of a token still maps into it.
-        /// </summary>
+        /// <summary>Returns the innermost node whose span contains position, or null when the position falls outside this node.</summary>
         public XamlNode? FindNode(int position)
         {
             if (!Span.ContainsInclusive(position))
@@ -176,7 +172,7 @@ namespace WinUiXaml.Xaml
 
         public bool IsClosed => IsSelfClosing || HasEndTag;
 
-        /// <summary>True for a property element such as <c>&lt;Grid.RowDefinitions&gt;</c>.</summary>
+        /// <summary>True for a property element.</summary>
         public bool IsPropertyElement => Name != null && !Name.HasPrefix && Name.IsDotted;
 
         public override XamlNodeKind Kind => XamlNodeKind.Element;
@@ -359,7 +355,7 @@ namespace WinUiXaml.Xaml
         public override IReadOnlyList<XamlNode> ChildNodes => System.Array.Empty<XamlNode>();
     }
 
-    /// <summary>A processing instruction / XML declaration such as <c>&lt;?xml ... ?&gt;</c>.</summary>
+    /// <summary>A processing instruction / XML declaration.</summary>
     public sealed class XamlProcessingInstruction : XamlNode
     {
         public XamlProcessingInstruction(string text, TextSpan span) : base(span)

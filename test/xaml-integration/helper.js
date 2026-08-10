@@ -1,15 +1,6 @@
 "use strict";
 
-// Shared helpers for the WinUI XAML VS Code integration tests.
-//
-// These drive the REAL extension inside a REAL VS Code instance: opening the smoke fixture's
-// SmokePage.xaml, replacing its in-memory buffer with "doctored" probe text (a `|` marks the
-// caret), and invoking VS Code's own language-feature commands so requests travel through the
-// actual LSP client to our .NET server — the same path a user exercises while typing.
-//
-// The on-disk file is never saved; the buffer is reverted on teardown. Resolution of x:Class,
-// project types, and App.xaml resources still works because the server reads those from disk
-// while parsing the in-memory buffer, mirroring the stdio smoke test.
+// Helpers drive VS Code language APIs against an unsaved SmokePage.xaml buffer. The fixture remains on disk for project and resource resolution.
 
 const vscode = require("vscode");
 const assert = require("node:assert");
@@ -53,10 +44,7 @@ function splitCaret(text) {
   return { clean: text.slice(0, i) + text.slice(i + 1), offset: i };
 }
 
-// Computes the caret as an EOL-agnostic (line, character) Position from the probe text. Using a
-// line/character position (rather than a flat offset fed through positionAt) is essential because
-// VS Code stores the buffer with the document's EOL (CRLF on Windows) while the probe text uses
-// LF — a flat offset would drift by one char per preceding newline.
+// Use line/character coordinates because CRLF buffers and LF probe text have different offsets.
 function caretPosition(text) {
   const i = text.indexOf("|");
   assert.ok(i >= 0, "probe text must contain a | caret marker");
@@ -92,8 +80,7 @@ async function completionsAt(text) {
   return (list && list.items ? list.items : []).map(labelOf);
 }
 
-// Returns FULL completion items { label, detail, newText } so a test can uniquely identify our
-// close-tag item (detail === "Closing tag") apart from VS Code's built-in word-based suggestions.
+// Preserve server detail to distinguish results from VS Code word suggestions.
 async function completionItemsAt(text) {
   const { clean, position } = caretPosition(text);
   await setBuffer(clean);
@@ -115,11 +102,7 @@ async function completionItemsAt(text) {
   }));
 }
 
-// Returns FULL completion items { label, detail, newText, additionalTextEdits } where each additional
-// edit is { newText, range:{start:{line,character},end:{line,character}} }. Used for the third-party
-// (round 84 / gap #4) xmlns-injection completions: a toolkit control item carries an AdditionalTextEdit
-// that declares xmlns:PREFIX="using:NS" on the root. Discriminate on these SERVER-ONLY fields (newText /
-// detail / additionalTextEdits) so VS Code's buffer word-based suggestions never confound assertions.
+// Preserve xmlns AdditionalTextEdits and server-only detail to exclude word suggestions.
 async function completionEditsAt(text) {
   const { clean, position } = caretPosition(text);
   await setBuffer(clean);
@@ -142,10 +125,7 @@ async function completionEditsAt(text) {
   }));
 }
 
-// Returns FULL completion items { label, detail, documentation } where `documentation` is the plain
-// markdown string of item.documentation (round 67 completion-item docs). VS Code delivers our eager
-// LSP MarkupContent as a vscode.MarkdownString (.value) or a plain string; normalize both. Tests
-// discriminate on this SERVER-ONLY field so buffer word-based suggestions never confound assertions.
+// Normalize server MarkdownString documentation; word suggestions carry none.
 async function completionDocsAt(text) {
   const { clean, position } = caretPosition(text);
   await setBuffer(clean);
@@ -246,9 +226,7 @@ function flattenSymbols(nodes, out = []) {
   return out;
 }
 
-// Sets the buffer, then waits until the diagnostics for the probe satisfy `predicate`. When no
-// predicate is given, waits the full timeout so asynchronously-published diagnostics have time to
-// settle (important right after switching buffers, when the previous probe's diagnostics linger).
+// Wait for matching diagnostics; without a predicate, allow stale diagnostics to settle.
 async function diagnosticsFor(text, predicate, timeoutMs = 15000) {
   const { clean } = splitCaret(text.includes("|") ? text : text + "|");
   await setBuffer(clean);
@@ -266,8 +244,7 @@ function delay(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Warms the language server: opens the probe, then polls element completion until the project
-// has loaded (the first request pays the design-time build cost, ~several seconds cold).
+// Warms the language server: opens the probe, then polls element completion until the project has loaded (the first request pays the design-time build cost, ~several seconds cold).
 async function warmUp(timeoutMs = 170000) {
   await openProbe();
   const started = Date.now();
@@ -290,8 +267,7 @@ async function warmUp(timeoutMs = 170000) {
   throw lastErr || new Error("language server did not warm up in time");
 }
 
-// Returns line-start offsets for LF text (probe text uses LF; edit positions are line/character
-// so EOL is irrelevant to the logical position).
+// Returns line-start offsets for LF text (probe text uses LF; edit positions are line/character so EOL is irrelevant to the logical position).
 function lineStartsOf(text) {
   const starts = [0];
   for (let i = 0; i < text.length; i++) if (text[i] === "\n") starts.push(i + 1);
@@ -303,9 +279,7 @@ function posToOffset(starts, textLen, line, character) {
   return Math.min(starts[line] + character, textLen);
 }
 
-// Format Document through VS Code's real formatting command. Returns { formatted, editCount } where
-// `formatted` is the edits applied to `text`. `text` contains NO caret marker (formatting is
-// whole-document / range, not caret-driven).
+// Apply Format Document edits and return { formatted, editCount }.
 async function formatDoc(text, options = { tabSize: 2, insertSpaces: true }) {
   await setBuffer(text);
   const edits = await vscode.commands.executeCommand(
@@ -326,8 +300,7 @@ async function formatDoc(text, options = { tabSize: 2, insertSpaces: true }) {
   return { formatted: out, editCount: (edits || []).length };
 }
 
-// Maps VS Code's numeric FoldingRangeKind back to its LSP string ("comment"/"region"/"imports") so
-// tests can assert on a readable kind without importing the vscode enum. Structural folds are undefined.
+// Maps VS Code's numeric FoldingRangeKind back to its LSP string ("comment"/"region"/"imports") so tests can assert on a readable kind without importing the vscode enum. Structural folds are undefined.
 function foldKindName(kind) {
   if (kind === vscode.FoldingRangeKind.Comment) return "comment";
   if (kind === vscode.FoldingRangeKind.Region) return "region";
@@ -345,9 +318,7 @@ async function foldingRangesAt(buffer) {
   return (ranges || []).map((r) => ({ start: r.start, end: r.end, kind: foldKindName(r.kind) }));
 }
 
-// Document color swatches for a whole buffer (no caret marker). Returns
-// { color: {red,green,blue,alpha}, range: {start,end}, text } where `text` is the exact source
-// substring the swatch covers (handy for asserting the literal, e.g. "#FF0000").
+// Return document colors with their ranges and covered source text.
 async function documentColorsAt(buffer) {
   await setBuffer(buffer);
   const infos = await vscode.commands.executeCommand(
@@ -377,9 +348,7 @@ async function documentColorsAt(buffer) {
   });
 }
 
-// Color presentations for a picked color over a range (as returned by documentColorsAt). `color` is a
-// plain {red,green,blue,alpha}; `range` is {start:{line,character}, end:{line,character}}. Returns
-// { label, newText, editRange } for each presentation.
+// Return presentation labels, replacement text, and ranges for a selected color.
 async function colorPresentationsAt(buffer, color, range) {
   await setBuffer(buffer);
   const vColor = new vscode.Color(color.red, color.green, color.blue, color.alpha);
@@ -406,8 +375,7 @@ async function colorPresentationsAt(buffer, color, range) {
   }));
 }
 
-// Selection ranges for a single caret (marked with |). Returns { caret, ranges } where `ranges` is the
-// flattened parent chain innermost -> outermost, each { start:{line,character}, end:{line,character} }.
+// Selection ranges for a single caret (marked with |). Returns { caret, ranges } where `ranges` is the flattened parent chain innermost -> outermost, each { start:{line,character}, end:{line,character} }.
 async function selectionRangesAt(text) {
   const { clean, position } = caretPosition(text);
   await setBuffer(clean);
@@ -428,11 +396,7 @@ async function selectionRangesAt(text) {
   return { caret: { line: position.line, character: position.character }, ranges };
 }
 
-// Drives the linked-editing provider at the caret. VS Code exposes this only via the internal
-// `_executeLinkedEditingProvider` command (there is no public vscode.execute* alias), which can return
-// ranges in either the extension shape ({start:{line,character}}) or the internal IRange shape
-// ({startLineNumber,startColumn}, 1-based); normalize both. Returns { caret, ranges, wordPattern } with
-// ranges [] when the provider returns nothing (self-closing / non-name caret).
+// Use VS Code's internal linked-editing command and normalize both returned range shapes.
 async function linkedEditingAt(text) {
   const { clean, position } = caretPosition(text);
   await setBuffer(clean);
@@ -464,9 +428,7 @@ async function linkedEditingAt(text) {
   };
 }
 
-// Document links for a whole buffer (no caret marker) via VS Code's real link provider. Returns
-// [{ range:{start,end}, target (fsPath), targetUri, text }] where `text` is the exact source substring
-// the link covers (the path token). `target` is undefined when the provider returned no resolved URI.
+// Return document-link ranges, targets, URIs, and covered source text.
 async function documentLinksAt(buffer) {
   await setBuffer(buffer);
   const links = await vscode.commands.executeCommand("vscode.executeLinkProvider", doc.uri);
@@ -481,9 +443,7 @@ async function documentLinksAt(buffer) {
   }));
 }
 
-// Rename via VS Code's real rename provider. Returns { edits } on success — each edit is
-// { uri, fsPath, line, character, endCharacter, newText, text } where `text` is the OLD covered token
-// (the buffer is not mutated) — or { error } when the provider rejects (e.g. an invalid new name).
+// Return decoded rename edits without mutating the buffer, or the provider error.
 async function renameAt(text, newName) {
   const { clean, position } = caretPosition(text);
   await setBuffer(clean);
@@ -516,16 +476,10 @@ async function renameAt(text, newName) {
   }
 }
 
-// The server's advertised legend order, used as a fallback if VS Code's legend command is unavailable.
-// Keep in lock-step with XamlSemanticTokens.TokenTypes.
+// The server's advertised legend order, used as a fallback if VS Code's legend command is unavailable. Keep in lock-step with XamlSemanticTokens.TokenTypes.
 const SEMANTIC_TOKEN_LEGEND = ["namespace", "class", "property", "macro", "parameter"];
 
-// Semantic tokens for a whole buffer (no caret marker) via VS Code's real semantic-tokens provider.
-// Fetches the provider legend, then decodes the flat 5-int LSP delta stream into absolute tokens:
-// [{ line, character, length, type (legend name), text (exact covered substring), modifiers (raw bitmask),
-// modifierNames (legend names of the set bits) }]. Unlike highlights / links / selection-ranges, semantic
-// tokens do NOT merge with a VS Code built-in (grammar coloring is not a semantic-tokens provider), so counts
-// and classifications reflect our server alone.
+// Decode the five-integer LSP delta stream using the provider legend. Semantic tokens are not merged with built-in grammar coloring.
 function decodeSemanticTokens(result, types, mods) {
   const data = result && result.data ? Array.from(result.data) : [];
   const tokens = [];
@@ -569,8 +523,7 @@ async function semanticTokensAt(buffer) {
   return { legend: { tokenTypes: types, tokenModifiers: mods }, tokens: decodeSemanticTokens(result, types, mods) };
 }
 
-// Semantic tokens limited to a range via the range provider VS Code registers when the server advertises
-// semanticTokensProvider.range. `range` is a plain shape { start: {line, character}, end: {line, character} }.
+// Semantic tokens limited to a range via the range provider VS Code registers when the server advertises semanticTokensProvider.range. `range` is a plain shape { start: {line, character}, end: {line, character} }.
 async function semanticTokensRangeAt(buffer, range) {
   await setBuffer(buffer);
   const vsRange = new vscode.Range(range.start.line, range.start.character, range.end.line, range.end.character);
@@ -581,8 +534,7 @@ async function semanticTokensRangeAt(buffer, range) {
   return { legend: { tokenTypes: types, tokenModifiers: mods }, tokens: decodeSemanticTokens(result, types, mods) };
 }
 
-// VS Code's Diagnostic.code may be a plain string or a { value, target } object; our server sends a
-// plain string ("WXAML0002"). Normalize to the string form.
+// VS Code's Diagnostic.code may be a plain string or a { value, target } object; our server sends a plain string ("WXAML0002"). Normalize to the string form.
 function codeString(code) {
   if (code == null) return "";
   return typeof code === "object" && "value" in code ? String(code.value) : String(code);
@@ -616,17 +568,7 @@ function decodeWorkspaceEdit(we) {
   return edits;
 }
 
-// Code actions ("Did you mean …?" quick fixes) for a whole buffer (no caret marker). A code action needs
-// a diagnostic to exist first, so this waits for the diagnostic identified by (matchCode[, matchText]) to
-// be published, then requests actions over exactly that diagnostic's range. Returns
-// { diagnostic: { code, message, range }, actions: [{ title, kind, isPreferred, edits }] }.
-// NOTE: vscode.executeCodeActionProvider MERGES actions from every provider (incl. VS Code built-ins), so
-// assert OUR action by title/kind rather than by array length.
-// matchText should be the EXACT flagged token (what the diagnostic underlines). The wait matches on the
-// diagnostic's flagged SPAN TEXT (doc.getText(range) === matchText), not merely its message: this makes the
-// helper immune to a cross-test ordering race where a stale diagnostic from the previous probe (same code +
-// message substring) is still published and its range now points at unrelated text in this buffer. A
-// message-substring fallback is kept only for defensive robustness if a caller passes a non-literal token.
+// Match flagged text to reject stale diagnostics. Identify server actions by title and kind because VS Code merges providers.
 async function codeActionsAt(buffer, matchCode, matchText) {
   const byToken = (d) =>
     codeString(d.code) === matchCode && !!matchText && doc.getText(d.range) === matchText;
@@ -657,10 +599,7 @@ async function codeActionsAt(buffer, matchCode, matchText) {
   };
 }
 
-// Position-driven code actions at a | caret (no diagnostic required) — for the "Generate event handler 'X'"
-// quick fix, which fires from the caret sitting on an event attribute value, not from a published diagnostic.
-// Returns [{ title, kind, isPreferred, edits }]; assert OUR action by title/kind since
-// vscode.executeCodeActionProvider MERGES actions from every provider.
+// Position-driven actions support event-handler fixes without a published diagnostic. Identify server actions by title and kind because VS Code merges providers.
 async function codeActionsAtCaret(text) {
   const { clean, position } = caretPosition(text);
   await setBuffer(clean);

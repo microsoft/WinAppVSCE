@@ -5,14 +5,7 @@ using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// Detects hex color literals in XAML and produces the LSP <c>documentColor</c> swatches and
-/// <c>colorPresentation</c> write-backs. Scope is deliberately narrow and unambiguous: a literal is
-/// recognized only when the ENTIRE (trimmed) value of a non-markup attribute is a XAML hex color
-/// (<c>#RGB</c>, <c>#ARGB</c>, <c>#RRGGBB</c>, or <c>#AARRGGBB</c>, alpha-first per XAML). This avoids
-/// the false positives that named-color or substring matching would create, and needs no type
-/// resolution. Named colors and property-element/text colors are intentionally out of scope.
-/// </summary>
+/// <summary>Provides LSP color support for complete XAML hex attribute values.</summary>
 internal static class XamlColor
 {
     public static List<ColorInformation> Collect(TextDocument doc)
@@ -51,10 +44,7 @@ internal static class XamlColor
         return result;
     }
 
-    /// <summary>
-    /// Offers hex write-backs for a picked color, over the exact range of the existing literal. The
-    /// loss-free format is offered first: <c>#RRGGBB</c> when fully opaque, otherwise <c>#AARRGGBB</c>.
-    /// </summary>
+    /// <summary>Offers hex write-backs for a picked color, over the exact range of the existing literal.</summary>
     public static List<ColorPresentation> Present(Lsp.Color color, Lsp.Range range)
     {
         byte a = ToByte(color.Alpha);

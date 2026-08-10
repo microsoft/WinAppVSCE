@@ -1,8 +1,6 @@
 "use strict";
 
-// Minimal end-to-end smoke test: proves the extension activates inside a real VS Code instance,
-// connects to the .NET language server, and answers a live completion request. This is the
-// "pipeline is alive" gate — richer feature coverage lives in features.test.js.
+// End-to-end activation and completion request through VS Code.
 
 const assert = require("node:assert");
 const h = require("./helper");

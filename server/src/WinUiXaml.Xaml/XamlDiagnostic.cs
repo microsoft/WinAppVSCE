@@ -8,10 +8,7 @@ namespace WinUiXaml.Xaml
         Error
     }
 
-    /// <summary>
-    /// A parser-produced diagnostic. Purely syntactic at this stage (unterminated tags/strings,
-    /// mismatched close tags, etc.). Semantic diagnostics are layered on later (spec item #22).
-    /// </summary>
+    /// <summary>A parser-produced diagnostic.</summary>
     public sealed class XamlDiagnostic
     {
         public XamlDiagnostic(string id, string message, TextSpan span, XamlDiagnosticSeverity severity = XamlDiagnosticSeverity.Error)

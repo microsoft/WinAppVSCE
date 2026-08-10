@@ -6,23 +6,10 @@ using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// A deliberately conservative XAML document formatter. It ONLY normalizes the leading indentation of
-/// structural lines (element open/end tags and comments) to match their element-nesting depth. It never
-/// reorders attributes, reflows wrapped attribute lines, trims trailing whitespace, or touches any
-/// non-leading-whitespace text. Lines inside an <c>xml:space="preserve"</c> subtree, or inside an element
-/// with mixed (inline-text) or CDATA content, are left byte-for-byte identical so significant whitespace
-/// is preserved. Every emitted edit replaces only a run of spaces/tabs at the start of a line with another
-/// run of spaces/tabs, so by construction the formatter can only ever change indentation -- never the
-/// document's tokens or content. Under-formatting is acceptable; corrupting a document is not.
-/// </summary>
+/// <summary>Formats leading indentation without changing document tokens or significant whitespace.</summary>
 internal static class XamlFormatter
 {
-    /// <summary>
-    /// Produces the minimal set of leading-indentation edits for <paramref name="doc"/>. When
-    /// <paramref name="range"/> is supplied (range formatting) only edits on lines intersecting the range
-    /// are returned. Returns an empty list when there is nothing safe to reindent.
-    /// </summary>
+    /// <summary>Produces safe leading-indentation edits within an optional range.</summary>
     public static List<TextEdit> Format(TextDocument doc, FormattingOptions options, Lsp.Range? range = null)
     {
         var edits = new List<TextEdit>();
@@ -68,8 +55,7 @@ internal static class XamlFormatter
                 string current = text.Substring(lineStart, leadingLength);
                 string desired = Repeat(unit, depth);
 
-                // Safety: we only ever replace a pure run of spaces/tabs. This always holds because
-                // firstNonWs advanced over spaces/tabs only; the guard makes that invariant explicit.
+                // Safety: we only ever replace a pure run of spaces/tabs. This always holds because firstNonWs advanced over spaces/tabs only; the guard makes that invariant explicit.
                 bool leadingIsWhitespace = current.All(c => c == ' ' || c == '\t');
 
                 if (leadingIsWhitespace && (range is null || IntersectsRange(line, range.Value)))
@@ -89,10 +75,7 @@ internal static class XamlFormatter
         return edits;
     }
 
-    /// <summary>
-    /// Reindents only the line whose tag was completed by typing <c>&gt;</c>. Other characters produce no
-    /// edits, keeping the on-type path bounded and avoiding document-wide work on each keystroke.
-    /// </summary>
+    /// <summary>Reindents only the line whose tag was completed by typing &gt;.</summary>
     public static List<TextEdit> FormatOnType(
         TextDocument doc,
         FormattingOptions options,
@@ -187,12 +170,7 @@ internal static class XamlFormatter
                 NewText = desired,
             };
 
-    /// <summary>
-    /// Records, for every structural token whose leading indentation is safe to normalize, its desired
-    /// nesting depth. An element's open tag is governed by its ancestors' safety; its end tag is governed
-    /// by its own content safety (the whitespace just before <c>&lt;/Tag&gt;</c> belongs to that element's
-    /// content). Text, CDATA, and processing-instruction lines are never reindented.
-    /// </summary>
+    /// <summary>Records, for every structural token whose leading indentation is safe to normalize, its desired nesting depth.</summary>
     private static void CollectIndents(XamlNode node, int depth, bool ancestorsSafe, Dictionary<int, int> map)
     {
         switch (node)
@@ -222,11 +200,7 @@ internal static class XamlFormatter
         }
     }
 
-    /// <summary>
-    /// True when it is safe to reindent the direct children of <paramref name="element"/>: false for an
-    /// <c>xml:space="preserve"</c> element and for any element carrying mixed (inline non-whitespace text)
-    /// or CDATA content, where inner whitespace is significant.
-    /// </summary>
+    /// <summary>True when it is safe to reindent the direct children of element: false for an xml:space="preserve" element and for any element carrying mixed (inline non-whitespace text) or CDATA</summary>
     private static bool IsContentSafe(XamlElement element)
     {
         if (element.GetAttribute("xml:space") is { Value: { } spaceValue } &&

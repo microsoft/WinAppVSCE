@@ -1,20 +1,12 @@
 namespace WinUiXaml.Xaml
 {
-    /// <summary>
-    /// Helpers that read well-known XAML directives (like <c>x:Class</c>) out of a parsed document.
-    /// Kept in the parser library so both the language server and tooling can share it without a
-    /// dependency on Roslyn.
-    /// </summary>
+    /// <summary>Helpers that read well-known XAML directives (like x:Class) out of a parsed document.</summary>
     public static class XamlIntrospection
     {
         /// <summary>The XAML language namespace that the <c>x:</c> prefix conventionally binds to.</summary>
         public const string XamlNamespace = "http://schemas.microsoft.com/winfx/2006/xaml";
 
-        /// <summary>
-        /// Attempts to read the root element's <c>x:Class</c> directive, identifying it by the
-        /// namespace the prefix resolves to (not by the literal prefix text), so a document that
-        /// binds the XAML namespace to a non-standard prefix still works.
-        /// </summary>
+        /// <summary>Attempts to read the root element's x:Class directive, identifying it by the namespace the prefix resolves to (not by the literal prefix text)</summary>
         public static bool TryGetClass(XamlDocument document, out string className, out TextSpan valueSpan)
         {
             className = string.Empty;

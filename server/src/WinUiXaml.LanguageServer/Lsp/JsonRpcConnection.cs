@@ -5,21 +5,13 @@ using System.Text.Json;
 
 namespace WinUiXaml.LanguageServer.Lsp;
 
-/// <summary>
-/// Raised by a request handler to signal the JSON-RPC "method not found" error (-32601).
-/// </summary>
+/// <summary>Signals JSON-RPC error -32601.</summary>
 internal sealed class MethodNotFoundException : Exception
 {
     public MethodNotFoundException(string method) : base($"Method not found: {method}") { }
 }
 
-/// <summary>
-/// A minimal JSON-RPC 2.0 connection over the LSP base protocol (Content-Length framed messages).
-/// Notifications are processed in wire order, while requests run concurrently so a slow semantic
-/// operation cannot block document updates, cancellation, or shutdown. Handlers are supplied via
-/// <see cref="OnRequest"/> and <see cref="OnNotification"/>;
-/// outbound server-to-client notifications go through <see cref="SendNotificationAsync"/>.
-/// </summary>
+/// <summary>Provides concurrent JSON-RPC 2.0 requests over LSP framing.</summary>
 internal sealed class JsonRpcConnection
 {
     private const string ContentLengthHeader = "Content-Length:";

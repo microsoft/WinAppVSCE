@@ -4,12 +4,10 @@ import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-// The committed WinUI smoke fixture doubles as the test workspace so the language server resolves a
-// genuine project (types, x:Bind targets, App.xaml resources) — exactly like the stdio smoke test.
+// Use a real project so the server can resolve types, x:Bind targets, and resources.
 const fixture = path.resolve(here, "test", "fixtures", "xaml", "fixture");
 
-// Local tests use the freshly-built Debug DLL. CI sets WINUI_XAML_TEST_BUNDLED after publishing the
-// self-contained bundle so the extension client's bundled-apphost resolution is exercised too.
+// CI can test the bundled executable instead of the local Debug DLL.
 const debugServerDll = path.resolve(
   here,
   "server",
@@ -32,9 +30,7 @@ export default defineConfig({
   files: process.env.WINUI_XAML_TEST_FILES || "test/xaml-integration/**/*.test.js",
   version: "stable",
   workspaceFolder: fixture,
-  // Isolate the extension under test from any other installed extensions. --disable-workspace-trust
-  // makes vscode.workspace.isTrusted true in the harness so the full feature suite still exercises
-  // the semantic server; production behavior is unchanged (the trust gate is only bypassed here).
+  // Isolate the extension and enable the semantic server in the harness.
   launchArgs: ["--disable-extensions", "--disable-workspace-trust"],
   env: {
     ...(process.env.WINUI_XAML_TEST_BUNDLED === "1"

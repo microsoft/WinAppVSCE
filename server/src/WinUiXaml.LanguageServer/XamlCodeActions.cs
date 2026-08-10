@@ -8,14 +8,7 @@ using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// Builds <c>textDocument/codeAction</c> quick fixes from the diagnostics the client hands back. Currently
-/// one kind: a "Did you mean 'X'?" spelling correction for an unknown element type / attribute / attached
-/// property / property-element member. The suggestions were computed when the diagnostic was produced (the
-/// type system was already in hand) and round-tripped in <see cref="Diagnostic.Data"/>, so this stage does
-/// no symbol resolution — it just turns each suggestion into an edit that replaces EXACTLY the flagged span
-/// with a name the type system already accepts, making an applied fix safe by construction.
-/// </summary>
+/// <summary>Builds textDocument/codeAction quick fixes from the diagnostics the client hands back.</summary>
 internal static class XamlCodeActions
 {
     // The unknown-name diagnostics whose data carries spelling suggestions.
@@ -28,9 +21,7 @@ internal static class XamlCodeActions
         XamlValidator.UnknownBindMemberCode,
     };
 
-    // Well-known XAML prefixes whose namespace URI is unambiguous, so an undeclared-prefix diagnostic
-    // (WXAML0001) can be fixed by inserting the standard declaration on the root. Custom prefixes need
-    // an author-chosen using: target we never guess.
+    // Well-known XAML prefixes whose namespace URI is unambiguous, so an undeclared-prefix diagnostic (WXAML0001) can be fixed by inserting the standard declaration on the root. Custom prefixes need an author-chosen using: target we never guess.
     private static readonly Dictionary<string, string> WellKnownNamespaces = new(StringComparer.Ordinal)
     {
         ["x"] = XamlTypeSystem.XamlLanguageNamespace,
@@ -56,9 +47,7 @@ internal static class XamlCodeActions
                     continue;
                 }
 
-                // Undeclared prefix (WXAML0001): offer to add the missing xmlns declaration on the root — the
-                // standard URI for a well-known prefix (x/d/mc), or an inferred using: for a custom prefix that
-                // names one of the project's own types.
+                // Undeclared prefix (WXAML0001): offer to add the missing xmlns declaration on the root — the standard URI for a well-known prefix (x/d/mc), or an inferred using: for a custom prefix that names one of the project's own types.
                 if (string.Equals(diagnostic.Code, XamlValidator.UndeclaredPrefixCode, StringComparison.Ordinal))
                 {
                     AddUndeclaredPrefixFixes(actions, uri, doc, diagnostic, typeSystem, seenXmlnsDeclarations);
@@ -123,8 +112,7 @@ internal static class XamlCodeActions
         return actions;
     }
 
-    /// <summary>LSP kind gate: a <c>quickfix</c> is offered when the client sends no <c>only</c> filter, or
-    /// an entry that equals <c>quickfix</c> or is one of its parent kinds.</summary>
+    /// <summary>LSP kind gate: a <c>quickfix</c> is offered when the client sends no <c>only</c> filter, or an entry that equals <c>quickfix</c> or is one of its parent kinds.</summary>
     internal static bool QuickFixKindAllowed(string[]? only)
         => KindAllowed(only, "quickfix");
 
@@ -147,11 +135,7 @@ internal static class XamlCodeActions
         return false;
     }
 
-    /// <summary>
-    /// Extracts the mistyped token and its ranked suggestions from a diagnostic's data. Accepts both the
-    /// in-process <see cref="DiagnosticData"/> instance (unit tests / same-process) and the
-    /// <see cref="JsonElement"/> the client round-trips back over the wire.
-    /// </summary>
+    /// <summary>Extracts the mistyped token and its ranked suggestions from a diagnostic's data.</summary>
     private static (string Bad, IReadOnlyList<string> Suggestions) ReadSuggestions(object? data)
     {
         switch (data)
@@ -193,13 +177,7 @@ internal static class XamlCodeActions
             : string.Empty;
     }
 
-    /// <summary>
-    /// The range the fix should replace: normally the flagged span itself, but when the diagnostic underlines
-    /// a WIDER region than the mistyped token (the first-segment <c>x:Bind</c> path diagnostic squiggles the
-    /// whole value, e.g. <c>GreetingTexx.Foo</c>, while the token is just <c>GreetingTexx</c>), narrow the edit
-    /// to exactly the token so a trailing path (<c>.Foo</c>) or a leading negation (<c>!</c>) is preserved.
-    /// Falls back to the whole span when the token isn't located inside it — the fix stays safe by construction.
-    /// </summary>
+    /// <summary>The range the fix should replace: normally the flagged span itself, but when the diagnostic underlines a WIDER region than the mistyped token (the first-segment x:Bind path</summary>
     private static Lsp.Range EditRange(TextDocument? doc, Lsp.Range range, string bad)
     {
         if (doc is null || bad.Length == 0)
@@ -223,17 +201,7 @@ internal static class XamlCodeActions
         return new Lsp.Range(doc.PositionAt(start), doc.PositionAt(start + bad.Length));
     }
 
-    /// <summary>
-    /// Builds the "Add xmlns:… declaration" quick fix(es) for an undeclared prefix (WXAML0001). A WELL-KNOWN
-    /// prefix (x, d, mc) maps to a single unambiguous standard URI. A CUSTOM prefix that names one of the
-    /// project's OWN types on an element (e.g. <c>&lt;local:MyControl&gt;</c>) is fixed with an inferred
-    /// <c>using:</c> declaration for each namespace that declares a type of that name — author intent we can
-    /// now infer from the type system rather than guess. Each fix is a single ZERO-WIDTH insertion of
-    /// <c>xmlns:PREFIX="URI"</c> on the root element, grouped after any existing xmlns declarations (else
-    /// right after the root element name), so applying it makes the prefix resolvable and clears the
-    /// diagnostic without disturbing formatting. A custom prefix used only on an ATTRIBUTE names a member,
-    /// not a type, so no using: is inferred there.
-    /// </summary>
+    /// <summary>Builds the "Add xmlns:… declaration" quick fix(es) for an undeclared prefix (WXAML0001).</summary>
     private static void AddUndeclaredPrefixFixes(
         List<CodeAction> actions, string uri, TextDocument? doc, Diagnostic diagnostic,
         XamlTypeSystem? typeSystem, HashSet<string> seen)
@@ -264,8 +232,7 @@ internal static class XamlCodeActions
             return;
         }
 
-        // Custom prefix: infer using: targets from the project's own types, but only when the prefix is on
-        // an ELEMENT (a type reference). Needs the type system; absent it, offer nothing (as before).
+        // Custom prefix: infer using: targets from the project's own types, but only when the prefix is on an ELEMENT (a type reference). Needs the type system; absent it, offer nothing (as before).
         if (typeSystem is null)
         {
             return;
@@ -292,11 +259,7 @@ internal static class XamlCodeActions
         }
     }
 
-    /// <summary>
-    /// The insertion point for a new xmlns declaration on the root element: grouped after any existing xmlns
-    /// declarations, otherwise right after the root element name. False when the document has no root
-    /// element to anchor to (nothing to fix).
-    /// </summary>
+    /// <summary>The insertion point for a new xmlns declaration on the root element: grouped after any existing xmlns declarations, otherwise right after the root element name.</summary>
     private static bool TryGetRootXmlnsInsertion(TextDocument doc, out Position pos)
     {
         pos = default!;
@@ -306,8 +269,7 @@ internal static class XamlCodeActions
             return false;
         }
 
-        // Group with existing xmlns declarations; otherwise place it right after the root element name.
-        // Always a single zero-width insertion so existing formatting is left untouched.
+        // Group with existing xmlns declarations; otherwise place it right after the root element name. Always a single zero-width insertion so existing formatting is left untouched.
         int insertAt = root.Name.Span.End;
         foreach (var attribute in root.Attributes)
         {
@@ -341,12 +303,7 @@ internal static class XamlCodeActions
         };
     }
 
-    /// <summary>
-    /// The local (type) name of the ELEMENT whose undeclared prefix the diagnostic flags — the name to
-    /// search for a using: target. Walks the parsed tree for the element whose name prefix matches and whose
-    /// prefix span covers the diagnostic offset. Returns null when the flagged prefix is on an attribute (a
-    /// member, not a type) or no matching element is found.
-    /// </summary>
+    /// <summary>The local (type) name of the ELEMENT whose undeclared prefix the diagnostic flags — the name to search for a using: target.</summary>
     private static string? FindElementTypeLocalNameForPrefix(TextDocument doc, Lsp.Range range, string prefix)
     {
         var root = doc.Parsed.Root;

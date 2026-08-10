@@ -10,20 +10,10 @@ using WinUiXaml.Xaml;
 
 namespace WinUiXaml.Workspace
 {
-    /// <summary>
-    /// Resolves the project/type/reference context for any <c>.xaml</c> file (#4). It finds the
-    /// owning project, loads it through the Host B <see cref="RoslynProjectWorkspace"/> (caching one
-    /// workspace per project), reads the file's <c>x:Class</c>, and resolves that type plus the
-    /// project's referenced assemblies.
-    /// <para>
-    /// Loaded projects are cached; call <see cref="Invalidate"/> (e.g. when a reference or the
-    /// project file changes) to force the next resolve to reload.
-    /// </para>
-    /// </summary>
+    /// <summary>Resolves the project/type/reference context for any .xaml file (#4).</summary>
     public sealed class XamlProjectResolver : IDisposable
     {
-        // WinUI apps only define x86/x64/ARM64 (no AnyCPU), so use the native server architecture for
-        // design-time evaluation instead of forcing x64 on ARM64 machines.
+        // WinUI apps only define x86/x64/ARM64 (no AnyCPU), so use the native server architecture for design-time evaluation instead of forcing x64 on ARM64 machines.
         private static readonly IReadOnlyDictionary<string, string> DefaultGlobalProperties =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -42,11 +32,7 @@ namespace WinUiXaml.Workspace
             _globalProperties = globalProperties ?? DefaultGlobalProperties;
         }
 
-        /// <summary>
-        /// Finds the project that owns <paramref name="xamlPath"/> by walking up the directory tree
-        /// and returning the nearest ancestor directory that contains a single project file. Returns
-        /// null if no project is found.
-        /// </summary>
+        /// <summary>Finds the project that owns xamlPath by walking up the directory tree and returning the nearest ancestor directory that contains a single project file.</summary>
         public static string? FindOwningProject(string xamlPath, string? searchRoot = null)
         {
             if (string.IsNullOrEmpty(xamlPath))
@@ -88,10 +74,7 @@ namespace WinUiXaml.Workspace
             return null;
         }
 
-        /// <summary>
-        /// Associates <paramref name="xamlPath"/> with its project and resolves its <c>x:Class</c>
-        /// type and referenced assembly set. Returns null if no owning project is found.
-        /// </summary>
+        /// <summary> Associates <paramref name="xamlPath"/> with its project and resolves its <c>x:Class</c> type and referenced assembly set. Returns null if no owning project is found.</summary>
         public async Task<XamlResolution?> ResolveAsync(
             string xamlPath,
             string? searchRoot = null,
@@ -203,8 +186,7 @@ namespace WinUiXaml.Workspace
                     return existing;
                 }
 
-                // Load with an independent token so one caller's cancellation can't poison the shared
-                // cache entry for other callers.
+                // Load with an independent token so one caller's cancellation can't poison the shared cache entry for other callers.
                 var task = RoslynProjectWorkspace.LoadProjectAsync(key, _globalProperties.ToDictionary(p => p.Key, p => p.Value), CancellationToken.None);
                 _projects[key] = task;
 

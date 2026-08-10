@@ -5,34 +5,17 @@ using System.Xml;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// Extracts a plain-text (lightly normalized) <c>&lt;summary&gt;</c> from a Roslyn documentation-comment
-/// XML string (<see cref="Microsoft.CodeAnalysis.ISymbol.GetDocumentationCommentXml(System.Globalization.CultureInfo,bool,System.Threading.CancellationToken)"/>).
-/// WinUI framework reference assemblies (Microsoft.WinUI.dll) and the user's own source both ship these docs,
-/// so this powers quick-info for elements, attributes, members, enum values, and attached properties.
-/// Pure and defensive: any malformed, doc-less, or summary-less input yields <see langword="null"/> and never throws.
-/// </summary>
+/// <summary>Extracts a plain-text (lightly normalized) &lt;summary&gt; from a Roslyn documentation-comment XML string</summary>
 internal static class XmlDocSummary
 {
-    /// <summary>
-    /// Returns the normalized single-line <c>&lt;summary&gt;</c> text of a documentation-comment XML document,
-    /// or <see langword="null"/> when the input is empty, unparseable, has no summary, or the summary is blank.
-    /// Inline doc elements are flattened to readable text: <c>&lt;see cref="P:...Foo"/&gt;</c> becomes
-    /// <c>Foo</c>, <c>&lt;paramref name="x"/&gt;</c> becomes <c>x</c>, and <c>&lt;c&gt;</c>/other inline tags
-    /// keep their inner text; runs of whitespace collapse to single spaces.
-    /// </summary>
+    /// <summary>Returns the normalized single-line &lt;summary&gt; text of a documentation-comment XML document, or when the input is empty, unparseable, has no summary, or the summary is blank.</summary>
     public static string? Extract(string? docXml)
     {
         var dom = Parse(docXml);
         return dom is null ? null : FirstElementText(dom, "summary");
     }
 
-    /// <summary>
-    /// Extracts the quick-info-relevant sections of a documentation-comment XML document — the
-    /// <c>&lt;summary&gt;</c>, the <c>&lt;returns&gt;</c>, and each documented <c>&lt;param&gt;</c> — each
-    /// flattened and sanitized exactly like <see cref="Extract"/>. Returns <see cref="QuickInfoDoc.Empty"/> when
-    /// the input is empty or unparseable. Powers method quick-info (event handlers, x:Bind function bindings).
-    /// </summary>
+    /// <summary>Extracts the quick-info-relevant sections of a documentation-comment XML document — the &lt;summary&gt;, the &lt;returns&gt;, and each documented &lt;param&gt</summary>
     public static QuickInfoDoc ExtractQuickInfo(string? docXml)
     {
         var dom = Parse(docXml);
@@ -47,8 +30,7 @@ internal static class XmlDocSummary
             ExtractParams(dom));
     }
 
-    // GetDocumentationCommentXml yields a <member>…</member> document (or, defensively, some other fragment).
-    // Parse without ever throwing back into the hover pipeline; null means empty or unparseable input.
+    // GetDocumentationCommentXml yields a <member>…</member> document (or, defensively, some other fragment). Parse without ever throwing back into the hover pipeline; null means empty or unparseable input.
     private static XmlDocument? Parse(string? docXml)
     {
         if (string.IsNullOrWhiteSpace(docXml))
@@ -69,16 +51,14 @@ internal static class XmlDocSummary
         return dom;
     }
 
-    // The flattened text of the FIRST element with the given tag, or null when absent/blank. A <member> doc
-    // carries at most one <summary>/<returns>, so first-match is exact.
+    // The flattened text of the FIRST element with the given tag, or null when absent/blank. A <member> doc carries at most one <summary>/<returns>, so first-match is exact.
     private static string? FirstElementText(XmlDocument dom, string tag)
     {
         var nodes = dom.GetElementsByTagName(tag);
         return nodes.Count > 0 && nodes[0] is XmlElement element ? FlattenElement(element) : null;
     }
 
-    // Each <param name="…">…</param> in document order, keeping only entries that carry a name (the text may be
-    // null when the param element is empty — the caller decides whether to render a param with no prose).
+    // Each <param name="…">…</param> in document order, keeping only entries that carry a name (the text may be null when the param element is empty — the caller decides whether to render a param with no prose).
     private static IReadOnlyList<XmlDocParam> ExtractParams(XmlDocument dom)
     {
         var nodes = dom.GetElementsByTagName("param");
@@ -112,12 +92,7 @@ internal static class XmlDocSummary
         return text.Length == 0 ? null : text;
     }
 
-    // WinUI framework XML docs are authored for DocFX / learn.microsoft.com and embed authoring markup as
-    // escaped text INSIDE <summary>: HTML tags (<img …/>, <sup>, <br/>), DocFX moniker zone fences
-    // (":::" lines), and alert blockquotes ("> [!NOTE] …"). Left as-is these render as broken images or a
-    // wall of noise that buries the real prose, so strip them to match VS quick-info's clean output. The rules
-    // are line-anchored where a bare marker character is ambiguous, so genuine prose (including "<"/">" used as
-    // comparison operators) is never corrupted.
+    // WinUI framework XML docs are authored for DocFX / learn.microsoft.com and embed authoring markup as escaped text INSIDE : HTML tags (, , )
     private static readonly Regex MonikerFenceLine = new(@"(?m)^[ \t]*:::.*$", RegexOptions.Compiled);
     private static readonly Regex BlockquoteMarker = new(@"(?m)^[ \t]*>+[ \t]?", RegexOptions.Compiled);
     private static readonly Regex AlertLabel = new(@"\[!\w+\]", RegexOptions.Compiled);
@@ -177,12 +152,7 @@ internal static class XmlDocSummary
         }
     }
 
-    /// <summary>
-    /// Renders a <c>&lt;see&gt;</c>/<c>&lt;seealso&gt;</c> as a readable name: prefer explicit inner text,
-    /// then <c>langword</c> (e.g. <c>null</c>/<c>true</c>), then the simple name from <c>cref</c> (stripping the
-    /// leading <c>T:</c>/<c>P:</c>/<c>M:</c> documentation-ID prefix and any method parameter list, keeping the
-    /// last dotted segment), falling back to <c>href</c>.
-    /// </summary>
+    /// <summary>Renders a &lt;see&gt;/&lt;seealso&gt; as a readable name: prefer explicit inner text, then langword.</summary>
     private static string ReferenceText(XmlElement element)
     {
         if (!string.IsNullOrEmpty(element.InnerText))
@@ -244,16 +214,10 @@ internal static class XmlDocSummary
     }
 }
 
-/// <summary>
-/// A single <c>&lt;param&gt;</c> entry from a documentation comment: its declared <paramref name="Name"/> and
-/// flattened doc <paramref name="Text"/> (<see langword="null"/> when the param element carries no prose).
-/// </summary>
+/// <summary>A single &lt;param&gt; entry from a documentation comment: its declared Name and flattened doc Text ( when the param element carries no prose).</summary>
 internal readonly record struct XmlDocParam(string Name, string? Text);
 
-/// <summary>
-/// The quick-info-relevant sections of a documentation comment — <see cref="Summary"/>, <see cref="Returns"/>,
-/// and <see cref="Parameters"/> — each flattened and sanitized like <see cref="XmlDocSummary.Extract"/>.
-/// </summary>
+/// <summary>The quick-info-relevant sections of a documentation comment — Summary, Returns, and Parameters — each flattened and sanitized like XmlDocSummary.Extract.</summary>
 internal readonly record struct QuickInfoDoc(string? Summary, string? Returns, IReadOnlyList<XmlDocParam> Parameters)
 {
     /// <summary>An empty document: no summary, no returns, no parameters.</summary>

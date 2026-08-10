@@ -2,10 +2,7 @@ using System.Collections.Generic;
 
 namespace WinUiXaml.Xaml
 {
-    /// <summary>
-    /// The set of <c>xmlns</c> declarations in effect at a given element, flattened from the element
-    /// and all its ancestors. The default namespace is stored under the empty-string key.
-    /// </summary>
+    /// <summary>The set of xmlns declarations in effect at a given element, flattened from the element and all its ancestors.</summary>
     public sealed class XamlNamespaceScope
     {
         public static readonly XamlNamespaceScope Empty =
@@ -18,9 +15,7 @@ namespace WinUiXaml.Xaml
             _map = map;
         }
 
-        /// <summary>
-        /// Resolves a prefix to its namespace URI. Pass null or empty for the default namespace.
-        /// </summary>
+        /// <summary> Resolves a prefix to its namespace URI. Pass null or empty for the default namespace.</summary>
         public bool TryResolvePrefix(string? prefix, out string namespaceUri)
         {
             var key = prefix ?? string.Empty;

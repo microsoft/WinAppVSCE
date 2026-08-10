@@ -2,22 +2,10 @@ using System;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// A curated set of common WinUI 3 (Windows App SDK) theme resource keys — Fluent brushes, text
-/// styles, colors, and corner radii that ship in <c>XamlControlsResources</c>. These feed
-/// <c>{StaticResource}</c>/<c>{ThemeResource}</c> key completion alongside the project's own
-/// document-local and App.xaml resources.
-/// <para>
-/// The Windows App SDK compiles its theme dictionaries into the framework (they are not restored as
-/// loose XAML), so this list is hand-curated to the well-established, high-confidence keys rather than
-/// extracted from the SDK. It is intentionally a common subset, not exhaustive; it errs toward names
-/// that have been stable across releases. It is only used for completion suggestions, never for
-/// validation, so an occasional omission simply means a key is not suggested.
-/// </para>
-/// </summary>
+/// <summary>Provides common stable WinUI theme-resource keys for completion.</summary>
 internal static class WinUiThemeResources
 {
-    /// <summary>The curated theme resource keys, in no particular order (the client sorts by key).</summary>
+    /// <summary>Theme-resource keys sorted by the client.</summary>
     public static readonly string[] Keys =
     {
         // --- Text block styles ---
@@ -109,17 +97,7 @@ internal static class WinUiThemeResources
         "SystemFillColorNeutralBackgroundBrush",
     };
 
-    /// <summary>
-    /// Infers the metadata type name of a curated theme resource from its key-name suffix convention
-    /// (<c>*Brush</c> → <c>Brush</c>, <c>*CornerRadius</c> → <c>CornerRadius</c>, <c>*Style</c> →
-    /// <c>Style</c>, <c>*Color</c>/<c>SystemAccentColor*</c> → <c>Color</c>). Returns <c>null</c> when
-    /// the name matches none of the recognized conventions — such a key is then ALWAYS offered (never
-    /// hidden), so an unrecognized name can never be wrongly filtered out of type-scoped completion.
-    /// <para>
-    /// <c>*Brush</c> is checked first so an <c>AccentFillColorDefaultBrush</c> (which contains "Color"
-    /// mid-name) is a brush, not a color.
-    /// </para>
-    /// </summary>
+    /// <summary>Infers the metadata type name of a curated theme resource from its key-name suffix convention (*Brush → Brush, *CornerRadius → CornerRadius, *Style → Style</summary>
     public static string? InferTypeMetadataName(string key)
     {
         if (key.EndsWith("Brush", StringComparison.Ordinal))

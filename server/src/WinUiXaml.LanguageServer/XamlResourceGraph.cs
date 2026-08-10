@@ -74,9 +74,7 @@ internal sealed class XamlResourceGraph
 
             totalBytes += file.Value.ByteCount;
             result.Add(file.Value);
-            // A ResourceDictionary resolves duplicate keys from its local entries first, then from
-            // merged dictionaries in reverse declaration order. Pushing sources forward onto a stack
-            // visits the last declared dictionary first and preserves that runtime lookup precedence.
+            // A ResourceDictionary resolves duplicate keys from its local entries first, then from merged dictionaries in reverse declaration order. Pushing sources forward onto a stack visits the last declared dictionary first and preserves that runtime lookup precedence.
             foreach (var source in file.Value.Sources)
             {
                 var resolved = ResolveSourcePath(path, projectRoot, source);

@@ -2,24 +2,7 @@ using System.Collections.Generic;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// The RGB(A) hex value for each WinUI 3 named color (<c>Microsoft.UI.Colors</c>), used ONLY to enrich
-/// named-color value completion with a swatch/detail — the completion item's <c>Detail</c> is set to this
-/// hex so VS Code renders a color swatch (its color parser reads a CSS-style hex from the item), matching
-/// Visual Studio/Blend's color dropdown.
-/// <para>
-/// The completion NAMES themselves come from the live SDK (<see cref="Workspace.XamlTypeSystem.GetNamedColors"/>),
-/// so this table only needs to COVER those names: a name absent from the map is still offered (without a
-/// swatch), so the feature degrades gracefully and carries no SDK-drift risk. The values were generated
-/// from <c>System.Drawing</c>'s known web colors, which are exactly the 141 <c>Microsoft.UI.Colors</c> names.
-/// </para>
-/// <para>
-/// Hex is in CSS form so VS Code's color parser accepts it: opaque colors use <c>#RRGGBB</c>; the single
-/// translucent entry (<c>Transparent</c>) uses CSS alpha-LAST <c>#RRGGBBAA</c> (<c>#FFFFFF00</c>). Note this
-/// differs from XAML's alpha-FIRST literal form — it is a rendering hint for the editor, not the text the
-/// author writes (the inserted value is always the color NAME).
-/// </para>
-/// </summary>
+/// <summary>Maps WinUI color names to CSS hex values for completion swatches.</summary> <remarks>CSS uses alpha-last hex, unlike XAML's alpha-first literals.</remarks>
 internal static class WinUiNamedColors
 {
     /// <summary>Named color ⇒ CSS-style hex (opaque <c>#RRGGBB</c>; <c>Transparent</c> ⇒ <c>#FFFFFF00</c>).</summary>

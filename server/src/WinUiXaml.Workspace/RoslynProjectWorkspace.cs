@@ -10,12 +10,7 @@ using Microsoft.CodeAnalysis.MSBuild;
 
 namespace WinUiXaml.Workspace
 {
-    /// <summary>
-    /// The Host B spine: a standalone Roslyn <see cref="MSBuildWorkspace"/> that loads a real
-    /// project (including WinUI 3 apps) and exposes its <see cref="Compilation"/> and symbols.
-    /// This is what powers semantic XAML features — resolving an <c>x:Class</c> type and its
-    /// x:Bind / event-handler members — without needing to co-host inside Roslyn's language server.
-    /// </summary>
+    /// <summary>The Host B spine: a standalone Roslyn MSBuildWorkspace that loads a real project (including WinUI 3 apps) and exposes its Compilation and symbols.</summary>
     public sealed class RoslynProjectWorkspace : IDisposable
     {
         private readonly MSBuildWorkspace _workspace;
@@ -40,10 +35,7 @@ namespace WinUiXaml.Workspace
         /// <summary>Non-fatal diagnostics produced while loading the project (design-time build warnings, etc.).</summary>
         public ImmutableList<WorkspaceDiagnostic> LoadDiagnostics => _workspace.Diagnostics;
 
-        /// <summary>
-        /// Loads a single project by path. WinUI apps only define specific platforms, so callers can
-        /// pass e.g. <c>Configuration=Debug;Platform=x64</c> to match a known good design-time build.
-        /// </summary>
+        /// <summary>Loads a single project by path.</summary>
         public static async Task<RoslynProjectWorkspace> LoadProjectAsync(
             string projectPath,
             IDictionary<string, string>? globalProperties = null,
@@ -120,10 +112,7 @@ namespace WinUiXaml.Workspace
         public Task<Compilation?> GetCompilationAsync(CancellationToken cancellationToken = default) =>
             Project.GetCompilationAsync(cancellationToken);
 
-        /// <summary>
-        /// Resolves a type by its metadata name (e.g. <c>SmokeFixture.SmokePage</c>) from the
-        /// project's compilation. This is the <c>x:Class</c> resolution step.
-        /// </summary>
+        /// <summary> Resolves a type by its metadata name.</summary>
         public async Task<INamedTypeSymbol?> ResolveTypeAsync(string metadataName, CancellationToken cancellationToken = default)
         {
             var compilation = await GetCompilationAsync(cancellationToken).ConfigureAwait(false);

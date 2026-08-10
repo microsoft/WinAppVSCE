@@ -5,27 +5,10 @@ using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// Produces LSP <c>documentLink</c> results so ctrl+click on a framework source reference opens the file it
-/// points at (Visual Studio parity). Scope is deliberately narrow and unambiguous, mirroring the color
-/// provider: a link is emitted ONLY for a known framework element's path-bearing attribute
-/// (<c>ResourceDictionary.Source</c> and the WinUI image/asset sources <c>Image.Source</c>,
-/// <c>ImageIcon.Source</c>, <c>ImageBrush.ImageSource</c>, <c>BitmapImage.UriSource</c>,
-/// <c>SvgImageSource.UriSource</c>), on an UNPREFIXED element, ONLY when the value is a plain path or an
-/// <c>ms-appx</c> URI that resolves to a file that actually EXISTS on disk. A missing target yields no link
-/// (never a dangling one), and a markup-extension, empty, or foreign-scheme value is skipped. A bare relative
-/// <c>ResourceDictionary.Source</c> resolves next to the document (unchanged), while a bare relative image
-/// source resolves from the app package root to match WinUI's <c>ms-appx:///</c> loader semantics. The
-/// resolution is pure and the filesystem probe is injectable so the logic is unit-testable without disk.
-/// </summary>
+/// <summary>Provides document links for unambiguous local XAML asset paths.</summary>
 internal static class XamlDocumentLinks
 {
-    /// <summary>
-    /// Framework elements whose named attribute carries a package file path we resolve into a ctrl+click
-    /// link. <c>ResourceDictionary.Source</c> keeps its original document-relative base for a bare path;
-    /// image/asset sources resolve a bare path from the APP PACKAGE ROOT (ms-appx:/// semantics), matching
-    /// how WinUI's loader treats <c>Source="Assets/Logo.png"</c> regardless of the page's folder.
-    /// </summary>
+    /// <summary>Framework elements whose named attribute carries a package file path we resolve into a ctrl+click link.</summary>
     private static readonly (string Element, string Attribute, bool AppRootRelative)[] LinkableSources =
     {
         ("ResourceDictionary", "Source", false),
@@ -60,8 +43,7 @@ internal static class XamlDocumentLinks
 
         foreach (var node in doc.Parsed.DescendantNodesAndSelf())
         {
-            // Only an unprefixed framework element; a prefixed local:Image / local:ResourceDictionary is a
-            // user type that happens to share the name, never linked.
+            // Only an unprefixed framework element; a prefixed local:Image / local:ResourceDictionary is a user type that happens to share the name, never linked.
             if (node is not XamlElement element ||
                 element.Name is not { HasPrefix: false } elementName)
             {
@@ -74,8 +56,7 @@ internal static class XamlDocumentLinks
                 continue;
             }
 
-            // The path must be a plain (non-markup) attribute value; the guard keeps a stray "{Binding …}"
-            // (a dynamically-sourced image or dictionary) from being treated as a path.
+            // The path must be a plain (non-markup) attribute value; the guard keeps a stray "{Binding …}" (a dynamically-sourced image or dictionary) from being treated as a path.
             if (element.GetAttribute(spec.Value.Attribute) is not { Value: { IsMarkupExtension: false } value })
             {
                 continue;
@@ -94,8 +75,7 @@ internal static class XamlDocumentLinks
                 continue;
             }
 
-            // Cover exactly the trimmed path token (skip any whitespace inside the quotes) so ctrl+click
-            // lands on the path, never on padding or the quotes.
+            // Cover exactly the trimmed path token (skip any whitespace inside the quotes) so ctrl+click lands on the path, never on padding or the quotes.
             int lead = 0;
             while (lead < raw.Length && char.IsWhiteSpace(raw[lead]))
             {
@@ -115,18 +95,7 @@ internal static class XamlDocumentLinks
         return result;
     }
 
-    /// <summary>
-    /// Maps a source value to an existing absolute file path, or null when it cannot be resolved (unknown
-    /// base directory, foreign URI scheme, or the file does not exist).
-    /// <list type="bullet">
-    /// <item><c>ms-appx:///path</c> or <c>ms-appx://package/path</c> → resolved under the project root.</item>
-    /// <item>A leading <c>/</c> (app-root-relative) → resolved under the project root.</item>
-    /// <item>Any other bare relative path → resolved next to the current document, or (when
-    /// <paramref name="bareRelativeFromAppRoot"/> is set, as for image/asset sources) under the project
-    /// root to match WinUI's <c>ms-appx:///</c> loader semantics.</item>
-    /// </list>
-    /// Any other explicit URI scheme (http, pack, file, …) is out of scope and yields null.
-    /// </summary>
+    /// <summary>Maps a source value to an existing absolute file path, or null when it cannot be resolved (unknown base directory, foreign URI scheme</summary>
     public static string? ResolvePath(
         string value,
         string? documentDirectory,
@@ -146,8 +115,7 @@ internal static class XamlDocumentLinks
             return Combine(projectDirectory, appRel, exists);
         }
 
-        // A different explicit scheme (http:, pack:, file:, …) — but NOT a bare "C:\" drive letter — is
-        // not a local resource we resolve.
+        // A different explicit scheme (http:, pack:, file:, …) — but NOT a bare "C:\" drive letter — is not a local resource we resolve.
         if (HasForeignUriScheme(value))
         {
             return null;
@@ -183,10 +151,7 @@ internal static class XamlDocumentLinks
         return exists(full) ? full : null;
     }
 
-    /// <summary>
-    /// True when the value begins with a URI scheme other than a single-letter Windows drive (so
-    /// <c>C:\dir\x.xaml</c> is treated as a path, while <c>http:</c>/<c>pack:</c>/<c>file:</c> are rejected).
-    /// </summary>
+    /// <summary>True when the value begins with a URI scheme other than a single-letter Windows drive (so C:\dir\x.xaml is treated as a path, while http:/pack:/file: are rejected).</summary>
     private static bool HasForeignUriScheme(string value)
     {
         int colon = value.IndexOf(':');

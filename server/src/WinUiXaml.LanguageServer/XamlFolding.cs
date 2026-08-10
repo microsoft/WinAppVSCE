@@ -4,14 +4,7 @@ using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// Computes <c>textDocument/foldingRange</c> results for a XAML document. Purely syntactic and
-/// non-destructive: it only reports collapsible line ranges (elements, property elements, comments,
-/// CDATA, and <c>#region</c>/<c>#endregion</c> comment pairs). It never edits text, so — unlike
-/// completion or formatting — there is no way for it to corrupt a document; the only correctness
-/// concerns are line-number accuracy and the invariant that every emitted range spans at least two
-/// lines (<c>endLine &gt; startLine</c>).
-/// </summary>
+/// <summary>Computes multi-line XAML folding ranges.</summary>
 internal static class XamlFolding
 {
     public static List<FoldingRange> Compute(TextDocument doc)
@@ -28,11 +21,7 @@ internal static class XamlFolding
         return Deduplicate(ranges);
     }
 
-    // Collapses ranges that cover an identical line span, preferring a specific kind (comment/region)
-    // over a structural fold. Two folds can legitimately coincide — e.g. an element whose sole content
-    // is a multi-line comment or CDATA, where the element span and the child span are the same lines.
-    // The client de-duplicates identical spans anyway (keeping an arbitrary one), which would silently
-    // drop the more descriptive kind; doing it here deterministically keeps the comment/region label.
+    // Collapses ranges that cover an identical line span, preferring a specific kind (comment/region) over a structural fold.
     private static List<FoldingRange> Deduplicate(List<FoldingRange> ranges)
     {
         var best = new Dictionary<(int Start, int End), FoldingRange>();
@@ -89,10 +78,7 @@ internal static class XamlFolding
 
     private static void AddElementFold(TextDocument doc, XamlElement element, List<FoldingRange> ranges)
     {
-        // Fold from the line the open tag starts on down to the line the end tag starts on. A
-        // self-closing element folds nothing (single logical tag). An unterminated element folds to
-        // the last line its content actually reaches, backing off a trailing (consumed) newline so we
-        // never fold into a phantom blank line.
+        // Fold from the line the open tag starts on down to the line the end tag starts on.
         int startLine = doc.PositionAt(element.OpenTagSpan.Start).Line;
 
         if (element.EndTagSpan is { } endTag)
@@ -114,8 +100,7 @@ internal static class XamlFolding
 
     private static void AddRegionFolds(TextDocument doc, List<XamlComment> comments, List<FoldingRange> ranges)
     {
-        // Pair <!-- #region --> with the next unmatched <!-- #endregion --> using a stack, so nested
-        // regions fold correctly. Unbalanced markers are ignored (never invert or crash).
+        // Pair <!-- #region --> with the next unmatched <!-- #endregion --> using a stack, so nested regions fold correctly. Unbalanced markers are ignored (never invert or crash).
         var open = new Stack<XamlComment>();
         foreach (var comment in comments)
         {
@@ -148,8 +133,7 @@ internal static class XamlFolding
     {
         string trimmed = innerText.Trim();
 
-        // Check #endregion first: "#endregion" does not start with "#region", but guard order keeps
-        // intent obvious and is robust to any future prefix overlap.
+        // Check #endregion first: "#endregion" does not start with "#region", but guard order keeps intent obvious and is robust to any future prefix overlap.
         if (StartsWithMarker(trimmed, "#endregion"))
         {
             return RegionMarker.End;
@@ -163,8 +147,7 @@ internal static class XamlFolding
         return RegionMarker.None;
     }
 
-    // A marker matches when the trimmed text is exactly the marker or the marker followed by whitespace
-    // (an optional label). This avoids matching identifiers like "#regionalize".
+    // A marker matches when the trimmed text is exactly the marker or the marker followed by whitespace (an optional label). This avoids matching identifiers like "#regionalize".
     private static bool StartsWithMarker(string trimmed, string marker)
     {
         if (!trimmed.StartsWith(marker, System.StringComparison.Ordinal))

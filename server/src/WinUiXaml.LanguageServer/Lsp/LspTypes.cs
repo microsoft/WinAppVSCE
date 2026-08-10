@@ -46,13 +46,7 @@ internal sealed class InitializeParams
     [JsonPropertyName("initializationOptions")] public InitializationOptions? InitializationOptions { get; set; }
 }
 
-/// <summary>
-/// Client-supplied options passed at initialize. <see cref="AllowedRoots"/> carries the workspace
-/// folder filesystem paths the client trusts; the server only performs project discovery / MSBuild
-/// evaluation for documents under one of these roots (workspace-trust boundary — see the language
-/// server's project-resolution gate). A non-null-but-empty list means "no roots" (e.g. an empty
-/// window), which disables project evaluation entirely.
-/// </summary>
+/// <summary>Client options that restrict project evaluation to trusted workspace roots.</summary>
 internal sealed class InitializationOptions
 {
     [JsonPropertyName("allowedRoots")] public string[]? AllowedRoots { get; set; }
@@ -239,20 +233,11 @@ internal sealed class Diagnostic
     [JsonPropertyName("source")] public string Source { get; set; } = "winui-xaml";
     [JsonPropertyName("message")] public string Message { get; set; } = string.Empty;
 
-    /// <summary>
-    /// Opaque payload preserved by the client between <c>publishDiagnostics</c> and a later
-    /// <c>codeAction</c> request (LSP 3.16+). We stash a <see cref="DiagnosticData"/> of spelling
-    /// suggestions here so the code-action handler can build quick fixes without re-resolving the symbol.
-    /// On the outbound side it is a <see cref="DiagnosticData"/>; on the inbound (code-action) side it
-    /// deserializes to a <see cref="JsonElement"/>.
-    /// </summary>
+    /// <summary>Opaque payload preserved by the client between publishDiagnostics and a later codeAction request (LSP 3.16+).</summary>
     [JsonPropertyName("data")] public object? Data { get; set; }
 }
 
-/// <summary>
-/// The <see cref="Diagnostic.Data"/> payload for an unknown-name diagnostic: the mistyped token plus the
-/// nearest valid names, best first, so a "Did you mean 'X'?" quick fix needs no symbol re-resolution.
-/// </summary>
+/// <summary>The Diagnostic.Data payload for an unknown-name diagnostic: the mistyped token plus the nearest valid names, best first</summary>
 internal sealed class DiagnosticData
 {
     [JsonPropertyName("bad")] public string Bad { get; set; } = string.Empty;
@@ -301,10 +286,7 @@ internal sealed class CompletionItem
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? InsertTextFormat { get; set; }
 
-    /// <summary>
-    /// Additional edits applied together with the primary <see cref="TextEdit"/> (e.g. inserting an
-    /// <c>xmlns:</c> declaration on the root element when completing a type from an undeclared namespace).
-    /// </summary>
+    /// <summary>Additional edits applied together with the primary TextEdit.</summary>
     [JsonPropertyName("additionalTextEdits")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<TextEdit>? AdditionalTextEdits { get; set; }
@@ -369,10 +351,7 @@ internal sealed class FoldingRangeParams
     [JsonPropertyName("textDocument")] public TextDocumentIdentifier TextDocument { get; set; } = new();
 }
 
-/// <summary>
-/// A collapsible range of lines (LSP <c>FoldingRange</c>). Lines are zero-based. When <see cref="Kind"/>
-/// is null it is omitted from the wire, yielding a generic (structural) fold.
-/// </summary>
+/// <summary>A collapsible range of lines (LSP FoldingRange).</summary>
 internal sealed class FoldingRange
 {
     [JsonPropertyName("startLine")] public int StartLine { get; set; }
@@ -428,10 +407,7 @@ internal sealed class SelectionRangeParams
     [JsonPropertyName("positions")] public Position[] Positions { get; set; } = System.Array.Empty<Position>();
 }
 
-/// <summary>
-/// A range the editor can select, plus its enclosing range (LSP <c>SelectionRange</c>). The chain runs
-/// from the innermost range outward via <see cref="Parent"/>; each parent strictly contains its child.
-/// </summary>
+/// <summary>A range the editor can select, plus its enclosing range (LSP SelectionRange).</summary>
 internal sealed class SelectionRange
 {
     [JsonPropertyName("range")] public Range Range { get; set; }
@@ -443,11 +419,7 @@ internal sealed class SelectionRange
 
 // --- Linked editing ranges --------------------------------------------------
 
-/// <summary>
-/// LSP <c>LinkedEditingRanges</c>: a set of ranges the editor keeps in sync during a rename (for XAML,
-/// an element's open and end tag names). <see cref="WordPattern"/> constrains the characters a user can
-/// type before the link is broken; we supply one that permits XAML prefixes and dotted names.
-/// </summary>
+/// <summary>LSP LinkedEditingRanges: a set of ranges the editor keeps in sync during a rename (for XAML, an element's open and end tag names).</summary>
 internal sealed class LinkedEditingRanges
 {
     [JsonPropertyName("ranges")] public Range[] Ranges { get; set; } = System.Array.Empty<Range>();
@@ -459,8 +431,7 @@ internal sealed class LinkedEditingRanges
 
 // --- Document links ---------------------------------------------------------
 
-/// <summary>Options for the LSP <c>documentLinkProvider</c> capability. We resolve targets eagerly, so
-/// <see cref="ResolveProvider"/> is false (no <c>documentLink/resolve</c> round-trip).</summary>
+/// <summary>Options for the LSP <c>documentLinkProvider</c> capability. We resolve targets eagerly, so <see cref="ResolveProvider"/> is false (no <c>documentLink/resolve</c> round-trip).</summary>
 internal sealed class DocumentLinkOptions
 {
     [JsonPropertyName("resolveProvider")] public bool ResolveProvider { get; set; }
@@ -471,11 +442,7 @@ internal sealed class DocumentLinkParams
     [JsonPropertyName("textDocument")] public TextDocumentIdentifier TextDocument { get; set; } = new();
 }
 
-/// <summary>
-/// LSP <c>DocumentLink</c>: a clickable <see cref="Range"/> in the document plus the <see cref="Target"/>
-/// URI the editor opens on ctrl+click. For XAML this is a <c>ResourceDictionary Source</c> resolved to a
-/// file URI.
-/// </summary>
+/// <summary>LSP DocumentLink: a clickable Range in the document plus the Target URI the editor opens on ctrl+click.</summary>
 internal sealed class DocumentLink
 {
     [JsonPropertyName("range")] public Range Range { get; set; }
@@ -491,9 +458,7 @@ internal sealed class DocumentLink
 
 // --- Rename -----------------------------------------------------------------
 
-/// <summary>Options for the LSP <c>renameProvider</c> capability. <see cref="PrepareProvider"/> advertises
-/// <c>textDocument/prepareRename</c>, so the editor validates the caret and shows the current name as the
-/// rename placeholder before the edit box appears.</summary>
+/// <summary>Options for the LSP renameProvider capability.</summary>
 internal sealed class RenameOptions
 {
     [JsonPropertyName("prepareProvider")] public bool PrepareProvider { get; set; }
@@ -506,16 +471,14 @@ internal sealed class RenameParams
     [JsonPropertyName("newName")] public string NewName { get; set; } = string.Empty;
 }
 
-/// <summary>LSP <c>prepareRename</c> result: the exact token <see cref="Range"/> the editor makes editable
-/// plus the <see cref="Placeholder"/> it seeds the rename box with (the symbol's current name).</summary>
+/// <summary>LSP prepareRename result: the exact token Range the editor makes editable plus the Placeholder it seeds the rename box with (the symbol's current name).</summary>
 internal sealed class PrepareRenameResult
 {
     [JsonPropertyName("range")] public Range Range { get; set; }
     [JsonPropertyName("placeholder")] public string Placeholder { get; set; } = string.Empty;
 }
 
-/// <summary>LSP <c>WorkspaceEdit</c> (the subset we emit): a per-document map of <see cref="TextEdit"/>s.
-/// Rename produces edits for a single document (the open XAML file).</summary>
+/// <summary>LSP <c>WorkspaceEdit</c> (the subset we emit): a per-document map of <see cref="TextEdit"/>s. Rename produces edits for a single document (the open XAML file).</summary>
 internal sealed class WorkspaceEdit
 {
     [JsonPropertyName("changes")] public Dictionary<string, List<TextEdit>> Changes { get; set; } = new();
@@ -536,16 +499,14 @@ internal sealed class CodeActionParams
     [JsonPropertyName("context")] public CodeActionContext Context { get; set; } = new();
 }
 
-/// <summary>The <c>context</c> of a code-action request: the diagnostics under the cursor (carrying our
-/// round-tripped <see cref="Diagnostic.Data"/>) and an optional <c>only</c> kind filter.</summary>
+/// <summary>The <c>context</c> of a code-action request: the diagnostics under the cursor (carrying our round-tripped <see cref="Diagnostic.Data"/>) and an optional <c>only</c> kind filter.</summary>
 internal sealed class CodeActionContext
 {
     [JsonPropertyName("diagnostics")] public List<Diagnostic> Diagnostics { get; set; } = new();
     [JsonPropertyName("only")] public string[]? Only { get; set; }
 }
 
-/// <summary>An LSP <c>CodeAction</c> — here always a <c>quickfix</c> carrying a single-document
-/// <see cref="WorkspaceEdit"/> and the diagnostic it resolves.</summary>
+/// <summary>An LSP <c>CodeAction</c> — here always a <c>quickfix</c> carrying a single-document <see cref="WorkspaceEdit"/> and the diagnostic it resolves.</summary>
 internal sealed class CodeAction
 {
     [JsonPropertyName("title")] public string Title { get; set; } = string.Empty;
@@ -557,8 +518,7 @@ internal sealed class CodeAction
 
 // --- Semantic tokens --------------------------------------------------------
 
-/// <summary>LSP <c>semanticTokensProvider</c> options: the <see cref="Legend"/> mapping our encoded
-/// token-type/modifier indices to names, plus <see cref="Full"/> = whole-document tokenization.</summary>
+/// <summary>LSP semanticTokensProvider options: the Legend mapping our encoded token-type/modifier indices to names, plus Full = whole-document tokenization.</summary>
 internal sealed class SemanticTokensOptions
 {
     [JsonPropertyName("legend")] public SemanticTokensLegend Legend { get; set; } = new();
@@ -577,16 +537,14 @@ internal sealed class SemanticTokensParams
     [JsonPropertyName("textDocument")] public TextDocumentIdentifier TextDocument { get; set; } = new();
 }
 
-/// <summary>LSP <c>SemanticTokensRangeParams</c>: tokens are requested for the visible
-/// <see cref="Range"/> only (VS Code sends this for large documents before the full set).</summary>
+/// <summary>LSP <c>SemanticTokensRangeParams</c>: tokens are requested for the visible <see cref="Range"/> only (VS Code sends this for large documents before the full set).</summary>
 internal sealed class SemanticTokensRangeParams
 {
     [JsonPropertyName("textDocument")] public TextDocumentIdentifier TextDocument { get; set; } = new();
     [JsonPropertyName("range")] public Range Range { get; set; } = new();
 }
 
-/// <summary>LSP <c>SemanticTokens</c>: the flat, 5-ints-per-token, delta-encoded array
-/// (deltaLine, deltaStartChar, length, tokenType, tokenModifiers).</summary>
+/// <summary>LSP <c>SemanticTokens</c>: the flat, 5-ints-per-token, delta-encoded array (deltaLine, deltaStartChar, length, tokenType, tokenModifiers).</summary>
 internal sealed class SemanticTokens
 {
     [JsonPropertyName("data")] public int[] Data { get; set; } = System.Array.Empty<int>();

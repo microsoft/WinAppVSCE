@@ -3,12 +3,7 @@ using System.Collections.Generic;
 
 namespace WinUiXaml.Xaml
 {
-    /// <summary>
-    /// A tolerant, non-throwing recursive-descent parser for XAML. It always produces a tree with
-    /// precise spans, records diagnostics instead of failing, and guarantees forward progress so it
-    /// terminates on any input (including truncated or random text). Suitable for editor scenarios
-    /// where the buffer is frequently mid-edit.
-    /// </summary>
+    /// <summary>A tolerant, non-throwing recursive-descent parser for XAML.</summary>
     public sealed class XamlParser
     {
         private const int MaxDepth = 500;
@@ -406,8 +401,7 @@ namespace WinUiXaml.Xaml
 
             if (!closed)
             {
-                // A nested unterminated extension makes every enclosing one unterminated too; they all end
-                // at the same offset. Report only the innermost (first emitted) to avoid a duplicate cascade.
+                // A nested unterminated extension makes every enclosing one unterminated too; they all end at the same offset. Report only the innermost (first emitted) to avoid a duplicate cascade.
                 bool alreadyReported = false;
                 for (int i = _diagnostics.Count - 1; i >= 0; i--)
                 {
@@ -488,8 +482,7 @@ namespace WinUiXaml.Xaml
                 return new XamlMarkupExtensionArgument(name, equalsSpan, val, TextSpan.FromBounds(valStart, valEnd), null, TextSpan.FromBounds(start, p));
             }
 
-            // Positional scalar argument: everything up to ',', '}', or a nested '{'. A comma inside
-            // parentheses is kept, so a function binding (Method(a, b)) is one positional path argument.
+            // Positional scalar argument: everything up to ',', '}', or a nested '{'. A comma inside parentheses is kept, so a function binding (Method(a, b)) is one positional path argument.
             p = start;
             int posStart = p;
             int posParenDepth = 0;

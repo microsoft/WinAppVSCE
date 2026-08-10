@@ -2,12 +2,7 @@ using System.Text;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// Optional server-side diagnostics sink. When the <c>WINUI_XAML_LOG</c> environment variable names
-/// a file, all <see cref="Console.Error"/> output (the server's log stream) is additionally appended
-/// to that file. This gives tests and the red-team loop real visibility into server behavior, which
-/// is otherwise trapped in the language client's non-readable output channel.
-/// </summary>
+/// <summary>Copies server errors to the optional <c>WINUI_XAML_LOG</c> file.</summary>
 internal static class DiagnosticLog
 {
     public static void Initialize()

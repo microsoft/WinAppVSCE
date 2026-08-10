@@ -1,9 +1,6 @@
 namespace WinUiXaml.Xaml
 {
-    /// <summary>
-    /// A possibly-qualified XAML name (<c>prefix:local</c> or just <c>local</c>) with precise spans
-    /// for the prefix and local parts so features can target exactly the right text run.
-    /// </summary>
+    /// <summary> A possibly-qualified XAML name (<c>prefix:local</c> or just <c>local</c>) with precise spans for the prefix and local parts so features can target exactly the right text run.</summary>
     public sealed class XamlName
     {
         public XamlName(string? prefix, string localName, TextSpan span, TextSpan? prefixSpan, TextSpan localNameSpan)
@@ -30,7 +27,7 @@ namespace WinUiXaml.Xaml
 
         public bool HasPrefix => !string.IsNullOrEmpty(Prefix);
 
-        /// <summary>True when the local name contains a dotted member (e.g. <c>Grid.Row</c>).</summary>
+        /// <summary>True when the local name contains a dotted member.</summary>
         public bool IsDotted => LocalName.IndexOf('.') >= 0;
 
         public string FullName => HasPrefix ? Prefix + ":" + LocalName : LocalName;

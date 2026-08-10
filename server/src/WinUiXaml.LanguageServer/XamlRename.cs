@@ -10,33 +10,17 @@ internal enum XamlRenameKind
     /// <summary>An <c>x:Name</c>/bare <c>Name</c> — must stay a legal identifier (it backs a generated field).</summary>
     Name,
 
-    /// <summary>An <c>x:Key</c> resource key — permissive, but may not contain characters that would break the
-    /// XML attribute value or start a markup extension.</summary>
+    /// <summary>An <c>x:Key</c> resource key — permissive, but may not contain characters that would break the XML attribute value or start a markup extension.</summary>
     Key,
 }
 
-/// <summary>
-/// Raised when a requested rename target name is invalid. The message is surfaced to the user (the language
-/// server turns a handler exception into a JSON-RPC error response), so a rename can never silently corrupt
-/// the markup or the generated code-behind field.
-/// </summary>
+/// <summary>Raised when a requested rename target name is invalid.</summary>
 internal sealed class RenameValidationException : System.Exception
 {
     public RenameValidationException(string message) : base(message) { }
 }
 
-/// <summary>
-/// Computes <c>textDocument/prepareRename</c> and <c>textDocument/rename</c> for WinUI XAML. Renames an
-/// <c>x:Name</c>/<c>Name</c> or an <c>x:Key</c> resource key and every reference to it within the document,
-/// reusing the same occurrence engine that powers Find All References and Document Highlights (so the edit
-/// set is always identical to what the user sees highlighted).
-/// <para>
-/// Scope: XAML-only. The declaration plus its XAML references (<c>ElementName=</c>, <c>Storyboard.TargetName</c>,
-/// and <c>{StaticResource}</c>/<c>{ThemeResource}</c>/<c>{CustomResource}</c> usages) are rewritten. Code-behind
-/// field references to an <c>x:Name</c> are NOT updated here (that is a cross-file C# refactor); the editor's
-/// rename preview lets the user review every edit before applying.
-/// </para>
-/// </summary>
+/// <summary>Computes textDocument/prepareRename and textDocument/rename for WinUI XAML.</summary>
 internal static class XamlRename
 {
     // An x:Name backs a generated C# field, so it must be a legal identifier.
@@ -45,10 +29,7 @@ internal static class XamlRename
     // Characters that would break out of the quoted attribute value or start a markup extension.
     private static readonly char[] KeyForbidden = { '"', '\'', '<', '>', '&', '{', '}' };
 
-    /// <summary>
-    /// Validates the caret and returns the exact token range to make editable plus the current name as the
-    /// placeholder, or null when the caret is not on a renameable symbol.
-    /// </summary>
+    /// <summary> Validates the caret and returns the exact token range to make editable plus the current name as the placeholder, or null when the caret is not on a renameable symbol.</summary>
     internal static PrepareRenameResult? PrepareRename(TextDocument doc, int offset)
     {
         if (doc.Parsed.Root is not { } root)
@@ -67,8 +48,7 @@ internal static class XamlRename
             return null;
         }
 
-        // Return the range of the specific occurrence the caret sits in (declaration or usage) so the editor
-        // seeds the rename box over the token under the cursor, not some other occurrence.
+        // Return the range of the specific occurrence the caret sits in (declaration or usage) so the editor seeds the rename box over the token under the cursor, not some other occurrence.
         foreach (var occurrence in occurrences)
         {
             if (RangeContainsOffset(doc, occurrence.Range, offset))
@@ -80,11 +60,7 @@ internal static class XamlRename
         return null;
     }
 
-    /// <summary>
-    /// Builds a single-document <see cref="WorkspaceEdit"/> renaming the symbol under the caret and every
-    /// reference to it. Throws <see cref="RenameValidationException"/> when <paramref name="newName"/> is
-    /// invalid for the symbol kind. Returns null when the caret is not on a renameable symbol.
-    /// </summary>
+    /// <summary>Builds a single-document WorkspaceEdit renaming the symbol under the caret and every reference to it.</summary>
     internal static WorkspaceEdit? Rename(TextDocument doc, int offset, string newName)
     {
         if (doc.Parsed.Root is not { } root)
@@ -97,18 +73,14 @@ internal static class XamlRename
             return null;
         }
 
-        // Gate on the renameable location first (this also rejects carets inside malformed/unterminated
-        // markup), so an invalid-name error is only raised when the caret is genuinely on a symbol.
+        // Gate on the renameable location first (this also rejects carets inside malformed/unterminated markup), so an invalid-name error is only raised when the caret is genuinely on a symbol.
         var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset);
         if (occurrences is null || occurrences.Count == 0)
         {
             return null;
         }
 
-        // The caret must sit on one of the occurrences (the declaration or a usage). PrepareRename enforces
-        // this, but a client can invoke rename directly without a prepareRename round-trip (e.g. VS Code's
-        // executeDocumentRenameProvider), so re-check here: a caret in the value's surrounding whitespace or
-        // otherwise off-token is not renameable and must not mutate every occurrence.
+        // The caret must sit on one of the occurrences (the declaration or a usage).
         if (!occurrences.Any(o => RangeContainsOffset(doc, o.Range, offset)))
         {
             return null;
@@ -159,9 +131,7 @@ internal static class XamlRename
         }
     }
 
-    /// <summary>True when <paramref name="offset"/> falls within <paramref name="range"/> (inclusive on both
-    /// ends, matching the caret-containment used elsewhere), so a caret at either boundary of the token
-    /// resolves to that occurrence.</summary>
+    /// <summary>True when offset falls within range (inclusive on both ends, matching the caret-containment used elsewhere), so a caret at either boundary of the token resolves to that occurrence.</summary>
     private static bool RangeContainsOffset(TextDocument doc, Lsp.Range range, int offset)
     {
         var start = doc.OffsetAt(range.Start);

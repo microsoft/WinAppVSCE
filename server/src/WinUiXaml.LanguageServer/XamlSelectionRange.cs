@@ -4,14 +4,7 @@ using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// Computes LSP <c>selectionRange</c> chains for "smart" expand/shrink selection. For each requested
-/// position it walks the tolerant XAML syntax tree from the innermost node outward, producing a strictly
-/// nested sequence of ranges: an attribute value's inner text -&gt; the quoted value -&gt; the whole
-/// attribute -&gt; the element's open tag -&gt; the whole element -&gt; each ancestor element -&gt; the
-/// document. Purely syntactic and read-only, so there is no content-corruption vector; the only invariants
-/// are that every range contains the caret and each parent strictly contains its child.
-/// </summary>
+/// <summary>Computes strictly nested LSP selection ranges containing the caret.</summary>
 internal static class XamlSelectionRange
 {
     public static List<SelectionRange> Compute(TextDocument doc, IReadOnlyList<Position>? positions)
@@ -57,8 +50,7 @@ internal static class XamlSelectionRange
             }
         }
 
-        // The node chain plus a couple of finer sub-spans that are not their own nodes (the value's inner
-        // text and an element's open tag) so expand/shrink stops at the places a XAML author expects.
+        // The node chain plus a couple of finer sub-spans that are not their own nodes (the value's inner text and an element's open tag) so expand/shrink stops at the places a XAML author expects.
         for (XamlNode? node = doc.Parsed.FindNode(offset); node != null; node = node.Parent)
         {
             if (node is XamlAttributeValue value)
@@ -120,7 +112,7 @@ internal static class XamlSelectionRange
 
         if (chain.Count == 0)
         {
-            // Degenerate (e.g. empty document): a single caret-sized range keeps the response well-formed.
+            // Degenerate.
             chain.Add(new TextSpan(0, doc.Text.Length));
         }
 

@@ -3,11 +3,7 @@ using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// An open text document: its text, the parsed XAML tree, and a line index for converting between
-/// LSP (line, character) positions and flat character offsets. Positions use UTF-16 code units,
-/// which matches .NET string indexing.
-/// </summary>
+/// <summary>Stores an open document, parsed tree, and UTF-16 line index.</summary>
 internal sealed class TextDocument
 {
     private readonly int[] _lineStarts;

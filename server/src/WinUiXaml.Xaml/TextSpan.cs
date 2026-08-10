@@ -2,11 +2,7 @@ using System;
 
 namespace WinUiXaml.Xaml
 {
-    /// <summary>
-    /// An immutable half-open text range <c>[Start, End)</c> measured in UTF-16 code units.
-    /// Never has negative length; construction clamps defensively so the tolerant parser can
-    /// synthesize spans from partial input without throwing.
-    /// </summary>
+    /// <summary>An immutable half-open text range [Start, End) measured in UTF-16 code units.</summary>
     public readonly struct TextSpan : IEquatable<TextSpan>
     {
         public TextSpan(int start, int end)

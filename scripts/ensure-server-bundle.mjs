@@ -1,6 +1,4 @@
-// Local packaging publishes fresh self-contained servers. Release packaging sets artifact mode after
-// downloading the signed server pipeline artifact into dist/server; artifact mode never falls back to
-// an unsigned local build.
+// Artifact mode must never fall back to an unsigned local build.
 
 import { existsSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";

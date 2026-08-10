@@ -14,12 +14,7 @@ namespace WinUiXaml.Workspace
         }
     }
 
-    /// <summary>
-    /// Registers an available MSBuild with <see cref="MSBuildLocator"/> exactly once, immediately
-    /// before project evaluation. Keeping registration lazy lets the self-contained language server
-    /// start and provide project-independent XAML features even when no SDK or Visual Studio
-    /// installation is available.
-    /// </summary>
+    /// <summary>Registers an available MSBuild with MSBuildLocator exactly once, immediately before project evaluation.</summary>
     public static class MsBuildRegistrar
     {
         private static readonly object Gate = new object();

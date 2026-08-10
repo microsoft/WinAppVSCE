@@ -9,23 +9,7 @@ using Diagnostic = WinUiXaml.LanguageServer.Lsp.Diagnostic;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// Semantic validation (spec item: diagnostics). Walks the parsed tree and reports issues the tolerant
-/// parser cannot catch on its own — undeclared namespace prefixes, unknown element types, and unknown
-/// attribute members — resolved against the project's <see cref="XamlTypeSystem"/>.
-/// </summary>
-/// <remarks>
-/// The checks are deliberately conservative to avoid false positives, which are worse than a missed
-/// diagnostic in an editor:
-/// <list type="bullet">
-/// <item>Property elements (<c>&lt;Grid.RowDefinitions&gt;</c>) are skipped — member validation is future work.</item>
-/// <item>The XAML language namespace (<c>x:</c>) is skipped — it exposes built-in primitives we don't model.</item>
-/// <item>Unknown-type/attribute is only reported for namespaces the type system actually understands
-/// (<see cref="XamlTypeSystem.IsKnownNamespace"/>), so design-time/third-party namespaces stay silent.</item>
-/// <item>Attribute validation covers simple unprefixed names and <c>Owner.Member</c> attached
-/// properties; supported design-time and markup-compatibility directives receive dedicated checks.</item>
-/// </list>
-/// </remarks>
+/// <summary>Reports semantic diagnostics against the project's XAML type system.</summary>
 internal static class XamlValidator
 {
     /// <summary>An undeclared xmlns prefix — certain, so reported as an error.</summary>
@@ -63,7 +47,6 @@ internal static class XamlValidator
 
     private const int SeverityError = 1;
     private const int SeverityWarning = 2;
-    // Prefixes that are always in scope and never need an xmlns declaration.
     private static readonly HashSet<string> ReservedPrefixes = new(System.StringComparer.Ordinal)
     {
         "xml", "xmlns",
@@ -74,13 +57,10 @@ internal static class XamlValidator
         var diagnostics = new List<Diagnostic>();
         if (doc.Parsed.Root is { } root)
         {
-            // The x:Bind root at the page level is the code-behind x:Class type; null when absent or
-            // unresolved, in which case x:Bind member checks stay silent (never a false positive).
+            // Unresolved binding roots remain silent to avoid false positives.
             var pageClass = ResolvePageClass(root, typeSystem);
             Walk(root, doc, typeSystem, diagnostics, pageClass);
 
-            // Structural uniqueness checks (no type resolution needed): duplicate x:Name within a name
-            // scope and duplicate x:Key within a ResourceDictionary. Both are hard compile errors in VS.
             ValidateUniqueNames(root, doc, diagnostics);
             ValidateUniqueResourceKeys(root, doc, diagnostics);
         }
@@ -91,8 +71,7 @@ internal static class XamlValidator
     private static void Walk(
         XamlElement element, TextDocument doc, XamlTypeSystem typeSystem, List<Diagnostic> diagnostics, INamedTypeSymbol? bindRoot)
     {
-        // A DataTemplate/element carrying x:DataType re-roots {x:Bind} for its subtree. When the type is
-        // declared but unresolvable, drop to null so bindings inside are not checked (avoids false positives).
+        // An unresolved x:DataType disables binding checks for its subtree.
         var effectiveRoot = bindRoot;
         if (TryGetDirectiveValue(element, "DataType", out var dataTypeText))
         {
@@ -150,9 +129,7 @@ internal static class XamlValidator
             return;
         }
 
-        // Out of scope: the x: language namespace (built-in primitives) and any namespace the type system
-        // cannot model (design-time, third-party). A property element carries no prefix, so it resolves
-        // through the default namespace like any other element here.
+        // Out of scope: the x: language namespace (built-in primitives) and any namespace the type system cannot model (design-time, third-party). A property element carries no prefix, so it resolves through the default namespace like any other element here.
         if (!scope.TryResolvePrefix(name.Prefix, out var uri) ||
             uri == XamlTypeSystem.XamlLanguageNamespace ||
             !typeSystem.IsKnownNamespace(uri))
@@ -160,8 +137,7 @@ internal static class XamlValidator
             return;
         }
 
-        // A property element (<Grid.RowDefinitions>) names a member of an owner type, not an element type,
-        // so it has no element-type/attribute surface — validate the member against the owner and stop.
+        // A property element (<Grid.RowDefinitions>) names a member of an owner type, not an element type, so it has no element-type/attribute surface — validate the member against the owner and stop.
         if (element.IsPropertyElement)
         {
             ValidatePropertyElement(name, uri, typeSystem, doc, diagnostics);
@@ -220,11 +196,7 @@ internal static class XamlValidator
         }
     }
 
-    /// <summary>
-    /// Validates an <c>Owner.Member</c> attached-property attribute: resolves the owner type through the
-    /// attribute's namespace and checks it actually exposes the member. Conservative — stays silent when
-    /// the owner's namespace is foreign/design-time or the owner type itself can't be resolved.
-    /// </summary>
+    /// <summary>Validates an Owner.Member attached-property attribute: resolves the owner type through the attribute's namespace and checks it actually exposes the member.</summary>
     private static void ValidateAttachedProperty(
         XamlName name,
         XamlNamespaceScope scope,
@@ -262,14 +234,7 @@ internal static class XamlValidator
             SuggestData(memberName, typeSystem.GetAttachedProperties(owner).Select(m => m.Name))));
     }
 
-    /// <summary>
-    /// Validates a property element (<c>&lt;Grid.RowDefinitions&gt;</c>): the dotted name references a
-    /// member of an owner type, so it resolves the owner through the element's namespace and checks the
-    /// member actually exists as either an instance property or an attached property used in element form
-    /// (<c>&lt;Grid.Row&gt;</c>). The caller has already confirmed the namespace is known, so an owner
-    /// type that does not resolve there is reported as an unknown type (<c>WXAML0002</c>), mirroring a
-    /// plain unknown element.
-    /// </summary>
+    /// <summary>Validates a property element (&lt;Grid.RowDefinitions&gt;): the dotted name references a member of an owner type</summary>
     private static void ValidatePropertyElement(
         XamlName name,
         string uri,
@@ -289,12 +254,7 @@ internal static class XamlValidator
         var owner = typeSystem.ResolveType(uri, ownerLocal);
         if (owner is null)
         {
-            // The enclosing namespace is already known/trusted (the caller gated on IsKnownNamespace),
-            // so a property element whose OWNER type does not resolve is a genuine unknown type — exactly
-            // like a plain <Bogus> element. Underline just the owner segment before the dot. Malformed
-            // dotted names (<Grid.>, <.Foo>) were already filtered above, and owners that DO resolve fall
-            // through to the member check, so attached forms (<Grid.Row>) and real property elements
-            // (<Grid.RowDefinitions>) stay silent.
+            // The enclosing namespace is already known/trusted (the caller gated on IsKnownNamespace), so a property element whose OWNER type does not resolve is a genuine unknown type
             var ownerSpan = new TextSpan(name.LocalNameSpan.Start, name.LocalNameSpan.Start + dot);
             diagnostics.Add(Diag(doc, ownerSpan, SeverityWarning, UnknownTypeCode,
                 $"The type '{ownerLocal}' was not found in the XAML namespace '{uri}'.",
@@ -308,8 +268,7 @@ internal static class XamlValidator
             return; // a real settable property / attached member used in element form
         }
 
-        // Underline just the member part, past "Owner.". An event exists as a member but cannot be set
-        // through property-element syntax (it needs an attribute), so it gets a distinct message.
+        // Underline just the member part, past "Owner.". An event exists as a member but cannot be set through property-element syntax (it needs an attribute), so it gets a distinct message.
         var memberSpan = new TextSpan(name.LocalNameSpan.Start + dot + 1, name.LocalNameSpan.End);
         bool isEvent = typeSystem.HasMember(owner, memberName);
         var message = isEvent
@@ -349,28 +308,14 @@ internal static class XamlValidator
             Data = data,
         };
 
-    /// <summary>
-    /// Builds the <see cref="DiagnosticData"/> spelling-suggestion payload for a mistyped <paramref name="bad"/>
-    /// name against the valid <paramref name="candidates"/>, or null when nothing is close enough — so an
-    /// unknown-name diagnostic only carries a "Did you mean …?" quick fix when there is a plausible fix.
-    /// </summary>
+    /// <summary>Builds the DiagnosticData spelling-suggestion payload for a mistyped bad name against the valid candidates, or null when nothing is close enough</summary>
     private static DiagnosticData? SuggestData(string bad, IEnumerable<string> candidates)
     {
         var nearest = XamlSuggestions.Nearest(bad, candidates);
         return nearest.Count == 0 ? null : new DiagnosticData { Bad = bad, Suggestions = nearest.ToArray() };
     }
 
-    /// <summary>
-    /// Reports an <c>{x:Bind}</c> path segment that is not a member of the type produced by the segment
-    /// before it (the first segment is checked against <paramref name="bindRoot"/>, later segments against
-    /// each resolved hop). A leading cast (<c>(ns:Type)Member.Member</c>) rebinds the root to the cast
-    /// target type and its member chain is checked against that type. Deliberately conservative: only closed
-    /// <c>x:Bind</c> extensions, only plain identifier or indexed-member segments (function-arg expressions
-    /// and complex function-arg expressions are skipped; an <c>Items[0]</c> segment validates the <c>Items</c> base
-    /// then unwraps the element type), an unresolved cast target is skipped, and the full bindable surface —
-    /// inherited, non-public root, and method members — counts as a match. The walk stops silently the
-    /// moment a hop's type can't be resolved. Empty paths (which bind the root itself) are ignored.
-    /// </summary>
+    /// <summary>Reports an {x:Bind} path segment that is not a member of the type produced by the segment before it (the first segment is checked against bindRoot</summary>
     private static void ValidateBindPath(
         XamlAttribute attribute,
         INamedTypeSymbol bindRoot,
@@ -399,11 +344,7 @@ internal static class XamlValidator
             return;
         }
 
-        // A C#-style cast ((ns:Type)Member.Member) rebinds the path root to the cast TARGET type, exactly
-        // as it does for completion/hover (round 26). Validate the member chain after the cast against that
-        // type — VS's XAML compiler checks these members too. Deliberately conservative: an unresolved cast
-        // target, an attached-property step ((Grid.Row) — handled by TryGetCastPath returning false), or a
-        // malformed cast produces NO diagnostic.
+        // Validate cast paths only when the target type is unambiguous.
         if (TryGetCastPath(path, out var castTypeName, out var castMembers, out var castMemberOffset))
         {
             if (ResolveTypeName(castTypeName, scope, typeSystem) is { } castType)
@@ -424,12 +365,10 @@ internal static class XamlValidator
         if (typeSystem.GetBindableMembers(bindRoot, includeRootNonPublic: true)
             .Any(m => string.Equals(m.Name, segment, System.StringComparison.Ordinal)))
         {
-            // The first segment is valid — validate any remaining dotted segments too, so a bad
-            // non-first member (GreetingText.Nope, Items[0].Nope) is caught rather than silently accepted.
+            // The first segment is valid — validate any remaining dotted segments too, so a bad non-first member (GreetingText.Nope, Items[0].Nope) is caught rather than silently accepted.
             ValidateBindPathTail(path, valueSpan, bindRoot, typeSystem, doc, diagnostics);
 
-            // For a function binding (Method(arg, arg)) each argument is itself a path bound against the
-            // root, so a bogus argument member is flagged the same as a bogus root path.
+            // For a function binding (Method(arg, arg)) each argument is itself a path bound against the root, so a bogus argument member is flagged the same as a bogus root path.
             ValidateBindFunctionArgs(path, valueSpan, bindRoot, typeSystem, doc, diagnostics);
             return;
         }
@@ -439,11 +378,7 @@ internal static class XamlValidator
             SuggestData(segment, typeSystem.GetBindableMembers(bindRoot, includeRootNonPublic: true).Select(m => m.Name))));
     }
 
-    /// <summary>
-    /// Validates a leading attached-property binding step such as <c>(Grid.Row)</c> and continues through
-    /// any ordinary tail (<c>(Grid.Row).Value</c>). Returns true when the path had attached-property shape,
-    /// including unresolved/malformed cases that should remain silent rather than fall through as casts.
-    /// </summary>
+    /// <summary>Validates a leading attached-property binding step.</summary>
     private static bool ValidateLeadingAttachedBindPath(
         string path,
         TextSpan valueSpan,
@@ -540,14 +475,7 @@ internal static class XamlValidator
         return true;
     }
 
-    /// <summary>
-    /// Walks the dotted segments of an <c>{x:Bind}</c> path after the first (which the caller has already
-    /// validated), typing each hop through <see cref="CompletionProvider.ResolveBindSegmentType"/> so the
-    /// same resolution powers completion, hover, and validation. Flags the FIRST non-first segment that is
-    /// not a member of the type produced by the preceding segment. Deliberately conservative: skips
-    /// function bindings and casts, and stops silently the moment a segment's result type can't be
-    /// resolved, so only a genuinely unknown member on a fully-resolved chain is reported.
-    /// </summary>
+    /// <summary>Walks the dotted segments of an {x:Bind} path after the first (which the caller has already validated)</summary>
     private static void ValidateBindPathTail(
         string path,
         TextSpan valueSpan,
@@ -556,8 +484,7 @@ internal static class XamlValidator
         TextDocument doc,
         List<Diagnostic> diagnostics)
     {
-        // Skip the leading '!' negation run (and whitespace), keeping the offset so segment spans stay
-        // aligned with the document text.
+        // Skip the leading '!' negation run (and whitespace), keeping the offset so segment spans stay aligned with the document text.
         int start = 0;
         while (start < path.Length && (path[start] == '!' || char.IsWhiteSpace(path[start])))
         {
@@ -566,8 +493,7 @@ internal static class XamlValidator
 
         var body = path.Substring(start);
 
-        // A function binding (Method(...)) or a cast ((ns:Type)Member) is not a plain member chain the
-        // tail walk can verify — the first-segment check already covered what it safely can.
+        // A function binding (Method(...)) or a cast ((ns:Type)Member) is not a plain member chain the tail walk can verify — the first-segment check already covered what it safely can.
         if (body.IndexOf('(') >= 0)
         {
             return;
@@ -582,19 +508,7 @@ internal static class XamlValidator
         ValidateMemberChain(bindRoot, segments, start, valueSpan, skipFirst: true, typeSystem, doc, diagnostics);
     }
 
-    /// <summary>
-    /// Walks a dotted member chain against a starting type, flagging the FIRST segment that is not a
-    /// member of the type produced by the preceding segment. Shared by the non-first-segment tail walk
-    /// (<paramref name="skipFirst"/> = <c>true</c> — the caller already checked segment 0) and cast-path
-    /// validation (<paramref name="skipFirst"/> = <c>false</c> — every segment is checked against the cast
-    /// target). Types each hop through the same <see cref="CompletionProvider.ResolveBindSegmentType"/>
-    /// oracle that powers completion and hover, and stops silently the moment a hop's type cannot be
-    /// modelled — so only a genuinely unknown member on a fully-resolved chain is reported.
-    /// </summary>
-    /// <param name="rootType">The type the first segment is expected to be a member of.</param>
-    /// <param name="segments">The chain split on <c>'.'</c>; a trailing indexer (<c>Items[0]</c>) is tolerated.</param>
-    /// <param name="chainStart">Offset within the attribute value of <c>segments[0]</c> (for span alignment).</param>
-    /// <param name="skipFirst">Leave segment 0 to the caller (tail walk) or validate it here (cast).</param>
+    /// <summary>Walks a dotted member chain against a starting type, flagging the FIRST segment that is not a member of the type produced by the preceding segment.</summary>
     private static void ValidateMemberChain(
         ITypeSymbol rootType,
         string[] segments,
@@ -655,14 +569,7 @@ internal static class XamlValidator
         }
     }
 
-    /// <summary>
-    /// Recognises a leading C#-style cast in an <c>{x:Bind}</c> path — <c>(ns:Type)Member.Member</c> — and
-    /// splits it into the cast target type reference and the member chain after the close paren. Mirrors the
-    /// round-26 completion/hover disambiguation so all three consumers agree: a parenthesised step whose
-    /// inner text contains a <c>'.'</c> is an attached-property step (<c>(Grid.Row)</c>), NOT a cast, and
-    /// returns <c>false</c>. A leading <c>'!'</c> negation run is skipped. An unterminated or empty cast
-    /// returns <c>false</c> so the caller stays silent.
-    /// </summary>
+    /// <summary>Splits an unambiguous leading x:Bind cast from its member path.</summary>
     private static bool TryGetCastPath(string path, out string castType, out string memberChain, out int memberOffset)
     {
         castType = string.Empty;
@@ -699,14 +606,7 @@ internal static class XamlValidator
         return true;
     }
 
-    /// <summary>
-    /// Validates the arguments of an <c>{x:Bind}</c> FUNCTION binding (<c>Method(arg, arg)</c>). Each
-    /// argument is a binding path evaluated against the same root, so a bogus member in an argument is
-    /// reported as <see cref="UnknownBindMemberCode"/> — parity with a bogus root path. Deliberately
-    /// conservative: only arguments that are unambiguously plain member paths are checked; string/number
-    /// literals, prefixed names (<c>x:Null</c>), nested markup, and nested calls are skipped so they never
-    /// produce a false positive.
-    /// </summary>
+    /// <summary>Validates unambiguous member paths in x:Bind function arguments.</summary>
     private static void ValidateBindFunctionArgs(
         string path,
         TextSpan valueSpan,
@@ -906,8 +806,7 @@ internal static class XamlValidator
         return false;
     }
 
-    /// <summary>Validates a single function-binding argument spanning <c>[from, to)</c> of <paramref name="path"/>
-    /// when — and only when — it is a plain member path; anything else is skipped.</summary>
+    /// <summary>Validates a single function-binding argument spanning <c>[from, to)</c> of <paramref name="path"/> when — and only when — it is a plain member path; anything else is skipped.</summary>
     private static void ValidateBindFunctionArg(
         string path,
         int from,
@@ -937,8 +836,7 @@ internal static class XamlValidator
 
         var arg = path.Substring(s, e - s);
 
-        // Only a plain member path is validatable. Skip literals (numbers/strings), prefixed names
-        // (x:Null / x:Static), nested markup ('{'), nested calls ('('), and anything with a ':' or quote.
+        // Only a plain member path is validatable. Skip literals (numbers/strings), prefixed names (x:Null / x:Static), nested markup ('{'), nested calls ('('), and anything with a ':' or quote.
         if (!(char.IsLetter(arg[0]) || arg[0] == '_'))
         {
             return;
@@ -992,9 +890,7 @@ internal static class XamlValidator
         }
     }
 
-    /// <summary>Extracts the first identifier segment of an x:Bind path, or false when it is not a plain
-    /// member name we can check (empty, a cast <c>(ns:Type)</c>, or a function-arg reference). A trailing
-    /// indexer (<c>Items[0]</c>) is reduced to its base member name so that base is still validated.</summary>
+    /// <summary>Extracts the first identifier segment of an x:Bind path, or false when it is not a plain member name we can check (empty, a cast (ns:Type), or a function-arg reference).</summary>
     private static bool TryFirstBindSegment(string path, out string segment)
     {
         segment = string.Empty;
@@ -1020,8 +916,7 @@ internal static class XamlValidator
         int dot = trimmed.IndexOf('.');
         var first = (dot >= 0 ? trimmed.Substring(0, dot) : trimmed).Trim();
 
-        // Strip a trailing indexer (Items[0]) and validate the base member name; a non-identifier base
-        // (cast, empty) is skipped so only genuine unknown members are reported.
+        // Strip a trailing indexer (Items[0]) and validate the base member name; a non-identifier base (cast, empty) is skipped so only genuine unknown members are reported.
         int bracket = first.IndexOf('[');
         if (bracket >= 0)
         {
@@ -1061,7 +956,7 @@ internal static class XamlValidator
             ? typeSystem.ResolveMetadataType(className.Trim())
             : null;
 
-    /// <summary>Reads an <c>x:</c>-prefixed directive value (e.g. <c>x:Class</c>, <c>x:DataType</c>) off an element.</summary>
+    /// <summary>Reads an <c>x:</c>-prefixed directive value.</summary>
     private static bool TryGetDirectiveValue(XamlElement element, string localName, out string value)
     {
         foreach (var attribute in element.Attributes)
@@ -1185,20 +1080,13 @@ internal static class XamlValidator
 
     // --- Structural uniqueness: duplicate x:Name / x:Key --------------------------------------------
 
-    /// <summary>Elements whose CONTENTS start a fresh XAML name scope, so an <c>x:Name</c> inside one does
-    /// not collide with the same name outside it (each instantiated template has its own scope).</summary>
+    /// <summary>Elements whose CONTENTS start a fresh XAML name scope, so an x:Name inside one does not collide with the same name outside it (each instantiated template has its own scope).</summary>
     private static readonly HashSet<string> NameScopeBoundaries = new(System.StringComparer.Ordinal)
     {
         "DataTemplate", "ControlTemplate", "ItemsPanelTemplate",
     };
 
-    /// <summary>
-    /// Reports duplicate <c>x:Name</c>/<c>Name</c> declarations within the same XAML name scope
-    /// (<c>WXAML0007</c>, an error — the XAML compiler rejects it). The document root opens the first
-    /// scope; templates (<see cref="NameScopeBoundaries"/>) open nested scopes for their contents, so a
-    /// name reused across two templates — or between a template and the page — is not a collision. Only
-    /// the SECOND and later uses are flagged; markup-extension and empty names are ignored.
-    /// </summary>
+    /// <summary>Reports duplicate x:Name/Name declarations within the same XAML name scope (WXAML0007, an error — the XAML compiler rejects it).</summary>
     private static void ValidateUniqueNames(XamlElement root, TextDocument doc, List<Diagnostic> diagnostics)
     {
         CollectScopedNames(root, new HashSet<string>(System.StringComparer.Ordinal), doc, diagnostics);
@@ -1232,16 +1120,7 @@ internal static class XamlValidator
     private static bool IsNameScopeBoundary(XamlElement element) =>
         element.Name is { HasPrefix: false, IsDotted: false } n && NameScopeBoundaries.Contains(n.LocalName);
 
-    /// <summary>
-    /// Reports duplicate <c>x:Key</c> declarations within the same <c>ResourceDictionary</c>
-    /// (<c>WXAML0008</c>, an error). A key scope is opened by an explicit <c>&lt;ResourceDictionary&gt;</c>
-    /// or any <c>.Resources</c> property element (<c>&lt;Page.Resources&gt;</c>,
-    /// <c>&lt;Application.Resources&gt;</c>, ...). Nested dictionaries — including merged/theme dictionaries
-    /// — form their own scopes, so the same key may repeat across them. Only direct entry children of a
-    /// dictionary carry keys; a key expressed as an <c>{x:Type Foo}</c> markup extension IS tracked (in a
-    /// distinct type key-space); any other markup-extension key form is skipped.
-    /// Only the second and later uses are flagged.
-    /// </summary>
+    /// <summary>Reports duplicate x:Key declarations within the same ResourceDictionary (WXAML0008, an error).</summary>
     private static void ValidateUniqueResourceKeys(XamlElement root, TextDocument doc, List<Diagnostic> diagnostics)
     {
         FindResourceScopes(root, doc, diagnostics);
@@ -1265,8 +1144,7 @@ internal static class XamlValidator
         }
     }
 
-    /// <summary>Collects the keys of a single dictionary's direct entry children into one scope; nested
-    /// dictionaries (explicit, or under merged/theme property elements) recurse as separate scopes.</summary>
+    /// <summary>Collects the keys of a single dictionary's direct entry children into one scope; nested dictionaries (explicit, or under merged/theme property elements) recurse as separate scopes.</summary>
     private static void ProcessDictionaryScope(XamlElement boundary, TextDocument doc, List<Diagnostic> diagnostics)
     {
         var scope = new HashSet<string>(System.StringComparer.Ordinal);
@@ -1277,23 +1155,21 @@ internal static class XamlValidator
                 continue;
             }
 
-            // An explicit nested <ResourceDictionary> (e.g. the one a .Resources holds) is its own scope.
+            // An explicit nested <ResourceDictionary>.
             if (IsResourceScopeBoundary(entry))
             {
                 ProcessDictionaryScope(entry, doc, diagnostics);
                 continue;
             }
 
-            // A structural property element (MergedDictionaries/ThemeDictionaries) is not a keyed entry;
-            // its subtree holds nested dictionaries, each their own scope.
+            // A structural property element (MergedDictionaries/ThemeDictionaries) is not a keyed entry; its subtree holds nested dictionaries, each their own scope.
             if (entry.IsPropertyElement)
             {
                 FindResourceScopes(entry, doc, diagnostics);
                 continue;
             }
 
-            // A keyed resource entry: its x:Key must be unique within THIS dictionary. Both a plain
-            // string key and an {x:Type Foo} implicit-style key are tracked (in separate key-spaces).
+            // A keyed resource entry: its x:Key must be unique within THIS dictionary. Both a plain string key and an {x:Type Foo} implicit-style key are tracked (in separate key-spaces).
             if (TryGetResourceKey(entry, out var canonicalKey, out var keySpan) && !scope.Add(canonicalKey))
             {
                 diagnostics.Add(Diag(doc, keySpan, SeverityError, DuplicateKeyCode,
@@ -1329,14 +1205,7 @@ internal static class XamlValidator
         return false;
     }
 
-    /// <summary>
-    /// Reads an entry's <c>x:Key</c> as a canonical, scope-comparable key. A plain string key
-    /// (<c>PageBrush</c>) is returned in a string key-space; an <c>{x:Type Foo}</c> implicit-style key is
-    /// returned in a distinct type key-space so two <c>{x:Type Foo}</c> collide while a string <c>"Foo"</c>
-    /// and <c>{x:Type Foo}</c> never do. Any other markup-extension key form is skipped (returns false) so
-    /// it can never produce a false positive. The reported span selects the key value (the type argument
-    /// for a type key).
-    /// </summary>
+    /// <summary>Reads an entry's x:Key as a canonical, scope-comparable key.</summary>
     private static bool TryGetResourceKey(XamlElement entry, out string canonicalKey, out TextSpan keySpan)
     {
         canonicalKey = string.Empty;
@@ -1361,8 +1230,7 @@ internal static class XamlValidator
             return true;
         }
 
-        // {x:Type Foo} implicit-style key: canonicalize by the (trimmed) type argument text so two
-        // {x:Type Foo} entries in the same dictionary are a duplicate, matching the XAML compiler.
+        // {x:Type Foo} implicit-style key: canonicalize by the (trimmed) type argument text so two {x:Type Foo} entries in the same dictionary are a duplicate, matching the XAML compiler.
         if (value.MarkupExtension is { IsClosed: true, Name: { LocalName: "Type" } typeName } ext &&
             string.Equals(typeName.Prefix, "x", System.StringComparison.Ordinal))
         {
@@ -1380,8 +1248,7 @@ internal static class XamlValidator
         return false; // other markup-extension key forms — skip conservatively.
     }
 
-    /// <summary>Reads a static (non-markup-extension, non-empty) directive value off an element, trying
-    /// <paramref name="primary"/> then optional <paramref name="fallback"/> (e.g. x:Name then Name).</summary>
+    /// <summary>Reads a static (non-markup-extension, non-empty) directive value off an element, trying primary then optional fallback.</summary>
     private static bool TryGetStaticValue(
         XamlElement element, string primary, string? fallback,
         [NotNullWhen(true)] out XamlAttribute? attr, out string text)

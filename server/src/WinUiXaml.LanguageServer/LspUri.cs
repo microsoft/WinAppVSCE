@@ -1,15 +1,6 @@
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// Conversions between LSP document URIs and Windows filesystem paths.
-/// </summary>
-/// <remarks>
-/// Kept separate (and internal, exposed to tests via InternalsVisibleTo) because the encoding rules
-/// are subtle: VS Code sends file URIs with a <b>percent-encoded drive colon</b> (<c>file:///c%3A/…</c>),
-/// and <see cref="System.Uri.LocalPath"/> mishandles that form — it yields <c>\c:\…</c>, which later
-/// roots against the current drive as <c>C:\c:\…</c> and breaks every project lookup. We decode the
-/// absolute path ourselves so both <c>file:///c:/…</c> and <c>file:///c%3A/…</c> converge.
-/// </remarks>
+/// <summary>Converts LSP document URIs to Windows paths.</summary> <remarks>Handles percent-encoded drive colons that <see cref="System.Uri.LocalPath"/> misinterprets.</remarks>
 internal static class LspUri
 {
     public static string? ToPath(string? uri)
@@ -19,8 +10,7 @@ internal static class LspUri
             return null;
         }
 
-        // Already a Windows filesystem path (drive-letter or UNC)? Accept defensively. Any other
-        // scheme (untitled:, http:, git:, …) has no local file to resolve, so return null.
+        // Non-file URI schemes have no local path.
         if (!uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
         {
             return IsWindowsPath(uri) ? uri : null;

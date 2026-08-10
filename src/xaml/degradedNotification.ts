@@ -1,24 +1,14 @@
-// Pure decision logic for the WinUI XAML "degraded to syntax-only" notification. Kept free of any
-// `vscode` import so it can be unit-tested under `tsx --test` (no VS Code host). The runtime wiring
-// lives in xamlLanguageService.ts (notifyDegraded), which maps each returned action to a concrete
-// vscode command / external URL / output-channel reveal.
+// Kept independent of the VS Code API for unit testing.
 
-/**
- * Why the language server is not running:
- *  - "untrusted": the workspace is not trusted, so the semantic server is intentionally disabled.
- *  - "server": the bundled server could not be located or launched.
- */
+/** Why the language server is not running. */
 export type DegradedCause = "untrusted" | "server";
 
-/** Settings query the "Open Settings" action focuses (the WinUI XAML server settings). */
+/** Settings query for the degraded-state action. */
 export const SERVER_SETTINGS_QUERY = "winui-xaml.server";
 
-/**
- * A single actionable button on the degraded warning. Exactly one of {@link command}, {@link url},
- * or {@link showOutput} describes what the button does when clicked.
- */
+/** An action displayed in the degraded-state warning. */
 export interface DegradedAction {
-  /** Button label shown to the user (also used to match the user's choice). */
+  /** Button label. */
   readonly label: string;
   /** VS Code command id to execute. */
   readonly command?: string;
@@ -37,10 +27,7 @@ export interface DegradedNotification {
   readonly actions: readonly DegradedAction[];
 }
 
-/**
- * Builds the warning message and action buttons for a degradation {@link DegradedCause}. Pure: no
- * side effects, deterministic, and independent of the VS Code API.
- */
+/** Builds a warning for a degradation cause. */
 export function buildDegradedNotification(
   cause: DegradedCause,
   detail?: string

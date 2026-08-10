@@ -4,20 +4,10 @@ using System.Linq;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// "Did you mean …?" spelling correction: ranks a set of valid candidate names by their closeness to a
-/// mistyped name so a code action can offer the nearest matches. Case-INSENSITIVE Levenshtein distance so a
-/// pure casing slip (<c>background</c> → <c>Background</c>, which XAML rejects as case-sensitive) scores 0
-/// and ranks first. Purely functional and allocation-light; no project or symbol state.
-/// </summary>
+/// <summary>"Did you mean …?" spelling correction: ranks a set of valid candidate names by their closeness to a mistyped name so a code action can offer the nearest matches.</summary>
 internal static class XamlSuggestions
 {
-    /// <summary>
-    /// Returns up to <paramref name="max"/> candidate names within an adaptive edit-distance threshold of
-    /// <paramref name="target"/>, best first. Ordering: smallest distance, then a shared first letter, then
-    /// case-insensitive alphabetical for stability. Exact (ordinal) matches are skipped — the caller only
-    /// asks when the name is already known-invalid, so an ordinal-equal candidate would be a no-op edit.
-    /// </summary>
+    /// <summary>Returns up to max candidate names within an adaptive edit-distance threshold of target, best first.</summary>
     public static IReadOnlyList<string> Nearest(string target, IEnumerable<string> candidates, int max = 3)
     {
         if (string.IsNullOrEmpty(target) || candidates is null)
@@ -57,10 +47,7 @@ internal static class XamlSuggestions
     private static bool SharesFirstLetter(string a, string b) =>
         a.Length > 0 && b.Length > 0 && char.ToLowerInvariant(a[0]) == char.ToLowerInvariant(b[0]);
 
-    /// <summary>
-    /// Case-insensitive Levenshtein distance, bailing out early (returning <paramref name="threshold"/> + 1)
-    /// once every cell in a row exceeds the threshold — the caller only cares about near matches.
-    /// </summary>
+    /// <summary>Case-insensitive Levenshtein distance, bailing out early (returning threshold + 1) once every cell in a row exceeds the threshold — the caller only cares about near matches.</summary>
     private static int Distance(string a, string b, int threshold)
     {
         int n = a.Length;

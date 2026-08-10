@@ -6,26 +6,10 @@ using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
 
-/// <summary>
-/// Computes <c>textDocument/semanticTokens/full</c> and <c>/range</c> for WinUI XAML. A purely
-/// <em>syntactic</em> tokenizer over the tolerant parse tree — it classifies each name by its structural
-/// role only (element type, attribute/member, name prefix, markup-extension name, markup-extension argument
-/// name) and never resolves <em>symbols</em>, so it is fast, deterministic, and can never mis-color based on
-/// a stale/failed project load. The one <c>defaultLibrary</c> modifier is derived only from the document's
-/// own <c>xmlns</c> declarations (prefix → URI, pure text — NOT a compilation/symbol lookup), so it keeps
-/// every one of those guarantees. It is read-only: VS Code merges these tokens over the TextMate grammar to
-/// give richer, semantic colors.
-/// <para>
-/// Output is the LSP flat encoding: 5 ints per token (deltaLine, deltaStartChar, length, tokenType,
-/// tokenModifiers), tokens sorted by position, single-line only, and non-overlapping — the invariants
-/// VS Code requires or it renders garbage. The <c>/range</c> variant returns the same encoding limited to
-/// tokens overlapping the requested range.
-/// </para>
-/// </summary>
+/// <summary>Computes textDocument/semanticTokens/full and /range for WinUI XAML.</summary>
 internal static class XamlSemanticTokens
 {
-    // The LSP legend. The encoded tokenType of each token is its index into this array; Initialize()
-    // advertises the same array so the client's mapping stays in lock-step with the encoder below.
+    // The LSP legend. The encoded tokenType of each token is its index into this array; Initialize() advertises the same array so the client's mapping stays in lock-step with the encoder below.
     public static readonly string[] TokenTypes = { "namespace", "class", "property", "macro", "parameter" };
 
     // The one emitted modifier: defaultLibrary (see ModDefaultLibrary). Advertised for a complete legend.
@@ -37,10 +21,7 @@ internal static class XamlSemanticTokens
     private const int TypeMacro = 3;     // markup-extension names: StaticResource, Binding
     private const int TypeParameter = 4; // markup-extension argument names: ElementName, Mode
 
-    // Modifier bitmask: bit i set => TokenModifiers[i] applies. Only defaultLibrary (bit 0) is emitted,
-    // marking names bound (via the document's own xmlns declarations) to a well-known framework namespace —
-    // the WinUI presentation namespace or the XAML language namespace — so themes can distinguish framework
-    // names (<Grid>, x:Name, {Binding}) from user names (<local:Foo>), exactly as C#/TS mark BCL symbols.
+    // Modifier bitmask: bit i set => TokenModifiers[i] applies.
     private const int ModDefaultLibrary = 1 << 0;
 
     private readonly record struct Token(int Line, int StartChar, int Length, int Type, int Modifiers);
@@ -61,21 +42,14 @@ internal static class XamlSemanticTokens
             switch (node)
             {
                 case XamlElement element:
-                    // A property element (<Grid.RowDefinitions>) is a member, not a type; a prefixed or
-                    // simple element name is a type. The open and end tag names are colored the same. An
-                    // unprefixed object-element name binds to the default xmlns (so <Grid> can be framework),
-                    // but a property-element name is a member of its owner type — only an explicit framework
-                    // prefix marks it.
+                    // A property element () is a member, not a type; a prefixed or simple element name is a type.
                     var elementLocalType = element.IsPropertyElement ? TypeProperty : TypeClass;
                     var elementAllowsDefault = !element.IsPropertyElement;
                     AddName(element.Name, elementLocalType, element.NamespaceScope, elementAllowsDefault, tokens, doc);
                     AddName(element.EndTagName, elementLocalType, element.NamespaceScope, elementAllowsDefault, tokens, doc);
                     break;
 
-                // xmlns / xmlns:foo declarations are structurally special (and already grammar-colored);
-                // skip them so a prefix name is never mis-classified as an ordinary member. An unprefixed
-                // attribute names a member of its owner element's type (not an xmlns), so only an explicit
-                // framework prefix (x:Name, x:Key) earns defaultLibrary.
+                // xmlns / xmlns:foo declarations are structurally special (and already grammar-colored); skip them so a prefix name is never mis-classified as an ordinary member.
                 case XamlAttribute attribute when !attribute.IsNamespaceDeclaration:
                     AddName(attribute.Name, TypeProperty, ScopeOf(attribute), allowDefaultNamespace: false, tokens, doc);
                     break;
@@ -108,10 +82,7 @@ internal static class XamlSemanticTokens
         return XamlNamespaceScope.Empty;
     }
 
-    /// <summary>The defaultLibrary bit when the name binds (via the document's xmlns) to a framework
-    /// namespace. <paramref name="allowDefaultNamespace"/> controls whether an unprefixed name resolves
-    /// against the default xmlns (true for object elements / markup extensions) or is left unmarked (true
-    /// for members, whose namespace is their owner type, not an xmlns).</summary>
+    /// <summary>The defaultLibrary bit when the name binds (via the document's xmlns) to a framework namespace. allowDefaultNamespace controls whether an unprefixed name resolves against the</summary>
     private static int ModifiersFor(XamlName name, XamlNamespaceScope scope, bool allowDefaultNamespace)
     {
         string? prefix = name.HasPrefix ? name.Prefix : (allowDefaultNamespace ? string.Empty : null);
@@ -156,8 +127,7 @@ internal static class XamlSemanticTokens
         AddSpan(name.LocalNameSpan, localType, modifiers, tokens, doc);
     }
 
-    /// <summary>Adds one token for a span, dropping empty or (defensively) multi-line spans since an LSP
-    /// semantic token must be a single, non-empty, single-line run.</summary>
+    /// <summary>Adds one token for a span, dropping empty or (defensively) multi-line spans since an LSP semantic token must be a single, non-empty, single-line run.</summary>
     private static void AddSpan(TextSpan span, int type, int modifiers, List<Token> tokens, TextDocument doc)
     {
         if (span.Length <= 0)
@@ -180,9 +150,7 @@ internal static class XamlSemanticTokens
         tokens.Add(new Token(range.Start.Line, range.Start.Character, length, type, modifiers));
     }
 
-    /// <summary>Sorts by position and produces the LSP delta encoding, skipping any token that would
-    /// overlap the previous one (the tolerant parser can synthesize odd spans on malformed input; an
-    /// overlapping token would corrupt the whole stream).</summary>
+    /// <summary>Sorts by position and produces the LSP delta encoding, skipping any token that would overlap the previous one (the tolerant parser can synthesize odd spans on malformed input</summary>
     private static int[] Encode(List<Token> tokens)
     {
         tokens.Sort(static (a, b) => a.Line != b.Line ? a.Line.CompareTo(b.Line) : a.StartChar.CompareTo(b.StartChar));
