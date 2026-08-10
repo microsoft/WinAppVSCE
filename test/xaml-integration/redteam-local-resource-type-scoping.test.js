@@ -14,10 +14,10 @@ function page(inner, extraNs = "") {
 
 const APP_AUTHOR = "SmokeAccentBrush";
 const BRUSH = "AccentFillColorDefaultBrush";
-const TEXT_BRUSH = "TextFillColorPrimaryBrush";
-const STYLE = "TitleTextBlockStyle";
-const ACCENT_STYLE = "AccentButtonStyle";
-const COLOR = "SystemAccentColor";
+const TEXT_BRUSH = "AccentTextFillColorPrimaryBrush";
+const STYLE = "AccentButtonStyle";
+const ACCENT_STYLE = "AlternateCloseButtonStyle";
+const COLOR = "ControlFillColorDefault";
 const CORNER = "ControlCornerRadius";
 
 const LOCAL_BRUSH = "R78LocalBrush";
@@ -270,7 +270,7 @@ describe("WinUI XAML red-team 78 — document-local author-key type-scoping", fu
     assertHas(r.themes, BRUSH, "Brush target should include Brush theme", r.items, brush);
     assertHas(r.themes, TEXT_BRUSH, "Brush target should include Text Brush theme", r.items, brush);
     assertLacks(r.themes, STYLE, "Brush target should hide Style theme", r.items, brush);
-    assertLacks(r.themes, COLOR, "Brush target should hide Color theme", r.items, brush);
+    assertHas(r.themes, COLOR, "Brush target should retain unresolved Color theme conservatively", r.items, brush);
     assertHas(r.authors, LOCAL_BRUSH, "paired local Brush presence", r.items, brush);
 
     const style = withResources('<Grid Style="{StaticResource |}" />');

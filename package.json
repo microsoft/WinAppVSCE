@@ -80,12 +80,6 @@
         "path": "./syntaxes/xaml.tmLanguage.json"
       }
     ],
-    "snippets": [
-      {
-        "language": "xaml",
-        "path": "./snippets/xaml.json"
-      }
-    ],
     "commands": [
       {
         "command": "winapp.init",
@@ -178,12 +172,6 @@
         "category": "WinUI XAML"
       },
       {
-        "command": "winui-xaml.surroundWith",
-        "title": "Surround With...",
-        "category": "WinUI XAML",
-        "enablement": "editorLangId == xaml && editorHasSelection"
-      },
-      {
         "command": "winapp.openManifestEditor",
         "title": "Open Manifest Editor",
         "category": "WinApp",
@@ -217,23 +205,6 @@
             "type": "boolean",
             "default": false,
             "description": "When enabled, report known manifest elements that appear under an unexpected parent even when substitution-group coverage is incomplete."
-          }
-        }
-      },
-      {
-        "title": "WinUI XAML",
-        "properties": {
-          "winui-xaml.server.path": {
-            "type": "string",
-            "default": "",
-            "scope": "machine",
-            "markdownDescription": "Absolute path to a custom `WinUiXaml.LanguageServer.exe` or `.dll`. Leave empty to use the bundled self-contained server. Changes restart the language server automatically. Machine-scoped: cannot be overridden by workspace settings, and is ignored in untrusted workspaces."
-          },
-          "winui-xaml.server.dotnetPath": {
-            "type": "string",
-            "default": "dotnet",
-            "scope": "machine",
-            "description": "Path to dotnet, used only when server.path points to a developer-provided DLL. Changes restart the language server automatically. The bundled server is self-contained. Machine-scoped and ignored in untrusted workspaces."
           }
         }
       }
@@ -348,7 +319,7 @@
     "download-cli:latest": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1 -Tag latest\"",
     "sync-schemas": "pwsh -NoProfile -Command \"& ./scripts/sync-schemas.ps1\"",
     "verify-schemas": "node -e \"const fs=require('fs'),p=require('path'),d=p.join(__dirname,'schemas');if(!fs.existsSync(d)||fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length===0){console.error('ERROR: schemas/ contains no XSD files. Run npm run sync-schemas first.');process.exit(1);}console.log('schemas/ verified:',fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length,'XSD files');\"",
-    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && node --test scripts/test/server-delivery.test.mjs && npx tsx --test src/test/artifact-types.test.ts src/test/arch-detection.test.ts src/test/asset-copy-token-store.test.ts src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-path.test.ts src/test/manifest-validator.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/noop-debug-adapter.test.ts src/test/pack-result.test.ts src/test/sign-utils.test.ts src/test/sign-flow.test.ts src/test/tool-command-utils.test.ts src/test/xaml-editor-features.test.ts src/test/xsd-parser.test.ts src/test/xml-context.test.ts src/test/intellisense-integration.test.ts src/test/intellisense-validation.test.ts src/test/schema-shared.test.ts src/test/semantic-validation.test.ts src/test/working-directory.test.ts src/test/xaml-degraded-notification.test.ts src/test/xaml-server-architecture.test.ts src/test/xaml-server-lifecycle.test.ts"
+    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && node --test scripts/test/server-delivery.test.mjs && npx tsx --test src/test/artifact-types.test.ts src/test/arch-detection.test.ts src/test/asset-copy-token-store.test.ts src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-path.test.ts src/test/manifest-validator.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/noop-debug-adapter.test.ts src/test/pack-result.test.ts src/test/sign-utils.test.ts src/test/sign-flow.test.ts src/test/tool-command-utils.test.ts src/test/xsd-parser.test.ts src/test/xml-context.test.ts src/test/intellisense-integration.test.ts src/test/intellisense-validation.test.ts src/test/schema-shared.test.ts src/test/semantic-validation.test.ts src/test/working-directory.test.ts src/test/xaml-degraded-notification.test.ts src/test/xaml-server-architecture.test.ts src/test/xaml-server-lifecycle.test.ts"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.9",

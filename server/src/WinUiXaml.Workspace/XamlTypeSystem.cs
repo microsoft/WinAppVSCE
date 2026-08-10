@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
+using System.Xml;
 using Microsoft.CodeAnalysis;
 
 namespace WinUiXaml.Workspace
@@ -32,6 +34,8 @@ namespace WinUiXaml.Workspace
         private IReadOnlyList<string>? _namedColors;
 
         private IReadOnlyList<string>? _fontWeights;
+
+        private IReadOnlyList<ThemeResourceInfo>? _themeResources;
 
         // Cache referenced controls because walking the reference closure is expensive.
         private IReadOnlyList<INamedTypeSymbol>? _referencedElementTypes;
@@ -266,6 +270,120 @@ namespace WinUiXaml.Workspace
                 .ToList();
 
             return _fontWeights = names;
+        }
+
+        /// <summary>Gets framework theme resources from the WinUI package referenced by this compilation.</summary>
+        public IReadOnlyList<ThemeResourceInfo> GetThemeResources()
+        {
+            if (_themeResources is not null)
+            {
+                return _themeResources;
+            }
+
+            foreach (var path in GetThemeResourceCandidates())
+            {
+                if (!File.Exists(path))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    return _themeResources = ParseThemeResources(path);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+                catch (XmlException)
+                {
+                }
+            }
+
+            return _themeResources = System.Array.Empty<ThemeResourceInfo>();
+        }
+
+        private IEnumerable<string> GetThemeResourceCandidates()
+        {
+            var managed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var native = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var reference in _compilation.References.OfType<PortableExecutableReference>())
+            {
+                if (string.IsNullOrEmpty(reference.FilePath))
+                {
+                    continue;
+                }
+
+                var referencePath = Path.GetFullPath(reference.FilePath);
+                var directory = Path.GetDirectoryName(referencePath);
+                var fileName = Path.GetFileName(referencePath);
+                var isManagedWinUi = string.Equals(
+                    fileName, "Microsoft.WinUI.dll", StringComparison.OrdinalIgnoreCase);
+                var isNativeWinUi = string.Equals(
+                    fileName, "Microsoft.UI.Xaml.winmd", StringComparison.OrdinalIgnoreCase);
+                if ((!isManagedWinUi && !isNativeWinUi) ||
+                    directory is null ||
+                    !TryFindPackageRoot(directory, out var packageRoot))
+                {
+                    continue;
+                }
+
+                if (isManagedWinUi)
+                {
+                    managed.Add(Path.Combine(directory, "Microsoft.WinUI", "Themes", "generic.xaml"));
+                }
+
+                native.Add(Path.Combine(packageRoot, "lib", "native", "Microsoft.UI", "Themes", "generic.xaml"));
+            }
+
+            return managed.Concat(native);
+        }
+
+        private static bool TryFindPackageRoot(string directory, out string packageRoot)
+        {
+            for (var current = new DirectoryInfo(directory); current is not null; current = current.Parent)
+            {
+                if (string.Equals(current.Name, "lib", StringComparison.OrdinalIgnoreCase) &&
+                    current.Parent is not null)
+                {
+                    packageRoot = current.Parent.FullName;
+                    return true;
+                }
+            }
+
+            packageRoot = string.Empty;
+            return false;
+        }
+
+        private static IReadOnlyList<ThemeResourceInfo> ParseThemeResources(string path)
+        {
+            const string xamlLanguageNamespace = "http://schemas.microsoft.com/winfx/2006/xaml";
+            var settings = new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+            };
+            var resources = new Dictionary<string, ThemeResourceInfo>(StringComparer.Ordinal);
+
+            using var reader = XmlReader.Create(path, settings);
+            while (reader.Read())
+            {
+                if (reader.NodeType != XmlNodeType.Element)
+                {
+                    continue;
+                }
+
+                var key = reader.GetAttribute("Key", xamlLanguageNamespace);
+                if (!string.IsNullOrEmpty(key) && !resources.ContainsKey(key))
+                {
+                    resources.Add(key, new ThemeResourceInfo(key, reader.NamespaceURI, reader.LocalName));
+                }
+            }
+
+            return resources.Values.OrderBy(resource => resource.Key, StringComparer.Ordinal).ToList();
         }
 
         private static void CollectUsableNamespaces(INamespaceSymbol ns, SortedSet<string> into)
@@ -1001,6 +1119,23 @@ namespace WinUiXaml.Workspace
         }
 
         private readonly record struct NamespaceBinding(IAssemblySymbol Assembly, string ClrNamespace);
+    }
+
+    /// <summary>A keyed resource declared by the active WinUI SDK's generic.xaml.</summary>
+    public sealed class ThemeResourceInfo
+    {
+        public ThemeResourceInfo(string key, string typeNamespace, string localTypeName)
+        {
+            Key = key;
+            TypeNamespace = typeNamespace;
+            LocalTypeName = localTypeName;
+        }
+
+        public string Key { get; }
+
+        public string TypeNamespace { get; }
+
+        public string LocalTypeName { get; }
     }
 
     /// <summary>The kind of XAML member a <see cref="XamlMemberInfo"/> describes.</summary>

@@ -1,5 +1,4 @@
 import * as path from "path";
-import * as fs from "fs";
 import * as vscode from "vscode";
 import {
   LanguageClient,
@@ -16,7 +15,6 @@ import {
 } from "./degradedNotification";
 import { getWindowsServerRid } from "./serverArchitecture";
 import { ServerLifecycle } from "./serverLifecycle";
-import { registerXamlEditorFeatures } from "./xamlEditorFeatures";
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
@@ -44,7 +42,6 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
   lifecycle.reset();
   output = vscode.window.createOutputChannel("WinUI XAML");
   context.subscriptions.push(output);
-  registerXamlEditorFeatures(context);
   log("WinUI XAML Tools activating…");
 
   context.subscriptions.push(
@@ -60,15 +57,6 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
     vscode.workspace.onDidGrantWorkspaceTrust(() => {
       if (vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")) {
         log("Workspace trust granted — restarting language server.");
-        return restartClient(context);
-      }
-    }),
-    vscode.workspace.onDidChangeConfiguration((event) => {
-      if (
-        (event.affectsConfiguration("winui-xaml.server.path") ||
-          event.affectsConfiguration("winui-xaml.server.dotnetPath")) &&
-        (client || vscode.workspace.textDocuments.some((document) => document.languageId === "xaml"))
-      ) {
         return restartClient(context);
       }
     })
@@ -132,25 +120,11 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     return;
   }
 
-  // Server paths remain machine-scoped as defense in depth.
-  const config = vscode.workspace.getConfiguration("winui-xaml");
-  const configuredServer = config.get<string>("server.path", "").trim();
-  const dotnet = config.get<string>("server.dotnetPath", "dotnet");
-  if (configuredServer && !fs.existsSync(configuredServer)) {
-    notifyDegraded(
-      `Configured language server not found: ${configuredServer}. ` +
-        "Update or clear 'winui-xaml.server.path'. Syntax highlighting remains available.",
-      "server",
-      userInitiated
-    );
-    return;
-  }
-
-  const server = resolveServer(context, configuredServer, dotnet);
+  const server = resolveServer(context);
   if (!server) {
     notifyDegraded(
-      "Language server executable not found. Set 'winui-xaml.server.path' to a server executable or DLL " +
-        "to enable IntelliSense, diagnostics, and navigation. Syntax highlighting remains available.",
+      "Bundled language server executable not found. IntelliSense, diagnostics, and navigation are unavailable; " +
+        "syntax highlighting remains available.",
       "server",
       userInitiated
     );
@@ -212,7 +186,6 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     disposeFileWatcher();
     notifyDegraded(
       `Failed to start language server (${server.command}): ${detail}. ` +
-        "Check 'winui-xaml.server.path' if you configured a custom server. " +
         "Syntax highlighting remains available.",
       "server",
       userInitiated
@@ -291,11 +264,9 @@ function runDegradedAction(action: DegradedAction): Thenable<unknown> | void {
   }
 }
 
-/** Locates a bundled executable or developer-provided DLL. */
+/** Locates the bundled server or a development-only environment override. */
 function resolveServer(
-  context: vscode.ExtensionContext,
-  configuredServer: string,
-  dotnet: string
+  context: vscode.ExtensionContext
 ): { command: string; args: string[]; cwd: string } | undefined {
   // Exercise missing-server degradation in the integration harness.
   if (process.env.WINUI_XAML_FORCE_NO_SERVER === "1") {
@@ -303,21 +274,17 @@ function resolveServer(
   }
   const candidates =
     process.env.WINUI_XAML_REQUIRE_BUNDLED === "1"
-      ? [configuredServer || bundledServer(context)]
+      ? [bundledServer(context)]
       : [
-          configuredServer,
           process.env.WINUI_XAML_SERVER_PATH ?? "",
-          process.env.WINUI_XAML_SERVER_DLL ?? "",
           bundledServer(context),
-          repoRelativeServer(context, "Debug"),
-          repoRelativeServer(context, "Release"),
         ];
   const serverPath = firstExistingPath(candidates);
   if (!serverPath) {
     return undefined;
   }
   return path.extname(serverPath).toLowerCase() === ".dll"
-    ? { command: dotnet, args: [serverPath], cwd: path.dirname(serverPath) }
+    ? { command: "dotnet", args: [serverPath], cwd: path.dirname(serverPath) }
     : { command: serverPath, args: [], cwd: path.dirname(serverPath) };
 }
 
@@ -329,18 +296,5 @@ function bundledServer(context: vscode.ExtensionContext): string {
     "server",
     rid,
     "WinUiXaml.LanguageServer.exe"
-  );
-}
-
-function repoRelativeServer(context: vscode.ExtensionContext, configuration: string): string {
-  return path.resolve(
-    context.extensionPath,
-    "server",
-    "src",
-    "WinUiXaml.LanguageServer",
-    "bin",
-    configuration,
-    "net10.0",
-    "WinUiXaml.LanguageServer.dll"
   );
 }

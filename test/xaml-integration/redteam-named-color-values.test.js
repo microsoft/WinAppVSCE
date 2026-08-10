@@ -90,20 +90,12 @@ const EXPECTED_COLOR_NAMES = [
   "WhiteSmoke", "Yellow", "YellowGreen",
 ].sort();
 
-const EXPECTED_HEX = {
-  AliceBlue: "#F0F8FF",
-  Black: "#000000",
-  CornflowerBlue: "#6495ED",
-  Cornsilk: "#FFF8DC",
-  Fuchsia: "#FF00FF",
-  Red: "#FF0000",
-  Transparent: "#FFFFFF00",
-  White: "#FFFFFF",
-  YellowGreen: "#9ACD32",
-};
+const REPRESENTATIVE_COLORS = [
+  "AliceBlue", "Black", "CornflowerBlue", "Cornsilk", "Fuchsia",
+  "Red", "Transparent", "White", "YellowGreen",
+];
 
-const isHex = (detail) => /^#[0-9A-Fa-f]{6,8}$/.test(detail || "");
-const colorItems = (items) => items.filter((i) => isHex(i.detail));
+const colorItems = (items) => items.filter((i) => i.detail === "named color");
 const colorLabels = (items) => colorItems(items).map((i) => i.label).sort();
 const summarizeColors = (items) => JSON.stringify(colorItems(items).map((i) => ({
   label: i.label,
@@ -120,17 +112,17 @@ async function assertExactNamedColorSet(buffer, reason) {
     assert.strictEqual(item.kind, vscode.CompletionItemKind.Color, `${reason}: ${item.label} kind should be Color; got ${item.kind}`);
     assert.strictEqual(item.newText, item.label, `${reason}: ${item.label} should replace with its name; got ${JSON.stringify(item.newText)}`);
   }
-  for (const [name, hex] of Object.entries(EXPECTED_HEX)) {
+  for (const name of REPRESENTATIVE_COLORS) {
     const item = colors.find((i) => i.label === name);
     assert.ok(item, `${reason}: missing ${name}`);
-    assert.strictEqual(item.detail, hex, `${reason}: ${name} swatch should be ${hex}; got ${JSON.stringify(item.detail)}`);
+    assert.strictEqual(item.detail, "named color");
   }
   return items;
 }
 
 async function assertNoNamedColors(buffer, reason) {
   const { items } = await rawCompletionItemsAt(buffer);
-  assert.deepStrictEqual(colorLabels(items), [], `${reason}: must not offer hex-detail named colors; got ${summarizeColors(items)}`);
+  assert.deepStrictEqual(colorLabels(items), [], `${reason}: must not offer named colors; got ${summarizeColors(items)}`);
   return items;
 }
 

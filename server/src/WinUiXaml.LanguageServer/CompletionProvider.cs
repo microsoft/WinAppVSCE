@@ -13,6 +13,22 @@ internal static partial class CompletionProvider
     private enum ContextKind { None, ElementName, AttributeName, AttributeValue, BindPath, MarkupName, MarkupArg, ResourceKey, TemplateBinding, TypeName, StaticMember, CloseTag, UsingNamespace, XmlnsValue, DesignInstanceType }
 
     public static CompletionList Provide(TextDocument doc, int offset, XamlTypeSystem typeSystem, INamedTypeSymbol? pageClass = null, IReadOnlyCollection<string>? appResourceKeys = null)
+        => ProvideCore(doc, offset, typeSystem, pageClass, appResourceKeys, null);
+
+    internal static CompletionList ProvideForTest(
+        TextDocument doc,
+        int offset,
+        XamlTypeSystem typeSystem,
+        Action<string, string> themeTypeResolutionObserver)
+        => ProvideCore(doc, offset, typeSystem, null, null, themeTypeResolutionObserver);
+
+    private static CompletionList ProvideCore(
+        TextDocument doc,
+        int offset,
+        XamlTypeSystem typeSystem,
+        INamedTypeSymbol? pageClass,
+        IReadOnlyCollection<string>? appResourceKeys,
+        Action<string, string>? themeTypeResolutionObserver)
     {
         var ctx = Classify(doc.Text, offset);
         if (ctx.Kind == ContextKind.None)
@@ -31,7 +47,8 @@ internal static partial class CompletionProvider
             ContextKind.BindPath => CompleteBindPath(doc, offset, ctx, scope, typeSystem, pageClass, replaceRange),
             ContextKind.MarkupName => CompleteMarkupName(ctx, replaceRange),
             ContextKind.MarkupArg => CompleteMarkupArg(doc, ctx, typeSystem, replaceRange),
-            ContextKind.ResourceKey => CompleteResourceKey(doc, offset, ctx, scope, typeSystem, appResourceKeys, replaceRange),
+            ContextKind.ResourceKey => CompleteResourceKey(
+                doc, offset, ctx, scope, typeSystem, appResourceKeys, replaceRange, themeTypeResolutionObserver),
             ContextKind.TemplateBinding => CompleteTemplateBinding(doc, offset, ctx, scope, typeSystem, replaceRange),
             ContextKind.TypeName => CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange, allTypeKinds: true),
             ContextKind.DesignInstanceType => CompleteDesignInstanceType(ctx, scope, typeSystem, replaceRange),

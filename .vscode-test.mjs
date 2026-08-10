@@ -38,8 +38,7 @@ export default defineConfig({
           WINUI_XAML_TEST_SERVER_PATH: bundledServerExe,
           WINUI_XAML_REQUIRE_BUNDLED: "1",
         }
-      : { WINUI_XAML_SERVER_DLL: debugServerDll }),
-    WINUI_XAML_TEST_DLL: debugServerDll,
+      : { WINUI_XAML_SERVER_PATH: debugServerDll }),
     WINUI_XAML_TEST: "1",
     WINUI_XAML_FIXTURE_DIR: fixture,
     WINUI_XAML_LOG: path.resolve(here, "server-test.log"),

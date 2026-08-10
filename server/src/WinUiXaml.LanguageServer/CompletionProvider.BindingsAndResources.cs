@@ -270,7 +270,8 @@ internal static partial class CompletionProvider
         XamlNamespaceScope scope,
         XamlTypeSystem typeSystem,
         IReadOnlyCollection<string>? appResourceKeys,
-        Lsp.Range replaceRange)
+        Lsp.Range replaceRange,
+        Action<string, string>? themeTypeResolutionObserver)
     {
         var projectKeys = new SortedSet<string>(StringComparer.Ordinal);
         if (doc.Parsed.Root is { } root)
@@ -314,11 +315,24 @@ internal static partial class CompletionProvider
             items.Add(ResourceKeyItem(key, "resource", "0", replaceRange));
         }
 
-        // Common WinUI theme resources, skipping any the project already redefines under the same key, and any whose (suffix-inferred) type is definitely not assignable to the target property.
-        foreach (var key in WinUiThemeResources.Keys)
+        var compatibilityByType =
+            new Dictionary<(string Namespace, string LocalName), bool>();
+
+        // SDK theme resources follow project resources and omit keys overridden by the project.
+        foreach (var resource in typeSystem.GetThemeResources())
         {
-            if (!projectKeys.Contains(key) && StartsWith(key, ctx.Partial) &&
-                ThemeKeyMatchesTarget(key, targetType, typeSystem))
+            var key = resource.Key;
+            if (!StartsWith(key, ctx.Partial) || projectKeys.Contains(key))
+            {
+                continue;
+            }
+
+            if (ThemeKeyMatchesTarget(
+                resource,
+                targetType,
+                typeSystem,
+                compatibilityByType,
+                themeTypeResolutionObserver))
             {
                 items.Add(ResourceKeyItem(key, "theme resource", "1", replaceRange));
             }
@@ -355,28 +369,32 @@ internal static partial class CompletionProvider
         return UnwrapNullable(type);
     }
 
-    /// <summary>True when a curated theme resource key should be offered for the given target property type.</summary>
-    private static bool ThemeKeyMatchesTarget(string key, ITypeSymbol? targetType, XamlTypeSystem typeSystem)
+    /// <summary>Excludes a theme resource only when its declared type is definitely incompatible.</summary>
+    private static bool ThemeKeyMatchesTarget(
+        ThemeResourceInfo resource,
+        ITypeSymbol? targetType,
+        XamlTypeSystem typeSystem,
+        Dictionary<(string Namespace, string LocalName), bool> compatibilityByType,
+        Action<string, string>? typeResolutionObserver)
     {
         if (targetType is null)
         {
             return true;
         }
 
-        var metadataName = WinUiThemeResources.InferTypeMetadataName(key);
-        if (metadataName is null)
+        var typeIdentity = (resource.TypeNamespace, resource.LocalTypeName);
+        if (compatibilityByType.TryGetValue(typeIdentity, out var isCompatible))
         {
-            return true;
+            return isCompatible;
         }
 
-        var keyType = typeSystem.ResolveMetadataType(metadataName);
-        if (keyType is null)
-        {
-            return true;
-        }
-
-        return XamlTypeSystem.IsAssignableTo(keyType, targetType) ||
-               XamlTypeSystem.IsAssignableTo(targetType, keyType);
+        typeResolutionObserver?.Invoke(resource.TypeNamespace, resource.LocalTypeName);
+        var keyType = typeSystem.ResolveType(resource.TypeNamespace, resource.LocalTypeName);
+        isCompatible = keyType is null ||
+            XamlTypeSystem.IsAssignableTo(keyType, targetType) ||
+            XamlTypeSystem.IsAssignableTo(targetType, keyType);
+        compatibilityByType.Add(typeIdentity, isCompatible);
+        return isCompatible;
     }
 
     private static CompletionItem ResourceKeyItem(string key, string detail, string sortGroup, Lsp.Range replaceRange) => new()
@@ -640,7 +658,7 @@ internal static partial class CompletionProvider
             {
                 Label = name,
                 Kind = CompletionItemKind.Color,
-                Detail = WinUiNamedColors.HexByName.TryGetValue(name, out var hex) ? hex : "named color",
+                Detail = "named color",
                 TextEdit = new TextEdit { Range = replaceRange, NewText = name },
                 FilterText = name,
                 SortText = name,
@@ -681,7 +699,7 @@ internal static partial class CompletionProvider
             {
                 Label = name,
                 Kind = CompletionItemKind.Value,
-                Detail = WinUiFontWeights.WeightByName.TryGetValue(name, out var weight) ? weight : "font weight",
+                Detail = "font weight",
                 TextEdit = new TextEdit { Range = replaceRange, NewText = name },
                 FilterText = name,
                 SortText = name,

@@ -63,23 +63,12 @@ async function rawCompletionItemsAt(bufferWithCaret) {
   };
 }
 
-const EXPECTED_WEIGHTS = {
-  Thin: "100",
-  ExtraLight: "200",
-  Light: "300",
-  SemiLight: "350",
-  Normal: "400",
-  Medium: "500",
-  SemiBold: "600",
-  Bold: "700",
-  ExtraBold: "800",
-  Black: "900",
-  ExtraBlack: "950",
-};
-const EXPECTED_WEIGHT_NAMES = Object.keys(EXPECTED_WEIGHTS).sort();
+const EXPECTED_WEIGHT_NAMES = [
+  "Thin", "ExtraLight", "Light", "SemiLight", "Normal", "Medium",
+  "SemiBold", "Bold", "ExtraBold", "Black", "ExtraBlack",
+].sort();
 
-const isWeightDetail = (detail) => /^\d{2,3}$/.test(detail || "");
-const weightItems = (items) => items.filter((i) => isWeightDetail(i.detail));
+const weightItems = (items) => items.filter((i) => i.detail === "font weight");
 const weightLabels = (items) => weightItems(items).map((i) => i.label).sort();
 const summarizeWeights = (items) => JSON.stringify(weightItems(items).map((i) => ({
   label: i.label,
@@ -94,7 +83,7 @@ async function assertExactWeightSet(buffer, reason) {
   assert.deepStrictEqual(weightLabels(items), EXPECTED_WEIGHT_NAMES, `${reason}: expected exactly the 11 WinUI FontWeights; got ${summarizeWeights(items)}`);
   for (const item of weights) {
     assert.strictEqual(item.kind, vscode.CompletionItemKind.Value, `${reason}: ${item.label} kind should be Value; got ${item.kind}`);
-    assert.strictEqual(item.detail, EXPECTED_WEIGHTS[item.label], `${reason}: ${item.label} detail should be ${EXPECTED_WEIGHTS[item.label]}; got ${JSON.stringify(item.detail)}`);
+    assert.strictEqual(item.detail, "font weight", `${reason}: ${item.label} should use generic detail`);
     assert.strictEqual(item.newText, item.label, `${reason}: ${item.label} should replace with the bare name; got ${JSON.stringify(item.newText)}`);
   }
   return items;
@@ -102,7 +91,7 @@ async function assertExactWeightSet(buffer, reason) {
 
 async function assertNoWeights(buffer, reason) {
   const { items } = await rawCompletionItemsAt(buffer);
-  assert.deepStrictEqual(weightLabels(items), [], `${reason}: must not offer numeric-detail FontWeight names; got ${summarizeWeights(items)}`);
+  assert.deepStrictEqual(weightLabels(items), [], `${reason}: must not offer FontWeight names; got ${summarizeWeights(items)}`);
   return items;
 }
 

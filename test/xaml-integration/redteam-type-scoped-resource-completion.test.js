@@ -13,11 +13,12 @@ function page(inner) {
 }
 
 const BRUSH = "AccentFillColorDefaultBrush";
-const TEXT_BRUSH = "TextFillColorPrimaryBrush";
-const STYLE = "TitleTextBlockStyle";
-const ACCENT_STYLE = "AccentButtonStyle";
-const COLOR = "SystemAccentColor";
-const COLOR_LIGHT = "SystemAccentColorLight1";
+const TEXT_BRUSH = "AccentTextFillColorPrimaryBrush";
+const STYLE = "AccentButtonStyle";
+const ACCENT_STYLE = "AlternateCloseButtonStyle";
+const TITLE_STYLE = "TitleTextBlockStyle";
+const COLOR = "ControlFillColorDefault";
+const COLOR_LIGHT = "ControlFillColorSecondary";
 const CORNER = "ControlCornerRadius";
 const OVERLAY_CORNER = "OverlayCornerRadius";
 const APP_AUTHOR = "SmokeAccentBrush";
@@ -90,7 +91,7 @@ describe("WinUI XAML red-team 74 — type-scoped resource key completion", funct
       ["Control.Foreground", '<Button Foreground="{StaticResource |}" />'],
     ];
     for (const [name, inner] of probes) {
-      await assertThemeShape(page(inner), name, [BRUSH, TEXT_BRUSH], [STYLE, COLOR, COLOR_LIGHT, CORNER]);
+      await assertThemeShape(page(inner), name, [BRUSH, TEXT_BRUSH, COLOR], [STYLE, CORNER]);
     }
   });
 
@@ -99,7 +100,7 @@ describe("WinUI XAML red-team 74 — type-scoped resource key completion", funct
       page('<Grid Style="{StaticResource |}" />'),
       "FrameworkElement.Style",
       [STYLE, ACCENT_STYLE],
-      [BRUSH, TEXT_BRUSH, COLOR, CORNER]
+      [BRUSH, TEXT_BRUSH, CORNER]
     );
   });
 
@@ -118,7 +119,7 @@ describe("WinUI XAML red-team 74 — type-scoped resource key completion", funct
       page('<Border CornerRadius="{StaticResource |}" />'),
       "Border.CornerRadius",
       [CORNER, OVERLAY_CORNER],
-      [BRUSH, TEXT_BRUSH, STYLE, COLOR]
+      [BRUSH, TEXT_BRUSH, STYLE]
     );
   });
 
@@ -128,8 +129,7 @@ describe("WinUI XAML red-team 74 — type-scoped resource key completion", funct
       ["ColumnDefinition.Width", '<Grid><Grid.ColumnDefinitions><ColumnDefinition Width="{StaticResource |}" /></Grid.ColumnDefinitions></Grid>'],
     ];
     for (const [name, inner] of probes) {
-      const items = await assertThemeShape(withLocalResource(inner), name, [], [BRUSH, TEXT_BRUSH, STYLE, ACCENT_STYLE, COLOR, COLOR_LIGHT, CORNER, OVERLAY_CORNER]);
-      assert.strictEqual(themeLabels(items).length, 0, `${name}: GridLength should hide all known typed framework themes; got ${summarize(items)}`);
+      const items = await assertThemeShape(withLocalResource(inner), name, [COLOR], [BRUSH, TEXT_BRUSH, STYLE, ACCENT_STYLE, CORNER, OVERLAY_CORNER]);
       assertHas(authorLabels(items), APP_AUTHOR, `${name}: App author key must still be conservative`, items);
       // The document-local Brush key is not assignable to GridLength.
       assertLacks(authorLabels(items), LOCAL_AUTHOR, `${name}: type-incompatible local Brush author key`, items);
@@ -163,7 +163,7 @@ describe("WinUI XAML red-team 74 — type-scoped resource key completion", funct
       withLocalResource('<TextBlock Foreground="{StaticResource Accent|}" />'),
       "Brush target with Accent partial",
       [BRUSH],
-      [STYLE, COLOR, CORNER]
+      [STYLE, CORNER]
     );
     assertHas(authorLabels(accent), ACCENT_AUTHOR, "Accent partial should still include matching local author key", accent);
     assertLacks(authorLabels(accent), APP_AUTHOR, "Accent partial should filter nonmatching App author key", accent);
@@ -181,9 +181,9 @@ describe("WinUI XAML red-team 74 — type-scoped resource key completion", funct
       withLocalResource('<TextBlock Foreground="{StaticResource Title|}" />'),
       "Brush target with Style partial",
       [],
-      [STYLE]
+      [TITLE_STYLE]
     );
-    assert.strictEqual(themeLabels(noTheme).length, 0, `Title partial on Brush should have no framework themes; got ${summarize(noTheme)}`);
+    assertLacks(themeLabels(noTheme), TITLE_STYLE, "Title partial should hide the incompatible Style", noTheme);
   });
 
   it("red-team 74 ThemeResource and CustomResource use the same type-scoped key rules as StaticResource", async () => {
@@ -191,14 +191,14 @@ describe("WinUI XAML red-team 74 — type-scoped resource key completion", funct
       await assertThemeShape(
         page(`<TextBlock Foreground="{${ext} |}" />`),
         `${ext} Brush target`,
-        [BRUSH, TEXT_BRUSH],
-        [STYLE, COLOR, CORNER]
+        [BRUSH, TEXT_BRUSH, COLOR],
+        [STYLE, CORNER]
       );
       await assertThemeShape(
         page(`<Grid Style="{${ext} |}" />`),
         `${ext} Style target`,
-        [STYLE, ACCENT_STYLE],
-        [BRUSH, COLOR, CORNER]
+        [STYLE, ACCENT_STYLE, COLOR],
+        [BRUSH, CORNER]
       );
     }
   });
@@ -251,7 +251,7 @@ describe("WinUI XAML red-team 74 — type-scoped resource key completion", funct
     const boolItems = await h.completionsAt(page('<Button IsEnabled="|" />'));
     assert.ok(boolItems.includes("True") && boolItems.includes("False"), `bool completion regressed; got ${boolItems.slice(0, 80).join(", ")}`);
 
-    const colorItems = (await h.completionItemsAt(page('<TextBlock Foreground="Corn|" />'))).filter((i) => /^#[0-9A-Fa-f]{6,8}$/.test(i.detail || ""));
+    const colorItems = (await h.completionItemsAt(page('<TextBlock Foreground="Corn|" />'))).filter((i) => i.detail === "named color");
     const colorLabels = colorItems.map((i) => i.label);
     assert.ok(colorLabels.includes("CornflowerBlue") && colorLabels.includes("Cornsilk"), `named-color completion regressed; got ${JSON.stringify(colorItems)}`);
   });

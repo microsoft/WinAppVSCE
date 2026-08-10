@@ -398,20 +398,21 @@ export async function runCoreScenarios(ctx) {
   console.log(`[ok] completion(resource, Style '{StaticResource Tit'): -> Title*TextBlockStyle theme resources (${resTheme.length} items)`);
 
   // 14i) ROUND 74: theme resource keys are type-scoped to the target property (VS parity). On a Brush
-  // property the theme BRUSH keys are offered while theme Style/Color/CornerRadius keys are hidden; the
-  // project's own author keys (App.xaml SmokeAccentBrush) are ALWAYS offered regardless of type.
+  // property the known incompatible Style/CornerRadius keys are hidden. Color's presentation-namespace
+  // type is unresolved, so it remains available conservatively.
   const resBrushProp = await completeWith(493, `<Page ${NS}>\n  <TextBlock Foreground="{StaticResource |}" />\n</Page>`, "resource-key-typed-brush");
   if (!resBrushProp.includes("AccentFillColorDefaultBrush")) fail(`Brush property should offer theme brush key 'AccentFillColorDefaultBrush' (got ${resBrushProp.join(",")})`);
   if (!resBrushProp.includes("SmokeAccentBrush")) fail(`Brush property should still offer App.xaml author key 'SmokeAccentBrush' (got ${resBrushProp.join(",")})`);
-  for (const hidden of ["TitleTextBlockStyle", "SystemAccentColor", "ControlCornerRadius"]) {
+  if (!resBrushProp.includes("ControlFillColorDefault")) fail(`Brush property should retain unknown-type color resources conservatively`);
+  for (const hidden of ["AccentButtonStyle", "ControlCornerRadius"]) {
     if (resBrushProp.includes(hidden)) fail(`Brush property must HIDE non-brush theme key '${hidden}' (got ${resBrushProp.join(",")})`);
   }
-  console.log(`[ok] completion(resource, Brush prop): brush + author keys, Style/Color/CornerRadius hidden (${resBrushProp.length} items)`);
+  console.log(`[ok] completion(resource, Brush prop): brush + author keys, known incompatible types hidden (${resBrushProp.length} items)`);
 
   // 14j) On a Color property (SolidColorBrush.Color) theme COLOR keys are offered, brush/style hidden.
   const resColorProp = await completeWith(494, `<Page ${NS}>\n  <Page.Background>\n    <SolidColorBrush Color="{ThemeResource |}" />\n  </Page.Background>\n</Page>`, "resource-key-typed-color");
-  if (!resColorProp.includes("SystemAccentColor")) fail(`Color property should offer theme color key 'SystemAccentColor' (got ${resColorProp.join(",")})`);
-  for (const hidden of ["AccentFillColorDefaultBrush", "TitleTextBlockStyle"]) {
+  if (!resColorProp.includes("ControlFillColorDefault")) fail(`Color property should offer theme color key 'ControlFillColorDefault' (got ${resColorProp.join(",")})`);
+  for (const hidden of ["AccentFillColorDefaultBrush", "AccentButtonStyle"]) {
     if (resColorProp.includes(hidden)) fail(`Color property must HIDE non-color theme key '${hidden}' (got ${resColorProp.join(",")})`);
   }
   console.log(`[ok] completion(resource, Color prop): color keys offered, brush/style hidden (${resColorProp.length} items)`);
@@ -424,7 +425,7 @@ export async function runCoreScenarios(ctx) {
 
   // 14l) On an 'object' property (Tag) NO type filter is applied — every theme key is offered.
   const resTagProp = await completeWith(496, `<Page ${NS}>\n  <TextBlock Tag="{StaticResource |}" />\n</Page>`, "resource-key-object");
-  for (const needle of ["AccentFillColorDefaultBrush", "TitleTextBlockStyle", "SystemAccentColor", "ControlCornerRadius"]) {
+  for (const needle of ["AccentFillColorDefaultBrush", "AccentButtonStyle", "ControlFillColorDefault", "ControlCornerRadius"]) {
     if (!resTagProp.includes(needle)) fail(`object (Tag) property must offer ALL theme keys incl '${needle}' (got ${resTagProp.length} items)`);
   }
   console.log(`[ok] completion(resource, object Tag prop): all theme keys offered, no type filter (${resTagProp.length} items)`);
@@ -432,7 +433,7 @@ export async function runCoreScenarios(ctx) {
   // 14m) A resource nested in another markup extension is NOT type-scoped (it feeds the extension arg,
   // not the attribute), so every theme key is offered even on a Brush-typed attribute.
   const resNested = await completeWith(497, `<Page ${NS}>\n  <TextBlock Foreground="{Binding Source={StaticResource |}}" />\n</Page>`, "resource-key-nested");
-  for (const needle of ["AccentFillColorDefaultBrush", "TitleTextBlockStyle", "SystemAccentColor"]) {
+  for (const needle of ["AccentFillColorDefaultBrush", "AccentButtonStyle", "ControlFillColorDefault"]) {
     if (!resNested.includes(needle)) fail(`nested resource must offer ALL theme keys incl '${needle}' (got ${resNested.join(",")})`);
   }
   console.log(`[ok] completion(resource, nested {Binding Source={StaticResource): all theme keys offered (${resNested.length} items)`);
@@ -443,7 +444,7 @@ export async function runCoreScenarios(ctx) {
   const svBrush = await completeWith(498, pageRes(`<Style TargetType="TextBlock">\n      <Setter Property="Foreground" Value="{StaticResource |}" />\n    </Style>`), "setterval-resource-brush");
   if (!svBrush.includes("AccentFillColorDefaultBrush")) fail(`Setter.Value(Foreground) should offer theme brush key (got ${svBrush.join(",")})`);
   if (!svBrush.includes("SmokeAccentBrush")) fail(`Setter.Value(Foreground) should still offer App.xaml author key 'SmokeAccentBrush' (got ${svBrush.join(",")})`);
-  for (const hidden of ["TitleTextBlockStyle", "SystemAccentColor", "ControlCornerRadius"]) {
+  for (const hidden of ["AccentButtonStyle", "ControlCornerRadius"]) {
     if (svBrush.includes(hidden)) fail(`Setter.Value(Foreground) must HIDE non-brush theme key '${hidden}' (got ${svBrush.join(",")})`);
   }
   console.log(`[ok] completion(Setter.Value Foreground): brush + author keys, Style/Color/CornerRadius hidden (${svBrush.length} items)`);
@@ -457,19 +458,20 @@ export async function runCoreScenarios(ctx) {
   // 14p) A Setter with NO resolvable Property= (ResolveSetterValueType -> null) offers EVERY theme key,
   // exactly as before round 75 (keeps the round-74 offer-all guarantee for untyped Setter.Value).
   const svNoProp = await completeWith(500, pageRes(`<Style TargetType="Button">\n      <Setter Value="{StaticResource |}" />\n    </Style>`), "setterval-resource-noprop");
-  for (const needle of ["AccentFillColorDefaultBrush", "TitleTextBlockStyle", "SystemAccentColor", "ControlCornerRadius"]) {
+  for (const needle of ["AccentFillColorDefaultBrush", "AccentButtonStyle", "ControlFillColorDefault", "ControlCornerRadius"]) {
     if (!svNoProp.includes(needle)) fail(`Setter.Value with no Property must offer ALL theme keys incl '${needle}' (got ${svNoProp.length} items)`);
   }
   console.log(`[ok] completion(Setter.Value no Property): all theme keys offered (${svNoProp.length} items)`);
 
-  // 14q) A Setter for a dotted ATTACHED property (Grid.Row : int) scopes to int — no theme key matches,
-  // so every theme key is hidden, yet the project's author key is ALWAYS offered (round-74 invariant).
+  // 14q) A Setter for Grid.Row scopes to int. Known incompatible framework types are hidden, while
+  // unresolved framework types and project resources remain available conservatively.
   const svAttached = await completeWith(501, pageRes(`<Style TargetType="Button">\n      <Setter Property="Grid.Row" Value="{StaticResource |}" />\n    </Style>`), "setterval-resource-attached");
   if (!svAttached.includes("SmokeAccentBrush")) fail(`Setter.Value(Grid.Row) should still offer App.xaml author key 'SmokeAccentBrush' (got ${svAttached.join(",")})`);
-  for (const hidden of ["AccentFillColorDefaultBrush", "TitleTextBlockStyle", "SystemAccentColor", "ControlCornerRadius"]) {
+  if (!svAttached.includes("ControlFillColorDefault")) fail(`Setter.Value(Grid.Row) should retain unknown-type color resources`);
+  for (const hidden of ["AccentFillColorDefaultBrush", "AccentButtonStyle", "ControlCornerRadius"]) {
     if (svAttached.includes(hidden)) fail(`Setter.Value(Grid.Row : int) must HIDE theme key '${hidden}' (got ${svAttached.join(",")})`);
   }
-  console.log(`[ok] completion(Setter.Value Grid.Row : int): all theme keys hidden, author key still offered (${svAttached.length} items)`);
+  console.log(`[ok] completion(Setter.Value Grid.Row : int): known incompatible theme keys hidden (${svAttached.length} items)`);
 
   // 14r) ROUND 75 (x:Type TargetType): a Style whose TargetType uses the {x:Type Button} markup-extension
   // wrapper must scope Setter.Value identically to a bare TargetType="TextBlock" (ResolveStyleTargetType

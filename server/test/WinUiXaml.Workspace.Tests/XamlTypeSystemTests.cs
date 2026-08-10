@@ -770,7 +770,141 @@ public sealed class XamlTypeSystemTests
         Assert.Empty(ts.GetFontWeights());
     }
 
+    [Fact]
+    public void GetThemeResourcesReadsManagedGenericXamlAndCachesPerTypeSystem()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var (ts, genericXaml) = CreateFileBackedWinUiTypeSystem(root);
+            WriteGenericXaml(genericXaml,
+                """<SolidColorBrush x:Key="SdkBrush" /><Style x:Key="SdkStyle" />""");
+
+            var first = ts.GetThemeResources();
+
+            Assert.Collection(first,
+                resource =>
+                {
+                    Assert.Equal("SdkBrush", resource.Key);
+                    Assert.Equal(Presentation, resource.TypeNamespace);
+                    Assert.Equal("SolidColorBrush", resource.LocalTypeName);
+                },
+                resource => Assert.Equal("SdkStyle", resource.Key));
+
+            WriteGenericXaml(genericXaml, """<CornerRadius x:Key="NewSdkRadius" />""");
+            Assert.Same(first, ts.GetThemeResources());
+
+            var (updatedTypeSystem, _) = CreateFileBackedWinUiTypeSystem(root);
+            Assert.Equal("NewSdkRadius", Assert.Single(updatedTypeSystem.GetThemeResources()).Key);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GetThemeResourcesPrefersManagedGenericXamlWithNativeFallback()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var (ts, managedXaml) = CreateFileBackedWinUiTypeSystem(root);
+            var nativeXaml = Path.Combine(root, "lib", "native", "Microsoft.UI", "Themes", "generic.xaml");
+            WriteGenericXaml(managedXaml, """<Style x:Key="ManagedKey" />""");
+            WriteGenericXaml(nativeXaml, """<Style x:Key="NativeKey" />""");
+
+            Assert.Equal("ManagedKey", Assert.Single(ts.GetThemeResources()).Key);
+
+            File.Delete(managedXaml);
+            var (fallbackTypeSystem, _) = CreateFileBackedWinUiTypeSystem(root);
+            Assert.Equal("NativeKey", Assert.Single(fallbackTypeSystem.GetThemeResources()).Key);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GetThemeResourcesDegradesSafelyForAbsentOrMalformedGenericXaml()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var (absentTypeSystem, genericXaml) = CreateFileBackedWinUiTypeSystem(root);
+            Assert.Empty(absentTypeSystem.GetThemeResources());
+
+            Directory.CreateDirectory(Path.GetDirectoryName(genericXaml)!);
+            File.WriteAllText(genericXaml, """<!DOCTYPE x [<!ENTITY e SYSTEM "file:///ignored">]><x>&e;</x>""");
+            var (malformedTypeSystem, _) = CreateFileBackedWinUiTypeSystem(root);
+            Assert.Empty(malformedTypeSystem.GetThemeResources());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     // --- helpers -----------------------------------------------------------------------------------
+
+    private static (XamlTypeSystem TypeSystem, string GenericXaml) CreateFileBackedWinUiTypeSystem(string root)
+    {
+        const string source = """
+            namespace Microsoft.UI.Xaml.Media
+            {
+                public class Brush { }
+                public class SolidColorBrush : Brush { }
+            }
+            namespace Microsoft.UI.Xaml
+            {
+                public class Style { }
+                public struct CornerRadius { }
+            }
+            """;
+        var references = new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) };
+        var library = CSharpCompilation.Create(
+            "Microsoft.WinUI",
+            new[] { CSharpSyntaxTree.ParseText(source) },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        AssertNoErrors(library);
+
+        var managedDirectory = Path.Combine(root, "lib", "net8.0");
+        Directory.CreateDirectory(managedDirectory);
+        var dllPath = Path.Combine(managedDirectory, "Microsoft.WinUI.dll");
+        var emit = library.Emit(dllPath);
+        Assert.True(emit.Success, string.Join("; ", emit.Diagnostics));
+
+        var winUiReference = MetadataReference.CreateFromFile(dllPath);
+        var consumer = CSharpCompilation.Create(
+            "TestApp",
+            references: references.Append(winUiReference),
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var assembly = (IAssemblySymbol)consumer.GetAssemblyOrModuleSymbol(winUiReference)!;
+        var typeSystem = XamlTypeSystem.FromCompilation(consumer, ImmutableArray.Create(assembly));
+        var genericXaml = Path.Combine(managedDirectory, "Microsoft.WinUI", "Themes", "generic.xaml");
+        return (typeSystem, genericXaml);
+    }
+
+    private static void WriteGenericXaml(string path, string resources)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, $"""
+            <ResourceDictionary
+                xmlns="{Presentation}"
+                xmlns:x="{XamlTypeSystem.XamlLanguageNamespace}">
+              {resources}
+            </ResourceDictionary>
+            """);
+    }
+
+    private static string CreateTemporaryDirectory()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "WinUiXaml.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
+    }
 
     /// <summary>
     /// Compiles <paramref name="librarySource"/> into a referenced library ("TestLib") and builds a

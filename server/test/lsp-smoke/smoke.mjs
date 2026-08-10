@@ -17,7 +17,7 @@ const SERVER_DLL = resolve(
 );
 // Allow pointing the smoke test at an alternate DLL or a self-contained packaged apphost.
 const serverPath =
-  process.env.WINUI_XAML_SERVER_PATH || process.env.WINUI_XAML_SERVER_DLL || SERVER_DLL;
+  process.env.WINUI_XAML_SERVER_PATH || SERVER_DLL;
 const XAML = process.env.WINUI_XAML_FIXTURE_XAML || resolve(here, "../../../test/fixtures/xaml/fixture/SmokePage.xaml");
 const EXPECTED_CODE_BEHIND = "smokepage.xaml.cs";
 const EXPECTED_HANDLER_LINE = 26; // OnGo_Click is on line 27 (1-based) of SmokePage.xaml.cs

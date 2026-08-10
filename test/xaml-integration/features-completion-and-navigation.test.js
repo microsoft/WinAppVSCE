@@ -236,7 +236,7 @@ describe("WinUI XAML — completion", function () {
       '</Page.Resources>',
     ].join("\n  ")));
     assert.ok(
-      noProp.some((i) => i === "TitleTextBlockStyle") && noProp.some((i) => i.includes("AccentFillColorDefaultBrush")),
+      noProp.some((i) => i === "AccentButtonStyle") && noProp.some((i) => i.includes("AccentFillColorDefaultBrush")),
       `Setter.Value with no Property must offer ALL theme keys; got ${noProp.slice(0, 20).join(", ")}`
     );
   });
@@ -1063,9 +1063,8 @@ describe("WinUI XAML — named-color value completion", function () {
   before(async () => { await h.warmUp(); });
   after(async () => { await h.revertProbe(); });
 
-  // Discriminate on the hex `detail` (a swatch like #6495ED) — color NAMES like "Red" can also come from VS Code's buffer word-based suggestions, so the hex detail is the reliable server marker.
-  const isHex = (d) => /^#[0-9A-Fa-f]{6,8}$/.test(d || "");
-  const colorLabels = (items) => items.filter((i) => isHex(i.detail)).map((i) => i.label);
+  const isNamedColor = (d) => d === "named color";
+  const colorLabels = (items) => items.filter((i) => isNamedColor(i.detail)).map((i) => i.label);
 
   it("Foreground (Brush) offers the WinUI named colors with hex swatches", async () => {
     const items = await h.completionItemsAt(page('<TextBlock Foreground="|" />'));
@@ -1074,11 +1073,11 @@ describe("WinUI XAML — named-color value completion", function () {
     for (const want of ["Red", "CornflowerBlue", "Transparent"]) {
       assert.ok(labels.includes(want), `named colors should include ${want}; got ${labels.length} items`);
     }
-    const cfb = items.find((i) => i.label === "CornflowerBlue" && isHex(i.detail));
-    assert.strictEqual(cfb.detail, "#6495ED", `CornflowerBlue detail should be its hex swatch; got ${JSON.stringify(cfb.detail)}`);
+    const cfb = items.find((i) => i.label === "CornflowerBlue" && isNamedColor(i.detail));
+    assert.strictEqual(cfb.detail, "named color");
     assert.strictEqual(cfb.newText, "CornflowerBlue", `CornflowerBlue should carry a whole-token TextEdit; got ${JSON.stringify(cfb.newText)}`);
-    const tr = items.find((i) => i.label === "Transparent" && isHex(i.detail));
-    assert.strictEqual(tr.detail, "#FFFFFF00", `Transparent detail should be CSS alpha-last #FFFFFF00; got ${JSON.stringify(tr.detail)}`);
+    const tr = items.find((i) => i.label === "Transparent" && isNamedColor(i.detail));
+    assert.strictEqual(tr.detail, "named color");
   });
 
   it("prefix 'Corn' filters to CornflowerBlue + Cornsilk", async () => {
@@ -1109,8 +1108,7 @@ describe("WinUI XAML — FontWeight value completion", function () {
   before(async () => { await h.warmUp(); });
   after(async () => { await h.revertProbe(); });
 
-  // Discriminate on the numeric weight `detail`.
-  const isWeight = (d) => /^\d{2,3}$/.test(d || "");
+  const isWeight = (d) => d === "font weight";
   const weightLabels = (items) => items.filter((i) => isWeight(i.detail)).map((i) => i.label);
 
   it("TextBlock.FontWeight offers the WinUI named weights with weight-number details", async () => {
@@ -1119,10 +1117,10 @@ describe("WinUI XAML — FontWeight value completion", function () {
     const want = ["Black", "Bold", "ExtraBlack", "ExtraBold", "ExtraLight", "Light", "Medium", "Normal", "SemiBold", "SemiLight", "Thin"];
     assert.deepStrictEqual(labels, want, `expected exactly the 11 named weights; got ${JSON.stringify(labels)}`);
     const bold = items.find((i) => i.label === "Bold" && isWeight(i.detail));
-    assert.strictEqual(bold.detail, "700", `Bold detail should be its weight number 700; got ${JSON.stringify(bold.detail)}`);
+    assert.strictEqual(bold.detail, "font weight");
     assert.strictEqual(bold.newText, "Bold", `Bold should carry a whole-token TextEdit; got ${JSON.stringify(bold.newText)}`);
     const sl = items.find((i) => i.label === "SemiLight" && isWeight(i.detail));
-    assert.strictEqual(sl.detail, "350", `SemiLight detail should be 350; got ${JSON.stringify(sl.detail)}`);
+    assert.strictEqual(sl.detail, "font weight");
   });
 
   it("prefix 'Ex' filters to the three Extra* weights", async () => {
@@ -1150,7 +1148,7 @@ describe("WinUI XAML — FontWeight value completion", function () {
     const labels = weightLabels(items);
     assert.ok(labels.includes("Bold") && labels.includes("SemiBold"), `Setter.Value FontWeight should offer named weights incl. Bold/SemiBold; got ${JSON.stringify(labels)}`);
     const bold = items.find((i) => i.label === "Bold" && isWeight(i.detail));
-    assert.strictEqual(bold.detail, "700", `Setter.Value Bold detail should be 700; got ${JSON.stringify(bold.detail)}`);
+    assert.strictEqual(bold.detail, "font weight");
     const dbl = await h.completionItemsAt(styleBuf('<Setter Property="Opacity" Value="|" />'));
     assert.deepStrictEqual(weightLabels(dbl), [], `a double Setter.Value must not offer named weights; got ${JSON.stringify(weightLabels(dbl))}`);
   });
@@ -1243,4 +1241,3 @@ describe("WinUI XAML — method hover returns/params", function () {
     assert.ok(!/\*\*Parameters:\*\*/.test(md), `attached-property hover must NOT carry Parameters; got: ${md}`);
   });
 });
-

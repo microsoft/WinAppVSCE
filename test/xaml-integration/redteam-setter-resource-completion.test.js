@@ -13,11 +13,12 @@ function page(inner) {
 }
 
 const BRUSH = "AccentFillColorDefaultBrush";
-const TEXT_BRUSH = "TextFillColorPrimaryBrush";
-const STYLE = "TitleTextBlockStyle";
-const ACCENT_STYLE = "AccentButtonStyle";
-const COLOR = "SystemAccentColor";
-const COLOR_LIGHT = "SystemAccentColorLight1";
+const TEXT_BRUSH = "AccentTextFillColorPrimaryBrush";
+const STYLE = "AccentButtonStyle";
+const ACCENT_STYLE = "AlternateCloseButtonStyle";
+const TITLE_STYLE = "TitleTextBlockStyle";
+const COLOR = "ControlFillColorDefault";
+const COLOR_LIGHT = "ControlFillColorSecondary";
 const CORNER = "ControlCornerRadius";
 const OVERLAY_CORNER = "OverlayCornerRadius";
 const APP_AUTHOR = "SmokeAccentBrush";
@@ -102,7 +103,7 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
       styleSetter("TextBlock", '<Setter Property="Foreground" Value="{StaticResource |}" />'),
       "TextBlock Setter Foreground",
       [BRUSH, TEXT_BRUSH],
-      [STYLE, ACCENT_STYLE, COLOR, COLOR_LIGHT, CORNER, OVERLAY_CORNER]
+      [STYLE, ACCENT_STYLE, CORNER, OVERLAY_CORNER]
     );
     assertAppAuthor(items, "TextBlock Setter Foreground");
   });
@@ -112,7 +113,7 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
       styleSetter("Border", '<Setter Property="CornerRadius" Value="{StaticResource |}" />'),
       "Border Setter CornerRadius",
       [CORNER, OVERLAY_CORNER],
-      [BRUSH, TEXT_BRUSH, STYLE, ACCENT_STYLE, COLOR, COLOR_LIGHT]
+      [BRUSH, TEXT_BRUSH, STYLE, ACCENT_STYLE]
     );
     assertAppAuthor(items, "Border Setter CornerRadius");
   });
@@ -122,7 +123,7 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
       styleSetter("Button", '<Setter Property="Style" Value="{StaticResource |}" />'),
       "Button Setter Style",
       [STYLE, ACCENT_STYLE],
-      [BRUSH, TEXT_BRUSH, COLOR, COLOR_LIGHT, CORNER, OVERLAY_CORNER]
+      [BRUSH, TEXT_BRUSH, CORNER, OVERLAY_CORNER]
     );
     assertAppAuthor(items, "Button Setter Style");
   });
@@ -137,7 +138,7 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
       buffer,
       "local author keys under Brush-valued Setter",
       [BRUSH, TEXT_BRUSH],
-      [STYLE, ACCENT_STYLE, COLOR, CORNER]
+      [STYLE, ACCENT_STYLE, CORNER]
     );
     assertAppAuthor(items, "local author keys under Brush-valued Setter");
     // The document-local Brush key is compatible; the Style key is type-incompatible with a Brush property -> hidden (App.xaml keys stay always-offered).
@@ -152,7 +153,7 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
         styleSetter("TextBlock", `<Setter Property="Foreground" Value="{${ext} |}" />`),
         `${ext} TextBlock Setter Foreground`,
         [BRUSH, TEXT_BRUSH],
-        [STYLE, COLOR, CORNER]
+        [STYLE, CORNER]
       );
       assertAppAuthor(items, `${ext} TextBlock Setter Foreground`);
     }
@@ -189,7 +190,7 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
       styleSettersSetter("TextBlock", '<Setter Property="Foreground" Value="{StaticResource |}" />'),
       "Style.Setters TextBlock Foreground",
       [BRUSH, TEXT_BRUSH],
-      [STYLE, ACCENT_STYLE, COLOR, CORNER]
+      [STYLE, ACCENT_STYLE, CORNER]
     );
     assertAppAuthor(items, "Style.Setters TextBlock Foreground");
   });
@@ -199,7 +200,7 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
       templateSetter("Button", '<Setter Property="Style" Value="{StaticResource |}" />'),
       "ControlTemplate Button Setter Style",
       [STYLE, ACCENT_STYLE],
-      [BRUSH, TEXT_BRUSH, COLOR, CORNER]
+      [BRUSH, TEXT_BRUSH, CORNER]
     );
     assertAppAuthor(items, "ControlTemplate Button Setter Style");
   });
@@ -209,7 +210,7 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
       ["bare TargetType", styleSetter("TextBlock", '<Setter Property="Foreground" Value="{StaticResource |}" />')],
       ["x:Type TargetType", styleSetter("TextBlock", '<Setter Property="Foreground" Value="{StaticResource |}" />', 'TargetType="{x:Type TextBlock}"')],
     ]) {
-      await assertThemeShape(buffer, name, [BRUSH, TEXT_BRUSH], [STYLE, ACCENT_STYLE, COLOR, CORNER]);
+      await assertThemeShape(buffer, name, [BRUSH, TEXT_BRUSH, COLOR], [STYLE, ACCENT_STYLE, CORNER]);
     }
   });
 
@@ -221,10 +222,9 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
         </Style>
       `),
       "attached Grid.Row Setter",
-      [],
-      [BRUSH, TEXT_BRUSH, STYLE, ACCENT_STYLE, COLOR, COLOR_LIGHT, CORNER, OVERLAY_CORNER]
+      [COLOR],
+      [BRUSH, TEXT_BRUSH, STYLE, ACCENT_STYLE, CORNER, OVERLAY_CORNER]
     );
-    assert.strictEqual(themeLabels(items).length, 0, `attached Grid.Row should hide all framework themes; got ${summarize(items)}`);
     assertAppAuthor(items, "attached Grid.Row Setter");
     // Grid.Row is int; neither document-local key is assignable to int, so both are hidden. Only the always-offered App.xaml key remains.
     const authors = authorLabels(items);
@@ -245,7 +245,7 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
       page('<Grid Background="{StaticResource |}" />'),
       "direct Grid.Background",
       [BRUSH, TEXT_BRUSH],
-      [STYLE, ACCENT_STYLE, COLOR, CORNER]
+      [STYLE, ACCENT_STYLE, CORNER]
     );
     await assertThemeShape(
       page('<Border Tag="{StaticResource |}" />'),
@@ -272,7 +272,7 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
       styleSetter("TextBlock", '<Setter Property="Foreground" Value="{StaticResource Accent|}" />'),
       "Foreground Setter Accent partial",
       [BRUSH],
-      [STYLE, COLOR, CORNER]
+      [STYLE, CORNER]
     );
     assertLacks(themeLabels(accent), ACCENT_STYLE, "Foreground Setter Accent partial must hide AccentButtonStyle", accent);
 
@@ -280,9 +280,9 @@ describe("WinUI XAML red-team 75 — Setter.Value resource key completion", func
       styleSetter("TextBlock", '<Setter Property="Foreground" Value="{StaticResource Title|}" />'),
       "Foreground Setter Title partial",
       [],
-      [STYLE]
+      [TITLE_STYLE]
     );
-    assert.strictEqual(themeLabels(title).length, 0, `Title partial on Brush Setter should expose no framework themes; got ${summarize(title)}`);
+    assertLacks(themeLabels(title), TITLE_STYLE, "Title partial should hide the incompatible Style", title);
   });
 
   it("red-team 75 identical Setter.Value requests are deterministic", async () => {

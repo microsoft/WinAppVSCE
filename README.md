@@ -42,7 +42,6 @@ packaging commands, or **WinUI XAML** for language-service commands.
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
 | **WinUI XAML: Show Info** | Show whether the WinUI XAML language server is running or the editor is in syntax-only mode. |
 | **WinUI XAML: Restart Language Server** | Restart the WinUI XAML language server (e.g. after changing server settings). |
-| **WinUI XAML: Surround With...** | Wrap the selected XAML in a `Border`, `Grid`, or `StackPanel`. |
 
 #### Workspace & Multi-Project Support
 
@@ -209,7 +208,7 @@ The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, 
 | **Rename** | Rename symbols with a prepare-rename validity check. |
 | **Formatting** | Whole-document and range formatting. |
 | **Semantic tokens** | Richer, type-aware colorization layered on top of the TextMate grammar. |
-| **Snippets and refactoring** | Structural snippets (`xgrid`, `xbind`, `xresource`, `xstyle`, and `xdatatemplate`), selection-based surround-with actions, namespace cleanup, and on-type indentation. |
+| **Code actions** | Add or remove namespace declarations and apply other XAML-aware quick fixes. |
 
 The self-contained language server starts automatically when you open a `.xaml` file. No separate .NET 10 runtime or SDK is required to launch it. Project-aware features use the MSBuild toolset from your WinUI build environment (Visual Studio, Visual Studio Build Tools, or a compatible SDK); if that toolset is unavailable, the server reports the missing prerequisite and keeps project-independent XAML features available. If the bundled server cannot start, XAML gracefully degrades to **syntax highlighting only** and the rest of the extension is unaffected. Use **WinUI XAML: Show Info** to check the server status and **WinUI XAML: Restart Language Server** to restart it.
 
@@ -307,7 +306,7 @@ The winapp CLI (and this extension) works with any Windows app framework:
 
 - Windows 10 or later
 - Visual Studio Code 1.109.0 or later
-- The WinUI XAML language server is bundled as self-contained `win-x64` and `win-arm64` executables, so users do not need to install .NET 10. Project-aware features require the MSBuild toolset already used to build the WinUI project. To run a developer build instead, set `winui-xaml.server.path` to a `WinUiXaml.LanguageServer.exe` or `.dll`; `winui-xaml.server.dotnetPath` is used only for a custom DLL. Both settings are machine-scoped and ignored in untrusted workspaces.
+- The WinUI XAML language server is bundled as self-contained `win-x64` and `win-arm64` executables, so users do not need to install .NET 10. Project-aware features require the MSBuild toolset already used to build the WinUI project.
 
 The winapp CLI is bundled with the extension — no separate installation required.
 

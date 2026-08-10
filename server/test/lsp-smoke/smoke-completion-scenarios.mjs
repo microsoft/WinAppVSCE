@@ -736,12 +736,12 @@ export async function runCompletionScenarios(ctx) {
 
   // 477-481) Named-color value completion (round 72): a Brush/Color-typed attribute value now completes the
   //          WinUI named colors (Microsoft.UI.Colors — Red, CornflowerBlue, …, Transparent) with a Color-kind
-  //          item + hex Detail (swatch), while a non-Brush/Color value (double/enum/string) offers none.
+  //          item and generic Detail, while a non-Brush/Color value (double/enum/string) offers none.
   const colorItems = (items) => items.filter((i) => i.kind === 16); // CompletionItemKind.Color
   const colorLabels = (items) => colorItems(items).map((i) => i.label);
 
   // 477) Foreground (Brush) empty -> the full named-color set incl. CornflowerBlue/Red/Transparent, Color-kind,
-  //      whole-token TextEdit, hex Detail (swatch) + raw-wire filterText/sortText = token.
+  //      whole-token TextEdit, generic Detail + raw-wire filterText/sortText = token.
   const clrFg = await completeItemsWith(477, pageCls('<TextBlock Foreground="|" />'), "namedcolor-foreground");
   {
     const labels = colorLabels(clrFg);
@@ -751,10 +751,10 @@ export async function runCompletionScenarios(ctx) {
     }
     const cfb = clrFg.find((i) => i.label === "CornflowerBlue");
     if (cfb?.textEdit?.newText !== "CornflowerBlue") fail(`CornflowerBlue should carry a whole-token TextEdit: ${JSON.stringify(cfb)}`);
-    if (cfb?.detail !== "#6495ED") fail(`CornflowerBlue detail should be its hex swatch #6495ED: ${JSON.stringify(cfb?.detail)}`);
+    if (cfb?.detail !== "named color") fail(`CornflowerBlue should have generic named-color detail: ${JSON.stringify(cfb?.detail)}`);
     if (cfb?.filterText !== "CornflowerBlue" || cfb?.sortText !== "CornflowerBlue") fail(`CornflowerBlue should carry filterText/sortText = token on the wire: ${JSON.stringify(cfb)}`);
     const tr = clrFg.find((i) => i.label === "Transparent");
-    if (tr?.detail !== "#FFFFFF00") fail(`Transparent detail should be CSS alpha-last #FFFFFF00: ${JSON.stringify(tr?.detail)}`);
+    if (tr?.detail !== "named color") fail(`Transparent should have generic named-color detail: ${JSON.stringify(tr?.detail)}`);
     if (clrFg.some((i) => i.label === "True" || i.label === "False")) fail(`a Brush value must not offer booleans`);
   }
 
@@ -785,7 +785,7 @@ export async function runCompletionScenarios(ctx) {
     if (clrEnum.includes("Red") || clrEnum.includes("CornflowerBlue")) fail(`an enum Visibility must NOT leak named colors: ${JSON.stringify(clrEnum)}`);
   }
 
-  console.log(`[ok] Named-color value completion: Brush (Foreground/Background) + Color (SolidColorBrush.Color) offer the WinUI named colors with hex swatches (prefix-filtered); double/enum offer none (round 72)`);
+  console.log(`[ok] Named-color value completion: Brush (Foreground/Background) + Color (SolidColorBrush.Color) offer SDK-driven names (prefix-filtered); double/enum offer none (round 72)`);
 
   // 483-484) Mid-token accept replaces the WHOLE value token (round 72 fix): with the caret inside an existing
   //          value ("Corn|silk"), the item's TextEdit range must span the whole token so applying it yields a
@@ -826,11 +826,12 @@ export async function runCompletionScenarios(ctx) {
 
   console.log(`[ok] Mid-token value accept replaces the whole token (no duplicated suffix) for named colors + GridLength (round 72 fix)`);
 
-  // 485-489) FontWeight named-value completion (round 73): a FontWeight-typed attribute value (Control/TextBlock.FontWeight, typed Windows.UI.Text.FontWeight) now completes the named weights (Microsoft.UI.Text.FontWeights — Thin, Light, Normal, SemiBold, Bold, …, ExtraBlack) as Value-kind items whose Detail is the numeric weight (Bold => 700). Numeric literals stay free-form.
-  const fwItems = (items) => items.filter((i) => /^\d{2,3}$/.test(i.detail ?? "")); // weight-number Detail (100..950)
+  // 485-489) FontWeight named-value completion (round 73): a FontWeight-typed attribute value completes
+  // the SDK-discovered Microsoft.UI.Text.FontWeights properties as Value-kind items.
+  const fwItems = (items) => items.filter((i) => i.detail === "font weight");
   const fwLabels = (items) => fwItems(items).map((i) => i.label);
 
-  // 485) FontWeight empty -> the full 11-name set with weight-number Detail, Value-kind, whole-token TextEdit.
+  // 485) FontWeight empty -> the full 11-name set with generic Detail, Value-kind, whole-token TextEdit.
   const fw = await completeItemsWith(485, pageCls('<TextBlock FontWeight="|" />'), "fontweight-empty");
   {
     const labels = fwLabels(fw).sort();
@@ -838,12 +839,12 @@ export async function runCompletionScenarios(ctx) {
     if (labels.join(",") !== want.join(",")) fail(`FontWeight empty should offer exactly the 11 named weights: ${JSON.stringify(labels)}`);
     const bold = fw.find((i) => i.label === "Bold");
     if (bold?.kind !== 12) fail(`Bold should be a Value-kind item: ${JSON.stringify(bold)}`);
-    if (bold?.detail !== "700") fail(`Bold detail should be its weight number 700: ${JSON.stringify(bold?.detail)}`);
+    if (bold?.detail !== "font weight") fail(`Bold should have generic font-weight detail: ${JSON.stringify(bold?.detail)}`);
     if (bold?.textEdit?.newText !== "Bold") fail(`Bold should carry a whole-token TextEdit: ${JSON.stringify(bold)}`);
     const sl = fw.find((i) => i.label === "SemiLight");
-    if (sl?.detail !== "350") fail(`SemiLight detail should be 350: ${JSON.stringify(sl?.detail)}`);
+    if (sl?.detail !== "font weight") fail(`SemiLight should have generic font-weight detail: ${JSON.stringify(sl?.detail)}`);
     const eb = fw.find((i) => i.label === "ExtraBlack");
-    if (eb?.detail !== "950") fail(`ExtraBlack detail should be 950: ${JSON.stringify(eb?.detail)}`);
+    if (eb?.detail !== "font weight") fail(`ExtraBlack should have generic font-weight detail: ${JSON.stringify(eb?.detail)}`);
     if (fw.some((i) => i.label === "True" || i.label === "False")) fail(`a FontWeight value must not offer booleans`);
   }
 
@@ -868,15 +869,15 @@ export async function runCompletionScenarios(ctx) {
     if (fwEnum.includes("Bold") || fwEnum.includes("SemiBold")) fail(`an enum Visibility must NOT leak named weights: ${JSON.stringify(fwEnum)}`);
   }
 
-  console.log(`[ok] FontWeight value completion: Control/TextBlock.FontWeight offers the WinUI named weights with weight-number details (prefix-filtered); double/enum offer none (round 73)`);
+  console.log(`[ok] FontWeight value completion: Control/TextBlock.FontWeight offers SDK-driven names with generic details (prefix-filtered); double/enum offer none (round 73)`);
 
   // 490-492) Setter.Value scalar completion generalized (round 73 fix): the <Setter Value="|"> path now shares the SAME scalar dispatch as ordinary attribute values, so a Style setter completes a FontWeight/Brush property identically to setting it directly (VS parity) — previously only enum/bool completed there. Typed by the sibling Property= against the enclosing TargetType. 490) <Setter Property="FontWeight" Value="|"> -> named weights (the round-73 deliverable in a Style).
   const svFw = await completeItemsWith(490, pageRes('<Style TargetType="Button">\n      <Setter Property="FontWeight" Value="|" />\n    </Style>'), "setterval-fontweight");
   {
     const labels = fwLabels(svFw).sort();
     if (!labels.includes("Bold") || !labels.includes("SemiBold")) fail(`Setter.Value FontWeight should offer named weights incl. Bold/SemiBold: ${JSON.stringify(labels)}`);
-    const bold = svFw.find((i) => i.label === "Bold" && /^\d{2,3}$/.test(i.detail ?? ""));
-    if (bold?.detail !== "700") fail(`Setter.Value Bold detail should be 700: ${JSON.stringify(bold?.detail)}`);
+    const bold = svFw.find((i) => i.label === "Bold");
+    if (bold?.detail !== "font weight") fail(`Setter.Value Bold should have generic font-weight detail: ${JSON.stringify(bold?.detail)}`);
   }
 
   // 491) <Setter Property="Foreground" Value="|"> -> named colors (proves the shared dispatch generalized

@@ -453,58 +453,6 @@ describe("WinUI XAML — document formatting", function () {
   });
 });
 
-describe("WinUI XAML — editor refactors", function () {
-  this.timeout(180000);
-  before(async () => { await h.warmUp(); });
-  after(async () => { await h.revertProbe(); });
-
-  it("surrounds every non-empty selection and contributes selection refactors", async () => {
-    const source = "<Page>\n  <TextBlock />\n  <Button />\n</Page>";
-    await h.setBuffer(source);
-    const editor = await vscode.window.showTextDocument(h.getDoc(), { preview: false });
-    editor.selections = [
-      new vscode.Selection(1, 2, 1, 15),
-      new vscode.Selection(2, 2, 2, 12),
-    ];
-
-    const actions = await vscode.commands.executeCommand(
-      "vscode.executeCodeActionProvider",
-      h.getDoc().uri,
-      editor.selections[0],
-      "refactor.surround"
-    );
-    assert.ok((actions || []).some((action) => action.title === "Surround with Border"));
-
-    await vscode.commands.executeCommand("winui-xaml.surroundWith", "Border");
-    const result = h.getDoc().getText();
-    assert.strictEqual((result.match(/<Border>/g) || []).length, 2);
-    assert.match(result, /<Border>\r?\n\s*<TextBlock \/>\r?\n\s*<\/Border>/);
-    assert.match(result, /<Border>\r?\n\s*<Button \/>\r?\n\s*<\/Border>/);
-  });
-
-  it("offers surround refactors in untitled XAML documents", async () => {
-    const smokeDoc = h.getDoc();
-    const untitled = await vscode.workspace.openTextDocument({
-      language: "xaml",
-      content: "<Button />",
-    });
-    const editor = await vscode.window.showTextDocument(untitled, { preview: false });
-    editor.selection = new vscode.Selection(0, 0, 0, untitled.getText().length);
-
-    try {
-      const actions = await vscode.commands.executeCommand(
-        "vscode.executeCodeActionProvider",
-        untitled.uri,
-        editor.selection,
-        "refactor.surround"
-      );
-      assert.ok((actions || []).some((action) => action.title === "Surround with Grid"));
-    } finally {
-      await vscode.window.showTextDocument(smokeDoc, { preview: false });
-    }
-  });
-});
-
 describe("WinUI XAML — folding ranges", function () {
   this.timeout(180000);
   before(async () => { await h.warmUp(); });
