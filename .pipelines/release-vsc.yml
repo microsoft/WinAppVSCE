@@ -67,64 +67,12 @@ extends:
             displayName: Download public CLI release for VS Code extension
             env:
               GH_TOKEN: $(GITHUB_TOKEN)
+              WINAPP_CLI_RELEASE_TAG: ${{ parameters.CliReleaseTag }}
             inputs:
               pwsh: true
               errorActionPreference: 'stop'
-              targetType: 'inline'
-              script: |
-                $cliReleaseTag = "${{ parameters.CliReleaseTag }}"
-                $repo = "microsoft/winappcli"
-
-                if ([string]::IsNullOrWhiteSpace($cliReleaseTag)) {
-                    Write-Host "No CLI release tag specified, finding latest stable release..."
-                    $releases = gh release list --repo $repo --limit 10 --json tagName,isPrerelease,isDraft | ConvertFrom-Json
-                    $stableRelease = $releases | Where-Object { -not $_.isPrerelease -and -not $_.isDraft } | Select-Object -First 1
-                    if (-not $stableRelease) {
-                        Write-Error "No stable release found for $repo"
-                        exit 1
-                    }
-                    $cliReleaseTag = $stableRelease.tagName
-                    Write-Host "Found latest stable release: $cliReleaseTag"
-                } else {
-                    Write-Host "Using specified CLI release tag: $cliReleaseTag"
-                }
-
-                Write-Host "##vso[task.setvariable variable=CliReleaseTag]$cliReleaseTag"
-
-                # Download x64 and arm64 CLI zips using gh CLI
-                $cliDir = "$(System.DefaultWorkingDirectory)/artifacts/public-cli"
-
-                New-Item -ItemType Directory -Path "$cliDir/win-x64" -Force | Out-Null
-                New-Item -ItemType Directory -Path "$cliDir/win-arm64" -Force | Out-Null
-
-                Write-Host "Downloading CLI binaries from release $cliReleaseTag..."
-                gh release download $cliReleaseTag --repo $repo --pattern "winappcli-x64.zip" --dir $cliDir
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Error "Failed to download winappcli-x64.zip from release $cliReleaseTag"
-                    exit 1
-                }
-
-                gh release download $cliReleaseTag --repo $repo --pattern "winappcli-arm64.zip" --dir $cliDir
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Error "Failed to download winappcli-arm64.zip from release $cliReleaseTag"
-                    exit 1
-                }
-
-                # Extract
-                Expand-Archive -Path "$cliDir/winappcli-x64.zip" -DestinationPath "$cliDir/win-x64" -Force
-                Expand-Archive -Path "$cliDir/winappcli-arm64.zip" -DestinationPath "$cliDir/win-arm64" -Force
-
-                # Validate
-                if (-not (Test-Path "$cliDir/win-x64/winapp.exe")) {
-                    Write-Error "winapp.exe not found in extracted x64 archive"
-                    exit 1
-                }
-                if (-not (Test-Path "$cliDir/win-arm64/winapp.exe")) {
-                    Write-Error "winapp.exe not found in extracted arm64 archive"
-                    exit 1
-                }
-
-                Write-Host "CLI binaries ($cliReleaseTag) downloaded and validated successfully"
+              filePath: $(System.DefaultWorkingDirectory)\scripts\download-cli.ps1
+              arguments: "-DestinationPath '$(System.DefaultWorkingDirectory)/artifacts/public-cli'"
           - task: PowerShell@2
             displayName: Create temporary .npmrc for Build
             inputs:
