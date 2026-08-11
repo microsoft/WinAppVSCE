@@ -184,6 +184,11 @@ internal sealed partial class XamlLanguageServer
             await NotifyMsBuildUnavailableAsync(ex).ConfigureAwait(false);
             return null;
         }
+        catch (ProjectRestoreRequiredException ex)
+        {
+            await NotifyProjectRestoreRequiredAsync(ex).ConfigureAwait(false);
+            return null;
+        }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[winui-xaml-ls] resolve failed: {ex.Message}");
@@ -271,6 +276,16 @@ internal sealed partial class XamlLanguageServer
                     message = exception.Message +
                         " The language server remains available for project-independent XAML features.",
                 })
+            : Task.CompletedTask;
+    }
+
+    private Task NotifyProjectRestoreRequiredAsync(ProjectRestoreRequiredException exception)
+    {
+        Console.Error.WriteLine($"[winui-xaml-ls] restore required: {exception.ProjectPath}");
+        return _restoreRequiredProjects.TryAdd(exception.ProjectPath, 0)
+            ? _connection.SendNotificationAsync(
+                "winui-xaml/projectRestoreRequired",
+                new { projectPath = exception.ProjectPath })
             : Task.CompletedTask;
     }
 

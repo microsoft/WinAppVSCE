@@ -1,5 +1,6 @@
 import * as path from "path";
 import * as vscode from "vscode";
+import { spawn } from "child_process";
 import {
   LanguageClient,
   LanguageClientOptions,
@@ -22,6 +23,12 @@ import {
 } from "./csharpDevKitNotification";
 import { getWindowsServerRid } from "./serverArchitecture";
 import { ServerLifecycle } from "./serverLifecycle";
+import {
+  PROJECT_RESTORE_ACTIONS,
+  PROJECT_RESTORE_MESSAGE,
+  PROJECT_RESTORE_NOTIFICATION,
+  ProjectRestoreNotificationGate,
+} from "./projectRestoreNotification";
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
@@ -35,6 +42,7 @@ const lifecycle = new ServerLifecycle();
 // Track each degraded cause once until the next successful start.
 let lastDegradedCause: DegradedCause | undefined;
 const csharpDevKitNotificationGate = new CsharpDevKitNotificationGate();
+const projectRestoreNotificationGate = new ProjectRestoreNotificationGate();
 
 // The integration harness cannot read OutputChannel contents.
 function log(message: string): void {
@@ -209,6 +217,10 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     serverOptions,
     clientOptions
   );
+  candidate.onNotification(
+    PROJECT_RESTORE_NOTIFICATION,
+    ({ projectPath }: { projectPath?: string }) => notifyProjectRestoreRequired(projectPath)
+  );
 
   try {
     await candidate.start();
@@ -218,6 +230,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     if (userInitiated) {
       void vscode.window.showInformationMessage("WinUI XAML language server restarted.");
     }
+
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     // Clean up the partially started client.
@@ -235,6 +248,93 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
       userInitiated
     );
   }
+}
+
+function notifyProjectRestoreRequired(projectPath: string | undefined): void {
+  if (
+    !projectPath ||
+    !isTrustedWorkspaceProject(projectPath) ||
+    !projectRestoreNotificationGate.shouldShow(projectPath)
+  ) {
+    return;
+  }
+
+  void vscode.window
+    .showInformationMessage(
+      PROJECT_RESTORE_MESSAGE,
+      PROJECT_RESTORE_ACTIONS.restore,
+      PROJECT_RESTORE_ACTIONS.showOutput
+    )
+    .then(async (choice) => {
+      if (choice === PROJECT_RESTORE_ACTIONS.showOutput) {
+        output?.show(true);
+      } else if (choice === PROJECT_RESTORE_ACTIONS.restore) {
+        await restoreProject(projectPath);
+      }
+    });
+}
+
+function isTrustedWorkspaceProject(projectPath: string): boolean {
+  if (!vscode.workspace.isTrusted || path.extname(projectPath).toLowerCase() !== ".csproj") {
+    return false;
+  }
+
+  const candidate = path.resolve(projectPath);
+  return (vscode.workspace.workspaceFolders ?? []).some((folder) => {
+    const relative = path.relative(path.resolve(folder.uri.fsPath), candidate);
+    return relative.length === 0 ||
+      (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
+  });
+}
+
+async function restoreProject(projectPath: string): Promise<void> {
+  output?.show(true);
+  log(`Restoring project packages: ${projectPath}`);
+
+  try {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: "Restoring WinUI project packages",
+      },
+      () => runDotnetRestore(projectPath)
+    );
+    log("Project package restore completed. IntelliSense metadata is reloading.");
+    void vscode.window.showInformationMessage(
+      "WinUI project packages restored. XAML IntelliSense is reloading."
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    log(`Project package restore failed: ${detail}`);
+    void vscode.window.showErrorMessage(
+      `WinUI project package restore failed: ${detail}`,
+      PROJECT_RESTORE_ACTIONS.showOutput
+    ).then((choice) => {
+      if (choice === PROJECT_RESTORE_ACTIONS.showOutput) {
+        output?.show(true);
+      }
+    });
+  }
+}
+
+function runDotnetRestore(projectPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("dotnet", ["restore", projectPath, "--nologo"], {
+      cwd: path.dirname(projectPath),
+      windowsHide: true,
+    });
+
+    child.stdout.on("data", (data: Buffer) => output?.append(data.toString()));
+    child.stderr.on("data", (data: Buffer) => output?.append(data.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`dotnet restore exited with code ${code ?? "unknown"}`));
+      }
+    });
+  });
 }
 
 /** Disposes the retained file-system watcher. */

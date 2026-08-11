@@ -36,4 +36,8 @@
     <PackageReference Include="Microsoft.NET.StringTools" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="WinUiXaml.Workspace.Tests" />
+  </ItemGroup>
+
 </Project>

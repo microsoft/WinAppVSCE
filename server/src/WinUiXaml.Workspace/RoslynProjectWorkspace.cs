@@ -10,6 +10,17 @@ using Microsoft.CodeAnalysis.MSBuild;
 
 namespace WinUiXaml.Workspace
 {
+    public sealed class ProjectRestoreRequiredException : InvalidOperationException
+    {
+        public ProjectRestoreRequiredException(string projectPath, Exception? innerException = null)
+            : base("Project packages must be restored before project-aware XAML features are available.", innerException)
+        {
+            ProjectPath = projectPath;
+        }
+
+        public string ProjectPath { get; }
+    }
+
     /// <summary>The Host B spine: a standalone Roslyn MSBuildWorkspace that loads a real project (including WinUI 3 apps) and exposes its Compilation and symbols.</summary>
     public sealed class RoslynProjectWorkspace : IDisposable
     {
@@ -57,22 +68,40 @@ namespace WinUiXaml.Workspace
                 }
             }
 
+            var (xamlFiles, applicationDefinitionPath, projectAssetsFile, hasPackageReferences) =
+                EvaluateXamlItems(projectPath, properties);
+            if (RequiresRestore(projectAssetsFile, hasPackageReferences))
+            {
+                throw new ProjectRestoreRequiredException(projectPath);
+            }
+
             var workspace = MSBuildWorkspace.Create(properties);
             workspace.LoadMetadataForReferencedProjects = true;
-
             try
             {
                 var project = await workspace
                     .OpenProjectAsync(projectPath, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
-                var (xamlFiles, applicationDefinitionPath) =
-                    EvaluateXamlItems(projectPath, properties);
-                cancellationToken.ThrowIfCancellationRequested();
+                if (workspace.Diagnostics.Any(diagnostic =>
+                    IsMissingRestoreFailure(diagnostic.Message)))
+                {
+                    throw new ProjectRestoreRequiredException(projectPath);
+                }
                 return new RoslynProjectWorkspace(
                     workspace, project, xamlFiles, applicationDefinitionPath);
             }
 
+            catch (ProjectRestoreRequiredException)
+            {
+                workspace.Dispose();
+                throw;
+            }
+            catch (Exception ex) when (IsMissingRestoreFailure(ex.ToString()))
+            {
+                workspace.Dispose();
+                throw new ProjectRestoreRequiredException(projectPath, ex);
+            }
             catch
             {
                 workspace.Dispose();
@@ -80,7 +109,11 @@ namespace WinUiXaml.Workspace
             }
         }
 
-        private static (ImmutableArray<string> Files, string? ApplicationDefinition) EvaluateXamlItems(
+        private static (
+            ImmutableArray<string> Files,
+            string? ApplicationDefinition,
+            string? ProjectAssetsFile,
+            bool HasPackageReferences) EvaluateXamlItems(
             string projectPath,
             IDictionary<string, string> globalProperties)
         {
@@ -96,7 +129,16 @@ namespace WinUiXaml.Workspace
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                 .ToImmutableArray();
-            return (files, applicationDefinitions.FirstOrDefault());
+            var assetsFile = project.GetPropertyValue("ProjectAssetsFile");
+            if (!string.IsNullOrWhiteSpace(assetsFile) && !Path.IsPathRooted(assetsFile))
+            {
+                assetsFile = Path.Combine(Path.GetDirectoryName(projectPath)!, assetsFile);
+            }
+            return (
+                files,
+                applicationDefinitions.FirstOrDefault(),
+                string.IsNullOrWhiteSpace(assetsFile) ? null : Path.GetFullPath(assetsFile),
+                project.GetItems("PackageReference").Count > 0);
 
             string GetFullPath(Microsoft.Build.Evaluation.ProjectItem item)
             {
@@ -107,6 +149,16 @@ namespace WinUiXaml.Workspace
                         : fullPath);
             }
         }
+
+        internal static bool RequiresRestore(string? projectAssetsFile, bool hasPackageReferences) =>
+            hasPackageReferences &&
+            (string.IsNullOrWhiteSpace(projectAssetsFile) || !File.Exists(projectAssetsFile));
+
+        internal static bool IsMissingRestoreFailure(string message) =>
+            message.Contains("NETSDK1004", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("NETSDK1005", StringComparison.OrdinalIgnoreCase) ||
+            (message.Contains("project.assets.json", StringComparison.OrdinalIgnoreCase) &&
+             message.Contains("not found", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>Gets the C# compilation for the loaded project.</summary>
         public Task<Compilation?> GetCompilationAsync(CancellationToken cancellationToken = default) =>
