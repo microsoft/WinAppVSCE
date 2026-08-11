@@ -13,6 +13,13 @@ import {
   DegradedAction,
   DegradedCause,
 } from "./degradedNotification";
+import {
+  CSHARP_DEV_KIT_DISMISSED_KEY,
+  CSHARP_DEV_KIT_EXTENSION_ID,
+  CSHARP_DEV_KIT_MARKETPLACE_URI,
+  CSHARP_DEV_KIT_RECOMMENDATION,
+  CsharpDevKitNotificationGate,
+} from "./csharpDevKitNotification";
 import { getWindowsServerRid } from "./serverArchitecture";
 import { ServerLifecycle } from "./serverLifecycle";
 
@@ -27,6 +34,7 @@ const lifecycle = new ServerLifecycle();
 
 // Track each degraded cause once until the next successful start.
 let lastDegradedCause: DegradedCause | undefined;
+const csharpDevKitNotificationGate = new CsharpDevKitNotificationGate();
 
 // The integration harness cannot read OutputChannel contents.
 function log(message: string): void {
@@ -64,15 +72,48 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
 
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument((document) => {
+      recommendCsharpDevKit(document, context);
       if (document.languageId === "xaml") {
         return startClient(context);
       }
     })
   );
 
+  vscode.workspace.textDocuments.forEach((document) => recommendCsharpDevKit(document, context));
+
   if (vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")) {
     await startClient(context);
   }
+}
+
+function recommendCsharpDevKit(
+  document: vscode.TextDocument,
+  context: vscode.ExtensionContext
+): void {
+  if (document.uri.scheme !== "file") {
+    return;
+  }
+
+  const dismissed = context.globalState.get<boolean>(CSHARP_DEV_KIT_DISMISSED_KEY, false);
+  const installed = vscode.extensions.getExtension(CSHARP_DEV_KIT_EXTENSION_ID) !== undefined;
+  if (!csharpDevKitNotificationGate.shouldShow(document.uri.fsPath, installed, dismissed)) {
+    return;
+  }
+
+  const recommendation = CSHARP_DEV_KIT_RECOMMENDATION;
+  void vscode.window
+    .showInformationMessage(
+      recommendation.message,
+      recommendation.installAction,
+      recommendation.dismissAction
+    )
+    .then(async (choice) => {
+      if (choice === recommendation.installAction) {
+        await vscode.env.openExternal(vscode.Uri.parse(CSHARP_DEV_KIT_MARKETPLACE_URI));
+      } else if (choice === recommendation.dismissAction) {
+        await context.globalState.update(CSHARP_DEV_KIT_DISMISSED_KEY, true);
+      }
+    });
 }
 
 export async function deactivateXaml(): Promise<void> {
