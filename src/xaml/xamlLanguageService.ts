@@ -27,7 +27,7 @@ let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
 
 // The client does not own caller-supplied watchers.
-let fileWatcher: vscode.FileSystemWatcher | undefined;
+let fileWatchers: vscode.FileSystemWatcher[] = [];
 
 // Serialize lifecycle operations so starts and stops cannot overlap.
 const lifecycle = new ServerLifecycle();
@@ -186,7 +186,10 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
   // Restrict project evaluation to trusted workspace roots.
   const allowedRoots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
 
-  fileWatcher = vscode.workspace.createFileSystemWatcher("**/*.{cs,csproj,xaml,props,targets}");
+  fileWatchers = [
+    vscode.workspace.createFileSystemWatcher("**/*.{cs,csproj,xaml,props,targets}"),
+    vscode.workspace.createFileSystemWatcher("**/obj/project.assets.json"),
+  ];
 
   const clientOptions: LanguageClientOptions = {
     documentSelector: [
@@ -196,7 +199,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     outputChannel: output,
     initializationOptions: { allowedRoots },
     synchronize: {
-      fileEvents: fileWatcher,
+      fileEvents: fileWatchers,
     },
   };
 
@@ -236,10 +239,10 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
 
 /** Disposes the retained file-system watcher. */
 function disposeFileWatcher(): void {
-  if (fileWatcher) {
-    fileWatcher.dispose();
-    fileWatcher = undefined;
+  for (const watcher of fileWatchers) {
+    watcher.dispose();
   }
+  fileWatchers = [];
 }
 
 /** Stops the server without interleaving with another lifecycle operation. */

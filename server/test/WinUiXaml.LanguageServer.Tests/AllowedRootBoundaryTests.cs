@@ -22,6 +22,16 @@ public class AllowedRootBoundaryTests
         Assert.Equal(expected, XamlLanguageServer.IsGeneratedBuildPath(path, @"C:\repo"));
     }
 
+    [Theory]
+    [InlineData(@"C:\repo\app\obj\project.assets.json", true)]
+    [InlineData(@"C:\repo\app\OBJ\PROJECT.ASSETS.JSON", true)]
+    [InlineData(@"C:\repo\app\obj\generated.json", false)]
+    [InlineData(@"C:\repo\app\project.assets.json", false)]
+    public void NuGetAssetsPathIsRecognizedPrecisely(string path, bool expected)
+    {
+        Assert.Equal(expected, XamlLanguageServer.IsNuGetAssetsPath(path));
+    }
+
     [Fact]
     public void ExactRoot_IsWithin()
     {

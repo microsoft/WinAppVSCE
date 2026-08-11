@@ -417,7 +417,7 @@ internal sealed partial class XamlLanguageServer
             .ConfigureAwait(false);
     }
 
-    /// <summary>Reacts to on-disk changes reported by the client's **/*.{cs,csproj,xaml,props,targets} watcher by dropping stale cached Roslyn project/type data.</summary>
+    /// <summary>Drops stale project data when source, build inputs, or NuGet assets change.</summary>
     private Task DidChangeWatchedFilesAsync(DidChangeWatchedFilesParams p)
     {
         if (p.Changes is null || p.Changes.Count == 0)
@@ -442,7 +442,8 @@ internal sealed partial class XamlLanguageServer
             var isImportedBuildFile =
                 ext.Equals(".props", StringComparison.OrdinalIgnoreCase) ||
                 ext.Equals(".targets", StringComparison.OrdinalIgnoreCase);
-            if (!isCs && !isCsproj && !isXaml && !isImportedBuildFile)
+            var isNuGetAssets = IsNuGetAssetsPath(path);
+            if (!isCs && !isCsproj && !isXaml && !isImportedBuildFile && !isNuGetAssets)
             {
                 continue;
             }
@@ -452,7 +453,7 @@ internal sealed partial class XamlLanguageServer
                 continue;
             }
 
-            if (IsGeneratedBuildPath(canonicalPath, allowedRoot))
+            if (!isNuGetAssets && IsGeneratedBuildPath(canonicalPath, allowedRoot))
             {
                 continue;
             }
@@ -464,7 +465,9 @@ internal sealed partial class XamlLanguageServer
             }
 
             // Source/project changes and added/removed XAML files affect the project graph.
-            var structural = isCs || isCsproj || isImportedBuildFile || change.Type != FileChangeType.Changed;
+            var structural =
+                isCs || isCsproj || isImportedBuildFile || isNuGetAssets ||
+                change.Type != FileChangeType.Changed;
             if (!structural)
             {
                 continue;
@@ -521,6 +524,20 @@ internal sealed partial class XamlLanguageServer
             .Any(segment =>
                 segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
                 segment.Equals("obj", StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal static bool IsNuGetAssetsPath(string path)
+    {
+        if (!System.IO.Path.GetFileName(path).Equals(
+            "project.assets.json",
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var directory = System.IO.Path.GetDirectoryName(path);
+        return directory != null &&
+            System.IO.Path.GetFileName(directory).Equals("obj", StringComparison.OrdinalIgnoreCase);
     }
 
     private void ResetContextsAndWarmOpenDocuments()
