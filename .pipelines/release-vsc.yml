@@ -70,8 +70,15 @@ extends:
               errorActionPreference: 'stop'
               targetType: 'inline'
               script: |
-                dotnet test "$(System.DefaultWorkingDirectory)/server/WinUiXaml.slnx" -c Release --nologo
-                if ($LASTEXITCODE -ne 0) { Write-Error "WinUI XAML language server tests failed"; exit 1 }
+                $testProjects = @(
+                  "WinUiXaml.Xaml.Tests/WinUiXaml.Xaml.Tests.csproj",
+                  "WinUiXaml.Workspace.Tests/WinUiXaml.Workspace.Tests.csproj",
+                  "WinUiXaml.LanguageServer.Tests/WinUiXaml.LanguageServer.Tests.csproj"
+                )
+                foreach ($project in $testProjects) {
+                  dotnet test "$(System.DefaultWorkingDirectory)/server/test/$project" -c Release --nologo
+                  if ($LASTEXITCODE -ne 0) { Write-Error "WinUI XAML language server tests failed: $project"; exit 1 }
+                }
           - task: PowerShell@2
             displayName: Publish self-contained WinUI XAML language servers
             inputs:
