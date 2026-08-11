@@ -29,11 +29,6 @@ function assertNoDocXmlLeak(md, reason) {
   assert.ok(!/(^|\s)[TPM!]:|cref=|<\/?(?:summary|see|c|para|paramref|typeparamref)\b/.test(summary), `${reason}: doc XML leaked into summary ${JSON.stringify(summary)} from ${JSON.stringify(md)}`);
 }
 
-function assertSignatureOnly(md, signatureRe, reason) {
-  assert.match(fenceOf(md), signatureRe, `${reason}: expected signature fence; got ${JSON.stringify(md)}`);
-  assert.strictEqual(summaryOf(md), "", `${reason}: no-summary symbol must not append an empty paragraph/trailing summary; got ${JSON.stringify(md)}`);
-}
-
 describe("WinUI XAML — red-team 66 (hover doc summaries)", function () {
   this.timeout(180000);
   before(async () => { await h.warmUp(); });
@@ -107,9 +102,10 @@ describe("WinUI XAML — red-team 66 (hover doc summaries)", function () {
     assertNoDocXmlLeak(md, "SmokePage type hover");
   });
 
-  it("red-team 66 no-summary user event handler remains signature-only with no blank paragraph", async () => {
+  it("red-team 66 no-summary user event handler gets metadata fallback prose", async () => {
     const md = await h.hoverAt(page('<Button Click="OnGo_Cl|ick" />'));
-    assertSignatureOnly(md, /^csharp\nvoid SmokePage\.OnGo_Click\(object sender, RoutedEventArgs e\)$/s, "OnGo_Click event handler hover");
+    assert.match(fenceOf(md), /^csharp\nvoid SmokePage\.OnGo_Click\(object sender, RoutedEventArgs e\)$/s);
+    assert.match(summaryOf(md), /Method `OnGo_Click` declared by `SmokeFixture\.SmokePage`/);
   });
 
   it("red-team 66 resource-key synthetic hover stays byte-for-byte unchanged and has no appended summary", async () => {
@@ -129,7 +125,7 @@ describe("WinUI XAML — red-team 66 (hover doc summaries)", function () {
 
   it("red-team 66 x:Bind markup-extension name synthetic hover stays curated and not symbol-enriched", async () => {
     const md = await h.hoverAt(page('<TextBlock Text="{x:Bi|nd GreetingText}" />'));
-    assert.strictEqual(md, '```xaml\n{x:Bind}\n```\nCompiled binding — resolves a field, property, or method against the page\'s `x:Class` (or the enclosing `DataTemplate` `x:DataType`) at compile time.');
+    assert.strictEqual(md, '```xaml\n{x:Bind}\n```\n\nCreates a compiled binding resolved against the page x:Class or enclosing x:DataType.');
   });
 
   it("red-team 66 StaticResource markup-extension name synthetic hover stays curated and not symbol-enriched", async () => {

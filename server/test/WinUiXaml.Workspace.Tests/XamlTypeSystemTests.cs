@@ -846,6 +846,53 @@ public sealed class XamlTypeSystemTests
         }
     }
 
+    [Fact]
+    public void DocumentationFallsBackToXmlBesideActiveReference()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var (typeSystem, _) = CreateFileBackedWinUiTypeSystem(root);
+            var xmlPath = Path.Combine(root, "lib", "net8.0", "Microsoft.WinUI.xml");
+            File.WriteAllText(xmlPath, """
+                <doc><members>
+                  <member name="T:Microsoft.UI.Xaml.Unrelated">
+                    <summary>Adjacent first member.</summary>
+                  </member>
+                  <member name="T:Microsoft.UI.Xaml.Style">
+                    <summary>Authoritative active-package style documentation.</summary>
+                  </member>
+                </members></doc>
+                """);
+            var style = typeSystem.ResolveType(Presentation, "Style");
+
+            var documentation = typeSystem.GetDocumentationCommentXml(style!);
+
+            Assert.Contains("Authoritative active-package style documentation.", documentation);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DocumentationReturnsEmptyWhenActiveReferenceHasNoSummary()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var (typeSystem, _) = CreateFileBackedWinUiTypeSystem(root);
+            var style = typeSystem.ResolveType(Presentation, "Style");
+
+            Assert.Equal(string.Empty, typeSystem.GetDocumentationCommentXml(style!));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     // --- helpers -----------------------------------------------------------------------------------
 
     private static (XamlTypeSystem TypeSystem, string GenericXaml) CreateFileBackedWinUiTypeSystem(string root)

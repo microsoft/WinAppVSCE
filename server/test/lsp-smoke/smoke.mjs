@@ -64,6 +64,28 @@ if (bindIdx < 0) fail("could not find {x:Bind GreetingText in the fixture");
 const bindCaretOffset = xamlText.indexOf("GreetingText", bindIdx) + 3;
 const bindCaret = offsetToPosition(xamlText, bindCaretOffset);
 
+const classIdx = xamlText.indexOf("x:Class");
+if (classIdx < 0) fail("could not find x:Class in the fixture");
+const classCaret = offsetToPosition(xamlText, classIdx + 3);
+
+const buttonIdx = xamlText.indexOf("<Button");
+if (buttonIdx < 0) fail("could not find Button in the fixture");
+const buttonCaret = offsetToPosition(xamlText, buttonIdx + 3);
+const pageIdx = xamlText.indexOf("<Page");
+if (pageIdx < 0) fail("could not find Page in the fixture");
+const pageCaret = offsetToPosition(xamlText, pageIdx + 3);
+const navigationIdx = xamlText.indexOf('NavigationCacheMode="Required"');
+if (navigationIdx < 0) fail("could not find NavigationCacheMode in the fixture");
+const navigationCaret = offsetToPosition(xamlText, navigationIdx + 5);
+const requiredCaret = offsetToPosition(xamlText, navigationIdx + 'NavigationCacheMode="'.length + 3);
+const ignorableIdx = xamlText.indexOf("mc:Ignorable");
+if (ignorableIdx < 0) fail("could not find mc:Ignorable in the fixture");
+const ignorableCaret = offsetToPosition(xamlText, ignorableIdx + 4);
+const contentIdx = xamlText.indexOf('Content="Go to Page 2"', buttonIdx);
+if (contentIdx < 0) fail("could not find Button.Content in the fixture");
+const contentCaret = offsetToPosition(xamlText, contentIdx + 3);
+const contentValueCaret = offsetToPosition(xamlText, contentIdx + 'Content="'.length + 3);
+
 // Caret inside the {StaticResource SmokeAccentBrush} value (resolves cross-file to App.xaml's x:Key).
 const resIdx = xamlText.indexOf("{StaticResource SmokeAccentBrush}");
 if (resIdx < 0) fail("could not find {StaticResource SmokeAccentBrush} in the fixture");
@@ -164,14 +186,70 @@ async function main() {
   }
   console.log("[ok] didOpen: 0 syntactic diagnostics for the valid fixture");
 
+  // Project-independent directive quick info must not wait for the cold design-time build.
+  const coldHoverStarted = performance.now();
+  send({
+    id: 100,
+    method: "textDocument/hover",
+    params: { textDocument: { uri: xamlUri }, position: classCaret },
+  });
+  const coldHover = await waitFor(responseFor(100), 5000, "cold x:Class hover");
+  const coldHoverMs = performance.now() - coldHoverStarted;
+  const coldHoverText = coldHover.result?.contents?.value ?? "";
+  if (!coldHoverText.includes("x:Class") || !/CLR class/i.test(coldHoverText)) {
+    fail(`cold x:Class hover was not useful: ${coldHoverText}`);
+  }
+  if (coldHoverMs >= 1000) fail(`cold x:Class hover took ${coldHoverMs.toFixed(0)} ms (contract: <1000 ms)`);
+  console.log(`[ok] hover(cold directive): x:Class (${coldHoverMs.toFixed(0)} ms)`);
+
+  const coldElementStarted = performance.now();
+  send({
+    id: 101,
+    method: "textDocument/hover",
+    params: { textDocument: { uri: xamlUri }, position: pageCaret },
+  });
+  const coldElementHover = await waitFor(responseFor(101), 5000, "cold element hover");
+  const coldElementMs = performance.now() - coldElementStarted;
+  const coldElementText = coldElementHover.result?.contents?.value ?? "";
+  const coldElementDescription = (coldElementText.split("```")[2] || "").trim();
+  if (!coldElementText.includes("Page") || !/XAML element[\s\S]+presentation/i.test(coldElementDescription)) {
+    fail(`cold element hover had no description: ${coldElementText}`);
+  }
+  if (/loading/i.test(coldElementText)) fail(`cold element hover exposed loading state: ${coldElementText}`);
+  if (coldElementMs >= 1000) fail(`cold element hover took ${coldElementMs.toFixed(0)} ms (contract: <1000 ms)`);
+  console.log(`[ok] hover(cold element): Page (${coldElementMs.toFixed(0)} ms)`);
+
+  for (const [id, position, label, expected] of [
+    [103, navigationCaret, "NavigationCacheMode attribute", /XAML attribute[\s\S]+NavigationCacheMode[\s\S]+Page[\s\S]+Required/i],
+    [104, requiredCaret, "Required enum value", /Literal value[\s\S]+Required[\s\S]+NavigationCacheMode[\s\S]+Page/i],
+    [105, ignorableCaret, "mc:Ignorable", /namespace prefixes/i],
+    [106, contentCaret, "Content attribute", /XAML attribute[\s\S]+Content[\s\S]+Button[\s\S]+Go to Page 2/i],
+    [107, contentValueCaret, "Content value", /Literal value[\s\S]+Go to Page 2[\s\S]+Content[\s\S]+Button/i],
+    [191, bindCaret, "x:Bind expression", /XAML markup expression[\s\S]+x:Bind GreetingText[\s\S]+TextBlock/i],
+    [192, resCaret, "resource reference", /References a XAML resource by key/i],
+  ]) {
+    const started = performance.now();
+    send({ id, method: "textDocument/hover", params: { textDocument: { uri: xamlUri }, position } });
+    const response = await waitFor(responseFor(id), 5000, `cold ${label} hover`);
+    const elapsedMs = performance.now() - started;
+    const text = response.result?.contents?.value ?? "";
+    const prose = (text.split("```")[2] || "").trim();
+    if (prose.length === 0 || !expected.test(prose)) fail(`cold ${label} hover had no useful prose: ${text}`);
+    if (/loading/i.test(text)) fail(`cold ${label} hover exposed loading state: ${text}`);
+    if (elapsedMs >= 1000) fail(`cold ${label} hover took ${elapsedMs.toFixed(0)} ms (contract: <1000 ms)`);
+    console.log(`[ok] hover(cold ${label}): (${elapsedMs.toFixed(0)} ms)`);
+  }
+
   // 3) definition (F12) on OnGo_Click -> C# code-behind (first call pays the design-time build cost)
   console.log(`[..] definition at ${caret.line}:${caret.character} (loading project, ~several s)`);
+  const coldDefinitionStarted = performance.now();
   send({
     id: 2,
     method: "textDocument/definition",
     params: { textDocument: { uri: xamlUri }, position: caret },
   });
   const def = await waitFor(responseFor(2), 90000, "definition");
+  const coldDefinitionMs = performance.now() - coldDefinitionStarted;
   if (def.error) fail(`definition errored: ${JSON.stringify(def.error)}`);
   const loc = def.result;
   if (!loc || !loc.uri) fail(`definition returned no location: ${JSON.stringify(loc)}`);
@@ -181,7 +259,163 @@ async function main() {
   if (loc.range?.start?.line !== EXPECTED_HANDLER_LINE) {
     fail(`definition landed on line ${loc.range?.start?.line}, expected ${EXPECTED_HANDLER_LINE}`);
   }
-  console.log(`[ok] definition: OnGo_Click -> ${loc.uri} @ line ${loc.range.start.line}`);
+  console.log(`[ok] definition: OnGo_Click -> ${loc.uri} @ line ${loc.range.start.line} (${coldDefinitionMs.toFixed(0)} ms cold)`);
+
+  const warmHoverStarted = performance.now();
+  send({
+    id: 102,
+    method: "textDocument/hover",
+    params: { textDocument: { uri: xamlUri }, position: buttonCaret },
+  });
+  const warmHover = await waitFor(responseFor(102), 5000, "warm element hover");
+  const warmHoverMs = performance.now() - warmHoverStarted;
+  const warmHoverText = warmHover.result?.contents?.value ?? "";
+  const warmDescription = (warmHoverText.split("```")[2] || "").trim();
+  if (!warmHoverText.includes("Button") || warmDescription.length === 0) {
+    fail(`warm element hover was signature-only: ${warmHoverText}`);
+  }
+  if (warmHoverMs >= 1000) fail(`warm element hover took ${warmHoverMs.toFixed(0)} ms (contract: <1000 ms)`);
+  console.log(`[ok] hover(warm element): Button (${warmHoverMs.toFixed(0)} ms)`);
+
+  // Actual generated-file watcher traffic must not invalidate authoritative context.
+  send({
+    method: "workspace/didChangeWatchedFiles",
+    params: {
+      changes: [{
+        uri: pathToFileURL(join(dirname(XAML), "obj", "Debug", "Generated.g.cs")).href,
+        type: 2,
+      }],
+    },
+  });
+  const generatedHoverStarted = performance.now();
+  send({
+    id: 188,
+    method: "textDocument/hover",
+    params: { textDocument: { uri: xamlUri }, position: pageCaret },
+  });
+  const generatedHover = await waitFor(responseFor(188), 5000, "post-obj watcher hover");
+  const generatedHoverMs = performance.now() - generatedHoverStarted;
+  const generatedHoverText = generatedHover.result?.contents?.value ?? "";
+  if (!/```csharp/.test(generatedHoverText) || !/Represents|page/i.test((generatedHoverText.split("```")[2] || ""))) {
+    fail(`obj/bin watcher reset authoritative context: ${generatedHoverText}`);
+  }
+  if (generatedHoverMs >= 1000) fail(`post-obj watcher hover took ${generatedHoverMs.toFixed(0)} ms`);
+  console.log(`[ok] obj/bin watched event preserves authoritative context (${generatedHoverMs.toFixed(0)} ms)`);
+
+  // A project-affecting watched change invalidates the context while this document remains open.
+  // Hover must stay responsive immediately and the existing single-flight warm-up must eventually
+  // restore authoritative quick info without closing/reopening the XAML document.
+  const importedBuildPath = join(dirname(XAML), "Directory.Build.targets");
+  const importedBuildUri = pathToFileURL(importedBuildPath).href;
+  if (existsSync(importedBuildPath)) fail(`test requires no pre-existing ${importedBuildPath}`);
+  const cleanImportedBuild = () => rmSync(importedBuildPath, { force: true });
+  process.once("exit", cleanImportedBuild);
+  writeFileSync(
+    importedBuildPath,
+    '<Project><ItemGroup><Compile Remove="SmokePage.xaml.cs" /></ItemGroup></Project>',
+    "utf8"
+  );
+  send({
+    method: "workspace/didChangeWatchedFiles",
+    params: { changes: [{ uri: importedBuildUri, type: 2 }] },
+  });
+
+  let reloadedHoverText = "";
+  let reloadElapsedMs = 0;
+  const reloadStarted = performance.now();
+  for (let attempt = 0; attempt < 80; attempt++) {
+    const id = 108 + attempt;
+    const requestStarted = performance.now();
+    send({
+      id,
+      method: "textDocument/hover",
+      params: { textDocument: { uri: xamlUri }, position: pageCaret },
+    });
+    const response = await waitFor(responseFor(id), 5000, "post-invalidation Page hover");
+    const requestMs = performance.now() - requestStarted;
+    if (requestMs >= 1000) fail(`post-invalidation hover blocked for ${requestMs.toFixed(0)} ms`);
+    reloadedHoverText = response.result?.contents?.value ?? "";
+    if (/loading/i.test(reloadedHoverText)) fail(`post-invalidation hover exposed loading state: ${reloadedHoverText}`);
+    const reloadedProse = (reloadedHoverText.split("```")[2] || "").trim();
+    if (!reloadedHoverText.includes("Page") || reloadedProse.length === 0) {
+      fail(`post-invalidation hover had no useful fallback prose: ${reloadedHoverText}`);
+    }
+    if (/```csharp/.test(reloadedHoverText) && /Represents|page/i.test((reloadedHoverText.split("```")[2] || ""))) {
+      reloadElapsedMs = performance.now() - reloadStarted;
+      break;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  if (!reloadElapsedMs) {
+    fail(`context never restored authoritative Page hover after watched-file invalidation: ${reloadedHoverText}`);
+  }
+  console.log(`[ok] hover context restarted after invalidation (${reloadElapsedMs.toFixed(0)} ms; every request <1000 ms)`);
+
+  send({
+    id: 700,
+    method: "textDocument/definition",
+    params: { textDocument: { uri: xamlUri }, position: caret },
+  });
+  const removedDefinition = await waitFor(responseFor(700), 90000, "definition after imported props change");
+  if (removedDefinition.result != null) {
+    fail(`imported props change did not alter project context: ${JSON.stringify(removedDefinition.result)}`);
+  }
+
+  cleanImportedBuild();
+  process.removeListener("exit", cleanImportedBuild);
+  send({
+    method: "workspace/didChangeWatchedFiles",
+    params: { changes: [{ uri: importedBuildUri, type: 3 }] },
+  });
+  let restoredDefinition;
+  for (let attempt = 0; attempt < 80; attempt++) {
+    const id = 701 + attempt;
+    send({
+      id,
+      method: "textDocument/definition",
+      params: { textDocument: { uri: xamlUri }, position: caret },
+    });
+    const response = await waitFor(responseFor(id), 90000, "definition after imported props removal");
+    if (response.result?.uri?.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) {
+      restoredDefinition = response.result;
+      break;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  if (!restoredDefinition) fail("project context did not recover after imported props removal");
+  console.log("[ok] imported props watched event changes and restores project context");
+
+  // Unsaved x:Class edits invalidate only this URI and resolution must use the in-memory text.
+  const page2Text = xamlText.replace("SmokeFixture.SmokePage", "SmokeFixture.Page2");
+  send({
+    method: "textDocument/didChange",
+    params: { textDocument: { uri: xamlUri, version: 2 }, contentChanges: [{ text: page2Text }] },
+  });
+  send({
+    id: 189,
+    method: "textDocument/definition",
+    params: { textDocument: { uri: xamlUri }, position: caret },
+  });
+  const changedClassDefinition = await waitFor(responseFor(189), 30000, "definition after x:Class edit");
+  if (changedClassDefinition.error) fail(`x:Class edit definition errored: ${JSON.stringify(changedClassDefinition.error)}`);
+  if (changedClassDefinition.result !== null) {
+    fail(`stale SmokePage x:Class survived in-memory edit: ${JSON.stringify(changedClassDefinition.result)}`);
+  }
+
+  send({
+    method: "textDocument/didChange",
+    params: { textDocument: { uri: xamlUri, version: 3 }, contentChanges: [{ text: xamlText }] },
+  });
+  send({
+    id: 190,
+    method: "textDocument/definition",
+    params: { textDocument: { uri: xamlUri }, position: caret },
+  });
+  const restoredClassDefinition = await waitFor(responseFor(190), 30000, "definition after x:Class restore");
+  if (!restoredClassDefinition.result?.uri?.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) {
+    fail(`restored x:Class did not restore SmokePage resolution: ${JSON.stringify(restoredClassDefinition.result)}`);
+  }
+  console.log("[ok] in-memory x:Class changes invalidate and rebuild only the document context");
 
   // 4) definition (F12) on the {x:Bind GreetingText} path -> the GreetingText property (project cached now)
   send({
@@ -260,10 +494,15 @@ async function main() {
   const NS =
     'xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" ' +
     'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"';
-  let version = 2;
+  let version = 3;
   const nextVersion = () => ++version;
+  const retainFixtureClass = (body) =>
+    /^<Page\b(?![^>]*\bx:Class=)/.test(body)
+      ? body.replace("<Page", '<Page x:Class="SmokeFixture.SmokePage"')
+      : body;
 
   async function completeWith(id, body, label) {
+    body = retainFixtureClass(body);
     const markerIdx = body.indexOf("|");
     if (markerIdx < 0) fail(`completion doc for ${label} has no caret marker`);
     const text = body.slice(0, markerIdx) + body.slice(markerIdx + 1);
@@ -283,6 +522,7 @@ async function main() {
   // Like completeWith but returns the full completion items (label + textEdit), so close-tag
   // completion can assert the inserted text (name, and whether a '>' is appended).
   async function completeItemsWith(id, body, label) {
+    body = retainFixtureClass(body);
     const markerIdx = body.indexOf("|");
     if (markerIdx < 0) fail(`completion doc for ${label} has no caret marker`);
     const text = body.slice(0, markerIdx) + body.slice(markerIdx + 1);
@@ -301,6 +541,7 @@ async function main() {
 
   // Hover at a caret marker in doctored in-memory text; returns the markdown string (or "").
   async function hoverAt(id, body, label) {
+    body = retainFixtureClass(body);
     const markerIdx = body.indexOf("|");
     if (markerIdx < 0) fail(`hover doc for ${label} has no caret marker`);
     const text = body.slice(0, markerIdx) + body.slice(markerIdx + 1);
@@ -317,6 +558,7 @@ async function main() {
 
   // F12 at a caret marker in doctored in-memory text; returns the first location (or null).
   async function definitionWith(id, body, label) {
+    body = retainFixtureClass(body);
     const markerIdx = body.indexOf("|");
     if (markerIdx < 0) fail(`definition doc for ${label} has no caret marker`);
     const text = body.slice(0, markerIdx) + body.slice(markerIdx + 1);
@@ -334,6 +576,7 @@ async function main() {
   // Position-driven code actions at a caret marker in doctored in-memory text (no diagnostic required) —
   // for the gap #3 "Generate event handler 'X'" quick fix. Returns the raw action array.
   async function codeActionAtCaret(id, body, label) {
+    body = retainFixtureClass(body);
     const markerIdx = body.indexOf("|");
     if (markerIdx < 0) fail(`codeAction doc for ${label} has no caret marker`);
     const text = body.slice(0, markerIdx) + body.slice(markerIdx + 1);
@@ -363,6 +606,7 @@ async function main() {
   // Find All References at a caret marker in doctored in-memory text. Returns { locations, texts }
   // where texts[i] is the substring the returned range covers (so assertions never hardcode positions).
   async function referencesWith(id, body, label, includeDeclaration = true) {
+    body = retainFixtureClass(body);
     const markerIdx = body.indexOf("|");
     if (markerIdx < 0) fail(`references doc for ${label} has no caret marker`);
     const text = body.slice(0, markerIdx) + body.slice(markerIdx + 1);
@@ -387,6 +631,7 @@ async function main() {
   // Document Highlights at a caret marker. Returns { highlights, texts, kinds } where texts[i] is the
   // covered substring and kinds[i] is the highlight kind (2=Read usage, 3=Write declaration).
   async function highlightWith(id, body, label) {
+    body = retainFixtureClass(body);
     const markerIdx = body.indexOf("|");
     if (markerIdx < 0) fail(`highlight doc for ${label} has no caret marker`);
     const text = body.slice(0, markerIdx) + body.slice(markerIdx + 1);
@@ -632,6 +877,40 @@ async function main() {
   await runCoreScenarios(scenarioContext);
   await runEditorScenarios(scenarioContext);
   await runCompletionScenarios(scenarioContext);
+
+  // Closing must evict the URI's ready context. Reopening the same URI with a different class
+  // must not serve definitions from the closed SmokePage context.
+  send({ method: "textDocument/didClose", params: { textDocument: { uri: xamlUri } } });
+  const reopenedText =
+    `<Page ${NS} x:Class="SmokeFixture.Page2">\n` +
+    `  <Button Click="OnGo_Click" />\n` +
+    `</Page>`;
+  send({
+    method: "textDocument/didOpen",
+    params: {
+      textDocument: {
+        uri: xamlUri,
+        languageId: "xaml",
+        version: 1,
+        text: reopenedText,
+      },
+    },
+  });
+  send({
+    id: 9999,
+    method: "textDocument/definition",
+    params: {
+      textDocument: { uri: xamlUri },
+      position: offsetToPosition(reopenedText, reopenedText.indexOf("OnGo_Click") + 3),
+    },
+  });
+  const reopenedDefinition = await waitFor(responseFor(9999), 30000, "definition after close/reopen");
+  if (reopenedDefinition.error) fail(`definition after close/reopen errored: ${JSON.stringify(reopenedDefinition.error)}`);
+  if (reopenedDefinition.result !== null) {
+    fail(`DidClose retained the stale SmokePage context: ${JSON.stringify(reopenedDefinition.result)}`);
+  }
+  console.log("[ok] didClose evicts the URI context and prevents stale publication after reopen");
+
   // 22) shutdown
   send({ id: 11, method: "shutdown", params: null });
   await waitFor(responseFor(11), 10000, "shutdown");

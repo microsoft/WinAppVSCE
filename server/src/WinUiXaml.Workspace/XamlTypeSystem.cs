@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
@@ -41,6 +42,8 @@ namespace WinUiXaml.Workspace
         private IReadOnlyList<INamedTypeSymbol>? _referencedElementTypes;
 
         private readonly Dictionary<string, List<NamespaceBinding>> _xmlnsMap;
+        private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, string>> _documentationFiles =
+            new(StringComparer.OrdinalIgnoreCase);
 
         // XAML intrinsic types are language-defined rather than namespace bindings.
         private static readonly Dictionary<string, string> XamlIntrinsicTypes = new(StringComparer.Ordinal)
@@ -134,6 +137,91 @@ namespace WinUiXaml.Workspace
         /// <summary>Resolves a fully qualified metadata type name.</summary>
         public INamedTypeSymbol? ResolveMetadataType(string metadataName) =>
             string.IsNullOrEmpty(metadataName) ? null : _compilation.GetTypeByMetadataName(metadataName);
+
+        /// <summary>Gets symbol documentation from Roslyn, then from XML files beside the active compilation reference.</summary>
+        public string GetDocumentationCommentXml(ISymbol symbol)
+        {
+            var direct = symbol.GetDocumentationCommentXml();
+            if (!string.IsNullOrWhiteSpace(direct) || symbol.GetDocumentationCommentId() is not { } id)
+            {
+                return direct ?? string.Empty;
+            }
+
+            foreach (var reference in _compilation.References.OfType<PortableExecutableReference>())
+            {
+                if (string.IsNullOrEmpty(reference.FilePath) ||
+                    _compilation.GetAssemblyOrModuleSymbol(reference) is not IAssemblySymbol assembly ||
+                    !SymbolEqualityComparer.Default.Equals(assembly, symbol.ContainingAssembly))
+                {
+                    continue;
+                }
+
+                foreach (var candidate in DocumentationCandidates(reference.FilePath))
+                {
+                    if (!File.Exists(candidate))
+                    {
+                        continue;
+                    }
+
+                    IReadOnlyDictionary<string, string> documentation;
+                    try
+                    {
+                        documentation = _documentationFiles.GetOrAdd(candidate, ReadDocumentationFile);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or XmlException)
+                    {
+                        continue;
+                    }
+
+                    if (documentation.TryGetValue(id, out var xml))
+                    {
+                        return xml;
+                    }
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static IReadOnlyDictionary<string, string> ReadDocumentationFile(string path)
+        {
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
+            using var reader = XmlReader.Create(path, settings);
+            while (!reader.EOF)
+            {
+                if (reader.NodeType != XmlNodeType.Element ||
+                    reader.LocalName != "member" ||
+                    reader.GetAttribute("name") is not { Length: > 0 } id)
+                {
+                    reader.Read();
+                    continue;
+                }
+
+                var element = new XmlDocument { XmlResolver = null };
+                element.LoadXml(reader.ReadOuterXml());
+                result[id] = element.DocumentElement?.OuterXml ?? string.Empty;
+            }
+            return result;
+        }
+
+        private static IEnumerable<string> DocumentationCandidates(string assemblyPath)
+        {
+            yield return Path.ChangeExtension(assemblyPath, ".xml");
+
+            var directory = Path.GetDirectoryName(assemblyPath);
+            if (directory is null || !TryFindPackageRoot(directory, out var packageRoot))
+            {
+                yield break;
+            }
+
+            var name = Path.GetFileNameWithoutExtension(assemblyPath);
+            if (string.Equals(name, "Microsoft.WinUI", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Microsoft.UI.Xaml", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return Path.Combine(packageRoot, "metadata", "Microsoft.UI.Xaml.xml");
+            }
+        }
 
         /// <summary>Finds source namespaces declaring an instantiable type with the given name.</summary>
         public IReadOnlyList<string> FindNamespacesForTypeName(string simpleName)

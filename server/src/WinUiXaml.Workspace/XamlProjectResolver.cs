@@ -78,7 +78,8 @@ namespace WinUiXaml.Workspace
         public async Task<XamlResolution?> ResolveAsync(
             string xamlPath,
             string? searchRoot = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            string? xamlText = null)
         {
             if (xamlPath == null)
             {
@@ -92,7 +93,9 @@ namespace WinUiXaml.Workspace
             }
 
             var normalizedXaml = Path.GetFullPath(xamlPath);
-            var className = TryReadClassName(normalizedXaml);
+            var className = xamlText is null
+                ? TryReadClassName(normalizedXaml)
+                : XamlIntrospection.GetClass(xamlText);
 
             var workspace = await GetOrLoadAsync(projectPath, cancellationToken)
                 .WaitAsync(cancellationToken)

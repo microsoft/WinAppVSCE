@@ -1169,8 +1169,37 @@ describe("WinUI XAML — hover", function () {
     assert.ok(/Content/.test(md), `expected Content in hover; got: ${md}`);
   });
 
+  for (const [directive, description] of [
+    ["Class", /CLR class/i],
+    ["Name", /namescope/i],
+    ["Key", /resource dictionary/i],
+    ["DataType", /compile bindings/i],
+    ["Load", /visual tree/i],
+  ]) {
+    it(`x:${directive} has directive quick info`, async () => {
+      const md = await h.hoverAt(
+        `<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"\n` +
+        `      xmlns:language="http://schemas.microsoft.com/winfx/2006/xaml"\n` +
+        `      language:${directive.slice(0, 2)}|${directive.slice(2)}="value" />`
+      );
+      assert.match(md, description);
+    });
+  }
+
+  it("mc:Ignorable resolves through an alternate prefix", async () => {
+    const md = await h.hoverAt(
+      `<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"\n` +
+      `      xmlns:compat="http://schemas.openxmlformats.org/markup-compatibility/2006"\n` +
+      `      compat:Ign|orable="design" />`
+    );
+    assert.match(md, /mc:Ignorable[\s\S]+namespace prefixes/i);
+  });
+
   it("resource reference -> type + source", async () => {
-    const md = await h.hoverAt(page('<Grid Background="{StaticResource SmokeAccent|Brush}" />'));
+    const md = await h.hoverMatchingAt(
+      page('<Grid Background="{StaticResource SmokeAccent|Brush}" />'),
+      (value) => /SolidColorBrush/.test(value) && /App\.xaml/.test(value)
+    );
     assert.ok(/SmokeAccentBrush/.test(md), "expected the key name");
     assert.ok(/SolidColorBrush/.test(md), "expected the resource type");
     assert.ok(/App\.xaml/.test(md), "expected the declaring file");
@@ -1180,18 +1209,24 @@ describe("WinUI XAML — hover", function () {
   const summaryOf = (md) => (md.split("```")[2] || "").trim();
 
   it("element type hover carries the framework <summary>", async () => {
-    const md = await h.hoverAt(page("<Butt|on />"));
+    const md = await h.hoverMatchingAt(page("<Butt|on />"), (value) => /class/.test(value));
     assert.ok(/class/.test(md), `expected a class signature; got: ${md}`);
     assert.ok(/button/i.test(summaryOf(md)), `expected framework <summary> below the fence; got: ${md}`);
   });
 
   it("property hover carries the framework <summary>", async () => {
-    const md = await h.hoverAt(page('<Button Cont|ent="x" />'));
+    const md = await h.hoverMatchingAt(
+      page('<Button Cont|ent="x" />'),
+      (value) => /gets or sets/i.test(summaryOf(value))
+    );
     assert.ok(/gets or sets/i.test(summaryOf(md)), `expected 'Gets or sets ...' <summary>; got: ${md}`);
   });
 
   it("user member hover carries the source <summary> with simplified see-cref", async () => {
-    const md = await h.hoverAt(page('<TextBlock Text="{x:Bind Greet|ingText}" />'));
+    const md = await h.hoverMatchingAt(
+      page('<TextBlock Text="{x:Bind Greet|ingText}" />'),
+      (value) => /Greeting sourced from the DI singleton IGreetingService/.test(summaryOf(value))
+    );
     assert.ok(/GreetingText/.test(md), `expected the member signature; got: ${md}`);
     assert.ok(
       /Greeting sourced from the DI singleton IGreetingService/.test(summaryOf(md)),
@@ -1200,7 +1235,10 @@ describe("WinUI XAML — hover", function () {
   });
 
   it("attached-property hover carries the getter <summary>", async () => {
-    const md = await h.hoverAt(page("<Grid><Button Grid.Ro|w=\"0\" /></Grid>"));
+    const md = await h.hoverMatchingAt(
+      page("<Grid><Button Grid.Ro|w=\"0\" /></Grid>"),
+      (value) => /\(attached property\)/.test(value)
+    );
     assert.ok(/\(attached property\)/.test(md), `expected the attached-property signature; got: ${md}`);
     assert.ok(/gets the value/i.test(summaryOf(md)), `expected the getter <summary>; got: ${md}`);
   });
@@ -1227,9 +1265,10 @@ describe("WinUI XAML — method hover returns/params", function () {
     assert.ok(/`startIndex`/.test(md), `expected the 'startIndex' param documented; got: ${md}`);
   });
 
-  it("undocumented user method stays signature-only (no phantom sections)", async () => {
+  it("undocumented user method gets a deterministic metadata description", async () => {
     const md = await h.hoverAt(page('<TextBlock Text="{x:Bind OnGo_C|lick()}" />'));
     assert.ok(/OnGo_Click\(object sender, RoutedEventArgs e\)/.test(md), `expected the method signature; got: ${md}`);
+    assert.ok(/Method `OnGo_Click` declared by/.test(md), `expected the metadata fallback; got: ${md}`);
     assert.ok(!/\*\*Returns:\*\*/.test(md), `undocumented method must NOT carry Returns; got: ${md}`);
     assert.ok(!/\*\*Parameters:\*\*/.test(md), `undocumented method must NOT carry Parameters; got: ${md}`);
   });

@@ -136,7 +136,7 @@ internal sealed partial class XamlLanguageServer
         var currentPath = UriToPath(currentUri) is { } cp ? System.IO.Path.GetFullPath(cp) : null;
         var cancellationToken = _requestCancellation.Value;
 
-        foreach (var file in context.Value.Resolution.XamlFiles)
+        foreach (var file in context.Resolution.XamlFiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!TryGetAllowedRoot(file, out var canonicalFile, out _))

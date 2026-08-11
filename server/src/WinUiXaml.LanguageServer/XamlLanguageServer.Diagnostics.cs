@@ -32,6 +32,15 @@ internal sealed partial class XamlLanguageServer
     {
         try
         {
+            // Give immediate editor requests a short head start before the CPU-heavy design-time
+            // build. This is still eager background initialization, without competing with the
+            // first hover/completion immediately after didOpen.
+            await Task.Delay(500).ConfigureAwait(false);
+            if (!IsCurrent(doc))
+            {
+                return;
+            }
+
             var typeSystem = await GetTypeSystemAsync(doc.Uri).ConfigureAwait(false);
             if (typeSystem == null || !IsCurrent(doc))
             {

@@ -22,9 +22,11 @@ internal sealed partial class XamlLanguageServer
         }
 
         int offset = doc.OffsetAt(p.Position);
-        var appKeys = GetAppResourceKeys(context.Value.Resolution);
-        return CompletionProvider.Provide(doc, offset, context.Value.TypeSystem, context.Value.Resolution.ClassSymbol, appKeys);
+        var appKeys = GetAppResourceKeys(context.Resolution);
+        return CompletionProvider.Provide(doc, offset, context.TypeSystem, context.Resolution.ClassSymbol, appKeys);
     }
+
+    internal sealed record XamlProjectContext(XamlResolution Resolution, XamlTypeSystem TypeSystem);
 
     /// <summary> Collects the <c>x:Key</c> resource keys declared in the project's App.xaml and its reachable merged dictionaries. Returns an empty set when there is no App.xaml.</summary>
     private string[] GetAppResourceKeys(XamlResolution resolution)
@@ -130,7 +132,35 @@ internal sealed partial class XamlLanguageServer
         (await GetContextAsync(uri).ConfigureAwait(false))?.TypeSystem;
 
     /// <summary> Resolves the document to its project <see cref="XamlResolution"/> (for the x:Class symbol) plus the cached <see cref="XamlTypeSystem"/> for its compilation.</summary>
-    private async Task<(XamlResolution Resolution, XamlTypeSystem TypeSystem)?> GetContextAsync(string uri)
+    private async Task<XamlProjectContext?> GetContextAsync(string uri)
+    {
+        var task = GetOrStartContext(uri);
+        return await task.WaitAsync(_requestCancellation.Value).ConfigureAwait(false);
+    }
+
+    private Task<XamlProjectContext?> GetOrStartContext(string uri) =>
+        _contexts.GetOrStart(uri, () => LoadContextAsync(uri));
+
+    private bool TryGetReadyContext(
+        string uri,
+        out XamlProjectContext context)
+    {
+        return _contexts.TryGetReady(uri, out context!);
+    }
+
+    private bool TryGetReadyTypeSystem(string uri, out XamlTypeSystem typeSystem)
+    {
+        if (TryGetReadyContext(uri, out var context))
+        {
+            typeSystem = context.TypeSystem;
+            return true;
+        }
+
+        typeSystem = null!;
+        return false;
+    }
+
+    private async Task<XamlProjectContext?> LoadContextAsync(string uri)
     {
         var path = UriToPath(uri);
         if (path == null)
@@ -142,7 +172,8 @@ internal sealed partial class XamlLanguageServer
         XamlResolution? resolution;
         try
         {
-            resolution = await ResolveIfAllowedAsync(path).ConfigureAwait(false);
+            var xamlText = _documents.TryGetValue(uri, out var document) ? document.Text : null;
+            resolution = await ResolveIfAllowedAsync(path, CancellationToken.None, xamlText).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -166,7 +197,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         var typeSystem = _typeSystems.GetValue(resolution.Compilation, _ => XamlTypeSystem.FromResolution(resolution));
-        return (resolution, typeSystem);
+        return new XamlProjectContext(resolution, typeSystem);
     }
 
     /// <summary>Shared pipeline for definition/hover: map the caret to a member name on the page's x:Class type (either an event-handler attribute value or an x:Bind path segment) and resolve it</summary>
@@ -184,33 +215,8 @@ internal sealed partial class XamlLanguageServer
             return (null, null);
         }
 
-        var path = UriToPath(p.TextDocument.Uri);
-        if (path == null)
-        {
-            return (null, target);
-        }
-
-        XamlResolution? resolution;
-        try
-        {
-            resolution = await ResolveIfAllowedAsync(path).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (MsBuildUnavailableException ex)
-        {
-            await NotifyMsBuildUnavailableAsync(ex).ConfigureAwait(false);
-            return (null, target);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[winui-xaml-ls] resolve failed: {ex.Message}");
-            return (null, target);
-        }
-
-        var classSymbol = resolution?.ClassSymbol;
+        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var classSymbol = context?.Resolution.ClassSymbol;
         if (classSymbol == null)
         {
             return (null, target);
@@ -603,16 +609,14 @@ internal sealed partial class XamlLanguageServer
             return;
         }
 
-        // Kick off project load so the first go-to-definition doesn't pay the full cold cost.
+        // Cache the complete context, not just the workspace, so all later features share one
+        // compilation and type system. A short delay gives immediate editor requests priority.
         _ = Task.Run(async () =>
         {
-            try
+            await Task.Delay(500).ConfigureAwait(false);
+            if (_documents.ContainsKey(uri))
             {
-                await _resolver.ResolveAsync(canonicalPath, allowedRoot).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[winui-xaml-ls] warm-up failed: {ex.Message}");
+                await GetOrStartContext(uri).ConfigureAwait(false);
             }
         });
     }

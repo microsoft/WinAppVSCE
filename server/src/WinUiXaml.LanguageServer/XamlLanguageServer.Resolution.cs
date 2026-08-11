@@ -9,6 +9,56 @@ internal sealed partial class XamlLanguageServer
 {
     private async Task<object?> HoverAsync(TextDocumentPositionParams p)
     {
+        if (!_documents.TryGetValue(p.TextDocument.Uri, out var document))
+        {
+            return null;
+        }
+
+        var offset = document.OffsetAt(p.Position);
+        if (XamlDirectiveMetadata.Resolve(document, offset) is { } directive)
+        {
+            return new Hover
+            {
+                Contents = new MarkupContent { Kind = "markdown", Value = directive.Markdown },
+                Range = directive.Range,
+            };
+        }
+
+        // didOpen eagerly starts the trusted project context, but a cold MSBuild design-time build
+        // takes seconds. Never queue project-independent quick info behind it.
+        if (!TryGetReadyContext(p.TextDocument.Uri, out _))
+        {
+            // An invalidation clears ready contexts while the document remains open. Ensure the
+            // existing trusted, single-flight warm-up is running before returning immediate prose.
+            WarmUp(document.Uri);
+
+            var nameReference = await ResolveNameReferenceHoverAsync(p).ConfigureAwait(false);
+            if (nameReference is not null)
+            {
+                return nameReference;
+            }
+
+            if (FindResourceKeyReferenceAt(document, offset) is { } resource)
+            {
+                return new Hover
+                {
+                    Contents = new MarkupContent
+                    {
+                        Kind = "markdown",
+                        Value = $"```xaml\n(resource) {resource.Key}\n```\n\nReferences a XAML resource by key.",
+                    },
+                    Range = document.RangeOf(resource.Span),
+                };
+            }
+
+            if (ResolveProjectIndependentMarkupHover(document, offset) is { } markup)
+            {
+                return markup;
+            }
+
+            return ResolveSyntacticHover(document, offset);
+        }
+
         var resourceHover = await ResolveResourceKeyHoverAsync(p).ConfigureAwait(false);
         if (resourceHover != null)
         {
@@ -56,9 +106,14 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
+        TryGetReadyTypeSystem(p.TextDocument.Uri, out var hoverTypeSystem);
         return new Hover
         {
-            Contents = new MarkupContent { Kind = "markdown", Value = HoverMarkdown(DescribeForHover(symbol), symbol) },
+            Contents = new MarkupContent
+            {
+                Kind = "markdown",
+                Value = HoverMarkdown(DescribeForHover(symbol), symbol, typeSystem: hoverTypeSystem),
+            },
             Range = _documents.TryGetValue(p.TextDocument.Uri, out var doc) ? doc.RangeOf(span.Value) : null,
         };
     }
@@ -96,8 +151,38 @@ internal sealed partial class XamlLanguageServer
         }
 
         // 2) Enum value typed directly as an attribute value (HorizontalAlignment="Center").
+        // Do not request project metadata unless the caret is actually inside a plain attribute
+        // value. Previously every element/attribute hover paid this await before symbol dispatch.
+        var valueAttribute = FindPlainValueAttributeAt(doc, offset);
+        if (valueAttribute is null)
+        {
+            return null;
+        }
+
         var ts = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
         return ts is null ? null : ResolveAttributeEnumHover(doc, offset, ts);
+    }
+
+    private static XamlAttribute? FindPlainValueAttributeAt(TextDocument document, int offset)
+    {
+        for (var current = document.Parsed.FindNode(offset); current is not null; current = current.Parent)
+        {
+            if (current is XamlAttribute attribute)
+            {
+                return !attribute.IsNamespaceDeclaration &&
+                    attribute.Value is { IsMarkupExtension: false } value &&
+                    value.InnerSpan.ContainsInclusive(offset)
+                    ? attribute
+                    : null;
+            }
+
+            if (current is XamlElement)
+            {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Returns the innermost <see cref="XamlMarkupExtension"/> whose span contains the offset, or null.</summary>
@@ -130,7 +215,7 @@ internal sealed partial class XamlLanguageServer
         "TemplateBinding" =>
             "```xaml\n{TemplateBinding}\n```\nBinds a property inside a `ControlTemplate` to a property on the templated control.",
         "RelativeSource" =>
-            "```xaml\n{RelativeSource}\n```\nSpecifies a binding source relative to the target (`Self`, `TemplatedParent`, `FindAncestor`).",
+            "```xaml\n{RelativeSource}\n```\nSpecifies a binding source relative to the target (`Self` or `TemplatedParent`).",
         "CustomResource" =>
             "```xaml\n{CustomResource}\n```\nLooks up a resource through a custom resource provider.",
         "x:Null" =>
@@ -141,6 +226,86 @@ internal sealed partial class XamlLanguageServer
             "```xaml\n{x:Type}\n```\nReferences a `System.Type` object for the named type.",
         _ => null,
     };
+
+    private static Hover? ResolveProjectIndependentMarkupHover(TextDocument document, int offset)
+    {
+        if (document.Parsed.Root is not { } root ||
+            InnermostMarkupExtensionAt(root, offset)?.Name is not { } name ||
+            !name.Span.ContainsInclusive(offset) ||
+            DescribeMarkupExtension(name.FullName) is not { } description)
+        {
+            return null;
+        }
+
+        return new Hover
+        {
+            Contents = new MarkupContent { Kind = "markdown", Value = description },
+            Range = document.RangeOf(name.Span),
+        };
+    }
+
+    internal static Hover? ResolveSyntacticHover(TextDocument document, int offset)
+    {
+        for (var node = document.Parsed.FindNode(offset); node is not null; node = node.Parent)
+        {
+            if (node is XamlAttribute attribute && attribute.Parent is XamlElement owner)
+            {
+                if (!attribute.IsNamespaceDeclaration && attribute.Name.Span.ContainsInclusive(offset))
+                {
+                    var ownerName = owner.Name?.FullName ?? "the containing element";
+                    var literal = attribute.Value is { IsMarkupExtension: false } attributeValue
+                        ? $" The current literal value is `{EscapeMarkdownCode(attributeValue.Text)}`."
+                        : string.Empty;
+                    return PlainXamlHover(
+                        $"attribute {attribute.Name.FullName}",
+                        $"XAML attribute `{attribute.Name.FullName}` on the `{ownerName}` element.{literal}",
+                        document.RangeOf(attribute.Name.Span));
+                }
+
+                if (!attribute.IsNamespaceDeclaration &&
+                    attribute.Value is { } value &&
+                    value.InnerSpan.ContainsInclusive(offset))
+                {
+                    var ownerName = owner.Name?.FullName ?? "the containing element";
+                    var valueDescription = value.IsMarkupExtension
+                        ? $"XAML markup expression `{EscapeMarkdownCode(value.Text)}` assigned to the `{attribute.Name.FullName}` attribute on the `{ownerName}` element."
+                        : $"Literal value `{EscapeMarkdownCode(value.Text)}` assigned to the `{attribute.Name.FullName}` attribute on the `{ownerName}` element.";
+                    return PlainXamlHover(
+                        $"value for {attribute.Name.FullName}",
+                        valueDescription,
+                        document.RangeOf(value.InnerSpan));
+                }
+            }
+
+            if (node is XamlElement element &&
+                element.Name is { } name &&
+                name.Span.ContainsInclusive(offset))
+            {
+                var namespaceText = element.NamespaceScope.TryResolvePrefix(name.Prefix, out var namespaceUri)
+                    ? $" in the `{EscapeMarkdownCode(namespaceUri)}` namespace"
+                    : string.Empty;
+                return PlainXamlHover(
+                    $"element {name.FullName}",
+                    $"XAML element `{name.FullName}`{namespaceText}.",
+                    document.RangeOf(name.Span));
+            }
+        }
+
+        return null;
+    }
+
+    private static string EscapeMarkdownCode(string text) => text.Replace("`", "\\`", StringComparison.Ordinal);
+
+    private static Hover PlainXamlHover(string signature, string description, Lsp.Range range) =>
+        new()
+        {
+            Contents = new MarkupContent
+            {
+                Kind = "markdown",
+                Value = $"```xaml\n({signature})\n```\n\n{description}",
+            },
+            Range = range,
+        };
 
     /// <summary>Hover for an enum value inside a markup-extension named argument.</summary>
     private Hover? ResolveMarkupArgumentEnumHover(
@@ -167,7 +332,11 @@ internal sealed partial class XamlLanguageServer
             {
                 return new Hover
                 {
-                    Contents = new MarkupContent { Kind = "markdown", Value = HoverMarkdown(DescribeForHover(member), member) },
+                    Contents = new MarkupContent
+                    {
+                        Kind = "markdown",
+                        Value = HoverMarkdown(DescribeForHover(member), member, typeSystem: typeSystem),
+                    },
                     Range = doc.RangeOf(valueSpan),
                 };
             }
@@ -238,7 +407,11 @@ internal sealed partial class XamlLanguageServer
 
         return new Hover
         {
-            Contents = new MarkupContent { Kind = "markdown", Value = HoverMarkdown(DescribeForHover(member), member) },
+            Contents = new MarkupContent
+            {
+                Kind = "markdown",
+                Value = HoverMarkdown(DescribeForHover(member), member, typeSystem: typeSystem),
+            },
             Range = doc.RangeOf(value.InnerSpan),
         };
     }
@@ -967,7 +1140,11 @@ internal sealed partial class XamlLanguageServer
             Contents = new MarkupContent
             {
                 Kind = "markdown",
-                Value = HoverMarkdown($"(attached property) {valueType} {ownerType.Name}.{attached.Name}", attached.Symbol, methodDetails: false),
+                Value = HoverMarkdown(
+                    $"(attached property) {valueType} {ownerType.Name}.{attached.Name}",
+                    attached.Symbol,
+                    methodDetails: false,
+                    typeSystem: typeSystem),
             },
             Range = doc.RangeOf(hit.MemberSpan),
         };
@@ -1031,15 +1208,26 @@ internal sealed partial class XamlLanguageServer
     };
 
     /// <summary>Builds hover markdown for a symbol: the C# signature in a fenced code block, followed by the symbol's XML-doc &lt;summary&gt</summary>
-    private static string HoverMarkdown(string signature, ISymbol? symbol, bool methodDetails = true)
+    private static string HoverMarkdown(
+        string signature,
+        ISymbol? symbol,
+        bool methodDetails = true,
+        XamlTypeSystem? typeSystem = null)
     {
-        var doc = symbol is null ? QuickInfoDoc.Empty : XmlDocSummary.ExtractQuickInfo(symbol.GetDocumentationCommentXml());
+        var documentationXml = symbol is null
+            ? null
+            : typeSystem?.GetDocumentationCommentXml(symbol) ?? symbol.GetDocumentationCommentXml();
+        var doc = XmlDocSummary.ExtractQuickInfo(documentationXml);
         var sb = new System.Text.StringBuilder();
         sb.Append("```csharp\n").Append(signature).Append("\n```");
 
         if (doc.Summary is not null)
         {
             sb.Append("\n\n").Append(doc.Summary);
+        }
+        else if (symbol is not null)
+        {
+            sb.Append("\n\n").Append(MetadataDescription(symbol));
         }
 
         // Gated to IMethodSymbol so property/field/type/event hovers (whose docs carry no returns/params anyway) stay byte-identical to the summary-only behavior.
@@ -1070,6 +1258,21 @@ internal sealed partial class XamlLanguageServer
 
         return sb.ToString();
     }
+
+    private static string MetadataDescription(ISymbol symbol) => symbol switch
+    {
+        INamedTypeSymbol type =>
+            $"XAML type `{type.ToDisplayString()}` ({type.TypeKind.ToString().ToLowerInvariant()}).",
+        IPropertySymbol property =>
+            $"Property `{property.Name}` declared by `{property.ContainingType?.ToDisplayString()}` with value type `{property.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}`.",
+        IEventSymbol @event =>
+            $"Event `{@event.Name}` declared by `{@event.ContainingType?.ToDisplayString()}`.",
+        IFieldSymbol field =>
+            $"Field `{field.Name}` declared by `{field.ContainingType?.ToDisplayString()}` with value type `{field.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}`.",
+        IMethodSymbol method =>
+            $"Method `{method.Name}` declared by `{method.ContainingType?.ToDisplayString()}`.",
+        _ => $"XAML symbol `{symbol.Name}` ({symbol.Kind.ToString().ToLowerInvariant()}).",
+    };
 
     private static string TypeKeyword(INamedTypeSymbol type) => type.TypeKind switch
     {

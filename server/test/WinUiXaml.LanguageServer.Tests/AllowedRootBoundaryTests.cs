@@ -12,6 +12,16 @@ namespace WinUiXaml.LanguageServer.Tests;
 /// </summary>
 public class AllowedRootBoundaryTests
 {
+    [Theory]
+    [InlineData(@"C:\repo\app\obj\Debug\net10.0\generated.props", true)]
+    [InlineData(@"C:\repo\app\bin\Debug\net10.0\App.dll", true)]
+    [InlineData(@"C:\repo\app\src\ObjectModel.cs", false)]
+    [InlineData(@"C:\repo\app\objects\theme.props", false)]
+    public void GeneratedBuildPathsAreIgnoredByWatchInvalidation(string path, bool expected)
+    {
+        Assert.Equal(expected, XamlLanguageServer.IsGeneratedBuildPath(path, @"C:\repo"));
+    }
+
     [Fact]
     public void ExactRoot_IsWithin()
     {

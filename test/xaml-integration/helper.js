@@ -208,6 +208,25 @@ async function hoverAt(text) {
   return parts.join("\n");
 }
 
+async function timedHoverAt(text) {
+  const started = performance.now();
+  const markdown = await hoverAt(text);
+  return { markdown, elapsedMs: performance.now() - started };
+}
+
+async function hoverMatchingAt(text, predicate, timeoutMs = 30000) {
+  const started = Date.now();
+  let markdown = "";
+  while (Date.now() - started < timeoutMs) {
+    markdown = await hoverAt(text);
+    if (predicate(markdown)) {
+      return markdown;
+    }
+    await delay(100);
+  }
+  throw new Error(`XAML hover did not reach the expected authoritative result: ${markdown}`);
+}
+
 async function symbolsAt(text) {
   const { clean } = splitCaret(text.includes("|") ? text : text + "|");
   await setBuffer(clean);
@@ -248,18 +267,28 @@ function delay(ms) {
 async function warmUp(timeoutMs = 170000) {
   await openProbe();
   const started = Date.now();
+  let readySince;
   let lastErr;
   while (Date.now() - started < timeoutMs) {
     try {
-      const items = await completionItemsAt(`<Page ${NS}>\n  <But|\n</Page>`);
+      const items = await completionItemsAt(
+        `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <But|\n</Page>`
+      );
       if (items.some((item) =>
         item.label === "Button" &&
         typeof item.detail === "string" &&
         item.detail.startsWith("Microsoft.UI.Xaml"))) {
-        return;
+        readySince ??= Date.now();
+        if (Date.now() - readySince >= 500) {
+          return;
+        }
+        await delay(100);
+        continue;
       }
+      readySince = undefined;
       lastErr = new Error(`semantic element completion did not yet include Button (got ${items.length} items)`);
     } catch (e) {
+      readySince = undefined;
       lastErr = e;
     }
     await delay(1000);
@@ -645,6 +674,8 @@ module.exports = {
   codeActionsAt,
   codeActionsAtCaret,
   hoverAt,
+  timedHoverAt,
+  hoverMatchingAt,
   symbolsAt,
   flattenSymbols,
   diagnosticsFor,

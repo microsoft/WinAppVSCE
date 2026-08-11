@@ -45,14 +45,14 @@ export async function runCoreScenarios(ctx) {
   console.log(`[ok] completion(bool): 'IsEnabled="' -> True/False (${boolLabels.length} items)`);
 
   // 12) x:Bind member-path completion: members of the page's x:Class (SmokePage), filtered by partial.
-  //     pageClass is resolved from the real SmokePage.xaml on disk, so the doctored wrapper is fine.
-  const bindLabels = await completeWith(20, `<Page ${NS}>\n  <TextBlock Text="{x:Bind Gre|}" />\n</Page>`, "bind-path");
+  //     Doctored documents retain x:Class so resolution follows the in-memory document.
+  const bindLabels = await completeWith(20, `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <TextBlock Text="{x:Bind Gre|}" />\n</Page>`, "bind-path");
   if (!bindLabels.includes("GreetingText")) fail(`x:Bind path completion missing 'GreetingText' (got ${bindLabels.join(",")})`);
   if (bindLabels.includes("Items")) fail(`x:Bind path completion with partial 'Gre' should have filtered out 'Items' (got ${bindLabels.join(",")})`);
   console.log(`[ok] completion(x:Bind, 'Gre'): -> GreetingText, not Items (${bindLabels.length} items)`);
 
   // 13) x:Bind with an empty path -> all bindable members of the page.
-  const bindAll = await completeWith(21, `<Page ${NS}>\n  <TextBlock Text="{x:Bind |}" />\n</Page>`, "bind-path-empty");
+  const bindAll = await completeWith(21, `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <TextBlock Text="{x:Bind |}" />\n</Page>`, "bind-path-empty");
   for (const want of ["GreetingText", "Items"]) {
     if (!bindAll.includes(want)) fail(`x:Bind empty-path completion missing '${want}' (got ${bindAll.length} items)`);
   }
@@ -60,7 +60,7 @@ export async function runCoreScenarios(ctx) {
 
   // 14) x:Bind dotted path -> members of the leading segment's type. Items is IReadOnlyList<string>,
   //     so 'Items.' must surface Count (found by walking the interface's inherited interfaces).
-  const bindDotted = await completeWith(22, `<Page ${NS}>\n  <TextBlock Text="{x:Bind Items.C|}" />\n</Page>`, "bind-path-dotted");
+  const bindDotted = await completeWith(22, `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <TextBlock Text="{x:Bind Items.C|}" />\n</Page>`, "bind-path-dotted");
   if (!bindDotted.includes("Count")) fail(`x:Bind dotted-path completion missing 'Count' (got ${bindDotted.join(",")})`);
   console.log(`[ok] completion(x:Bind, 'Items.C'): -> Count (${bindDotted.length} items)`);
 
@@ -83,7 +83,7 @@ export async function runCoreScenarios(ctx) {
   console.log(`[ok] completion(cdata): '<![CDATA[ <But' -> no element completions (${cdataItems.length} items)`);
 
   // 15) Style/ControlTemplate authoring completion (VS parity).
-  const pageRes = (inner) => `<Page ${NS}>\n  <Page.Resources>\n    ${inner}\n  </Page.Resources>\n</Page>`;
+  const pageRes = (inner) => `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <Page.Resources>\n    ${inner}\n  </Page.Resources>\n</Page>`;
 
   // 15a) <Style TargetType="|"> completes type names (incl. alphabetically-late ones like TextBlock).
   const styleTt = await completeWith(46, pageRes(`<Style TargetType="|">\n      <Setter Property="Content" Value="Go" />\n    </Style>`), "style-targettype");
@@ -123,7 +123,7 @@ export async function runCoreScenarios(ctx) {
   }
   console.log(`[ok] completion(TemplateBinding): -> Content/IsEnabled (${tb.length} items)`);
 
-  const ttDef = await definitionWith(98, `<Page ${NS} ${dLocal}>\n  <Page.Resources>\n    <Style TargetType="local:Smoke|Page">\n      <Setter Property="DataContext" Value="{x:Null}" />\n    </Style>\n  </Page.Resources>\n</Page>`, "targettype-f12");
+  const ttDef = await definitionWith(98, `<Page ${NS} x:Class="SmokeFixture.SmokePage" ${dLocal}>\n  <Page.Resources>\n    <Style TargetType="local:Smoke|Page">\n      <Setter Property="DataContext" Value="{x:Null}" />\n    </Style>\n  </Page.Resources>\n</Page>`, "targettype-f12");
   if (!ttDef?.uri || !ttDef.uri.endsWith("SmokePage.xaml.cs")) {
     fail(`TargetType F12 did not land on SmokePage.xaml.cs (got ${ttDef?.uri ?? "null"})`);
   }
@@ -331,13 +331,13 @@ export async function runCoreScenarios(ctx) {
 
 
   // 14a) x:Bind via the named Path= argument resolves the same members as the positional form.
-  const bindNamedPath = await completeWith(40, `<Page ${NS}>\n  <TextBlock Text="{x:Bind Path=Gre|}" />\n</Page>`, "bind-named-path");
+  const bindNamedPath = await completeWith(40, `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <TextBlock Text="{x:Bind Path=Gre|}" />\n</Page>`, "bind-named-path");
   if (!bindNamedPath.includes("GreetingText")) fail(`x:Bind named-Path completion missing 'GreetingText' (got ${bindNamedPath.join(",")})`);
   if (bindNamedPath.includes("Items")) fail(`x:Bind named-Path 'Gre' should filter out 'Items' (got ${bindNamedPath.join(",")})`);
   console.log(`[ok] completion(x:Bind, 'Path=Gre'): -> GreetingText, not Items (${bindNamedPath.length} items)`);
 
   // 14a-ii) F12 through the named Path= argument lands on the same member as the positional form.
-  const bindNamedDef = await definitionWith(41, `<Page ${NS}>\n  <TextBlock Text="{x:Bind Path=Greeting|Text}" />\n</Page>`, "bind-named-path");
+  const bindNamedDef = await definitionWith(41, `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <TextBlock Text="{x:Bind Path=Greeting|Text}" />\n</Page>`, "bind-named-path");
   if (!bindNamedDef || !bindNamedDef.uri) fail(`x:Bind named-Path definition returned no location: ${JSON.stringify(bindNamedDef)}`);
   if (!bindNamedDef.uri.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) fail(`x:Bind named-Path definition landed in unexpected file: ${bindNamedDef.uri}`);
   if (bindNamedDef.range?.start?.line !== EXPECTED_GREETING_LINE) fail(`x:Bind named-Path definition landed on line ${bindNamedDef.range?.start?.line}, expected ${EXPECTED_GREETING_LINE}`);
@@ -620,7 +620,7 @@ export async function runCoreScenarios(ctx) {
 
   // Undeclared namespace prefix -> error.
   const prefixDiags = await validateDoc(
-    `<Page ${NS}>\n  <zzz:Widget x:Name="w" />\n</Page>`,
+    `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <zzz:Widget x:Name="w" />\n</Page>`,
     (d) => d.some((x) => x.code === "WXAML0001" && x.message.includes("zzz")),
     "undeclared-prefix diagnostic"
   );

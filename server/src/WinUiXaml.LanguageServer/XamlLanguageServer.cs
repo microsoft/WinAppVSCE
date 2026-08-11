@@ -19,6 +19,8 @@ internal sealed partial class XamlLanguageServer
     private readonly JsonRpcConnection _connection;
     private readonly XamlProjectResolver _resolver;
     private readonly ConcurrentDictionary<string, TextDocument> _documents = new(StringComparer.OrdinalIgnoreCase);
+    private readonly AsyncSingleFlightCache<string, XamlProjectContext> _contexts =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, XamlTypeSystem> _typeSystems = new();
     private readonly XamlResourceGraph _resourceGraph = new();
     private readonly AsyncLocal<CancellationToken> _requestCancellation = new();
@@ -351,14 +353,20 @@ internal sealed partial class XamlLanguageServer
     }
 
     /// <summary>Resolves the document's project context only when it is under a trusted workspace root; otherwise serves it project-less (no MSBuild evaluation).</summary>
-    private Task<XamlResolution?> ResolveIfAllowedAsync(string path)
+    private Task<XamlResolution?> ResolveIfAllowedAsync(string path) =>
+        ResolveIfAllowedAsync(path, _requestCancellation.Value, null);
+
+    private Task<XamlResolution?> ResolveIfAllowedAsync(
+        string path,
+        CancellationToken cancellationToken,
+        string? xamlText)
     {
         if (!TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot))
         {
             return Task.FromResult<XamlResolution?>(null);
         }
 
-        return _resolver.ResolveAsync(canonicalPath, allowedRoot, _requestCancellation.Value);
+        return _resolver.ResolveAsync(canonicalPath, allowedRoot, cancellationToken, xamlText);
     }
 
     private Task<object?> Shutdown()
@@ -386,14 +394,23 @@ internal sealed partial class XamlLanguageServer
 
         // Full sync: the last change carries the complete document text.
         var text = p.ContentChanges[^1].Text;
+        _documents.TryGetValue(p.TextDocument.Uri, out var previous);
         var doc = new TextDocument(p.TextDocument.Uri, text);
         _documents[p.TextDocument.Uri] = doc;
+        if (!string.Equals(
+            previous is null ? null : XamlIntrospection.GetClass(previous.Text),
+            XamlIntrospection.GetClass(text),
+            StringComparison.Ordinal))
+        {
+            InvalidateContextAndWarm(p.TextDocument.Uri);
+        }
         await PublishDiagnosticsAsync(doc).ConfigureAwait(false);
     }
 
     private async Task DidCloseAsync(DidCloseTextDocumentParams p)
     {
         _documents.TryRemove(p.TextDocument.Uri, out _);
+        _contexts.Invalidate(p.TextDocument.Uri);
         await _connection.SendNotificationAsync(
             "textDocument/publishDiagnostics",
             new PublishDiagnosticsParams { Uri = p.TextDocument.Uri, Diagnostics = new List<Diagnostic>() })
@@ -430,14 +447,25 @@ internal sealed partial class XamlLanguageServer
                 continue;
             }
 
-            // Structural change: a project-file edit, or a page added/removed. A plain .xaml content save (Changed) does not change the project's type/reference graph, so skip the reload.
-            var structural = isCs || isCsproj || change.Type != FileChangeType.Changed;
-            if (!structural)
+            if (!TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot))
             {
                 continue;
             }
 
-            if (!TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot))
+            if (IsGeneratedBuildPath(canonicalPath, allowedRoot))
+            {
+                continue;
+            }
+
+            if (isXaml && change.Type == FileChangeType.Changed)
+            {
+                InvalidateIfSavedClassChanged(canonicalPath);
+                continue;
+            }
+
+            // Source/project changes and added/removed XAML files affect the project graph.
+            var structural = isCs || isCsproj || isImportedBuildFile || change.Type != FileChangeType.Changed;
+            if (!structural)
             {
                 continue;
             }
@@ -460,12 +488,17 @@ internal sealed partial class XamlLanguageServer
         if (invalidateAllProjects)
         {
             _resolver.InvalidateAll();
+            ResetContextsAndWarmOpenDocuments();
         }
         else
         {
             foreach (var project in projectsToInvalidate)
             {
                 _resolver.Invalidate(project);
+            }
+            if (projectsToInvalidate.Count > 0)
+            {
+                ResetContextsAndWarmOpenDocuments();
             }
         }
 
@@ -476,6 +509,69 @@ internal sealed partial class XamlLanguageServer
         }
 
         return Task.CompletedTask;
+    }
+
+    internal static bool IsGeneratedBuildPath(string path, string root)
+    {
+        var relativePath = System.IO.Path.GetRelativePath(root, path);
+        return relativePath
+            .Split(
+                new[] { System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment =>
+                segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                segment.Equals("obj", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void ResetContextsAndWarmOpenDocuments()
+    {
+        _contexts.InvalidateAll();
+
+        // Rebuild invalidated contexts for every open trusted document. WarmUp retains the
+        // trusted-root gate, and GetOrStartContext keeps this single-flight per document.
+        foreach (var uri in _documents.Keys)
+        {
+            WarmUp(uri);
+        }
+    }
+
+    private void InvalidateContextAndWarm(string uri)
+    {
+        _contexts.Invalidate(uri);
+        if (_documents.ContainsKey(uri))
+        {
+            WarmUp(uri);
+        }
+    }
+
+    private void InvalidateIfSavedClassChanged(string canonicalPath)
+    {
+        var uri = _documents.Keys.FirstOrDefault(openUri =>
+            UriToPath(openUri) is { } openPath &&
+            string.Equals(CanonicalizePath(openPath), canonicalPath, StringComparison.OrdinalIgnoreCase));
+        if (uri is null)
+        {
+            return;
+        }
+
+        if (!TryGetReadyContext(uri, out var context))
+        {
+            InvalidateContextAndWarm(uri);
+            return;
+        }
+
+        try
+        {
+            var savedClass = XamlIntrospection.GetClass(System.IO.File.ReadAllText(canonicalPath));
+            if (!string.Equals(savedClass, context.Resolution.ClassName, StringComparison.Ordinal))
+            {
+                InvalidateContextAndWarm(uri);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A transient save/rename will produce another watched event.
+        }
     }
 
 }

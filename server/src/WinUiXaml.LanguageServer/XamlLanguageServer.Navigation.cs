@@ -316,13 +316,13 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        var appXaml = FindAppXamlPath(context.Value.Resolution);
+        var appXaml = FindAppXamlPath(context.Resolution);
         if (appXaml == null)
         {
             return null;
         }
 
-        var projectRoot = System.IO.Path.GetDirectoryName(context.Value.Resolution.ProjectPath)!;
+        var projectRoot = System.IO.Path.GetDirectoryName(context.Resolution.ProjectPath)!;
         foreach (var resourceFile in ReadResourceGraph(appXaml, projectRoot))
         {
             var declaration = FindResourceDeclaration(resourceFile.Parsed, key);
@@ -614,7 +614,11 @@ internal sealed partial class XamlLanguageServer
             Contents = new MarkupContent
             {
                 Kind = "markdown",
-                Value = HoverMarkdown($"(attached property) {valueType} {ownerType.Name}.{attached.Name}", attached.Symbol, methodDetails: false),
+                Value = HoverMarkdown(
+                    $"(attached property) {valueType} {ownerType.Name}.{attached.Name}",
+                    attached.Symbol,
+                    methodDetails: false,
+                    typeSystem: typeSystem),
             },
             Range = doc.RangeOf(hoverSpan),
         };
@@ -659,7 +663,11 @@ internal sealed partial class XamlLanguageServer
             Contents = new MarkupContent
             {
                 Kind = "markdown",
-                Value = HoverMarkdown($"(attached property) {valueType} {ownerType.Name}.{attached.Name}", attached.Symbol, methodDetails: false),
+                Value = HoverMarkdown(
+                    $"(attached property) {valueType} {ownerType.Name}.{attached.Name}",
+                    attached.Symbol,
+                    methodDetails: false,
+                    typeSystem: typeSystem),
             },
             Range = doc.RangeOf(hit.Span),
         };

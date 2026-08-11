@@ -674,12 +674,15 @@ export async function runCompletionScenarios(ctx) {
     if (!mSubstring.includes("`startIndex`")) fail(`Substring hover should document the 'startIndex' param: ${JSON.stringify(mSubstring)}`);
   }
 
-  // 471) NEGATIVE — an undocumented USER method (function binding) stays signature-only, byte-identical to the
-  //      pre-round-70 behavior (no phantom empty Returns/Parameters sections).
+  // 471) An undocumented user method gets deterministic metadata prose, but no phantom sections.
   const mUserFn = await hoverAt(471, pageCls('<TextBlock Text="{x:Bind OnGo_C|lick()}" />'), "method-hover-user-nodoc");
   {
-    const expected = "```csharp\nvoid SmokePage.OnGo_Click(object sender, RoutedEventArgs e)\n```";
-    if (mUserFn !== expected) fail(`Undocumented user method hover must be signature-only: ${JSON.stringify(mUserFn)}`);
+    if (!mUserFn.includes("Method `OnGo_Click` declared by `SmokeFixture.SmokePage`.")) {
+      fail(`Undocumented user method hover needs metadata fallback prose: ${JSON.stringify(mUserFn)}`);
+    }
+    if (mUserFn.includes("**Returns:**") || mUserFn.includes("**Parameters:**")) {
+      fail(`Undocumented user method hover must not invent method sections: ${JSON.stringify(mUserFn)}`);
+    }
   }
 
   // 472) NEGATIVE — an attached-property hover is presented AS a property (methodDetails:false), so even though
@@ -690,7 +693,7 @@ export async function runCompletionScenarios(ctx) {
     if (mAttached.includes("**Returns:**") || mAttached.includes("**Parameters:**")) fail(`attached-property hover must NOT carry method Returns/Parameters: ${JSON.stringify(mAttached)}`);
   }
 
-  console.log(`[ok] method hover enrichment: {x:Bind FindName}/GreetingText.Substring show Returns + Parameters; undocumented OnGo_Click stays signature-only; attached Grid.Row not enriched (round 70)`);
+  console.log(`[ok] method hover enrichment: documented methods show Returns + Parameters; undocumented methods get metadata prose; attached Grid.Row is not method-enriched`);
 
   // 473-476) GridLength value completion (round 71): a GridLength-typed attribute value (RowDefinition.Height,
   //          ColumnDefinition.Width) now offers the two keyword sizings VS/Blend surface — Auto and * — while

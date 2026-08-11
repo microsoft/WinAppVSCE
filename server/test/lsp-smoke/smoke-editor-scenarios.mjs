@@ -257,6 +257,13 @@ export async function runEditorScenarios(ctx) {
   const vsmSetterTarget = (target) =>
     pageCls(`<Border x:Name="Chrome" />\n  <Setter Target="${target}" Value="0.5" />`);
 
+  // Earlier editor-only scenarios intentionally replace the document with fragments that have no
+  // x:Class. Re-establish and await the fixture class before asserting semantic member hover.
+  await definitionWith(
+    5999,
+    pageCls('<Button Click="OnGo_Cl|ick" />'),
+    "restore semantic context after editor-only documents");
+
   // Hover on the Setter.Target member resolves the property on the named element's type (Border -> UIElement.Opacity).
   const stmHover = await hoverAt(531, vsmSetterTarget("Chrome.Opac|ity"), "Setter.Target member hover");
   if (!/Opacity/.test(stmHover) || !/(UIElement|double|Double)/.test(stmHover))
