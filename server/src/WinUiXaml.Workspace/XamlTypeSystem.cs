@@ -693,6 +693,54 @@ namespace WinUiXaml.Workspace
             }
         }
 
+        /// <summary>Properties that can be authored in property-element form: publicly settable
+        /// properties, get-only collections, and attached properties.</summary>
+        public IEnumerable<XamlMemberInfo> GetPropertyElementMembers(INamedTypeSymbol owner)
+        {
+            if (owner is null)
+            {
+                yield break;
+            }
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            for (INamedTypeSymbol? type = owner; type is not null; type = type.BaseType)
+            {
+                foreach (var property in type.GetMembers().OfType<IPropertySymbol>())
+                {
+                    if (property.IsStatic ||
+                        property.IsIndexer ||
+                        property.DeclaredAccessibility != Accessibility.Public ||
+                        !seen.Add(property.Name))
+                    {
+                        continue;
+                    }
+
+                    bool publiclySettable =
+                        property.SetMethod?.DeclaredAccessibility == Accessibility.Public;
+                    bool getOnlyCollection =
+                        property.GetMethod?.DeclaredAccessibility == Accessibility.Public &&
+                        GetCollectionElementType(property.Type) is not null;
+                    if (publiclySettable || getOnlyCollection)
+                    {
+                        yield return new XamlMemberInfo(
+                            property.Name,
+                            XamlMemberKind.Property,
+                            property,
+                            property.Type,
+                            type);
+                    }
+                }
+            }
+
+            foreach (var attached in GetAttachedProperties(owner))
+            {
+                if (seen.Add(attached.Name))
+                {
+                    yield return attached;
+                }
+            }
+        }
+
         /// <summary>Enumerates the attached properties declared by owner — the WinUI pattern of a static GetXxx(DependencyObject) / SetXxx(DependencyObject, T) pair.</summary>
         public IEnumerable<XamlMemberInfo> GetAttachedProperties(INamedTypeSymbol owner)
         {

@@ -83,6 +83,25 @@ export async function runCoreScenarios(ctx) {
   if (propChild.includes("Button")) fail(`property-element child completion should be scoped to RowDefinition, not offer 'Button' (got ${propChild.length} items)`);
   console.log(`[ok] completion(property element): '<Grid.RowDefinitions><' -> RowDefinition, scoped (${propChild.length} items)`);
 
+  const gridPropertyElements = await completeWith(
+    431,
+    `<Page ${NS}>\n  <Grid>\n    <Grid.|\n  </Grid>\n</Page>`,
+    "grid-property-element-name"
+  );
+  if (!gridPropertyElements.includes("RowDefinitions")) {
+    fail(`'<Grid.' should offer the RowDefinitions property element (got ${gridPropertyElements.slice(0, 40).join(",")})`);
+  }
+
+  const windowPropertyElements = await completeWith(
+    432,
+    `<Window ${NS}>\n  <Window.|\n</Window>`,
+    "window-property-element-name"
+  );
+  if (!windowPropertyElements.includes("SystemBackdrop")) {
+    fail(`'<Window.' should offer the SystemBackdrop property element (got ${windowPropertyElements.slice(0, 40).join(",")})`);
+  }
+  console.log(`[ok] completion(property-element names): '<Grid.' -> RowDefinitions; '<Window.' -> SystemBackdrop`);
+
   // 14b) nested markup extension: {Binding Source={StaticResource |}} completes resource keys for the
   //      INNER StaticResource, not the outer Binding.
   const nestedRes = await completeWith(44, `<Page ${NS}>\n  <Border Tag="{Binding Source={StaticResource |}}" />\n</Page>`, "nested-resource");

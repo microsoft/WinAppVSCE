@@ -21,6 +21,21 @@ internal static partial class CompletionProvider
             return new CompletionList();
         }
 
+        int propertySeparator = local.IndexOf('.');
+        if (propertySeparator >= 0)
+        {
+            return CompletePropertyElementName(
+                doc,
+                ctx,
+                prefix,
+                local,
+                propertySeparator,
+                uri,
+                scope,
+                typeSystem,
+                replaceRange);
+        }
+
         var items = new List<CompletionItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var type in typeSystem.GetTypes(uri))
@@ -86,6 +101,91 @@ internal static partial class CompletionProvider
         }
 
         return Finish(items);
+    }
+
+    private static CompletionList CompletePropertyElementName(
+        TextDocument doc,
+        Context ctx,
+        string prefix,
+        string local,
+        int separator,
+        string uri,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        Lsp.Range replaceRange)
+    {
+        if (separator == 0 || local.IndexOf('.', separator + 1) >= 0)
+        {
+            return new CompletionList();
+        }
+
+        var ownerName = local.Substring(0, separator);
+        var propertyPartial = local.Substring(separator + 1);
+        var ownerType = typeSystem.ResolveType(uri, ownerName);
+        if (ownerType is null)
+        {
+            return new CompletionList();
+        }
+
+        var enclosingType = ResolveEnclosingElementType(doc, ctx, scope, typeSystem);
+        if (enclosingType is not null && !XamlTypeSystem.IsAssignableTo(enclosingType, ownerType))
+        {
+            return new CompletionList();
+        }
+
+        var qualifiedOwner = prefix.Length > 0 ? prefix + ":" + ownerName : ownerName;
+        var items = new List<CompletionItem>();
+        foreach (var member in typeSystem.GetPropertyElementMembers(ownerType))
+        {
+            if (!StartsWith(member.Name, propertyPartial))
+            {
+                continue;
+            }
+
+            items.Add(new CompletionItem
+            {
+                Label = member.Name,
+                Kind = CompletionItemKind.Property,
+                Documentation = CompletionDoc(member.Symbol),
+                Detail = member.Type is null
+                    ? $"{ownerName} property element"
+                    : $"{ownerName} property element : {member.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}",
+                TextEdit = new TextEdit
+                {
+                    Range = replaceRange,
+                    NewText = qualifiedOwner + "." + member.Name,
+                },
+                FilterText = member.Name,
+                SortText = member.Name,
+            });
+        }
+
+        return Finish(items);
+    }
+
+    private static INamedTypeSymbol? ResolveEnclosingElementType(
+        TextDocument doc,
+        Context ctx,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem)
+    {
+        int ltIndex = ctx.ReplaceStart - 1;
+        for (var node = doc.Parsed.FindNode(Math.Max(0, ltIndex - 1)); node != null; node = node.Parent)
+        {
+            if (node is not XamlElement { Name: not null } element)
+            {
+                continue;
+            }
+
+            if (!scope.TryResolvePrefix(element.Name.Prefix, out var enclosingUri))
+            {
+                return null;
+            }
+
+            return typeSystem.ResolveType(enclosingUri, element.Name.LocalName);
+        }
+
+        return null;
     }
 
     /// <summary>Adds third-party (referenced-assembly) element types to an UNPREFIXED element-name completion list</summary>
