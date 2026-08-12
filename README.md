@@ -14,6 +14,11 @@ The **WinApp** extension brings the [Windows App Development CLI (WinApp CLI)](h
 
 Try the WinApp extension today: [**VS Code Markplace**](https://marketplace.visualstudio.com/items?itemName=Microsoft-WinAppCLI.winapp)
 
+| | Version |
+|--|---------|
+| **Extension** | <!-- EXT_VERSION -->0.2.2<!-- /EXT_VERSION --> |
+| **Bundled WinApp CLI** | <!-- CLI_VERSION -->development<!-- /CLI_VERSION --> |
+
 ## Features
 
 ### Command Palette
