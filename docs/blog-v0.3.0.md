@@ -14,12 +14,12 @@ Your `AppxManifest.xml` (or `.appxmanifest`) declares your app's identity, capab
 
 With v0.3.0, we're introducing support for AppxManifest IntelliSense in VS Code. The extension bundles the AppxManifest XSD schemas from the Windows SDK and parses your manifest as you type, offering autocomplete suggestions and flagging errors the moment the manifest becomes invalid. AppxManifest IntelliSense in the WinApp extension supports:
 
-- **Element autocompletion** — IntelliSense suggests valid elements such as `Identity` or `uap:VisualElements` based on your cursor position and the contents of your manifest
-- **Attribute autocompletion** — IntelliSense suggests the attributes the current element supports, sorting required attributes to the top and hiding ones you've already set
-- **Value autocompletion** — IntelliSense suggests the allowed values for attributes that accept a fixed set
-- **Hover documentation** — IntelliSense shows the schema's own description of an element or attribute, along with its type, whether it's required, and what it accepts
-- **Diagnostics** — IntelliSense reports missing required elements and attributes, invalid values, format and length violations, misplaced elements, and malformed XML inline as you edit
-- **Go to Definition** — IntelliSense resolves any element to its schema definition, reachable with **F12** or **Ctrl+Click**
+- **Element autocompletion**: IntelliSense suggests valid elements such as `Identity` or `uap:VisualElements` based on your cursor position and the contents of your manifest
+- **Attribute autocompletion**: IntelliSense suggests the attributes the current element supports, sorting required attributes to the top and hiding ones you've already set
+- **Value autocompletion**: IntelliSense suggests the allowed values for attributes that accept a fixed set
+- **Hover documentation**: IntelliSense shows the schema's own description of an element or attribute, along with its type, whether it's required, and what it accepts
+- **Diagnostics**: IntelliSense reports missing required elements and attributes, invalid values, format and length violations, misplaced elements, and malformed XML inline as you edit
+- **Go to Definition**: IntelliSense resolves any element to its schema definition, reachable with **F12** or **Ctrl+Click**
 
 <TODO add photo>
 
@@ -27,7 +27,7 @@ The text editor and the visual editor now share the same schema model and valida
 
 <TODO add photo>
 
-**Getting started** is nothing more than opening any `AppxManifest.xml` or `.appxmanifest` in the VS Code text editor — IntelliSense is on by default when the WinApp extension is installed.
+**Getting started** is nothing more than opening any `AppxManifest.xml` or `.appxmanifest` in the VS Code text editor. IntelliSense is on by default when the WinApp extension is installed.
 
 For more information about manifest IntelliSense, visit the [AppxManifest IntelliSense documentation](https://github.com/microsoft/WinAppVSCE#appxmanifest-intellisense).
 
@@ -41,7 +41,7 @@ In v0.3.0, those commands search your workspace first and present matching candi
 | --- | --- |
 | **WinApp: Create MSIX Package** | Lists build output folders containing an `.exe` |
 | **WinApp: Run Application** | Lists build output folders containing an `.exe` |
-| **WinApp: Sign File** | Lists MSIX/APPX packages, `.exe`, and `.dll` files — then the `.pfx` certificates to sign them with |
+| **WinApp: Sign File** | Lists MSIX/APPX packages, `.exe`, and `.dll` files, then the `.pfx` certificates to sign them with |
 
 If the file or folder you're after isn't listed, every Quick Pick ends with a **Browse…** option that opens the familiar file dialog.
 
