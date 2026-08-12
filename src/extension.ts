@@ -1208,7 +1208,13 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.openManifestEditor', async () => {
+		vscode.commands.registerCommand('winapp.openManifestEditor', async (resource?: vscode.Uri) => {
+			// Invoked from the editor title bar: open that manifest directly, no quick pick.
+			if (resource instanceof vscode.Uri && isManifestPath(resource.fsPath)) {
+				await vscode.commands.executeCommand('vscode.openWith', resource, ManifestEditorProvider.viewType);
+				return;
+			}
+
 			const manifests = (await Promise.all(
 				MANIFEST_SELECTOR.map(selector =>
 					vscode.workspace.findFiles(selector.pattern as string, BUILD_OUTPUT_EXCLUDE_GLOB)
