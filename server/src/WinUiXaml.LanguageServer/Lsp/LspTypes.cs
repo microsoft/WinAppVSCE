@@ -280,6 +280,9 @@ internal sealed class CompletionItem
     [JsonPropertyName("filterText")] public string? FilterText { get; set; }
     [JsonPropertyName("sortText")] public string? SortText { get; set; }
     [JsonPropertyName("textEdit")] public TextEdit? TextEdit { get; set; }
+    [JsonPropertyName("command")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Command? Command { get; set; }
 
     /// <summary>LSP InsertTextFormat: 1 = PlainText, 2 = Snippet. Null = client default (PlainText).</summary>
     [JsonPropertyName("insertTextFormat")]
@@ -290,6 +293,15 @@ internal sealed class CompletionItem
     [JsonPropertyName("additionalTextEdits")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<TextEdit>? AdditionalTextEdits { get; set; }
+}
+
+internal sealed class Command
+{
+    [JsonPropertyName("title")] public string Title { get; set; } = string.Empty;
+    [JsonPropertyName("command")] public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("arguments")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object[]? Arguments { get; set; }
 }
 
 internal sealed class TextEdit

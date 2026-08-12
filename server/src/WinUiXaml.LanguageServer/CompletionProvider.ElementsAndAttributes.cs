@@ -532,6 +532,7 @@ internal static partial class CompletionProvider
                 Detail = DescribeMember(member),
                 TextEdit = new TextEdit { Range = nameReplaceRange, NewText = appendValue ? member.Name + "=\"$0\"" : member.Name },
                 InsertTextFormat = appendValue ? SnippetInsertFormat : null,
+                Command = AttributeValueSuggestionCommand(member, appendValue),
                 FilterText = member.Name,
                 // Sort events after properties so the common case (properties) surfaces first.
                 SortText = (member.Kind == XamlMemberKind.Event ? "1" : "0") + member.Name,
@@ -615,6 +616,7 @@ internal static partial class CompletionProvider
                 Detail = "attached property" + (member.Type != null ? " : " + member.Type.ToDisplayString() : string.Empty),
                 TextEdit = new TextEdit { Range = replaceRange, NewText = appendValue ? qualified + "=\"$0\"" : qualified },
                 InsertTextFormat = appendValue ? SnippetInsertFormat : null,
+                Command = AttributeValueSuggestionCommand(member, appendValue),
                 FilterText = qualified,
                 SortText = "2" + qualified,
             });
@@ -689,6 +691,7 @@ internal static partial class CompletionProvider
                 Detail = "attached property" + (member.Type != null ? " : " + member.Type.ToDisplayString() : string.Empty),
                 TextEdit = new TextEdit { Range = replaceRange, NewText = appendValue ? qualified + "=\"$0\"" : qualified },
                 InsertTextFormat = appendValue ? SnippetInsertFormat : null,
+                Command = AttributeValueSuggestionCommand(member, appendValue),
                 FilterText = qualified,
                 // Rank after the element's own members (which use group "0"/"1").
                 SortText = "2" + qualified,
@@ -743,12 +746,43 @@ internal static partial class CompletionProvider
                 Detail = "attached property" + (member.Type != null ? " : " + member.Type.ToDisplayString() : string.Empty),
                 TextEdit = new TextEdit { Range = replaceRange, NewText = appendValue ? qualified + "=\"$0\"" : qualified },
                 InsertTextFormat = appendValue ? SnippetInsertFormat : null,
+                Command = AttributeValueSuggestionCommand(member, appendValue),
                 FilterText = qualified,
                 SortText = member.Name,
             });
         }
 
         return Finish(items);
+    }
+
+    private static Lsp.Command? AttributeValueSuggestionCommand(XamlMemberInfo member, bool appendValue)
+    {
+        if (!appendValue)
+        {
+            return null;
+        }
+
+        if (member.Kind != XamlMemberKind.Event)
+        {
+            var valueType = member.Type is null ? null : UnwrapNullable(member.Type);
+            if (valueType is null ||
+                (valueType.TypeKind != TypeKind.Enum &&
+                 valueType.SpecialType != SpecialType.System_Boolean &&
+                 valueType is not INamedTypeSymbol { Name: "Type", ContainingNamespace.Name: "System" } &&
+                 !XamlValueConverter.IsGridLength(valueType) &&
+                 !XamlValueConverter.IsBrush(valueType) &&
+                 !XamlValueConverter.IsColor(valueType) &&
+                 !XamlValueConverter.IsFontWeight(valueType)))
+            {
+                return null;
+            }
+        }
+
+        return new Lsp.Command
+        {
+            Title = "Trigger attribute value suggestions",
+            Name = "editor.action.triggerSuggest",
+        };
     }
 
     // --- Attribute value (enum members / booleans) ------------------------------------------------

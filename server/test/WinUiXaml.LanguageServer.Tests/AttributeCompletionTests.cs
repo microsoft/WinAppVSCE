@@ -17,6 +17,10 @@ public sealed class AttributeCompletionTests
             public class Button : DependencyObject
             {
                 public double Width { get; set; }
+                public string Text { get; set; } = "";
+                public bool IsEnabled { get; set; }
+                public Microsoft.UI.Xaml.Media.Brush Foreground { get; set; } = new();
+                public event System.EventHandler? Click;
             }
 
             public class Window : DependencyObject
@@ -39,7 +43,16 @@ public sealed class AttributeCompletionTests
             {
                 public static string GetName(DependencyObject value) => "";
                 public static void SetName(DependencyObject value, string name) { }
+                public static AccessibilityView GetAccessibilityView(DependencyObject value) => AccessibilityView.Raw;
+                public static void SetAccessibilityView(DependencyObject value, AccessibilityView view) { }
             }
+
+            public enum AccessibilityView { Raw, Control, Content }
+        }
+
+        namespace Microsoft.UI.Xaml.Media
+        {
+            public class Brush { }
         }
         """;
 
@@ -80,6 +93,57 @@ public sealed class AttributeCompletionTests
             CreateTypeSystem()).Items.Select(item => item.Label);
 
         Assert.DoesNotContain("x:Name", labels);
+    }
+
+    [Theory]
+    [InlineData("Foreground", true)]
+    [InlineData("IsEnabled", true)]
+    [InlineData("Click", true)]
+    [InlineData("Text", false)]
+    [InlineData("Width", false)]
+    public void AttributeCompletion_TriggersValueSuggestionsOnlyWhenAvailable(
+        string attributeName,
+        bool expectsValueSuggestions)
+    {
+        var marked = $$"""
+            <Button xmlns="using:TestApp"
+                    {{attributeName.Substring(0, 1)}}| />
+            """;
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        var item = Assert.Single(
+            CompletionProvider.Provide(
+                new TextDocument("file:///C:/test/Page.xaml", text),
+                offset,
+                CreateTypeSystem()).Items,
+            candidate => candidate.Label == attributeName);
+
+        Assert.Equal(attributeName + "=\"$0\"", item.TextEdit!.NewText);
+        Assert.Equal(2, item.InsertTextFormat);
+        Assert.Equal(expectsValueSuggestions, item.Command is not null);
+        if (expectsValueSuggestions)
+        {
+            Assert.Equal("editor.action.triggerSuggest", item.Command!.Name);
+        }
+    }
+
+    [Fact]
+    public void AttachedAttributeCompletion_TriggersAvailableValueSuggestions()
+    {
+        const string marked = """
+            <Button xmlns="using:TestApp"
+                    AutomationProperties.A| />
+            """;
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        var item = Assert.Single(
+            CompletionProvider.Provide(
+                new TextDocument("file:///C:/test/Page.xaml", text),
+                offset,
+                CreateTypeSystem()).Items,
+            candidate => candidate.Label == "AutomationProperties.AccessibilityView");
+
+        Assert.Equal("editor.action.triggerSuggest", item.Command?.Name);
     }
 
     [Theory]

@@ -24,6 +24,20 @@ export async function runCoreScenarios(ctx) {
   }
   console.log(`[ok] completion(attribute): '<Button ' -> members, x:Name, and AutomationProperties.Name (${attrLabels.length} items)`);
 
+  const chainedValueItems = await completeItemsWith(
+    704,
+    `<Page ${NS}>\n  <TextBlock Foreg|\n</Page>`,
+    "attribute-value-chain"
+  );
+  const foregroundItem = chainedValueItems.find((item) => item.label === "Foreground");
+  if (foregroundItem?.textEdit?.newText !== 'Foreground="$0"') {
+    fail(`Foreground attribute completion should insert a quoted value snippet: ${JSON.stringify(foregroundItem)}`);
+  }
+  if (foregroundItem?.command?.command !== "editor.action.triggerSuggest") {
+    fail(`Foreground attribute completion should trigger value suggestions: ${JSON.stringify(foregroundItem)}`);
+  }
+  console.log("[ok] completion(attribute chain): accepting Foreground requests value suggestions inside the inserted quotes");
+
   const newlineAttrLabels = await completeWith(8, `<Page ${NS}>\n  <Button\n    |\n</Page>`, "attribute-name-newline");
   for (const want of ["Content", "x:Name", "AutomationProperties.Name"]) {
     if (!newlineAttrLabels.includes(want)) fail(`newline attribute completion missing '${want}' (got ${newlineAttrLabels.length} items)`);
