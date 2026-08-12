@@ -107,6 +107,13 @@
       border-radius: 18px;
       box-shadow: 0 40px 90px rgba(14,48,86,.35);
     }
+    .editor img {
+      display: block;
+      width: 1180px;
+      height: auto;
+      object-fit: cover;
+      object-position: left top;
+    }
     .titlebar {
       display: flex;
       align-items: center;
@@ -206,24 +213,7 @@
     </section>
 
     <section class="editor" aria-label="AppxManifest IntelliSense screenshot">
-      <div class="titlebar">
-        <div class="tab"><span style="color:#e37933">&lt;/&gt;</span> Package.appxmanifest</div>
-      </div>
-      <div class="xml"><span class="ln">1</span><span class="tag">&lt;Package</span> <span class="attr">xmlns</span>=<span class="str">"http://schemas.microsoft.com/appx/manifest/foundation/windows10"</span><span class="tag">&gt;</span>
-<span class="ln">2</span>  <span class="tag">&lt;Identity</span> <span class="attr">Name</span>=<span class="str">"Contoso.PhotoApp"</span> <span class="attr">Publisher</span>=<span class="str">"CN=Contoso"</span> <span class="attr">Version</span>=<span class="str">"1.0.0.0"</span> <span class="tag">/&gt;</span>
-<span class="ln">3</span>  <span class="tag">&lt;Properties&gt;</span>
-<span class="ln">4</span>    <span class="tag">&lt;DisplayName&gt;</span>Contoso Photos<span class="tag">&lt;/DisplayName&gt;</span>
-<span class="ln">5</span>  <span class="tag">&lt;/Properties&gt;</span>
-<span class="ln">6</span>  <span class="tag">&lt;</span><span class="cursor"></span>
-<span class="ln">7</span><span class="tag">&lt;/Package&gt;</span></div>
-      <div class="suggest">
-        <div class="suggest-row active"><span class="cube">&#9670;</span><b>Dependencies</b><span class="required">required</span></div>
-        <div class="suggest-row"><span class="cube">&#9670;</span>Resources</div>
-        <div class="suggest-row"><span class="cube">&#9670;</span>Applications</div>
-        <div class="suggest-row"><span class="cube">&#9670;</span>Capabilities</div>
-        <div class="doc"><b>Dependencies</b><br>Declares packages and device families that this package depends on.</div>
-      </div>
-      <div class="problem"><b>&#10006; Missing required element</b> &lt;Dependencies&gt; in &lt;Package&gt;</div>
+      <img src="intellisense-editor.png" alt="">
     </section>
   </main>
 </body>
