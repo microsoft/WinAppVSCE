@@ -95,6 +95,7 @@ public class XamlCodeActionsTests
                      XamlValidator.UnknownAttachedPropertyCode,
                      XamlValidator.UnknownPropertyElementCode,
                      XamlValidator.UnknownBindMemberCode,
+                     XamlValidator.UnknownResourceKeyCode,
                  })
         {
             var ctx = Context(Diag(code, R(0, 1, 5), Data("Foo", "Bar")));

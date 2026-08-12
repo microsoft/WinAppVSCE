@@ -252,6 +252,45 @@ public class XamlValidatorTests
         Assert.DoesNotContain(diagnostics, d => d.Code == XamlValidator.InvalidAttributeValueCode);
     }
 
+    [Fact]
+    public void MisspelledKnownThemeResource_IsReportedWithSuggestion()
+    {
+        var diagnostics = Validate(
+            Page("""Foreground="{ThemeResource TextFillColorSecondaryBru}" """),
+            "TextFillColorSecondaryBrush");
+
+        var diagnostic = Assert.Single(
+            diagnostics,
+            item => item.Code == XamlValidator.UnknownResourceKeyCode);
+        Assert.Equal(1, diagnostic.Severity);
+        var data = Assert.IsType<Lsp.DiagnosticData>(diagnostic.Data);
+        Assert.Contains("TextFillColorSecondaryBrush", data.Suggestions);
+    }
+
+    [Fact]
+    public void KnownAndUncataloguedResourceKeys_RemainValid()
+    {
+        var known = Validate(
+            Page("""Foreground="{ThemeResource TextFillColorSecondaryBrush}" """),
+            "TextFillColorSecondaryBrush");
+        var uncatalogued = Validate(
+            Page("""Foreground="{ThemeResource LibraryProvidedBrush}" """),
+            "TextFillColorSecondaryBrush");
+
+        Assert.DoesNotContain(known, item => item.Code == XamlValidator.UnknownResourceKeyCode);
+        Assert.DoesNotContain(uncatalogued, item => item.Code == XamlValidator.UnknownResourceKeyCode);
+    }
+
+    [Fact]
+    public void NestedMisspelledResource_IsReported()
+    {
+        var diagnostics = Validate(
+            Page("""Foreground="{Binding Source={StaticResource AccentBru}}" """),
+            "AccentBrush");
+
+        Assert.Contains(diagnostics, item => item.Code == XamlValidator.UnknownResourceKeyCode);
+    }
+
     private static string Page(string attributes) => $$"""
         <Page xmlns="using:TestApp"
               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -262,7 +301,9 @@ public class XamlValidatorTests
               {{attributes}} />
         """;
 
-    private static System.Collections.Generic.List<Lsp.Diagnostic> Validate(string xaml)
+    private static System.Collections.Generic.List<Lsp.Diagnostic> Validate(
+        string xaml,
+        params string[] resourceKeys)
     {
         var compilation = CSharpCompilation.Create(
             "TestApp",
@@ -274,6 +315,6 @@ public class XamlValidatorTests
             ImmutableArray<IAssemblySymbol>.Empty);
         var document = new TextDocument("file:///C:/test/Page.xaml", xaml);
 
-        return XamlValidator.Validate(document, typeSystem);
+        return XamlValidator.Validate(document, typeSystem, resourceKeys);
     }
 }

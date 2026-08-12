@@ -41,13 +41,17 @@ internal sealed partial class XamlLanguageServer
                 return;
             }
 
-            var typeSystem = await GetTypeSystemAsync(doc.Uri).ConfigureAwait(false);
-            if (typeSystem == null || !IsCurrent(doc))
+            var context = await GetContextAsync(doc.Uri).ConfigureAwait(false);
+            if (context == null || !IsCurrent(doc))
             {
                 return;
             }
 
-            var semantic = XamlValidator.Validate(doc, typeSystem);
+            var resourceKeys = GetAppResourceKeys(context.Resolution)
+                .Concat(context.TypeSystem.GetThemeResources().Select(resource => resource.Key))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var semantic = XamlValidator.Validate(doc, context.TypeSystem, resourceKeys);
             if (semantic.Count == 0 || !IsCurrent(doc))
             {
                 // No semantic issues: the syntactic-only publish already sent is the correct final state.

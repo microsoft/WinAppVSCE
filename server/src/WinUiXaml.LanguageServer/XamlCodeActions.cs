@@ -19,6 +19,7 @@ internal static class XamlCodeActions
         XamlValidator.UnknownAttachedPropertyCode,
         XamlValidator.UnknownPropertyElementCode,
         XamlValidator.UnknownBindMemberCode,
+        XamlValidator.UnknownResourceKeyCode,
     };
 
     // Well-known XAML prefixes whose namespace URI is unambiguous, so an undeclared-prefix diagnostic (WXAML0001) can be fixed by inserting the standard declaration on the root. Custom prefixes need an author-chosen using: target we never guess.

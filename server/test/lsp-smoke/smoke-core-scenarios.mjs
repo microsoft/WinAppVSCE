@@ -697,6 +697,30 @@ export async function runCoreScenarios(ctx) {
   }
   console.log(`[ok] validation(WinUI values): converter-backed structs, brushes, colors, and known non-string empty literals`);
 
+  const misspelledThemeResource = await validateDoc(
+    `<Page ${NS} x:Class="SmokeFixture.SmokePage">
+  <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBru}" />
+</Page>`,
+    (d) => d.some((x) => x.code === "WXAML0013" && x.message.includes("TextFillColorSecondaryBru")),
+    "misspelled theme-resource key"
+  );
+  const misspelledThemeResourceHits = misspelledThemeResource.filter((x) => x.code === "WXAML0013");
+  if (misspelledThemeResourceHits.length !== 1 || misspelledThemeResourceHits[0].severity !== 1) {
+    fail(`misspelled ThemeResource key should produce one WXAML0013 error: ${JSON.stringify(misspelledThemeResource)}`);
+  }
+
+  const validThemeResource = await validateDoc(
+    `<Page ${NS} x:Class="SmokeFixture.SmokePage">
+  <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+</Page>`,
+    (d) => d.length === 0,
+    "valid theme-resource key"
+  );
+  if (validThemeResource.length !== 0) {
+    fail(`known ThemeResource key must remain diagnostic-free: ${JSON.stringify(validThemeResource)}`);
+  }
+  console.log(`[ok] validation(resource keys): misspelled SDK ThemeResource -> WXAML0013; exact key remains valid`);
+
   // 19) Round-7 regressions: function-binding F12, x:Bind completion noise, invalid-member diagnostic, unquoted value.
   const fnF12 = await definitionWith(210, pageCls('<Button Click="{x:Bind OnGo_Cl|ick()}" />'), "fn-binding-f12");
   if (!fnF12?.uri || !fnF12.uri.endsWith("SmokePage.xaml.cs")) {

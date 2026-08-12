@@ -48,6 +48,9 @@ internal static class XamlValidator
     /// <summary>A literal attribute value cannot be converted to the property's primitive or enum type.</summary>
     public const string InvalidAttributeValueCode = "WXAML0012";
 
+    /// <summary>A resource key closely resembles a known key but does not resolve.</summary>
+    public const string UnknownResourceKeyCode = "WXAML0013";
+
     private const int SeverityError = 1;
     private const int SeverityWarning = 2;
     private static readonly HashSet<string> ReservedPrefixes = new(System.StringComparer.Ordinal)
@@ -55,14 +58,31 @@ internal static class XamlValidator
         "xml", "xmlns",
     };
 
-    public static List<Diagnostic> Validate(TextDocument doc, XamlTypeSystem typeSystem)
+    public static List<Diagnostic> Validate(
+        TextDocument doc,
+        XamlTypeSystem typeSystem,
+        IReadOnlyCollection<string>? projectResourceKeys = null)
     {
         var diagnostics = new List<Diagnostic>();
         if (doc.Parsed.Root is { } root)
         {
+            var resourceKeys = new HashSet<string>(System.StringComparer.Ordinal);
+            foreach (var key in CompletionProvider.CollectResourceKeys(doc.Parsed))
+            {
+                resourceKeys.Add(key);
+            }
+
+            if (projectResourceKeys is not null)
+            {
+                foreach (var key in projectResourceKeys)
+                {
+                    resourceKeys.Add(key);
+                }
+            }
+
             // Unresolved binding roots remain silent to avoid false positives.
             var pageClass = ResolvePageClass(root, typeSystem);
-            Walk(root, doc, typeSystem, diagnostics, pageClass);
+            Walk(root, doc, typeSystem, diagnostics, pageClass, resourceKeys);
 
             ValidateUniqueNames(root, doc, diagnostics);
             ValidateUniqueResourceKeys(root, doc, diagnostics);
@@ -72,7 +92,12 @@ internal static class XamlValidator
     }
 
     private static void Walk(
-        XamlElement element, TextDocument doc, XamlTypeSystem typeSystem, List<Diagnostic> diagnostics, INamedTypeSymbol? bindRoot)
+        XamlElement element,
+        TextDocument doc,
+        XamlTypeSystem typeSystem,
+        List<Diagnostic> diagnostics,
+        INamedTypeSymbol? bindRoot,
+        IReadOnlySet<string> resourceKeys)
     {
         // An unresolved x:DataType disables binding checks for its subtree.
         var effectiveRoot = bindRoot;
@@ -82,12 +107,70 @@ internal static class XamlValidator
         }
 
         ValidateElement(element, doc, typeSystem, diagnostics, effectiveRoot);
+        ValidateResourceReferences(element, doc, diagnostics, resourceKeys);
 
         foreach (var child in element.Content)
         {
             if (child is XamlElement childElement)
             {
-                Walk(childElement, doc, typeSystem, diagnostics, effectiveRoot);
+                Walk(childElement, doc, typeSystem, diagnostics, effectiveRoot, resourceKeys);
+            }
+        }
+    }
+
+    private static void ValidateResourceReferences(
+        XamlElement element,
+        TextDocument doc,
+        List<Diagnostic> diagnostics,
+        IReadOnlySet<string> resourceKeys)
+    {
+        if (resourceKeys.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var attribute in element.Attributes)
+        {
+            if (attribute.Value is not { } value)
+            {
+                continue;
+            }
+
+            foreach (var extension in value.DescendantNodesAndSelf().OfType<XamlMarkupExtension>())
+            {
+                if (!extension.IsClosed ||
+                    extension.Name is not { HasPrefix: false } name ||
+                    name.LocalName is not ("StaticResource" or "ThemeResource"))
+                {
+                    continue;
+                }
+
+                var argument = extension.Arguments.FirstOrDefault(
+                    candidate => !candidate.IsNamed &&
+                        candidate.NestedExtension is null &&
+                        candidate.Value is { Length: > 0 });
+                if (argument?.Value is not { } key ||
+                    argument.ValueSpan is not { } keySpan ||
+                    resourceKeys.Contains(key))
+                {
+                    continue;
+                }
+
+                var suggestion = SuggestData(key, resourceKeys);
+                if (suggestion is null)
+                {
+                    // Referenced assemblies can contribute resources that are not visible in the
+                    // project or SDK catalogs. Only diagnose high-confidence spelling mistakes.
+                    continue;
+                }
+
+                diagnostics.Add(Diag(
+                    doc,
+                    keySpan,
+                    SeverityError,
+                    UnknownResourceKeyCode,
+                    $"The resource '{key}' was not found.",
+                    suggestion));
             }
         }
     }
