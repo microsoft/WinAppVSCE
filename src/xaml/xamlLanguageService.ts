@@ -26,6 +26,7 @@ import { ServerLifecycle } from "./serverLifecycle";
 import {
   isEnterEdit,
   shouldTriggerAttributeSuggestions,
+  shouldTriggerElementSuggestions,
 } from "./attributeSuggestionTrigger";
 import {
   PROJECT_RESTORE_ACTIONS,
@@ -92,15 +93,18 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
     vscode.workspace.onDidChangeTextDocument((event) => {
       if (
         event.document.languageId !== "xaml" ||
-        event.contentChanges.length !== 1 ||
-        !isEnterEdit(event.contentChanges[0].text)
+        event.contentChanges.length !== 1
       ) {
         return;
       }
 
       const change = event.contentChanges[0];
       const offset = change.rangeOffset + change.text.length;
-      if (!shouldTriggerAttributeSuggestions(event.document.getText(), offset)) {
+      const text = event.document.getText();
+      const shouldTrigger =
+        (isEnterEdit(change.text) && shouldTriggerAttributeSuggestions(text, offset)) ||
+        (change.text === "<" && shouldTriggerElementSuggestions(text, offset));
+      if (!shouldTrigger) {
         return;
       }
 

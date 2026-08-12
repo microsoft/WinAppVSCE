@@ -6,45 +6,51 @@ export async function runCoreScenarios(ctx) {
     send, waitFor, responseFor, nextVersion, resCaret,
   } = ctx;
 
-  const elementLabels = await completeWith(5, `<Page ${NS}>\n  <But|\n</Page>`, "element-name");
+  const emptyElementLabels = await completeWith(5, `<Page ${NS}>\n  <|\n</Page>`, "element-name-empty");
+  for (const want of ["Button", "TextBlock", "TitleBar"]) {
+    if (!emptyElementLabels.includes(want)) fail(`empty element completion missing '${want}' (got ${emptyElementLabels.length} items)`);
+  }
+  console.log(`[ok] completion(element): '<' -> Button/TextBlock/TitleBar (${emptyElementLabels.length} items)`);
+
+  const elementLabels = await completeWith(6, `<Page ${NS}>\n  <But|\n</Page>`, "element-name");
   for (const want of ["Button"]) {
     if (!elementLabels.includes(want)) fail(`element completion missing '${want}' (got ${elementLabels.length} items)`);
   }
   console.log(`[ok] completion(element): '<But' -> Button (${elementLabels.length} items)`);
 
-  const attrLabels = await completeWith(6, `<Page ${NS}>\n  <Button |\n</Page>`, "attribute-name");
+  const attrLabels = await completeWith(7, `<Page ${NS}>\n  <Button |\n</Page>`, "attribute-name");
   for (const want of ["Content", "Click", "IsEnabled", "x:Name", "AutomationProperties.Name"]) {
     if (!attrLabels.includes(want)) fail(`attribute completion missing '${want}' (got ${attrLabels.length} items)`);
   }
   console.log(`[ok] completion(attribute): '<Button ' -> members, x:Name, and AutomationProperties.Name (${attrLabels.length} items)`);
 
-  const newlineAttrLabels = await completeWith(601, `<Page ${NS}>\n  <Button\n    |\n</Page>`, "attribute-name-newline");
+  const newlineAttrLabels = await completeWith(8, `<Page ${NS}>\n  <Button\n    |\n</Page>`, "attribute-name-newline");
   for (const want of ["Content", "x:Name", "AutomationProperties.Name"]) {
     if (!newlineAttrLabels.includes(want)) fail(`newline attribute completion missing '${want}' (got ${newlineAttrLabels.length} items)`);
   }
   console.log(`[ok] completion(attribute newline): an empty indented line inside <Button> offers attributes (${newlineAttrLabels.length} items)`);
 
-  const attachedLabels = await completeWith(7, `<Page ${NS}>\n  <Button Grid.|\n</Page>`, "attached-property");
+  const attachedLabels = await completeWith(9, `<Page ${NS}>\n  <Button Grid.|\n</Page>`, "attached-property");
   for (const want of ["Grid.Row", "Grid.Column"]) {
     if (!attachedLabels.includes(want)) fail(`attached-property completion missing '${want}' (got ${attachedLabels.length} items)`);
   }
   console.log(`[ok] completion(attached): '<Button Grid.' -> Grid.Row/Grid.Column (${attachedLabels.length} items)`);
 
   // 9) value completion: enum-typed attribute -> enum members.
-  const enumLabels = await completeWith(8, `<Page ${NS}>\n  <Button HorizontalAlignment="|" />\n</Page>`, "enum-value");
+  const enumLabels = await completeWith(10, `<Page ${NS}>\n  <Button HorizontalAlignment="|" />\n</Page>`, "enum-value");
   for (const want of ["Left", "Center", "Right", "Stretch"]) {
     if (!enumLabels.includes(want)) fail(`enum value completion missing '${want}' (got ${enumLabels.join(",")})`);
   }
   console.log(`[ok] completion(enum): 'HorizontalAlignment="' -> Left/Center/Right/Stretch (${enumLabels.length} items)`);
 
   // 10) value completion: enum members filter by the partial already typed.
-  const enumPartial = await completeWith(9, `<Page ${NS}>\n  <Button HorizontalAlignment="C|" />\n</Page>`, "enum-value-partial");
+  const enumPartial = await completeWith(11, `<Page ${NS}>\n  <Button HorizontalAlignment="C|" />\n</Page>`, "enum-value-partial");
   if (!enumPartial.includes("Center")) fail(`enum partial completion missing 'Center' (got ${enumPartial.join(",")})`);
   if (enumPartial.includes("Left")) fail(`enum partial completion should have filtered out 'Left' (got ${enumPartial.join(",")})`);
   console.log(`[ok] completion(enum, partial 'C'): -> Center, not Left (${enumPartial.length} items)`);
 
   // 11) value completion: boolean-typed attribute -> True/False.
-  const boolLabels = await completeWith(10, `<Page ${NS}>\n  <Button IsEnabled="|" />\n</Page>`, "bool-value");
+  const boolLabels = await completeWith(12, `<Page ${NS}>\n  <Button IsEnabled="|" />\n</Page>`, "bool-value");
   for (const want of ["True", "False"]) {
     if (!boolLabels.includes(want)) fail(`bool value completion missing '${want}' (got ${boolLabels.join(",")})`);
   }

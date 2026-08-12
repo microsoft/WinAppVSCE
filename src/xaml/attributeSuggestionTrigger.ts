@@ -44,3 +44,22 @@ export function shouldTriggerAttributeSuggestions(text: string, offset: number):
 export function isEnterEdit(text: string): boolean {
   return /^\r?\n[ \t]*$/.test(text);
 }
+
+/** Returns true when a newly typed less-than sign starts an element in XAML content. */
+export function shouldTriggerElementSuggestions(text: string, offset: number): boolean {
+  if (offset <= 0 || offset > text.length || text[offset - 1] !== "<") {
+    return false;
+  }
+
+  const beforeElement = text.slice(0, offset - 1);
+  if (
+    beforeElement.lastIndexOf("<!--") > beforeElement.lastIndexOf("-->") ||
+    beforeElement.lastIndexOf("<![CDATA[") > beforeElement.lastIndexOf("]]>")
+  ) {
+    return false;
+  }
+
+  const previousLt = beforeElement.lastIndexOf("<");
+  const previousGt = beforeElement.lastIndexOf(">");
+  return previousLt < 0 || previousGt > previousLt;
+}

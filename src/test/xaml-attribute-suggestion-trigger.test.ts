@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   isEnterEdit,
   shouldTriggerAttributeSuggestions,
+  shouldTriggerElementSuggestions,
 } from "../xaml/attributeSuggestionTrigger";
 
 function caret(marked: string): [string, number] {
@@ -41,4 +42,19 @@ test("recognizes only an Enter edit with optional indentation", () => {
   assert.equal(isEnterEdit("\r\n    "), true);
   assert.equal(isEnterEdit("a"), false);
   assert.equal(isEnterEdit("\n  a"), false);
+});
+
+test("triggers when less-than starts an element on a new content line", () => {
+  const [text, offset] = caret("<Page>\n  <|\n</Page>");
+  assert.equal(shouldTriggerElementSuggestions(text, offset), true);
+});
+
+test("does not trigger element suggestions inside attributes, comments, or CDATA", () => {
+  const [attribute, attributeOffset] = caret('<Button Content="<|" />');
+  const [comment, commentOffset] = caret("<Page><!-- <| --></Page>");
+  const [cdata, cdataOffset] = caret("<Page><![CDATA[ <| ]]></Page>");
+
+  assert.equal(shouldTriggerElementSuggestions(attribute, attributeOffset), false);
+  assert.equal(shouldTriggerElementSuggestions(comment, commentOffset), false);
+  assert.equal(shouldTriggerElementSuggestions(cdata, cdataOffset), false);
 });
