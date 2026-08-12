@@ -790,19 +790,19 @@ internal static partial class CompletionProvider
         }
 
         // GridLength-typed value (RowDefinition.Height / ColumnDefinition.Width) — offer the two keyword sizings VS/Blend surface (Auto, *). FrameworkElement.Width/Height are 'double' (not GridLength), so they correctly fall through to the empty list below.
-        if (IsGridLength(valueType))
+        if (XamlValueConverter.IsGridLength(valueType))
         {
             return CompleteGridLength(partial, valueReplaceRange);
         }
 
         // Brush/Color-typed value (Foreground/Background/BorderBrush/…, SolidColorBrush.Color, GradientStop.Color) — offer the WinUI named colors (Red, CornflowerBlue, …
-        if (IsBrush(valueType) || IsColor(valueType))
+        if (XamlValueConverter.IsBrush(valueType) || XamlValueConverter.IsColor(valueType))
         {
             return CompleteNamedColor(partial, typeSystem, valueReplaceRange);
         }
 
         // FontWeight-typed value (Control.FontWeight, TextBlock.FontWeight, …) — offer the named weights (Thin, Light, Normal, SemiBold, Bold, …, ExtraBlack) from Microsoft.UI.Text.FontWeights, as VS/Blend do. The numeric form (FontWeight="700") stays free-form (no named weight starts with a digit).
-        if (IsFontWeight(valueType))
+        if (XamlValueConverter.IsFontWeight(valueType))
         {
             return CompleteFontWeight(partial, typeSystem, valueReplaceRange);
         }

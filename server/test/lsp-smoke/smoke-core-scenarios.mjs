@@ -661,6 +661,42 @@ export async function runCoreScenarios(ctx) {
   }
   console.log(`[ok] validation(values): Width="abc" -> WXAML0012; Width='12.5' remains valid XML/XAML`);
 
+  const invalidWinUiValues = await validateDoc(
+    `<Page ${NS} x:Class="SmokeFixture.SmokePage">
+  <Border CornerRadius="8,bad,8,0" BorderThickness="1,2,nope,4" BorderBrush="DefinitelyNotABrush" />
+</Page>`,
+    (d) => d.filter((x) => x.code === "WXAML0012").length === 3,
+    "invalid WinUI converter values"
+  );
+  const invalidWinUiValueHits = invalidWinUiValues.filter((x) => x.code === "WXAML0012");
+  if (invalidWinUiValueHits.length !== 3 || invalidWinUiValueHits.some((x) => x.severity !== 1)) {
+    fail(`invalid CornerRadius, Thickness, and Brush values should produce three WXAML0012 errors: ${JSON.stringify(invalidWinUiValues)}`);
+  }
+
+  const validWinUiValues = await validateDoc(
+    `<Page ${NS} x:Class="SmokeFixture.SmokePage">
+  <Border CornerRadius="8 0 8 0" BorderThickness="1,2" BorderBrush="#80112233" Background="Red" />
+</Page>`,
+    (d) => d.length === 0,
+    "valid WinUI converter values"
+  );
+  if (validWinUiValues.length !== 0) {
+    fail(`valid CornerRadius, Thickness, and Brush values must remain diagnostic-free: ${JSON.stringify(validWinUiValues)}`);
+  }
+
+  const emptyWinUiValues = await validateDoc(
+    `<Page ${NS} x:Class="SmokeFixture.SmokePage">
+  <Border CornerRadius="" BorderThickness="" BorderBrush=""><TextBlock Text="" /></Border>
+</Page>`,
+    (d) => d.filter((x) => x.code === "WXAML0012").length === 3,
+    "empty WinUI converter values"
+  );
+  const emptyWinUiValueHits = emptyWinUiValues.filter((x) => x.code === "WXAML0012");
+  if (emptyWinUiValueHits.length !== 3) {
+    fail(`empty CornerRadius, Thickness, and Brush values should be invalid while Text="" remains valid: ${JSON.stringify(emptyWinUiValues)}`);
+  }
+  console.log(`[ok] validation(WinUI values): converter-backed structs, brushes, colors, and known non-string empty literals`);
+
   // 19) Round-7 regressions: function-binding F12, x:Bind completion noise, invalid-member diagnostic, unquoted value.
   const fnF12 = await definitionWith(210, pageCls('<Button Click="{x:Bind OnGo_Cl|ick()}" />'), "fn-binding-f12");
   if (!fnF12?.uri || !fnF12.uri.endsWith("SmokePage.xaml.cs")) {

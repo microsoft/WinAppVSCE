@@ -568,18 +568,6 @@ internal static partial class CompletionProvider
         ("*", "GridLength — star sizing (one share of the remaining space)"),
     };
 
-    /// <summary>True when the resolved value type is <c>Microsoft.UI.Xaml.GridLength</c> (WinUI, not WPF).</summary>
-    private static bool IsGridLength(ITypeSymbol type) =>
-        type is INamedTypeSymbol
-        {
-            Name: "GridLength",
-            ContainingNamespace:
-            {
-                Name: "Xaml",
-                ContainingNamespace: { Name: "UI", ContainingNamespace.Name: "Microsoft" }
-            }
-        };
-
     /// <summary>Completes a GridLength-typed attribute value.</summary>
     private static CompletionList CompleteGridLength(string partial, Lsp.Range replaceRange)
     {
@@ -605,44 +593,6 @@ internal static partial class CompletionProvider
         return Finish(items);
     }
 
-    /// <summary>True when the resolved value type is (or derives from) Microsoft.UI.Xaml.Media.Brush</summary>
-    private static bool IsBrush(ITypeSymbol type)
-    {
-        for (ITypeSymbol? cur = type; cur is not null; cur = cur.BaseType)
-        {
-            if (cur is INamedTypeSymbol
-                {
-                    Name: "Brush",
-                    ContainingNamespace:
-                    {
-                        Name: "Media",
-                        ContainingNamespace:
-                        {
-                            Name: "Xaml",
-                            ContainingNamespace: { Name: "UI", ContainingNamespace.Name: "Microsoft" }
-                        }
-                    }
-                })
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>True when the resolved value type is Windows.UI.Color (the WinUI 3 color struct,</summary>
-    private static bool IsColor(ITypeSymbol type) =>
-        type is INamedTypeSymbol
-        {
-            Name: "Color",
-            ContainingNamespace:
-            {
-                Name: "UI",
-                ContainingNamespace: { Name: "Windows", ContainingNamespace.IsGlobalNamespace: true }
-            }
-        };
-
     /// <summary>Completes a Brush/Color-typed attribute value with the WinUI named colors (Microsoft.UI.Colors — Red, CornflowerBlue, …, Transparent).</summary>
     private static CompletionList CompleteNamedColor(string partial, XamlTypeSystem typeSystem, Lsp.Range replaceRange)
     {
@@ -667,22 +617,6 @@ internal static partial class CompletionProvider
 
         return Finish(items);
     }
-
-    /// <summary>True when the resolved value type is Windows.UI.Text.FontWeight (the WinUI 3 font-weight struct,</summary>
-    private static bool IsFontWeight(ITypeSymbol type) =>
-        type is INamedTypeSymbol
-        {
-            Name: "FontWeight",
-            ContainingNamespace:
-            {
-                Name: "Text",
-                ContainingNamespace:
-                {
-                    Name: "UI",
-                    ContainingNamespace: { Name: "Windows", ContainingNamespace.IsGlobalNamespace: true }
-                }
-            }
-        };
 
     /// <summary>Completes a FontWeight-typed attribute value with the WinUI named weights (Microsoft.UI.Text.FontWeights — Thin, Light, Normal, SemiBold, Bold, …), matching Visual Studio/Blend.</summary>
     private static CompletionList CompleteFontWeight(string partial, XamlTypeSystem typeSystem, Lsp.Range replaceRange)

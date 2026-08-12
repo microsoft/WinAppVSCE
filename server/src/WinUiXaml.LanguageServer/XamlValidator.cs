@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.Globalization;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using WinUiXaml.LanguageServer.Lsp;
@@ -203,13 +202,14 @@ internal static class XamlValidator
 
         if (member.Kind == XamlMemberKind.Property && member.Type is not null)
         {
-            ValidateLiteralAttributeValue(attribute, member.Type, doc, diagnostics);
+            ValidateLiteralAttributeValue(attribute, member.Type, typeSystem, doc, diagnostics);
         }
     }
 
     private static void ValidateLiteralAttributeValue(
         XamlAttribute attribute,
         ITypeSymbol memberType,
+        XamlTypeSystem typeSystem,
         TextDocument doc,
         List<Diagnostic> diagnostics)
     {
@@ -221,8 +221,8 @@ internal static class XamlValidator
             return;
         }
 
-        var targetType = UnwrapNullable(memberType);
-        if (!IsKnownInvalidPrimitive(value.Text, targetType))
+        var targetType = XamlValueConverter.UnwrapNullable(memberType);
+        if (!XamlValueConverter.TryValidate(value.Text, targetType, typeSystem, out var isValid) || isValid)
         {
             return;
         }
@@ -234,52 +234,6 @@ internal static class XamlValidator
             InvalidAttributeValueCode,
             $"'{value.Text}' is not a valid value for '{attribute.Name.FullName}' ({targetType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)})."));
     }
-
-    private static ITypeSymbol UnwrapNullable(ITypeSymbol type) =>
-        type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable
-            ? nullable.TypeArguments[0]
-            : type;
-
-    private static bool IsKnownInvalidPrimitive(string text, ITypeSymbol type)
-    {
-        if (type.TypeKind == TypeKind.Enum)
-        {
-            if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
-            {
-                return false;
-            }
-
-            var names = type.GetMembers().OfType<IFieldSymbol>()
-                .Where(field => field.HasConstantValue)
-                .Select(field => field.Name)
-                .ToHashSet(System.StringComparer.Ordinal);
-            return text.Split(',').Any(part => !names.Contains(part.Trim()));
-        }
-
-        return type.SpecialType switch
-        {
-            SpecialType.System_Boolean => !bool.TryParse(text, out _),
-            SpecialType.System_Byte => !byte.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
-            SpecialType.System_SByte => !sbyte.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
-            SpecialType.System_Int16 => !short.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
-            SpecialType.System_UInt16 => !ushort.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
-            SpecialType.System_Int32 => !int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
-            SpecialType.System_UInt32 => !uint.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
-            SpecialType.System_Int64 => !long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
-            SpecialType.System_UInt64 => !ulong.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
-            SpecialType.System_Single => !IsValidFloatingPoint(text, single: true),
-            SpecialType.System_Double => !IsValidFloatingPoint(text, single: false),
-            SpecialType.System_Decimal => !decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _),
-            SpecialType.System_Char => text.Length != 1,
-            _ => false,
-        };
-    }
-
-    private static bool IsValidFloatingPoint(string text, bool single) =>
-        string.Equals(text, "Auto", System.StringComparison.OrdinalIgnoreCase) ||
-        (single
-            ? float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
-            : double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _));
 
     /// <summary>Validates an Owner.Member attached-property attribute: resolves the owner type through the attribute's namespace and checks it actually exposes the member.</summary>
     private static void ValidateAttachedProperty(
@@ -316,7 +270,7 @@ internal static class XamlValidator
         var memberType = typeSystem.GetAttachedMemberType(owner, memberName);
         if (memberType is not null)
         {
-            ValidateLiteralAttributeValue(attribute, memberType, doc, diagnostics);
+            ValidateLiteralAttributeValue(attribute, memberType, typeSystem, doc, diagnostics);
             return;
         }
 

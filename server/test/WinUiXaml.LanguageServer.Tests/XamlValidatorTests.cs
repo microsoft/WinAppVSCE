@@ -21,6 +21,11 @@ public class XamlValidatorTests
             {
                 public double Width { get; set; }
                 public bool IsEnabled { get; set; }
+                public string Text { get; set; } = "";
+                public Microsoft.UI.Xaml.CornerRadius CornerRadius { get; set; }
+                public Microsoft.UI.Xaml.Thickness Margin { get; set; }
+                public Microsoft.UI.Xaml.Media.Brush Foreground { get; set; } = new Microsoft.UI.Xaml.Media.Brush();
+                public Windows.UI.Color Color { get; set; }
                 public Child Child { get; } = new Child();
                 public Formatter Formatter { get; } = new Formatter();
                 public string Format(string value) => value;
@@ -48,6 +53,31 @@ public class XamlValidatorTests
             {
                 public static int GetRow(object value) => 0;
                 public static void SetRow(object value, int row) { }
+            }
+        }
+
+        namespace Microsoft.UI.Xaml
+        {
+            public struct CornerRadius { }
+            public struct Thickness { }
+        }
+
+        namespace Microsoft.UI.Xaml.Media
+        {
+            public class Brush { }
+        }
+
+        namespace Windows.UI
+        {
+            public struct Color { }
+        }
+
+        namespace Microsoft.UI
+        {
+            public static class Colors
+            {
+                public static Windows.UI.Color Red => default;
+                public static Windows.UI.Color Transparent => default;
             }
         }
         """;
@@ -177,6 +207,49 @@ public class XamlValidatorTests
         var diagnostics = Validate(Page("""Grid.Row="abc" """));
 
         Assert.Contains(diagnostics, d => d.Code == XamlValidator.InvalidAttributeValueCode);
+    }
+
+    [Theory]
+    [InlineData("""CornerRadius="8" """, false)]
+    [InlineData("""CornerRadius="8,0,8,0" """, false)]
+    [InlineData("""CornerRadius="8 0 8 0" """, false)]
+    [InlineData("""CornerRadius="8,bad,8,0" """, true)]
+    [InlineData("""CornerRadius="" """, true)]
+    [InlineData("""Margin="4" """, false)]
+    [InlineData("""Margin="4,8" """, false)]
+    [InlineData("""Margin="4 8 4 8" """, false)]
+    [InlineData("""Margin="4,,8" """, true)]
+    [InlineData("""Margin="" """, true)]
+    public void WinUiNumericStructValues_AreValidated(string attribute, bool invalid)
+    {
+        var diagnostics = Validate(Page(attribute));
+
+        Assert.Equal(invalid, diagnostics.Any(d => d.Code == XamlValidator.InvalidAttributeValueCode));
+    }
+
+    [Theory]
+    [InlineData("""Foreground="Red" """, false)]
+    [InlineData("""Foreground="transparent" """, false)]
+    [InlineData("""Foreground="#123" """, false)]
+    [InlineData("""Foreground="#80112233" """, false)]
+    [InlineData("""Foreground="DefinitelyNotABrush" """, true)]
+    [InlineData("""Foreground="#12XX34" """, true)]
+    [InlineData("""Foreground="" """, true)]
+    [InlineData("""Color="Red" """, false)]
+    [InlineData("""Color="NoSuchColor" """, true)]
+    public void BrushAndColorValues_AreValidated(string attribute, bool invalid)
+    {
+        var diagnostics = Validate(Page(attribute));
+
+        Assert.Equal(invalid, diagnostics.Any(d => d.Code == XamlValidator.InvalidAttributeValueCode));
+    }
+
+    [Fact]
+    public void EmptyStringProperty_RemainsValid()
+    {
+        var diagnostics = Validate(Page("""Text="" """));
+
+        Assert.DoesNotContain(diagnostics, d => d.Code == XamlValidator.InvalidAttributeValueCode);
     }
 
     private static string Page(string attributes) => $$"""
