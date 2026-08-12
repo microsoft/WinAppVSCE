@@ -32,8 +32,7 @@ internal static partial class CompletionProvider
                 propertySeparator,
                 uri,
                 scope,
-                typeSystem,
-                replaceRange);
+                typeSystem);
         }
 
         var items = new List<CompletionItem>();
@@ -111,8 +110,7 @@ internal static partial class CompletionProvider
         int separator,
         string uri,
         XamlNamespaceScope scope,
-        XamlTypeSystem typeSystem,
-        Lsp.Range replaceRange)
+        XamlTypeSystem typeSystem)
     {
         if (separator == 0 || local.IndexOf('.', separator + 1) >= 0)
         {
@@ -134,6 +132,8 @@ internal static partial class CompletionProvider
         }
 
         var qualifiedOwner = prefix.Length > 0 ? prefix + ":" + ownerName : ownerName;
+        var propertyReplaceRange = doc.RangeOf(
+            new TextSpan(ctx.ReplaceStart + qualifiedOwner.Length + 1, ctx.ReplaceStart + ctx.Partial.Length));
         var items = new List<CompletionItem>();
         foreach (var member in typeSystem.GetPropertyElementMembers(ownerType))
         {
@@ -152,8 +152,8 @@ internal static partial class CompletionProvider
                     : $"{ownerName} property element : {member.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}",
                 TextEdit = new TextEdit
                 {
-                    Range = replaceRange,
-                    NewText = qualifiedOwner + "." + member.Name,
+                    Range = propertyReplaceRange,
+                    NewText = member.Name,
                 },
                 FilterText = member.Name,
                 SortText = member.Name,

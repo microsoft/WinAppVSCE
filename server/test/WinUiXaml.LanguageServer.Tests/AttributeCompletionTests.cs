@@ -102,14 +102,21 @@ public sealed class AttributeCompletionTests
         var offset = marked.IndexOf('|');
         var text = marked.Remove(offset, 1);
 
+        var document = new TextDocument("file:///C:/test/Page.xaml", text);
         var item = Assert.Single(
             CompletionProvider.Provide(
-                new TextDocument("file:///C:/test/Page.xaml", text),
+                document,
                 offset,
                 CreateTypeSystem()).Items,
             candidate => candidate.Label == expectedLabel);
 
-        Assert.Equal(expectedInsertion, item.TextEdit!.NewText);
+        var edit = item.TextEdit!;
+        var editStart = document.OffsetAt(edit.Range.Start);
+        var editEnd = document.OffsetAt(edit.Range.End);
+        var edited = text.Substring(0, editStart) + edit.NewText + text.Substring(editEnd);
+        Assert.Contains("<" + expectedInsertion, edited);
+        Assert.Equal(expectedLabel, edit.NewText);
+        Assert.Equal(expectedLabel, item.FilterText);
         Assert.Equal(Lsp.CompletionItemKind.Property, item.Kind);
     }
 
