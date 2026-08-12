@@ -24,6 +24,10 @@ import {
 import { getWindowsServerRid } from "./serverArchitecture";
 import { ServerLifecycle } from "./serverLifecycle";
 import {
+  isEnterEdit,
+  shouldTriggerAttributeSuggestions,
+} from "./attributeSuggestionTrigger";
+import {
   PROJECT_RESTORE_ACTIONS,
   PROJECT_RESTORE_MESSAGE,
   PROJECT_RESTORE_NOTIFICATION,
@@ -84,6 +88,32 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
       if (document.languageId === "xaml") {
         return startClient(context);
       }
+    }),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (
+        event.document.languageId !== "xaml" ||
+        event.contentChanges.length !== 1 ||
+        !isEnterEdit(event.contentChanges[0].text)
+      ) {
+        return;
+      }
+
+      const change = event.contentChanges[0];
+      const offset = change.rangeOffset + change.text.length;
+      if (!shouldTriggerAttributeSuggestions(event.document.getText(), offset)) {
+        return;
+      }
+
+      const expectedPosition = event.document.positionAt(offset);
+      setTimeout(() => {
+        const editor = vscode.window.activeTextEditor;
+        if (
+          editor?.document.uri.toString() === event.document.uri.toString() &&
+          editor.selection.active.isEqual(expectedPosition)
+        ) {
+          void vscode.commands.executeCommand("editor.action.triggerSuggest");
+        }
+      }, 0);
     })
   );
 
