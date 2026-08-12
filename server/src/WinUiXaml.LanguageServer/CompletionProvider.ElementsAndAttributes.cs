@@ -385,7 +385,8 @@ internal static partial class CompletionProvider
         XamlTypeSystem typeSystem,
         Lsp.Range replaceRange)
     {
-        var element = FindEnclosingElement(doc.Parsed.FindNode(Math.Max(0, offset - 1)));
+        var element = FindEnclosingElement(doc.Parsed.FindNode(Math.Max(0, offset - 1)))
+            ?? FindStartTagElement(doc, offset);
         if (element?.Name is null)
         {
             return new CompletionList();
@@ -437,9 +438,114 @@ internal static partial class CompletionProvider
             });
         }
 
+        AddXamlDirectives(items, existing, ctx.Partial, scope, nameReplaceRange, appendValue);
         AddContainerAttachedProperties(items, element, existing, ctx.Partial, scope, typeSystem, nameReplaceRange, appendValue);
+        AddAutomationProperties(items, existing, ctx.Partial, scope, typeSystem, nameReplaceRange, appendValue);
 
         return Finish(items);
+    }
+
+    private static XamlElement? FindStartTagElement(TextDocument doc, int offset)
+    {
+        int lt = doc.Text.LastIndexOf('<', Math.Max(0, offset - 1));
+        if (lt < 0 || lt + 1 >= offset)
+        {
+            return null;
+        }
+
+        return doc.Parsed.DescendantNodesAndSelf()
+            .OfType<XamlElement>()
+            .Where(element => element.Name?.Span.Start == lt + 1)
+            .OrderByDescending(element => element.Span.Start)
+            .FirstOrDefault();
+    }
+
+    private static void AddXamlDirectives(
+        List<CompletionItem> items,
+        HashSet<string> existing,
+        string partial,
+        XamlNamespaceScope scope,
+        Lsp.Range replaceRange,
+        bool appendValue)
+    {
+        var xamlPrefix = scope.Declarations.FirstOrDefault(
+            declaration => string.Equals(declaration.Value, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal)).Key;
+        if (string.IsNullOrEmpty(xamlPrefix))
+        {
+            return;
+        }
+
+        AddSyntheticAttribute(items, existing, partial, xamlPrefix + ":Name", "XAML name", replaceRange, appendValue, "0");
+    }
+
+    private static void AddAutomationProperties(
+        List<CompletionItem> items,
+        HashSet<string> existing,
+        string partial,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        Lsp.Range replaceRange,
+        bool appendValue)
+    {
+        if (!scope.TryResolvePrefix(string.Empty, out var presentationUri))
+        {
+            return;
+        }
+
+        var owner = typeSystem.ResolveType(presentationUri, "AutomationProperties");
+        if (owner is null)
+        {
+            return;
+        }
+
+        foreach (var member in typeSystem.GetAttachedProperties(owner))
+        {
+            var qualified = "AutomationProperties." + member.Name;
+            if (existing.Contains(qualified) ||
+                (!StartsWith(member.Name, partial) && !StartsWith(qualified, partial)))
+            {
+                continue;
+            }
+
+            items.Add(new CompletionItem
+            {
+                Label = qualified,
+                Kind = CompletionItemKind.Property,
+                Documentation = CompletionDoc(member.Symbol),
+                Detail = "attached property" + (member.Type != null ? " : " + member.Type.ToDisplayString() : string.Empty),
+                TextEdit = new TextEdit { Range = replaceRange, NewText = appendValue ? qualified + "=\"$0\"" : qualified },
+                InsertTextFormat = appendValue ? SnippetInsertFormat : null,
+                FilterText = qualified,
+                SortText = "2" + qualified,
+            });
+        }
+    }
+
+    private static void AddSyntheticAttribute(
+        List<CompletionItem> items,
+        HashSet<string> existing,
+        string partial,
+        string name,
+        string detail,
+        Lsp.Range replaceRange,
+        bool appendValue,
+        string sortGroup)
+    {
+        if (existing.Contains(name) || !StartsWith(name, partial))
+        {
+            return;
+        }
+
+        items.Add(new CompletionItem
+        {
+            Label = name,
+            Kind = CompletionItemKind.Property,
+            Detail = detail,
+            TextEdit = new TextEdit { Range = replaceRange, NewText = appendValue ? name + "=\"$0\"" : name },
+            InsertTextFormat = appendValue ? SnippetInsertFormat : null,
+            FilterText = name,
+            SortText = sortGroup + name,
+        });
     }
 
     /// <summary>Also offers the nearest ancestor container's attached properties.</summary>

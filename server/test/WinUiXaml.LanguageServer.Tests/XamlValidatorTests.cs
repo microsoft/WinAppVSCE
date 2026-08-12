@@ -19,6 +19,8 @@ public class XamlValidatorTests
 
             public class Page : BasePage
             {
+                public double Width { get; set; }
+                public bool IsEnabled { get; set; }
                 public Child Child { get; } = new Child();
                 public Formatter Formatter { get; } = new Formatter();
                 public string Format(string value) => value;
@@ -153,6 +155,28 @@ public class XamlValidatorTests
         var diagnostic = Assert.Single(
             diagnostics, d => d.Code == XamlValidator.UnknownIgnorablePrefixCode);
         Assert.Contains("'missing'", diagnostic.Message);
+    }
+
+    [Theory]
+    [InlineData("""Width="abc" """, true)]
+    [InlineData("""Width="12.5" """, false)]
+    [InlineData("""Width="Auto" """, false)]
+    [InlineData("""Width='12.5' """, false)]
+    [InlineData("""Width="{x:Bind Child}" """, false)]
+    [InlineData("""IsEnabled="not-bool" """, true)]
+    public void PrimitiveAttributeValues_AreValidatedConservatively(string attribute, bool invalid)
+    {
+        var diagnostics = Validate(Page(attribute));
+
+        Assert.Equal(invalid, diagnostics.Any(d => d.Code == XamlValidator.InvalidAttributeValueCode));
+    }
+
+    [Fact]
+    public void AttachedPrimitiveAttributeValues_AreValidated()
+    {
+        var diagnostics = Validate(Page("""Grid.Row="abc" """));
+
+        Assert.Contains(diagnostics, d => d.Code == XamlValidator.InvalidAttributeValueCode);
     }
 
     private static string Page(string attributes) => $$"""

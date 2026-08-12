@@ -190,6 +190,12 @@ public class CompletionClassifyTests
         Assert.Equal("AttributeName:IsEna", Classify("<Button IsEna| />"));
     }
 
+    [Fact]
+    public void NewlineInsideStartTag_ClassifiesAsEmptyAttributeName()
+    {
+        Assert.Equal("AttributeName:", Classify("<Button\n    | />"));
+    }
+
     // --- {x:Type} / {x:Static} references (round 20) ----------------------------------------------
 
     [Fact]

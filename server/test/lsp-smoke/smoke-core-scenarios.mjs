@@ -13,10 +13,16 @@ export async function runCoreScenarios(ctx) {
   console.log(`[ok] completion(element): '<But' -> Button (${elementLabels.length} items)`);
 
   const attrLabels = await completeWith(6, `<Page ${NS}>\n  <Button |\n</Page>`, "attribute-name");
-  for (const want of ["Content", "Click", "IsEnabled"]) {
+  for (const want of ["Content", "Click", "IsEnabled", "x:Name", "AutomationProperties.Name"]) {
     if (!attrLabels.includes(want)) fail(`attribute completion missing '${want}' (got ${attrLabels.length} items)`);
   }
-  console.log(`[ok] completion(attribute): '<Button ' -> Content/Click/IsEnabled (${attrLabels.length} items)`);
+  console.log(`[ok] completion(attribute): '<Button ' -> members, x:Name, and AutomationProperties.Name (${attrLabels.length} items)`);
+
+  const newlineAttrLabels = await completeWith(601, `<Page ${NS}>\n  <Button\n    |\n</Page>`, "attribute-name-newline");
+  for (const want of ["Content", "x:Name", "AutomationProperties.Name"]) {
+    if (!newlineAttrLabels.includes(want)) fail(`newline attribute completion missing '${want}' (got ${newlineAttrLabels.length} items)`);
+  }
+  console.log(`[ok] completion(attribute newline): an empty indented line inside <Button> offers attributes (${newlineAttrLabels.length} items)`);
 
   const attachedLabels = await completeWith(7, `<Page ${NS}>\n  <Button Grid.|\n</Page>`, "attached-property");
   for (const want of ["Grid.Row", "Grid.Column"]) {
@@ -628,6 +634,26 @@ export async function runCoreScenarios(ctx) {
   if (undeclared.length !== 1) fail(`expected exactly 1 undeclared-prefix diagnostic, got ${undeclared.length}: ${JSON.stringify(prefixDiags)}`);
   if (undeclared[0].severity !== 1) fail(`undeclared-prefix should be an error (severity 1), got ${undeclared[0].severity}`);
   console.log(`[ok] validation: '<zzz:Widget>' -> undeclared-prefix error`);
+
+  const invalidDouble = await validateDoc(
+    `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <Button Width="abc" />\n</Page>`,
+    (d) => d.some((x) => x.code === "WXAML0012" && x.message.includes("Width")),
+    "invalid-double diagnostic"
+  );
+  const invalidDoubleHits = invalidDouble.filter((x) => x.code === "WXAML0012");
+  if (invalidDoubleHits.length !== 1 || invalidDoubleHits[0].severity !== 1) {
+    fail(`Width="abc" should produce exactly one WXAML0012 error: ${JSON.stringify(invalidDouble)}`);
+  }
+
+  const validSingleQuote = await validateDoc(
+    `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <Button Width='12.5' />\n</Page>`,
+    (d) => d.length === 0,
+    "single-quoted numeric value"
+  );
+  if (validSingleQuote.length !== 0) {
+    fail(`single-quoted XAML attributes are legal and must remain diagnostic-free: ${JSON.stringify(validSingleQuote)}`);
+  }
+  console.log(`[ok] validation(values): Width="abc" -> WXAML0012; Width='12.5' remains valid XML/XAML`);
 
   // 19) Round-7 regressions: function-binding F12, x:Bind completion noise, invalid-member diagnostic, unquoted value.
   const fnF12 = await definitionWith(210, pageCls('<Button Click="{x:Bind OnGo_Cl|ick()}" />'), "fn-binding-f12");

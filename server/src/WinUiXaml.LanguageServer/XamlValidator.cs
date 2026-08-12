@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using WinUiXaml.LanguageServer.Lsp;
@@ -44,6 +45,9 @@ internal static class XamlValidator
 
     /// <summary>An <c>x:Bind</c> function has no overload accepting the supplied argument count.</summary>
     public const string InvalidBindFunctionCode = "WXAML0011";
+
+    /// <summary>A literal attribute value cannot be converted to the property's primitive or enum type.</summary>
+    public const string InvalidAttributeValueCode = "WXAML0012";
 
     private const int SeverityError = 1;
     private const int SeverityWarning = 2;
@@ -178,7 +182,7 @@ internal static class XamlValidator
         // Attached property (Owner.Member): validate the member against the OWNER type, not the element.
         if (name.IsDotted)
         {
-            ValidateAttachedProperty(name, scope, typeSystem, doc, diagnostics);
+            ValidateAttachedProperty(attribute, scope, typeSystem, doc, diagnostics);
             return;
         }
 
@@ -188,22 +192,104 @@ internal static class XamlValidator
             return;
         }
 
-        if (!typeSystem.HasMember(elementType, name.LocalName))
+        var member = typeSystem.FindMember(elementType, name.LocalName);
+        if (member is null)
         {
             diagnostics.Add(Diag(doc, name.LocalNameSpan, SeverityWarning, UnknownAttributeCode,
                 $"'{name.LocalName}' is not a property or event of '{elementType.Name}'.",
                 SuggestData(name.LocalName, typeSystem.GetAttributeCandidateNames(elementType))));
+            return;
+        }
+
+        if (member.Kind == XamlMemberKind.Property && member.Type is not null)
+        {
+            ValidateLiteralAttributeValue(attribute, member.Type, doc, diagnostics);
         }
     }
 
+    private static void ValidateLiteralAttributeValue(
+        XamlAttribute attribute,
+        ITypeSymbol memberType,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        var value = attribute.Value;
+        if (value is null ||
+            value.IsMarkupExtension ||
+            value.Quote is null)
+        {
+            return;
+        }
+
+        var targetType = UnwrapNullable(memberType);
+        if (!IsKnownInvalidPrimitive(value.Text, targetType))
+        {
+            return;
+        }
+
+        diagnostics.Add(Diag(
+            doc,
+            value.InnerSpan,
+            SeverityError,
+            InvalidAttributeValueCode,
+            $"'{value.Text}' is not a valid value for '{attribute.Name.FullName}' ({targetType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)})."));
+    }
+
+    private static ITypeSymbol UnwrapNullable(ITypeSymbol type) =>
+        type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable
+            ? nullable.TypeArguments[0]
+            : type;
+
+    private static bool IsKnownInvalidPrimitive(string text, ITypeSymbol type)
+    {
+        if (type.TypeKind == TypeKind.Enum)
+        {
+            if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+            {
+                return false;
+            }
+
+            var names = type.GetMembers().OfType<IFieldSymbol>()
+                .Where(field => field.HasConstantValue)
+                .Select(field => field.Name)
+                .ToHashSet(System.StringComparer.Ordinal);
+            return text.Split(',').Any(part => !names.Contains(part.Trim()));
+        }
+
+        return type.SpecialType switch
+        {
+            SpecialType.System_Boolean => !bool.TryParse(text, out _),
+            SpecialType.System_Byte => !byte.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
+            SpecialType.System_SByte => !sbyte.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
+            SpecialType.System_Int16 => !short.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
+            SpecialType.System_UInt16 => !ushort.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
+            SpecialType.System_Int32 => !int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
+            SpecialType.System_UInt32 => !uint.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
+            SpecialType.System_Int64 => !long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
+            SpecialType.System_UInt64 => !ulong.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
+            SpecialType.System_Single => !IsValidFloatingPoint(text, single: true),
+            SpecialType.System_Double => !IsValidFloatingPoint(text, single: false),
+            SpecialType.System_Decimal => !decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _),
+            SpecialType.System_Char => text.Length != 1,
+            _ => false,
+        };
+    }
+
+    private static bool IsValidFloatingPoint(string text, bool single) =>
+        string.Equals(text, "Auto", System.StringComparison.OrdinalIgnoreCase) ||
+        (single
+            ? float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
+            : double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _));
+
     /// <summary>Validates an Owner.Member attached-property attribute: resolves the owner type through the attribute's namespace and checks it actually exposes the member.</summary>
     private static void ValidateAttachedProperty(
-        XamlName name,
+        XamlAttribute attribute,
         XamlNamespaceScope scope,
         XamlTypeSystem typeSystem,
         TextDocument doc,
         List<Diagnostic> diagnostics)
     {
+        var name = attribute.Name;
         int dot = name.LocalName.LastIndexOf('.');
         if (dot <= 0 || dot >= name.LocalName.Length - 1)
         {
@@ -222,9 +308,16 @@ internal static class XamlValidator
         }
 
         var owner = typeSystem.ResolveType(uri, ownerLocal);
-        if (owner is null || typeSystem.HasAttachedMember(owner, memberName))
+        if (owner is null)
         {
-            return; // unknown owner (stay silent) or a real attached member
+            return; // unknown owner: stay silent
+        }
+
+        var memberType = typeSystem.GetAttachedMemberType(owner, memberName);
+        if (memberType is not null)
+        {
+            ValidateLiteralAttributeValue(attribute, memberType, doc, diagnostics);
+            return;
         }
 
         // Underline just the member part, past "Owner.".
