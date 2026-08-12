@@ -46,7 +46,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (128 tests)
+## Test inventory (130 tests)
 
 ### `sign-quickpick.spec.ts` — 6 tests
 
@@ -220,6 +220,15 @@ Validates error handling for malformed manifests. This spec launches its own VS 
 | # | Test | Validates |
 |---|------|-----------|
 | 1 | shows error view for malformed XML | Malformed manifest XML opens the error view with expected message and "Open in Text Editor" action |
+
+### `open-manifest-editor-command.spec.ts` — 2 tests
+
+Validates the two invocation paths of `winapp.openManifestEditor`. This spec launches its own VS Code instance with two manifests in the workspace.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | title bar button opens the active manifest without a quick pick | Editor title bar button passes the active resource through and opens it directly in the custom editor — no manifest picker |
+| 2 | Command Palette invocation shows the manifest quick pick | Palette invocation (no resource argument) lists workspace manifests plus the Browse… entry |
 
 ### `push-notifications-fixture.spec.ts` — 8 tests
 
