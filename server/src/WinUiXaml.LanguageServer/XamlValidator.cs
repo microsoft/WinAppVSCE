@@ -84,7 +84,7 @@ internal static class XamlValidator
             var pageClass = ResolvePageClass(root, typeSystem);
             Walk(root, doc, typeSystem, diagnostics, pageClass, resourceKeys);
 
-            ValidateUniqueNames(root, doc, diagnostics);
+            ValidateUniqueNames(root, doc, typeSystem, diagnostics);
             ValidateUniqueResourceKeys(root, doc, diagnostics);
         }
 
@@ -1210,20 +1210,34 @@ internal static class XamlValidator
 
     // --- Structural uniqueness: duplicate x:Name / x:Key --------------------------------------------
 
-    /// <summary>Elements whose CONTENTS start a fresh XAML name scope, so an x:Name inside one does not collide with the same name outside it (each instantiated template has its own scope).</summary>
-    private static readonly HashSet<string> NameScopeBoundaries = new(System.StringComparer.Ordinal)
-    {
-        "DataTemplate", "ControlTemplate", "ItemsPanelTemplate",
-    };
-
     /// <summary>Reports duplicate x:Name/Name declarations within the same XAML name scope (WXAML0007, an error — the XAML compiler rejects it).</summary>
-    private static void ValidateUniqueNames(XamlElement root, TextDocument doc, List<Diagnostic> diagnostics)
+    private static void ValidateUniqueNames(
+        XamlElement root,
+        TextDocument doc,
+        XamlTypeSystem typeSystem,
+        List<Diagnostic> diagnostics)
     {
-        CollectScopedNames(root, new HashSet<string>(System.StringComparer.Ordinal), doc, diagnostics);
+        if (typeSystem.ResolveMetadataType("Microsoft.UI.Xaml.FrameworkTemplate") is not { } frameworkTemplate)
+        {
+            return;
+        }
+
+        CollectScopedNames(
+            root,
+            new HashSet<string>(System.StringComparer.Ordinal),
+            doc,
+            typeSystem,
+            frameworkTemplate,
+            diagnostics);
     }
 
     private static void CollectScopedNames(
-        XamlElement element, HashSet<string> scope, TextDocument doc, List<Diagnostic> diagnostics)
+        XamlElement element,
+        HashSet<string> scope,
+        TextDocument doc,
+        XamlTypeSystem typeSystem,
+        ITypeSymbol frameworkTemplate,
+        List<Diagnostic> diagnostics)
     {
         // The element's own name belongs to the CURRENT scope (a template's own x:Name is outer-scoped).
         if (TryGetStaticValue(element, "x:Name", "Name", out var nameAttr, out var nameText) &&
@@ -1234,7 +1248,7 @@ internal static class XamlValidator
         }
 
         // A template re-scopes its subtree; every other element shares the current scope.
-        var childScope = IsNameScopeBoundary(element)
+        var childScope = IsNameScopeBoundary(element, typeSystem, frameworkTemplate)
             ? new HashSet<string>(System.StringComparer.Ordinal)
             : scope;
 
@@ -1242,13 +1256,30 @@ internal static class XamlValidator
         {
             if (child is XamlElement childElement)
             {
-                CollectScopedNames(childElement, childScope, doc, diagnostics);
+                CollectScopedNames(childElement, childScope, doc, typeSystem, frameworkTemplate, diagnostics);
             }
         }
     }
 
-    private static bool IsNameScopeBoundary(XamlElement element) =>
-        element.Name is { HasPrefix: false, IsDotted: false } n && NameScopeBoundaries.Contains(n.LocalName);
+    private static bool IsNameScopeBoundary(
+        XamlElement element,
+        XamlTypeSystem typeSystem,
+        ITypeSymbol frameworkTemplate)
+    {
+        if (element.Name is not { IsDotted: false } name)
+        {
+            return false;
+        }
+
+        if (!element.NamespaceScope.TryResolvePrefix(name.Prefix, out var namespaceUri) ||
+            typeSystem.ResolveType(namespaceUri, name.LocalName) is not { } elementType)
+        {
+            return false;
+        }
+
+        // FrameworkTemplate content is instantiated into its own XAML namescope.
+        return XamlTypeSystem.IsAssignableTo(elementType, frameworkTemplate);
+    }
 
     /// <summary>Reports duplicate x:Key declarations within the same ResourceDictionary (WXAML0008, an error).</summary>
     private static void ValidateUniqueResourceKeys(XamlElement root, TextDocument doc, List<Diagnostic> diagnostics)

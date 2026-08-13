@@ -49,6 +49,9 @@ public class XamlValidatorTests
                 public string Format(Child value) => value.Name;
             }
 
+            public class RenamedTemplate : Microsoft.UI.Xaml.FrameworkTemplate { }
+            public class TemplateLookalike { }
+
             public class Grid
             {
                 public static int GetRow(object value) => 0;
@@ -60,6 +63,7 @@ public class XamlValidatorTests
         {
             public struct CornerRadius { }
             public struct Thickness { }
+            public class FrameworkTemplate { }
         }
 
         namespace Microsoft.UI.Xaml.Media
@@ -291,6 +295,61 @@ public class XamlValidatorTests
         Assert.Contains(diagnostics, item => item.Code == XamlValidator.UnknownResourceKeyCode);
     }
 
+    [Fact]
+    public void FrameworkTemplateSubclass_StartsIndependentNameScope()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Child x:Name="Shared" />
+              <RenamedTemplate>
+                <Child x:Name="Shared" />
+              </RenamedTemplate>
+            </Page>
+            """;
+
+        Assert.DoesNotContain(Validate(xaml), item => item.Code == XamlValidator.DuplicateNameCode);
+    }
+
+    [Fact]
+    public void TemplateLikeNameWithoutFrameworkTemplateBase_SharesParentNameScope()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Child x:Name="Shared" />
+              <TemplateLookalike>
+                <Child x:Name="Shared" />
+              </TemplateLookalike>
+            </Page>
+            """;
+
+        Assert.Contains(Validate(xaml), item => item.Code == XamlValidator.DuplicateNameCode);
+    }
+
+    [Fact]
+    public void DuplicateNameValidation_IsSuppressedWhenFrameworkMetadataIsUnavailable()
+    {
+        const string source = """
+            namespace TestApp
+            {
+                public class Page { }
+                public class Child { }
+            }
+            """;
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Child x:Name="Shared" />
+              <Child x:Name="Shared" />
+            </Page>
+            """;
+
+        Assert.DoesNotContain(
+            ValidateWithSource(xaml, source),
+            item => item.Code == XamlValidator.DuplicateNameCode);
+    }
+
     private static string Page(string attributes) => $$"""
         <Page xmlns="using:TestApp"
               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -303,11 +362,17 @@ public class XamlValidatorTests
 
     private static System.Collections.Generic.List<Lsp.Diagnostic> Validate(
         string xaml,
+        params string[] resourceKeys) =>
+        ValidateWithSource(xaml, Types, resourceKeys);
+
+    private static System.Collections.Generic.List<Lsp.Diagnostic> ValidateWithSource(
+        string xaml,
+        string source,
         params string[] resourceKeys)
     {
         var compilation = CSharpCompilation.Create(
             "TestApp",
-            new[] { CSharpSyntaxTree.ParseText(Types) },
+            new[] { CSharpSyntaxTree.ParseText(source) },
             new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var typeSystem = XamlTypeSystem.FromCompilation(

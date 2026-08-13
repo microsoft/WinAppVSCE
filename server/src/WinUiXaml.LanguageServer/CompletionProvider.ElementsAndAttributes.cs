@@ -847,8 +847,10 @@ internal static partial class CompletionProvider
             return CompleteElementNames(doc, ctx.Partial, string.Empty, scope, typeSystem, replaceRange);
         }
 
-        // RelativePanel alignment targets reference named elements; *WithPanel variants are booleans.
-        if (ctx.AttributeName is { } attr && RelativePanelAlignmentTargets.Contains(attr))
+        // RelativePanel object-valued alignment targets reference named elements; the SDK
+        // getter signature naturally excludes the boolean *WithPanel variants.
+        if (ctx.AttributeName is { } attr &&
+            IsRelativePanelElementReferenceAttribute(attr, scope, typeSystem))
         {
             return CompleteElementNames(doc, ctx.Partial, string.Empty, scope, typeSystem, replaceRange);
         }
@@ -1243,21 +1245,23 @@ internal static partial class CompletionProvider
         return Finish(items);
     }
 
-    /// <summary>Completes the x:Name'd elements declared anywhere in the document (x:Name scope is per-file), filtered by partial and emitted with prefix preserved in the inserted text.</summary>
-    internal static readonly HashSet<string> RelativePanelAlignmentTargets = new(StringComparer.Ordinal)
+    internal static bool IsRelativePanelElementReferenceAttribute(
+        string attributeName,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem)
     {
-        "RelativePanel.Above",
-        "RelativePanel.Below",
-        "RelativePanel.LeftOf",
-        "RelativePanel.RightOf",
-        "RelativePanel.AlignLeftWith",
-        "RelativePanel.AlignRightWith",
-        "RelativePanel.AlignTopWith",
-        "RelativePanel.AlignBottomWith",
-        "RelativePanel.AlignHorizontalCenterWith",
-        "RelativePanel.AlignVerticalCenterWith",
-    };
+        int dot = attributeName.IndexOf('.');
+        if (dot <= 0 || dot == attributeName.Length - 1)
+        {
+            return false;
+        }
 
+        var owner = ResolveElementType(ParseQualified(attributeName.Substring(0, dot)), scope, typeSystem);
+        return owner is not null &&
+            typeSystem.IsRelativePanelElementReference(owner, attributeName.Substring(dot + 1));
+    }
+
+    /// <summary>Completes the x:Name'd elements declared anywhere in the document (x:Name scope is per-file), filtered by partial and emitted with prefix preserved in the inserted text.</summary>
     private static CompletionList CompleteElementNames(
         TextDocument doc, string partial, string prefix,
         XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange)

@@ -47,6 +47,26 @@ public sealed class XamlTypeSystemTests
                 // A getter with no matching setter must NOT be reported as an attached property.
                 public static int GetActualRow(Microsoft.UI.Xaml.DependencyObject obj) => 0;
             }
+            public class RelativePanel : Control
+            {
+                public static object GetRightOf(Microsoft.UI.Xaml.UIElement element) => new object();
+                public static void SetRightOf(Microsoft.UI.Xaml.UIElement element, object value) { }
+                public static bool GetAlignTopWithPanel(Microsoft.UI.Xaml.UIElement element) => false;
+                public static void SetAlignTopWithPanel(Microsoft.UI.Xaml.UIElement element, bool value) { }
+            }
+            public static class ToolTipService
+            {
+                public static object GetToolTip(Microsoft.UI.Xaml.DependencyObject element) => new object();
+                public static void SetToolTip(Microsoft.UI.Xaml.DependencyObject element, object value) { }
+            }
+        }
+        namespace TestApp
+        {
+            public class RelativePanel
+            {
+                public static object GetRightOf(Microsoft.UI.Xaml.UIElement element) => new object();
+                public static void SetRightOf(Microsoft.UI.Xaml.UIElement element, object value) { }
+            }
         }
         """;
 
@@ -72,6 +92,21 @@ public sealed class XamlTypeSystemTests
         var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
 
         Assert.Null(ts.ResolveType(Presentation, "NoSuchControl"));
+    }
+
+    [Fact]
+    public void RelativePanelElementReferences_AreDerivedFromExactSdkOwnerAndGetterSignature()
+    {
+        var (compilation, referenced) = CompileLibraryAndConsumer(WinUiLikeSource);
+        var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
+        var relativePanel = ts.ResolveMetadataType("Microsoft.UI.Xaml.Controls.RelativePanel")!;
+        var toolTipService = ts.ResolveMetadataType("Microsoft.UI.Xaml.Controls.ToolTipService")!;
+        var lookalike = ts.ResolveMetadataType("TestApp.RelativePanel")!;
+
+        Assert.True(ts.IsRelativePanelElementReference(relativePanel, "RightOf"));
+        Assert.False(ts.IsRelativePanelElementReference(relativePanel, "AlignTopWithPanel"));
+        Assert.False(ts.IsRelativePanelElementReference(toolTipService, "ToolTip"));
+        Assert.False(ts.IsRelativePanelElementReference(lookalike, "RightOf"));
     }
 
     [Fact]

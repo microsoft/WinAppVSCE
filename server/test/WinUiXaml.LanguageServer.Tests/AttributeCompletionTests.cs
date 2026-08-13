@@ -146,6 +146,26 @@ public sealed class AttributeCompletionTests
         Assert.Equal("editor.action.triggerSuggest", item.Command?.Name);
     }
 
+    [Fact]
+    public void RelativePanelNameCompletion_DoesNotGuessWhileSdkMetadataIsUnavailable()
+    {
+        const string marked = """
+            <Button xmlns="using:TestApp"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Button x:Name="Anchor" />
+              <Button RelativePanel.RightOf="|" />
+            </Button>
+            """;
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        var labels = CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            CreateTypeSystem()).Items.Select(item => item.Label);
+
+        Assert.DoesNotContain("Anchor", labels);
+    }
+
     [Theory]
     [InlineData("<Window.", "SystemBackdrop", "Window.SystemBackdrop")]
     [InlineData("<Window.Syst", "SystemBackdrop", "Window.SystemBackdrop")]

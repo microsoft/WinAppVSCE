@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using WinUiXaml.LanguageServer.Lsp;
+using WinUiXaml.Workspace;
 using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
@@ -30,19 +31,22 @@ internal static class XamlRename
     private static readonly char[] KeyForbidden = { '"', '\'', '<', '>', '&', '{', '}' };
 
     /// <summary> Validates the caret and returns the exact token range to make editable plus the current name as the placeholder, or null when the caret is not on a renameable symbol.</summary>
-    internal static PrepareRenameResult? PrepareRename(TextDocument doc, int offset)
+    internal static PrepareRenameResult? PrepareRename(
+        TextDocument doc,
+        int offset,
+        XamlTypeSystem? typeSystem = null)
     {
         if (doc.Parsed.Root is not { } root)
         {
             return null;
         }
 
-        if (XamlLanguageServer.DetectSymbolAt(doc, offset) is not { } symbol)
+        if (XamlLanguageServer.DetectSymbolAt(doc, offset, typeSystem) is not { } symbol)
         {
             return null;
         }
 
-        var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset);
+        var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
         if (occurrences is null)
         {
             return null;
@@ -61,20 +65,24 @@ internal static class XamlRename
     }
 
     /// <summary>Builds a single-document WorkspaceEdit renaming the symbol under the caret and every reference to it.</summary>
-    internal static WorkspaceEdit? Rename(TextDocument doc, int offset, string newName)
+    internal static WorkspaceEdit? Rename(
+        TextDocument doc,
+        int offset,
+        string newName,
+        XamlTypeSystem? typeSystem = null)
     {
         if (doc.Parsed.Root is not { } root)
         {
             return null;
         }
 
-        if (XamlLanguageServer.DetectSymbolAt(doc, offset) is not { } symbol)
+        if (XamlLanguageServer.DetectSymbolAt(doc, offset, typeSystem) is not { } symbol)
         {
             return null;
         }
 
         // Gate on the renameable location first (this also rejects carets inside malformed/unterminated markup), so an invalid-name error is only raised when the caret is genuinely on a symbol.
-        var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset);
+        var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
         if (occurrences is null || occurrences.Count == 0)
         {
             return null;

@@ -101,7 +101,8 @@ internal sealed partial class XamlLanguageServer
         }
 
         int offset = doc.OffsetAt(p.Position);
-        var occurrences = ResolveOccurrences(doc, root, offset);
+        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var occurrences = ResolveOccurrences(doc, root, offset, context?.TypeSystem);
         if (occurrences is null)
         {
             return null;
@@ -114,7 +115,7 @@ internal sealed partial class XamlLanguageServer
             .ToList();
 
         // A resource key is a PROJECT-WIDE symbol: its x:Key is typically declared in App.xaml and used across pages.
-        if (DetectSymbolAt(doc, offset) is { Kind: XamlRenameKind.Key, Name: { Length: > 0 } key })
+        if (DetectSymbolAt(doc, offset, context?.TypeSystem) is { Kind: XamlRenameKind.Key, Name: { Length: > 0 } key })
         {
             await AddCrossFileResourceReferencesAsync(p.TextDocument.Uri, key, includeDeclaration, locations)
                 .ConfigureAwait(false);
@@ -205,13 +206,13 @@ internal sealed partial class XamlLanguageServer
     /// <summary>Handles textDocument/documentHighlight — highlights every occurrence of the symbol under the caret in this document (the read-only sibling of Find All References).</summary>
     private async Task<object?> DocumentHighlightAsync(TextDocumentPositionParams p)
     {
-        await Task.CompletedTask.ConfigureAwait(false);
         if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc) || doc.Parsed.Root is not { } root)
         {
             return null;
         }
 
-        var occurrences = ResolveOccurrences(doc, root, doc.OffsetAt(p.Position));
+        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var occurrences = ResolveOccurrences(doc, root, doc.OffsetAt(p.Position), context?.TypeSystem);
         if (occurrences is null)
         {
             return null;
@@ -225,25 +226,25 @@ internal sealed partial class XamlLanguageServer
     /// <summary>Handles textDocument/prepareRename — confirms the caret sits on a renameable symbol (an x:Name/Name or an x:Key resource key) and returns the exact editable token range plus the</summary>
     private async Task<object?> PrepareRenameAsync(TextDocumentPositionParams p)
     {
-        await Task.CompletedTask.ConfigureAwait(false);
         if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc))
         {
             return null;
         }
 
-        return XamlRename.PrepareRename(doc, doc.OffsetAt(p.Position));
+        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        return XamlRename.PrepareRename(doc, doc.OffsetAt(p.Position), context?.TypeSystem);
     }
 
     /// <summary>Handles textDocument/rename — renames the x:Name/Name or x:Key resource key under the caret and every reference to it in the document, returning a single-document WorkspaceEdit.</summary>
     private async Task<object?> RenameAsync(RenameParams p)
     {
-        await Task.CompletedTask.ConfigureAwait(false);
         if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc))
         {
             return null;
         }
 
-        return XamlRename.Rename(doc, doc.OffsetAt(p.Position), p.NewName);
+        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        return XamlRename.Rename(doc, doc.OffsetAt(p.Position), p.NewName, context?.TypeSystem);
     }
 
     /// <summary>Handles textDocument/formatting (Format Document) — returns leading-indentation edits that normalize every structural line to its element-nesting depth.</summary>

@@ -7,7 +7,11 @@ namespace WinUiXaml.LanguageServer;
 
 internal sealed partial class XamlLanguageServer
 {
-    internal static List<(Lsp.Range Range, bool IsDeclaration)>? ResolveOccurrences(TextDocument doc, XamlElement root, int offset)
+    internal static List<(Lsp.Range Range, bool IsDeclaration)>? ResolveOccurrences(
+        TextDocument doc,
+        XamlElement root,
+        int offset,
+        XamlTypeSystem? typeSystem = null)
     {
         // Malformed, still-being-typed markup: stay silent when the caret sits inside an unterminated extension (self or an enclosing one).
         if (IsInsideUnterminatedExtension(root, offset))
@@ -15,7 +19,7 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        if (DetectSymbolAt(doc, offset) is not { } symbol)
+        if (DetectSymbolAt(doc, offset, typeSystem) is not { } symbol)
         {
             return null;
         }
@@ -23,7 +27,7 @@ internal sealed partial class XamlLanguageServer
         var occurrences = new List<(Lsp.Range Range, bool IsDeclaration)>();
         if (symbol.Kind == XamlRenameKind.Name)
         {
-            CollectNameOccurrences(root, symbol.Name, doc, occurrences);
+            CollectNameOccurrences(root, symbol.Name, doc, typeSystem, occurrences);
         }
         else
         {
@@ -34,10 +38,13 @@ internal sealed partial class XamlLanguageServer
     }
 
     /// <summary>Classifies the renameable/referenceable symbol the caret sits on: an x:Name/Name (whether the caret is on the declaration or a usage) or an x:Key resource key.</summary>
-    internal static (XamlRenameKind Kind, string Name)? DetectSymbolAt(TextDocument doc, int offset)
+    internal static (XamlRenameKind Kind, string Name)? DetectSymbolAt(
+        TextDocument doc,
+        int offset,
+        XamlTypeSystem? typeSystem = null)
     {
         // x:Name: the caret is on a usage (ElementName=/Storyboard.TargetName) or on the declaration itself.
-        var name = FindNameReferenceAt(doc, offset)?.Name ?? FindNameDeclarationAt(doc, offset);
+        var name = FindNameReferenceAt(doc, offset, typeSystem)?.Name ?? FindNameDeclarationAt(doc, offset);
         if (name is { Length: > 0 })
         {
             return (XamlRenameKind.Name, name);
@@ -124,7 +131,11 @@ internal sealed partial class XamlLanguageServer
 
     /// <summary>Collects, into results, the x:Name/bare Name declaration literal (flagged as declaration) plus every named-element usage of name in the subtree</summary>
     private static void CollectNameOccurrences(
-        XamlElement element, string name, TextDocument doc, List<(Lsp.Range Range, bool IsDeclaration)> results)
+        XamlElement element,
+        string name,
+        TextDocument doc,
+        XamlTypeSystem? typeSystem,
+        List<(Lsp.Range Range, bool IsDeclaration)> results)
     {
         if ((element.GetAttribute("x:Name") ?? element.GetAttribute("Name")) is { Value: { IsMarkupExtension: false } declValue } &&
             string.Equals(declValue.Text.Trim(), name, StringComparison.Ordinal))
@@ -140,7 +151,8 @@ internal sealed partial class XamlLanguageServer
             }
 
             // Storyboard.TargetName="Foo" (a plain element-name attribute value).
-            if (attr.Value is { IsMarkupExtension: false } plain && IsNameReferenceAttribute(attr.Name) &&
+            if (attr.Value is { IsMarkupExtension: false } plain &&
+                IsNameReferenceAttribute(attr, typeSystem) &&
                 string.Equals(plain.Text.Trim(), name, StringComparison.Ordinal))
             {
                 results.Add((doc.RangeOf(TrimmedValueSpan(plain)), false));
@@ -178,7 +190,7 @@ internal sealed partial class XamlLanguageServer
         {
             if (child is XamlElement childElement)
             {
-                CollectNameOccurrences(childElement, name, doc, results);
+                CollectNameOccurrences(childElement, name, doc, typeSystem, results);
             }
         }
     }
@@ -358,7 +370,8 @@ internal sealed partial class XamlLanguageServer
         }
 
         int offset = doc.OffsetAt(p.Position);
-        var reference = FindNameReferenceAt(doc, offset);
+        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var reference = FindNameReferenceAt(doc, offset, context?.TypeSystem);
         if (reference == null)
         {
             return null;
@@ -400,7 +413,10 @@ internal sealed partial class XamlLanguageServer
     }
 
     /// <summary>Detects a named-element reference at offset: the value of a {Binding (or other) ElementName= named argument, or a Storyboard.TargetName="..." attribute value.</summary>
-    private static (string Name, TextSpan Span)? FindNameReferenceAt(TextDocument doc, int offset)
+    private static (string Name, TextSpan Span)? FindNameReferenceAt(
+        TextDocument doc,
+        int offset,
+        XamlTypeSystem? typeSystem = null)
     {
         if (doc.Parsed.Root is not { } root)
         {
@@ -429,7 +445,7 @@ internal sealed partial class XamlLanguageServer
         {
             if (current is XamlAttribute attr && !attr.IsNamespaceDeclaration &&
                 attr.Value is { IsMarkupExtension: false } value && value.Span.ContainsInclusive(offset) &&
-                IsNameReferenceAttribute(attr.Name))
+                IsNameReferenceAttribute(attr, typeSystem))
             {
                 var text = value.Text.Trim();
                 return text.Length > 0 ? (text, value.InnerSpan) : ((string, TextSpan)?)null;
@@ -489,11 +505,27 @@ internal sealed partial class XamlLanguageServer
         return (text.Substring(lead, end - lead), new TextSpan(start + lead, start + end));
     }
 
-    /// <summary>Attribute names whose (bare) value is an element x:Name reference (not a CLR member or type)</summary>
-    private static bool IsNameReferenceAttribute(XamlName name) =>
-        !name.HasPrefix &&
-        (string.Equals(name.LocalName, "Storyboard.TargetName", StringComparison.Ordinal) ||
-         CompletionProvider.RelativePanelAlignmentTargets.Contains(name.LocalName));
+    /// <summary>True when a bare attribute value is an element x:Name reference rather than a CLR member or type.</summary>
+    private static bool IsNameReferenceAttribute(XamlAttribute attribute, XamlTypeSystem? typeSystem)
+    {
+        var name = attribute.Name;
+        if (name.HasPrefix)
+        {
+            return false;
+        }
+
+        if (string.Equals(name.LocalName, "Storyboard.TargetName", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return typeSystem is not null &&
+            attribute.Parent is XamlElement element &&
+            CompletionProvider.IsRelativePanelElementReferenceAttribute(
+                name.LocalName,
+                element.NamespaceScope,
+                typeSystem);
+    }
 
     /// <summary>Finds the element declaring x:Name="name" (or Name="name") anywhere in the document and returns its element type name plus the span of the name literal to navigate to, or null.</summary>
     private static (string TypeName, TextSpan NavSpan)? FindNamedElement(XamlElement element, string name)

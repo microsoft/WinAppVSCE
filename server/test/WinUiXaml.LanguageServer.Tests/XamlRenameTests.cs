@@ -1,8 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using WinUiXaml.LanguageServer;
 using WinUiXaml.LanguageServer.Lsp;
+using WinUiXaml.Workspace;
 using Xunit;
 
 namespace WinUiXaml.LanguageServer.Tests;
@@ -27,13 +31,46 @@ public class XamlRenameTests
     private static string Covered(TextDocument doc, Lsp.Range range) =>
         doc.Text.Substring(doc.OffsetAt(range.Start), doc.OffsetAt(range.End) - doc.OffsetAt(range.Start));
 
-    private static List<TextEdit> RenameEdits(string textWithCaret, string newName)
+    private static List<TextEdit> RenameEdits(
+        string textWithCaret,
+        string newName,
+        XamlTypeSystem? typeSystem = null)
     {
         var (doc, offset) = Caret(textWithCaret);
-        var edit = XamlRename.Rename(doc, offset, newName);
+        var edit = XamlRename.Rename(doc, offset, newName, typeSystem);
         Assert.NotNull(edit);
         Assert.True(edit!.Changes.ContainsKey(Uri), "edit must target the open document");
         return edit.Changes[Uri];
+    }
+
+    private static XamlTypeSystem CreateRelativePanelTypeSystem()
+    {
+        const string source = """
+            namespace Microsoft.UI.Xaml
+            {
+                public class UIElement { }
+            }
+            namespace Microsoft.UI.Xaml.Controls
+            {
+                public class RelativePanel : Microsoft.UI.Xaml.UIElement
+                {
+                    public static object GetRightOf(Microsoft.UI.Xaml.UIElement element) => new object();
+                    public static void SetRightOf(Microsoft.UI.Xaml.UIElement element, object value) { }
+                    public static object GetAlignTopWith(Microsoft.UI.Xaml.UIElement element) => new object();
+                    public static void SetAlignTopWith(Microsoft.UI.Xaml.UIElement element, object value) { }
+                    public static object GetBelow(Microsoft.UI.Xaml.UIElement element) => new object();
+                    public static void SetBelow(Microsoft.UI.Xaml.UIElement element, object value) { }
+                }
+                public class TextBox : Microsoft.UI.Xaml.UIElement { }
+                public class Button : Microsoft.UI.Xaml.UIElement { }
+            }
+            """;
+        var compilation = CSharpCompilation.Create(
+            "TestApp",
+            new[] { CSharpSyntaxTree.ParseText(source) },
+            new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        return XamlTypeSystem.FromCompilation(compilation, ImmutableArray<IAssemblySymbol>.Empty);
     }
 
     // ---- prepareRename gating ------------------------------------------------
@@ -180,11 +217,11 @@ public class XamlRenameTests
     public void Rename_Name_RewritesRelativePanelAlignmentReferences()
     {
         var buffer =
-            "<RelativePanel>\n" +
+            "<RelativePanel xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\">\n" +
             "  <TextBox x:Name=\"An|chor\" />\n" +
             "  <Button RelativePanel.RightOf=\"Anchor\" RelativePanel.AlignTopWith=\"Anchor\" />\n" +
             "</RelativePanel>";
-        var edits = RenameEdits(buffer, "Pivot");
+        var edits = RenameEdits(buffer, "Pivot", CreateRelativePanelTypeSystem());
         Assert.Equal(3, edits.Count); // declaration + RightOf + AlignTopWith
         Assert.All(edits, e => Assert.Equal("Pivot", e.NewText));
     }
@@ -193,11 +230,11 @@ public class XamlRenameTests
     public void Rename_Name_FromRelativePanelUsageCaret_RewritesSameSet()
     {
         var buffer =
-            "<RelativePanel>\n" +
+            "<RelativePanel xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\">\n" +
             "  <TextBox x:Name=\"Anchor\" />\n" +
             "  <Button RelativePanel.Below=\"An|chor\" />\n" +
             "</RelativePanel>";
-        var edits = RenameEdits(buffer, "Pivot");
+        var edits = RenameEdits(buffer, "Pivot", CreateRelativePanelTypeSystem());
         Assert.Equal(2, edits.Count);
         Assert.All(edits, e => Assert.Equal("Pivot", e.NewText));
     }

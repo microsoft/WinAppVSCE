@@ -910,6 +910,31 @@ namespace WinUiXaml.Workspace
             return null;
         }
 
+        /// <summary>
+        /// True for RelativePanel attached properties whose SDK getter signature marks an
+        /// element-name alignment target rather than a boolean *WithPanel flag.
+        /// </summary>
+        public bool IsRelativePanelElementReference(INamedTypeSymbol owner, string member)
+        {
+            var relativePanel = ResolveMetadataType("Microsoft.UI.Xaml.Controls.RelativePanel");
+            var uiElement = ResolveMetadataType("Microsoft.UI.Xaml.UIElement");
+            if (relativePanel is null ||
+                uiElement is null ||
+                !SymbolEqualityComparer.Default.Equals(owner, relativePanel))
+            {
+                return false;
+            }
+
+            return GetAttachedProperties(owner)
+                .FirstOrDefault(candidate => string.Equals(candidate.Name, member, StringComparison.Ordinal))
+                ?.Symbol is IMethodSymbol
+                {
+                    ReturnType.SpecialType: SpecialType.System_Object,
+                    Parameters.Length: 1,
+                } getter &&
+                SymbolEqualityComparer.Default.Equals(getter.Parameters[0].Type, uiElement);
+        }
+
         /// <summary>The value type produced by a bindable member (property/field type, or method return).</summary>
         public static ITypeSymbol? GetMemberType(ISymbol member) => member switch
         {
