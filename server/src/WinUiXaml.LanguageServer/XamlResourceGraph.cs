@@ -35,6 +35,7 @@ internal sealed class XamlResourceGraph
         string projectRoot,
         Func<string, string?> authorizePath,
         Action<string> log,
+        Func<XamlElement, bool> isResourceDictionary,
         Func<string, string?>? getOpenDocumentText = null,
         CancellationToken cancellationToken = default)
     {
@@ -75,7 +76,7 @@ internal sealed class XamlResourceGraph
             totalBytes += file.Value.ByteCount;
             result.Add(file.Value);
             // A ResourceDictionary resolves duplicate keys from its local entries first, then from merged dictionaries in reverse declaration order. Pushing sources forward onto a stack visits the last declared dictionary first and preserves that runtime lookup precedence.
-            foreach (var source in file.Value.Sources)
+            foreach (var source in CollectSources(file.Value.Parsed, isResourceDictionary))
             {
                 var resolved = ResolveSourcePath(path, projectRoot, source);
                 if (resolved is not null)
@@ -182,11 +183,12 @@ internal sealed class XamlResourceGraph
             text,
             parsed,
             CompletionProvider.CollectResourceKeys(parsed).ToArray(),
-            CollectSources(parsed).ToArray(),
             byteCount);
     }
 
-    private static IEnumerable<string> CollectSources(XamlDocument document)
+    private static IEnumerable<string> CollectSources(
+        XamlDocument document,
+        Func<XamlElement, bool> isResourceDictionary)
     {
         if (document.Root is null)
         {
@@ -195,10 +197,8 @@ internal sealed class XamlResourceGraph
 
         foreach (var node in document.Root.DescendantNodesAndSelf())
         {
-            if (node is XamlElement
-                {
-                    Name: { HasPrefix: false, IsDotted: false, LocalName: "ResourceDictionary" },
-                } dictionary &&
+            if (node is XamlElement dictionary &&
+                isResourceDictionary(dictionary) &&
                 dictionary.GetAttribute("Source")?.Value is
                 {
                     MarkupExtension: null,
@@ -215,7 +215,6 @@ internal sealed class XamlResourceGraph
         string Text,
         XamlDocument Parsed,
         string[] Keys,
-        string[] Sources,
         long ByteCount);
 
     private readonly record struct CachedResourceFile(DateTime Stamp, ResourceFile File);

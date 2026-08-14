@@ -102,7 +102,8 @@ internal sealed partial class XamlLanguageServer
 
         int offset = doc.OffsetAt(p.Position);
         var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
-        var occurrences = ResolveOccurrences(doc, root, offset, context?.TypeSystem);
+        var typeSystem = context?.TypeSystem;
+        var occurrences = ResolveOccurrences(doc, root, offset, typeSystem);
         if (occurrences is null)
         {
             return null;
@@ -115,20 +116,22 @@ internal sealed partial class XamlLanguageServer
             .ToList();
 
         // A resource key is a PROJECT-WIDE symbol: its x:Key is typically declared in App.xaml and used across pages.
-        if (DetectSymbolAt(doc, offset, context?.TypeSystem) is { Kind: XamlRenameKind.Key, Name: { Length: > 0 } key })
+        if (DetectSymbolAt(doc, offset, typeSystem) is { Kind: XamlRenameKind.Key, Name: { Length: > 0 } key })
         {
-            await AddCrossFileResourceReferencesAsync(p.TextDocument.Uri, key, includeDeclaration, locations)
-                .ConfigureAwait(false);
+            AddCrossFileResourceReferences(context, p.TextDocument.Uri, key, includeDeclaration, locations);
         }
 
         return locations;
     }
 
     /// <summary>Adds, to locations, every reference to the resource key in the project's OTHER XAML documents</summary>
-    private async Task AddCrossFileResourceReferencesAsync(
-        string currentUri, string key, bool includeDeclaration, List<Lsp.Location> locations)
+    private void AddCrossFileResourceReferences(
+        XamlProjectContext? context,
+        string currentUri,
+        string key,
+        bool includeDeclaration,
+        List<Lsp.Location> locations)
     {
-        var context = await GetContextAsync(currentUri).ConfigureAwait(false);
         if (context == null)
         {
             return;
@@ -211,8 +214,8 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
-        var occurrences = ResolveOccurrences(doc, root, doc.OffsetAt(p.Position), context?.TypeSystem);
+        var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var occurrences = ResolveOccurrences(doc, root, doc.OffsetAt(p.Position), typeSystem);
         if (occurrences is null)
         {
             return null;
@@ -231,8 +234,9 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
-        return XamlRename.PrepareRename(doc, doc.OffsetAt(p.Position), context?.TypeSystem);
+        var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
+        return XamlRename.PrepareRename(doc, doc.OffsetAt(p.Position), typeSystem);
     }
 
     /// <summary>Handles textDocument/rename — renames the x:Name/Name or x:Key resource key under the caret and every reference to it in the document, returning a single-document WorkspaceEdit.</summary>
@@ -243,8 +247,25 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
-        return XamlRename.Rename(doc, doc.OffsetAt(p.Position), p.NewName, context?.TypeSystem);
+        var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
+        return XamlRename.Rename(doc, doc.OffsetAt(p.Position), p.NewName, typeSystem);
+    }
+
+    private static void EnsureCompleteNameRenameSemantics(
+        TextDocument doc,
+        Position position,
+        XamlTypeSystem? typeSystem)
+    {
+        if (DetectSymbolAt(doc, doc.OffsetAt(position), typeSystem) is
+                { Kind: XamlRenameKind.Name } &&
+            typeSystem?.Capabilities.HasCompleteNameReferenceSemantics != true)
+        {
+            throw new RenameValidationException(
+                "Rename requires complete WinUI SDK metadata so every named-element reference can " +
+                "be updated safely. Restore the project, reload the window, and use " +
+                "'WinUI XAML: Show Info' to check project resolution.");
+        }
     }
 
     /// <summary>Handles textDocument/formatting (Format Document) — returns leading-indentation edits that normalize every structural line to its element-nesting depth.</summary>
@@ -291,14 +312,17 @@ internal sealed partial class XamlLanguageServer
         return Task.FromResult<object?>(XamlFolding.Compute(doc));
     }
 
-    private Task<object?> DocumentColorAsync(DocumentColorParams p)
+    private async Task<object?> DocumentColorAsync(DocumentColorParams p)
     {
         if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc))
         {
-            return Task.FromResult<object?>(null);
+            return null;
         }
 
-        return Task.FromResult<object?>(XamlColor.Collect(doc));
+        var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        return typeSystem is null
+            ? new List<ColorInformation>()
+            : XamlColor.Collect(doc, typeSystem);
     }
 
     private Task<object?> ColorPresentationAsync(ColorPresentationParams p) =>

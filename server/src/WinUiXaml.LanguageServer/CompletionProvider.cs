@@ -45,8 +45,8 @@ internal static partial class CompletionProvider
             ContextKind.CloseTag => CompleteCloseTag(doc, offset, ctx.ReplaceStart, replaceRange),
             ContextKind.AttributeValue => MaybeQuoteUnquotedValues(CompleteAttributeValue(doc, offset, ctx, scope, typeSystem, pageClass, replaceRange), doc, offset, ctx),
             ContextKind.BindPath => CompleteBindPath(doc, offset, ctx, scope, typeSystem, pageClass, replaceRange),
-            ContextKind.MarkupName => CompleteMarkupName(ctx, replaceRange),
-            ContextKind.MarkupArg => CompleteMarkupArg(doc, ctx, typeSystem, replaceRange),
+            ContextKind.MarkupName => CompleteMarkupName(ctx, scope, typeSystem, replaceRange),
+            ContextKind.MarkupArg => CompleteMarkupArg(doc, ctx, scope, typeSystem, replaceRange),
             ContextKind.ResourceKey => CompleteResourceKey(
                 doc, offset, ctx, scope, typeSystem, appResourceKeys, replaceRange, themeTypeResolutionObserver),
             ContextKind.TemplateBinding => CompleteTemplateBinding(doc, offset, ctx, scope, typeSystem, replaceRange),

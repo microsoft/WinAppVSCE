@@ -1,3 +1,7 @@
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using WinUiXaml.Workspace;
 using Xunit;
 
 namespace WinUiXaml.LanguageServer.Tests;
@@ -51,7 +55,8 @@ public class XamlResourceGraphTests
                 path => Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase)
                     ? Path.GetFullPath(path)
                     : null,
-                _ => { });
+                _ => { },
+                IsResourceDictionary);
 
             Assert.Equal(2, files.Count);
             Assert.Contains(files, file => file.Keys.Contains("AppKey"));
@@ -103,6 +108,7 @@ public class XamlResourceGraphTests
                 root,
                 path => Path.GetFullPath(path),
                 _ => { },
+                IsResourceDictionary,
                 path => string.Equals(path, app, StringComparison.OrdinalIgnoreCase)
                     ? Dictionary("OpenKey")
                     : null);
@@ -117,6 +123,51 @@ public class XamlResourceGraphTests
 
             graph.Clear();
             Assert.Contains("UpdatedDiskKey", Assert.Single(Read(graph, app, root)).Keys);
+        }
+
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReadReachable_UsesSdkIdentityForMergedDictionarySources()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var app = Path.Combine(root, "App.xaml");
+            var included = Path.Combine(root, "Included.xaml");
+            var ignored = Path.Combine(root, "Ignored.xaml");
+            File.WriteAllText(
+                app,
+                """
+                <ResourceDictionary xmlns="using:Microsoft.UI.Xaml"
+                                    xmlns:local="using:Contoso">
+                  <local:DerivedDictionary Source="Included.xaml" />
+                  <local:ResourceDictionary Source="Ignored.xaml" />
+                </ResourceDictionary>
+                """);
+            File.WriteAllText(included, Dictionary("IncludedKey"));
+            File.WriteAllText(ignored, Dictionary("IgnoredKey"));
+
+            var typeSystem = CreateResourceDictionaryTypeSystem();
+            var files = new XamlResourceGraph().ReadReachable(
+                app,
+                root,
+                path => File.Exists(path) ? Path.GetFullPath(path) : null,
+                _ => { },
+                element => XamlSemanticFacts.IsElement(
+                    element,
+                    typeSystem.Capabilities.ResourceDictionary,
+                    typeSystem,
+                    allowDerived: true));
+
+            Assert.Equal(2, files.Count);
+            Assert.Contains(files, file => file.Keys.Contains("IncludedKey"));
+            Assert.DoesNotContain(files, file => file.Keys.Contains("IgnoredKey"));
         }
         finally
         {
@@ -159,6 +210,7 @@ public class XamlResourceGraphTests
                 @"C:\project",
                 path => path,
                 _ => { },
+                IsResourceDictionary,
                 cancellationToken: cancellation.Token));
     }
 
@@ -171,6 +223,7 @@ public class XamlResourceGraphTests
             @"C:\project",
             path => path,
             logged.Add,
+            IsResourceDictionary,
             _ => new string(' ', checked((int)(XamlResourceGraph.MaxFileBytes / 2 + 1))));
 
         Assert.Empty(files);
@@ -225,7 +278,34 @@ public class XamlResourceGraphTests
                     ? full
                     : null;
             },
-            _ => { });
+            _ => { },
+            IsResourceDictionary);
+
+    private static bool IsResourceDictionary(WinUiXaml.Xaml.XamlElement element) =>
+        element.Name is { LocalName: "ResourceDictionary", IsDotted: false };
+
+    private static XamlTypeSystem CreateResourceDictionaryTypeSystem()
+    {
+        const string source = """
+            namespace Microsoft.UI.Xaml
+            {
+                public class ResourceDictionary { }
+            }
+            namespace Contoso
+            {
+                public class DerivedDictionary : Microsoft.UI.Xaml.ResourceDictionary { }
+                public class ResourceDictionary { }
+            }
+            """;
+        var compilation = CSharpCompilation.Create(
+            "TestApp",
+            [CSharpSyntaxTree.ParseText(source)],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        return XamlTypeSystem.FromCompilation(
+            compilation,
+            ImmutableArray<IAssemblySymbol>.Empty);
+    }
 
     private static string Dictionary(string key, params string[] sources)
     {

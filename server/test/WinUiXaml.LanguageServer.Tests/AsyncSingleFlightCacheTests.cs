@@ -75,6 +75,8 @@ public sealed class AsyncSingleFlightCacheTests
         Assert.Equal("fresh", fresh?.Name);
         Assert.True(cache.TryGetReady("page", out var ready));
         Assert.Equal("fresh", ready.Name);
+        Assert.True(cache.TryGetLatest("page", out var latest));
+        Assert.Equal("fresh", latest.Name);
     }
 
     [Fact]
@@ -94,6 +96,31 @@ public sealed class AsyncSingleFlightCacheTests
         Assert.Equal("fresh", fresh?.Name);
         Assert.True(cache.TryGetReady("page", out var ready));
         Assert.Equal("fresh", ready.Name);
+    }
+
+    [Fact]
+    public async Task AcceptedSnapshotRemainsAvailableDuringPerKeyReplacement()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>();
+        await cache.GetOrStart(
+            "page",
+            () => Task.FromResult<Value?>(new Value("first")));
+
+        cache.Invalidate("page");
+        var replacementRelease =
+            new TaskCompletionSource<Value?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var replacement = cache.GetOrStart(
+            "page",
+            () => replacementRelease.Task);
+
+        Assert.False(cache.TryGetReady("page", out _));
+        Assert.True(cache.TryGetLatest("page", out var first));
+        Assert.Equal("first", first.Name);
+
+        replacementRelease.SetResult(new Value("second"));
+        Assert.Equal("second", (await replacement)?.Name);
+        Assert.True(cache.TryGetLatest("page", out var second));
+        Assert.Equal("second", second.Name);
     }
 
     private sealed record Value(string Name);

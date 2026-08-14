@@ -10,15 +10,8 @@ namespace WinUiXaml.LanguageServer;
 internal static partial class CompletionProvider
 {
     private static INamedTypeSymbol? ResolveElementType(
-        XamlName name, XamlNamespaceScope scope, XamlTypeSystem typeSystem)
-    {
-        if (!scope.TryResolvePrefix(name.Prefix, out var uri))
-        {
-            return null;
-        }
-
-        return typeSystem.ResolveType(uri, name.LocalName);
-    }
+        XamlName name, XamlNamespaceScope scope, XamlTypeSystem typeSystem) =>
+        XamlSemanticFacts.ResolveType(name, scope, typeSystem);
 
     private static XamlName ParseQualified(string qualified)
     {

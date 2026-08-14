@@ -132,17 +132,56 @@ internal sealed partial class XamlLanguageServer
         var extension = InnermostMarkupExtensionAt(root, offset);
         if (extension is not null)
         {
-            if (extension.Name is { } exName && exName.Span.ContainsInclusive(offset) &&
-                DescribeMarkupExtension(exName.FullName) is { } description)
+            XamlTypeSystem? typeSystem = null;
+            if (extension.Name is { } exName && exName.Span.ContainsInclusive(offset))
             {
-                return new Hover
+                var extensionScope = NearestElementScope(extension);
+                if (CanUseProjectIndependentMarkupDescription(exName, extensionScope) &&
+                    DescribeMarkupExtension(exName.FullName) is { } description)
                 {
-                    Contents = new MarkupContent { Kind = "markdown", Value = description },
-                    Range = doc.RangeOf(exName.Span),
-                };
+                    return new Hover
+                    {
+                        Contents = new MarkupContent { Kind = "markdown", Value = description },
+                        Range = doc.RangeOf(exName.Span),
+                    };
+                }
+
+                typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+                var scope = extensionScope;
+                var extensionType = typeSystem is null || scope is null
+                    ? null
+                    : XamlSemanticFacts.ResolveMarkupExtensionType(
+                        exName.FullName,
+                        scope,
+                        typeSystem);
+                if (extensionType is not null)
+                {
+                    var frameworkDescription =
+                        SymbolEqualityComparer.Default.Equals(
+                            extensionType,
+                            typeSystem!.Capabilities.Binding) ||
+                        SymbolEqualityComparer.Default.Equals(
+                            extensionType,
+                            typeSystem.Capabilities.RelativeSource)
+                            ? DescribeMarkupExtension(exName.FullName)
+                            : null;
+                    return new Hover
+                    {
+                        Contents = new MarkupContent
+                        {
+                            Kind = "markdown",
+                            Value = frameworkDescription ??
+                                HoverMarkdown(
+                                    DescribeForHover(extensionType),
+                                    extensionType,
+                                    typeSystem: typeSystem),
+                        },
+                        Range = doc.RangeOf(exName.Span),
+                    };
+                }
             }
 
-            var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+            typeSystem ??= await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
             var argHover = typeSystem is null ? null : ResolveMarkupArgumentEnumHover(extension, offset, typeSystem, doc);
             if (argHover is not null)
             {
@@ -227,11 +266,42 @@ internal sealed partial class XamlLanguageServer
         _ => null,
     };
 
+    private static bool CanUseProjectIndependentMarkupDescription(
+        XamlName name,
+        XamlNamespaceScope? scope)
+    {
+        if (string.Equals(name.Prefix, "x", StringComparison.Ordinal))
+        {
+            return scope is not null &&
+                scope.TryResolvePrefix(name.Prefix, out var xamlNamespace) &&
+                string.Equals(
+                    xamlNamespace,
+                    XamlTypeSystem.XamlLanguageNamespace,
+                    StringComparison.Ordinal);
+        }
+
+        if (name.HasPrefix)
+        {
+            return false;
+        }
+
+        return scope is null ||
+            !scope.TryResolvePrefix(string.Empty, out var namespaceUri) ||
+            string.Equals(
+                namespaceUri,
+                XamlTypeSystem.PresentationNamespace,
+                StringComparison.Ordinal);
+    }
+
     private static Hover? ResolveProjectIndependentMarkupHover(TextDocument document, int offset)
     {
         if (document.Parsed.Root is not { } root ||
-            InnermostMarkupExtensionAt(root, offset)?.Name is not { } name ||
+            InnermostMarkupExtensionAt(root, offset) is not { } extension ||
+            extension.Name is not { } name ||
             !name.Span.ContainsInclusive(offset) ||
+            !CanUseProjectIndependentMarkupDescription(
+                name,
+                NearestElementScope(extension)) ||
             DescribeMarkupExtension(name.FullName) is not { } description)
         {
             return null;
@@ -326,7 +396,11 @@ internal sealed partial class XamlLanguageServer
                 continue;
             }
 
-            var argType = ResolveMarkupArgumentType(extName.FullName, argName.LocalName, typeSystem);
+            var argType = ResolveMarkupArgumentType(
+                extension,
+                extName.FullName,
+                argName.LocalName,
+                typeSystem);
             if (argType is { TypeKind: TypeKind.Enum } &&
                 FindEnumMember(argType, valueText) is { } member)
             {
@@ -346,15 +420,16 @@ internal sealed partial class XamlLanguageServer
     }
 
     /// <summary>Resolves the value type of a markup-extension named argument.</summary>
-    private static ITypeSymbol? ResolveMarkupArgumentType(string extensionFullName, string argName, XamlTypeSystem typeSystem)
+    private static ITypeSymbol? ResolveMarkupArgumentType(
+        XamlMarkupExtension extension,
+        string extensionFullName,
+        string argName,
+        XamlTypeSystem typeSystem)
     {
-        var extensionType = extensionFullName switch
-        {
-            "RelativeSource" => typeSystem.ResolveMetadataType("Microsoft.UI.Xaml.Data.RelativeSource"),
-            "Binding" => typeSystem.ResolveMetadataType("Microsoft.UI.Xaml.Data.Binding"),
-            _ => null,
-        };
-
+        var scope = NearestElementScope(extension);
+        var extensionType = scope is null
+            ? null
+            : XamlSemanticFacts.ResolveMarkupExtensionType(extensionFullName, scope, typeSystem);
         var argType = extensionType is null ? null : typeSystem.FindMember(extensionType, argName)?.Type;
 
         // x:Bind has no reflectable extension type; its Mode argument is a BindingMode like Binding's.
@@ -494,12 +569,15 @@ internal sealed partial class XamlLanguageServer
         int dot = value.LastIndexOf('.');
         if (isType || dot <= 0 || dot >= value.Length - 1)
         {
-            var type = ResolveXamlTypeName(value, scope, typeSystem);
+            var type = XamlSemanticFacts.ResolveTypeName(value, scope, typeSystem);
             return type == null ? (null, null) : (type, valueSpan);
         }
 
         // {x:Static Owner.Member}: split on the last dot into the owner type and the static member.
-        var owner = ResolveXamlTypeName(value.Substring(0, dot), scope, typeSystem);
+        var owner = XamlSemanticFacts.ResolveTypeName(
+            value.Substring(0, dot),
+            scope,
+            typeSystem);
         if (owner == null)
         {
             return (null, null);
@@ -757,18 +835,25 @@ internal sealed partial class XamlLanguageServer
 
         if (attr?.Value is not { } value || value.IsMarkupExtension ||
             !value.Span.ContainsInclusive(offset) ||
-            attr.Parent is not XamlElement { Name: { HasPrefix: false } ownerName } owner)
+            attr.Parent is not XamlElement owner)
+        {
+            return (null, null);
+        }
+
+        var typeSystem = await GetTypeSystemAsync(uri).ConfigureAwait(false);
+        if (typeSystem == null)
         {
             return (null, null);
         }
 
         // Type-valued attributes we navigate/hover from: unprefixed TargetType, and x:DataType on a template.
-        bool isTargetType = !attr.Name.HasPrefix &&
+        bool isTargetType = XamlSemanticFacts.IsStyleOrControlTemplate(owner, typeSystem) &&
+            !attr.Name.HasPrefix &&
             string.Equals(attr.Name.LocalName, "TargetType", StringComparison.Ordinal);
         bool isDataType = string.Equals(attr.Name.Prefix, "x", StringComparison.Ordinal) &&
             string.Equals(attr.Name.LocalName, "DataType", StringComparison.Ordinal);
         bool isSetterProperty = !attr.Name.HasPrefix &&
-            string.Equals(ownerName.LocalName, "Setter", StringComparison.Ordinal) &&
+            XamlSemanticFacts.IsSetter(owner, typeSystem) &&
             string.Equals(attr.Name.LocalName, "Property", StringComparison.Ordinal);
 
         if (!isTargetType && !isDataType && !isSetterProperty)
@@ -782,16 +867,13 @@ internal sealed partial class XamlLanguageServer
             return (null, null);
         }
 
-        var typeSystem = await GetTypeSystemAsync(uri).ConfigureAwait(false);
-        if (typeSystem == null)
-        {
-            return (null, null);
-        }
-
         // TargetType="Foo" / x:DataType="Foo" -> the referenced type (F12 to user-type source, hover describes it).
         if (isTargetType || isDataType)
         {
-            var type = ResolveXamlTypeName(text, owner.NamespaceScope, typeSystem);
+            var type = XamlSemanticFacts.ResolveTypeName(
+                text,
+                owner.NamespaceScope,
+                typeSystem);
             return type == null ? (null, null) : (type, value.InnerSpan);
         }
 
@@ -800,12 +882,18 @@ internal sealed partial class XamlLanguageServer
             int dot = text.IndexOf('.');
             if (dot > 0)
             {
-                var attachedOwner = ResolveXamlTypeName(text.Substring(0, dot), owner.NamespaceScope, typeSystem);
+                var attachedOwner = XamlSemanticFacts.ResolveTypeName(
+                    text.Substring(0, dot),
+                    owner.NamespaceScope,
+                    typeSystem);
                 var attached = attachedOwner == null ? null : FindMember(attachedOwner, text.Substring(dot + 1));
                 return attached == null ? (null, null) : (attached, value.InnerSpan);
             }
 
-            var targetType = ResolveEnclosingTargetType(owner, typeSystem);
+            var targetType = XamlSemanticFacts.ResolveStyleTargetType(
+                owner,
+                owner.NamespaceScope,
+                typeSystem);
             var member = targetType == null ? null : FindMember(targetType, text);
             return member == null ? (null, null) : (member, value.InnerSpan);
         }
@@ -835,21 +923,28 @@ internal sealed partial class XamlLanguageServer
             }
         }
 
-        if (attr is null || attr.Name.HasPrefix ||
+        if (attr is null ||
             attr.Value is not { IsMarkupExtension: false } value ||
             !value.Span.ContainsInclusive(offset) ||
-            attr.Parent is not XamlElement { Name: { HasPrefix: false } } owner)
+            attr.Parent is not XamlElement owner)
         {
             return (null, null);
         }
 
         var text = value.Text;
+        var typeSystem = await GetTypeSystemAsync(uri).ConfigureAwait(false);
+        if (typeSystem == null)
+        {
+            return (null, null);
+        }
+
         string? elementName;
         int memStart;
         int memEnd;
 
-        if (string.Equals(attr.Name.LocalName, "Target", StringComparison.Ordinal) &&
-            string.Equals(owner.Name.LocalName, "Setter", StringComparison.Ordinal))
+        if (!attr.Name.HasPrefix &&
+            string.Equals(attr.Name.LocalName, "Target", StringComparison.Ordinal) &&
+            XamlSemanticFacts.IsSetter(owner, typeSystem))
         {
             // <Setter Target="Element.Property"> — the member is the single segment after the first dot.
             int dot = text.IndexOf('.');
@@ -863,7 +958,11 @@ internal sealed partial class XamlLanguageServer
             memStart = dot + 1;
             memEnd = text.Length;
         }
-        else if (string.Equals(attr.Name.LocalName, "Storyboard.TargetProperty", StringComparison.Ordinal))
+        else if (XamlSemanticFacts.IsStoryboardAttachedProperty(
+            attr.Name.FullName,
+            "TargetProperty",
+            owner.NamespaceScope,
+            typeSystem))
         {
             // Storyboard.TargetProperty="Property" — a bare single-segment member rooted at the sibling Storyboard.TargetName. Parenthesized/dotted/attached target paths are deferred.
             if (text.IndexOf('.') >= 0 || text.IndexOf('(') >= 0)
@@ -872,8 +971,11 @@ internal sealed partial class XamlLanguageServer
             }
 
             elementName = owner.Attributes.FirstOrDefault(
-                a => !a.Name.HasPrefix &&
-                     string.Equals(a.Name.LocalName, "Storyboard.TargetName", StringComparison.Ordinal))
+                a => XamlSemanticFacts.IsStoryboardAttachedProperty(
+                    a.Name.FullName,
+                    "TargetName",
+                    owner.NamespaceScope,
+                    typeSystem))
                 ?.Value?.Text?.Trim();
             memStart = 0;
             memEnd = text.Length;
@@ -906,12 +1008,6 @@ internal sealed partial class XamlLanguageServer
             return (null, null);
         }
 
-        var typeSystem = await GetTypeSystemAsync(uri).ConfigureAwait(false);
-        if (typeSystem == null)
-        {
-            return (null, null);
-        }
-
         var elementType = CompletionProvider.ResolveNamedElementType(root, elementName!, owner.NamespaceScope, typeSystem);
         if (elementType == null)
         {
@@ -929,7 +1025,10 @@ internal sealed partial class XamlLanguageServer
         bool CaretOnMember, XamlNamespaceScope Scope);
 
     /// <summary>Locates a parenthesized (Owner.Member) qualifier group (as used by Storyboard.TargetProperty PropertyPaths — (Canvas.Left), (UIElement.Opacity)</summary>
-    private static QualifiedTargetHit? FindQualifiedTargetPropertyAt(TextDocument doc, int offset)
+    private static QualifiedTargetHit? FindQualifiedTargetPropertyAt(
+        TextDocument doc,
+        int offset,
+        XamlTypeSystem typeSystem)
     {
         if (doc.Parsed.Root is not { } root)
         {
@@ -952,11 +1051,15 @@ internal sealed partial class XamlLanguageServer
             }
         }
 
-        if (attr is null || attr.Name.HasPrefix ||
-            !string.Equals(attr.Name.LocalName, "Storyboard.TargetProperty", StringComparison.Ordinal) ||
+        if (attr is null ||
             attr.Value is not { IsMarkupExtension: false } value ||
             !value.Span.ContainsInclusive(offset) ||
-            attr.Parent is not XamlElement { Name: { HasPrefix: false } } owner)
+            attr.Parent is not XamlElement owner ||
+            !XamlSemanticFacts.IsStoryboardAttachedProperty(
+                attr.Name.FullName,
+                "TargetProperty",
+                owner.NamespaceScope,
+                typeSystem))
         {
             return null;
         }
@@ -1064,8 +1167,7 @@ internal sealed partial class XamlLanguageServer
     /// <summary>Resolves a parenthesized (Owner.Member) qualifier inside Storyboard.TargetProperty to its symbol for F12/hover.</summary>
     private async Task<(ISymbol? Symbol, TextSpan? Span)> ResolveQualifiedTargetPropertyMemberAsync(string uri, int offset)
     {
-        if (!_documents.TryGetValue(uri, out var doc) ||
-            FindQualifiedTargetPropertyAt(doc, offset) is not { } hit)
+        if (!_documents.TryGetValue(uri, out var doc))
         {
             return (null, null);
         }
@@ -1076,7 +1178,15 @@ internal sealed partial class XamlLanguageServer
             return (null, null);
         }
 
-        var ownerType = ResolveXamlTypeName(hit.OwnerToken, hit.Scope, typeSystem);
+        if (FindQualifiedTargetPropertyAt(doc, offset, typeSystem) is not { } hit)
+        {
+            return (null, null);
+        }
+
+        var ownerType = XamlSemanticFacts.ResolveTypeName(
+            hit.OwnerToken,
+            hit.Scope,
+            typeSystem);
         if (ownerType == null)
         {
             return (null, null);
@@ -1104,18 +1214,21 @@ internal sealed partial class XamlLanguageServer
         }
 
         int offset = doc.OffsetAt(p.Position);
-        if (FindQualifiedTargetPropertyAt(doc, offset) is not { CaretOnMember: true } hit)
-        {
-            return null;
-        }
-
         var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
         if (typeSystem == null)
         {
             return null;
         }
 
-        var ownerType = ResolveXamlTypeName(hit.OwnerToken, hit.Scope, typeSystem);
+        if (FindQualifiedTargetPropertyAt(doc, offset, typeSystem) is not { CaretOnMember: true } hit)
+        {
+            return null;
+        }
+
+        var ownerType = XamlSemanticFacts.ResolveTypeName(
+            hit.OwnerToken,
+            hit.Scope,
+            typeSystem);
         if (ownerType == null)
         {
             return null;
@@ -1148,42 +1261,6 @@ internal sealed partial class XamlLanguageServer
             },
             Range = doc.RangeOf(hit.MemberSpan),
         };
-    }
-
-    /// <summary>Resolves a (possibly <c>prefix:</c>-qualified) XAML type name against a namespace scope.</summary>
-    private static INamedTypeSymbol? ResolveXamlTypeName(
-        string text, XamlNamespaceScope scope, XamlTypeSystem typeSystem)
-    {
-        string prefix = string.Empty;
-        string local = text;
-        int colon = text.IndexOf(':');
-        if (colon >= 0)
-        {
-            prefix = text.Substring(0, colon);
-            local = text.Substring(colon + 1);
-        }
-
-        return scope.TryResolvePrefix(prefix, out var nsUri) ? typeSystem.ResolveType(nsUri, local) : null;
-    }
-
-    /// <summary>Walks up to the nearest <c>Style</c>/<c>ControlTemplate</c> and resolves its TargetType.</summary>
-    private static INamedTypeSymbol? ResolveEnclosingTargetType(XamlElement start, XamlTypeSystem typeSystem)
-    {
-        for (XamlNode? node = start; node != null; node = node.Parent)
-        {
-            if (node is not XamlElement { Name: { HasPrefix: false } name } element ||
-                (name.LocalName != "Style" && name.LocalName != "ControlTemplate"))
-            {
-                continue;
-            }
-
-            var targetType = element.Attributes.FirstOrDefault(
-                a => !a.Name.HasPrefix && string.Equals(a.Name.LocalName, "TargetType", StringComparison.Ordinal));
-            var text = targetType?.Value?.Text?.Trim();
-            return string.IsNullOrEmpty(text) ? null : ResolveXamlTypeName(text!, element.NamespaceScope, typeSystem);
-        }
-
-        return null;
     }
 
     private static XamlName? NameHitInElement(XamlElement element, int offset)

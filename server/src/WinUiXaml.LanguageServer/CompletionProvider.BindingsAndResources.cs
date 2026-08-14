@@ -23,34 +23,105 @@ internal static partial class CompletionProvider
         ("x:Null", "The null value"),
     };
 
-    private static CompletionList CompleteMarkupName(Context ctx, Lsp.Range replaceRange)
+    private static CompletionList CompleteMarkupName(
+        Context ctx,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        Lsp.Range replaceRange)
     {
         var items = new List<CompletionItem>();
-        foreach (var (name, detail) in MarkupExtensions)
-        {
-            if (!StartsWith(name, ctx.Partial))
-            {
-                continue;
-            }
+        var seen = new HashSet<string>(StringComparer.Ordinal);
 
-            items.Add(new CompletionItem
+        void AddCuratedExtensions()
+        {
+            foreach (var (name, detail) in MarkupExtensions)
             {
-                Label = name,
-                Kind = CompletionItemKind.Keyword,
-                Detail = detail,
-                TextEdit = new TextEdit { Range = replaceRange, NewText = name },
-                FilterText = name,
-                SortText = name,
-            });
+                if (!StartsWith(name, ctx.Partial) || !seen.Add(name))
+                {
+                    continue;
+                }
+
+                items.Add(new CompletionItem
+                {
+                    Label = name,
+                    Kind = CompletionItemKind.Keyword,
+                    Detail = detail,
+                    TextEdit = new TextEdit { Range = replaceRange, NewText = name },
+                    FilterText = name,
+                    SortText = name,
+                });
+            }
+        }
+
+        void AddRuntimeExtensions()
+        {
+            foreach (var declaration in scope.Declarations)
+            {
+                if (string.Equals(declaration.Value, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                foreach (var type in typeSystem.GetMarkupExtensionTypes(declaration.Value))
+                {
+                    var localName = type.Name.EndsWith("Extension", StringComparison.Ordinal) &&
+                        type.Name.Length > "Extension".Length
+                            ? type.Name.Substring(0, type.Name.Length - "Extension".Length)
+                            : type.Name;
+                    var name = declaration.Key.Length == 0
+                        ? localName
+                        : declaration.Key + ":" + localName;
+                    if (!StartsWith(name, ctx.Partial) || !seen.Add(name))
+                    {
+                        continue;
+                    }
+
+                    items.Add(new CompletionItem
+                    {
+                        Label = name,
+                        Kind = CompletionItemKind.Class,
+                        Detail = type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                        Documentation = CompletionDoc(type),
+                        TextEdit = new TextEdit { Range = replaceRange, NewText = name },
+                        FilterText = name,
+                        SortText = name,
+                    });
+                }
+            }
+        }
+
+        var preferCustomDefault =
+            scope.TryResolvePrefix(string.Empty, out var defaultNamespace) &&
+            !string.Equals(
+                defaultNamespace,
+                XamlTypeSystem.PresentationNamespace,
+                StringComparison.Ordinal);
+        if (preferCustomDefault)
+        {
+            AddRuntimeExtensions();
+            AddCuratedExtensions();
+        }
+        else
+        {
+            AddCuratedExtensions();
+            AddRuntimeExtensions();
         }
 
         return Finish(items);
     }
 
     /// <summary>Completes a markup extension's named arguments: the argument NAMES when no = has been typed.</summary>
-    private static CompletionList CompleteMarkupArg(TextDocument doc, Context ctx, XamlTypeSystem typeSystem, Lsp.Range replaceRange)
+    private static CompletionList CompleteMarkupArg(
+        TextDocument doc,
+        Context ctx,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        Lsp.Range replaceRange)
     {
-        var extensionType = ResolveMarkupExtensionType(ctx.MarkupExtension, typeSystem);
+        var extensionType = XamlSemanticFacts.ResolveMarkupExtensionType(
+            ctx.MarkupExtension,
+            scope,
+            typeSystem);
 
         // Argument-name completion: offer the extension type's settable property names.
         if (string.IsNullOrEmpty(ctx.AttributeName))
@@ -193,22 +264,6 @@ internal static partial class CompletionProvider
                 }
             }
         }
-    }
-
-    /// <summary>Resolves a markup extension name to its CLR type (for named-argument completion). Null for x:Bind.</summary>
-    private static INamedTypeSymbol? ResolveMarkupExtensionType(string? extension, XamlTypeSystem typeSystem)
-    {
-        if (string.IsNullOrEmpty(extension))
-        {
-            return null;
-        }
-
-        return extension switch
-        {
-            "RelativeSource" => typeSystem.ResolveMetadataType("Microsoft.UI.Xaml.Data.RelativeSource"),
-            "Binding" => typeSystem.ResolveMetadataType("Microsoft.UI.Xaml.Data.Binding"),
-            _ => null,
-        };
     }
 
     /// <summary>The named arguments of a compiled <c>{x:Bind}</c> expression, offered for arg-name completion.</summary>
@@ -356,9 +411,9 @@ internal static partial class CompletionProvider
             return null;
         }
 
-        var type = element.Name is { HasPrefix: false, LocalName: "Setter" } &&
+        var type = XamlSemanticFacts.IsSetter(element, typeSystem) &&
                    string.Equals(ctx.AttributeName, "Value", StringComparison.Ordinal)
-            ? ResolveSetterValueType(element, scope, typeSystem)
+            ? XamlSemanticFacts.ResolveSetterValueType(element, scope, typeSystem)
             : ResolveAttributeType(ctx.AttributeName!, element, scope, typeSystem);
 
         if (type is null || type.SpecialType == SpecialType.System_Object)
@@ -814,14 +869,17 @@ internal static partial class CompletionProvider
             }
 
             // A DataTemplate re-roots BOTH compiled and classic bindings to its x:DataType (the templated item), so it always wins at its scope; an empty/unresolvable x:DataType yields no root.
-            if (element.Name?.LocalName == "DataTemplate")
+            if (XamlSemanticFacts.IsDataTemplate(element, typeSystem))
             {
                 var dataType = element.Attributes.FirstOrDefault(a =>
                     !a.IsNamespaceDeclaration && a.Name.Prefix == "x" && a.Name.LocalName == "DataType");
                 var typeName = dataType?.Value?.Text?.Trim();
                 return string.IsNullOrEmpty(typeName)
                     ? null
-                    : ResolveElementType(ParseQualified(typeName!), scope, typeSystem);
+                    : XamlSemanticFacts.ResolveTypeName(
+                        typeName!,
+                        element.NamespaceScope,
+                        typeSystem);
             }
 
             // Classic {Binding} binds to the runtime DataContext, whose type is only statically known when a design-time hint declares it: d:DataContext="{d:DesignInstance Type=local:Foo}".
@@ -992,12 +1050,12 @@ internal static partial class CompletionProvider
                 var (name, val) = SplitMarkupArg(text, argStart, j);
                 if (name == "Type")
                 {
-                    return NormalizeTypeToken(val);
+                    return XamlSemanticFacts.NormalizeTypeToken(val);
                 }
 
                 if (name is null && positional is null && val.Length > 0)
                 {
-                    positional = NormalizeTypeToken(val);
+                    positional = XamlSemanticFacts.NormalizeTypeToken(val);
                 }
 
                 argStart = j + 1;
@@ -1095,53 +1153,6 @@ internal static partial class CompletionProvider
         return eq >= 0
             ? (text.Substring(start, eq - start).Trim(), text.Substring(eq + 1, endExclusive - eq - 1).Trim())
             : (null, text.Substring(start, endExclusive - start).Trim());
-    }
-
-    /// <summary>Normalizes a type token that may be a bare/prefixed name or an {x:Type ...} wrapper — used by both design-instance types and Style/ControlTemplate TargetType.</summary>
-    private static string? NormalizeTypeToken(string value)
-    {
-        var v = value.Trim();
-        if (v.Length == 0)
-        {
-            return null;
-        }
-
-        if (v[0] == '{')
-        {
-            int k = 1;
-            while (k < v.Length && char.IsWhiteSpace(v[k]))
-            {
-                k++;
-            }
-
-            int ns = k;
-            while (k < v.Length && (char.IsLetterOrDigit(v[k]) || v[k] == ':'))
-            {
-                k++;
-            }
-
-            if (LocalPart(v.Substring(ns, k - ns)) != "Type")
-            {
-                return null;
-            }
-
-            while (k < v.Length && char.IsWhiteSpace(v[k]))
-            {
-                k++;
-            }
-
-            int ts = k;
-            while (k < v.Length && (char.IsLetterOrDigit(v[k]) || v[k] == ':' || v[k] == '.'))
-            {
-                k++;
-            }
-
-            var wrapped = v.Substring(ts, k - ts).Trim();
-            return wrapped.Length > 0 ? wrapped : null;
-        }
-
-        v = v.TrimEnd('}').Trim();
-        return v.Length > 0 ? v : null;
     }
 
 

@@ -48,7 +48,7 @@ async function referencesAt(text, includeDeclaration) {
   }));
 }
 
-async function lspReferencesAt(text, includeDeclaration) {
+async function lspReferencesAt(text, includeDeclaration, warmProject = true) {
   const { clean, position } = caretPosition(text);
   const serverPath =
     process.env.WINUI_XAML_TEST_SERVER_PATH ||
@@ -112,6 +112,13 @@ async function lspReferencesAt(text, includeDeclaration) {
     await send("textDocument/didOpen", {
       textDocument: { uri, languageId: "xaml", version: 1, text: clean },
     }, true);
+    if (warmProject) {
+      await send("textDocument/completion", {
+        textDocument: { uri },
+        position: { line: 0, character: 1 },
+        context: { triggerKind: 1 },
+      });
+    }
     const locs = await send("textDocument/references", {
       textDocument: { uri },
       position: { line: position.line, character: position.character },
@@ -259,6 +266,15 @@ describe("WinUI XAML — red-team 79 (cross-file resource references)", function
     assert.strictEqual(countBase(withoutDecl, "DiPage.xaml"), 1, "includeDeclaration=false must keep DiPage usage");
     assert.strictEqual(currentRefs(withoutDecl).length, 1, "includeDeclaration=false must keep current usage");
     assertNoBuildOutput(withoutDecl, "includeDeclaration=false");
+  });
+
+  it("returns complete cross-file results on the first cold reference request", async () => {
+    const refs = await lspReferencesAt(
+      page(`<Border Background="{StaticResource SmokeAccent|Brush}" />`),
+      true,
+      false);
+    assert.strictEqual(refs.length, 3, `cold request should await buffer + App + DiPage; got ${JSON.stringify(refs)}`);
+    assertPositiveCrossFileShape(refs, 1, "cold direct LSP request");
   });
 
   it("drives cross-file references from an x:Key declaration caret in the open buffer", async () => {

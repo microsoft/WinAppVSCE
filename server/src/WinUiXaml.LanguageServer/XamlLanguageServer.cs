@@ -412,7 +412,7 @@ internal sealed partial class XamlLanguageServer
     private async Task DidCloseAsync(DidCloseTextDocumentParams p)
     {
         _documents.TryRemove(p.TextDocument.Uri, out _);
-        _contexts.Invalidate(p.TextDocument.Uri);
+        _contexts.Invalidate(p.TextDocument.Uri, discardLatest: true);
         await _connection.SendNotificationAsync(
             "textDocument/publishDiagnostics",
             new PublishDiagnosticsParams { Uri = p.TextDocument.Uri, Diagnostics = new List<Diagnostic>() })

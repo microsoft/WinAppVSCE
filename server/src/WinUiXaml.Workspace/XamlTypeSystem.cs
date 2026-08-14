@@ -40,6 +40,8 @@ namespace WinUiXaml.Workspace
 
         // Cache referenced controls because walking the reference closure is expensive.
         private IReadOnlyList<INamedTypeSymbol>? _referencedElementTypes;
+        private readonly ConcurrentDictionary<string, IReadOnlyList<INamedTypeSymbol>> _markupExtensionTypes =
+            new(StringComparer.Ordinal);
 
         private readonly Dictionary<string, List<NamespaceBinding>> _xmlnsMap;
         private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, string>> _documentationFiles =
@@ -72,7 +74,11 @@ namespace WinUiXaml.Workspace
             _compilation = compilation;
             _assemblies = assemblies;
             _xmlnsMap = xmlnsMap;
+            Capabilities = new WinUiSdkCapabilities(compilation);
         }
+
+        /// <summary>Framework capabilities captured for this immutable project compilation.</summary>
+        public WinUiSdkCapabilities Capabilities { get; }
 
         /// <summary>Builds a type system from a resolved XAML file's project context.</summary>
         public static XamlTypeSystem FromResolution(XamlResolution resolution)
@@ -534,6 +540,37 @@ namespace WinUiXaml.Workspace
             }
         }
 
+        /// <summary>
+        /// Public, non-abstract runtime markup extensions available through an XML namespace.
+        /// Results are cached for the lifetime of this immutable project compilation.
+        /// </summary>
+        public IReadOnlyList<INamedTypeSymbol> GetMarkupExtensionTypes(string xmlnsUri) =>
+            _markupExtensionTypes.GetOrAdd(
+                xmlnsUri,
+                uri =>
+                {
+                    var markupExtension = Capabilities.MarkupExtension;
+                    if (markupExtension is null)
+                    {
+                        return System.Array.Empty<INamedTypeSymbol>();
+                    }
+
+                    return GetAllTypes(uri)
+                        .Where(type =>
+                            IsPublicClass(type) &&
+                            !type.IsAbstract &&
+                            !SymbolEqualityComparer.Default.Equals(type, markupExtension) &&
+                            IsAssignableTo(type, markupExtension))
+                        .OrderBy(type => type.Name, StringComparer.Ordinal)
+                        .ToArray();
+                });
+
+        public bool IsMarkupExtensionType(INamedTypeSymbol? type) =>
+            type is not null &&
+            Capabilities.MarkupExtension is { } markupExtension &&
+            !SymbolEqualityComparer.Default.Equals(type, markupExtension) &&
+            IsAssignableTo(type, markupExtension);
+
         /// <summary>The XAML language intrinsic type aliases.</summary>
         public IEnumerable<KeyValuePair<string, INamedTypeSymbol>> GetXamlIntrinsicTypes(bool allTypeKinds)
         {
@@ -916,8 +953,8 @@ namespace WinUiXaml.Workspace
         /// </summary>
         public bool IsRelativePanelElementReference(INamedTypeSymbol owner, string member)
         {
-            var relativePanel = ResolveMetadataType("Microsoft.UI.Xaml.Controls.RelativePanel");
-            var uiElement = ResolveMetadataType("Microsoft.UI.Xaml.UIElement");
+            var relativePanel = Capabilities.RelativePanel;
+            var uiElement = Capabilities.UIElement;
             if (relativePanel is null ||
                 uiElement is null ||
                 !SymbolEqualityComparer.Default.Equals(owner, relativePanel))

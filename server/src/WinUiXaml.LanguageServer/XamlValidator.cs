@@ -1217,7 +1217,7 @@ internal static class XamlValidator
         XamlTypeSystem typeSystem,
         List<Diagnostic> diagnostics)
     {
-        if (typeSystem.ResolveMetadataType("Microsoft.UI.Xaml.FrameworkTemplate") is not { } frameworkTemplate)
+        if (typeSystem.Capabilities.FrameworkTemplate is not { } frameworkTemplate)
         {
             return;
         }

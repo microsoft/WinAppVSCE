@@ -22,17 +22,18 @@ internal sealed partial class XamlLanguageServer
         }
 
         int offset = doc.OffsetAt(p.Position);
-        var appKeys = GetAppResourceKeys(context.Resolution);
+        var appKeys = GetAppResourceKeys(context);
         return CompletionProvider.Provide(doc, offset, context.TypeSystem, context.Resolution.ClassSymbol, appKeys);
     }
 
     internal sealed record XamlProjectContext(XamlResolution Resolution, XamlTypeSystem TypeSystem);
 
     /// <summary> Collects the <c>x:Key</c> resource keys declared in the project's App.xaml and its reachable merged dictionaries. Returns an empty set when there is no App.xaml.</summary>
-    private string[] GetAppResourceKeys(XamlResolution resolution)
+    private string[] GetAppResourceKeys(XamlProjectContext context)
     {
         try
         {
+            var resolution = context.Resolution;
             var appXaml = FindAppXamlPath(resolution);
             if (appXaml == null)
             {
@@ -40,7 +41,7 @@ internal sealed partial class XamlLanguageServer
             }
 
             var projectRoot = System.IO.Path.GetDirectoryName(resolution.ProjectPath)!;
-            return ReadResourceGraph(appXaml, projectRoot)
+            return ReadResourceGraph(appXaml, projectRoot, context.TypeSystem)
                 .SelectMany(file => file.Keys)
                 .Distinct(System.StringComparer.Ordinal)
                 .ToArray();
@@ -53,7 +54,10 @@ internal sealed partial class XamlLanguageServer
         }
     }
 
-    private IReadOnlyList<XamlResourceGraph.ResourceFile> ReadResourceGraph(string rootPath, string projectRoot)
+    private IReadOnlyList<XamlResourceGraph.ResourceFile> ReadResourceGraph(
+        string rootPath,
+        string projectRoot,
+        XamlTypeSystem typeSystem)
     {
         var canonicalProjectRoot = CanonicalizePath(projectRoot);
         return _resourceGraph.ReadReachable(
@@ -73,6 +77,11 @@ internal sealed partial class XamlLanguageServer
                     : null;
             },
             message => System.Console.Error.WriteLine($"[winui-xaml-ls] {message}"),
+            element => XamlSemanticFacts.IsElement(
+                element,
+                typeSystem.Capabilities.ResourceDictionary,
+                typeSystem,
+                allowDerived: true),
             GetOpenDocumentText,
             _requestCancellation.Value);
     }
@@ -150,7 +159,7 @@ internal sealed partial class XamlLanguageServer
 
     private bool TryGetReadyTypeSystem(string uri, out XamlTypeSystem typeSystem)
     {
-        if (TryGetReadyContext(uri, out var context))
+        if (TryGetReadyProjectContext(uri, out var context))
         {
             typeSystem = context.TypeSystem;
             return true;
@@ -158,6 +167,16 @@ internal sealed partial class XamlLanguageServer
 
         typeSystem = null!;
         return false;
+    }
+
+    private bool TryGetReadyProjectContext(string uri, out XamlProjectContext context)
+    {
+        if (TryGetReadyContext(uri, out context!))
+        {
+            return true;
+        }
+
+        return _contexts.TryGetLatest(uri, out context!);
     }
 
     private async Task<XamlProjectContext?> LoadContextAsync(string uri)
@@ -240,7 +259,7 @@ internal sealed partial class XamlLanguageServer
             var caretNode = doc.Parsed.FindNode(offset);
             var scope = (caretNode != null ? NearestElementScope(caretNode) : null) ?? doc.Parsed.Root?.NamespaceScope;
             var castType = typeSystem != null && scope != null
-                ? ResolveXamlTypeName(castName, scope, typeSystem)
+                ? XamlSemanticFacts.ResolveTypeName(castName, scope, typeSystem)
                 : null;
             if (castType == null)
             {
@@ -336,9 +355,16 @@ internal sealed partial class XamlLanguageServer
     /// <summary>Returns the type an {x:Bind} path binds against at offset: the nearest enclosing DataTemplate's x:DataType</summary>
     private async Task<INamedTypeSymbol?> ResolveBindRootTypeAsync(TextDocument doc, int offset, string uri)
     {
+        var typeSystem = await GetTypeSystemAsync(uri).ConfigureAwait(false);
+        if (typeSystem == null)
+        {
+            return null;
+        }
+
         for (XamlNode? node = doc.Parsed.FindNode(offset); node != null; node = node.Parent)
         {
-            if (node is not XamlElement { Name: { HasPrefix: false, LocalName: "DataTemplate" } } template)
+            if (node is not XamlElement template ||
+                !XamlSemanticFacts.IsDataTemplate(template, typeSystem))
             {
                 continue;
             }
@@ -352,8 +378,10 @@ internal sealed partial class XamlLanguageServer
                 return null;
             }
 
-            var typeSystem = await GetTypeSystemAsync(uri).ConfigureAwait(false);
-            return typeSystem == null ? null : ResolveXamlTypeName(text!, template.NamespaceScope, typeSystem);
+            return XamlSemanticFacts.ResolveTypeName(
+                text!,
+                template.NamespaceScope,
+                typeSystem);
         }
 
         return null;

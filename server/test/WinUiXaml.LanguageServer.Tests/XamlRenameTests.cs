@@ -20,6 +20,7 @@ namespace WinUiXaml.LanguageServer.Tests;
 public class XamlRenameTests
 {
     private const string Uri = "file:///C:/proj/Page.xaml";
+    private static readonly XamlTypeSystem FrameworkTypeSystem = CreateFrameworkTypeSystem();
 
     private static (TextDocument Doc, int Offset) Caret(string textWithCaret)
     {
@@ -37,18 +38,19 @@ public class XamlRenameTests
         XamlTypeSystem? typeSystem = null)
     {
         var (doc, offset) = Caret(textWithCaret);
-        var edit = XamlRename.Rename(doc, offset, newName, typeSystem);
+        var edit = XamlRename.Rename(doc, offset, newName, typeSystem ?? FrameworkTypeSystem);
         Assert.NotNull(edit);
         Assert.True(edit!.Changes.ContainsKey(Uri), "edit must target the open document");
         return edit.Changes[Uri];
     }
 
-    private static XamlTypeSystem CreateRelativePanelTypeSystem()
+    private static XamlTypeSystem CreateFrameworkTypeSystem()
     {
         const string source = """
             namespace Microsoft.UI.Xaml
             {
                 public class UIElement { }
+                public class Setter { }
             }
             namespace Microsoft.UI.Xaml.Controls
             {
@@ -63,6 +65,16 @@ public class XamlRenameTests
                 }
                 public class TextBox : Microsoft.UI.Xaml.UIElement { }
                 public class Button : Microsoft.UI.Xaml.UIElement { }
+            }
+            namespace Microsoft.UI.Xaml.Media.Animation
+            {
+                public class Storyboard
+                {
+                    public static string GetTargetName(Microsoft.UI.Xaml.UIElement element) => "";
+                    public static void SetTargetName(Microsoft.UI.Xaml.UIElement element, string value) { }
+                    public static string GetTargetProperty(Microsoft.UI.Xaml.UIElement element) => "";
+                    public static void SetTargetProperty(Microsoft.UI.Xaml.UIElement element, string value) { }
+                }
             }
             """;
         var compilation = CSharpCompilation.Create(
@@ -79,7 +91,7 @@ public class XamlRenameTests
     public void PrepareRename_OnNameDeclaration_ReturnsTokenRangeAndPlaceholder()
     {
         var (doc, offset) = Caret("<Grid x:Name=\"Ro|ot\" />");
-        var result = XamlRename.PrepareRename(doc, offset);
+        var result = XamlRename.PrepareRename(doc, offset, FrameworkTypeSystem);
         Assert.NotNull(result);
         Assert.Equal("Root", result!.Placeholder);
         Assert.Equal("Root", Covered(doc, result.Range));
@@ -93,7 +105,7 @@ public class XamlRenameTests
             "  <TextBox Text=\"{Binding ElementName=Ro|ot}\" />\n" +
             "</Grid>";
         var (doc, offset) = Caret(buffer);
-        var result = XamlRename.PrepareRename(doc, offset);
+        var result = XamlRename.PrepareRename(doc, offset, FrameworkTypeSystem);
         Assert.NotNull(result);
         Assert.Equal("Root", result!.Placeholder);
         Assert.Equal("Root", Covered(doc, result.Range));
@@ -142,11 +154,11 @@ public class XamlRenameTests
     public void Rename_Name_RewritesDeclarationAndAllUsages()
     {
         var buffer =
-            "<Grid x:Name=\"Ro|ot\">\n" +
+            "<Grid xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" x:Name=\"Ro|ot\">\n" +
             "  <TextBox Text=\"{Binding ElementName=Root}\" />\n" +
             "  <Storyboard><DoubleAnimation Storyboard.TargetName=\"Root\" /></Storyboard>\n" +
             "</Grid>";
-        var edits = RenameEdits(buffer, "Panel");
+        var edits = RenameEdits(buffer, "Panel", CreateFrameworkTypeSystem());
         Assert.Equal(3, edits.Count);
         Assert.All(edits, e => Assert.Equal("Panel", e.NewText));
     }
@@ -199,7 +211,7 @@ public class XamlRenameTests
             "  <TextBox Text=\"{Binding ElementName=Ro|ot}\" />\n" +
             "</Grid>";
         var (doc, offset) = Caret(buffer);
-        var edit = XamlRename.Rename(doc, offset, "Panel");
+        var edit = XamlRename.Rename(doc, offset, "Panel", FrameworkTypeSystem);
         Assert.NotNull(edit);
         Assert.All(edit!.Changes[Uri], e => Assert.Equal("Root", Covered(doc, e.Range)));
     }
@@ -221,9 +233,23 @@ public class XamlRenameTests
             "  <TextBox x:Name=\"An|chor\" />\n" +
             "  <Button RelativePanel.RightOf=\"Anchor\" RelativePanel.AlignTopWith=\"Anchor\" />\n" +
             "</RelativePanel>";
-        var edits = RenameEdits(buffer, "Pivot", CreateRelativePanelTypeSystem());
+        var edits = RenameEdits(buffer, "Pivot", CreateFrameworkTypeSystem());
         Assert.Equal(3, edits.Count); // declaration + RightOf + AlignTopWith
         Assert.All(edits, e => Assert.Equal("Pivot", e.NewText));
+    }
+
+    [Fact]
+    public void Rename_Name_RewritesPrefixedStoryboardTargetName()
+    {
+        var buffer =
+            "<Grid xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+            "xmlns:anim=\"using:Microsoft.UI.Xaml.Media.Animation\">\n" +
+            "  <Border x:Name=\"He|ro\" />\n" +
+            "  <DoubleAnimation anim:Storyboard.TargetName=\"Hero\" />\n" +
+            "</Grid>";
+        var edits = RenameEdits(buffer, "Pivot", CreateFrameworkTypeSystem());
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("Pivot", edit.NewText));
     }
 
     [Fact]
@@ -234,7 +260,7 @@ public class XamlRenameTests
             "  <TextBox x:Name=\"Anchor\" />\n" +
             "  <Button RelativePanel.Below=\"An|chor\" />\n" +
             "</RelativePanel>";
-        var edits = RenameEdits(buffer, "Pivot", CreateRelativePanelTypeSystem());
+        var edits = RenameEdits(buffer, "Pivot", CreateFrameworkTypeSystem());
         Assert.Equal(2, edits.Count);
         Assert.All(edits, e => Assert.Equal("Pivot", e.NewText));
     }
@@ -243,12 +269,12 @@ public class XamlRenameTests
     public void Rename_Name_RewritesSetterTargetElementSegmentOnly()
     {
         var buffer =
-            "<Page>\n" +
+            "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\">\n" +
             "  <Border x:Name=\"He|ro\" />\n" +
             "  <Setter Target=\"Hero.Background\" Value=\"Red\" />\n" +
             "</Page>";
         var (doc, offset) = Caret(buffer);
-        var edit = XamlRename.Rename(doc, offset, "Banner");
+        var edit = XamlRename.Rename(doc, offset, "Banner", CreateFrameworkTypeSystem());
         Assert.NotNull(edit);
         var edits = edit!.Changes[Uri];
         Assert.Equal(2, edits.Count); // declaration + Setter.Target element segment
@@ -261,12 +287,12 @@ public class XamlRenameTests
     public void PrepareRename_OnSetterTargetElementSegment_ReturnsName()
     {
         var buffer =
-            "<Page>\n" +
+            "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\">\n" +
             "  <Border x:Name=\"Hero\" />\n" +
             "  <Setter Target=\"He|ro.Background\" Value=\"Red\" />\n" +
             "</Page>";
         var (doc, offset) = Caret(buffer);
-        var result = XamlRename.PrepareRename(doc, offset);
+        var result = XamlRename.PrepareRename(doc, offset, CreateFrameworkTypeSystem());
         Assert.NotNull(result);
         Assert.Equal("Hero", result!.Placeholder);
         Assert.Equal("Hero", Covered(doc, result.Range));
@@ -282,7 +308,7 @@ public class XamlRenameTests
             "  <Setter Target=\"Hero.Backgr|ound\" Value=\"Red\" />\n" +
             "</Page>";
         var (doc, offset) = Caret(buffer);
-        Assert.Null(XamlRename.PrepareRename(doc, offset));
+        Assert.Null(XamlRename.PrepareRename(doc, offset, FrameworkTypeSystem));
     }
 
     // ---- new-name validation -------------------------------------------------
@@ -298,7 +324,8 @@ public class XamlRenameTests
     public void Rename_Name_RejectsInvalidIdentifier(string newName)
     {
         var (doc, offset) = Caret("<Grid x:Name=\"Ro|ot\" />");
-        Assert.Throws<RenameValidationException>(() => XamlRename.Rename(doc, offset, newName));
+        Assert.Throws<RenameValidationException>(() =>
+            XamlRename.Rename(doc, offset, newName, FrameworkTypeSystem));
     }
 
     [Theory]
@@ -367,8 +394,8 @@ public class XamlRenameTests
             "  <TextBox Text=\"{Binding ElementName=Root}\" />\n" +
             "</Grid>";
         var (doc, offset) = Caret(buffer);
-        var first = XamlRename.Rename(doc, offset, "Panel")!.Changes[Uri];
-        var second = XamlRename.Rename(doc, offset, "Panel")!.Changes[Uri];
+        var first = XamlRename.Rename(doc, offset, "Panel", FrameworkTypeSystem)!.Changes[Uri];
+        var second = XamlRename.Rename(doc, offset, "Panel", FrameworkTypeSystem)!.Changes[Uri];
         Assert.Equal(first.Count, second.Count);
         for (var i = 0; i < first.Count; i++)
         {
@@ -399,7 +426,7 @@ public class XamlRenameTests
             "  <TextBox Text=\"{Binding ElementName=Root}\" />\n" +
             "</Grid>";
         var (doc, offset) = Caret(buffer);
-        var edit = XamlRename.Rename(doc, offset, "Panel");
+        var edit = XamlRename.Rename(doc, offset, "Panel", FrameworkTypeSystem);
         Assert.NotNull(edit);
         Assert.Equal(2, edit!.Changes[Uri].Count);
         Assert.All(edit.Changes[Uri], e => Assert.Equal("Root", Covered(doc, e.Range)));
@@ -418,11 +445,11 @@ public class XamlRenameTests
     public void Rename_Name_PaddedStoryboardTargetName_CoversTrimmedTokenOnly()
     {
         var buffer =
-            "<Grid x:Name=\"Ro|ot\">\n" +
+            "<Grid xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" x:Name=\"Ro|ot\">\n" +
             "  <Storyboard><DoubleAnimation Storyboard.TargetName=\"Root \" /></Storyboard>\n" +
             "</Grid>";
         var (doc, offset) = Caret(buffer);
-        var edit = XamlRename.Rename(doc, offset, "Panel");
+        var edit = XamlRename.Rename(doc, offset, "Panel", CreateFrameworkTypeSystem());
         Assert.NotNull(edit);
         Assert.Equal(2, edit!.Changes[Uri].Count);
         Assert.All(edit.Changes[Uri], e => Assert.Equal("Root", Covered(doc, e.Range)));
@@ -448,7 +475,7 @@ public class XamlRenameTests
     public void PrepareRename_PaddedDeclaration_ReturnsTrimmedTokenRange()
     {
         var (doc, offset) = Caret("<Grid x:Name=\"Ro|ot \" />");
-        var result = XamlRename.PrepareRename(doc, offset);
+        var result = XamlRename.PrepareRename(doc, offset, FrameworkTypeSystem);
         Assert.NotNull(result);
         Assert.Equal("Root", Covered(doc, result!.Range));
     }
@@ -459,7 +486,7 @@ public class XamlRenameTests
         // Caret sits immediately after the last identifier char (before the trailing space): this is the
         // token's end boundary, so it renames — but only the token, never the trailing whitespace.
         var (doc, offset) = Caret("<Grid x:Name=\"Root| \" />");
-        var edit = XamlRename.Rename(doc, offset, "Panel");
+        var edit = XamlRename.Rename(doc, offset, "Panel", FrameworkTypeSystem);
         Assert.NotNull(edit);
         Assert.Single(edit!.Changes[Uri]);
         Assert.Equal("Root", Covered(doc, edit.Changes[Uri][0].Range));
@@ -472,5 +499,18 @@ public class XamlRenameTests
         var (doc, offset) = Caret("<Grid x:Name=\"Root |\" />");
         Assert.Null(XamlRename.Rename(doc, offset, "Panel"));
         Assert.Null(XamlRename.PrepareRename(doc, offset));
+    }
+
+    [Fact]
+    public void Rename_Name_RejectsPartialEditWithoutCompleteSdkSemantics()
+    {
+        var (doc, offset) = Caret(
+            "<Grid x:Name=\"Ro|ot\">" +
+            "<TextBox Text=\"{Binding ElementName=Root}\" />" +
+            "<DoubleAnimation Storyboard.TargetName=\"Root\" />" +
+            "</Grid>");
+
+        Assert.Null(XamlRename.PrepareRename(doc, offset));
+        Assert.Null(XamlRename.Rename(doc, offset, "Panel"));
     }
 }

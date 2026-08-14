@@ -47,7 +47,7 @@ internal sealed partial class XamlLanguageServer
                 return;
             }
 
-            var resourceKeys = GetAppResourceKeys(context.Resolution)
+            var resourceKeys = GetAppResourceKeys(context)
                 .Concat(context.TypeSystem.GetThemeResources().Select(resource => resource.Key))
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();

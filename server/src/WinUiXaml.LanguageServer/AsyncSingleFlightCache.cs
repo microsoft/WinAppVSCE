@@ -6,12 +6,14 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
     private readonly object _gate = new();
     private readonly Dictionary<TKey, Entry> _entries;
     private readonly Dictionary<TKey, TValue> _ready;
+    private readonly Dictionary<TKey, TValue> _latest;
     private long _generation;
 
     public AsyncSingleFlightCache(IEqualityComparer<TKey>? comparer = null)
     {
         _entries = new Dictionary<TKey, Entry>(comparer);
         _ready = new Dictionary<TKey, TValue>(comparer);
+        _latest = new Dictionary<TKey, TValue>(comparer);
     }
 
     public Task<TValue?> GetOrStart(TKey key, Func<Task<TValue?>> factory)
@@ -43,22 +45,38 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
         }
     }
 
-    public void Invalidate(TKey key)
+    public bool TryGetLatest(TKey key, out TValue value)
+    {
+        lock (_gate)
+        {
+            return _latest.TryGetValue(key, out value!);
+        }
+    }
+
+    public void Invalidate(TKey key, bool discardLatest = false)
     {
         lock (_gate)
         {
             _entries.Remove(key);
             _ready.Remove(key);
+            if (discardLatest)
+            {
+                _latest.Remove(key);
+            }
         }
     }
 
-    public void InvalidateAll()
+    public void InvalidateAll(bool discardLatest = true)
     {
         lock (_gate)
         {
             _generation++;
             _entries.Clear();
             _ready.Clear();
+            if (discardLatest)
+            {
+                _latest.Clear();
+            }
         }
     }
 
@@ -87,6 +105,7 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
                 else
                 {
                     _ready[key] = value;
+                    _latest[key] = value;
                 }
             }
 

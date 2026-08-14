@@ -194,7 +194,7 @@ export async function runEditorScenarios(ctx) {
 
   // 19b) ROUND 80: element-name reference nav + rename now recognize RelativePanel alignment attached properties (bare-name, like Storyboard.TargetName) AND VSM <Setter Target="Element.Property"> (only the pre-dot element segment). Before this, renaming an x:Name silently left these dangling. F12 on a RelativePanel.RightOf value navigates to the referenced x:Name declaration (line 1, not the usage).
   const rpBody =
-    "<RelativePanel>\n" +
+    `<RelativePanel ${NS}>\n` +
     '  <TextBox x:Name="Anchor" />\n' +
     '  <Button RelativePanel.RightOf="An|chor" />\n' +
     "</RelativePanel>";
@@ -205,7 +205,7 @@ export async function runEditorScenarios(ctx) {
 
   // References on the x:Name decl include BOTH RelativePanel alignment usages (RightOf + AlignTopWith).
   const rpRefBody =
-    "<RelativePanel>\n" +
+    `<RelativePanel ${NS}>\n` +
     '  <TextBox x:Name="An|chor" />\n' +
     '  <Button RelativePanel.RightOf="Anchor" RelativePanel.AlignTopWith="Anchor" />\n' +
     "</RelativePanel>";
@@ -218,7 +218,7 @@ export async function runEditorScenarios(ctx) {
 
   // F12 on the ELEMENT segment of a VSM Setter.Target navigates to the x:Name declaration (line 1).
   const stgBody =
-    "<Page>\n" +
+    `<Page ${NS}>\n` +
     '  <Border x:Name="Hero" />\n' +
     '  <Setter Target="He|ro.Background" Value="Red" />\n' +
     "</Page>";
@@ -230,7 +230,7 @@ export async function runEditorScenarios(ctx) {
   // THE RAZOR: renaming the x:Name rewrites the Setter.Target ELEMENT segment only — every edit covers exactly
   // "Hero", never "Hero.Background", so the ".Background" property tail is preserved.
   const stgRnBody =
-    "<Page>\n" +
+    `<Page ${NS}>\n` +
     '  <Border x:Name="Hero" />\n' +
     '  <Setter Target="Hero.Background" Value="Red" />\n' +
     "</Page>";

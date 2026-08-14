@@ -813,17 +813,17 @@ internal static partial class CompletionProvider
         }
 
         // <Setter Property="|"> inside a Style/ControlTemplate completes the settable property names of the target type resolved from the ancestor's TargetType.
-        if (element.Name is { HasPrefix: false, LocalName: "Setter" } &&
+        if (XamlSemanticFacts.IsSetter(element, typeSystem) &&
             string.Equals(ctx.AttributeName, "Property", StringComparison.Ordinal))
         {
             return CompleteSetterProperty(element, ctx.Partial, scope, typeSystem, replaceRange);
         }
 
         // <Setter Value="|"> completes enum members / booleans typed by the sibling Property= on the enclosing TargetType because Setter.Value itself is declared 'object'.
-        if (element.Name is { HasPrefix: false, LocalName: "Setter" } &&
+        if (XamlSemanticFacts.IsSetter(element, typeSystem) &&
             string.Equals(ctx.AttributeName, "Value", StringComparison.Ordinal))
         {
-            var setterValueType = ResolveSetterValueType(element, scope, typeSystem);
+            var setterValueType = XamlSemanticFacts.ResolveSetterValueType(element, scope, typeSystem);
             if (setterValueType is null)
             {
                 return new CompletionList();
@@ -835,14 +835,18 @@ internal static partial class CompletionProvider
         }
 
         // VisualState <Setter Target="Element.Property"> (VSM setters use Target, not Property): the segment before the first dot lists the x:Name'd elements in scope; segments after it list that element's property members. Matches Visual Studio's VSM authoring.
-        if (element.Name is { HasPrefix: false, LocalName: "Setter" } &&
+        if (XamlSemanticFacts.IsSetter(element, typeSystem) &&
             string.Equals(ctx.AttributeName, "Target", StringComparison.Ordinal))
         {
             return CompleteSetterTarget(doc, ctx.Partial, scope, typeSystem, replaceRange);
         }
 
         // Storyboard.TargetName="Foo" references an x:Name'd element in scope (like Binding ElementName).
-        if (string.Equals(ctx.AttributeName, "Storyboard.TargetName", StringComparison.Ordinal))
+        if (XamlSemanticFacts.IsStoryboardAttachedProperty(
+            ctx.AttributeName,
+            "TargetName",
+            scope,
+            typeSystem))
         {
             return CompleteElementNames(doc, ctx.Partial, string.Empty, scope, typeSystem, replaceRange);
         }
@@ -850,19 +854,24 @@ internal static partial class CompletionProvider
         // RelativePanel object-valued alignment targets reference named elements; the SDK
         // getter signature naturally excludes the boolean *WithPanel variants.
         if (ctx.AttributeName is { } attr &&
-            IsRelativePanelElementReferenceAttribute(attr, scope, typeSystem))
+            XamlSemanticFacts.IsRelativePanelElementReferenceAttribute(attr, scope, typeSystem))
         {
             return CompleteElementNames(doc, ctx.Partial, string.Empty, scope, typeSystem, replaceRange);
         }
 
         // Storyboard.TargetProperty="Opacity" lists the property members of the element named by the sibling Storyboard.TargetName on the same animation element.
-        if (string.Equals(ctx.AttributeName, "Storyboard.TargetProperty", StringComparison.Ordinal))
+        if (XamlSemanticFacts.IsStoryboardAttachedProperty(
+            ctx.AttributeName,
+            "TargetProperty",
+            scope,
+            typeSystem))
         {
             return CompleteStoryboardTargetProperty(doc, element, ctx.Partial, scope, typeSystem, replaceRange);
         }
 
         // TargetType="|" (Style, ControlTemplate, ...) completes type names, like an element-name list.
-        if (string.Equals(ctx.AttributeName, "TargetType", StringComparison.Ordinal) &&
+        if (XamlSemanticFacts.IsStyleOrControlTemplate(element, typeSystem) &&
+            string.Equals(ctx.AttributeName, "TargetType", StringComparison.Ordinal) &&
             ctx.AttributeName!.IndexOf(':') < 0)
         {
             return CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange);
@@ -1027,7 +1036,7 @@ internal static partial class CompletionProvider
             return CompleteAttachedProperty(partial.Substring(0, dot), partial.Substring(dot + 1), scope, typeSystem, replaceRange);
         }
 
-        var targetType = ResolveStyleTargetType(setter, scope, typeSystem);
+        var targetType = XamlSemanticFacts.ResolveStyleTargetType(setter, scope, typeSystem);
         if (targetType is null)
         {
             return new CompletionList();
@@ -1058,64 +1067,10 @@ internal static partial class CompletionProvider
 
     /// <summary>Walks up from a node to the nearest Style or ControlTemplate element and resolves its TargetType attribute value to a type symbol.</summary>
     internal static INamedTypeSymbol? ResolveStyleTargetType(
-        XamlNode? start, XamlNamespaceScope scope, XamlTypeSystem typeSystem)
-    {
-        for (XamlNode? node = start; node != null; node = node.Parent)
-        {
-            if (node is not XamlElement { Name: { HasPrefix: false } name } element ||
-                (name.LocalName != "Style" && name.LocalName != "ControlTemplate"))
-            {
-                continue;
-            }
-
-            var targetType = element.Attributes.FirstOrDefault(
-                a => !a.Name.HasPrefix && string.Equals(a.Name.LocalName, "TargetType", StringComparison.Ordinal));
-            var text = targetType?.Value?.Text;
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return null;
-            }
-
-            // TargetType may be a bare/prefixed name ("Button", "local:Foo") or the {x:Type Button} markup-extension wrapper; normalize both to a qualified name before resolving.
-            var typeToken = NormalizeTypeToken(text!);
-            if (typeToken is null)
-            {
-                return null;
-            }
-
-            return ResolveElementType(ParseQualified(typeToken), scope, typeSystem);
-        }
-
-        return null;
-    }
+        XamlNode? start, XamlNamespaceScope scope, XamlTypeSystem typeSystem) =>
+        XamlSemanticFacts.ResolveStyleTargetType(start, scope, typeSystem);
 
     /// <summary>Resolves the value type of a &lt;Setter Value="..."&gt; from its sibling Property= against the enclosing Style/ControlTemplate TargetType — the simple member's type</summary>
-    private static ITypeSymbol? ResolveSetterValueType(
-        XamlElement setter, XamlNamespaceScope scope, XamlTypeSystem typeSystem)
-    {
-        var propName = setter.Attributes.FirstOrDefault(
-            a => !a.Name.HasPrefix && string.Equals(a.Name.LocalName, "Property", StringComparison.Ordinal))
-            ?.Value?.Text?.Trim();
-        if (string.IsNullOrEmpty(propName))
-        {
-            return null;
-        }
-
-        int dot = propName!.IndexOf('.');
-        if (dot > 0)
-        {
-            var owner = ResolveElementType(ParseQualified(propName.Substring(0, dot)), scope, typeSystem);
-            var attachedName = propName.Substring(dot + 1);
-            return owner is null
-                ? null
-                : typeSystem.GetAttachedProperties(owner)
-                    .FirstOrDefault(m => string.Equals(m.Name, attachedName, StringComparison.Ordinal))?.Type;
-        }
-
-        var targetType = ResolveStyleTargetType(setter, scope, typeSystem);
-        return targetType is null ? null : typeSystem.FindMember(targetType, propName)?.Type;
-    }
-
     /// <summary>Completes a VisualState &lt;Setter Target="Element.Property"&gt; value.</summary>
     private static CompletionList CompleteSetterTarget(
         TextDocument doc, string partial, XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange)
@@ -1243,22 +1198,6 @@ internal static partial class CompletionProvider
         }
 
         return Finish(items);
-    }
-
-    internal static bool IsRelativePanelElementReferenceAttribute(
-        string attributeName,
-        XamlNamespaceScope scope,
-        XamlTypeSystem typeSystem)
-    {
-        int dot = attributeName.IndexOf('.');
-        if (dot <= 0 || dot == attributeName.Length - 1)
-        {
-            return false;
-        }
-
-        var owner = ResolveElementType(ParseQualified(attributeName.Substring(0, dot)), scope, typeSystem);
-        return owner is not null &&
-            typeSystem.IsRelativePanelElementReference(owner, attributeName.Substring(dot + 1));
     }
 
     /// <summary>Completes the x:Name'd elements declared anywhere in the document (x:Name scope is per-file), filtered by partial and emitted with prefix preserved in the inserted text.</summary>

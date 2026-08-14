@@ -159,7 +159,8 @@ internal sealed partial class XamlLanguageServer
             }
 
             // VSM <Setter Target="Element.Property"> — only the element-name segment (before the first dot) names an x:Name'd element; the ".Property" tail is a member on that element.
-            if (element.Name is { HasPrefix: false, LocalName: "Setter" } &&
+            if (typeSystem is not null &&
+                XamlSemanticFacts.IsSetter(element, typeSystem) &&
                 !attr.Name.HasPrefix && string.Equals(attr.Name.LocalName, "Target", StringComparison.Ordinal) &&
                 SetterTargetElementSpan(attr.Value) is { } target &&
                 string.Equals(target.Element, name, StringComparison.Ordinal))
@@ -335,7 +336,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         var projectRoot = System.IO.Path.GetDirectoryName(context.Resolution.ProjectPath)!;
-        foreach (var resourceFile in ReadResourceGraph(appXaml, projectRoot))
+        foreach (var resourceFile in ReadResourceGraph(appXaml, projectRoot, context.TypeSystem))
         {
             var declaration = FindResourceDeclaration(resourceFile.Parsed, key);
             if (declaration is null)
@@ -363,15 +364,14 @@ internal sealed partial class XamlLanguageServer
     /// <summary>F12/hover shared resolver for a named-element reference under the caret: a classic {Binding ElementName=Foo} argument or a Storyboard.TargetName="Foo" attribute value.</summary>
     private async Task<NameReferenceHit?> ResolveNameReferenceAsync(TextDocumentPositionParams p)
     {
-        await Task.CompletedTask.ConfigureAwait(false);
         if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc) || doc.Parsed.Root is not { } root)
         {
             return null;
         }
 
         int offset = doc.OffsetAt(p.Position);
-        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
-        var reference = FindNameReferenceAt(doc, offset, context?.TypeSystem);
+        var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var reference = FindNameReferenceAt(doc, offset, typeSystem);
         if (reference == null)
         {
             return null;
@@ -453,7 +453,9 @@ internal sealed partial class XamlLanguageServer
 
             // A VSM <Setter Target="Element.Property"> value: only the element-name segment (before the first dot) is a name reference; a caret in the ".Property" tail falls through (not a name).
             if (current is XamlAttribute setterAttr &&
-                setterAttr.Parent is XamlElement { Name: { HasPrefix: false, LocalName: "Setter" } } &&
+                typeSystem is not null &&
+                setterAttr.Parent is XamlElement setter &&
+                XamlSemanticFacts.IsSetter(setter, typeSystem) &&
                 !setterAttr.Name.HasPrefix &&
                 string.Equals(setterAttr.Name.LocalName, "Target", StringComparison.Ordinal) &&
                 SetterTargetElementSpan(setterAttr.Value) is { } target && target.Span.ContainsInclusive(offset))
@@ -509,20 +511,22 @@ internal sealed partial class XamlLanguageServer
     private static bool IsNameReferenceAttribute(XamlAttribute attribute, XamlTypeSystem? typeSystem)
     {
         var name = attribute.Name;
-        if (name.HasPrefix)
-        {
-            return false;
-        }
 
-        if (string.Equals(name.LocalName, "Storyboard.TargetName", StringComparison.Ordinal))
+        if (typeSystem is not null &&
+            attribute.Parent is XamlElement storyboardOwner &&
+            XamlSemanticFacts.IsStoryboardAttachedProperty(
+                name.FullName,
+                "TargetName",
+                storyboardOwner.NamespaceScope,
+                typeSystem))
         {
             return true;
         }
 
         return typeSystem is not null &&
             attribute.Parent is XamlElement element &&
-            CompletionProvider.IsRelativePanelElementReferenceAttribute(
-                name.LocalName,
+            XamlSemanticFacts.IsRelativePanelElementReferenceAttribute(
+                name.FullName,
                 element.NamespaceScope,
                 typeSystem);
     }
@@ -581,7 +585,13 @@ internal sealed partial class XamlLanguageServer
         }
 
         if (attr is null || attr.IsNamespaceDeclaration ||
-            attr.Parent is not XamlElement { Name: { } ownerElementName } ownerElement)
+            attr.Parent is not XamlElement ownerElement)
+        {
+            return null;
+        }
+
+        var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        if (typeSystem == null)
         {
             return null;
         }
@@ -600,8 +610,7 @@ internal sealed partial class XamlLanguageServer
         }
         // Case 2: caret in a <Setter Property="Grid.Row"> value (dotted -> attached property).
         else if (!attr.Name.HasPrefix && string.Equals(attr.Name.LocalName, "Property", StringComparison.Ordinal) &&
-                 string.Equals(ownerElementName.LocalName, "Setter", StringComparison.Ordinal) &&
-                 !ownerElementName.HasPrefix &&
+                 XamlSemanticFacts.IsSetter(ownerElement, typeSystem) &&
                  attr.Value is { IsMarkupExtension: false } setterValue &&
                  setterValue.Span.ContainsInclusive(offset))
         {
@@ -621,13 +630,10 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
-        if (typeSystem == null)
-        {
-            return null;
-        }
-
-        var ownerType = ResolveXamlTypeName(ownerName, ownerElement.NamespaceScope, typeSystem);
+        var ownerType = XamlSemanticFacts.ResolveTypeName(
+            ownerName,
+            ownerElement.NamespaceScope,
+            typeSystem);
         if (ownerType == null)
         {
             return null;
@@ -676,7 +682,10 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        var ownerType = ResolveXamlTypeName(hit.Owner, hit.Scope, typeSystem);
+        var ownerType = XamlSemanticFacts.ResolveTypeName(
+            hit.Owner,
+            hit.Scope,
+            typeSystem);
         if (ownerType == null)
         {
             return null;

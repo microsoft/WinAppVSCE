@@ -1,6 +1,10 @@
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using WinUiXaml.LanguageServer.Lsp;
+using WinUiXaml.Workspace;
 using Xunit;
 using LspColor = WinUiXaml.LanguageServer.Lsp.Color;
 using LspRange = WinUiXaml.LanguageServer.Lsp.Range;
@@ -16,8 +20,11 @@ namespace WinUiXaml.LanguageServer.Tests;
 /// </summary>
 public class XamlColorTests
 {
+    private const string Ns = " xmlns=\"using:Microsoft.UI.Xaml\"";
+    private static readonly XamlTypeSystem TypeSystem = CreateTypeSystem();
+
     private static List<ColorInformation> Collect(string text) =>
-        XamlColor.Collect(new TextDocument("file:///test.xaml", text));
+        XamlColor.Collect(new TextDocument("file:///test.xaml", text), TypeSystem);
 
     private static string TextAt(string src, LspRange r)
     {
@@ -87,7 +94,7 @@ public class XamlColorTests
     [Fact]
     public void Collect_FullValueHex_EmitsSwatchOverTokenOnly()
     {
-        const string src = "<Rectangle Fill=\"#FF0000\" />";
+        const string src = "<Rectangle xmlns=\"using:Microsoft.UI.Xaml\" Fill=\"#FF0000\" />";
         var colors = Collect(src);
         var info = Assert.Single(colors);
         Assert.Equal("#FF0000", TextAt(src, info.Range));
@@ -100,7 +107,7 @@ public class XamlColorTests
     [Fact]
     public void Collect_InnerWhitespace_RangeCoversJustTheToken()
     {
-        const string src = "<Rectangle Fill=\"  #00FF00  \" />";
+        const string src = "<Rectangle xmlns=\"using:Microsoft.UI.Xaml\" Fill=\"  #00FF00  \" />";
         var info = Assert.Single(Collect(src));
         Assert.Equal("#00FF00", TextAt(src, info.Range));
         Assert.Equal(1.0, info.Color.Green, 3);
@@ -109,29 +116,45 @@ public class XamlColorTests
     [Fact]
     public void Collect_MarkupExtensionValue_Skipped()
     {
-        Assert.Empty(Collect("<Rectangle Fill=\"{StaticResource Brush1}\" />"));
-        Assert.Empty(Collect("<Rectangle Fill=\"{Binding Color}\" />"));
+        Assert.Empty(Collect("<Rectangle" + Ns + " Fill=\"{StaticResource Brush1}\" />"));
+        Assert.Empty(Collect("<Rectangle" + Ns + " Fill=\"{Binding Color}\" />"));
     }
 
     [Fact]
     public void Collect_NotAFullValue_Skipped()
     {
         // hex embedded in a larger string is not a color value
-        Assert.Empty(Collect("<TextBlock Text=\"#FF0000 is red\" />"));
-        Assert.Empty(Collect("<TextBlock Text=\"call #123 today\" />"));
+        Assert.Empty(Collect("<TextBlock" + Ns + " Text=\"#FF0000 is red\" />"));
+        Assert.Empty(Collect("<TextBlock" + Ns + " Text=\"call #123 today\" />"));
+    }
+
+    [Fact]
+    public void Collect_HexOnNonColorProperty_Skipped()
+    {
+        Assert.Empty(Collect("<TextBlock" + Ns + " Text=\"#FF0000\" />"));
+    }
+
+    [Fact]
+    public void Collect_SetterValue_UsesEnclosingStyleTargetPropertyType()
+    {
+        const string src =
+            "<Style xmlns=\"using:Microsoft.UI.Xaml\" TargetType=\"Button\">" +
+            "<Setter Property=\"Background\" Value=\"#FF0000\" />" +
+            "</Style>";
+        Assert.Single(Collect(src));
     }
 
     [Fact]
     public void Collect_NamespaceDeclaration_Skipped()
     {
         // contrived: a value that parses as hex must not be picked up on an xmlns attr
-        Assert.Empty(Collect("<Page xmlns:x=\"#FF0000\" />"));
+        Assert.Empty(Collect("<Page" + Ns + " xmlns:x=\"#FF0000\" />"));
     }
 
     [Fact]
     public void Collect_MultipleAttributes_EmitsEach()
     {
-        const string src = "<Border Background=\"#112233\" BorderBrush=\"#ABCDEF\" />";
+        const string src = "<Border xmlns=\"using:Microsoft.UI.Xaml\" Background=\"#112233\" BorderBrush=\"#ABCDEF\" />";
         var colors = Collect(src);
         Assert.Equal(2, colors.Count);
         Assert.Contains(colors, c => TextAt(src, c.Range) == "#112233");
@@ -142,7 +165,7 @@ public class XamlColorTests
     public void Collect_AlphaFirstOrdering()
     {
         // #80FF0000 -> alpha 0x80, red full
-        var info = Assert.Single(Collect("<Rectangle Fill=\"#80FF0000\" />"));
+        var info = Assert.Single(Collect("<Rectangle" + Ns + " Fill=\"#80FF0000\" />"));
         Assert.Equal(0x80 / 255.0, info.Color.Alpha, 3);
         Assert.Equal(1.0, info.Color.Red, 3);
         Assert.Equal(0.0, info.Color.Green, 3);
@@ -151,7 +174,7 @@ public class XamlColorTests
     [Fact]
     public void Collect_ShortHex_Detected()
     {
-        var info = Assert.Single(Collect("<Rectangle Fill=\"#f00\" />"));
+        var info = Assert.Single(Collect("<Rectangle" + Ns + " Fill=\"#f00\" />"));
         Assert.Equal(1.0, info.Color.Red, 3);
         Assert.Equal(0.0, info.Color.Green, 3);
     }
@@ -159,7 +182,7 @@ public class XamlColorTests
     [Fact]
     public void Collect_MultiLineAttribute_RangeOnCorrectLine()
     {
-        const string src = "<Rectangle\n    Fill=\"#00FF00\" />";
+        const string src = "<Rectangle xmlns=\"using:Microsoft.UI.Xaml\"\n    Fill=\"#00FF00\" />";
         var info = Assert.Single(Collect(src));
         Assert.Equal(1, info.Range.Start.Line);
         Assert.Equal("#00FF00", TextAt(src, info.Range));
@@ -172,6 +195,48 @@ public class XamlColorTests
         Start = new Position { Line = 0, Character = startChar },
         End = new Position { Line = 0, Character = endChar },
     };
+
+    private static XamlTypeSystem CreateTypeSystem()
+    {
+        const string source = """
+            namespace Windows.UI { public struct Color { } }
+            namespace Microsoft.UI.Xaml.Media
+            {
+                public abstract class Brush { }
+                public sealed class SolidColorBrush : Brush { public Windows.UI.Color Color { get; set; } }
+            }
+            namespace Microsoft.UI.Xaml
+            {
+                public class Setter
+                {
+                    public string Property { get; set; }
+                    public object Value { get; set; }
+                }
+                public class Style
+                {
+                    public System.Type TargetType { get; set; }
+                }
+                public class Button
+                {
+                    public Microsoft.UI.Xaml.Media.Brush Background { get; set; }
+                }
+                public class Rectangle { public Microsoft.UI.Xaml.Media.Brush Fill { get; set; } }
+                public class Border
+                {
+                    public Microsoft.UI.Xaml.Media.Brush Background { get; set; }
+                    public Microsoft.UI.Xaml.Media.Brush BorderBrush { get; set; }
+                }
+                public class TextBlock { public string Text { get; set; } }
+                public class Page { }
+            }
+            """;
+        var compilation = CSharpCompilation.Create(
+            "TestApp",
+            new[] { CSharpSyntaxTree.ParseText(source) },
+            new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        return XamlTypeSystem.FromCompilation(compilation, ImmutableArray<IAssemblySymbol>.Empty);
+    }
 
     private static LspColor Rgba(double r, double g, double b, double a) =>
         new() { Red = r, Green = g, Blue = b, Alpha = a };

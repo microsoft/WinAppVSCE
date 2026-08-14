@@ -46,6 +46,12 @@ internal static class XamlRename
             return null;
         }
 
+        if (symbol.Kind == XamlRenameKind.Name &&
+            typeSystem?.Capabilities.HasCompleteNameReferenceSemantics != true)
+        {
+            return null;
+        }
+
         var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
         if (occurrences is null)
         {
@@ -77,6 +83,12 @@ internal static class XamlRename
         }
 
         if (XamlLanguageServer.DetectSymbolAt(doc, offset, typeSystem) is not { } symbol)
+        {
+            return null;
+        }
+
+        if (symbol.Kind == XamlRenameKind.Name &&
+            typeSystem?.Capabilities.HasCompleteNameReferenceSemantics != true)
         {
             return null;
         }

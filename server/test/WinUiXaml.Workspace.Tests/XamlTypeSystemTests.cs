@@ -60,6 +60,10 @@ public sealed class XamlTypeSystemTests
                 public static void SetToolTip(Microsoft.UI.Xaml.DependencyObject element, object value) { }
             }
         }
+        namespace Microsoft.UI.Xaml.Markup
+        {
+            public abstract class MarkupExtension { }
+        }
         namespace TestApp
         {
             public class RelativePanel
@@ -67,6 +71,11 @@ public sealed class XamlTypeSystemTests
                 public static object GetRightOf(Microsoft.UI.Xaml.UIElement element) => new object();
                 public static void SetRightOf(Microsoft.UI.Xaml.UIElement element, object value) { }
             }
+            public sealed class CurrentThemeExtension : Microsoft.UI.Xaml.Markup.MarkupExtension
+            {
+                public bool Invert { get; set; }
+            }
+            public sealed class LookalikeExtension { }
         }
         """;
 
@@ -92,6 +101,36 @@ public sealed class XamlTypeSystemTests
         var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
 
         Assert.Null(ts.ResolveType(Presentation, "NoSuchControl"));
+    }
+
+    [Fact]
+    public void Capabilities_AreCapturedOnceWithoutMissingSymbolFallbacks()
+    {
+        var (compilation, referenced) = CompileLibraryAndConsumer(WinUiLikeSource);
+        var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
+
+        Assert.Same(
+            ts.ResolveMetadataType("Microsoft.UI.Xaml.Controls.RelativePanel"),
+            ts.Capabilities.RelativePanel);
+        Assert.Same(
+            ts.ResolveMetadataType("Microsoft.UI.Xaml.Markup.MarkupExtension"),
+            ts.Capabilities.MarkupExtension);
+        Assert.Null(ts.Capabilities.Setter);
+    }
+
+    [Fact]
+    public void MarkupExtensionTypes_AreSdkDerivedAndCached()
+    {
+        var (compilation, referenced) = CompileLibraryAndConsumer(WinUiLikeSource);
+        var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
+
+        var first = ts.GetMarkupExtensionTypes("using:TestApp");
+        var second = ts.GetMarkupExtensionTypes("using:TestApp");
+
+        Assert.Same(first, second);
+        Assert.Equal(
+            new[] { "TestApp.CurrentThemeExtension" },
+            first.Select(type => type.ToDisplayString()));
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using WinUiXaml.LanguageServer.Lsp;
+using WinUiXaml.Workspace;
 using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
@@ -8,7 +9,7 @@ namespace WinUiXaml.LanguageServer;
 /// <summary>Provides LSP color support for complete XAML hex attribute values.</summary>
 internal static class XamlColor
 {
-    public static List<ColorInformation> Collect(TextDocument doc)
+    public static List<ColorInformation> Collect(TextDocument doc, XamlTypeSystem typeSystem)
     {
         var result = new List<ColorInformation>();
         foreach (var node in doc.Parsed.DescendantNodesAndSelf())
@@ -18,7 +19,8 @@ internal static class XamlColor
                 continue;
             }
 
-            if (attr.Value is not { IsMarkupExtension: false } value)
+            if (attr.Value is not { IsMarkupExtension: false } value ||
+                !XamlSemanticFacts.IsColorAttribute(attr, typeSystem))
             {
                 continue;
             }
