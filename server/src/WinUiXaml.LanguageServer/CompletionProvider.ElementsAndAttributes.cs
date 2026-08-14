@@ -1105,7 +1105,11 @@ internal static partial class CompletionProvider
         }
 
         var targetName = animation.Attributes.FirstOrDefault(
-            a => !a.Name.HasPrefix && string.Equals(a.Name.LocalName, "Storyboard.TargetName", StringComparison.Ordinal))
+            a => XamlSemanticFacts.IsStoryboardAttachedProperty(
+                a.Name.FullName,
+                "TargetName",
+                animation.NamespaceScope,
+                typeSystem))
             ?.Value?.Text?.Trim();
         if (string.IsNullOrEmpty(targetName))
         {

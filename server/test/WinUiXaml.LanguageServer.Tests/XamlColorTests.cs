@@ -145,6 +145,18 @@ public class XamlColorTests
     }
 
     [Fact]
+    public void Collect_SetterValue_UsesAttachedPropertyType()
+    {
+        const string brush =
+            "<Setter xmlns=\"using:Microsoft.UI.Xaml\" Property=\"Paint.Accent\" Value=\"#FF0000\" />";
+        const string text =
+            "<Setter xmlns=\"using:Microsoft.UI.Xaml\" Property=\"Paint.Label\" Value=\"#FF0000\" />";
+
+        Assert.Single(Collect(brush));
+        Assert.Empty(Collect(text));
+    }
+
+    [Fact]
     public void Collect_NamespaceDeclaration_Skipped()
     {
         // contrived: a value that parses as hex must not be picked up on an xmlns attr
@@ -228,6 +240,13 @@ public class XamlColorTests
                 }
                 public class TextBlock { public string Text { get; set; } }
                 public class Page { }
+                public class Paint
+                {
+                    public static Microsoft.UI.Xaml.Media.Brush GetAccent(object value) => null;
+                    public static void SetAccent(object value, Microsoft.UI.Xaml.Media.Brush brush) { }
+                    public static string GetLabel(object value) => "";
+                    public static void SetLabel(object value, string label) { }
+                }
             }
             """;
         var compilation = CSharpCompilation.Create(

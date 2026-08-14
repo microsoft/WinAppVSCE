@@ -81,6 +81,14 @@ internal static class XamlSemanticFacts
                 .Any(property => string.Equals(property.Name, memberName, StringComparison.Ordinal));
     }
 
+    internal static bool IsBindingMarkupExtension(
+        XamlMarkupExtension extension,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem) =>
+        typeSystem.Capabilities.Binding is { } binding &&
+        ResolveMarkupExtensionType(extension.Name?.FullName, scope, typeSystem) is { } extensionType &&
+        XamlTypeSystem.IsAssignableTo(extensionType, binding);
+
     internal static bool IsColorAttribute(XamlAttribute attribute, XamlTypeSystem typeSystem)
     {
         if (attribute.Parent is not XamlElement element ||
@@ -187,6 +195,15 @@ internal static class XamlSemanticFacts
         var targetType = ResolveStyleTargetType(setter, scope, typeSystem);
         return targetType is null ? null : typeSystem.FindMember(targetType, propertyName)?.Type;
     }
+
+    internal static bool IsResourceDictionary(
+        XamlElement element,
+        XamlTypeSystem typeSystem) =>
+        IsElement(
+            element,
+            typeSystem.Capabilities.ResourceDictionary,
+            typeSystem,
+            allowDerived: true);
 
     internal static INamedTypeSymbol? ResolveMarkupExtensionType(
         string? extensionName,

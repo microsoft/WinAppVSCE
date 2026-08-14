@@ -168,11 +168,17 @@ internal sealed partial class XamlLanguageServer
                 results.Add((doc.RangeOf(target.Span), false));
             }
 
-            // {Binding ElementName=Foo} — any markup extension with a matching named ElementName argument.
+            // {Binding ElementName=Foo}.
             if (attr.Value?.MarkupExtension is { } ext)
             {
                 ForEachExtension(ext, e =>
                 {
+                    if (typeSystem is null ||
+                        !XamlSemanticFacts.IsBindingMarkupExtension(e, element.NamespaceScope, typeSystem))
+                    {
+                        return;
+                    }
+
                     foreach (var arg in e.Arguments)
                     {
                         if (arg.IsNamed &&
@@ -423,9 +429,15 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        // 1) A markup-extension named "ElementName" argument ({Binding ElementName=Foo}).
+        // 1) A Binding ElementName argument.
         var extension = InnermostMarkupExtensionAt(root, offset);
-        if (extension is not null)
+        if (extension is not null &&
+            typeSystem is not null &&
+            NearestEnclosingElement(doc, offset) is { } extensionElement &&
+            XamlSemanticFacts.IsBindingMarkupExtension(
+                extension,
+                extensionElement.NamespaceScope,
+                typeSystem))
         {
             foreach (var argument in extension.Arguments)
             {
@@ -470,6 +482,57 @@ internal sealed partial class XamlLanguageServer
         }
 
         return null;
+    }
+
+    private static bool IsPotentialNameReferenceAt(TextDocument doc, int offset)
+    {
+        if (doc.Parsed.Root is not { } root)
+        {
+            return false;
+        }
+
+        var extension = InnermostMarkupExtensionAt(root, offset);
+        if (extension is not null)
+        {
+            foreach (var argument in extension.Arguments)
+            {
+                if (argument.IsNamed &&
+                    string.Equals(argument.Name?.LocalName, "ElementName", StringComparison.Ordinal) &&
+                    argument.ValueSpan is { } valueSpan &&
+                    valueSpan.ContainsInclusive(offset))
+                {
+                    return true;
+                }
+            }
+        }
+
+        for (var current = doc.Parsed.FindNode(offset); current != null; current = current.Parent)
+        {
+            if (current is XamlAttribute attribute &&
+                !attribute.IsNamespaceDeclaration &&
+                attribute.Value is { IsMarkupExtension: false } value &&
+                value.Span.ContainsInclusive(offset))
+            {
+                var candidate = value.Text.Trim();
+                int dot = candidate.IndexOf('.');
+                if (dot > 0)
+                {
+                    candidate = candidate.Substring(0, dot);
+                }
+
+                if (candidate.Length > 0 && FindNamedElement(root, candidate) is not null)
+                {
+                    return true;
+                }
+            }
+
+            if (current is XamlElement)
+            {
+                break;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>The element-name segment of a VSM &lt;Setter Target="Element.Property"&gt; value — the token before the first dot with surrounding whitespace stripped — plus its span</summary>

@@ -544,26 +544,36 @@ namespace WinUiXaml.Workspace
         /// Public, non-abstract runtime markup extensions available through an XML namespace.
         /// Results are cached for the lifetime of this immutable project compilation.
         /// </summary>
-        public IReadOnlyList<INamedTypeSymbol> GetMarkupExtensionTypes(string xmlnsUri) =>
-            _markupExtensionTypes.GetOrAdd(
-                xmlnsUri,
-                uri =>
-                {
-                    var markupExtension = Capabilities.MarkupExtension;
-                    if (markupExtension is null)
-                    {
-                        return System.Array.Empty<INamedTypeSymbol>();
-                    }
+        public IReadOnlyList<INamedTypeSymbol> GetMarkupExtensionTypes(string xmlnsUri)
+        {
+            if (_markupExtensionTypes.TryGetValue(xmlnsUri, out var cached))
+            {
+                return cached;
+            }
 
-                    return GetAllTypes(uri)
-                        .Where(type =>
-                            IsPublicClass(type) &&
-                            !type.IsAbstract &&
-                            !SymbolEqualityComparer.Default.Equals(type, markupExtension) &&
-                            IsAssignableTo(type, markupExtension))
-                        .OrderBy(type => type.Name, StringComparer.Ordinal)
-                        .ToArray();
-                });
+            var markupExtension = Capabilities.MarkupExtension;
+            if (markupExtension is null)
+            {
+                return System.Array.Empty<INamedTypeSymbol>();
+            }
+
+            var namespaceTypes = GetAllTypes(xmlnsUri).ToArray();
+            if (namespaceTypes.Length == 0)
+            {
+                // Do not retain attacker-controlled unknown namespace URIs for the compilation lifetime.
+                return System.Array.Empty<INamedTypeSymbol>();
+            }
+
+            var discovered = namespaceTypes
+                .Where(type =>
+                    IsPublicClass(type) &&
+                    !type.IsAbstract &&
+                    !SymbolEqualityComparer.Default.Equals(type, markupExtension) &&
+                    IsAssignableTo(type, markupExtension))
+                .OrderBy(type => type.Name, StringComparer.Ordinal)
+                .ToArray();
+            return _markupExtensionTypes.GetOrAdd(xmlnsUri, discovered);
+        }
 
         public bool IsMarkupExtensionType(INamedTypeSymbol? type) =>
             type is not null &&

@@ -82,6 +82,71 @@ public sealed class MarkupExtensionCompletionTests
         Assert.DoesNotContain("ext:Lookalike", labels);
     }
 
+    [Fact]
+    public void MarkupName_CustomDefaultSuppressesInvalidUnprefixedFrameworkExtensions()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:App.Extensions"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  Tag="{Th|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.DoesNotContain("ThemeResource", labels);
+        Assert.Contains("x:Type", Complete(
+            """
+            <Page xmlns="using:App.Extensions"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  Tag="{x:T|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true)));
+    }
+
+    [Fact]
+    public void MarkupName_CustomDefaultQualifiesFrameworkExtensionsWithPresentationPrefix()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:App.Extensions"
+                  xmlns:ui="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  Tag="{ui:Th|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("ui:ThemeResource", labels);
+        Assert.DoesNotContain("ThemeResource", labels);
+    }
+
+    [Fact]
+    public void MarkupArgument_ExactExtensionTypeWinsOverSuffixedType()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:ext="using:App.Extensions"
+                  Tag="{ext:Exact Ex|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("ExactOnly", labels);
+        Assert.DoesNotContain("SuffixedOnly", labels);
+    }
+
+    [Fact]
+    public void MarkupName_LimitsRuntimeNamespaceDiscoveryPerRequest()
+    {
+        var declarations = string.Join(
+            " ",
+            Enumerable.Range(0, 70)
+                .Select(index => $"xmlns:p{index}=\"using:App.Extensions\""));
+        var labels = Complete(
+            $"<Page xmlns=\"using:Microsoft.UI.Xaml\" {declarations} Tag=\"{{p69:Cur|}}\" />",
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.DoesNotContain("p69:CurrentTheme", labels);
+    }
+
     private static HashSet<string> Complete(string marked, XamlTypeSystem typeSystem) =>
         CompleteItems(marked, typeSystem)
             .Select(item => item.Label)
@@ -124,6 +189,14 @@ public sealed class MarkupExtensionCompletionTests
                 public sealed class CurrentTheme { }
                 public sealed class BindingExtension : {{derivedBase}} { }
                 public sealed class StaticResourceExtension : {{derivedBase}} { }
+                public sealed class Exact : {{derivedBase}}
+                {
+                    public string ExactOnly { get; set; } = "";
+                }
+                public sealed class ExactExtension : {{derivedBase}}
+                {
+                    public string SuffixedOnly { get; set; } = "";
+                }
                 public sealed class LookalikeExtension
                 {
                     public bool Invert { get; set; }

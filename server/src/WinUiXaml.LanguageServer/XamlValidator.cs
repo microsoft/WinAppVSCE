@@ -85,7 +85,7 @@ internal static class XamlValidator
             Walk(root, doc, typeSystem, diagnostics, pageClass, resourceKeys);
 
             ValidateUniqueNames(root, doc, typeSystem, diagnostics);
-            ValidateUniqueResourceKeys(root, doc, diagnostics);
+            ValidateUniqueResourceKeys(root, doc, typeSystem, diagnostics);
         }
 
         return diagnostics;
@@ -1282,17 +1282,25 @@ internal static class XamlValidator
     }
 
     /// <summary>Reports duplicate x:Key declarations within the same ResourceDictionary (WXAML0008, an error).</summary>
-    private static void ValidateUniqueResourceKeys(XamlElement root, TextDocument doc, List<Diagnostic> diagnostics)
+    private static void ValidateUniqueResourceKeys(
+        XamlElement root,
+        TextDocument doc,
+        XamlTypeSystem typeSystem,
+        List<Diagnostic> diagnostics)
     {
-        FindResourceScopes(root, doc, diagnostics);
+        FindResourceScopes(root, doc, typeSystem, diagnostics);
     }
 
     /// <summary>Walks outside any dictionary looking for dictionary boundaries to validate as scopes.</summary>
-    private static void FindResourceScopes(XamlElement element, TextDocument doc, List<Diagnostic> diagnostics)
+    private static void FindResourceScopes(
+        XamlElement element,
+        TextDocument doc,
+        XamlTypeSystem typeSystem,
+        List<Diagnostic> diagnostics)
     {
-        if (IsResourceScopeBoundary(element))
+        if (IsResourceScopeBoundary(element, typeSystem))
         {
-            ProcessDictionaryScope(element, doc, diagnostics);
+            ProcessDictionaryScope(element, doc, typeSystem, diagnostics);
             return;
         }
 
@@ -1300,13 +1308,17 @@ internal static class XamlValidator
         {
             if (child is XamlElement childElement)
             {
-                FindResourceScopes(childElement, doc, diagnostics);
+                FindResourceScopes(childElement, doc, typeSystem, diagnostics);
             }
         }
     }
 
     /// <summary>Collects the keys of a single dictionary's direct entry children into one scope; nested dictionaries (explicit, or under merged/theme property elements) recurse as separate scopes.</summary>
-    private static void ProcessDictionaryScope(XamlElement boundary, TextDocument doc, List<Diagnostic> diagnostics)
+    private static void ProcessDictionaryScope(
+        XamlElement boundary,
+        TextDocument doc,
+        XamlTypeSystem typeSystem,
+        List<Diagnostic> diagnostics)
     {
         var scope = new HashSet<string>(System.StringComparer.Ordinal);
         foreach (var child in boundary.Content)
@@ -1317,16 +1329,16 @@ internal static class XamlValidator
             }
 
             // An explicit nested <ResourceDictionary>.
-            if (IsResourceScopeBoundary(entry))
+            if (IsResourceScopeBoundary(entry, typeSystem))
             {
-                ProcessDictionaryScope(entry, doc, diagnostics);
+                ProcessDictionaryScope(entry, doc, typeSystem, diagnostics);
                 continue;
             }
 
             // A structural property element (MergedDictionaries/ThemeDictionaries) is not a keyed entry; its subtree holds nested dictionaries, each their own scope.
             if (entry.IsPropertyElement)
             {
-                FindResourceScopes(entry, doc, diagnostics);
+                FindResourceScopes(entry, doc, typeSystem, diagnostics);
                 continue;
             }
 
@@ -1338,11 +1350,11 @@ internal static class XamlValidator
             }
 
             // The entry's own subtree may nest further dictionaries (rare) — validate them independently.
-            FindResourceScopes(entry, doc, diagnostics);
+            FindResourceScopes(entry, doc, typeSystem, diagnostics);
         }
     }
 
-    private static bool IsResourceScopeBoundary(XamlElement element)
+    private static bool IsResourceScopeBoundary(XamlElement element, XamlTypeSystem typeSystem)
     {
         if (element.Name is not { } n)
         {
@@ -1350,9 +1362,9 @@ internal static class XamlValidator
         }
 
         // An explicit dictionary element.
-        if (!n.IsDotted && n.LocalName == "ResourceDictionary")
+        if (!n.IsDotted)
         {
-            return true;
+            return XamlSemanticFacts.IsResourceDictionary(element, typeSystem);
         }
 
         // A ".Resources" property element on any type (Page.Resources, Application.Resources, ...).

@@ -51,6 +51,8 @@ public class XamlValidatorTests
 
             public class RenamedTemplate : Microsoft.UI.Xaml.FrameworkTemplate { }
             public class TemplateLookalike { }
+            public class ResourceDictionary { }
+            public class DerivedDictionary : Microsoft.UI.Xaml.ResourceDictionary { }
 
             public class Grid
             {
@@ -64,6 +66,7 @@ public class XamlValidatorTests
             public struct CornerRadius { }
             public struct Thickness { }
             public class FrameworkTemplate { }
+            public class ResourceDictionary { }
         }
 
         namespace Microsoft.UI.Xaml.Media
@@ -348,6 +351,32 @@ public class XamlValidatorTests
         Assert.DoesNotContain(
             ValidateWithSource(xaml, source),
             item => item.Code == XamlValidator.DuplicateNameCode);
+    }
+
+    [Fact]
+    public void DuplicateKeyValidation_UsesSdkResourceDictionaryIdentity()
+    {
+        const string derived = """
+            <DerivedDictionary xmlns="using:TestApp"
+                               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Child x:Key="Shared" />
+              <Child x:Key="Shared" />
+            </DerivedDictionary>
+            """;
+        const string lookalike = """
+            <ResourceDictionary xmlns="using:TestApp"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Child x:Key="Shared" />
+              <Child x:Key="Shared" />
+            </ResourceDictionary>
+            """;
+
+        Assert.Contains(
+            Validate(derived),
+            item => item.Code == XamlValidator.DuplicateKeyCode);
+        Assert.DoesNotContain(
+            Validate(lookalike),
+            item => item.Code == XamlValidator.DuplicateKeyCode);
     }
 
     private static string Page(string attributes) => $$"""

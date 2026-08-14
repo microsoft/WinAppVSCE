@@ -49,6 +49,8 @@ namespace WinUiXaml.Workspace
             RelativePanel is not null &&
             UIElement is not null &&
             Setter is not null &&
-            Storyboard is not null;
+            Storyboard is not null &&
+            MarkupExtension is not null &&
+            Binding is not null;
     }
 }

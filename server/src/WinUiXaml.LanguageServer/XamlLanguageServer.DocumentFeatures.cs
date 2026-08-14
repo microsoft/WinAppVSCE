@@ -103,6 +103,7 @@ internal sealed partial class XamlLanguageServer
         int offset = doc.OffsetAt(p.Position);
         var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
         var typeSystem = context?.TypeSystem;
+        EnsureCompleteNameReferenceSemantics(doc, offset, typeSystem, "Find References");
         var occurrences = ResolveOccurrences(doc, root, offset, typeSystem);
         if (occurrences is null)
         {
@@ -215,6 +216,11 @@ internal sealed partial class XamlLanguageServer
         }
 
         var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        EnsureCompleteNameReferenceSemantics(
+            doc,
+            doc.OffsetAt(p.Position),
+            typeSystem,
+            "Document highlights");
         var occurrences = ResolveOccurrences(doc, root, doc.OffsetAt(p.Position), typeSystem);
         if (occurrences is null)
         {
@@ -257,13 +263,31 @@ internal sealed partial class XamlLanguageServer
         Position position,
         XamlTypeSystem? typeSystem)
     {
-        if (DetectSymbolAt(doc, doc.OffsetAt(position), typeSystem) is
-                { Kind: XamlRenameKind.Name } &&
+        int offset = doc.OffsetAt(position);
+        if ((DetectSymbolAt(doc, offset, typeSystem) is { Kind: XamlRenameKind.Name } ||
+             IsPotentialNameReferenceAt(doc, offset)) &&
             typeSystem?.Capabilities.HasCompleteNameReferenceSemantics != true)
         {
             throw new RenameValidationException(
                 "Rename requires complete WinUI SDK metadata so every named-element reference can " +
                 "be updated safely. Restore the project, reload the window, and use " +
+                "'WinUI XAML: Show Info' to check project resolution.");
+        }
+    }
+
+    private static void EnsureCompleteNameReferenceSemantics(
+        TextDocument doc,
+        int offset,
+        XamlTypeSystem? typeSystem,
+        string operation)
+    {
+        if ((FindNameDeclarationAt(doc, offset) is not null ||
+             IsPotentialNameReferenceAt(doc, offset)) &&
+            typeSystem?.Capabilities.HasCompleteNameReferenceSemantics != true)
+        {
+            throw new RenameValidationException(
+                $"{operation} requires complete WinUI SDK metadata so every named-element reference " +
+                "can be reported. Restore the project, reload the window, and use " +
                 "'WinUI XAML: Show Info' to check project resolution.");
         }
     }

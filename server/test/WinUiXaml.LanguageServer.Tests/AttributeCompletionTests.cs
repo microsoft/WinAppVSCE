@@ -38,6 +38,7 @@ public sealed class AttributeCompletionTests
             }
 
             public class RowDefinition : DependencyObject { }
+            public class DoubleAnimation : DependencyObject { }
 
             public static class AutomationProperties
             {
@@ -53,6 +54,17 @@ public sealed class AttributeCompletionTests
         namespace Microsoft.UI.Xaml.Media
         {
             public class Brush { }
+        }
+
+        namespace Microsoft.UI.Xaml.Media.Animation
+        {
+            public class Storyboard
+            {
+                public static string GetTargetName(object value) => "";
+                public static void SetTargetName(object value, string name) { }
+                public static string GetTargetProperty(object value) => "";
+                public static void SetTargetProperty(object value, string name) { }
+            }
         }
         """;
 
@@ -164,6 +176,28 @@ public sealed class AttributeCompletionTests
             CreateTypeSystem()).Items.Select(item => item.Label);
 
         Assert.DoesNotContain("Anchor", labels);
+    }
+
+    [Fact]
+    public void PrefixedStoryboardTargetPropertyUsesPrefixedTargetNameSibling()
+    {
+        const string marked = """
+            <Grid xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:anim="using:Microsoft.UI.Xaml.Media.Animation">
+              <Button x:Name="Hero" />
+              <DoubleAnimation anim:Storyboard.TargetName="Hero"
+                               anim:Storyboard.TargetProperty="Wi|" />
+            </Grid>
+            """;
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        var labels = CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            CreateTypeSystem()).Items.Select(item => item.Label);
+
+        Assert.Contains("Width", labels);
     }
 
     [Theory]

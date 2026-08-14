@@ -52,6 +52,14 @@ public class XamlRenameTests
                 public class UIElement { }
                 public class Setter { }
             }
+            namespace Microsoft.UI.Xaml.Markup
+            {
+                public abstract class MarkupExtension { }
+            }
+            namespace Microsoft.UI.Xaml.Data
+            {
+                public class Binding : Microsoft.UI.Xaml.Markup.MarkupExtension { }
+            }
             namespace Microsoft.UI.Xaml.Controls
             {
                 public class RelativePanel : Microsoft.UI.Xaml.UIElement
@@ -161,6 +169,58 @@ public class XamlRenameTests
         var edits = RenameEdits(buffer, "Panel", CreateFrameworkTypeSystem());
         Assert.Equal(3, edits.Count);
         Assert.All(edits, e => Assert.Equal("Panel", e.NewText));
+    }
+
+    [Fact]
+    public void Rename_Name_DoesNotRewriteCustomMarkupExtensionElementNameArgument()
+    {
+        const string source = """
+            namespace Microsoft.UI.Xaml
+            {
+                public class UIElement { }
+                public class Setter { }
+            }
+            namespace Microsoft.UI.Xaml.Controls
+            {
+                public class RelativePanel : Microsoft.UI.Xaml.UIElement { }
+            }
+            namespace Microsoft.UI.Xaml.Markup
+            {
+                public abstract class MarkupExtension { }
+            }
+            namespace Microsoft.UI.Xaml.Data
+            {
+                public class Binding : Microsoft.UI.Xaml.Markup.MarkupExtension { }
+            }
+            namespace Microsoft.UI.Xaml.Media.Animation
+            {
+                public class Storyboard { }
+            }
+            namespace TestApp
+            {
+                public class ProbeExtension : Microsoft.UI.Xaml.Markup.MarkupExtension
+                {
+                    public string ElementName { get; set; } = "";
+                }
+            }
+            """;
+        var compilation = CSharpCompilation.Create(
+            "TestApp",
+            [CSharpSyntaxTree.ParseText(source)],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var typeSystem = XamlTypeSystem.FromCompilation(
+            compilation,
+            ImmutableArray<IAssemblySymbol>.Empty);
+        var buffer =
+            "<Grid xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+            "xmlns:local=\"using:TestApp\" x:Name=\"Ro|ot\">" +
+            "<TextBox Text=\"{Binding ElementName=Root}\" Tag=\"{local:Probe ElementName=Root}\" />" +
+            "</Grid>";
+
+        var edits = RenameEdits(buffer, "Panel", typeSystem);
+
+        Assert.Equal(2, edits.Count);
     }
 
     [Fact]

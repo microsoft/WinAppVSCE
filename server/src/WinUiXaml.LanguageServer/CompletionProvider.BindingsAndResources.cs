@@ -29,33 +29,45 @@ internal static partial class CompletionProvider
         XamlTypeSystem typeSystem,
         Lsp.Range replaceRange)
     {
+        const int maxRuntimeNamespaces = 64;
         var items = new List<CompletionItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        void AddCuratedExtensions()
+        void AddCuratedExtensions(string? frameworkPrefix = null)
         {
             foreach (var (name, detail) in MarkupExtensions)
             {
-                if (!StartsWith(name, ctx.Partial) || !seen.Add(name))
+                var completionName = name;
+                if (name.IndexOf(':') < 0 && frameworkPrefix is not null)
+                {
+                    if (frameworkPrefix.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    completionName = frameworkPrefix + ":" + name;
+                }
+
+                if (!StartsWith(completionName, ctx.Partial) || !seen.Add(completionName))
                 {
                     continue;
                 }
 
                 items.Add(new CompletionItem
                 {
-                    Label = name,
+                    Label = completionName,
                     Kind = CompletionItemKind.Keyword,
                     Detail = detail,
-                    TextEdit = new TextEdit { Range = replaceRange, NewText = name },
-                    FilterText = name,
-                    SortText = name,
+                    TextEdit = new TextEdit { Range = replaceRange, NewText = completionName },
+                    FilterText = completionName,
+                    SortText = completionName,
                 });
             }
         }
 
         void AddRuntimeExtensions()
         {
-            foreach (var declaration in scope.Declarations)
+            foreach (var declaration in scope.Declarations.Take(maxRuntimeNamespaces))
             {
                 if (string.Equals(declaration.Value, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal))
                 {
@@ -99,7 +111,15 @@ internal static partial class CompletionProvider
         if (preferCustomDefault)
         {
             AddRuntimeExtensions();
-            AddCuratedExtensions();
+            var presentationPrefix = scope.Declarations
+                .FirstOrDefault(pair =>
+                    pair.Key.Length > 0 &&
+                    string.Equals(
+                        pair.Value,
+                        XamlTypeSystem.PresentationNamespace,
+                        StringComparison.Ordinal))
+                .Key;
+            AddCuratedExtensions(presentationPrefix ?? string.Empty);
         }
         else
         {
