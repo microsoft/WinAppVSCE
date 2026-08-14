@@ -216,11 +216,14 @@ internal sealed partial class XamlLanguageServer
         }
 
         var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
-        EnsureCompleteNameReferenceSemantics(
-            doc,
-            doc.OffsetAt(p.Position),
-            typeSystem,
-            "Document highlights");
+        if (RequiresCompleteNameReferenceSemantics(
+                doc,
+                doc.OffsetAt(p.Position),
+                typeSystem))
+        {
+            return null;
+        }
+
         var occurrences = ResolveOccurrences(doc, root, doc.OffsetAt(p.Position), typeSystem);
         if (occurrences is null)
         {
@@ -264,11 +267,9 @@ internal sealed partial class XamlLanguageServer
         XamlTypeSystem? typeSystem)
     {
         int offset = doc.OffsetAt(position);
-        if ((DetectSymbolAt(doc, offset, typeSystem) is { Kind: XamlRenameKind.Name } ||
-             IsPotentialNameReferenceAt(doc, offset)) &&
-            typeSystem?.Capabilities.HasCompleteNameReferenceSemantics != true)
+        if (RequiresCompleteNameReferenceSemantics(doc, offset, typeSystem))
         {
-            throw new RenameValidationException(
+            throw new RequestFailedException(
                 "Rename requires complete WinUI SDK metadata so every named-element reference can " +
                 "be updated safely. Restore the project, reload the window, and use " +
                 "'WinUI XAML: Show Info' to check project resolution.");
@@ -281,16 +282,22 @@ internal sealed partial class XamlLanguageServer
         XamlTypeSystem? typeSystem,
         string operation)
     {
-        if ((FindNameDeclarationAt(doc, offset) is not null ||
-             IsPotentialNameReferenceAt(doc, offset)) &&
-            typeSystem?.Capabilities.HasCompleteNameReferenceSemantics != true)
+        if (RequiresCompleteNameReferenceSemantics(doc, offset, typeSystem))
         {
-            throw new RenameValidationException(
+            throw new RequestFailedException(
                 $"{operation} requires complete WinUI SDK metadata so every named-element reference " +
                 "can be reported. Restore the project, reload the window, and use " +
                 "'WinUI XAML: Show Info' to check project resolution.");
         }
     }
+
+    private static bool RequiresCompleteNameReferenceSemantics(
+        TextDocument doc,
+        int offset,
+        XamlTypeSystem? typeSystem) =>
+        typeSystem?.Capabilities.HasCompleteNameReferenceSemantics != true &&
+        (FindNameDeclarationAt(doc, offset) is not null ||
+         IsPotentialNameReferenceAt(doc, offset));
 
     /// <summary>Handles textDocument/formatting (Format Document) — returns leading-indentation edits that normalize every structural line to its element-nesting depth.</summary>
     private Task<object?> FormatDocumentAsync(DocumentFormattingParams p)

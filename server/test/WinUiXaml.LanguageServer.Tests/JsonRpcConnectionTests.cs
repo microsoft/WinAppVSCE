@@ -115,6 +115,25 @@ public class JsonRpcConnectionTests
         Assert.Contains("\"code\":-32800", Encoding.UTF8.GetString(output.ToArray()));
     }
 
+    [Fact]
+    public async Task ExpectedRequestFailureUsesLspRequestFailedCode()
+    {
+        await using var input = new MemoryStream(
+            Frame("""{"jsonrpc":"2.0","id":1,"method":"fail"}"""));
+        await using var output = new MemoryStream();
+        var connection = new JsonRpcConnection(input, output)
+        {
+            OnRequest = (_, _, _) =>
+                throw new RequestFailedException("Expected capability failure"),
+        };
+
+        await connection.RunAsync();
+
+        var response = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("\"code\":-32803", response);
+        Assert.Contains("Expected capability failure", response);
+    }
+
     private static byte[] Frame(string json)
     {
         var body = Encoding.UTF8.GetBytes(json);

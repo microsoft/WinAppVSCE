@@ -32,6 +32,10 @@ internal static partial class CompletionProvider
         const int maxRuntimeNamespaces = 64;
         var items = new List<CompletionItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        int prefixSeparator = ctx.Partial.IndexOf(':');
+        var requestedPrefix = prefixSeparator > 0
+            ? ctx.Partial.Substring(0, prefixSeparator)
+            : null;
 
         void AddCuratedExtensions(string? frameworkPrefix = null)
         {
@@ -67,7 +71,15 @@ internal static partial class CompletionProvider
 
         void AddRuntimeExtensions()
         {
-            foreach (var declaration in scope.Declarations.Take(maxRuntimeNamespaces))
+            IEnumerable<KeyValuePair<string, string>> declarations =
+                requestedPrefix is not null &&
+                scope.TryResolvePrefix(requestedPrefix, out var requestedNamespace)
+                    ? new[]
+                    {
+                        new KeyValuePair<string, string>(requestedPrefix, requestedNamespace),
+                    }
+                    : scope.Declarations.Take(maxRuntimeNamespaces);
+            foreach (var declaration in declarations)
             {
                 if (string.Equals(declaration.Value, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal))
                 {
@@ -108,22 +120,32 @@ internal static partial class CompletionProvider
                 defaultNamespace,
                 XamlTypeSystem.PresentationNamespace,
                 StringComparison.Ordinal);
+        var requestedFrameworkPrefix =
+            requestedPrefix is not null &&
+            scope.TryResolvePrefix(requestedPrefix, out var requestedPrefixNamespace) &&
+            string.Equals(
+                requestedPrefixNamespace,
+                XamlTypeSystem.PresentationNamespace,
+                StringComparison.Ordinal)
+                ? requestedPrefix
+                : null;
         if (preferCustomDefault)
         {
             AddRuntimeExtensions();
-            var presentationPrefix = scope.Declarations
-                .FirstOrDefault(pair =>
-                    pair.Key.Length > 0 &&
-                    string.Equals(
-                        pair.Value,
-                        XamlTypeSystem.PresentationNamespace,
-                        StringComparison.Ordinal))
-                .Key;
+            var presentationPrefix = requestedFrameworkPrefix ??
+                scope.Declarations
+                    .FirstOrDefault(pair =>
+                        pair.Key.Length > 0 &&
+                        string.Equals(
+                            pair.Value,
+                            XamlTypeSystem.PresentationNamespace,
+                            StringComparison.Ordinal))
+                    .Key;
             AddCuratedExtensions(presentationPrefix ?? string.Empty);
         }
         else
         {
-            AddCuratedExtensions();
+            AddCuratedExtensions(requestedFrameworkPrefix);
             AddRuntimeExtensions();
         }
 

@@ -513,14 +513,21 @@ internal sealed partial class XamlLanguageServer
                 attribute.Value is { IsMarkupExtension: false } value &&
                 value.Span.ContainsInclusive(offset))
             {
-                var candidate = value.Text.Trim();
-                int dot = candidate.IndexOf('.');
-                if (dot > 0)
+                if (attribute.Name.IsDotted)
                 {
-                    candidate = candidate.Substring(0, dot);
+                    var candidate = value.Text.Trim();
+                    if (candidate.Length > 0 && FindNamedElement(root, candidate) is not null)
+                    {
+                        return true;
+                    }
                 }
-
-                if (candidate.Length > 0 && FindNamedElement(root, candidate) is not null)
+                else if (string.Equals(
+                             attribute.Name.LocalName,
+                             "Target",
+                             StringComparison.Ordinal) &&
+                         SetterTargetElementSpan(value) is { } target &&
+                         target.Span.ContainsInclusive(offset) &&
+                         FindNamedElement(root, target.Element) is not null)
                 {
                     return true;
                 }

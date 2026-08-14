@@ -134,7 +134,7 @@ public sealed class MarkupExtensionCompletionTests
     }
 
     [Fact]
-    public void MarkupName_LimitsRuntimeNamespaceDiscoveryPerRequest()
+    public void MarkupName_ExplicitPrefixBypassesBroadNamespaceLimit()
     {
         var declarations = string.Join(
             " ",
@@ -144,6 +144,21 @@ public sealed class MarkupExtensionCompletionTests
             $"<Page xmlns=\"using:Microsoft.UI.Xaml\" {declarations} Tag=\"{{p69:Cur|}}\" />",
             CreateTypeSystem(includeMarkupExtensionBase: true));
 
+        Assert.Contains("p69:CurrentTheme", labels);
+    }
+
+    [Fact]
+    public void MarkupName_BroadDiscoveryLimitsRuntimeNamespacesPerRequest()
+    {
+        var declarations = string.Join(
+            " ",
+            Enumerable.Range(0, 70)
+                .Select(index => $"xmlns:p{index}=\"using:App.Extensions\""));
+        var labels = Complete(
+            $"<Page xmlns=\"using:Microsoft.UI.Xaml\" {declarations} Tag=\"{{|}}\" />",
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("p0:CurrentTheme", labels);
         Assert.DoesNotContain("p69:CurrentTheme", labels);
     }
 

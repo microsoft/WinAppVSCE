@@ -11,6 +11,12 @@ internal sealed class MethodNotFoundException : Exception
     public MethodNotFoundException(string method) : base($"Method not found: {method}") { }
 }
 
+/// <summary>Signals LSP RequestFailed (-32803) for expected request-specific failures.</summary>
+internal class RequestFailedException : Exception
+{
+    public RequestFailedException(string message) : base(message) { }
+}
+
 /// <summary>Provides concurrent JSON-RPC 2.0 requests over LSP framing.</summary>
 internal sealed class JsonRpcConnection
 {
@@ -140,6 +146,10 @@ internal sealed class JsonRpcConnection
         catch (OperationCanceledException) when (requestCancellation.IsCancellationRequested)
         {
             error = new ResponseError(-32800, $"Request cancelled: {method}");
+        }
+        catch (RequestFailedException ex)
+        {
+            error = new ResponseError(-32803, ex.Message);
         }
         catch (Exception ex)
         {

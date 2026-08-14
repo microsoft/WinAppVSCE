@@ -121,12 +121,12 @@ describe("WinUI XAML — rename without SDK metadata", function () {
           context: { includeDeclaration: true },
         }),
         /Find References requires complete WinUI SDK metadata.*restore.*Show Info/i);
-      await assert.rejects(
-        send("textDocument/documentHighlight", {
+      assert.equal(
+        await send("textDocument/documentHighlight", {
           textDocument: { uri },
           position: positionOf(declarationText, "Root"),
         }),
-        /Document highlights requires complete WinUI SDK metadata.*restore.*Show Info/i);
+        null);
 
       const referenceCases = [
         '<Grid x:Name="Root"><DoubleAnimation Storyboard.TargetName="Root" /></Grid>',
@@ -136,6 +136,19 @@ describe("WinUI XAML — rename without SDK metadata", function () {
       for (const text of referenceCases) {
         await changeDocument(text);
         const position = positionOf(text, "Root", 1);
+        await assert.rejects(
+          send("textDocument/references", {
+            textDocument: { uri },
+            position,
+            context: { includeDeclaration: true },
+          }),
+          /Find References requires complete WinUI SDK metadata.*restore.*Show Info/i);
+        assert.equal(
+          await send("textDocument/documentHighlight", {
+            textDocument: { uri },
+            position,
+          }),
+          null);
         await assert.rejects(
           send("textDocument/prepareRename", {
             textDocument: { uri },
@@ -150,6 +163,26 @@ describe("WinUI XAML — rename without SDK metadata", function () {
           }),
           /Rename requires complete WinUI SDK metadata.*restore.*Show Info/i);
       }
+
+      const paddedSetter =
+        '<Grid x:Name="Root"><Setter Target="Root .Opacity" /></Grid>';
+      await changeDocument(paddedSetter);
+      await assert.rejects(
+        send("textDocument/prepareRename", {
+          textDocument: { uri },
+          position: positionOf(paddedSetter, "Root", 1),
+        }),
+        /Rename requires complete WinUI SDK metadata.*restore.*Show Info/i);
+
+      const ordinaryValue =
+        '<Grid x:Name="Root"><TextBlock Text="Root" /></Grid>';
+      await changeDocument(ordinaryValue);
+      assert.equal(
+        await send("textDocument/prepareRename", {
+          textDocument: { uri },
+          position: positionOf(ordinaryValue, "Root", 1),
+        }),
+        null);
       await assert.rejects(
         send("textDocument/rename", {
           textDocument: { uri },

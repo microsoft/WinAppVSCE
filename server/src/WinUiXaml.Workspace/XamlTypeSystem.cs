@@ -42,6 +42,10 @@ namespace WinUiXaml.Workspace
         private IReadOnlyList<INamedTypeSymbol>? _referencedElementTypes;
         private readonly ConcurrentDictionary<string, IReadOnlyList<INamedTypeSymbol>> _markupExtensionTypes =
             new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, byte> _missingMarkupExtensionNamespaces =
+            new(StringComparer.Ordinal);
+        private readonly object _missingMarkupExtensionNamespacesGate = new();
+        private const int MaxMissingMarkupExtensionNamespaces = 256;
 
         private readonly Dictionary<string, List<NamespaceBinding>> _xmlnsMap;
         private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, string>> _documentationFiles =
@@ -546,7 +550,15 @@ namespace WinUiXaml.Workspace
         /// </summary>
         public IReadOnlyList<INamedTypeSymbol> GetMarkupExtensionTypes(string xmlnsUri)
         {
-            if (_markupExtensionTypes.TryGetValue(xmlnsUri, out var cached))
+            var canonicalUri = CanonicalizeNamespaceUri(xmlnsUri);
+            if (canonicalUri.Length == 0 ||
+                canonicalUri.Length > 1024 ||
+                _missingMarkupExtensionNamespaces.ContainsKey(canonicalUri))
+            {
+                return System.Array.Empty<INamedTypeSymbol>();
+            }
+
+            if (_markupExtensionTypes.TryGetValue(canonicalUri, out var cached))
             {
                 return cached;
             }
@@ -557,10 +569,18 @@ namespace WinUiXaml.Workspace
                 return System.Array.Empty<INamedTypeSymbol>();
             }
 
-            var namespaceTypes = GetAllTypes(xmlnsUri).ToArray();
+            var namespaceTypes = GetAllTypes(canonicalUri).ToArray();
             if (namespaceTypes.Length == 0)
             {
-                // Do not retain attacker-controlled unknown namespace URIs for the compilation lifetime.
+                lock (_missingMarkupExtensionNamespacesGate)
+                {
+                    if (_missingMarkupExtensionNamespaces.Count <
+                        MaxMissingMarkupExtensionNamespaces)
+                    {
+                        _missingMarkupExtensionNamespaces.TryAdd(canonicalUri, 0);
+                    }
+                }
+
                 return System.Array.Empty<INamedTypeSymbol>();
             }
 
@@ -572,7 +592,49 @@ namespace WinUiXaml.Workspace
                     IsAssignableTo(type, markupExtension))
                 .OrderBy(type => type.Name, StringComparer.Ordinal)
                 .ToArray();
-            return _markupExtensionTypes.GetOrAdd(xmlnsUri, discovered);
+            return _markupExtensionTypes.GetOrAdd(canonicalUri, discovered);
+        }
+
+        internal int MarkupExtensionNamespaceCacheCount =>
+            _markupExtensionTypes.Count + _missingMarkupExtensionNamespaces.Count;
+
+        private static string CanonicalizeNamespaceUri(string xmlnsUri)
+        {
+            if (string.IsNullOrWhiteSpace(xmlnsUri))
+            {
+                return string.Empty;
+            }
+
+            if (xmlnsUri.StartsWith(UsingScheme, StringComparison.Ordinal))
+            {
+                return UsingScheme + xmlnsUri.Substring(UsingScheme.Length).Trim();
+            }
+
+            if (xmlnsUri.StartsWith(ClrNamespaceScheme, StringComparison.Ordinal))
+            {
+                var body = xmlnsUri.Substring(ClrNamespaceScheme.Length);
+                int semi = body.IndexOf(';');
+                var clrNamespace = (semi >= 0 ? body.Substring(0, semi) : body).Trim();
+                if (semi < 0)
+                {
+                    return ClrNamespaceScheme + clrNamespace;
+                }
+
+                var rest = body.Substring(semi + 1);
+                const string assemblyKey = "assembly=";
+                int assemblyIndex = rest.IndexOf(
+                    assemblyKey,
+                    StringComparison.OrdinalIgnoreCase);
+                var assemblyName = assemblyIndex >= 0
+                    ? rest.Substring(assemblyIndex + assemblyKey.Length).Trim()
+                    : string.Empty;
+                return assemblyName.Length == 0
+                    ? ClrNamespaceScheme + clrNamespace
+                    : ClrNamespaceScheme + clrNamespace +
+                      ";assembly=" + assemblyName.ToUpperInvariant();
+            }
+
+            return xmlnsUri;
         }
 
         public bool IsMarkupExtensionType(INamedTypeSymbol? type) =>

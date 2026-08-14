@@ -118,6 +118,53 @@ public sealed class XamlTypeSystemTests
         Assert.Null(ts.Capabilities.Setter);
     }
 
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    public void CompleteNameReferenceSemanticsRequiresMarkupExtensionAndBinding(
+        bool includeMarkupExtension,
+        bool includeBinding,
+        bool expected)
+    {
+        var markupExtension = includeMarkupExtension
+            ? "namespace Microsoft.UI.Xaml.Markup { public abstract class MarkupExtension { } }"
+            : string.Empty;
+        var bindingBase = includeMarkupExtension
+            ? "Microsoft.UI.Xaml.Markup.MarkupExtension"
+            : "object";
+        var binding = includeBinding
+            ? $"namespace Microsoft.UI.Xaml.Data {{ public class Binding : {bindingBase} {{ }} }}"
+            : string.Empty;
+        var source = $$"""
+            namespace Microsoft.UI.Xaml
+            {
+                public class UIElement { }
+                public class Setter { }
+            }
+            namespace Microsoft.UI.Xaml.Controls
+            {
+                public class RelativePanel : Microsoft.UI.Xaml.UIElement { }
+            }
+            namespace Microsoft.UI.Xaml.Media.Animation
+            {
+                public class Storyboard { }
+            }
+            {{markupExtension}}
+            {{binding}}
+            """;
+        var compilation = CSharpCompilation.Create(
+            "TestApp",
+            [CSharpSyntaxTree.ParseText(source)],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var ts = XamlTypeSystem.FromCompilation(
+            compilation,
+            ImmutableArray<IAssemblySymbol>.Empty);
+
+        Assert.Equal(expected, ts.Capabilities.HasCompleteNameReferenceSemantics);
+    }
+
     [Fact]
     public void MarkupExtensionTypes_AreSdkDerivedAndCached()
     {
@@ -131,6 +178,24 @@ public sealed class XamlTypeSystemTests
         Assert.Equal(
             new[] { "TestApp.CurrentThemeExtension" },
             first.Select(type => type.ToDisplayString()));
+    }
+
+    [Fact]
+    public void MarkupExtensionNamespaceCacheCanonicalizesAndBoundsMisses()
+    {
+        var (compilation, referenced) = CompileLibraryAndConsumer(WinUiLikeSource);
+        var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
+
+        for (var index = 0; index < 300; index++)
+        {
+            Assert.Empty(ts.GetMarkupExtensionTypes($"using:Missing.Namespace{index}"));
+        }
+
+        Assert.Equal(256, ts.MarkupExtensionNamespaceCacheCount);
+        var first = ts.GetMarkupExtensionTypes("using:TestApp");
+        var second = ts.GetMarkupExtensionTypes("using: TestApp ");
+        Assert.Same(first, second);
+        Assert.Equal(257, ts.MarkupExtensionNamespaceCacheCount);
     }
 
     [Fact]

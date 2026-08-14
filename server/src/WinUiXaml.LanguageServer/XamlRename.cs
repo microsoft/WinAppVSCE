@@ -16,7 +16,7 @@ internal enum XamlRenameKind
 }
 
 /// <summary>Raised when a requested rename target name is invalid.</summary>
-internal sealed class RenameValidationException : System.Exception
+internal sealed class RenameValidationException : RequestFailedException
 {
     public RenameValidationException(string message) : base(message) { }
 }
