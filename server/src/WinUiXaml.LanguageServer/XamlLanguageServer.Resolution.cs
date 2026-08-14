@@ -136,8 +136,10 @@ internal sealed partial class XamlLanguageServer
             if (extension.Name is { } exName && exName.Span.ContainsInclusive(offset))
             {
                 var extensionScope = NearestElementScope(extension);
-                if (CanUseProjectIndependentMarkupDescription(exName, extensionScope) &&
-                    DescribeMarkupExtension(exName.FullName) is { } description)
+                if (NormalizeProjectIndependentMarkupName(
+                        exName,
+                        extensionScope) is { } normalizedName &&
+                    DescribeMarkupExtension(normalizedName) is { } description)
                 {
                     return new Hover
                     {
@@ -266,23 +268,20 @@ internal sealed partial class XamlLanguageServer
         _ => null,
     };
 
-    private static bool CanUseProjectIndependentMarkupDescription(
+    internal static string? NormalizeProjectIndependentMarkupName(
         XamlName name,
         XamlNamespaceScope? scope)
     {
-        if (string.Equals(name.Prefix, "x", StringComparison.Ordinal))
+        if (name.HasPrefix)
         {
             return scope is not null &&
                 scope.TryResolvePrefix(name.Prefix, out var xamlNamespace) &&
                 string.Equals(
                     xamlNamespace,
                     XamlTypeSystem.XamlLanguageNamespace,
-                    StringComparison.Ordinal);
-        }
-
-        if (name.HasPrefix)
-        {
-            return false;
+                    StringComparison.Ordinal)
+                        ? "x:" + name.LocalName
+                        : null;
         }
 
         return scope is null ||
@@ -290,7 +289,9 @@ internal sealed partial class XamlLanguageServer
             string.Equals(
                 namespaceUri,
                 XamlTypeSystem.PresentationNamespace,
-                StringComparison.Ordinal);
+                StringComparison.Ordinal)
+                    ? name.LocalName
+                    : null;
     }
 
     private static Hover? ResolveProjectIndependentMarkupHover(TextDocument document, int offset)
@@ -299,10 +300,10 @@ internal sealed partial class XamlLanguageServer
             InnermostMarkupExtensionAt(root, offset) is not { } extension ||
             extension.Name is not { } name ||
             !name.Span.ContainsInclusive(offset) ||
-            !CanUseProjectIndependentMarkupDescription(
+            NormalizeProjectIndependentMarkupName(
                 name,
-                NearestElementScope(extension)) ||
-            DescribeMarkupExtension(name.FullName) is not { } description)
+                NearestElementScope(extension)) is not { } normalizedName ||
+            DescribeMarkupExtension(normalizedName) is not { } description)
         {
             return null;
         }

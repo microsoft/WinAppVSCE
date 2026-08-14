@@ -129,6 +129,7 @@ describe("WinUI XAML — rename without SDK metadata", function () {
         null);
 
       const referenceCases = [
+        '<Grid x:Name="Root"><TextBlock Text="{Binding ElementName=Root}" /></Grid>',
         '<Grid x:Name="Root"><DoubleAnimation Storyboard.TargetName="Root" /></Grid>',
         '<Grid x:Name="Root"><Button RelativePanel.RightOf="Root" /></Grid>',
         '<Grid x:Name="Root"><Setter Target="Root.Opacity" /></Grid>',

@@ -13,11 +13,9 @@ internal static partial class CompletionProvider
     private static readonly (string Name, string Detail)[] MarkupExtensions =
     {
         ("x:Bind", "Compiled binding to a field/property (page x:Class or template x:DataType)"),
-        ("Binding", "Runtime binding through the element's DataContext"),
         ("StaticResource", "Resource reference resolved once at load time"),
         ("ThemeResource", "Resource reference re-evaluated when the theme changes"),
         ("TemplateBinding", "Binds to a property on the templated parent"),
-        ("RelativeSource", "Source relative to the target (Self / TemplatedParent)"),
         ("x:Static", "References a static field, property, or constant"),
         ("x:Type", "A System.Type reference for the named type"),
         ("x:Null", "The null value"),
@@ -37,12 +35,21 @@ internal static partial class CompletionProvider
             ? ctx.Partial.Substring(0, prefixSeparator)
             : null;
 
-        void AddCuratedExtensions(string? frameworkPrefix = null)
+        void AddCuratedExtensions(string? frameworkPrefix, string? xamlPrefix)
         {
             foreach (var (name, detail) in MarkupExtensions)
             {
                 var completionName = name;
-                if (name.IndexOf(':') < 0 && frameworkPrefix is not null)
+                if (name.StartsWith("x:", StringComparison.Ordinal))
+                {
+                    if (string.IsNullOrEmpty(xamlPrefix))
+                    {
+                        continue;
+                    }
+
+                    completionName = xamlPrefix + name.Substring(1);
+                }
+                else if (frameworkPrefix is not null)
                 {
                     if (frameworkPrefix.Length == 0)
                     {
@@ -129,6 +136,24 @@ internal static partial class CompletionProvider
                 StringComparison.Ordinal)
                 ? requestedPrefix
                 : null;
+        var requestedXamlPrefix =
+            requestedPrefix is not null &&
+            scope.TryResolvePrefix(requestedPrefix, out var requestedXamlNamespace) &&
+            string.Equals(
+                requestedXamlNamespace,
+                XamlTypeSystem.XamlLanguageNamespace,
+                StringComparison.Ordinal)
+                ? requestedPrefix
+                : null;
+        var xamlPrefix = requestedXamlPrefix ??
+            scope.Declarations
+                .FirstOrDefault(pair =>
+                    pair.Key.Length > 0 &&
+                    string.Equals(
+                        pair.Value,
+                        XamlTypeSystem.XamlLanguageNamespace,
+                        StringComparison.Ordinal))
+                .Key;
         if (preferCustomDefault)
         {
             AddRuntimeExtensions();
@@ -141,11 +166,11 @@ internal static partial class CompletionProvider
                             XamlTypeSystem.PresentationNamespace,
                             StringComparison.Ordinal))
                     .Key;
-            AddCuratedExtensions(presentationPrefix ?? string.Empty);
+            AddCuratedExtensions(presentationPrefix ?? string.Empty, xamlPrefix);
         }
         else
         {
-            AddCuratedExtensions(requestedFrameworkPrefix);
+            AddCuratedExtensions(requestedFrameworkPrefix, xamlPrefix);
             AddRuntimeExtensions();
         }
 

@@ -119,36 +119,39 @@ public sealed class XamlTypeSystemTests
     }
 
     [Theory]
-    [InlineData(true, true, true)]
-    [InlineData(false, true, false)]
-    [InlineData(true, false, false)]
-    public void CompleteNameReferenceSemanticsRequiresMarkupExtensionAndBinding(
-        bool includeMarkupExtension,
-        bool includeBinding,
+    [InlineData(null, true)]
+    [InlineData("RelativePanel", false)]
+    [InlineData("UIElement", false)]
+    [InlineData("Setter", false)]
+    [InlineData("Storyboard", false)]
+    [InlineData("MarkupExtension", false)]
+    [InlineData("Binding", false)]
+    public void CompleteNameReferenceSemanticsRequiresEveryClassifierType(
+        string? missingType,
         bool expected)
     {
-        var markupExtension = includeMarkupExtension
+        var markupExtension = missingType != "MarkupExtension"
             ? "namespace Microsoft.UI.Xaml.Markup { public abstract class MarkupExtension { } }"
             : string.Empty;
-        var bindingBase = includeMarkupExtension
+        var bindingBase = missingType != "MarkupExtension"
             ? "Microsoft.UI.Xaml.Markup.MarkupExtension"
             : "object";
-        var binding = includeBinding
+        var binding = missingType != "Binding"
             ? $"namespace Microsoft.UI.Xaml.Data {{ public class Binding : {bindingBase} {{ }} }}"
             : string.Empty;
         var source = $$"""
             namespace Microsoft.UI.Xaml
             {
-                public class UIElement { }
-                public class Setter { }
+                {{(missingType != "UIElement" ? "public class UIElement { }" : string.Empty)}}
+                {{(missingType != "Setter" ? "public class Setter { }" : string.Empty)}}
             }
             namespace Microsoft.UI.Xaml.Controls
             {
-                public class RelativePanel : Microsoft.UI.Xaml.UIElement { }
+                {{(missingType != "RelativePanel" ? "public class RelativePanel { }" : string.Empty)}}
             }
             namespace Microsoft.UI.Xaml.Media.Animation
             {
-                public class Storyboard { }
+                {{(missingType != "Storyboard" ? "public class Storyboard { }" : string.Empty)}}
             }
             {{markupExtension}}
             {{binding}}
@@ -194,6 +197,30 @@ public sealed class XamlTypeSystemTests
         Assert.Equal(256, ts.MarkupExtensionNamespaceCacheCount);
         var first = ts.GetMarkupExtensionTypes("using:TestApp");
         var second = ts.GetMarkupExtensionTypes("using: TestApp ");
+        Assert.Same(first, second);
+        Assert.Equal(257, ts.MarkupExtensionNamespaceCacheCount);
+    }
+
+    [Fact]
+    public void MarkupExtensionNamespaceCacheBoundsConcurrentMissesAndCanonicalizesClrNamespace()
+    {
+        var (compilation, referenced) = CompileLibraryAndConsumer(WinUiLikeSource);
+        var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
+
+        Parallel.For(
+            0,
+            1000,
+            index => Assert.Empty(
+                ts.GetMarkupExtensionTypes($"using:Missing.Concurrent{index}")));
+        Assert.Equal(256, ts.MarkupExtensionNamespaceCacheCount);
+
+        Assert.Empty(ts.GetMarkupExtensionTypes("using:" + new string('A', 1025)));
+        Assert.Equal(256, ts.MarkupExtensionNamespaceCacheCount);
+
+        var first = ts.GetMarkupExtensionTypes(
+            "clr-namespace:TestApp;assembly=TestLib");
+        var second = ts.GetMarkupExtensionTypes(
+            "clr-namespace: TestApp ; Assembly= testlib ");
         Assert.Same(first, second);
         Assert.Equal(257, ts.MarkupExtensionNamespaceCacheCount);
     }

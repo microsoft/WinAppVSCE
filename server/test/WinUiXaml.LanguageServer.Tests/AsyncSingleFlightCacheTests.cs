@@ -123,5 +123,36 @@ public sealed class AsyncSingleFlightCacheTests
         Assert.Equal("second", second.Name);
     }
 
+    [Fact]
+    public async Task PerKeyDiscardRemovesAcceptedSnapshot()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>();
+        await cache.GetOrStart(
+            "page",
+            () => Task.FromResult<Value?>(new Value("first")));
+
+        cache.Invalidate("page", discardLatest: true);
+
+        Assert.False(cache.TryGetReady("page", out _));
+        Assert.False(cache.TryGetLatest("page", out _));
+    }
+
+    [Fact]
+    public async Task GlobalDiscardRemovesAllAcceptedSnapshots()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>();
+        await cache.GetOrStart(
+            "page",
+            () => Task.FromResult<Value?>(new Value("first")));
+        await cache.GetOrStart(
+            "app",
+            () => Task.FromResult<Value?>(new Value("second")));
+
+        cache.InvalidateAll(discardLatest: true);
+
+        Assert.False(cache.TryGetLatest("page", out _));
+        Assert.False(cache.TryGetLatest("app", out _));
+    }
+
     private sealed record Value(string Name);
 }

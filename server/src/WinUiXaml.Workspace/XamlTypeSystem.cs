@@ -585,11 +585,7 @@ namespace WinUiXaml.Workspace
             }
 
             var discovered = namespaceTypes
-                .Where(type =>
-                    IsPublicClass(type) &&
-                    !type.IsAbstract &&
-                    !SymbolEqualityComparer.Default.Equals(type, markupExtension) &&
-                    IsAssignableTo(type, markupExtension))
+                .Where(IsMarkupExtensionType)
                 .OrderBy(type => type.Name, StringComparer.Ordinal)
                 .ToArray();
             return _markupExtensionTypes.GetOrAdd(canonicalUri, discovered);
@@ -639,6 +635,8 @@ namespace WinUiXaml.Workspace
 
         public bool IsMarkupExtensionType(INamedTypeSymbol? type) =>
             type is not null &&
+            IsPublicClass(type) &&
+            !type.IsAbstract &&
             Capabilities.MarkupExtension is { } markupExtension &&
             !SymbolEqualityComparer.Default.Equals(type, markupExtension) &&
             IsAssignableTo(type, markupExtension);

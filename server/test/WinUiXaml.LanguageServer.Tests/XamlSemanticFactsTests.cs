@@ -108,6 +108,14 @@ public sealed class XamlSemanticFactsTests
             "local:Lookalike",
             element.NamespaceScope,
             TypeSystem));
+        Assert.Null(XamlSemanticFacts.ResolveMarkupExtensionType(
+            "local:Abstract",
+            element.NamespaceScope,
+            TypeSystem));
+        Assert.Null(XamlSemanticFacts.ResolveMarkupExtensionType(
+            "local:Hidden",
+            element.NamespaceScope,
+            TypeSystem));
     }
 
     [Fact]
@@ -200,6 +208,8 @@ public sealed class XamlSemanticFactsTests
                 public class Button { }
                 public class DerivedDictionary : Microsoft.UI.Xaml.ResourceDictionary { }
                 public class CustomExtension : Microsoft.UI.Xaml.Markup.MarkupExtension { }
+                public abstract class AbstractExtension : Microsoft.UI.Xaml.Markup.MarkupExtension { }
+                internal class HiddenExtension : Microsoft.UI.Xaml.Markup.MarkupExtension { }
                 public class Binding : Microsoft.UI.Xaml.Markup.MarkupExtension { }
                 public class Lookalike { }
                 public class Storyboard

@@ -104,6 +104,35 @@ public sealed class MarkupExtensionCompletionTests
     }
 
     [Fact]
+    public void MarkupName_UsesDeclaredAliasForXamlLanguageIntrinsics()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:lang="http://schemas.microsoft.com/winfx/2006/xaml"
+                  Tag="{lang:T|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("lang:Type", labels);
+        Assert.DoesNotContain("x:Type", labels);
+    }
+
+    [Fact]
+    public void MarkupName_DoesNotOfferUndeclaredXamlLanguagePrefix()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  Tag="{|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.DoesNotContain("x:Bind", labels);
+        Assert.DoesNotContain("x:Type", labels);
+    }
+
+    [Fact]
     public void MarkupName_CustomDefaultQualifiesFrameworkExtensionsWithPresentationPrefix()
     {
         var labels = Complete(
@@ -152,14 +181,15 @@ public sealed class MarkupExtensionCompletionTests
     {
         var declarations = string.Join(
             " ",
-            Enumerable.Range(0, 70)
-                .Select(index => $"xmlns:p{index}=\"using:App.Extensions\""));
+            Enumerable.Range(1, 69)
+                .Select(index => $"xmlns:p{index}=\"using:App.Namespace{index}\""));
         var labels = Complete(
-            $"<Page xmlns=\"using:Microsoft.UI.Xaml\" {declarations} Tag=\"{{|}}\" />",
-            CreateTypeSystem(includeMarkupExtensionBase: true));
+            $"<Page xmlns=\"using:App.Namespace0\" {declarations} Tag=\"{{|}}\" />",
+            CreateManyNamespaceTypeSystem());
 
-        Assert.Contains("p0:CurrentTheme", labels);
-        Assert.DoesNotContain("p69:CurrentTheme", labels);
+        Assert.Contains("Theme0", labels);
+        Assert.Contains("p63:Theme63", labels);
+        Assert.DoesNotContain("p64:Theme64", labels);
     }
 
     private static HashSet<string> Complete(string marked, XamlTypeSystem typeSystem) =>
@@ -226,5 +256,34 @@ public sealed class MarkupExtensionCompletionTests
             new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         return XamlTypeSystem.FromCompilation(compilation, ImmutableArray<IAssemblySymbol>.Empty);
+    }
+
+    private static XamlTypeSystem CreateManyNamespaceTypeSystem()
+    {
+        var namespaces = string.Join(
+            Environment.NewLine,
+            Enumerable.Range(0, 70).Select(index => $$"""
+                namespace App.Namespace{{index}}
+                {
+                    {{(index == 0 ? "public class Page { public object Tag { get; set; } }" : string.Empty)}}
+                    public sealed class Theme{{index}}Extension :
+                        Microsoft.UI.Xaml.Markup.MarkupExtension { }
+                }
+                """));
+        var source = $$"""
+            namespace Microsoft.UI.Xaml.Markup
+            {
+                public abstract class MarkupExtension { }
+            }
+            {{namespaces}}
+            """;
+        var compilation = CSharpCompilation.Create(
+            "TestApp",
+            [CSharpSyntaxTree.ParseText(source)],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        return XamlTypeSystem.FromCompilation(
+            compilation,
+            ImmutableArray<IAssemblySymbol>.Empty);
     }
 }

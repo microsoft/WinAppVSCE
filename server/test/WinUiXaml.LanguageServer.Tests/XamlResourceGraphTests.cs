@@ -176,6 +176,58 @@ public class XamlResourceGraphTests
     }
 
     [Fact]
+    public void ReadReachable_ReclassifiesCachedParseWithCurrentSdkIdentity()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var app = Path.Combine(root, "App.xaml");
+            var included = Path.Combine(root, "Included.xaml");
+            File.WriteAllText(
+                app,
+                """
+                <ResourceDictionary xmlns="using:Microsoft.UI.Xaml"
+                                    xmlns:local="using:Contoso">
+                  <local:DerivedDictionary Source="Included.xaml" />
+                </ResourceDictionary>
+                """);
+            File.WriteAllText(included, Dictionary("IncludedKey"));
+            var graph = new XamlResourceGraph();
+            var authorize = (string path) =>
+                File.Exists(path) ? Path.GetFullPath(path) : null;
+
+            Assert.Single(graph.ReadReachable(
+                app,
+                root,
+                authorize,
+                _ => { },
+                _ => false));
+
+            var typeSystem = CreateResourceDictionaryTypeSystem();
+            var reclassified = graph.ReadReachable(
+                app,
+                root,
+                authorize,
+                _ => { },
+                element => XamlSemanticFacts.IsElement(
+                    element,
+                    typeSystem.Capabilities.ResourceDictionary,
+                    typeSystem,
+                    allowDerived: true));
+
+            Assert.Equal(2, reclassified.Count);
+            Assert.Contains(
+                reclassified,
+                file => file.Keys.Contains("IncludedKey"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ReadReachable_RejectsTraversalOutsideAuthorizedProject()
     {
         var parent = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
