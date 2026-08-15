@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace WinUiXaml.LanguageServer.Tests;
 
 public sealed class AsyncSingleFlightCacheTests
@@ -96,6 +98,125 @@ public sealed class AsyncSingleFlightCacheTests
         Assert.Equal("fresh", fresh?.Name);
         Assert.True(cache.TryGetReady("page", out var ready));
         Assert.Equal("fresh", ready.Name);
+    }
+
+    [Fact]
+    public async Task PerKeyInvalidationCancelsSupersededLoad()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stale = cache.GetOrStart("page", async cancellationToken =>
+        {
+            started.SetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return new Value("stale");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                cancelled.SetResult();
+                throw;
+            }
+        });
+        await started.Task;
+
+        cache.Invalidate("page");
+        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(await stale);
+
+        var fresh = await cache.GetOrStart(
+            "page",
+            _ => Task.FromResult<Value?>(new Value("fresh")));
+        Assert.Equal("fresh", fresh?.Name);
+    }
+
+    [Fact]
+    public async Task GlobalInvalidationCancelsEverySupersededLoad()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>();
+        var started = new CountdownEvent(2);
+        var cancelled = new ConcurrentBag<string>();
+
+        Task<Value?> Start(string key) => cache.GetOrStart(key, async cancellationToken =>
+        {
+            started.Signal();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return new Value(key);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                cancelled.Add(key);
+                throw;
+            }
+        });
+
+        var first = Start("first");
+        var second = Start("second");
+        Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+
+        cache.InvalidateAll();
+
+        Assert.Null(await first);
+        Assert.Null(await second);
+        Assert.Equal(new[] { "first", "second" }, cancelled.OrderBy(key => key));
+    }
+
+    [Fact]
+    public async Task InvalidationDoesNotWaitForCancellationCallbacks()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackRelease =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stale = cache.GetOrStart("page", async cancellationToken =>
+        {
+            using var registration = cancellationToken.Register(
+                () => callbackRelease.Task.GetAwaiter().GetResult());
+            started.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new Value("stale");
+        });
+        await started.Task;
+
+        var invalidate = Task.Run(() => cache.Invalidate("page"));
+        try
+        {
+            await invalidate.WaitAsync(TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            callbackRelease.TrySetResult();
+        }
+
+        Assert.Null(await stale);
+    }
+
+    [Fact]
+    public async Task CompletionRacingInvalidationNeverThrowsOrPublishesStaleValue()
+    {
+        for (var iteration = 0; iteration < 250; iteration++)
+        {
+            var cache = new AsyncSingleFlightCache<string, Value>();
+            var release = new TaskCompletionSource<Value?>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var stale = cache.GetOrStart("page", _ => release.Task);
+
+            var invalidate = Task.Run(() => cache.Invalidate("page"));
+            release.TrySetResult(new Value("stale"));
+            await invalidate;
+            await stale;
+
+            var fresh = await cache.GetOrStart(
+                "page",
+                _ => Task.FromResult<Value?>(new Value("fresh")));
+            Assert.Equal("fresh", fresh?.Name);
+            Assert.True(cache.TryGetReady("page", out var ready));
+            Assert.Equal("fresh", ready.Name);
+        }
     }
 
     [Fact]

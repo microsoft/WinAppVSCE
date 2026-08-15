@@ -19,6 +19,9 @@ namespace WinUiXaml.Workspace
             {
                 ["Configuration"] = "Debug",
                 ["Platform"] = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "ARM64" : "x64",
+                // Language-service project evaluation must not perform network-backed vulnerability
+                // auditing; restore/CI owns that work, and an unavailable feed otherwise blocks hover.
+                ["NuGetAudit"] = "false",
             };
 
         private readonly object _gate = new object();

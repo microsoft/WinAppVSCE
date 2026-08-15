@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   isEnterEdit,
+  shouldTriggerAutomaticXamlSuggestions,
   shouldTriggerAttributeSuggestions,
   shouldTriggerElementSuggestions,
 } from "../xaml/attributeSuggestionTrigger";
@@ -57,4 +58,17 @@ test("does not trigger element suggestions inside attributes, comments, or CDATA
   assert.equal(shouldTriggerElementSuggestions(attribute, attributeOffset), false);
   assert.equal(shouldTriggerElementSuggestions(comment, commentOffset), false);
   assert.equal(shouldTriggerElementSuggestions(cdata, cdataOffset), false);
+});
+
+test("does not trigger automatic suggestions while XAML IntelliSense is disabled", () => {
+  const [text, offset] = caret("<Page>\n  <|\n</Page>");
+
+  assert.equal(
+    shouldTriggerAutomaticXamlSuggestions(false, "<", text, offset),
+    false
+  );
+  assert.equal(
+    shouldTriggerAutomaticXamlSuggestions(true, "<", text, offset),
+    true
+  );
 });

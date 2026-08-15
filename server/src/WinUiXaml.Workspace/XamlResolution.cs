@@ -49,5 +49,20 @@ namespace WinUiXaml.Workspace
 
         /// <summary>The evaluated ApplicationDefinition file, if the project has one.</summary>
         public string? ApplicationDefinitionPath { get; }
+
+        /// <summary>
+        /// Rebinds the document's in-memory <c>x:Class</c> against the same immutable project
+        /// compilation. This avoids rebuilding project-wide XAML metadata for an XML-only edit.
+        /// </summary>
+        public XamlResolution WithClassName(string? className) =>
+            new(
+                XamlPath,
+                ProjectPath,
+                className,
+                className is null ? null : Compilation.GetTypeByMetadataName(className),
+                Compilation,
+                ReferencedAssemblies,
+                XamlFiles,
+                ApplicationDefinitionPath);
     }
 }

@@ -11,6 +11,7 @@ namespace WinUiXaml.Workspace
         internal WinUiSdkCapabilities(Compilation compilation)
         {
             FrameworkTemplate = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.FrameworkTemplate");
+            FrameworkElement = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.FrameworkElement");
             RelativePanel = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Controls.RelativePanel");
             UIElement = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.UIElement");
             Setter = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Setter");
@@ -22,11 +23,22 @@ namespace WinUiXaml.Workspace
             MarkupExtension = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Markup.MarkupExtension");
             Binding = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Data.Binding");
             RelativeSource = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Data.RelativeSource");
+            BindingMode = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Data.BindingMode");
+            UpdateSourceTrigger = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Data.UpdateSourceTrigger");
+            ContentPropertyAttribute = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Markup.ContentPropertyAttribute");
             Brush = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Media.Brush");
             Color = compilation.GetTypeByMetadataName("Windows.UI.Color");
+            FontWeight = compilation.GetTypeByMetadataName("Windows.UI.Text.FontWeight");
+            FontFamily = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Media.FontFamily");
+            GridLength = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.GridLength");
+            Thickness = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Thickness");
+            CornerRadius = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.CornerRadius");
+            RowDefinitionCollection = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Controls.RowDefinitionCollection");
+            ColumnDefinitionCollection = compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.Controls.ColumnDefinitionCollection");
         }
 
         public INamedTypeSymbol? FrameworkTemplate { get; }
+        public INamedTypeSymbol? FrameworkElement { get; }
         public INamedTypeSymbol? RelativePanel { get; }
         public INamedTypeSymbol? UIElement { get; }
         public INamedTypeSymbol? Setter { get; }
@@ -38,8 +50,18 @@ namespace WinUiXaml.Workspace
         public INamedTypeSymbol? MarkupExtension { get; }
         public INamedTypeSymbol? Binding { get; }
         public INamedTypeSymbol? RelativeSource { get; }
+        public INamedTypeSymbol? BindingMode { get; }
+        public INamedTypeSymbol? UpdateSourceTrigger { get; }
+        public INamedTypeSymbol? ContentPropertyAttribute { get; }
         public INamedTypeSymbol? Brush { get; }
         public INamedTypeSymbol? Color { get; }
+        public INamedTypeSymbol? FontWeight { get; }
+        public INamedTypeSymbol? FontFamily { get; }
+        public INamedTypeSymbol? GridLength { get; }
+        public INamedTypeSymbol? Thickness { get; }
+        public INamedTypeSymbol? CornerRadius { get; }
+        public INamedTypeSymbol? RowDefinitionCollection { get; }
+        public INamedTypeSymbol? ColumnDefinitionCollection { get; }
 
         /// <summary>
         /// Whether every SDK type needed to identify x:Name reference forms is available. Rename must

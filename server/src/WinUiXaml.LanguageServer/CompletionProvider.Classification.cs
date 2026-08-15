@@ -8,7 +8,7 @@ internal static partial class CompletionProvider
 {
     private readonly struct Context
     {
-        public Context(ContextKind kind, string partial, int replaceStart, string? attributeName = null, string? bindPrefixPath = null, string? markupExtension = null, string? bindCastType = null, bool isClassicBinding = false, string? bindElementName = null, bool isUnquoted = false)
+        public Context(ContextKind kind, string partial, int replaceStart, string? attributeName = null, string? bindPrefixPath = null, string? markupExtension = null, string? bindCastType = null, bool isClassicBinding = false, string? bindElementName = null, bool isUnquoted = false, bool isExplicitBindingPath = false)
         {
             Kind = kind;
             Partial = partial;
@@ -20,6 +20,7 @@ internal static partial class CompletionProvider
             IsClassicBinding = isClassicBinding;
             BindElementName = bindElementName;
             IsUnquoted = isUnquoted;
+            IsExplicitBindingPath = isExplicitBindingPath;
         }
 
         public ContextKind Kind { get; }
@@ -46,6 +47,9 @@ internal static partial class CompletionProvider
 
         /// <summary>For ContextKind.AttributeValue: true when the value position has NO surrounding quotes (the user typed Click=OnGo without "…").</summary>
         public bool IsUnquoted { get; }
+
+        /// <summary>For ContextKind.BindPath: true when the path is the value of an explicit Path= argument.</summary>
+        public bool IsExplicitBindingPath { get; }
 
         public static readonly Context None = new(ContextKind.None, string.Empty, 0);
     }
@@ -468,7 +472,11 @@ internal static partial class CompletionProvider
         }
 
         var extName = text.Substring(nameStart, i - nameStart);
-        if (extName != "StaticResource" && extName != "ThemeResource" && extName != "CustomResource")
+        var separator = extName.LastIndexOf(':');
+        var localName = separator >= 0 ? extName.Substring(separator + 1) : extName;
+        if (localName != "StaticResource" &&
+            localName != "ThemeResource" &&
+            localName != "CustomResource")
         {
             return null;
         }

@@ -51,6 +51,25 @@ internal static class XamlValidator
     /// <summary>A resource key closely resembles a known key but does not resolve.</summary>
     public const string UnknownResourceKeyCode = "WXAML0013";
 
+    /// <summary>An x:Name value does not follow XAML identifier grammar.</summary>
+    public const string InvalidNameCode = "WXAML0014";
+    /// <summary>A plain event-handler name is absent from the resolved x:Class hierarchy.</summary>
+    public const string MissingEventHandlerCode = "WXAML0015";
+    /// <summary>More than one object is assigned to a scalar content property.</summary>
+    public const string MultipleScalarChildrenCode = "WXAML0016";
+    /// <summary>A Setter names no property on its resolved Style.TargetType.</summary>
+    public const string InvalidSetterPropertyCode = "WXAML0017";
+    /// <summary>An x:Bind in a DataTemplate has no local x:DataType.</summary>
+    public const string DataTemplateDataTypeRequiredCode = "WXAML0018";
+    /// <summary>An expanded attribute name occurs more than once on an element.</summary>
+    public const string DuplicateAttributeCode = "WXAML0019";
+    /// <summary>A resolved property-element child is not assignable to the property's item type.</summary>
+    public const string InvalidPropertyElementChildCode = "WXAML0020";
+    /// <summary>The resolved x:Class is not assignable to the resolved root element type.</summary>
+    public const string InvalidRootClassCode = "WXAML0021";
+    /// <summary>An x:Bind Mode is absent from the SDK BindingMode enum.</summary>
+    public const string InvalidBindModeCode = "WXAML0022";
+
     private const int SeverityError = 1;
     private const int SeverityWarning = 2;
     private static readonly HashSet<string> ReservedPrefixes = new(System.StringComparer.Ordinal)
@@ -82,7 +101,8 @@ internal static class XamlValidator
 
             // Unresolved binding roots remain silent to avoid false positives.
             var pageClass = ResolvePageClass(root, typeSystem);
-            Walk(root, doc, typeSystem, diagnostics, pageClass, resourceKeys);
+            ValidateRootClass(root, pageClass, typeSystem, doc, diagnostics);
+            Walk(root, doc, typeSystem, diagnostics, pageClass, pageClass, resourceKeys, styleTargetType: null, dataTemplateNeedsDataType: false);
 
             ValidateUniqueNames(root, doc, typeSystem, diagnostics);
             ValidateUniqueResourceKeys(root, doc, typeSystem, diagnostics);
@@ -97,23 +117,47 @@ internal static class XamlValidator
         XamlTypeSystem typeSystem,
         List<Diagnostic> diagnostics,
         INamedTypeSymbol? bindRoot,
-        IReadOnlySet<string> resourceKeys)
+        INamedTypeSymbol? pageClass,
+        IReadOnlySet<string> resourceKeys,
+        INamedTypeSymbol? styleTargetType,
+        bool dataTemplateNeedsDataType)
     {
-        // An unresolved x:DataType disables binding checks for its subtree.
+        var elementType = ResolveElementType(element, typeSystem);
+
+        // A template creates a new binding root. It must not inherit the page's x:Bind root.
         var effectiveRoot = bindRoot;
+        var effectiveTemplateNeedsDataType = dataTemplateNeedsDataType;
+        if (elementType is not null &&
+            typeSystem.Capabilities.DataTemplate is { } dataTemplate &&
+            XamlTypeSystem.IsAssignableTo(elementType, dataTemplate))
+        {
+            effectiveRoot = null;
+            effectiveTemplateNeedsDataType = !TryGetDirectiveValue(element, "DataType", out _);
+        }
+
+        // An unresolved x:DataType disables binding checks for its subtree.
         if (TryGetDirectiveValue(element, "DataType", out var dataTypeText))
         {
             effectiveRoot = ResolveTypeName(dataTypeText, element.NamespaceScope, typeSystem);
+            effectiveTemplateNeedsDataType = false;
         }
 
-        ValidateElement(element, doc, typeSystem, diagnostics, effectiveRoot);
+        var effectiveStyleTarget = styleTargetType;
+        if (elementType is not null &&
+            typeSystem.Capabilities.Style is { } styleType &&
+            XamlTypeSystem.IsAssignableTo(elementType, styleType))
+        {
+            effectiveStyleTarget = TryResolveTypeAttribute(element, "TargetType", typeSystem);
+        }
+
+        ValidateElement(element, doc, typeSystem, diagnostics, effectiveRoot, pageClass, effectiveStyleTarget, effectiveTemplateNeedsDataType);
         ValidateResourceReferences(element, doc, diagnostics, resourceKeys);
 
         foreach (var child in element.Content)
         {
             if (child is XamlElement childElement)
             {
-                Walk(childElement, doc, typeSystem, diagnostics, effectiveRoot, resourceKeys);
+                Walk(childElement, doc, typeSystem, diagnostics, effectiveRoot, pageClass, resourceKeys, effectiveStyleTarget, effectiveTemplateNeedsDataType);
             }
         }
     }
@@ -139,8 +183,9 @@ internal static class XamlValidator
             foreach (var extension in value.DescendantNodesAndSelf().OfType<XamlMarkupExtension>())
             {
                 if (!extension.IsClosed ||
-                    extension.Name is not { HasPrefix: false } name ||
-                    name.LocalName is not ("StaticResource" or "ThemeResource"))
+                    !XamlSemanticFacts.IsResourceReferenceExtension(
+                        extension,
+                        element.NamespaceScope))
                 {
                     continue;
                 }
@@ -176,14 +221,22 @@ internal static class XamlValidator
     }
 
     private static void ValidateElement(
-        XamlElement element, TextDocument doc, XamlTypeSystem typeSystem, List<Diagnostic> diagnostics, INamedTypeSymbol? bindRoot)
+        XamlElement element, TextDocument doc, XamlTypeSystem typeSystem, List<Diagnostic> diagnostics,
+        INamedTypeSymbol? bindRoot, INamedTypeSymbol? pageClass, INamedTypeSymbol? styleTargetType,
+        bool dataTemplateNeedsDataType)
     {
         var scope = element.NamespaceScope;
+        ValidateDuplicateAttributes(element, doc, diagnostics);
 
-        // {x:Bind} member checks are independent of whether the element type resolves.
-        if (bindRoot is not null)
+        foreach (var attribute in element.Attributes)
         {
-            foreach (var attribute in element.Attributes)
+            ValidateBindMode(attribute, scope, typeSystem, doc, diagnostics);
+            if (dataTemplateNeedsDataType && XamlSemanticFacts.IsXBind(attribute, scope))
+            {
+                diagnostics.Add(Diag(doc, attribute.Value!.InnerSpan, SeverityError, DataTemplateDataTypeRequiredCode,
+                    "x:Bind inside a DataTemplate requires x:DataType."));
+            }
+            if (bindRoot is not null)
             {
                 ValidateBindPath(attribute, bindRoot, scope, typeSystem, doc, diagnostics);
             }
@@ -224,9 +277,9 @@ internal static class XamlValidator
         }
 
         // A property element (<Grid.RowDefinitions>) names a member of an owner type, not an element type, so it has no element-type/attribute surface — validate the member against the owner and stop.
-        if (element.IsPropertyElement)
+        if (name.IsDotted)
         {
-            ValidatePropertyElement(name, uri, typeSystem, doc, diagnostics);
+            ValidatePropertyElement(element, name, uri, typeSystem, doc, diagnostics);
             return;
         }
 
@@ -242,8 +295,12 @@ internal static class XamlValidator
         // The element type is known — verify its simple attributes name real members.
         foreach (var attribute in element.Attributes)
         {
-            ValidateAttributeMember(attribute, elementType, scope, typeSystem, doc, diagnostics);
+            ValidateAttributeMember(attribute, elementType, scope, typeSystem, doc, diagnostics, pageClass);
         }
+
+        ValidateNameGrammar(element, elementType, scope, typeSystem, doc, diagnostics);
+        ValidateScalarContent(element, elementType, typeSystem, doc, diagnostics);
+        ValidateSetterProperty(element, elementType, styleTargetType, typeSystem, doc, diagnostics);
     }
 
     private static void ValidateAttributeMember(
@@ -252,7 +309,8 @@ internal static class XamlValidator
         XamlNamespaceScope scope,
         XamlTypeSystem typeSystem,
         TextDocument doc,
-        List<Diagnostic> diagnostics)
+        List<Diagnostic> diagnostics,
+        INamedTypeSymbol? pageClass)
     {
         var name = attribute.Name;
 
@@ -274,7 +332,7 @@ internal static class XamlValidator
             return;
         }
 
-        var member = typeSystem.FindMember(elementType, name.LocalName);
+        var member = typeSystem.FindAttributeMember(elementType, name.LocalName);
         if (member is null)
         {
             diagnostics.Add(Diag(doc, name.LocalNameSpan, SeverityWarning, UnknownAttributeCode,
@@ -286,6 +344,15 @@ internal static class XamlValidator
         if (member.Kind == XamlMemberKind.Property && member.Type is not null)
         {
             ValidateLiteralAttributeValue(attribute, member.Type, typeSystem, doc, diagnostics);
+        }
+        else if (member.Kind == XamlMemberKind.Event &&
+                 pageClass is not null &&
+                 attribute.Value is { IsMarkupExtension: false } eventValue &&
+                 eventValue.Text.Trim() is { Length: > 0 } handler &&
+                 !HasMethod(pageClass, handler))
+        {
+            diagnostics.Add(Diag(doc, eventValue.InnerSpan, SeverityError, MissingEventHandlerCode,
+                $"The event handler '{handler}' was not found on '{pageClass.Name}' or its base types."));
         }
     }
 
@@ -366,46 +433,340 @@ internal static class XamlValidator
 
     /// <summary>Validates a property element (&lt;Grid.RowDefinitions&gt;): the dotted name references a member of an owner type</summary>
     private static void ValidatePropertyElement(
+        XamlElement element,
         XamlName name,
         string uri,
         XamlTypeSystem typeSystem,
         TextDocument doc,
         List<Diagnostic> diagnostics)
     {
-        int dot = name.LocalName.LastIndexOf('.');
-        if (dot <= 0 || dot >= name.LocalName.Length - 1)
+        var resolved = XamlSemanticFacts.ResolvePropertyElementMember(name, uri, typeSystem);
+        if (resolved is null)
         {
             return; // malformed dotted name — leave it to the parser
         }
 
-        var ownerLocal = name.LocalName.Substring(0, dot);
-        var memberName = name.LocalName.Substring(dot + 1);
-
-        var owner = typeSystem.ResolveType(uri, ownerLocal);
+        var (ownerLocal, memberName, owner, propertyType, isAttached) = resolved.Value;
         if (owner is null)
         {
             // The enclosing namespace is already known/trusted (the caller gated on IsKnownNamespace), so a property element whose OWNER type does not resolve is a genuine unknown type
-            var ownerSpan = new TextSpan(name.LocalNameSpan.Start, name.LocalNameSpan.Start + dot);
+            var ownerSpan = new TextSpan(
+                name.LocalNameSpan.Start,
+                name.LocalNameSpan.Start + ownerLocal.Length);
             diagnostics.Add(Diag(doc, ownerSpan, SeverityWarning, UnknownTypeCode,
                 $"The type '{ownerLocal}' was not found in the XAML namespace '{uri}'.",
                 SuggestData(ownerLocal, typeSystem.GetAllTypes(uri).Select(t => t.Name))));
             return;
         }
 
-        if (typeSystem.HasProperty(owner, memberName) ||
-            typeSystem.HasAttachedMember(owner, memberName))
+        if (propertyType is not null)
         {
+            if (!isAttached)
+            {
+                if (element.Parent is not XamlElement parent ||
+                    ResolveElementType(parent, typeSystem) is not { } parentType)
+                {
+                    return;
+                }
+
+                if (!XamlTypeSystem.IsAssignableTo(parentType, owner))
+                {
+                    var mismatchedMemberSpan = new TextSpan(
+                        name.LocalNameSpan.Start + ownerLocal.Length + 1,
+                        name.LocalNameSpan.End);
+                    diagnostics.Add(Diag(
+                        doc,
+                        mismatchedMemberSpan,
+                        SeverityWarning,
+                        UnknownPropertyElementCode,
+                        $"The property '{memberName}' is not a member of the enclosing type '{parentType.Name}'."));
+                    return;
+                }
+            }
+
+            ValidatePropertyElementChildren(element, propertyType, typeSystem, doc, diagnostics);
             return; // a real settable property / attached member used in element form
         }
 
         // Underline just the member part, past "Owner.". An event exists as a member but cannot be set through property-element syntax (it needs an attribute), so it gets a distinct message.
-        var memberSpan = new TextSpan(name.LocalNameSpan.Start + dot + 1, name.LocalNameSpan.End);
+        var memberSpan = new TextSpan(
+            name.LocalNameSpan.Start + ownerLocal.Length + 1,
+            name.LocalNameSpan.End);
         bool isEvent = typeSystem.HasMember(owner, memberName);
         var message = isEvent
             ? $"'{memberName}' is an event and cannot be set using property-element syntax."
             : $"The property '{memberName}' was not found in the type '{owner.Name}'.";
         var data = isEvent ? null : SuggestData(memberName, typeSystem.GetPropertyElementCandidateNames(owner));
         diagnostics.Add(Diag(doc, memberSpan, SeverityWarning, UnknownPropertyElementCode, message, data));
+    }
+
+    private static INamedTypeSymbol? ResolveElementType(XamlElement element, XamlTypeSystem typeSystem) =>
+        element.Name is { IsDotted: false }
+            ? XamlSemanticFacts.ResolveElementType(element, typeSystem)
+            : null;
+
+    private static void ValidateDuplicateAttributes(
+        XamlElement element, TextDocument doc, List<Diagnostic> diagnostics)
+    {
+        var seen = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var attribute in element.Attributes)
+        {
+            string key;
+            if (attribute.IsNamespaceDeclaration)
+            {
+                key = "xmlns:" + (attribute.DeclaredPrefix ?? string.Empty);
+            }
+            else if (attribute.Name.HasPrefix &&
+                     element.NamespaceScope.TryResolvePrefix(attribute.Name.Prefix, out var uri))
+            {
+                key = "{" + uri + "}" + attribute.Name.LocalName;
+            }
+            else
+            {
+                key = attribute.Name.FullName;
+            }
+
+            if (!seen.Add(key))
+            {
+                diagnostics.Add(Diag(doc, attribute.Name.Span, SeverityError, DuplicateAttributeCode,
+                    $"The attribute '{attribute.Name.FullName}' is specified more than once."));
+            }
+        }
+    }
+
+    private static void ValidateNameGrammar(
+        XamlElement element,
+        INamedTypeSymbol elementType,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        foreach (var attribute in element.Attributes)
+        {
+            if (XamlSemanticFacts.IsNameAttribute(
+                    attribute,
+                    elementType,
+                    scope,
+                    typeSystem) &&
+                attribute.Value is { IsMarkupExtension: false } value &&
+                !IsIdentifier(value.Text))
+            {
+                diagnostics.Add(Diag(doc, value.InnerSpan, SeverityError, InvalidNameCode,
+                    $"'{value.Text}' is not a valid XAML name."));
+            }
+        }
+    }
+
+    private static bool HasMethod(INamedTypeSymbol type, string methodName)
+    {
+        for (INamedTypeSymbol? current = type; current is not null; current = current.BaseType)
+        {
+            if (current.GetMembers(methodName).OfType<IMethodSymbol>().Any())
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void ValidateScalarContent(
+        XamlElement element,
+        INamedTypeSymbol elementType,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        var contentType = typeSystem.GetContentPropertyDeclaredType(elementType);
+        if (contentType is null || XamlTypeSystem.GetCollectionElementType(contentType) is not null)
+        {
+            return;
+        }
+
+        var children = element.Content.OfType<XamlElement>().Where(child => !child.IsPropertyElement).ToArray();
+        for (int i = 1; i < children.Length; i++)
+        {
+            diagnostics.Add(Diag(doc, children[i].Name?.Span ?? children[i].Span, SeverityError,
+                MultipleScalarChildrenCode,
+                $"The scalar content property of '{elementType.Name}' can only contain one object."));
+        }
+    }
+
+    private static void ValidatePropertyElementChildren(
+        XamlElement propertyElement,
+        ITypeSymbol propertyType,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        if (propertyType is INamedTypeSymbol namedPropertyType &&
+            typeSystem.Capabilities.ResourceDictionary is { } resourceDictionary &&
+            XamlTypeSystem.IsAssignableTo(namedPropertyType, resourceDictionary))
+        {
+            // ResourceDictionary implements IDictionary, whose CLR element type is KeyValuePair.
+            // XAML dictionary children are the keyed values themselves, not KeyValuePair objects.
+            return;
+        }
+
+        var expectedType = XamlTypeSystem.GetCollectionElementType(propertyType) ?? propertyType;
+        var children = propertyElement.Content.OfType<XamlElement>()
+            .Where(child => !child.IsPropertyElement)
+            .ToArray();
+
+        if (XamlTypeSystem.GetCollectionElementType(propertyType) is null)
+        {
+            for (int i = 1; i < children.Length; i++)
+            {
+                diagnostics.Add(Diag(doc, children[i].Name?.Span ?? children[i].Span, SeverityError,
+                    MultipleScalarChildrenCode, "A scalar property element can only contain one object."));
+            }
+        }
+
+        foreach (var child in children)
+        {
+            var childType = ResolveElementType(child, typeSystem);
+            if (childType is not null && !XamlTypeSystem.IsAssignableTo(childType, expectedType))
+            {
+                diagnostics.Add(Diag(doc, child.Name?.Span ?? child.Span, SeverityError,
+                    InvalidPropertyElementChildCode,
+                    $"'{childType.Name}' is not assignable to '{expectedType.Name}' for this property."));
+            }
+        }
+    }
+
+    private static void ValidateSetterProperty(
+        XamlElement element,
+        INamedTypeSymbol elementType,
+        INamedTypeSymbol? styleTargetType,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        if (styleTargetType is null ||
+            typeSystem.Capabilities.Setter is not { } setter ||
+            !XamlTypeSystem.IsAssignableTo(elementType, setter) ||
+            element.GetAttribute("Property")?.Value is not { IsMarkupExtension: false } value)
+        {
+            return;
+        }
+
+        var propertyName = value.Text.Trim();
+        int dot = propertyName.IndexOf('.');
+        if (dot > 0 && dot < propertyName.Length - 1)
+        {
+            var ownerName = propertyName.Substring(0, dot);
+            var memberName = propertyName.Substring(dot + 1);
+            var owner = ResolveTypeName(ownerName, element.NamespaceScope, typeSystem);
+            if (owner is null)
+            {
+                var colon = ownerName.IndexOf(':');
+                var prefix = colon >= 0 ? ownerName[..colon] : string.Empty;
+                var localName = colon >= 0 ? ownerName[(colon + 1)..] : ownerName;
+                var suggestions =
+                    element.NamespaceScope.TryResolvePrefix(prefix, out var uri)
+                        ? typeSystem.GetAllTypes(uri).Select(type => type.Name)
+                        : Enumerable.Empty<string>();
+                diagnostics.Add(Diag(doc, value.InnerSpan, SeverityError, InvalidSetterPropertyCode,
+                    $"The attached-property owner '{ownerName}' was not found.",
+                    SuggestData(localName, suggestions)));
+                return;
+            }
+
+            if (typeSystem.GetAttachedMemberType(owner, memberName) is not null)
+            {
+                return;
+            }
+
+            diagnostics.Add(Diag(doc, value.InnerSpan, SeverityError, InvalidSetterPropertyCode,
+                $"The attached property '{memberName}' was not found on '{owner.Name}'.",
+                SuggestData(memberName, typeSystem.GetAttachedProperties(owner).Select(member => member.Name))));
+            return;
+        }
+
+        if (!IsIdentifier(propertyName) || typeSystem.HasProperty(styleTargetType, propertyName))
+        {
+            return;
+        }
+
+        diagnostics.Add(Diag(doc, value.InnerSpan, SeverityError, InvalidSetterPropertyCode,
+            $"The property '{propertyName}' was not found on the style target type '{styleTargetType.Name}'.",
+            SuggestData(propertyName, typeSystem.GetPropertyElementCandidateNames(styleTargetType))));
+    }
+
+    private static INamedTypeSymbol? TryResolveTypeAttribute(
+        XamlElement element, string attributeName, XamlTypeSystem typeSystem)
+    {
+        if (element.GetAttribute(attributeName)?.Value is not { } value)
+        {
+            return null;
+        }
+
+        string? text = null;
+        if (!value.IsMarkupExtension)
+        {
+            text = value.Text;
+        }
+        else if (value.MarkupExtension is { IsClosed: true, Name: { } name } extension &&
+            XamlSemanticFacts.IsXamlLanguageName(name, "Type", element.NamespaceScope))
+        {
+            text = extension.Arguments.FirstOrDefault(argument =>
+                !argument.IsNamed && argument.NestedExtension is null)?.Value;
+        }
+
+        return text is null ? null : ResolveTypeName(text, element.NamespaceScope, typeSystem);
+    }
+
+    private static void ValidateBindMode(
+        XamlAttribute attribute,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        if (!XamlSemanticFacts.IsXBind(attribute, scope) ||
+            attribute.Value!.MarkupExtension is not { } extension ||
+            XamlSemanticFacts.ResolveMarkupArgumentType(
+                extension,
+                scope,
+                "Mode",
+                typeSystem) is not { TypeKind: TypeKind.Enum } bindingMode ||
+            extension.Arguments.FirstOrDefault(argument =>
+                argument.IsNamed && argument.Name?.LocalName == "Mode") is not { Value: { } mode, ValueSpan: { } span })
+        {
+            return;
+        }
+
+        var names = bindingMode.GetMembers().OfType<IFieldSymbol>()
+            .Where(field => field.HasConstantValue)
+            .Select(field => field.Name)
+            .ToArray();
+        if (XamlValueConverter.TryValidate(mode, bindingMode, typeSystem, out var isValid) && !isValid)
+        {
+            diagnostics.Add(Diag(doc, span, SeverityError, InvalidBindModeCode,
+                $"'{mode}' is not a valid x:Bind mode.", SuggestData(mode, names)));
+        }
+    }
+
+    private static void ValidateRootClass(
+        XamlElement root,
+        INamedTypeSymbol? pageClass,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        if (pageClass is null || ResolveElementType(root, typeSystem) is not { } rootType ||
+            XamlTypeSystem.IsAssignableTo(pageClass, rootType))
+        {
+            return;
+        }
+
+        var classAttribute = XamlSemanticFacts.GetDirectiveAttribute(root, "Class");
+        if (classAttribute?.Value is { } value)
+        {
+            diagnostics.Add(Diag(doc, value.InnerSpan, SeverityError, InvalidRootClassCode,
+                $"The x:Class type '{pageClass.ToDisplayString()}' is not assignable to the root element type '{rootType.ToDisplayString()}'."));
+        }
     }
 
     private static void ReportUndeclaredPrefix(
@@ -454,9 +815,8 @@ internal static class XamlValidator
         TextDocument doc,
         List<Diagnostic> diagnostics)
     {
-        if (attribute.Value?.MarkupExtension is not { IsClosed: true } ext ||
-            ext.Name is not { LocalName: "Bind" } extName ||
-            !string.Equals(extName.Prefix, "x", System.StringComparison.Ordinal))
+        if (!XamlSemanticFacts.IsXBind(attribute, scope) ||
+            attribute.Value?.MarkupExtension is not { IsClosed: true } ext)
         {
             return;
         }
@@ -500,6 +860,22 @@ internal static class XamlValidator
 
             // For a function binding (Method(arg, arg)) each argument is itself a path bound against the root, so a bogus argument member is flagged the same as a bogus root path.
             ValidateBindFunctionArgs(path, valueSpan, bindRoot, typeSystem, doc, diagnostics);
+            return;
+        }
+
+        if (XamlSemanticFacts.ResolveNamedElementTypeInScope(
+                doc,
+                attribute.Parent,
+                segment,
+                typeSystem) is { } namedElementType)
+        {
+            ValidateNamedElementBindPathTail(
+                path,
+                valueSpan,
+                namedElementType,
+                typeSystem,
+                doc,
+                diagnostics);
             return;
         }
 
@@ -636,6 +1012,44 @@ internal static class XamlValidator
         }
 
         ValidateMemberChain(bindRoot, segments, start, valueSpan, skipFirst: true, typeSystem, doc, diagnostics);
+    }
+
+    private static void ValidateNamedElementBindPathTail(
+        string path,
+        TextSpan valueSpan,
+        INamedTypeSymbol namedElementType,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        int start = 0;
+        while (start < path.Length && (path[start] == '!' || char.IsWhiteSpace(path[start])))
+        {
+            start++;
+        }
+
+        var body = path.Substring(start);
+        if (body.IndexOf('(') >= 0)
+        {
+            return;
+        }
+
+        var segments = body.Split('.');
+        if (segments.Length < 2)
+        {
+            return;
+        }
+
+        int tailStart = start + segments[0].Length + 1;
+        ValidateMemberChain(
+            namedElementType,
+            segments.Skip(1).ToArray(),
+            tailStart,
+            valueSpan,
+            skipFirst: false,
+            typeSystem,
+            doc,
+            diagnostics);
     }
 
     /// <summary>Walks a dotted member chain against a starting type, flagging the FIRST segment that is not a member of the type produced by the preceding segment.</summary>
@@ -1086,18 +1500,14 @@ internal static class XamlValidator
             ? typeSystem.ResolveMetadataType(className.Trim())
             : null;
 
-    /// <summary>Reads an <c>x:</c>-prefixed directive value.</summary>
+    /// <summary>Reads a XAML-language directive value.</summary>
     private static bool TryGetDirectiveValue(XamlElement element, string localName, out string value)
     {
-        foreach (var attribute in element.Attributes)
+        if (XamlSemanticFacts.GetDirectiveAttribute(element, localName)?.Value is
+            { Text.Length: > 0 } attributeValue)
         {
-            if (string.Equals(attribute.Name.Prefix, "x", System.StringComparison.Ordinal) &&
-                string.Equals(attribute.Name.LocalName, localName, System.StringComparison.Ordinal) &&
-                attribute.Value is { Text.Length: > 0 } v)
-            {
-                value = v.Text;
-                return true;
-            }
+            value = attributeValue.Text;
+            return true;
         }
 
         value = string.Empty;
@@ -1106,24 +1516,11 @@ internal static class XamlValidator
 
     /// <summary>Resolves a XAML type reference (<c>local:Page2</c> or a metadata name) to a symbol, or null.</summary>
     private static INamedTypeSymbol? ResolveTypeName(string text, XamlNamespaceScope scope, XamlTypeSystem typeSystem)
-    {
-        text = text.Trim();
-        if (text.Length == 0)
-        {
-            return null;
-        }
-
-        int colon = text.IndexOf(':');
-        if (colon >= 0)
-        {
-            var prefix = text.Substring(0, colon);
-            var local = text.Substring(colon + 1);
-            return scope.TryResolvePrefix(prefix, out var uri) ? typeSystem.ResolveType(uri, local) : null;
-        }
-
-        var byDefault = scope.TryResolvePrefix(null, out var defaultUri) ? typeSystem.ResolveType(defaultUri, text) : null;
-        return byDefault ?? typeSystem.ResolveMetadataType(text);
-    }
+        => XamlSemanticFacts.ResolveTypeName(
+            text,
+            scope,
+            typeSystem,
+            allowMetadataNameFallback: true);
 
     private static void ValidateDirectives(
         XamlElement element,
@@ -1217,68 +1614,27 @@ internal static class XamlValidator
         XamlTypeSystem typeSystem,
         List<Diagnostic> diagnostics)
     {
-        if (typeSystem.Capabilities.FrameworkTemplate is not { } frameworkTemplate)
+        if (typeSystem.Capabilities.FrameworkTemplate is null)
         {
             return;
         }
 
-        CollectScopedNames(
-            root,
-            new HashSet<string>(System.StringComparer.Ordinal),
-            doc,
-            typeSystem,
-            frameworkTemplate,
-            diagnostics);
-    }
-
-    private static void CollectScopedNames(
-        XamlElement element,
-        HashSet<string> scope,
-        TextDocument doc,
-        XamlTypeSystem typeSystem,
-        ITypeSymbol frameworkTemplate,
-        List<Diagnostic> diagnostics)
-    {
-        // The element's own name belongs to the CURRENT scope (a template's own x:Name is outer-scoped).
-        if (TryGetStaticValue(element, "x:Name", "Name", out var nameAttr, out var nameText) &&
-            !scope.Add(nameText))
+        foreach (var nameScope in XamlSemanticFacts.GetNameScopes(root, typeSystem))
         {
-            diagnostics.Add(Diag(doc, nameAttr.Value!.InnerSpan, SeverityError, DuplicateNameCode,
-                $"The name '{nameText}' already exists in the current name scope."));
-        }
-
-        // A template re-scopes its subtree; every other element shares the current scope.
-        var childScope = IsNameScopeBoundary(element, typeSystem, frameworkTemplate)
-            ? new HashSet<string>(System.StringComparer.Ordinal)
-            : scope;
-
-        foreach (var child in element.Content)
-        {
-            if (child is XamlElement childElement)
+            var seen = new HashSet<string>(System.StringComparer.Ordinal);
+            foreach (var (name, attribute) in nameScope)
             {
-                CollectScopedNames(childElement, childScope, doc, typeSystem, frameworkTemplate, diagnostics);
+                if (!seen.Add(name))
+                {
+                    diagnostics.Add(Diag(
+                        doc,
+                        attribute.Value!.InnerSpan,
+                        SeverityError,
+                        DuplicateNameCode,
+                        $"The name '{name}' already exists in the current name scope."));
+                }
             }
         }
-    }
-
-    private static bool IsNameScopeBoundary(
-        XamlElement element,
-        XamlTypeSystem typeSystem,
-        ITypeSymbol frameworkTemplate)
-    {
-        if (element.Name is not { IsDotted: false } name)
-        {
-            return false;
-        }
-
-        if (!element.NamespaceScope.TryResolvePrefix(name.Prefix, out var namespaceUri) ||
-            typeSystem.ResolveType(namespaceUri, name.LocalName) is not { } elementType)
-        {
-            return false;
-        }
-
-        // FrameworkTemplate content is instantiated into its own XAML namescope.
-        return XamlTypeSystem.IsAssignableTo(elementType, frameworkTemplate);
     }
 
     /// <summary>Reports duplicate x:Key declarations within the same ResourceDictionary (WXAML0008, an error).</summary>
@@ -1328,6 +1684,40 @@ internal static class XamlValidator
                 continue;
             }
 
+            // A structural property element (MergedDictionaries/ThemeDictionaries) is not a keyed entry; its subtree holds nested dictionaries, each their own scope.
+            if (entry.IsPropertyElement ||
+                XamlSemanticFacts.ResolvePropertyElementMember(entry, typeSystem) is not null)
+            {
+                if (IsThemeDictionariesPropertyElement(entry, typeSystem))
+                {
+                    var themeKeys = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var dictionary in entry.Content.OfType<XamlElement>())
+                    {
+                        if (TryGetResourceKey(
+                                dictionary,
+                                typeSystem,
+                                out var themeKey,
+                                out var themeKeySpan) &&
+                            !themeKeys.Add(themeKey))
+                        {
+                            diagnostics.Add(Diag(
+                                doc,
+                                themeKeySpan,
+                                SeverityError,
+                                DuplicateKeyCode,
+                                "An item with the same key has already been added."));
+                        }
+
+                        FindResourceScopes(dictionary, doc, typeSystem, diagnostics);
+                    }
+                }
+                else
+                {
+                    FindResourceScopes(entry, doc, typeSystem, diagnostics);
+                }
+                continue;
+            }
+
             // An explicit nested <ResourceDictionary>.
             if (IsResourceScopeBoundary(entry, typeSystem))
             {
@@ -1335,15 +1725,9 @@ internal static class XamlValidator
                 continue;
             }
 
-            // A structural property element (MergedDictionaries/ThemeDictionaries) is not a keyed entry; its subtree holds nested dictionaries, each their own scope.
-            if (entry.IsPropertyElement)
-            {
-                FindResourceScopes(entry, doc, typeSystem, diagnostics);
-                continue;
-            }
-
             // A keyed resource entry: its x:Key must be unique within THIS dictionary. Both a plain string key and an {x:Type Foo} implicit-style key are tracked (in separate key-spaces).
-            if (TryGetResourceKey(entry, out var canonicalKey, out var keySpan) && !scope.Add(canonicalKey))
+            if (TryGetResourceKey(entry, typeSystem, out var canonicalKey, out var keySpan) &&
+                !scope.Add(canonicalKey))
             {
                 diagnostics.Add(Diag(doc, keySpan, SeverityError, DuplicateKeyCode,
                     "An item with the same key has already been added."));
@@ -1352,6 +1736,17 @@ internal static class XamlValidator
             // The entry's own subtree may nest further dictionaries (rare) — validate them independently.
             FindResourceScopes(entry, doc, typeSystem, diagnostics);
         }
+    }
+
+    private static bool IsThemeDictionariesPropertyElement(
+        XamlElement element,
+        XamlTypeSystem typeSystem)
+    {
+        var resolved = XamlSemanticFacts.ResolvePropertyElementMember(element, typeSystem);
+        return resolved?.Owner is { } owner &&
+            typeSystem.Capabilities.ResourceDictionary is { } resourceDictionary &&
+            XamlTypeSystem.IsAssignableTo(owner, resourceDictionary) &&
+            string.Equals(resolved.Value.MemberName, "ThemeDictionaries", StringComparison.Ordinal);
     }
 
     private static bool IsResourceScopeBoundary(XamlElement element, XamlTypeSystem typeSystem)
@@ -1367,24 +1762,20 @@ internal static class XamlValidator
             return XamlSemanticFacts.IsResourceDictionary(element, typeSystem);
         }
 
-        // A ".Resources" property element on any type (Page.Resources, Application.Resources, ...).
-        if (n.IsDotted && !n.HasPrefix)
-        {
-            int dot = n.LocalName.LastIndexOf('.');
-            return dot > 0 && dot < n.LocalName.Length - 1 &&
-                   string.Equals(n.LocalName.Substring(dot + 1), "Resources", System.StringComparison.Ordinal);
-        }
-
-        return false;
+        return XamlSemanticFacts.IsResourceDictionaryPropertyElement(element, typeSystem);
     }
 
     /// <summary>Reads an entry's x:Key as a canonical, scope-comparable key.</summary>
-    private static bool TryGetResourceKey(XamlElement entry, out string canonicalKey, out TextSpan keySpan)
+    private static bool TryGetResourceKey(
+        XamlElement entry,
+        XamlTypeSystem typeSystem,
+        out string canonicalKey,
+        out TextSpan keySpan)
     {
         canonicalKey = string.Empty;
         keySpan = default;
 
-        if (entry.GetAttribute("x:Key")?.Value is not { } value)
+        if (XamlSemanticFacts.GetKeyAttribute(entry)?.Value is not { } value)
         {
             return false;
         }
@@ -1404,15 +1795,16 @@ internal static class XamlValidator
         }
 
         // {x:Type Foo} implicit-style key: canonicalize by the (trimmed) type argument text so two {x:Type Foo} entries in the same dictionary are a duplicate, matching the XAML compiler.
-        if (value.MarkupExtension is { IsClosed: true, Name: { LocalName: "Type" } typeName } ext &&
-            string.Equals(typeName.Prefix, "x", System.StringComparison.Ordinal))
+        if (value.MarkupExtension is { IsClosed: true, Name: { } typeName } ext &&
+            XamlSemanticFacts.IsXamlLanguageName(typeName, "Type", entry.NamespaceScope))
         {
             var typeArg = ext.Arguments.FirstOrDefault(
                 a => !a.IsNamed && a.NestedExtension is null && a.Value is { Length: > 0 });
             var argText = typeArg?.Value?.Trim();
             if (!string.IsNullOrEmpty(argText))
             {
-                canonicalKey = "t:" + argText;
+                var type = ResolveTypeName(argText, entry.NamespaceScope, typeSystem);
+                canonicalKey = "t:" + (type?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ?? argText);
                 keySpan = typeArg!.ValueSpan ?? value.InnerSpan;
                 return true;
             }

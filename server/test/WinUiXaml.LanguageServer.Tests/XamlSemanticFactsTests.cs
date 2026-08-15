@@ -131,6 +131,45 @@ public sealed class XamlSemanticFactsTests
                 TypeSystem)?.ToDisplayString());
     }
 
+    [Fact]
+    public void UnprefixedMarkupExtensionDoesNotFallBackUnderCustomDefaultNamespace()
+    {
+        var element = Element("""<Page xmlns="using:Other" />""");
+
+        Assert.Null(XamlSemanticFacts.ResolveMarkupExtensionType(
+                "Binding",
+                element.NamespaceScope,
+                TypeSystem));
+    }
+
+    [Fact]
+    public void XBindModeTypingDoesNotLeakToUnknownMarkupExtensions()
+    {
+        var customElement = Element(
+                """<Page xmlns="using:Microsoft.UI.Xaml" xmlns:local="using:Contoso" Tag="{local:Lookalike Mode=OneWay}" />""");
+        var customExtension = customElement.DescendantNodesAndSelf()
+                .OfType<WinUiXaml.Xaml.XamlMarkupExtension>()
+                .Single();
+        Assert.Null(XamlSemanticFacts.ResolveMarkupArgumentType(
+                customExtension,
+                customElement.NamespaceScope,
+                "Mode",
+                TypeSystem));
+
+        var bindElement = Element(
+                """<Page xmlns="using:Microsoft.UI.Xaml" xmlns:lang="http://schemas.microsoft.com/winfx/2006/xaml" Tag="{lang:Bind Mode=OneWay}" />""");
+        var bindExtension = bindElement.DescendantNodesAndSelf()
+                .OfType<WinUiXaml.Xaml.XamlMarkupExtension>()
+                .Single();
+        Assert.Equal(
+                "Microsoft.UI.Xaml.Data.BindingMode",
+                XamlSemanticFacts.ResolveMarkupArgumentType(
+                    bindExtension,
+                    bindElement.NamespaceScope,
+                    "Mode",
+                    TypeSystem)?.ToDisplayString());
+    }
+
     [Theory]
     [InlineData("Binding", "Microsoft.UI.Xaml.Data.Binding")]
     [InlineData("RelativeSource", "Microsoft.UI.Xaml.Data.RelativeSource")]
@@ -147,6 +186,97 @@ public sealed class XamlSemanticFactsTests
                     "ui:" + extensionName,
                     element.NamespaceScope,
                     TypeSystem)?.ToDisplayString());
+    }
+
+    [Fact]
+    public void NamedElementLookupUsesTheEnclosingTemplateNameScope()
+    {
+        const string text = """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                      xmlns:lang="http://schemas.microsoft.com/winfx/2006/xaml"
+                      xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Button x:Name="Shared" />
+              <DataTemplate>
+                    <controls:Button lang:Name="Shared" />
+                    <controls:Button Tag="{Binding ElementName=Shared}" />
+              </DataTemplate>
+            </Page>
+            """;
+        var document = new TextDocument("file:///test.xaml", text);
+        var context = document.Parsed.FindNode(text.IndexOf("ElementName=Shared", StringComparison.Ordinal));
+
+        var element = XamlSemanticFacts.FindNamedElementInScope(
+            document,
+            context,
+            "Shared",
+            TypeSystem);
+
+        Assert.NotNull(element);
+        Assert.Equal(
+            "DataTemplate",
+            Assert.IsType<WinUiXaml.Xaml.XamlElement>(element!.Parent).Name?.LocalName);
+    }
+
+    [Fact]
+    public void NamedElementLookupTraversesRootTemplateContent()
+    {
+        const string text = """
+            <DataTemplate xmlns="using:Microsoft.UI.Xaml"
+                          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                          xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Button x:Name="Target" />
+              <controls:Button Tag="{Binding ElementName=Target}" />
+            </DataTemplate>
+            """;
+        var document = new TextDocument("file:///test.xaml", text);
+        var context = document.Parsed.FindNode(text.IndexOf("ElementName=Target", StringComparison.Ordinal));
+
+        var element = XamlSemanticFacts.FindNamedElementInScope(
+            document,
+            context,
+            "Target",
+            TypeSystem);
+
+        Assert.NotNull(element);
+    }
+
+    [Fact]
+    public void ConventionalXPrefixIsOnlyAssumedWhenUnresolved()
+    {
+        var unresolved = Element("""<Page xmlns="using:Microsoft.UI.Xaml" />""");
+        var foreign = Element("""<Page xmlns="using:Microsoft.UI.Xaml" xmlns:x="using:Foreign" />""");
+
+        Assert.True(XamlSemanticFacts.IsXamlDirectiveName("x:Name", "Name", unresolved.NamespaceScope));
+        Assert.False(XamlSemanticFacts.IsXamlDirectiveName("x:Name", "Name", foreign.NamespaceScope));
+    }
+
+    [Theory]
+    [InlineData("""<Page Background="{StaticResource Key}" />""", true)]
+    [InlineData(
+        """<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Background="{StaticResource Key}" />""",
+        true)]
+    [InlineData(
+        """<Page xmlns="using:Contoso" Background="{StaticResource Key}" />""",
+        false)]
+    [InlineData(
+        """<local:Page xmlns="using:Contoso" xmlns:p="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Background="{p:StaticResource Key}" />""",
+        true)]
+    public void ResourceReferenceClassifierUsesTheResolvedNamespace(
+        string text,
+        bool expected)
+    {
+        var element = Element(text);
+        var attribute = Assert.Single(
+            element.Attributes,
+            candidate => candidate.Value?.MarkupExtension is not null);
+        var extension = attribute.Value!.MarkupExtension!;
+
+        Assert.Equal(
+            expected,
+            XamlSemanticFacts.IsResourceReferenceExtension(
+                extension,
+                element.NamespaceScope));
     }
 
     private static bool Classify(string typeName, WinUiXaml.Xaml.XamlElement element) => typeName switch
@@ -171,15 +301,17 @@ public sealed class XamlSemanticFactsTests
         const string source = """
             namespace Microsoft.UI.Xaml
             {
+                public class Page { }
+                public class FrameworkTemplate { }
                 public class Setter { }
                 public class Style { }
-                public class DataTemplate { }
+                public class DataTemplate : FrameworkTemplate { }
                 public class ResourceDictionary { }
             }
             namespace Microsoft.UI.Xaml.Controls
             {
-                public class ControlTemplate { }
-                public class Button { }
+                public class ControlTemplate : Microsoft.UI.Xaml.FrameworkTemplate { }
+                public class Button { public object Tag { get; set; } }
             }
             namespace Microsoft.UI.Xaml.Markup
             {
@@ -189,6 +321,7 @@ public sealed class XamlSemanticFactsTests
             {
                 public class Binding : Microsoft.UI.Xaml.Markup.MarkupExtension { }
                 public class RelativeSource : Microsoft.UI.Xaml.Markup.MarkupExtension { }
+                public enum BindingMode { OneWay, TwoWay }
             }
             namespace Microsoft.UI.Xaml.Media.Animation
             {

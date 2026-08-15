@@ -147,8 +147,14 @@ internal sealed partial class XamlLanguageServer
         return await task.WaitAsync(_requestCancellation.Value).ConfigureAwait(false);
     }
 
-    private Task<XamlProjectContext?> GetOrStartContext(string uri) =>
-        _contexts.GetOrStart(uri, () => LoadContextAsync(uri));
+    private async Task<XamlProjectContext?> GetContextAsync(string uri, CancellationToken cancellationToken)
+    {
+        var task = GetOrStartContext(uri);
+        return await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private Task<XamlProjectContext?> GetOrStartContext(string uri)
+        => _contexts.GetOrStart(uri, cancellationToken => LoadContextAsync(uri, cancellationToken));
 
     private bool TryGetReadyContext(
         string uri,
@@ -179,7 +185,26 @@ internal sealed partial class XamlLanguageServer
         return _contexts.TryGetLatest(uri, out context!);
     }
 
-    private async Task<XamlProjectContext?> LoadContextAsync(string uri)
+    private bool TryGetAcceptedContext(
+        TextDocument document,
+        out XamlProjectContext context)
+    {
+        if (!TryGetReadyProjectContext(document.Uri, out var accepted))
+        {
+            context = null!;
+            return false;
+        }
+
+        var className = XamlIntrospection.GetClass(document.Text);
+        context = new XamlProjectContext(
+            accepted.Resolution.WithClassName(className),
+            accepted.TypeSystem);
+        return true;
+    }
+
+    private async Task<XamlProjectContext?> LoadContextAsync(
+        string uri,
+        CancellationToken cancellationToken)
     {
         var path = UriToPath(uri);
         if (path == null)
@@ -192,7 +217,16 @@ internal sealed partial class XamlLanguageServer
         try
         {
             var xamlText = _documents.TryGetValue(uri, out var document) ? document.Text : null;
-            resolution = await ResolveIfAllowedAsync(path, CancellationToken.None, xamlText).ConfigureAwait(false);
+            if (_contexts.TryGetLatest(uri, out var latestContext))
+            {
+                var className = xamlText is null
+                    ? latestContext.Resolution.ClassName
+                    : XamlIntrospection.GetClass(xamlText);
+                resolution = latestContext.Resolution.WithClassName(className);
+                return new XamlProjectContext(resolution, latestContext.TypeSystem);
+            }
+
+            resolution = await ResolveIfAllowedAsync(path, cancellationToken, xamlText).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -369,9 +403,7 @@ internal sealed partial class XamlLanguageServer
                 continue;
             }
 
-            var dataType = template.Attributes.FirstOrDefault(
-                a => string.Equals(a.Name.Prefix, "x", StringComparison.Ordinal) &&
-                     string.Equals(a.Name.LocalName, "DataType", StringComparison.Ordinal));
+            var dataType = XamlSemanticFacts.GetDirectiveAttribute(template, "DataType");
             var text = dataType?.Value?.Text?.Trim();
             if (string.IsNullOrEmpty(text))
             {
@@ -684,12 +716,10 @@ internal sealed partial class XamlLanguageServer
             }
         }
 
-        if (extension?.Name is not { HasPrefix: false } name)
-        {
-            return null;
-        }
-
-        if (name.LocalName is not ("StaticResource" or "ThemeResource" or "CustomResource"))
+        if (extension is null ||
+            !XamlSemanticFacts.IsResourceReferenceExtension(
+                extension,
+                NearestElementScope(extension) ?? root.NamespaceScope))
         {
             return null;
         }
@@ -710,41 +740,6 @@ internal sealed partial class XamlLanguageServer
         return null;
     }
 
-    /// <summary>Finds the element carrying x:Key="key" anywhere in the parsed document and returns its element type name plus the span to navigate to (the type-name span</summary>
-    private static ResourceDeclaration? FindResourceDeclaration(XamlDocument parsed, string key) =>
-        parsed.Root is { } root ? FindResourceDeclarationCore(root, key) : null;
-
-    private static ResourceDeclaration? FindResourceDeclarationCore(XamlElement element, string key)
-    {
-        foreach (var attribute in element.Attributes)
-        {
-            if (!attribute.IsNamespaceDeclaration
-                && attribute.Name.Prefix == "x"
-                && attribute.Name.LocalName == "Key"
-                && attribute.Value is { } value
-                && value.Text == key)
-            {
-                // Navigate to (and select) the x:Key value itself, so F12 lands on "Key" rather than the resource element's type name -- matching how Visual Studio highlights the key.
-                string typeName = element.Name is { LocalName.Length: > 0 } elementName ? elementName.FullName : string.Empty;
-                return new ResourceDeclaration(typeName, value.InnerSpan);
-            }
-        }
-
-        foreach (var child in element.Content)
-        {
-            if (child is XamlElement childElement)
-            {
-                var hit = FindResourceDeclarationCore(childElement, key);
-                if (hit != null)
-                {
-                    return hit;
-                }
-            }
-        }
-
-        return null;
-    }
-
     /// <summary>Nearest <see cref="XamlElement"/> enclosing <paramref name="offset"/> (the element that owns the attribute/markup extension under the caret), or null.</summary>
     private static XamlElement? NearestEnclosingElement(TextDocument doc, int offset)
     {
@@ -753,43 +748,6 @@ internal sealed partial class XamlLanguageServer
             if (n is XamlElement element)
             {
                 return element;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>Resolves an x:Key resource declaration in LEXICAL SCOPE: walks up from reference and, at each enclosing element, searches only that element's own &lt;Owner.Resources&gt</summary>
-    private static ResourceDeclaration? FindResourceDeclarationScoped(XamlElement reference, string key)
-    {
-        for (XamlElement? scope = reference; scope != null; scope = ParentElement(scope))
-        {
-            foreach (var child in scope.Content)
-            {
-                if (child is XamlElement propertyElement
-                    && propertyElement.Name is { } name
-                    && name.FullName.EndsWith(".Resources", StringComparison.Ordinal))
-                {
-                    var hit = FindResourceDeclarationCore(propertyElement, key);
-                    if (hit != null)
-                    {
-                        return hit;
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>The nearest ancestor <see cref="XamlElement"/> above <paramref name="element"/>, or null.</summary>
-    private static XamlElement? ParentElement(XamlElement element)
-    {
-        for (XamlNode? n = element.Parent; n != null; n = n.Parent)
-        {
-            if (n is XamlElement parent)
-            {
-                return parent;
             }
         }
 

@@ -62,7 +62,7 @@ internal sealed partial class XamlLanguageServer
     /// <summary>Returns the element's <c>x:Name</c> (or <c>Name</c>) value, or null if unset.</summary>
     private static string? GetXName(XamlElement element)
     {
-        var attr = element.GetAttribute("x:Name") ?? element.GetAttribute("Name");
+        var attr = XamlSemanticFacts.GetNameAttribute(element);
         var text = attr?.Value?.Text;
         return string.IsNullOrWhiteSpace(text) ? null : text!.Trim();
     }
@@ -79,7 +79,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         // A named-element reference (Binding ElementName=Foo, Storyboard.TargetName="Foo") navigates to the x:Name declaration in this document. Tried before the member pipeline so TargetName does not fall through and mis-resolve to the generated x:Name backing field in the .g.i.cs.
-        var nameRef = await ResolveNameReferenceAsync(p).ConfigureAwait(false);
+        var nameRef = await ResolveNameReferenceAsync(p, waitForTypeSystem: true).ConfigureAwait(false);
         if (nameRef != null)
         {
             return nameRef.Value.Declaration;
@@ -296,7 +296,7 @@ internal sealed partial class XamlLanguageServer
         int offset,
         XamlTypeSystem? typeSystem) =>
         typeSystem?.Capabilities.HasCompleteNameReferenceSemantics != true &&
-        (FindNameDeclarationAt(doc, offset) is not null ||
+        (FindNameDeclarationAt(doc, offset, null) is not null ||
          IsPotentialNameReferenceAt(doc, offset));
 
     /// <summary>Handles textDocument/formatting (Format Document) — returns leading-indentation edits that normalize every structural line to its element-nesting depth.</summary>

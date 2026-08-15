@@ -45,6 +45,19 @@ export function isEnterEdit(text: string): boolean {
   return /^\r?\n[ \t]*$/.test(text);
 }
 
+export function shouldTriggerAutomaticXamlSuggestions(
+  enabled: boolean,
+  changeText: string,
+  text: string,
+  offset: number
+): boolean {
+  return (
+    enabled &&
+    ((isEnterEdit(changeText) && shouldTriggerAttributeSuggestions(text, offset)) ||
+      (changeText === "<" && shouldTriggerElementSuggestions(text, offset)))
+  );
+}
+
 /** Returns true when a newly typed less-than sign starts an element in XAML content. */
 export function shouldTriggerElementSuggestions(text: string, offset: number): boolean {
   if (offset <= 0 || offset > text.length || text[offset - 1] !== "<") {

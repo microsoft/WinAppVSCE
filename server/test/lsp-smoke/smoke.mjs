@@ -101,6 +101,7 @@ server = spawn(isDll ? "dotnet" : serverPath, isDll ? [serverPath] : [], {
 // --- LSP framing ---
 let buffer = Buffer.alloc(0);
 const waiters = [];
+const publishedDiagnostics = [];
 
 server.stdout.on("data", (chunk) => {
   buffer = Buffer.concat([buffer, chunk]);
@@ -120,6 +121,10 @@ server.stdout.on("data", (chunk) => {
 });
 
 function dispatch(msg) {
+  if (msg.method === "textDocument/publishDiagnostics") {
+    publishedDiagnostics.push(msg.params);
+  }
+
   for (let i = 0; i < waiters.length; i++) {
     if (waiters[i].match(msg)) {
       const [w] = waiters.splice(i, 1);
@@ -320,36 +325,20 @@ async function main() {
     params: { changes: [{ uri: importedBuildUri, type: 2 }] },
   });
 
-  let reloadedHoverText = "";
-  let reloadElapsedMs = 0;
-  const reloadStarted = performance.now();
-  for (let attempt = 0; attempt < 80; attempt++) {
-    const id = 108 + attempt;
-    const requestStarted = performance.now();
-    send({
-      id,
-      method: "textDocument/hover",
-      params: { textDocument: { uri: xamlUri }, position: pageCaret },
-    });
-    const response = await waitFor(responseFor(id), 5000, "post-invalidation Page hover");
-    const requestMs = performance.now() - requestStarted;
-    if (requestMs >= 1000) fail(`post-invalidation hover blocked for ${requestMs.toFixed(0)} ms`);
-    reloadedHoverText = response.result?.contents?.value ?? "";
-    if (/loading/i.test(reloadedHoverText)) fail(`post-invalidation hover exposed loading state: ${reloadedHoverText}`);
-    const reloadedProse = (reloadedHoverText.split("```")[2] || "").trim();
-    if (!reloadedHoverText.includes("Page") || reloadedProse.length === 0) {
-      fail(`post-invalidation hover had no useful fallback prose: ${reloadedHoverText}`);
-    }
-    if (/```csharp/.test(reloadedHoverText) && /Represents|page/i.test((reloadedHoverText.split("```")[2] || ""))) {
-      reloadElapsedMs = performance.now() - reloadStarted;
-      break;
-    }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  const fallbackStarted = performance.now();
+  send({
+    id: 108,
+    method: "textDocument/hover",
+    params: { textDocument: { uri: xamlUri }, position: pageCaret },
+  });
+  const fallbackResponse = await waitFor(responseFor(108), 5000, "post-invalidation fallback hover");
+  const fallbackMs = performance.now() - fallbackStarted;
+  const fallbackText = fallbackResponse.result?.contents?.value ?? "";
+  if (fallbackMs >= 1000) fail(`post-invalidation fallback hover took ${fallbackMs.toFixed(0)} ms`);
+  if (/loading/i.test(fallbackText)) fail(`post-invalidation hover exposed loading state: ${fallbackText}`);
+  if (!fallbackText.includes("Page") || !(fallbackText.split("```")[2] || "").trim()) {
+    fail(`post-invalidation hover had no useful fallback prose: ${fallbackText}`);
   }
-  if (!reloadElapsedMs) {
-    fail(`context never restored authoritative Page hover after watched-file invalidation: ${reloadedHoverText}`);
-  }
-  console.log(`[ok] hover context restarted after invalidation (${reloadElapsedMs.toFixed(0)} ms; every request <1000 ms)`);
 
   send({
     id: 700,
@@ -360,6 +349,22 @@ async function main() {
   if (removedDefinition.result != null) {
     fail(`imported props change did not alter project context: ${JSON.stringify(removedDefinition.result)}`);
   }
+
+  const authoritativeStarted = performance.now();
+  send({
+    id: 109,
+    method: "textDocument/hover",
+    params: { textDocument: { uri: xamlUri }, position: pageCaret },
+  });
+  const authoritativeResponse = await waitFor(responseFor(109), 5000, "post-reload Page hover");
+  const authoritativeMs = performance.now() - authoritativeStarted;
+  const authoritativeText = authoritativeResponse.result?.contents?.value ?? "";
+  if (authoritativeMs >= 1000) fail(`post-reload hover took ${authoritativeMs.toFixed(0)} ms`);
+  if (!/```csharp/.test(authoritativeText) ||
+      !/Represents|page/i.test((authoritativeText.split("```")[2] || ""))) {
+    fail(`context did not restore authoritative Page hover after invalidation: ${authoritativeText}`);
+  }
+  console.log(`[ok] hover remains useful during invalidation and is authoritative after reload (${fallbackMs.toFixed(0)} ms fallback, ${authoritativeMs.toFixed(0)} ms restored)`);
 
   cleanImportedBuild();
   process.removeListener("exit", cleanImportedBuild);
@@ -386,7 +391,11 @@ async function main() {
   console.log("[ok] imported props watched event changes and restores project context");
 
   // Unsaved x:Class edits invalidate only this URI and resolution must use the in-memory text.
-  const page2Text = xamlText.replace("SmokeFixture.SmokePage", "SmokeFixture.Page2");
+  const page2Text = xamlText
+    .replace("SmokeFixture.SmokePage", "SmokeFixture.Page2")
+    .replace("OnGo_Click", "OnOpenDiPage_Click");
+  const page2HandlerOffset = page2Text.indexOf("OnOpenDiPage_Click") + 3;
+  const page2HandlerCaret = offsetToPosition(page2Text, page2HandlerOffset);
   send({
     method: "textDocument/didChange",
     params: { textDocument: { uri: xamlUri, version: 2 }, contentChanges: [{ text: page2Text }] },
@@ -394,12 +403,12 @@ async function main() {
   send({
     id: 189,
     method: "textDocument/definition",
-    params: { textDocument: { uri: xamlUri }, position: caret },
+    params: { textDocument: { uri: xamlUri }, position: page2HandlerCaret },
   });
   const changedClassDefinition = await waitFor(responseFor(189), 30000, "definition after x:Class edit");
   if (changedClassDefinition.error) fail(`x:Class edit definition errored: ${JSON.stringify(changedClassDefinition.error)}`);
-  if (changedClassDefinition.result !== null) {
-    fail(`stale SmokePage x:Class survived in-memory edit: ${JSON.stringify(changedClassDefinition.result)}`);
+  if (!changedClassDefinition.result?.uri?.toLowerCase().endsWith("page2.xaml.cs")) {
+    fail(`replacement x:Class did not resolve Page2 member: ${JSON.stringify(changedClassDefinition.result)}`);
   }
 
   send({
@@ -842,6 +851,7 @@ async function main() {
     EXPECTED_ACCENT_KEY_LINE,
     NS,
     nextVersion,
+    publishedDiagnostics,
     completeWith,
     completeItemsWith,
     hoverAt,
@@ -878,9 +888,38 @@ async function main() {
   await runEditorScenarios(scenarioContext);
   await runCompletionScenarios(scenarioContext);
 
-  // Closing must evict the URI's ready context. Reopening the same URI with a different class
-  // must not serve definitions from the closed SmokePage context.
+  // Closing cancels pending semantic validation and clears diagnostics before the URI is reopened.
+  publishedDiagnostics.length = 0;
+  const closingVersion = nextVersion();
+  const clearedAfterClose = waitFor(
+    (message) =>
+      message.method === "textDocument/publishDiagnostics" &&
+      message.params.uri === xamlUri &&
+      message.params.version === undefined &&
+      message.params.diagnostics.length === 0,
+    10000,
+    "diagnostic clear after didClose"
+  );
+  send({
+    method: "textDocument/didChange",
+    params: {
+      textDocument: { uri: xamlUri, version: closingVersion },
+      contentChanges: [{ text: xamlText.replace("<Button", "<Buton") }],
+    },
+  });
   send({ method: "textDocument/didClose", params: { textDocument: { uri: xamlUri } } });
+  await clearedAfterClose;
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  if (publishedDiagnostics.some(
+    (publish) =>
+      publish.version === closingVersion &&
+      publish.diagnostics.some((diagnostic) => diagnostic.code === "WXAML0002")
+  )) {
+    fail("didClose allowed pending semantic diagnostics to publish");
+  }
+
+  // Reopening the same URI with a different class must not serve definitions from the closed
+  // SmokePage context.
   const reopenedText =
     `<Page ${NS} x:Class="SmokeFixture.Page2">\n` +
     `  <Button Click="OnGo_Click" />\n` +
@@ -909,7 +948,7 @@ async function main() {
   if (reopenedDefinition.result !== null) {
     fail(`DidClose retained the stale SmokePage context: ${JSON.stringify(reopenedDefinition.result)}`);
   }
-  console.log("[ok] didClose evicts the URI context and prevents stale publication after reopen");
+  console.log("[ok] didClose cancels pending diagnostics, evicts context, and prevents stale publication");
 
   // 22) shutdown
   send({ id: 11, method: "shutdown", params: null });
@@ -920,4 +959,12 @@ async function main() {
   setTimeout(() => process.exit(0), 200);
 }
 
-main().catch((err) => fail(err.message));
+main().catch((err) => {
+  const recentDiagnostics = publishedDiagnostics
+    .slice(-6)
+    .map((publish) => ({
+      version: publish.version,
+      codes: publish.diagnostics.map((diagnostic) => diagnostic.code),
+    }));
+  fail(`${err.message}; recent diagnostics: ${JSON.stringify(recentDiagnostics)}`);
+});

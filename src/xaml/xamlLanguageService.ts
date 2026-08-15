@@ -24,9 +24,7 @@ import {
 import { getWindowsServerRid } from "./serverArchitecture";
 import { ServerLifecycle } from "./serverLifecycle";
 import {
-  isEnterEdit,
-  shouldTriggerAttributeSuggestions,
-  shouldTriggerElementSuggestions,
+  shouldTriggerAutomaticXamlSuggestions,
 } from "./attributeSuggestionTrigger";
 import {
   PROJECT_RESTORE_ACTIONS,
@@ -34,6 +32,14 @@ import {
   PROJECT_RESTORE_NOTIFICATION,
   ProjectRestoreNotificationGate,
 } from "./projectRestoreNotification";
+import {
+  normalizeDiagnosticsLevel,
+  getXamlStatus,
+  getXamlStatusEffect,
+  readXamlLanguageServerConfiguration,
+  shouldRestartXamlLanguageServer,
+  XamlStatusAction,
+} from "./xamlConfiguration";
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
@@ -66,14 +72,38 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
   log("WinUI XAML Tools activating…");
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("winui-xaml.showInfo", () => {
-      vscode.window.showInformationMessage(
-        client && client.isRunning()
-          ? "WinUI XAML Tools — language server running (Host B)."
-          : "WinUI XAML Tools — syntax only; language server not started."
-      );
-    }),
+    vscode.commands.registerCommand("winui-xaml.showInfo", () => showXamlInfo()),
     vscode.commands.registerCommand("winui-xaml.restartServer", () => restartClient(context, true)),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("winapp.xaml.intelliSense.enable")) {
+        if (!shouldRestartXamlLanguageServer(
+          client !== undefined,
+          vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")
+        )) {
+          log("XAML configuration changed — changes will apply when a XAML document opens.");
+          return;
+        }
+        log("XAML configuration changed — restarting language server.");
+        return restartClient(context);
+      }
+
+      if (event.affectsConfiguration("winapp.xaml.diagnostics.level")) {
+        const diagnosticsLevel = normalizeDiagnosticsLevel(
+          vscode.workspace
+            .getConfiguration("winapp.xaml")
+            .get("diagnostics.level", "warning")
+        );
+        if (!client?.isRunning()) {
+          log("XAML diagnostics level changed — it will apply when the language server is running.");
+          return;
+        }
+
+        log(`XAML diagnostics level changed to '${diagnosticsLevel}'.`);
+        return client.sendNotification("workspace/didChangeConfiguration", {
+          settings: { diagnosticsLevel },
+        });
+      }
+    }),
     // Start semantic processing only after the workspace becomes trusted.
     vscode.workspace.onDidGrantWorkspaceTrust(() => {
       if (vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")) {
@@ -99,11 +129,24 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
       }
 
       const change = event.contentChanges[0];
+      const enabled = vscode.workspace
+        .getConfiguration("winapp.xaml")
+        .get("intelliSense.enable", true);
+      if (
+        !enabled ||
+        (change.text !== "<" && !/^\r?\n[ \t]*$/.test(change.text))
+      ) {
+        return;
+      }
+
       const offset = change.rangeOffset + change.text.length;
       const text = event.document.getText();
-      const shouldTrigger =
-        (isEnterEdit(change.text) && shouldTriggerAttributeSuggestions(text, offset)) ||
-        (change.text === "<" && shouldTriggerElementSuggestions(text, offset));
+      const shouldTrigger = shouldTriggerAutomaticXamlSuggestions(
+        enabled,
+        change.text,
+        text,
+        offset
+      );
       if (!shouldTrigger) {
         return;
       }
@@ -126,6 +169,30 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
   if (vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")) {
     await startClient(context);
   }
+}
+
+function showXamlInfo(): void {
+  const configuration = readXamlLanguageServerConfiguration((section, defaultValue) =>
+    vscode.workspace.getConfiguration("winapp.xaml").get(section, defaultValue)
+  );
+  const status = getXamlStatus(
+    configuration.enabled,
+    client?.isRunning() ?? false,
+    vscode.workspace.isTrusted,
+    vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")
+  );
+  void vscode.window
+    .showInformationMessage<XamlStatusAction>(status.message, ...status.actions)
+    .then((selection) => {
+      const effect = getXamlStatusEffect(selection);
+      if (effect && "command" in effect) {
+        return vscode.commands.executeCommand(effect.command, ...(effect.args ?? []));
+      }
+      if (effect && "showOutput" in effect) {
+        output?.show();
+      }
+      return undefined;
+    });
 }
 
 function recommendCsharpDevKit(
@@ -192,6 +259,33 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     return;
   }
 
+  const xamlConfiguration = vscode.workspace.getConfiguration("winapp.xaml");
+  const serverConfiguration = readXamlLanguageServerConfiguration(
+    (section, defaultValue) => xamlConfiguration.get(section, defaultValue)
+  );
+  if (!serverConfiguration.enabled) {
+    lastDegradedCause = undefined;
+    log("Language server disabled by winapp.xaml.intelliSense.enable.");
+    if (userInitiated) {
+      void vscode.window
+        .showInformationMessage(
+          "WinUI XAML IntelliSense is disabled in Settings.",
+          "Open Settings"
+        )
+        .then((selection) => {
+          if (selection === "Open Settings") {
+            return vscode.commands.executeCommand(
+              "workbench.action.openSettings",
+              "winapp.xaml.intelliSense.enable"
+            );
+          }
+          return undefined;
+        });
+    }
+    return;
+  }
+  const { diagnosticsLevel } = serverConfiguration.initializationOptions;
+
   // Never evaluate projects in an untrusted workspace: MSBuild evaluation can execute attacker-controlled targets and tasks. Remain syntax-only until trust is granted. WINUI_XAML_FORCE_UNTRUSTED exercises this boundary in the integration harness.
   const forceUntrusted = process.env.WINUI_XAML_FORCE_UNTRUSTED === "1";
   if (forceUntrusted || !vscode.workspace.isTrusted) {
@@ -239,7 +333,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
       { scheme: "untitled", language: "xaml" },
     ],
     outputChannel: output,
-    initializationOptions: { allowedRoots },
+    initializationOptions: { allowedRoots, diagnosticsLevel },
     synchronize: {
       fileEvents: fileWatchers,
     },
@@ -259,14 +353,24 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
   try {
     await candidate.start();
     client = candidate;
+    const latestDiagnosticsLevel = normalizeDiagnosticsLevel(
+      vscode.workspace
+        .getConfiguration("winapp.xaml")
+        .get("diagnostics.level", "warning")
+    );
+    await candidate.sendNotification("workspace/didChangeConfiguration", {
+      settings: { diagnosticsLevel: latestDiagnosticsLevel },
+    });
     lastDegradedCause = undefined;
     log("Language server started.");
     if (userInitiated) {
       void vscode.window.showInformationMessage("WinUI XAML language server restarted.");
     }
-
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
+    if (client === candidate) {
+      client = undefined;
+    }
     // Clean up the partially started client.
     try {
       await candidate.stop();

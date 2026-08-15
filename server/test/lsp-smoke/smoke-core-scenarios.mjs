@@ -3,7 +3,7 @@ export async function runCoreScenarios(ctx) {
     fail, xamlText, xamlUri, XAML, NS, EXPECTED_CODE_BEHIND,
     EXPECTED_GREETING_LINE, completeWith, completeItemsWith, hoverAt,
     definitionWith, codeActionAtCaret, referencesWith, highlightWith,
-    send, waitFor, responseFor, nextVersion, resCaret,
+    send, waitFor, responseFor, nextVersion, resCaret, publishedDiagnostics,
   } = ctx;
 
   const emptyElementLabels = await completeWith(5, `<Page ${NS}>\n  <|\n</Page>`, "element-name-empty");
@@ -614,6 +614,88 @@ export async function runCoreScenarios(ctx) {
     return (await done).params.diagnostics;
   }
 
+  // Rapid changes must cancel semantic validation for the superseded version rather than publishing
+  // stale diagnostics after the latest document has already been accepted.
+  publishedDiagnostics.length = 0;
+  const staleVersion = nextVersion();
+  const latestVersion = nextVersion();
+  const staleText = xamlText.replace("<Button", "<Buton");
+  const latestText = xamlText.replace('Text="Smoke Fixture"', 'Texx="Smoke Fixture"');
+  const latestDiagnostics = waitFor(
+    (message) =>
+      message.method === "textDocument/publishDiagnostics" &&
+      message.params.uri === xamlUri &&
+      message.params.diagnostics.some((diagnostic) => diagnostic.code === "WXAML0003"),
+    30000,
+    "latest-version semantic diagnostic"
+  );
+  send({
+    method: "textDocument/didChange",
+    params: {
+      textDocument: { uri: xamlUri, version: staleVersion },
+      contentChanges: [{ text: staleText }],
+    },
+  });
+  send({
+    method: "textDocument/didChange",
+    params: {
+      textDocument: { uri: xamlUri, version: latestVersion },
+      contentChanges: [{ text: latestText }],
+    },
+  });
+  const latestPublish = await latestDiagnostics;
+  if (latestPublish.params.version !== latestVersion) {
+    fail(`latest semantic diagnostics carried version ${latestPublish.params.version}; expected ${latestVersion}`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  if (publishedDiagnostics.some(
+    (publish) =>
+      publish.version === staleVersion &&
+      publish.diagnostics.some((diagnostic) => diagnostic.code === "WXAML0002")
+  )) {
+    fail("superseded document version published stale semantic diagnostics");
+  }
+  console.log("[ok] diagnostics: rapid didChange cancels superseded semantic validation");
+
+  // A configuration generation change must suppress a semantic worker that is still pending.
+  publishedDiagnostics.length = 0;
+  const pendingConfigurationVersion = nextVersion();
+  send({
+    method: "textDocument/didChange",
+    params: {
+      textDocument: { uri: xamlUri, version: pendingConfigurationVersion },
+      contentChanges: [{ text: staleText }],
+    },
+  });
+  send({
+    method: "workspace/didChangeConfiguration",
+    params: { settings: { diagnosticsLevel: "off" } },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  if (publishedDiagnostics.some(
+    (publish) =>
+      publish.version === pendingConfigurationVersion &&
+      publish.diagnostics.some((diagnostic) => diagnostic.code === "WXAML0002")
+  )) {
+    fail("superseded diagnostics generation published after diagnostics were disabled");
+  }
+
+  const restoredDiagnostics = waitFor(
+    (message) =>
+      message.method === "textDocument/publishDiagnostics" &&
+      message.params.uri === xamlUri &&
+      message.params.version === pendingConfigurationVersion &&
+      message.params.diagnostics.some((diagnostic) => diagnostic.code === "WXAML0002"),
+    30000,
+    "semantic diagnostics after configuration restore"
+  );
+  send({
+    method: "workspace/didChangeConfiguration",
+    params: { settings: { diagnosticsLevel: "warning" } },
+  });
+  await restoredDiagnostics;
+  console.log("[ok] diagnostics: configuration generation suppresses pending stale publication");
+
   // Inject exactly one unknown element into the REAL fixture: if any of the many real controls
   // (Grid, ScrollViewer, ItemsRepeater, DataTemplate, RowDefinition, ...) or property elements were
   // wrongly flagged, this assertion fails — so it doubles as a whole-fixture false-positive guard.
@@ -856,6 +938,28 @@ export async function runCoreScenarios(ctx) {
   if (!enDef?.uri || !enDef.uri.toLowerCase().endsWith("smokepage.xaml")) fail(`ElementName F12 should land in this document (got ${enDef?.uri})`);
   if (enDef.range.start.line !== enLine) fail(`ElementName F12 should land on x:Name line ${enLine} (got ${enDef.range.start.line})`);
   console.log(`[ok] definition(ElementName): 'InputBox' -> ${enDef.uri} @ line ${enDef.range.start.line}`);
+
+  const scopedNames =
+    `<Page ${NS} xmlns:lang="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="SmokeFixture.SmokePage">\n` +
+    `  <Page.Resources>\n    <DataTemplate x:Key="ScopedTemplate" x:DataType="local:SmokePage">\n      <Grid>\n` +
+    `        <Button lang:Name="Shared" />\n` +
+    `        <TextBlock Text="{Binding ElementName=Shared}" />\n` +
+    `      </Grid>\n    </DataTemplate>\n  </Page.Resources>\n` +
+    `  <Button x:Name="Shared" />\n</Page>`;
+  const scopedInnerLine = scopedNames.split("\n").findIndex((line) => line.includes('lang:Name="Shared"'));
+  const scopedCompletion = await completeWith(
+    1240,
+    scopedNames.replace("ElementName=Shared", "ElementName=|"),
+    "elementname-template-scope-completion");
+  if (!scopedCompletion.includes("Shared")) fail(`template ElementName completion should include the inner 'Shared' declaration`);
+  const scopedDefinition = await definitionWith(
+    1241,
+    scopedNames.replace("ElementName=Shared", "ElementName=Sha|red"),
+    "elementname-template-scope-definition");
+  if (scopedDefinition?.range.start.line !== scopedInnerLine) {
+    fail(`template ElementName F12 should land on inner x:Name line ${scopedInnerLine} (got ${scopedDefinition?.range.start.line})`);
+  }
+  console.log(`[ok] ElementName completion/F12 respect template namescope`);
 
   // 22c) Hover on an ElementName value identifies the referenced element + its type.
   const enHover = await hoverAt(242, enNamed.replace("ElementName=InputBox", "ElementName=Inp|utBox"), "elementname-hover");

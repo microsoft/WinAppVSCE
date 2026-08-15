@@ -67,19 +67,20 @@ internal static class XamlValueConverter
                 return true;
         }
 
-        if (IsWinUiXamlType(type, "Thickness") || IsWinUiXamlType(type, "CornerRadius"))
+        if (IsThickness(type, typeSystem) ||
+            SymbolEqualityComparer.Default.Equals(type, typeSystem.Capabilities.CornerRadius))
         {
             isValid = IsValidDoubleList(text, minimumCount: 1, maximumCount: 4);
             return true;
         }
 
-        if (IsGridLength(type))
+        if (IsGridLength(type, typeSystem))
         {
             isValid = IsValidGridLength(text);
             return true;
         }
 
-        if (IsBrush(type) || IsColor(type))
+        if (IsBrush(type, typeSystem) || IsColor(type, typeSystem))
         {
             isValid = XamlColor.TryParseHex(text, out _, out _, out _, out _) ||
                 typeSystem.GetNamedColors().Any(
@@ -87,7 +88,7 @@ internal static class XamlValueConverter
             return true;
         }
 
-        if (IsFontWeight(type))
+        if (IsFontWeight(type, typeSystem))
         {
             isValid = ushort.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ||
                 typeSystem.GetFontWeights().Any(
@@ -104,69 +105,29 @@ internal static class XamlValueConverter
             ? nullable.TypeArguments[0]
             : type;
 
-    public static bool IsGridLength(ITypeSymbol type) => IsWinUiXamlType(type, "GridLength");
+    public static bool IsGridLength(ITypeSymbol type, XamlTypeSystem typeSystem) =>
+        SymbolEqualityComparer.Default.Equals(type, typeSystem.Capabilities.GridLength);
 
-    public static bool IsBrush(ITypeSymbol type)
-    {
-        for (ITypeSymbol? current = type; current is not null; current = current.BaseType)
-        {
-            if (current is INamedTypeSymbol
-                {
-                    Name: "Brush",
-                    ContainingNamespace:
-                    {
-                        Name: "Media",
-                        ContainingNamespace:
-                        {
-                            Name: "Xaml",
-                            ContainingNamespace: { Name: "UI", ContainingNamespace.Name: "Microsoft" }
-                        }
-                    }
-                })
-            {
-                return true;
-            }
-        }
+    public static bool IsThickness(ITypeSymbol type, XamlTypeSystem typeSystem) =>
+        SymbolEqualityComparer.Default.Equals(type, typeSystem.Capabilities.Thickness);
 
-        return false;
-    }
+    public static bool IsFontFamily(ITypeSymbol type, XamlTypeSystem typeSystem) =>
+        typeSystem.Capabilities.FontFamily is { } fontFamily &&
+        SymbolEqualityComparer.Default.Equals(type, fontFamily);
 
-    public static bool IsColor(ITypeSymbol type) =>
-        type is INamedTypeSymbol
-        {
-            Name: "Color",
-            ContainingNamespace:
-            {
-                Name: "UI",
-                ContainingNamespace: { Name: "Windows", ContainingNamespace.IsGlobalNamespace: true }
-            }
-        };
+    public static bool IsGridDefinitionCollection(ITypeSymbol type, XamlTypeSystem typeSystem) =>
+        typeSystem.IsGridDefinitionCollection(type);
 
-    public static bool IsFontWeight(ITypeSymbol type) =>
-        type is INamedTypeSymbol
-        {
-            Name: "FontWeight",
-            ContainingNamespace:
-            {
-                Name: "Text",
-                ContainingNamespace:
-                {
-                    Name: "UI",
-                    ContainingNamespace: { Name: "Windows", ContainingNamespace.IsGlobalNamespace: true }
-                }
-            }
-        };
+    public static bool IsBrush(ITypeSymbol type, XamlTypeSystem typeSystem) =>
+        type is INamedTypeSymbol named &&
+        typeSystem.Capabilities.Brush is { } brush &&
+        XamlTypeSystem.IsAssignableTo(named, brush);
 
-    private static bool IsWinUiXamlType(ITypeSymbol type, string name) =>
-        type is INamedTypeSymbol
-        {
-            ContainingNamespace:
-            {
-                Name: "Xaml",
-                ContainingNamespace: { Name: "UI", ContainingNamespace.Name: "Microsoft" }
-            }
-        } named &&
-        string.Equals(named.Name, name, StringComparison.Ordinal);
+    public static bool IsColor(ITypeSymbol type, XamlTypeSystem typeSystem) =>
+        SymbolEqualityComparer.Default.Equals(type, typeSystem.Capabilities.Color);
+
+    public static bool IsFontWeight(ITypeSymbol type, XamlTypeSystem typeSystem) =>
+        SymbolEqualityComparer.Default.Equals(type, typeSystem.Capabilities.FontWeight);
 
     private static bool IsValidEnum(string text, ITypeSymbol type)
     {

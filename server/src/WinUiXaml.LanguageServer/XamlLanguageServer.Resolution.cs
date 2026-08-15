@@ -397,11 +397,14 @@ internal sealed partial class XamlLanguageServer
                 continue;
             }
 
-            var argType = ResolveMarkupArgumentType(
-                extension,
-                extName.FullName,
-                argName.LocalName,
-                typeSystem);
+            var scope = NearestElementScope(extension);
+            var argType = scope is null
+                ? null
+                : XamlSemanticFacts.ResolveMarkupArgumentType(
+                    extension,
+                    scope,
+                    argName.LocalName,
+                    typeSystem);
             if (argType is { TypeKind: TypeKind.Enum } &&
                 FindEnumMember(argType, valueText) is { } member)
             {
@@ -418,28 +421,6 @@ internal sealed partial class XamlLanguageServer
         }
 
         return null;
-    }
-
-    /// <summary>Resolves the value type of a markup-extension named argument.</summary>
-    private static ITypeSymbol? ResolveMarkupArgumentType(
-        XamlMarkupExtension extension,
-        string extensionFullName,
-        string argName,
-        XamlTypeSystem typeSystem)
-    {
-        var scope = NearestElementScope(extension);
-        var extensionType = scope is null
-            ? null
-            : XamlSemanticFacts.ResolveMarkupExtensionType(extensionFullName, scope, typeSystem);
-        var argType = extensionType is null ? null : typeSystem.FindMember(extensionType, argName)?.Type;
-
-        // x:Bind has no reflectable extension type; its Mode argument is a BindingMode like Binding's.
-        if (argType is null && string.Equals(argName, "Mode", StringComparison.Ordinal))
-        {
-            argType = typeSystem.ResolveMetadataType("Microsoft.UI.Xaml.Data.BindingMode");
-        }
-
-        return argType;
     }
 
     /// <summary>Hover for an enum value typed directly as an attribute value (HorizontalAlignment="Center"): resolves the attribute's member type on the owner element and</summary>
@@ -748,34 +729,25 @@ internal sealed partial class XamlLanguageServer
                     return (null, null);
                 }
 
-                int dot = peName.LocalName.LastIndexOf('.');
-                if (dot <= 0 || dot >= peName.LocalName.Length - 1)
-                {
-                    return (null, null); // malformed dotted name — leave it to the parser
-                }
-
                 var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
                 if (typeSystem == null ||
-                    !propertyElement.NamespaceScope.TryResolvePrefix(peName.Prefix, out var uri))
-                {
-                    return (null, null);
-                }
-
-                var ownerType = typeSystem.ResolveType(uri, peName.LocalName.Substring(0, dot));
-                if (ownerType == null)
+                    XamlSemanticFacts.ResolvePropertyElementMember(propertyElement, typeSystem) is not
+                        { Owner: { } ownerType } resolved)
                 {
                     return (null, null);
                 }
 
                 // Only resolve the member when the caret is actually on the Member part (past the dot); otherwise the caret is on the Owner segment, so resolve the Owner type instead of letting the member masquerade under a caret that is not on it.
-                int memberStart = peName.LocalNameSpan.Start + dot + 1;
+                int memberStart = peName.LocalNameSpan.Start + resolved.OwnerName.Length + 1;
                 if (offset < memberStart)
                 {
-                    var ownerSpan = new TextSpan(peName.LocalNameSpan.Start, peName.LocalNameSpan.Start + dot);
+                    var ownerSpan = new TextSpan(
+                        peName.LocalNameSpan.Start,
+                        peName.LocalNameSpan.Start + resolved.OwnerName.Length);
                     return (ownerType, ownerSpan);
                 }
 
-                var member = FindMember(ownerType, peName.LocalName.Substring(dot + 1));
+                var member = FindMember(ownerType, resolved.MemberName);
                 if (member == null)
                 {
                     return (null, null); // unknown member (or attached-only) — stay silent, no guess
@@ -851,8 +823,10 @@ internal sealed partial class XamlLanguageServer
         bool isTargetType = XamlSemanticFacts.IsStyleOrControlTemplate(owner, typeSystem) &&
             !attr.Name.HasPrefix &&
             string.Equals(attr.Name.LocalName, "TargetType", StringComparison.Ordinal);
-        bool isDataType = string.Equals(attr.Name.Prefix, "x", StringComparison.Ordinal) &&
-            string.Equals(attr.Name.LocalName, "DataType", StringComparison.Ordinal);
+        bool isDataType = XamlSemanticFacts.IsXamlDirective(
+            attr,
+            "DataType",
+            owner.NamespaceScope);
         bool isSetterProperty = !attr.Name.HasPrefix &&
             XamlSemanticFacts.IsSetter(owner, typeSystem) &&
             string.Equals(attr.Name.LocalName, "Property", StringComparison.Ordinal);
@@ -1009,7 +983,14 @@ internal sealed partial class XamlLanguageServer
             return (null, null);
         }
 
-        var elementType = CompletionProvider.ResolveNamedElementType(root, elementName!, owner.NamespaceScope, typeSystem);
+        var targetElement = XamlSemanticFacts.FindNamedElementInScope(
+            doc,
+            owner,
+            elementName!,
+            typeSystem);
+        var elementType = targetElement is null
+            ? null
+            : XamlSemanticFacts.ResolveElementType(targetElement, typeSystem);
         if (elementType == null)
         {
             return (null, null);

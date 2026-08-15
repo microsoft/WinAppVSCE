@@ -24,6 +24,10 @@ internal sealed partial class XamlLanguageServer
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, XamlTypeSystem> _typeSystems = new();
     private readonly XamlResourceGraph _resourceGraph = new();
     private readonly AsyncLocal<CancellationToken> _requestCancellation = new();
+    private readonly object _semanticDiagnosticsGate = new();
+    private readonly SemaphoreSlim _diagnosticsPublicationGate = new(1, 1);
+    private readonly ConcurrentDictionary<string, AsyncCancellationLifetime> _semanticDiagnosticCancellations =
+        new(StringComparer.OrdinalIgnoreCase);
     private int _msbuildUnavailableNotified;
     private readonly ConcurrentDictionary<string, byte> _restoreRequiredProjects =
         new(StringComparer.OrdinalIgnoreCase);
@@ -31,6 +35,8 @@ internal sealed partial class XamlLanguageServer
 
     // MSBuild evaluation is restricted to trusted roots because project files can execute code. An empty list disables project evaluation.
     private string[] _allowedRoots = System.Array.Empty<string>();
+    private string _diagnosticsLevel = "warning";
+    private int _diagnosticsGeneration;
 
     public XamlLanguageServer(JsonRpcConnection connection, XamlProjectResolver resolver)
     {
@@ -102,6 +108,9 @@ internal sealed partial class XamlLanguageServer
             case "workspace/didChangeWatchedFiles":
                 await DidChangeWatchedFilesAsync(Deserialize<DidChangeWatchedFilesParams>(@params)).ConfigureAwait(false);
                 break;
+            case "workspace/didChangeConfiguration":
+                await DidChangeConfigurationAsync(Deserialize<DidChangeConfigurationParams>(@params)).ConfigureAwait(false);
+                break;
             case "exit":
                 Environment.Exit(_shuttingDown ? 0 : 1);
                 break;
@@ -111,6 +120,8 @@ internal sealed partial class XamlLanguageServer
     private InitializeResult Initialize(InitializeParams p)
     {
         _allowedRoots = ResolveAllowedRoots(p);
+        _diagnosticsLevel = NormalizeDiagnosticsLevel(
+            p.InitializationOptions?.DiagnosticsLevel);
         Console.Error.WriteLine(
             $"[winui-xaml-ls] allowed roots: {(_allowedRoots.Length == 0 ? "(none — project evaluation disabled)" : string.Join("; ", _allowedRoots))}");
         return new()
@@ -159,6 +170,9 @@ internal sealed partial class XamlLanguageServer
         ServerInfo = new ServerInfo { Version = "0.1.0" },
         };
     }
+
+    private static string NormalizeDiagnosticsLevel(string? value) =>
+        value is "off" or "error" ? value : "warning";
 
     /// <summary>Computes the workspace-trust boundary from initialize params.</summary>
     private static string[] ResolveAllowedRoots(InitializeParams p)
@@ -381,7 +395,10 @@ internal sealed partial class XamlLanguageServer
 
     private async Task DidOpenAsync(DidOpenTextDocumentParams p)
     {
-        var doc = new TextDocument(p.TextDocument.Uri, p.TextDocument.Text);
+        var doc = new TextDocument(
+            p.TextDocument.Uri,
+            p.TextDocument.Text,
+            p.TextDocument.Version);
         _documents[p.TextDocument.Uri] = doc;
         await PublishDiagnosticsAsync(doc).ConfigureAwait(false);
         WarmUp(doc.Uri);
@@ -397,7 +414,10 @@ internal sealed partial class XamlLanguageServer
         // Full sync: the last change carries the complete document text.
         var text = p.ContentChanges[^1].Text;
         _documents.TryGetValue(p.TextDocument.Uri, out var previous);
-        var doc = new TextDocument(p.TextDocument.Uri, text);
+        var doc = new TextDocument(
+            p.TextDocument.Uri,
+            text,
+            p.TextDocument.Version);
         _documents[p.TextDocument.Uri] = doc;
         if (!string.Equals(
             previous is null ? null : XamlIntrospection.GetClass(previous.Text),
@@ -411,12 +431,38 @@ internal sealed partial class XamlLanguageServer
 
     private async Task DidCloseAsync(DidCloseTextDocumentParams p)
     {
-        _documents.TryRemove(p.TextDocument.Uri, out _);
-        _contexts.Invalidate(p.TextDocument.Uri, discardLatest: true);
-        await _connection.SendNotificationAsync(
-            "textDocument/publishDiagnostics",
-            new PublishDiagnosticsParams { Uri = p.TextDocument.Uri, Diagnostics = new List<Diagnostic>() })
-            .ConfigureAwait(false);
+        await _diagnosticsPublicationGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            _documents.TryRemove(p.TextDocument.Uri, out _);
+            CancelSemanticDiagnostics(p.TextDocument.Uri);
+            _contexts.Invalidate(p.TextDocument.Uri, discardLatest: true);
+            await _connection.SendNotificationAsync(
+                "textDocument/publishDiagnostics",
+                new PublishDiagnosticsParams { Uri = p.TextDocument.Uri, Diagnostics = new List<Diagnostic>() })
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _diagnosticsPublicationGate.Release();
+        }
+    }
+
+    private async Task DidChangeConfigurationAsync(DidChangeConfigurationParams p)
+    {
+        var level = NormalizeDiagnosticsLevel(p.Settings?.DiagnosticsLevel);
+        if (string.Equals(level, _diagnosticsLevel, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _diagnosticsLevel = level;
+        Interlocked.Increment(ref _diagnosticsGeneration);
+        foreach (var document in _documents.Values)
+        {
+            CancelSemanticDiagnostics(document.Uri);
+            await PublishDiagnosticsAsync(document).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Drops stale project data when source, build inputs, or NuGet assets change.</summary>

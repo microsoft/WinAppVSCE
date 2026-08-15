@@ -17,6 +17,11 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
     }
 
     public Task<TValue?> GetOrStart(TKey key, Func<Task<TValue?>> factory)
+        => GetOrStart(key, _ => factory());
+
+    public Task<TValue?> GetOrStart(
+        TKey key,
+        Func<CancellationToken, Task<TValue?>> factory)
     {
         Entry entry;
         lock (_gate)
@@ -27,10 +32,12 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
             }
 
             var generation = _generation;
+            var cancellation = new AsyncCancellationLifetime();
             entry = null!;
             entry = new Entry(new Lazy<Task<TValue?>>(
                 () => RunAsync(key, entry, generation, factory),
-                LazyThreadSafetyMode.ExecutionAndPublication));
+                LazyThreadSafetyMode.ExecutionAndPublication),
+                cancellation);
             _entries.Add(key, entry);
         }
 
@@ -55,22 +62,30 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
 
     public void Invalidate(TKey key, bool discardLatest = false)
     {
+        Entry? removed;
         lock (_gate)
         {
-            _entries.Remove(key);
+            _entries.Remove(key, out removed);
             _ready.Remove(key);
             if (discardLatest)
             {
                 _latest.Remove(key);
             }
         }
+
+        if (removed is not null)
+        {
+            CancelIfRunning(removed);
+        }
     }
 
     public void InvalidateAll(bool discardLatest = true)
     {
+        Entry[] removed;
         lock (_gate)
         {
             _generation++;
+            removed = _entries.Values.ToArray();
             _entries.Clear();
             _ready.Clear();
             if (discardLatest)
@@ -78,17 +93,26 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
                 _latest.Clear();
             }
         }
+
+        foreach (var entry in removed)
+        {
+            CancelIfRunning(entry);
+        }
     }
+
+    private static void CancelIfRunning(Entry entry)
+        => entry.Cancel();
 
     private async Task<TValue?> RunAsync(
         TKey key,
         Entry entry,
         long generation,
-        Func<Task<TValue?>> factory)
+        Func<CancellationToken, Task<TValue?>> factory)
     {
+        var cancellationToken = entry.CancellationToken;
         try
         {
-            var value = await factory().ConfigureAwait(false);
+            var value = await factory(cancellationToken).ConfigureAwait(false);
             lock (_gate)
             {
                 if (!_entries.TryGetValue(key, out var current) ||
@@ -111,6 +135,10 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
 
             return value;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
         catch
         {
             lock (_gate)
@@ -123,7 +151,32 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
             }
             throw;
         }
+        finally
+        {
+            await entry.DisposeCancellationAsync().ConfigureAwait(false);
+        }
     }
 
-    private sealed record Entry(Lazy<Task<TValue?>> Task);
+    private sealed class Entry
+    {
+        private readonly AsyncCancellationLifetime _cancellation;
+
+        internal Entry(
+            Lazy<Task<TValue?>> task,
+            AsyncCancellationLifetime cancellation)
+        {
+            Task = task;
+            _cancellation = cancellation;
+            CancellationToken = cancellation.Token;
+        }
+
+        internal Lazy<Task<TValue?>> Task { get; }
+        internal CancellationToken CancellationToken { get; }
+
+        internal void Cancel()
+            => _cancellation.Cancel();
+
+        internal async ValueTask DisposeCancellationAsync()
+            => await _cancellation.DisposeAsync().ConfigureAwait(false);
+    }
 }

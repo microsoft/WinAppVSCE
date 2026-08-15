@@ -53,7 +53,9 @@ internal static class XamlRename
         }
 
         var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
-        if (occurrences is null)
+        if (occurrences is null ||
+            (symbol.Kind == XamlRenameKind.Key &&
+             !occurrences.Any(occurrence => occurrence.IsDeclaration)))
         {
             return null;
         }
@@ -95,7 +97,10 @@ internal static class XamlRename
 
         // Gate on the renameable location first (this also rejects carets inside malformed/unterminated markup), so an invalid-name error is only raised when the caret is genuinely on a symbol.
         var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
-        if (occurrences is null || occurrences.Count == 0)
+        if (occurrences is null ||
+            occurrences.Count == 0 ||
+            (symbol.Kind == XamlRenameKind.Key &&
+             !occurrences.Any(occurrence => occurrence.IsDeclaration)))
         {
             return null;
         }

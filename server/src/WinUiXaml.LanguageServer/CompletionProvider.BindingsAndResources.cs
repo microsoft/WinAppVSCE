@@ -121,19 +121,45 @@ internal static partial class CompletionProvider
             }
         }
 
+        void AddBindingCapability(string? frameworkPrefix)
+        {
+            if (typeSystem.Capabilities.Binding is not { } binding)
+            {
+                return;
+            }
+
+            var name = frameworkPrefix switch
+            {
+                null => "Binding",
+                { Length: > 0 } => frameworkPrefix + ":Binding",
+                _ => null,
+            };
+            if (name is null ||
+                !StartsWith(name, ctx.Partial) ||
+                !seen.Add(name))
+            {
+                return;
+            }
+
+            items.Add(new CompletionItem
+            {
+                Label = name,
+                Kind = CompletionItemKind.Class,
+                Detail = binding.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                Documentation = CompletionDoc(binding),
+                TextEdit = new TextEdit { Range = replaceRange, NewText = name },
+                FilterText = name,
+                SortText = name,
+            });
+        }
+
         var preferCustomDefault =
             scope.TryResolvePrefix(string.Empty, out var defaultNamespace) &&
-            !string.Equals(
-                defaultNamespace,
-                XamlTypeSystem.PresentationNamespace,
-                StringComparison.Ordinal);
+            !XamlSemanticFacts.IsPresentationNamespace(defaultNamespace);
         var requestedFrameworkPrefix =
             requestedPrefix is not null &&
             scope.TryResolvePrefix(requestedPrefix, out var requestedPrefixNamespace) &&
-            string.Equals(
-                requestedPrefixNamespace,
-                XamlTypeSystem.PresentationNamespace,
-                StringComparison.Ordinal)
+            XamlSemanticFacts.IsPresentationNamespace(requestedPrefixNamespace)
                 ? requestedPrefix
                 : null;
         var requestedXamlPrefix =
@@ -161,15 +187,14 @@ internal static partial class CompletionProvider
                 scope.Declarations
                     .FirstOrDefault(pair =>
                         pair.Key.Length > 0 &&
-                        string.Equals(
-                            pair.Value,
-                            XamlTypeSystem.PresentationNamespace,
-                            StringComparison.Ordinal))
+                        XamlSemanticFacts.IsPresentationNamespace(pair.Value))
                     .Key;
+            AddBindingCapability(presentationPrefix ?? string.Empty);
             AddCuratedExtensions(presentationPrefix ?? string.Empty, xamlPrefix);
         }
         else
         {
+            AddBindingCapability(requestedFrameworkPrefix);
             AddCuratedExtensions(requestedFrameworkPrefix, xamlPrefix);
             AddRuntimeExtensions();
         }
@@ -194,10 +219,10 @@ internal static partial class CompletionProvider
         if (string.IsNullOrEmpty(ctx.AttributeName))
         {
             // x:Bind/Bind is compiled and has no runtime extension type to reflect over, so offer its curated named arguments (Mode, Converter, FallbackValue, ...) directly.
-            if (IsBindExtension(ctx.MarkupExtension))
+            if (XamlSemanticFacts.IsXBindName(ctx.MarkupExtension, scope, typeSystem))
             {
                 var bindNames = new List<CompletionItem>();
-                var bindingType = typeSystem.ResolveMetadataType(BindingMetadataName);
+                var bindingType = typeSystem.Capabilities.Binding;
                 foreach (var name in XBindArgumentNames)
                 {
                     if (!StartsWith(name, ctx.Partial))
@@ -227,24 +252,14 @@ internal static partial class CompletionProvider
             }
 
             var names = new List<CompletionItem>();
-            foreach (var member in typeSystem.GetMembers(extensionType))
-            {
-                if (member.Kind != XamlMemberKind.Property || !StartsWith(member.Name, ctx.Partial))
-                {
-                    continue;
-                }
-
-                names.Add(new CompletionItem
-                {
-                    Label = member.Name,
-                    Kind = CompletionItemKind.Property,
-                    Documentation = CompletionDoc(member.Symbol),
-                    Detail = DescribeMember(member),
-                    TextEdit = new TextEdit { Range = replaceRange, NewText = member.Name },
-                    FilterText = member.Name,
-                    SortText = member.Name,
-                });
-            }
+            AddReflectedPropertyCompletions(
+                names,
+                new HashSet<string>(StringComparer.Ordinal),
+                extensionType,
+                ctx.Partial,
+                typeSystem,
+                replaceRange,
+                string.Empty);
 
             return Finish(names);
         }
@@ -252,23 +267,20 @@ internal static partial class CompletionProvider
         // Argument-value completion: resolve the argument's type on the extension, complete enum members.
 
         // ElementName=<caret> (classic {Binding ElementName=...}) completes the x:Name'd elements in the doc.
-        if (string.Equals(ctx.AttributeName, "ElementName", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(ctx.AttributeName, "ElementName", StringComparison.OrdinalIgnoreCase) &&
+            XamlSemanticFacts.IsBindingMarkupExtensionName(
+                ctx.MarkupExtension,
+                scope,
+                typeSystem))
         {
-            return CompleteNamedElements(doc, ctx.Partial, replaceRange);
+            return CompleteNamedElements(doc, ctx.Partial, typeSystem, replaceRange);
         }
 
-        var argType = extensionType is null
-            ? null
-            : typeSystem.FindMember(extensionType, ctx.AttributeName!)?.Type;
-
-        // {x:Bind}/{Bind} is compiled and has no reflectable runtime extension type, so its enum-typed named arguments (Mode, UpdateSourceTrigger
-        if (argType is null &&
-            IsBindExtension(ctx.MarkupExtension) &&
-            ctx.AttributeName is { } argName &&
-            BindEnumArgumentTypes.TryGetValue(argName, out var enumMetadataName))
-        {
-            argType = typeSystem.ResolveMetadataType(enumMetadataName);
-        }
+        var argType = XamlSemanticFacts.ResolveMarkupArgumentType(
+            ctx.MarkupExtension,
+            scope,
+            ctx.AttributeName!,
+            typeSystem);
 
         if (argType is { TypeKind: TypeKind.Enum })
         {
@@ -284,53 +296,36 @@ internal static partial class CompletionProvider
     }
 
     /// <summary>Completes the <c>x:Name</c>'d elements declared in the document (for <c>ElementName=</c>).</summary>
-    private static CompletionList CompleteNamedElements(TextDocument doc, string partial, Lsp.Range replaceRange)
+    private static CompletionList CompleteNamedElements(
+        TextDocument doc,
+        string partial,
+        XamlTypeSystem typeSystem,
+        Lsp.Range replaceRange)
     {
         var items = new List<CompletionItem>();
-        if (doc.Parsed.Root is { } root)
+        var context = doc.Parsed.FindNode(Math.Max(0, doc.OffsetAt(replaceRange.Start) - 1));
+        foreach (var (name, element) in XamlSemanticFacts.EnumerateNamedElementsInScope(
+            doc,
+            context,
+            typeSystem))
         {
-            foreach (var (name, typeName) in CollectNamedElements(root))
+            if (!StartsWith(name, partial))
             {
-                if (!StartsWith(name, partial))
-                {
-                    continue;
-                }
-
-                items.Add(new CompletionItem
-                {
-                    Label = name,
-                    Kind = CompletionItemKind.Field,
-                    Detail = typeName,
-                    TextEdit = new TextEdit { Range = replaceRange, NewText = name },
-                    FilterText = name,
-                    SortText = name,
-                });
+                continue;
             }
+
+            items.Add(new CompletionItem
+            {
+                Label = name,
+                Kind = CompletionItemKind.Field,
+                Detail = element.Name?.FullName,
+                TextEdit = new TextEdit { Range = replaceRange, NewText = name },
+                FilterText = name,
+                SortText = name,
+            });
         }
 
         return Finish(items);
-    }
-
-    /// <summary>Walks the AST yielding each element's <c>x:Name</c>/<c>Name</c> value and its element type name.</summary>
-    private static IEnumerable<(string Name, string TypeName)> CollectNamedElements(XamlElement element)
-    {
-        var attr = element.GetAttribute("x:Name") ?? element.GetAttribute("Name");
-        var text = attr?.Value?.Text?.Trim();
-        if (!string.IsNullOrEmpty(text) && attr?.Value is { IsMarkupExtension: false })
-        {
-            yield return (text!, element.Name is { LocalName.Length: > 0 } n ? n.FullName : string.Empty);
-        }
-
-        foreach (var child in element.Content)
-        {
-            if (child is XamlElement childElement)
-            {
-                foreach (var hit in CollectNamedElements(childElement))
-                {
-                    yield return hit;
-                }
-            }
-        }
     }
 
     /// <summary>The named arguments of a compiled <c>{x:Bind}</c> expression, offered for arg-name completion.</summary>
@@ -345,9 +340,6 @@ internal static partial class CompletionProvider
         "BindBack",
         "UpdateSourceTrigger",
     };
-
-    /// <summary>Metadata name of the classic binding type whose properties back the curated x:Bind arg names.</summary>
-    private const string BindingMetadataName = "Microsoft.UI.Xaml.Data.Binding";
 
     /// <summary>Documentation for the x:Bind-only BindBack argument, which has no classic Binding property to borrow a &lt;summary&gt</summary>
     private static readonly MarkupContent BindBackDoc = new()
@@ -370,18 +362,6 @@ internal static partial class CompletionProvider
             ? BindBackDetail
             : bindingMember is null ? null : DescribeMember(bindingMember);
 
-    /// <summary>The enum-typed {x:Bind} named arguments mapped to their CLR enum metadata name.</summary>
-    private static readonly Dictionary<string, string> BindEnumArgumentTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["Mode"] = "Microsoft.UI.Xaml.Data.BindingMode",
-        ["UpdateSourceTrigger"] = "Microsoft.UI.Xaml.Data.UpdateSourceTrigger",
-    };
-
-    /// <summary>True for the compiled-binding extension in either its prefixed (<c>x:Bind</c>) or bare (<c>Bind</c>) form.</summary>
-    private static bool IsBindExtension(string? extension) =>
-        string.Equals(extension, "x:Bind", StringComparison.Ordinal) ||
-        string.Equals(extension, "Bind", StringComparison.Ordinal);
-
     // --- Resource keys ({StaticResource | ThemeResource key}) -------------------------------------
 
     /// <summary>Completes the key of a {StaticResource}/{ThemeResource} reference from the x:Keyd resources defined in this document plus the project's App.xaml (passed in).</summary>
@@ -395,6 +375,16 @@ internal static partial class CompletionProvider
         Lsp.Range replaceRange,
         Action<string, string>? themeTypeResolutionObserver)
     {
+        var extension = doc.Parsed.Root?
+            .DescendantNodesAndSelf()
+            .OfType<XamlMarkupExtension>()
+            .LastOrDefault(candidate => candidate.Span.ContainsInclusive(offset));
+        if (extension is not null &&
+            !XamlSemanticFacts.IsResourceReferenceExtension(extension, scope))
+        {
+            return new CompletionList();
+        }
+
         var projectKeys = new SortedSet<string>(StringComparer.Ordinal);
         if (doc.Parsed.Root is { } root)
         {
@@ -416,20 +406,37 @@ internal static partial class CompletionProvider
         var docLocalDecls = doc.Parsed.Root is { } declRoot
             ? CollectDocLocalKeyDeclarations(declRoot)
             : new Dictionary<string, XamlElement>(StringComparer.Ordinal);
+        var referenceElement = NearestElement(
+            doc.Parsed.FindNode(Math.Max(0, offset - 1)));
 
         var items = new List<CompletionItem>();
+        var visibleProjectKeys = new HashSet<string>(StringComparer.Ordinal);
 
         // Project-defined resources first (document-local + App.xaml); the "0" sort group keeps them above the framework keys, which are grouped under "1".
         foreach (var key in projectKeys)
         {
+            var visibleDeclaration = referenceElement is null
+                ? null
+                : XamlSemanticFacts.FindResourceDeclarationInScope(
+                    referenceElement,
+                    key,
+                    typeSystem);
+            var isAppResource = appResourceKeys?.Contains(key) == true;
+            if (visibleDeclaration is null &&
+                docLocalDecls.ContainsKey(key) &&
+                !isAppResource)
+            {
+                continue;
+            }
+
+            visibleProjectKeys.Add(key);
             if (!StartsWith(key, ctx.Partial))
             {
                 continue;
             }
 
-            if (docLocalDecls.TryGetValue(key, out var decl) &&
-                (appResourceKeys is null || !appResourceKeys.Contains(key)) &&
-                !AuthorKeyMatchesTarget(decl, targetType, scope, typeSystem))
+            if (visibleDeclaration is { } decl &&
+                !AuthorKeyMatchesTarget(decl, targetType, typeSystem))
             {
                 continue;
             }
@@ -444,7 +451,7 @@ internal static partial class CompletionProvider
         foreach (var resource in typeSystem.GetThemeResources())
         {
             var key = resource.Key;
-            if (!StartsWith(key, ctx.Partial) || projectKeys.Contains(key))
+            if (!StartsWith(key, ctx.Partial) || visibleProjectKeys.Contains(key))
             {
                 continue;
             }
@@ -529,7 +536,7 @@ internal static partial class CompletionProvider
         SortText = sortGroup + key,
     };
 
-    /// <summary>Gathers every <c>x:Key</c> value declared anywhere in <paramref name="document"/>.</summary>
+    /// <summary>Gathers every XAML key directive value declared anywhere in <paramref name="document"/>.</summary>
     public static List<string> CollectResourceKeys(XamlDocument document)
     {
         var keys = new HashSet<string>(StringComparer.Ordinal);
@@ -543,14 +550,10 @@ internal static partial class CompletionProvider
 
     private static void CollectResourceKeysCore(XamlElement element, ISet<string> into)
     {
-        foreach (var attribute in element.Attributes)
+        if (XamlSemanticFacts.GetKeyAttribute(element)?.Value is { } value &&
+            value.Text.Length > 0)
         {
-            if (!attribute.IsNamespaceDeclaration &&
-                attribute.Name.Prefix == "x" && attribute.Name.LocalName == "Key" &&
-                attribute.Value is { } value && value.Text.Length > 0)
-            {
-                into.Add(value.Text);
-            }
+            into.Add(value.Text);
         }
 
         foreach (var child in element.Content)
@@ -572,17 +575,11 @@ internal static partial class CompletionProvider
 
     private static void CollectKeyDeclarationsCore(XamlElement element, Dictionary<string, XamlElement> into)
     {
-        foreach (var attribute in element.Attributes)
+        if (XamlSemanticFacts.GetKeyAttribute(element)?.Value is { } value &&
+            value.Text.Length > 0 &&
+            !into.ContainsKey(value.Text))
         {
-            if (!attribute.IsNamespaceDeclaration &&
-                attribute.Name.Prefix == "x" && attribute.Name.LocalName == "Key" &&
-                attribute.Value is { } value && value.Text.Length > 0)
-            {
-                if (!into.ContainsKey(value.Text))
-                {
-                    into.Add(value.Text, element);
-                }
-            }
+            into.Add(value.Text, element);
         }
 
         foreach (var child in element.Content)
@@ -594,16 +591,29 @@ internal static partial class CompletionProvider
         }
     }
 
+    private static XamlElement? NearestElement(XamlNode? node)
+    {
+        for (var current = node; current is not null; current = current.Parent)
+        {
+            if (current is XamlElement element)
+            {
+                return element;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Conservative type-scoping for the project's document-local author keys: follow-on).</summary>
     private static bool AuthorKeyMatchesTarget(
-        XamlElement declaringElement, ITypeSymbol? targetType, XamlNamespaceScope scope, XamlTypeSystem typeSystem)
+        XamlElement declaringElement, ITypeSymbol? targetType, XamlTypeSystem typeSystem)
     {
         if (targetType is null || declaringElement.Name is not { } name)
         {
             return true;
         }
 
-        var keyType = ResolveElementType(name, scope, typeSystem);
+        var keyType = XamlSemanticFacts.ResolveElementType(declaringElement, typeSystem);
         if (keyType is null)
         {
             return true;
@@ -789,7 +799,12 @@ internal static partial class CompletionProvider
         }
 
         var elementType = ResolveElementType(element.Name, scope, typeSystem);
-        return elementType is null ? null : typeSystem.FindMember(elementType, attributeName)?.Type;
+        if (elementType is null)
+        {
+            return null;
+        }
+
+        return typeSystem.FindAttributeMember(elementType, attributeName)?.Type;
     }
 
     private static ITypeSymbol UnwrapNullable(ITypeSymbol type) =>
@@ -810,14 +825,77 @@ internal static partial class CompletionProvider
         INamedTypeSymbol? pageClass,
         Lsp.Range replaceRange)
     {
+        var items = new List<CompletionItem>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (ctx.IsClassicBinding)
+        {
+            var extensionType = XamlSemanticFacts.ResolveMarkupExtensionType(
+                ctx.MarkupExtension,
+                scope,
+                typeSystem);
+            if (!SymbolEqualityComparer.Default.Equals(
+                    extensionType,
+                    typeSystem.Capabilities.Binding))
+            {
+                return new CompletionList();
+            }
+        }
+        else if (!XamlSemanticFacts.IsXBindName(ctx.MarkupExtension, scope, typeSystem))
+        {
+            return new CompletionList();
+        }
+
+        if (ctx.IsClassicBinding &&
+            string.IsNullOrEmpty(ctx.BindPrefixPath) &&
+            !ctx.IsExplicitBindingPath)
+        {
+            AddClassicBindingArgumentNames(
+                items,
+                seen,
+                ctx.Partial,
+                typeSystem,
+                replaceRange);
+        }
+
         var root = string.IsNullOrEmpty(ctx.BindCastType)
             ? (string.IsNullOrEmpty(ctx.BindElementName)
                 ? ResolveBindRoot(doc, offset, scope, typeSystem, pageClass, ctx.IsClassicBinding)
-                : ResolveNamedElementType(doc.Parsed.Root, ctx.BindElementName!, scope, typeSystem))
+                : XamlSemanticFacts.ResolveNamedElementTypeInScope(
+                    doc,
+                    doc.Parsed.FindNode(Math.Max(0, offset - 1)),
+                    ctx.BindElementName!,
+                    typeSystem))
             : ResolveElementType(ParseQualified(ctx.BindCastType!), scope, typeSystem);
+        if (!ctx.IsClassicBinding &&
+            string.IsNullOrEmpty(ctx.BindPrefixPath) &&
+            string.IsNullOrEmpty(ctx.BindCastType) &&
+            doc.Parsed.Root is not null)
+        {
+            foreach (var (name, element) in XamlSemanticFacts.EnumerateNamedElementsInScope(
+                doc,
+                doc.Parsed.FindNode(Math.Max(0, offset - 1)),
+                typeSystem))
+            {
+                if (!StartsWith(name, ctx.Partial) || !seen.Add(name))
+                {
+                    continue;
+                }
+
+                items.Add(new CompletionItem
+                {
+                    Label = name,
+                    Kind = CompletionItemKind.Field,
+                    Detail = element.Name?.FullName,
+                    TextEdit = new TextEdit { Range = replaceRange, NewText = name },
+                    FilterText = name,
+                    SortText = "0" + name,
+                });
+            }
+        }
+
         if (root is null)
         {
-            return new CompletionList();
+            return Finish(items);
         }
 
         // Walk the segments already typed before the last dot.
@@ -832,7 +910,25 @@ internal static partial class CompletionProvider
                     return new CompletionList();
                 }
 
-                var resolved = ResolveBindSegmentType(typeSystem, current, segment, atRoot);
+                var resolved =
+                    atRoot &&
+                    !ctx.IsClassicBinding &&
+                    string.IsNullOrEmpty(ctx.BindCastType)
+                        ? XamlSemanticFacts.ResolveNamedElementTypeInScope(
+                            doc,
+                            doc.Parsed.FindNode(Math.Max(0, offset - 1)),
+                            segment,
+                            typeSystem) ??
+                          ResolveBindSegmentType(
+                              typeSystem,
+                              current,
+                              segment,
+                              atRoot)
+                        : ResolveBindSegmentType(
+                            typeSystem,
+                            current,
+                            segment,
+                            atRoot);
                 if (resolved is null)
                 {
                     return new CompletionList();
@@ -843,10 +939,11 @@ internal static partial class CompletionProvider
             }
         }
 
-        var items = new List<CompletionItem>();
         foreach (var member in typeSystem.GetBindableMembers(current, includeRootNonPublic: atRoot))
         {
-            if (!StartsWith(member.Name, ctx.Partial) || IsBindCompletionNoise(member))
+            if (!StartsWith(member.Name, ctx.Partial) ||
+                IsBindCompletionNoise(member) ||
+                !seen.Add(member.Name))
             {
                 continue;
             }
@@ -865,6 +962,60 @@ internal static partial class CompletionProvider
         }
 
         return Finish(items);
+    }
+
+    private static void AddClassicBindingArgumentNames(
+        List<CompletionItem> items,
+        HashSet<string> seen,
+        string partial,
+        XamlTypeSystem typeSystem,
+        Lsp.Range replaceRange)
+    {
+        var binding = typeSystem.Capabilities.Binding;
+        if (binding is null)
+        {
+            return;
+        }
+
+        AddReflectedPropertyCompletions(
+            items,
+            seen,
+            binding,
+            partial,
+            typeSystem,
+            replaceRange,
+            "0");
+    }
+
+    private static void AddReflectedPropertyCompletions(
+        List<CompletionItem> items,
+        HashSet<string> seen,
+        INamedTypeSymbol owner,
+        string partial,
+        XamlTypeSystem typeSystem,
+        Lsp.Range replaceRange,
+        string sortPrefix)
+    {
+        foreach (var member in typeSystem.GetMembers(owner))
+        {
+            if (member.Kind != XamlMemberKind.Property ||
+                !StartsWith(member.Name, partial) ||
+                !seen.Add(member.Name))
+            {
+                continue;
+            }
+
+            items.Add(new CompletionItem
+            {
+                Label = member.Name,
+                Kind = CompletionItemKind.Property,
+                Documentation = CompletionDoc(member.Symbol),
+                Detail = DescribeMember(member),
+                TextEdit = new TextEdit { Range = replaceRange, NewText = member.Name },
+                FilterText = member.Name,
+                SortText = sortPrefix + member.Name,
+            });
+        }
     }
 
     /// <summary>Resolves one {x:Bind} path segment to the type it evaluates to, handling indexer suffixes: a segment like Items[0] resolves the Items member</summary>
@@ -939,7 +1090,8 @@ internal static partial class CompletionProvider
             if (XamlSemanticFacts.IsDataTemplate(element, typeSystem))
             {
                 var dataType = element.Attributes.FirstOrDefault(a =>
-                    !a.IsNamespaceDeclaration && a.Name.Prefix == "x" && a.Name.LocalName == "DataType");
+                    !a.IsNamespaceDeclaration &&
+                    XamlSemanticFacts.IsXamlDirective(a, "DataType", element.NamespaceScope));
                 var typeName = dataType?.Value?.Text?.Trim();
                 return string.IsNullOrEmpty(typeName)
                     ? null

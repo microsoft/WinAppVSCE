@@ -27,11 +27,63 @@ internal sealed partial class XamlLanguageServer
         var occurrences = new List<(Lsp.Range Range, bool IsDeclaration)>();
         if (symbol.Kind == XamlRenameKind.Name)
         {
-            CollectNameOccurrences(root, symbol.Name, doc, typeSystem, occurrences);
+            if (typeSystem is null)
+            {
+                CollectNameOccurrences(root, symbol.Name, doc, null, occurrences, recurse: true);
+            }
+            else
+            {
+                var context = doc.Parsed.FindNode(offset);
+                foreach (var element in XamlSemanticFacts.EnumerateElementsInNameScope(
+                    doc,
+                    context,
+                    typeSystem))
+                {
+                    CollectNameOccurrences(
+                        element,
+                        symbol.Name,
+                        doc,
+                        typeSystem,
+                        occurrences,
+                        recurse: false);
+                }
+            }
         }
         else
         {
-            CollectResourceOccurrences(root, symbol.Name, doc, occurrences);
+            var targetDeclaration = FindResourceDeclarationAt(doc, offset);
+            if (targetDeclaration is null &&
+                FindResourceKeyReferenceAt(doc, offset) is { } reference)
+            {
+                targetDeclaration = FindResourceDeclarationForReference(
+                    doc,
+                    reference.Span.Start,
+                    symbol.Name,
+                    typeSystem);
+                if (targetDeclaration is null)
+                {
+                    CollectResourceOccurrences(
+                        root,
+                        symbol.Name,
+                        doc,
+                        occurrences,
+                        onlyUnresolvedReferences: true,
+                        typeSystem: typeSystem);
+                    return DedupeAndSort(occurrences);
+                }
+            }
+            if (targetDeclaration is null)
+            {
+                return null;
+            }
+
+            CollectResourceOccurrences(
+                root,
+                symbol.Name,
+                doc,
+                occurrences,
+                targetDeclaration,
+                typeSystem: typeSystem);
         }
 
         return DedupeAndSort(occurrences);
@@ -44,7 +96,17 @@ internal sealed partial class XamlLanguageServer
         XamlTypeSystem? typeSystem = null)
     {
         // x:Name: the caret is on a usage (ElementName=/Storyboard.TargetName) or on the declaration itself.
-        var name = FindNameReferenceAt(doc, offset, typeSystem)?.Name ?? FindNameDeclarationAt(doc, offset);
+        var reference = FindNameReferenceAt(doc, offset, typeSystem);
+        var name = reference is null
+            ? FindNameDeclarationAt(doc, offset, typeSystem)
+            : typeSystem is null ||
+              XamlSemanticFacts.FindNamedElementInScope(
+                  doc,
+                  doc.Parsed.FindNode(reference.Value.Span.Start),
+                  reference.Value.Name,
+                  typeSystem) is not null
+                ? reference.Value.Name
+                : null;
         if (name is { Length: > 0 })
         {
             return (XamlRenameKind.Name, name);
@@ -76,25 +138,70 @@ internal sealed partial class XamlLanguageServer
     }
 
     /// <summary>The x:Name/bare Name literal the caret sits inside (the declaration), or null.</summary>
-    private static string? FindNameDeclarationAt(TextDocument doc, int offset) =>
-        DeclarationValueAt(doc, offset, static name =>
-            string.Equals(name.LocalName, "Name", StringComparison.Ordinal) &&
-            (!name.HasPrefix || string.Equals(name.Prefix, "x", StringComparison.Ordinal)));
+    private static string? FindNameDeclarationAt(
+        TextDocument doc,
+        int offset,
+        XamlTypeSystem? typeSystem) =>
+        DeclarationValueAt(doc, offset, (attribute, owner) =>
+            typeSystem is null
+                ? XamlSemanticFacts.IsXamlDirective(attribute, "Name", owner.NamespaceScope) ||
+                    !attribute.Name.HasPrefix &&
+                    string.Equals(attribute.Name.LocalName, "Name", StringComparison.Ordinal)
+                : ReferenceEquals(
+                    XamlSemanticFacts.GetNameAttribute(owner, typeSystem),
+                    attribute));
 
-    /// <summary>The <c>x:Key</c> literal the caret sits inside (the declaration), or null. Only the <c>x:</c>-prefixed form is a resource key.</summary>
+    /// <summary>The XAML key-directive literal the caret sits inside (the declaration), or null.</summary>
     private static string? FindKeyDeclarationAt(TextDocument doc, int offset) =>
-        DeclarationValueAt(doc, offset, static name =>
-            name.HasPrefix && string.Equals(name.Prefix, "x", StringComparison.Ordinal) &&
-            string.Equals(name.LocalName, "Key", StringComparison.Ordinal));
+        DeclarationValueAt(doc, offset, static (attribute, owner) =>
+            XamlSemanticFacts.IsXamlDirective(attribute, "Key", owner.NamespaceScope));
+
+    private static XamlElement? FindResourceDeclarationAt(TextDocument doc, int offset)
+    {
+        for (var current = doc.Parsed.FindNode(offset); current is not null; current = current.Parent)
+        {
+            if (current is XamlAttribute attribute &&
+                attribute.Value is { IsMarkupExtension: false } value &&
+                value.InnerSpan.ContainsInclusive(offset) &&
+                attribute.Parent is XamlElement owner &&
+                XamlSemanticFacts.IsXamlDirective(attribute, "Key", owner.NamespaceScope))
+            {
+                return owner;
+            }
+
+            if (current is XamlElement)
+            {
+                break;
+            }
+        }
+
+        return null;
+    }
+
+    private static XamlElement? FindResourceDeclarationForReference(
+        TextDocument doc,
+        int referenceOffset,
+        string key,
+        XamlTypeSystem? typeSystem) =>
+        NearestEnclosingElement(doc, referenceOffset) is { } referenceElement
+            ? XamlSemanticFacts.FindResourceDeclarationInScope(
+                referenceElement,
+                key,
+                typeSystem)
+            : null;
 
     /// <summary>The trimmed value of a non-markup attribute whose name matches nameMatches and whose value literal contains the caret — used to start a reference search from the declaration.</summary>
-    private static string? DeclarationValueAt(TextDocument doc, int offset, Func<XamlName, bool> nameMatches)
+    private static string? DeclarationValueAt(
+        TextDocument doc,
+        int offset,
+        Func<XamlAttribute, XamlElement, bool> attributeMatches)
     {
         for (var current = doc.Parsed.FindNode(offset); current != null; current = current.Parent)
         {
             if (current is XamlAttribute attr && !attr.IsNamespaceDeclaration &&
                 attr.Value is { IsMarkupExtension: false } value && value.InnerSpan.ContainsInclusive(offset) &&
-                nameMatches(attr.Name))
+                attr.Parent is XamlElement owner &&
+                attributeMatches(attr, owner))
             {
                 var text = value.Text.Trim();
                 return text.Length > 0 ? text : null;
@@ -135,9 +242,13 @@ internal sealed partial class XamlLanguageServer
         string name,
         TextDocument doc,
         XamlTypeSystem? typeSystem,
-        List<(Lsp.Range Range, bool IsDeclaration)> results)
+        List<(Lsp.Range Range, bool IsDeclaration)> results,
+        bool recurse)
     {
-        if ((element.GetAttribute("x:Name") ?? element.GetAttribute("Name")) is { Value: { IsMarkupExtension: false } declValue } &&
+        var nameAttribute = typeSystem is null
+            ? XamlSemanticFacts.GetNameAttribute(element)
+            : XamlSemanticFacts.GetNameAttribute(element, typeSystem);
+        if (nameAttribute is { Value: { IsMarkupExtension: false } declValue } &&
             string.Equals(declValue.Text.Trim(), name, StringComparison.Ordinal))
         {
             results.Add((doc.RangeOf(TrimmedValueSpan(declValue)), true));
@@ -193,21 +304,34 @@ internal sealed partial class XamlLanguageServer
             }
         }
 
+        if (!recurse)
+        {
+            return;
+        }
+
         foreach (var child in element.Content)
         {
             if (child is XamlElement childElement)
             {
-                CollectNameOccurrences(childElement, name, doc, typeSystem, results);
+                CollectNameOccurrences(childElement, name, doc, typeSystem, results, recurse: true);
             }
         }
     }
 
     /// <summary>Collects, into results, the x:Key declaration literal (flagged as declaration) plus every {StaticResource}/{ThemeResource}/{CustomResource} usage of key in the subtree (including</summary>
     private static void CollectResourceOccurrences(
-        XamlElement element, string key, TextDocument doc, List<(Lsp.Range Range, bool IsDeclaration)> results)
+        XamlElement element,
+        string key,
+        TextDocument doc,
+        List<(Lsp.Range Range, bool IsDeclaration)> results,
+        XamlElement? targetDeclaration = null,
+        bool onlyUnresolvedReferences = false,
+        XamlTypeSystem? typeSystem = null)
     {
-        if (element.GetAttribute("x:Key") is { Value: { IsMarkupExtension: false } keyValue } &&
-            string.Equals(keyValue.Text.Trim(), key, StringComparison.Ordinal))
+        if (XamlSemanticFacts.GetKeyAttribute(element) is { Value: { IsMarkupExtension: false } keyValue } &&
+            string.Equals(keyValue.Text.Trim(), key, StringComparison.Ordinal) &&
+            !onlyUnresolvedReferences &&
+            (targetDeclaration is null || ReferenceEquals(element, targetDeclaration)))
         {
             results.Add((doc.RangeOf(TrimmedValueSpan(keyValue)), true));
         }
@@ -218,8 +342,9 @@ internal sealed partial class XamlLanguageServer
             {
                 ForEachExtension(ext, e =>
                 {
-                    if (e.Name is not { HasPrefix: false } n ||
-                        n.LocalName is not ("StaticResource" or "ThemeResource" or "CustomResource"))
+                    if (!XamlSemanticFacts.IsResourceReferenceExtension(
+                        e,
+                        element.NamespaceScope))
                     {
                         return;
                     }
@@ -229,7 +354,18 @@ internal sealed partial class XamlLanguageServer
                         if (!arg.IsNamed && arg.Value is { Length: > 0 } v &&
                             string.Equals(v.Trim(), key, StringComparison.Ordinal))
                         {
-                            results.Add((doc.RangeOf(arg.ValueSpan ?? arg.Span), false));
+                            var resolvedDeclaration =
+                                XamlSemanticFacts.FindResourceDeclarationInScope(
+                                    element,
+                                    key,
+                                    typeSystem);
+                            if ((onlyUnresolvedReferences && resolvedDeclaration is null) ||
+                                (!onlyUnresolvedReferences &&
+                                 (targetDeclaration is null ||
+                                  ReferenceEquals(resolvedDeclaration, targetDeclaration))))
+                            {
+                                results.Add((doc.RangeOf(arg.ValueSpan ?? arg.Span), false));
+                            }
                         }
                     }
                 });
@@ -240,7 +376,14 @@ internal sealed partial class XamlLanguageServer
         {
             if (child is XamlElement childElement)
             {
-                CollectResourceOccurrences(childElement, key, doc, results);
+                CollectResourceOccurrences(
+                    childElement,
+                    key,
+                    doc,
+                    results,
+                    targetDeclaration,
+                    onlyUnresolvedReferences,
+                    typeSystem);
             }
         }
     }
@@ -314,10 +457,21 @@ internal sealed partial class XamlLanguageServer
         var (key, referenceSpan) = reference.Value;
         var referenceRange = doc.RangeOf(referenceSpan);
 
-        // 1) The current document, resolved in lexical scope (nearest <Owner.Resources> wins) so an inner dictionary shadows an outer one; fall back to a document-wide search for keys outside the reference's ancestor scopes.
+        // 1) The current document, resolved in lexical scope (nearest resource dictionary wins).
         var referenceElement = NearestEnclosingElement(doc, offset);
-        var local = (referenceElement != null ? FindResourceDeclarationScoped(referenceElement, key) : null)
-            ?? FindResourceDeclaration(doc.Parsed, key);
+        var context = TryGetAcceptedContext(doc, out var acceptedContext)
+            ? acceptedContext
+            : await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var localElement = referenceElement is null
+            ? null
+            : XamlSemanticFacts.FindResourceDeclarationInScope(
+                referenceElement,
+                key,
+                context?.TypeSystem);
+
+        var local = localElement is null
+            ? null
+            : ToResourceDeclaration(localElement);
         if (local != null)
         {
             return new ResourceReferenceHit(
@@ -329,7 +483,6 @@ internal sealed partial class XamlLanguageServer
         }
 
         // 2) The project's App.xaml and every reachable merged ResourceDictionary.
-        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
         if (context == null)
         {
             return null;
@@ -344,7 +497,13 @@ internal sealed partial class XamlLanguageServer
         var projectRoot = System.IO.Path.GetDirectoryName(context.Resolution.ProjectPath)!;
         foreach (var resourceFile in ReadResourceGraph(appXaml, projectRoot, context.TypeSystem))
         {
-            var declaration = FindResourceDeclaration(resourceFile.Parsed, key);
+            var declaration = resourceFile.Parsed.Root is { } resourceRoot
+                ? ToResourceDeclaration(
+                    XamlSemanticFacts.FindResourceDeclarationInScope(
+                        resourceRoot,
+                        key,
+                        context.TypeSystem))
+                : null;
             if (declaration is null)
             {
                 continue;
@@ -365,18 +524,50 @@ internal sealed partial class XamlLanguageServer
         return null;
     }
 
+    private static ResourceDeclaration? ToResourceDeclaration(XamlElement? element)
+    {
+        if (element is null ||
+            XamlSemanticFacts.GetKeyAttribute(element)?.Value is not { } value)
+        {
+            return null;
+        }
+
+        var typeName = element.Name is { LocalName.Length: > 0 } elementName
+            ? elementName.FullName
+            : string.Empty;
+        return new ResourceDeclaration(typeName, value.InnerSpan);
+    }
+
     // --- Named-element references (ElementName / Storyboard.TargetName) ------
 
     /// <summary>F12/hover shared resolver for a named-element reference under the caret: a classic {Binding ElementName=Foo} argument or a Storyboard.TargetName="Foo" attribute value.</summary>
-    private async Task<NameReferenceHit?> ResolveNameReferenceAsync(TextDocumentPositionParams p)
+    private async Task<NameReferenceHit?> ResolveNameReferenceAsync(
+        TextDocumentPositionParams p,
+        bool waitForTypeSystem = false)
     {
-        if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc) || doc.Parsed.Root is not { } root)
+        if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc) || doc.Parsed.Root is null)
         {
             return null;
         }
 
         int offset = doc.OffsetAt(p.Position);
-        var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        XamlTypeSystem? typeSystem;
+        if (!TryGetReadyTypeSystem(p.TextDocument.Uri, out var readyTypeSystem))
+        {
+            typeSystem = waitForTypeSystem
+                ? (await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false))?.TypeSystem
+                : null;
+        }
+        else
+        {
+            typeSystem = readyTypeSystem;
+        }
+
+        if (typeSystem is null)
+        {
+            return null;
+        }
+
         var reference = FindNameReferenceAt(doc, offset, typeSystem);
         if (reference == null)
         {
@@ -384,8 +575,15 @@ internal sealed partial class XamlLanguageServer
         }
 
         var (name, referenceSpan) = reference.Value;
-        var declaration = FindNamedElement(root, name);
-        if (declaration == null)
+        var declarationElement = XamlSemanticFacts.FindNamedElementInScope(
+            doc,
+            doc.Parsed.FindNode(referenceSpan.Start),
+            name,
+            typeSystem);
+        var declaration = declarationElement is null
+            ? null
+            : FindNameDeclaration(declarationElement, typeSystem);
+        if (declaration is null)
         {
             return null;
         }
@@ -513,21 +711,14 @@ internal sealed partial class XamlLanguageServer
                 attribute.Value is { IsMarkupExtension: false } value &&
                 value.Span.ContainsInclusive(offset))
             {
-                if (attribute.Name.IsDotted)
+                if (attribute.Name.IsDotted && value.Text.Trim().Length > 0)
                 {
-                    var candidate = value.Text.Trim();
-                    if (candidate.Length > 0 && FindNamedElement(root, candidate) is not null)
-                    {
-                        return true;
-                    }
+                    return true;
                 }
-                else if (string.Equals(
-                             attribute.Name.LocalName,
-                             "Target",
-                             StringComparison.Ordinal) &&
-                         SetterTargetElementSpan(value) is { } target &&
-                         target.Span.ContainsInclusive(offset) &&
-                         FindNamedElement(root, target.Element) is not null)
+
+                if (string.Equals(attribute.Name.LocalName, "Target", StringComparison.Ordinal) &&
+                    SetterTargetElementSpan(value) is { } target &&
+                    target.Span.ContainsInclusive(offset))
                 {
                     return true;
                 }
@@ -601,30 +792,14 @@ internal sealed partial class XamlLanguageServer
                 typeSystem);
     }
 
-    /// <summary>Finds the element declaring x:Name="name" (or Name="name") anywhere in the document and returns its element type name plus the span of the name literal to navigate to, or null.</summary>
-    private static (string TypeName, TextSpan NavSpan)? FindNamedElement(XamlElement element, string name)
+    private static (string TypeName, TextSpan NavSpan)? FindNameDeclaration(
+        XamlElement element,
+        XamlTypeSystem typeSystem)
     {
-        var attr = element.GetAttribute("x:Name") ?? element.GetAttribute("Name");
-        if (attr?.Value is { } value && !value.IsMarkupExtension &&
-            string.Equals(value.Text.Trim(), name, StringComparison.Ordinal))
-        {
-            var typeName = element.Name is { LocalName.Length: > 0 } elementName ? elementName.FullName : string.Empty;
-            return (typeName, value.InnerSpan);
-        }
-
-        foreach (var child in element.Content)
-        {
-            if (child is XamlElement childElement)
-            {
-                var hit = FindNamedElement(childElement, name);
-                if (hit != null)
-                {
-                    return hit;
-                }
-            }
-        }
-
-        return null;
+        var attribute = XamlSemanticFacts.GetNameAttribute(element, typeSystem);
+        return attribute?.Value is { IsMarkupExtension: false } value
+            ? (element.Name?.FullName ?? string.Empty, value.InnerSpan)
+            : null;
     }
 
     // --- Attached-property hover --------------------------------------------

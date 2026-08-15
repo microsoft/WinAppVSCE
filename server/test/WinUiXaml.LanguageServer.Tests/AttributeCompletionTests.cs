@@ -14,11 +14,17 @@ public sealed class AttributeCompletionTests
         namespace TestApp
         {
             public class DependencyObject { }
+            public class Page : DependencyObject
+            {
+                public Microsoft.UI.Xaml.ResourceDictionary Resources { get; } = new();
+            }
             public class Button : DependencyObject
             {
                 public double Width { get; set; }
                 public string Text { get; set; } = "";
                 public bool IsEnabled { get; set; }
+                public Microsoft.UI.Xaml.Thickness Margin { get; set; }
+                public Microsoft.UI.Xaml.Media.FontFamily FontFamily { get; set; } = new();
                 public Microsoft.UI.Xaml.Media.Brush Foreground { get; set; } = new();
                 public event System.EventHandler? Click;
             }
@@ -30,14 +36,21 @@ public sealed class AttributeCompletionTests
                 public event System.EventHandler? Closed;
             }
 
+            public class Widget : DependencyObject
+            {
+                public System.Collections.Generic.List<Button> Resources { get; } = new();
+            }
+
             public class Grid : DependencyObject
             {
-                public System.Collections.Generic.List<RowDefinition> RowDefinitions { get; } = new();
+                public Microsoft.UI.Xaml.Controls.RowDefinitionCollection RowDefinitions { get; } = new();
+                public Microsoft.UI.Xaml.Controls.ColumnDefinitionCollection ColumnDefinitions { get; } = new();
                 public static int GetRow(DependencyObject value) => 0;
                 public static void SetRow(DependencyObject value, int row) { }
             }
 
             public class RowDefinition : DependencyObject { }
+            public class ColumnDefinition : DependencyObject { }
             public class DoubleAnimation : DependencyObject { }
 
             public static class AutomationProperties
@@ -54,6 +67,24 @@ public sealed class AttributeCompletionTests
         namespace Microsoft.UI.Xaml.Media
         {
             public class Brush { }
+            public class FontFamily { }
+        }
+
+        namespace Microsoft.UI.Xaml
+        {
+            public struct Thickness { }
+            public class FrameworkTemplate { }
+            public class DataTemplate : FrameworkTemplate { }
+            public class ResourceDictionary
+            {
+                public System.Collections.Generic.Dictionary<string, ResourceDictionary> ThemeDictionaries { get; } = new();
+            }
+        }
+
+        namespace Microsoft.UI.Xaml.Controls
+        {
+            public class RowDefinitionCollection : System.Collections.Generic.List<TestApp.RowDefinition> { }
+            public class ColumnDefinitionCollection : System.Collections.Generic.List<TestApp.ColumnDefinition> { }
         }
 
         namespace Microsoft.UI.Xaml.Media.Animation
@@ -67,6 +98,53 @@ public sealed class AttributeCompletionTests
             }
         }
         """;
+
+    [Theory]
+    [InlineData("<Button Margin=\"|\" />", "0,0,0,0")]
+    [InlineData("<Button FontFamily=\"|\" />", "Segoe Fluent Icons")]
+    [InlineData("<Grid RowDefinitions=\"|\" />", "Auto,*,Auto")]
+    [InlineData("<Grid ColumnDefinitions=\"|\" />", "Auto,*,Auto")]
+    public void CommonLiteralValuesOfferAuthoringSuggestions(string body, string expected)
+    {
+        const string header = "<Page xmlns=\"using:TestApp\">";
+        var marked = header + body + "</Page>";
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+
+        var labels = CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            CreateTypeSystem()).Items.Select(item => item.Label);
+
+        Assert.Contains(expected, labels);
+    }
+
+    [Theory]
+    [InlineData("<Grid R| />", "RowDefinitions")]
+    [InlineData("<Grid C| />", "ColumnDefinitions")]
+    public void GridConciseCollectionsAreOfferedAsAttributes(string body, string expected)
+    {
+        const string header = "<Page xmlns=\"using:TestApp\">";
+        Assert.Contains(expected, CompleteLabels(header + body + "</Page>"));
+    }
+
+    [Theory]
+    [InlineData("<Grid RowDefinitions=\"|\" />", "rows")]
+    [InlineData("<Grid ColumnDefinitions=\"|\" />", "columns")]
+    public void GridDefinitionSuggestionsDescribeCorrectDimension(string body, string dimension)
+    {
+        const string header = "<Page xmlns=\"using:TestApp\">";
+        var marked = header + body + "</Page>";
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+
+        var item = CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            CreateTypeSystem()).Items.Single(candidate => candidate.Label == "Auto,*");
+
+        Assert.Contains(dimension, item.Detail, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void NewlineAttributeCompletion_IncludesDirectivesAndAutomationProperties()
@@ -85,7 +163,205 @@ public sealed class AttributeCompletionTests
 
         Assert.Contains(items, item => item.Label == "Width");
         Assert.Contains(items, item => item.Label == "x:Name");
+        Assert.Contains(items, item => item.Label == "x:DataType");
+        Assert.Contains(items, item => item.Label == "x:Uid");
+        Assert.Contains(items, item => item.Label == "x:Load");
         Assert.Contains(items, item => item.Label == "AutomationProperties.Name");
+    }
+
+    [Fact]
+    public void ResourceChildCompletionIncludesXKey()
+    {
+        const string marked = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Page.Resources>
+                <Button x:| />
+              </Page.Resources>
+            </Page>
+            """;
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        var labels = CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            CreateTypeSystem()).Items.Select(item => item.Label);
+
+        Assert.Contains("x:Key", labels);
+    }
+
+    [Fact]
+    public void ThemeDictionaryChildCompletionIncludesXKey()
+    {
+        const string marked = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <ResourceDictionary.ThemeDictionaries xmlns="using:Microsoft.UI.Xaml">
+                <ResourceDictionary x:| />
+              </ResourceDictionary.ThemeDictionaries>
+            </Page>
+            """;
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        var labels = CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            CreateTypeSystem()).Items.Select(item => item.Label);
+
+        Assert.Contains("x:Key", labels);
+    }
+
+    [Fact]
+    public void XClassIsOnlyOfferedOnRootElement()
+    {
+        const string marked = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Button x:| />
+            </Page>
+            """;
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        var labels = CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            CreateTypeSystem()).Items.Select(item => item.Label);
+
+        Assert.DoesNotContain("x:Class", labels);
+    }
+
+    [Fact]
+    public void RootElementCompletionIncludesXClass()
+    {
+        const string marked = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  x:| />
+            """;
+
+        Assert.Contains("x:Class", CompleteLabels(marked));
+    }
+
+    [Fact]
+    public void OrdinaryChildCompletionDoesNotIncludeXKey()
+    {
+        const string marked = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Button x:| />
+            </Page>
+            """;
+
+        Assert.DoesNotContain("x:Key", CompleteLabels(marked));
+    }
+
+    [Fact]
+    public void CustomNonDictionaryResourcesPropertyDoesNotIncludeXKey()
+    {
+        const string marked = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Widget.Resources>
+                <Button x:| />
+              </Widget.Resources>
+            </Page>
+            """;
+
+        Assert.DoesNotContain("x:Key", CompleteLabels(marked));
+    }
+
+    [Fact]
+    public void PropertyElementCompletionRejectsMismatchedOwner()
+    {
+        const string marked = """
+            <Grid xmlns="using:TestApp">
+              <Button.| />
+            </Grid>
+            """;
+
+        Assert.Empty(CompleteLabels(marked));
+    }
+
+    [Fact]
+    public void DataTypeValueCompletionSupportsAlternateXamlPrefix()
+    {
+        const string marked = """
+            <Page xmlns="using:TestApp"
+                  xmlns:lang="http://schemas.microsoft.com/winfx/2006/xaml"
+                  lang:DataType="|" />
+            """;
+
+        Assert.Contains("Page", CompleteLabels(marked));
+    }
+
+    [Fact]
+    public void DirectiveCompletionUsesThePrefixBeingTyped()
+    {
+        const string marked = """
+            <Button xmlns="using:TestApp"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:lang="http://schemas.microsoft.com/winfx/2006/xaml"
+                    lang:| />
+            """;
+
+        var labels = CompleteLabels(marked);
+
+        Assert.Contains("lang:Name", labels);
+        Assert.DoesNotContain("x:Name", labels);
+    }
+
+    [Fact]
+    public void FieldModifierAndDeferLoadStrategyRequireAName()
+    {
+        const string unnamed = """
+            <Button xmlns="using:TestApp"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    x:| />
+            """;
+        const string named = """
+            <Button xmlns="using:TestApp"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    x:Name="Action"
+                    x:| />
+            """;
+
+        Assert.DoesNotContain("x:FieldModifier", CompleteLabels(unnamed));
+        Assert.DoesNotContain("x:DeferLoadStrategy", CompleteLabels(unnamed));
+        Assert.Contains("x:FieldModifier", CompleteLabels(named));
+        Assert.Contains("x:DeferLoadStrategy", CompleteLabels(named));
+    }
+
+    [Fact]
+    public void XPhaseRequiresXBindInsideDataTemplate()
+    {
+        const string withBinding = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="using:Microsoft.UI.Xaml">
+              <ui:DataTemplate>
+                <Button Text="{x:Bind Name}" x:| />
+              </ui:DataTemplate>
+            </Page>
+            """;
+        const string withoutBinding = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="using:Microsoft.UI.Xaml">
+              <ui:DataTemplate>
+                <Button x:| />
+              </ui:DataTemplate>
+            </Page>
+            """;
+        const string outsideTemplate = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Button Text="{x:Bind Name}" x:| />
+            </Page>
+            """;
+
+        Assert.Contains("x:Phase", CompleteLabels(withBinding));
+        Assert.DoesNotContain("x:Phase", CompleteLabels(withoutBinding));
+        Assert.DoesNotContain("x:Phase", CompleteLabels(outsideTemplate));
     }
 
     [Fact]
@@ -105,6 +381,30 @@ public sealed class AttributeCompletionTests
             CreateTypeSystem()).Items.Select(item => item.Label);
 
         Assert.DoesNotContain("x:Name", labels);
+    }
+
+    [Fact]
+    public void ExistingDirectiveAliasSuppressesEquivalentDirective()
+    {
+        const string marked = """
+            <Button xmlns="using:TestApp"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:lang="http://schemas.microsoft.com/winfx/2006/xaml"
+                    lang:Name="Action"
+                    x:| />
+            """;
+
+        Assert.DoesNotContain("x:Name", CompleteLabels(marked));
+    }
+
+    private static string[] CompleteLabels(string marked)
+    {
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        return CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            CreateTypeSystem()).Items.Select(item => item.Label).ToArray();
     }
 
     [Theory]

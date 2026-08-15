@@ -418,7 +418,7 @@ internal static partial class CompletionProvider
         }
 
         var contentType = enclosing.IsPropertyElement
-            ? PropertyElementContentType(enclosing, scope, typeSystem)
+            ? PropertyElementContentType(enclosing, typeSystem)
             : ObjectElementContentType(enclosing, scope, typeSystem);
 
         // Only scope when the type narrows the list to a concrete class. object / interfaces do not.
@@ -434,33 +434,13 @@ internal static partial class CompletionProvider
 
     /// <summary>Content type accepted inside a property element (<c>&lt;Owner.Property&gt;</c>).</summary>
     private static ITypeSymbol? PropertyElementContentType(
-        XamlElement propertyElement, XamlNamespaceScope scope, XamlTypeSystem typeSystem)
+        XamlElement propertyElement,
+        XamlTypeSystem typeSystem)
     {
-        var local = propertyElement.Name!.LocalName; // "Grid.RowDefinitions"
-        int dot = local.IndexOf('.');
-        if (dot <= 0 || dot >= local.Length - 1)
-        {
-            return null;
-        }
-
-        if (!scope.TryResolvePrefix(string.Empty, out var uri))
-        {
-            return null;
-        }
-
-        var ownerType = typeSystem.ResolveType(uri, local.Substring(0, dot));
-        if (ownerType is null)
-        {
-            return null;
-        }
-
-        var propertyType = typeSystem.GetPropertyType(ownerType, local.Substring(dot + 1));
-        if (propertyType is null)
-        {
-            return null;
-        }
-
-        return XamlTypeSystem.GetCollectionElementType(propertyType) ?? propertyType;
+        var propertyType = XamlSemanticFacts.ResolvePropertyElementMember(propertyElement, typeSystem)?.PropertyType;
+        return propertyType is null
+            ? null
+            : XamlTypeSystem.GetCollectionElementType(propertyType) ?? propertyType;
     }
 
     /// <summary>Content type accepted inside a plain object element, via its <c>[ContentProperty]</c>.</summary>
@@ -515,9 +495,19 @@ internal static partial class CompletionProvider
                 .Where(a => !a.IsNamespaceDeclaration && a.Name.LocalNameSpan.Start != ctx.ReplaceStart)
                 .Select(a => a.Name.FullName),
             StringComparer.Ordinal);
+        var existingDirectives = new HashSet<string>(
+            element.Attributes
+                .Where(attribute =>
+                    !attribute.IsNamespaceDeclaration &&
+                    attribute.Name.LocalNameSpan.Start != ctx.ReplaceStart &&
+                    attribute.Name.HasPrefix &&
+                    scope.TryResolvePrefix(attribute.Name.Prefix, out var uri) &&
+                    string.Equals(uri, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal))
+                .Select(attribute => attribute.Name.LocalName),
+            StringComparer.Ordinal);
 
         var items = new List<CompletionItem>();
-        foreach (var member in typeSystem.GetMembers(elementType))
+        foreach (var member in typeSystem.GetAttributeMembers(elementType))
         {
             if (!StartsWith(member.Name, ctx.Partial) || existing.Contains(member.Name))
             {
@@ -532,14 +522,23 @@ internal static partial class CompletionProvider
                 Detail = DescribeMember(member),
                 TextEdit = new TextEdit { Range = nameReplaceRange, NewText = appendValue ? member.Name + "=\"$0\"" : member.Name },
                 InsertTextFormat = appendValue ? SnippetInsertFormat : null,
-                Command = AttributeValueSuggestionCommand(member, appendValue),
+                Command = AttributeValueSuggestionCommand(member, typeSystem, appendValue),
                 FilterText = member.Name,
                 // Sort events after properties so the common case (properties) surfaces first.
                 SortText = (member.Kind == XamlMemberKind.Event ? "1" : "0") + member.Name,
             });
         }
 
-        AddXamlDirectives(items, existing, ctx.Partial, scope, nameReplaceRange, appendValue);
+        AddXamlDirectives(
+            items,
+            existing,
+            existingDirectives,
+            ctx.Partial,
+            element,
+            scope,
+            typeSystem,
+            nameReplaceRange,
+            appendValue);
         AddContainerAttachedProperties(items, element, existing, ctx.Partial, scope, typeSystem, nameReplaceRange, appendValue);
         AddAutomationProperties(items, existing, ctx.Partial, scope, typeSystem, nameReplaceRange, appendValue);
 
@@ -564,19 +563,95 @@ internal static partial class CompletionProvider
     private static void AddXamlDirectives(
         List<CompletionItem> items,
         HashSet<string> existing,
+        HashSet<string> existingDirectives,
         string partial,
+        XamlElement element,
         XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
         Lsp.Range replaceRange,
         bool appendValue)
     {
-        var xamlPrefix = scope.Declarations.FirstOrDefault(
-            declaration => string.Equals(declaration.Value, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal)).Key;
+        var colon = partial.IndexOf(':');
+        var typedPrefix = colon > 0 ? partial[..colon] : string.Empty;
+        var xamlPrefix =
+            typedPrefix.Length > 0 &&
+            scope.TryResolvePrefix(typedPrefix, out var typedUri) &&
+            string.Equals(typedUri, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal)
+                ? typedPrefix
+                : scope.Declarations.FirstOrDefault(
+                    declaration => string.Equals(
+                        declaration.Value,
+                        XamlTypeSystem.XamlLanguageNamespace,
+                        StringComparison.Ordinal)).Key;
         if (string.IsNullOrEmpty(xamlPrefix))
         {
             return;
         }
 
-        AddSyntheticAttribute(items, existing, partial, xamlPrefix + ":Name", "XAML name", replaceRange, appendValue, "0");
+        foreach (var (localName, description) in XamlDirectiveMetadata.AttributeDirectives)
+        {
+            if (existingDirectives.Contains(localName) ||
+                !IsApplicableXamlDirective(localName, element, typeSystem))
+            {
+                continue;
+            }
+
+            AddSyntheticAttribute(
+                items,
+                existing,
+                partial,
+                xamlPrefix + ":" + localName,
+                description,
+                replaceRange,
+                appendValue,
+                "0");
+        }
+    }
+
+    private static bool IsApplicableXamlDirective(
+        string localName,
+        XamlElement element,
+        XamlTypeSystem typeSystem)
+    {
+        if (string.Equals(localName, "Class", StringComparison.Ordinal))
+        {
+            return element.Parent is not XamlElement;
+        }
+
+        if (string.Equals(localName, "Key", StringComparison.Ordinal))
+        {
+            return element.Parent is XamlElement parent &&
+                (XamlSemanticFacts.IsResourceDictionaryPropertyElement(parent, typeSystem) ||
+                 XamlSemanticFacts.IsResourceDictionary(parent, typeSystem));
+        }
+
+        if (string.Equals(localName, "Phase", StringComparison.Ordinal))
+        {
+            if (!element.Attributes.Any(attribute =>
+                    XamlSemanticFacts.IsXBind(attribute, element.NamespaceScope)))
+            {
+                return false;
+            }
+
+            for (var current = element.Parent; current is not null; current = current.Parent)
+            {
+                if (current is XamlElement ancestor &&
+                    XamlSemanticFacts.IsDataTemplate(ancestor, typeSystem))
+                {
+                    return true;
+                }
+
+            }
+
+            return false;
+        }
+
+        if (localName is "FieldModifier" or "DeferLoadStrategy")
+        {
+            return XamlSemanticFacts.GetNameAttribute(element, typeSystem) is not null;
+        }
+
+        return true;
     }
 
     private static void AddAutomationProperties(
@@ -616,7 +691,7 @@ internal static partial class CompletionProvider
                 Detail = "attached property" + (member.Type != null ? " : " + member.Type.ToDisplayString() : string.Empty),
                 TextEdit = new TextEdit { Range = replaceRange, NewText = appendValue ? qualified + "=\"$0\"" : qualified },
                 InsertTextFormat = appendValue ? SnippetInsertFormat : null,
-                Command = AttributeValueSuggestionCommand(member, appendValue),
+                Command = AttributeValueSuggestionCommand(member, typeSystem, appendValue),
                 FilterText = qualified,
                 SortText = "2" + qualified,
             });
@@ -691,7 +766,7 @@ internal static partial class CompletionProvider
                 Detail = "attached property" + (member.Type != null ? " : " + member.Type.ToDisplayString() : string.Empty),
                 TextEdit = new TextEdit { Range = replaceRange, NewText = appendValue ? qualified + "=\"$0\"" : qualified },
                 InsertTextFormat = appendValue ? SnippetInsertFormat : null,
-                Command = AttributeValueSuggestionCommand(member, appendValue),
+                Command = AttributeValueSuggestionCommand(member, typeSystem, appendValue),
                 FilterText = qualified,
                 // Rank after the element's own members (which use group "0"/"1").
                 SortText = "2" + qualified,
@@ -746,7 +821,7 @@ internal static partial class CompletionProvider
                 Detail = "attached property" + (member.Type != null ? " : " + member.Type.ToDisplayString() : string.Empty),
                 TextEdit = new TextEdit { Range = replaceRange, NewText = appendValue ? qualified + "=\"$0\"" : qualified },
                 InsertTextFormat = appendValue ? SnippetInsertFormat : null,
-                Command = AttributeValueSuggestionCommand(member, appendValue),
+                Command = AttributeValueSuggestionCommand(member, typeSystem, appendValue),
                 FilterText = qualified,
                 SortText = member.Name,
             });
@@ -755,7 +830,10 @@ internal static partial class CompletionProvider
         return Finish(items);
     }
 
-    private static Lsp.Command? AttributeValueSuggestionCommand(XamlMemberInfo member, bool appendValue)
+    private static Lsp.Command? AttributeValueSuggestionCommand(
+        XamlMemberInfo member,
+        XamlTypeSystem typeSystem,
+        bool appendValue)
     {
         if (!appendValue)
         {
@@ -769,10 +847,13 @@ internal static partial class CompletionProvider
                 (valueType.TypeKind != TypeKind.Enum &&
                  valueType.SpecialType != SpecialType.System_Boolean &&
                  valueType is not INamedTypeSymbol { Name: "Type", ContainingNamespace.Name: "System" } &&
-                 !XamlValueConverter.IsGridLength(valueType) &&
-                 !XamlValueConverter.IsBrush(valueType) &&
-                 !XamlValueConverter.IsColor(valueType) &&
-                 !XamlValueConverter.IsFontWeight(valueType)))
+                 !XamlValueConverter.IsGridLength(valueType, typeSystem) &&
+                 !XamlValueConverter.IsThickness(valueType, typeSystem) &&
+                 !XamlValueConverter.IsFontFamily(valueType, typeSystem) &&
+                 !XamlValueConverter.IsGridDefinitionCollection(valueType, typeSystem) &&
+                 !XamlValueConverter.IsBrush(valueType, typeSystem) &&
+                 !XamlValueConverter.IsColor(valueType, typeSystem) &&
+                 !XamlValueConverter.IsFontWeight(valueType, typeSystem)))
             {
                 return null;
             }
@@ -848,7 +929,7 @@ internal static partial class CompletionProvider
             scope,
             typeSystem))
         {
-            return CompleteElementNames(doc, ctx.Partial, string.Empty, scope, typeSystem, replaceRange);
+            return CompleteElementNames(doc, ctx.Partial, string.Empty, typeSystem, replaceRange);
         }
 
         // RelativePanel object-valued alignment targets reference named elements; the SDK
@@ -856,7 +937,7 @@ internal static partial class CompletionProvider
         if (ctx.AttributeName is { } attr &&
             XamlSemanticFacts.IsRelativePanelElementReferenceAttribute(attr, scope, typeSystem))
         {
-            return CompleteElementNames(doc, ctx.Partial, string.Empty, scope, typeSystem, replaceRange);
+            return CompleteElementNames(doc, ctx.Partial, string.Empty, typeSystem, replaceRange);
         }
 
         // Storyboard.TargetProperty="Opacity" lists the property members of the element named by the sibling Storyboard.TargetName on the same animation element.
@@ -878,7 +959,10 @@ internal static partial class CompletionProvider
         }
 
         // x:DataType roots binding completion and accepts any type kind.
-        if (string.Equals(ctx.AttributeName, "x:DataType", StringComparison.Ordinal))
+        if (XamlSemanticFacts.IsXamlDirectiveName(
+            ctx.AttributeName!,
+            "DataType",
+            scope))
         {
             return CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange, allTypeKinds: true);
         }
@@ -935,24 +1019,87 @@ internal static partial class CompletionProvider
         }
 
         // GridLength-typed value (RowDefinition.Height / ColumnDefinition.Width) — offer the two keyword sizings VS/Blend surface (Auto, *). FrameworkElement.Width/Height are 'double' (not GridLength), so they correctly fall through to the empty list below.
-        if (XamlValueConverter.IsGridLength(valueType))
+        if (XamlValueConverter.IsGridLength(valueType, typeSystem))
         {
             return CompleteGridLength(partial, valueReplaceRange);
         }
 
+        if (XamlValueConverter.IsGridDefinitionCollection(valueType, typeSystem))
+        {
+            var dimension =
+                typeSystem.Capabilities.ColumnDefinitionCollection is { } columns &&
+                SymbolEqualityComparer.Default.Equals(valueType, columns)
+                    ? "columns"
+                    : "rows";
+            return CompleteLiteralValues(
+                partial,
+                valueReplaceRange,
+                ("Auto,*", $"Two {dimension}: content-sized, then remaining space"),
+                ("Auto,*,Auto", $"Three {dimension}: content-sized, remaining space, content-sized"),
+                ("*,*", $"Two equal star-sized {dimension}"));
+        }
+
+        if (XamlValueConverter.IsThickness(valueType, typeSystem))
+        {
+            return CompleteLiteralValues(
+                partial,
+                valueReplaceRange,
+                ("0", "Uniform thickness"),
+                ("0,0", "Horizontal and vertical thickness"),
+                ("0,0,0,0", "Left, top, right, and bottom thickness"));
+        }
+
+        if (XamlValueConverter.IsFontFamily(valueType, typeSystem))
+        {
+            return CompleteLiteralValues(
+                partial,
+                valueReplaceRange,
+                ("Segoe UI", "Windows UI text font"),
+                ("Segoe UI Variable", "Windows variable UI text font"),
+                ("Segoe Fluent Icons", "Windows Fluent icon font"));
+        }
+
         // Brush/Color-typed value (Foreground/Background/BorderBrush/…, SolidColorBrush.Color, GradientStop.Color) — offer the WinUI named colors (Red, CornflowerBlue, …
-        if (XamlValueConverter.IsBrush(valueType) || XamlValueConverter.IsColor(valueType))
+        if (XamlValueConverter.IsBrush(valueType, typeSystem) ||
+            XamlValueConverter.IsColor(valueType, typeSystem))
         {
             return CompleteNamedColor(partial, typeSystem, valueReplaceRange);
         }
 
         // FontWeight-typed value (Control.FontWeight, TextBlock.FontWeight, …) — offer the named weights (Thin, Light, Normal, SemiBold, Bold, …, ExtraBlack) from Microsoft.UI.Text.FontWeights, as VS/Blend do. The numeric form (FontWeight="700") stays free-form (no named weight starts with a digit).
-        if (XamlValueConverter.IsFontWeight(valueType))
+        if (XamlValueConverter.IsFontWeight(valueType, typeSystem))
         {
             return CompleteFontWeight(partial, typeSystem, valueReplaceRange);
         }
 
         return null;
+    }
+
+    private static CompletionList CompleteLiteralValues(
+        string partial,
+        Lsp.Range replaceRange,
+        params (string Value, string Detail)[] values)
+    {
+        var items = new List<CompletionItem>();
+        foreach (var (value, detail) in values)
+        {
+            if (!StartsWith(value, partial))
+            {
+                continue;
+            }
+
+            items.Add(new CompletionItem
+            {
+                Label = value,
+                Kind = CompletionItemKind.Value,
+                Detail = detail,
+                TextEdit = new TextEdit { Range = replaceRange, NewText = value },
+                FilterText = value,
+                SortText = value,
+            });
+        }
+
+        return Finish(items);
     }
 
     /// <summary>Completes type names for a type-valued attribute.</summary>
@@ -1079,11 +1226,15 @@ internal static partial class CompletionProvider
         if (dot < 0)
         {
             // Still typing the element-name segment.
-            return CompleteElementNames(doc, partial, string.Empty, scope, typeSystem, replaceRange);
+            return CompleteElementNames(doc, partial, string.Empty, typeSystem, replaceRange);
         }
 
         var elementName = partial.Substring(0, dot);
-        var elementType = ResolveNamedElementType(doc.Parsed.Root, elementName, scope, typeSystem);
+        var elementType = XamlSemanticFacts.ResolveNamedElementTypeInScope(
+            doc,
+            doc.Parsed.FindNode(Math.Max(0, doc.OffsetAt(replaceRange.Start) - 1)),
+            elementName,
+            typeSystem);
         if (elementType is null)
         {
             return new CompletionList();
@@ -1116,7 +1267,11 @@ internal static partial class CompletionProvider
             return new CompletionList();
         }
 
-        var targetType = ResolveNamedElementType(doc.Parsed.Root, targetName!, scope, typeSystem);
+        var targetType = XamlSemanticFacts.ResolveNamedElementTypeInScope(
+            doc,
+            animation,
+            targetName!,
+            typeSystem);
         return targetType is null
             ? new CompletionList()
             : CompletePropertyPath(targetType, partial, string.Empty, typeSystem, replaceRange);
@@ -1204,34 +1359,35 @@ internal static partial class CompletionProvider
         return Finish(items);
     }
 
-    /// <summary>Completes the x:Name'd elements declared anywhere in the document (x:Name scope is per-file), filtered by partial and emitted with prefix preserved in the inserted text.</summary>
+    /// <summary>Completes named elements in the current XAML namescope.</summary>
     private static CompletionList CompleteElementNames(
         TextDocument doc, string partial, string prefix,
-        XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange)
+        XamlTypeSystem typeSystem, Lsp.Range replaceRange)
     {
         var items = new List<CompletionItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        if (doc.Parsed.Root is { } root)
+        var context = doc.Parsed.FindNode(Math.Max(0, doc.OffsetAt(replaceRange.Start) - 1));
+        foreach (var (name, element) in XamlSemanticFacts.EnumerateNamedElementsInScope(
+            doc,
+            context,
+            typeSystem))
         {
-            foreach (var (name, element) in EnumerateNamedElements(root))
+            if (!StartsWith(name, partial) || !seen.Add(name))
             {
-                if (!StartsWith(name, partial) || !seen.Add(name))
-                {
-                    continue;
-                }
-
-                var type = element.Name is { } typeName ? ResolveElementType(typeName, scope, typeSystem) : null;
-                var newText = prefix + name;
-                items.Add(new CompletionItem
-                {
-                    Label = name,
-                    Kind = CompletionItemKind.Field,
-                    Detail = type is null ? "(element)" : "(element) " + type.Name,
-                    TextEdit = new TextEdit { Range = replaceRange, NewText = newText },
-                    FilterText = newText,
-                    SortText = name,
-                });
+                continue;
             }
+
+            var type = XamlSemanticFacts.ResolveElementType(element, typeSystem);
+            var newText = prefix + name;
+            items.Add(new CompletionItem
+            {
+                Label = name,
+                Kind = CompletionItemKind.Field,
+                Detail = type is null ? "(element)" : "(element) " + type.Name,
+                TextEdit = new TextEdit { Range = replaceRange, NewText = newText },
+                FilterText = newText,
+                SortText = name,
+            });
         }
 
         return Finish(items);
@@ -1284,51 +1440,6 @@ internal static partial class CompletionProvider
         }
 
         return Finish(items);
-    }
-
-    /// <summary>Resolves an x:Name reference to the declaring element's type symbol, or null when the name is not declared in the document or its type cannot be resolved.</summary>
-    internal static INamedTypeSymbol? ResolveNamedElementType(
-        XamlElement? root, string name, XamlNamespaceScope scope, XamlTypeSystem typeSystem)
-    {
-        if (root is null)
-        {
-            return null;
-        }
-
-        foreach (var (candidate, element) in EnumerateNamedElements(root))
-        {
-            if (string.Equals(candidate, name, StringComparison.Ordinal))
-            {
-                return element.Name is { } typeName ? ResolveElementType(typeName, scope, typeSystem) : null;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>Enumerates every element carrying an x:Name (or Name) literal, paired with its name, by walking the document tree. x:Name scope is the whole file</summary>
-    private static IEnumerable<(string Name, XamlElement Element)> EnumerateNamedElements(XamlElement element)
-    {
-        var attr = element.GetAttribute("x:Name") ?? element.GetAttribute("Name");
-        if (attr?.Value is { IsMarkupExtension: false } value)
-        {
-            var name = value.Text.Trim();
-            if (name.Length > 0 && element.Name is { LocalName.Length: > 0 })
-            {
-                yield return (name, element);
-            }
-        }
-
-        foreach (var child in element.Content)
-        {
-            if (child is XamlElement childElement)
-            {
-                foreach (var hit in EnumerateNamedElements(childElement))
-                {
-                    yield return hit;
-                }
-            }
-        }
     }
 
     /// <summary> Completes <c>{TemplateBinding |}</c> with the settable properties of the enclosing <c>ControlTemplate</c>'s <c>TargetType</c>.</summary>

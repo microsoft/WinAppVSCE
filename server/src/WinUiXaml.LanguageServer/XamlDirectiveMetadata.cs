@@ -19,6 +19,7 @@ internal static class XamlDirectiveMetadata
             ["Load"] = new("x:Load", "Controls whether the XAML object is created and added to the visual tree."),
             ["Phase"] = new("x:Phase", "Assigns a compiled binding to an incremental data-template rendering phase."),
             ["Uid"] = new("x:Uid", "Identifies localized resources that provide property values for this XAML object."),
+            ["DeferLoadStrategy"] = new("x:DeferLoadStrategy", "Defers creation of the XAML object until it is requested."),
         };
 
     private static readonly IReadOnlyDictionary<string, DirectiveInfo> XamlExtensions =
@@ -71,6 +72,9 @@ internal static class XamlDirectiveMetadata
 
         return null;
     }
+
+    internal static IEnumerable<(string LocalName, string Description)> AttributeDirectives =>
+        XamlDirectives.Select(pair => (pair.Key, pair.Value.Description));
 
     private static XamlNamespaceScope? FindScope(XamlNode node)
     {

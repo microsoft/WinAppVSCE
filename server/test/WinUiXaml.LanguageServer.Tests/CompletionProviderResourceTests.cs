@@ -32,12 +32,12 @@ public sealed class CompletionProviderResourceTests
                 """);
 
             var text = $$"""
-                <Page xmlns="{{Presentation}}" xmlns:x="{{Xaml}}">
+                <Page xmlns="{{Presentation}}" xmlns:lang="{{Xaml}}" xmlns:p="{{Presentation}}">
                   <Page.Resources>
-                    <SolidColorBrush x:Key="LocalBrush" />
-                    <Style x:Key="LocalStyle" />
+                    <SolidColorBrush lang:Key="LocalBrush" />
+                    <Style lang:Key="LocalStyle" />
                   </Page.Resources>
-                  <Border Background="{ThemeResource |}" />
+                  <Border Background="{p:ThemeResource |}" />
                 </Page>
                 """;
             var offset = text.IndexOf('|');
@@ -54,6 +54,113 @@ public sealed class CompletionProviderResourceTests
             Assert.Contains("AppBrush", labels);
             Assert.DoesNotContain("SdkStyle", labels);
             Assert.DoesNotContain("LocalStyle", labels);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResourceCompletionFiltersAgainstTheVisibleShadowingDeclaration()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinUiXaml.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var typeSystem = CreateTypeSystem(root);
+            var text = $$"""
+                <Page xmlns="{{Presentation}}" xmlns:x="{{Xaml}}">
+                  <Page.Resources>
+                    <Style x:Key="Shared" />
+                  </Page.Resources>
+                  <Grid>
+                    <Grid.Resources>
+                      <SolidColorBrush x:Key="Shared" />
+                    </Grid.Resources>
+                    <Border Background="{ThemeResource Sha|}" />
+                  </Grid>
+                </Page>
+                """;
+            var offset = text.IndexOf('|');
+            text = text.Remove(offset, 1);
+
+            var labels = CompletionProvider.Provide(
+                    new TextDocument("file:///Page.xaml", text),
+                    offset,
+                    typeSystem)
+                .Items.Select(item => item.Label).ToHashSet(StringComparer.Ordinal);
+
+            Assert.Contains("Shared", labels);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResourceCompletionOmitsKeysOutsideLexicalScope()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinUiXaml.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var typeSystem = CreateTypeSystem(root);
+            var text = $$"""
+                <Page xmlns="{{Presentation}}" xmlns:x="{{Xaml}}">
+                  <Grid>
+                    <Grid.Resources>
+                      <SolidColorBrush x:Key="SiblingOnly" />
+                    </Grid.Resources>
+                  </Grid>
+                  <Border Background="{ThemeResource Sibling|}" />
+                </Page>
+                """;
+            var offset = text.IndexOf('|');
+            text = text.Remove(offset, 1);
+
+            var labels = CompletionProvider.Provide(
+                    new TextDocument("file:///Page.xaml", text),
+                    offset,
+                    typeSystem)
+                .Items.Select(item => item.Label).ToHashSet(StringComparer.Ordinal);
+
+            Assert.DoesNotContain("SiblingOnly", labels);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void VisibleLocalResourceStillFiltersWhenAppDefinesTheSameKey()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinUiXaml.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var typeSystem = CreateTypeSystem(root);
+            var text = $$"""
+                <Page xmlns="{{Presentation}}" xmlns:x="{{Xaml}}">
+                  <Page.Resources>
+                    <Style x:Key="Shared" />
+                  </Page.Resources>
+                  <Border Background="{ThemeResource Sha|}" />
+                </Page>
+                """;
+            var offset = text.IndexOf('|');
+            text = text.Remove(offset, 1);
+
+            var labels = CompletionProvider.Provide(
+                    new TextDocument("file:///Page.xaml", text),
+                    offset,
+                    typeSystem,
+                    appResourceKeys: new[] { "Shared" })
+                .Items.Select(item => item.Label).ToHashSet(StringComparer.Ordinal);
+
+            Assert.DoesNotContain("Shared", labels);
         }
         finally
         {
@@ -150,6 +257,10 @@ public sealed class CompletionProviderResourceTests
             }
             namespace Microsoft.UI.Xaml.Controls
             {
+                public class Grid : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public object Resources { get; set; }
+                }
                 public class Border : Microsoft.UI.Xaml.DependencyObject
                 {
                     public Microsoft.UI.Xaml.Media.Brush Background { get; set; }

@@ -4,7 +4,7 @@
 export type DegradedCause = "untrusted" | "server";
 
 /** Settings query for the degraded-state action. */
-export const SERVER_SETTINGS_QUERY = "winui-xaml.server";
+export const SERVER_SETTINGS_QUERY = "winapp.xaml";
 
 /** An action displayed in the degraded-state warning. */
 export interface DegradedAction {
@@ -54,6 +54,7 @@ export function buildDegradedNotification(
       "IntelliSense, diagnostics, and navigation are unavailable." +
       (detail ? ` ${detail}` : ""),
     actions: [
+      { label: "Restart Language Server", command: "winui-xaml.restartServer" },
       { label: "Open Settings", command: "workbench.action.openSettings", commandArg: SERVER_SETTINGS_QUERY },
       { label: "Show Output", showOutput: true },
     ],

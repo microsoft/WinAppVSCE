@@ -17,6 +17,22 @@ async function hasSemanticButtonCompletion() {
   };
 }
 
+async function waitForSemanticButton(expected, timeoutMs = 30000) {
+  const started = Date.now();
+  let last;
+  while (Date.now() - started < timeoutMs) {
+    last = await hasSemanticButtonCompletion();
+    if (last.found === expected) {
+      return last;
+    }
+    await h.delay(200);
+  }
+  assert.fail(
+    `semantic Button completion did not become ${expected ? "available" : "unavailable"}; ` +
+      `last items: ${(last?.labels || []).join(", ")}`
+  );
+}
+
 describe("WinUI XAML — cold hover contract", function () {
   this.timeout(30000);
 
@@ -102,6 +118,97 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     await h.warmUp();
     const items = await h.completionsAt(`<Page ${h.NS}>\n  <But|\n</Page>`);
     assert.ok(items.includes("Button"), "server should recover after rapid restarts");
+  });
+
+  it("stays syntax-only while XAML IntelliSense is disabled and starts after re-enabling", async () => {
+    const configuration = vscode.workspace.getConfiguration("winapp.xaml");
+    const previous = configuration.inspect("intelliSense.enable")?.globalValue;
+    try {
+      await configuration.update(
+        "intelliSense.enable",
+        false,
+        vscode.ConfigurationTarget.Global
+      );
+      await waitForSemanticButton(false);
+    } finally {
+      await configuration.update(
+        "intelliSense.enable",
+        previous,
+        vscode.ConfigurationTarget.Global
+      );
+      await waitForSemanticButton(true);
+    }
+
+    const recovered = await hasSemanticButtonCompletion();
+    assert.ok(recovered.found, "server should start after XAML IntelliSense is re-enabled");
+  });
+
+  it("applies diagnostic levels sent through client initialization options", async () => {
+    const configuration = vscode.workspace.getConfiguration("winapp.xaml");
+    const previous = configuration.inspect("diagnostics.level")?.globalValue;
+    const hasCode = (diagnostics, code) =>
+      diagnostics.some((diagnostic) => String(diagnostic.code) === code);
+    try {
+      await configuration.update(
+        "diagnostics.level",
+        "warning",
+        vscode.ConfigurationTarget.Global
+      );
+      const existing = await h.diagnosticsFor(
+        `<Page ${h.NS}>\n  <Buton />\n</Page>`,
+        (diagnostics) => hasCode(diagnostics, "WXAML0002")
+      );
+      assert.ok(hasCode(existing, "WXAML0002"), "warning should publish semantic warnings");
+
+      await configuration.update(
+        "diagnostics.level",
+        "off",
+        vscode.ConfigurationTarget.Global
+      );
+      const openDocument = h.getDoc();
+      const suppressionStarted = Date.now();
+      while (
+        Date.now() - suppressionStarted < 5000 &&
+        hasCode(vscode.languages.getDiagnostics(openDocument.uri), "WXAML0002")
+      ) {
+        await h.delay(100);
+      }
+      assert.ok(
+        !hasCode(vscode.languages.getDiagnostics(openDocument.uri), "WXAML0002"),
+        "off should republish unchanged open documents without semantic warnings"
+      );
+
+      await waitForSemanticButton(true);
+      const suppressed = await h.diagnosticsFor(
+        `<Page ${h.NS}>\n  <Buton />\n</Page>`,
+        undefined,
+        2000
+      );
+      assert.ok(!hasCode(suppressed, "WXAML0002"), "off should suppress semantic warnings");
+
+      await configuration.update(
+        "diagnostics.level",
+        "error",
+        vscode.ConfigurationTarget.Global
+      );
+      await waitForSemanticButton(true);
+      const errorsOnly = await h.diagnosticsFor(
+        `<Page ${h.NS}>\n  <zzz:Widget />\n</Page>`,
+        (diagnostics) => hasCode(diagnostics, "WXAML0001")
+      );
+      assert.ok(hasCode(errorsOnly, "WXAML0001"), "error level should preserve errors");
+      assert.ok(
+        errorsOnly.every((diagnostic) => diagnostic.severity === vscode.DiagnosticSeverity.Error),
+        "error level should filter non-error diagnostics"
+      );
+    } finally {
+      await configuration.update(
+        "diagnostics.level",
+        previous,
+        vscode.ConfigurationTarget.Global
+      );
+      await waitForSemanticButton(true);
+    }
   });
 
   it("degrades to syntax-only when the server DLL is absent (no throw)", async function () {

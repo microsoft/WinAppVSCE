@@ -8,7 +8,7 @@ import {
 // G7: the degraded-notification message + action buttons must be asserted so a regression that drops
 // or rewires an action is caught. buildDegradedNotification is the pure decision the runtime executes.
 describe('buildDegradedNotification', () => {
-	it('server cause: offers Open Settings and Show Output wired to the right targets', () => {
+	it('server cause: offers restart, settings, and output actions wired to the right targets', () => {
 		const detail = "Configured language server not found: C:\\missing\\server.exe.";
 		const { message, actions } = buildDegradedNotification('server', detail);
 
@@ -18,14 +18,18 @@ describe('buildDegradedNotification', () => {
 
 		assert.deepEqual(
 			actions.map((a) => a.label),
-			['Open Settings', 'Show Output']
+			['Restart Language Server', 'Open Settings', 'Show Output']
 		);
+
+		const restart = actions.find((a) => a.label === 'Restart Language Server');
+		assert.ok(restart);
+		assert.equal(restart.command, 'winui-xaml.restartServer');
 
 		const openSettings = actions.find((a) => a.label === 'Open Settings');
 		assert.ok(openSettings);
 		assert.equal(openSettings.command, 'workbench.action.openSettings');
 		assert.equal(openSettings.commandArg, SERVER_SETTINGS_QUERY);
-		assert.equal(openSettings.commandArg, 'winui-xaml.server');
+		assert.equal(openSettings.commandArg, 'winapp.xaml');
 
 		const showOutput = actions.find((a) => a.label === 'Show Output');
 		assert.ok(showOutput);

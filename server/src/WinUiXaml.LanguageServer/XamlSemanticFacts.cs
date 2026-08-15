@@ -85,9 +85,462 @@ internal static class XamlSemanticFacts
         XamlMarkupExtension extension,
         XamlNamespaceScope scope,
         XamlTypeSystem typeSystem) =>
+        IsBindingMarkupExtensionName(extension.Name?.FullName, scope, typeSystem);
+
+    internal static bool IsBindingMarkupExtensionName(
+        string? extensionName,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem) =>
         typeSystem.Capabilities.Binding is { } binding &&
-        ResolveMarkupExtensionType(extension.Name?.FullName, scope, typeSystem) is { } extensionType &&
+        ResolveMarkupExtensionType(extensionName, scope, typeSystem) is { } extensionType &&
         XamlTypeSystem.IsAssignableTo(extensionType, binding);
+
+    internal static bool IsResourceReferenceExtension(
+        XamlMarkupExtension extension,
+        XamlNamespaceScope scope) =>
+        extension.Name is { } name &&
+        name.LocalName is "StaticResource" or "ThemeResource" or "CustomResource" &&
+        (!scope.TryResolvePrefix(name.Prefix, out var namespaceUri)
+            ? !name.HasPrefix
+            : IsPresentationNamespace(namespaceUri));
+
+    internal static bool IsPresentationNamespace(string namespaceUri) =>
+        string.Equals(
+            namespaceUri,
+            XamlTypeSystem.PresentationNamespace,
+            StringComparison.Ordinal) ||
+        string.Equals(namespaceUri, "using:Microsoft.UI.Xaml", StringComparison.Ordinal) ||
+        string.Equals(namespaceUri, "using:Windows.UI.Xaml", StringComparison.Ordinal);
+
+    internal static bool IsXBind(XamlAttribute attribute, XamlNamespaceScope scope) =>
+        attribute.Value?.MarkupExtension is
+            { IsClosed: true } extension &&
+        IsXBind(extension, scope);
+
+    internal static bool IsXBind(XamlMarkupExtension extension, XamlNamespaceScope scope) =>
+        extension.Name is { } name &&
+        IsXamlLanguageName(name, "Bind", scope);
+
+    internal static bool IsXamlLanguageName(
+        XamlName name,
+        string localName,
+        XamlNamespaceScope scope) =>
+        name.HasPrefix &&
+        string.Equals(name.LocalName, localName, StringComparison.Ordinal) &&
+        (scope.TryResolvePrefix(name.Prefix, out var uri)
+            ? string.Equals(uri, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal)
+            : string.Equals(name.Prefix, "x", StringComparison.Ordinal));
+
+    internal static bool IsXamlDirectiveName(
+        string attributeName,
+        string localName,
+        XamlNamespaceScope scope)
+    {
+        SplitQualified(attributeName, out var prefix, out var candidate);
+        if (prefix.Length == 0 || !string.Equals(candidate, localName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return scope.TryResolvePrefix(prefix, out var uri)
+            ? string.Equals(uri, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal)
+            : string.Equals(prefix, "x", StringComparison.Ordinal);
+    }
+
+    internal static bool IsXamlDirective(XamlAttribute attribute, string localName)
+    {
+        for (var current = attribute.Parent; current is not null; current = current.Parent)
+        {
+            if (current is XamlElement element)
+            {
+                return IsXamlDirectiveName(
+                    attribute.Name.FullName,
+                    localName,
+                    element.NamespaceScope);
+            }
+        }
+
+        return false;
+    }
+
+    internal static bool IsXamlDirective(
+        XamlAttribute attribute,
+        string localName,
+        XamlNamespaceScope scope) =>
+        IsXamlLanguageName(attribute.Name, localName, scope);
+
+    internal static XamlAttribute? GetDirectiveAttribute(XamlElement element, string localName) =>
+        element.Attributes.FirstOrDefault(attribute =>
+            !attribute.IsNamespaceDeclaration &&
+            IsXamlDirective(attribute, localName, element.NamespaceScope));
+
+    internal static XamlAttribute? GetNameAttribute(XamlElement element) =>
+        GetDirectiveAttribute(element, "Name") ??
+        element.Attributes.FirstOrDefault(attribute =>
+            !attribute.IsNamespaceDeclaration &&
+            !attribute.Name.HasPrefix &&
+            string.Equals(attribute.Name.LocalName, "Name", StringComparison.Ordinal));
+
+    internal static XamlAttribute? GetNameAttribute(
+        XamlElement element,
+        XamlTypeSystem typeSystem)
+    {
+        var directive = GetDirectiveAttribute(element, "Name");
+        if (directive is not null ||
+            ResolveElementType(element, typeSystem) is not { } elementType ||
+            typeSystem.Capabilities.FrameworkElement is not { } frameworkElement ||
+            !XamlTypeSystem.IsAssignableTo(elementType, frameworkElement))
+        {
+            return directive;
+        }
+
+        return element.Attributes.FirstOrDefault(attribute =>
+            !attribute.IsNamespaceDeclaration &&
+            !attribute.Name.HasPrefix &&
+            string.Equals(attribute.Name.LocalName, "Name", StringComparison.Ordinal));
+    }
+
+    internal static bool IsNameAttribute(
+        XamlAttribute attribute,
+        INamedTypeSymbol elementType,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem) =>
+        IsXamlDirective(attribute, "Name", scope) ||
+        (!attribute.Name.HasPrefix &&
+         string.Equals(attribute.Name.LocalName, "Name", StringComparison.Ordinal) &&
+         typeSystem.Capabilities.FrameworkElement is { } frameworkElement &&
+         XamlTypeSystem.IsAssignableTo(elementType, frameworkElement));
+
+    internal static XamlAttribute? GetKeyAttribute(XamlElement element) =>
+        GetDirectiveAttribute(element, "Key");
+
+    internal static XamlElement? FindResourceDeclarationInScope(
+        XamlElement reference,
+        string key,
+        XamlTypeSystem? typeSystem = null)
+    {
+        for (XamlElement? scope = reference; scope is not null; scope = ParentElement(scope))
+        {
+            if (IsResourceDictionaryScope(scope, typeSystem) &&
+                FindDirectResourceDeclaration(scope, key, typeSystem) is { } dictionaryDeclaration)
+            {
+                return dictionaryDeclaration;
+            }
+
+            foreach (var child in scope.Content.OfType<XamlElement>())
+            {
+                if (!IsResourceDictionaryPropertyScope(child, typeSystem))
+                {
+                    continue;
+                }
+
+                var declaration = FindDirectResourceDeclaration(child, key, typeSystem);
+                if (declaration is not null)
+                {
+                    return declaration;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static XamlElement? FindDirectResourceDeclaration(
+        XamlElement container,
+        string key,
+        XamlTypeSystem? typeSystem)
+    {
+        foreach (var entry in container.Content.OfType<XamlElement>())
+        {
+            if (GetKeyAttribute(entry)?.Value is { IsMarkupExtension: false } value &&
+                string.Equals(value.Text.Trim(), key, StringComparison.Ordinal))
+            {
+                return entry;
+            }
+
+            // A property element may wrap its entries in an explicit ResourceDictionary.
+            if (IsResourceDictionaryScope(entry, typeSystem) &&
+                GetKeyAttribute(entry) is null &&
+                FindDirectResourceDeclaration(entry, key, typeSystem) is { } wrappedDeclaration)
+            {
+                return wrappedDeclaration;
+            }
+
+            if (IsResourceDictionaryCollectionScope(entry, typeSystem))
+            {
+                foreach (var dictionary in entry.Content.OfType<XamlElement>().Reverse())
+                {
+                    if (FindDirectResourceDeclaration(dictionary, key, typeSystem) is { } mergedDeclaration)
+                    {
+                        return mergedDeclaration;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsResourceDictionaryScope(
+        XamlElement element,
+        XamlTypeSystem? typeSystem)
+    {
+        if (typeSystem?.Capabilities.ResourceDictionary is not null &&
+            ResolveElementType(element, typeSystem) is not null)
+        {
+            return IsResourceDictionary(element, typeSystem);
+        }
+
+        if (element.Name is not { LocalName: "ResourceDictionary" } name)
+        {
+            return false;
+        }
+
+        return element.NamespaceScope.TryResolvePrefix(name.Prefix, out var namespaceUri)
+            ? IsPresentationNamespace(namespaceUri)
+            : !name.HasPrefix;
+    }
+
+    private static bool IsResourceDictionaryPropertyScope(
+        XamlElement element,
+        XamlTypeSystem? typeSystem)
+    {
+        if (typeSystem?.Capabilities.ResourceDictionary is not null &&
+            ResolvePropertyElementMember(element, typeSystem) is { Owner: not null })
+        {
+            return IsResourceDictionaryPropertyElement(element, typeSystem);
+        }
+
+        return element.Name?.FullName.EndsWith(".Resources", StringComparison.Ordinal) == true;
+    }
+
+    private static bool IsResourceDictionaryCollectionScope(
+        XamlElement element,
+        XamlTypeSystem? typeSystem)
+    {
+        if (typeSystem?.Capabilities.ResourceDictionary is { } resourceDictionary &&
+            ResolvePropertyElementMember(element, typeSystem) is
+                { Owner: { } owner, MemberName: "MergedDictionaries" or "ThemeDictionaries" })
+        {
+            return XamlTypeSystem.IsAssignableTo(owner, resourceDictionary);
+        }
+
+        return element.Name?.FullName.EndsWith(
+            ".MergedDictionaries",
+            StringComparison.Ordinal) == true ||
+            element.Name?.FullName.EndsWith(
+                ".ThemeDictionaries",
+                StringComparison.Ordinal) == true;
+    }
+
+    private static XamlElement? ParentElement(XamlElement element)
+    {
+        for (var parent = element.Parent; parent is not null; parent = parent.Parent)
+        {
+            if (parent is XamlElement parentElement)
+            {
+                return parentElement;
+            }
+        }
+
+        return null;
+    }
+
+    internal static (
+        string OwnerName,
+        string MemberName,
+        INamedTypeSymbol? Owner,
+        ITypeSymbol? PropertyType,
+        bool IsAttached)? ResolvePropertyElementMember(
+            XamlElement propertyElement,
+            XamlTypeSystem typeSystem)
+    {
+        if (propertyElement.Name is not { IsDotted: true } name ||
+            !propertyElement.NamespaceScope.TryResolvePrefix(name.Prefix, out var uri))
+        {
+            return null;
+        }
+
+        return ResolvePropertyElementMember(name, uri, typeSystem);
+    }
+
+    internal static (
+        string OwnerName,
+        string MemberName,
+        INamedTypeSymbol? Owner,
+        ITypeSymbol? PropertyType,
+        bool IsAttached)? ResolvePropertyElementMember(
+            XamlName name,
+            string uri,
+            XamlTypeSystem typeSystem)
+    {
+        var dot = name.LocalName.LastIndexOf('.');
+        if (dot <= 0 || dot >= name.LocalName.Length - 1)
+        {
+            return null;
+        }
+
+        var ownerName = name.LocalName[..dot];
+        var memberName = name.LocalName[(dot + 1)..];
+        var owner = typeSystem.ResolveType(uri, ownerName);
+        var propertyType = owner is null ? null : typeSystem.GetPropertyType(owner, memberName);
+        var isAttached = false;
+        if (propertyType is null && owner is not null)
+        {
+            propertyType = typeSystem.GetAttachedMemberType(owner, memberName);
+            isAttached = propertyType is not null;
+        }
+
+        return (ownerName, memberName, owner, propertyType, isAttached);
+    }
+
+    internal static bool IsNameScopeBoundary(XamlElement element, XamlTypeSystem typeSystem) =>
+        typeSystem.Capabilities.FrameworkTemplate is { } template &&
+        IsElement(element, template, typeSystem, allowDerived: true);
+
+    internal static IEnumerable<(string Name, XamlElement Element)> EnumerateNamedElementsInScope(
+        TextDocument document,
+        XamlNode? context,
+        XamlTypeSystem typeSystem)
+    {
+        foreach (var element in EnumerateElementsInNameScope(document, context, typeSystem))
+        {
+            var attribute = GetNameAttribute(element, typeSystem);
+            if (attribute?.Value is { IsMarkupExtension: false } value)
+            {
+                var name = value.Text.Trim();
+                if (name.Length > 0 && element.Name is { LocalName.Length: > 0 })
+                {
+                    yield return (name, element);
+                }
+            }
+        }
+    }
+
+    internal static IEnumerable<XamlElement> EnumerateElementsInNameScope(
+        TextDocument document,
+        XamlNode? context,
+        XamlTypeSystem typeSystem)
+    {
+        if (document.Parsed.Root is not { } documentRoot)
+        {
+            yield break;
+        }
+        var scopeRoot = documentRoot;
+        var scopeStartsInsideBoundary = false;
+        for (var current = context; current is not null; current = current.Parent)
+        {
+            if (current is XamlElement element &&
+                IsNameScopeBoundary(element, typeSystem) &&
+                IsWithinElementContent(context, element))
+            {
+                scopeRoot = element;
+                scopeStartsInsideBoundary = true;
+                break;
+            }
+        }
+
+        var roots = scopeStartsInsideBoundary
+            ? scopeRoot.Content.OfType<XamlElement>()
+            : new[] { scopeRoot };
+        foreach (var root in roots)
+        {
+            foreach (var element in EnumerateElementsInNameScopeCore(root, typeSystem))
+            {
+                yield return element;
+            }
+        }
+    }
+
+    private static bool IsWithinElementContent(XamlNode? context, XamlElement element)
+    {
+        var child = context;
+        while (child is not null && !ReferenceEquals(child.Parent, element))
+        {
+            child = child.Parent;
+        }
+
+        return child is not null && child is not XamlAttribute;
+    }
+
+    internal static XamlElement? FindNamedElementInScope(
+        TextDocument document,
+        XamlNode? context,
+        string name,
+        XamlTypeSystem typeSystem) =>
+        EnumerateNamedElementsInScope(document, context, typeSystem)
+            .FirstOrDefault(candidate => string.Equals(candidate.Name, name, StringComparison.Ordinal))
+            .Element;
+
+    internal static INamedTypeSymbol? ResolveNamedElementTypeInScope(
+        TextDocument document,
+        XamlNode? context,
+        string name,
+        XamlTypeSystem typeSystem)
+    {
+        var element = FindNamedElementInScope(document, context, name, typeSystem);
+        return element is null ? null : ResolveElementType(element, typeSystem);
+    }
+
+    internal static IReadOnlyList<IReadOnlyList<(string Name, XamlAttribute Attribute)>> GetNameScopes(
+        XamlElement root,
+        XamlTypeSystem typeSystem)
+    {
+        var scopes = new List<IReadOnlyList<(string Name, XamlAttribute Attribute)>>();
+        var rootScope = new List<(string Name, XamlAttribute Attribute)>();
+        scopes.Add(rootScope);
+        CollectNameScopes(root, rootScope, scopes, typeSystem);
+        return scopes;
+    }
+
+    private static void CollectNameScopes(
+        XamlElement element,
+        List<(string Name, XamlAttribute Attribute)> scope,
+        List<IReadOnlyList<(string Name, XamlAttribute Attribute)>> scopes,
+        XamlTypeSystem typeSystem)
+    {
+        if (GetNameAttribute(element, typeSystem) is
+            { Value: { IsMarkupExtension: false } value } attribute)
+        {
+            var name = value.Text.Trim();
+            if (name.Length > 0)
+            {
+                scope.Add((name, attribute));
+            }
+        }
+
+        var childScope = scope;
+        if (IsNameScopeBoundary(element, typeSystem))
+        {
+            childScope = new List<(string Name, XamlAttribute Attribute)>();
+            scopes.Add(childScope);
+        }
+
+        foreach (var child in element.Content.OfType<XamlElement>())
+        {
+            CollectNameScopes(child, childScope, scopes, typeSystem);
+        }
+    }
+
+    private static IEnumerable<XamlElement> EnumerateElementsInNameScopeCore(
+        XamlElement element,
+        XamlTypeSystem typeSystem)
+    {
+        yield return element;
+
+        if (IsNameScopeBoundary(element, typeSystem))
+        {
+            yield break;
+        }
+
+        foreach (var child in element.Content.OfType<XamlElement>())
+        {
+            foreach (var result in EnumerateElementsInNameScopeCore(child, typeSystem))
+            {
+                yield return result;
+            }
+        }
+    }
 
     internal static bool IsColorAttribute(XamlAttribute attribute, XamlTypeSystem typeSystem)
     {
@@ -205,6 +658,85 @@ internal static class XamlSemanticFacts
             typeSystem,
             allowDerived: true);
 
+    internal static bool IsResourceDictionaryPropertyElement(
+        XamlElement propertyElement,
+        XamlTypeSystem typeSystem)
+    {
+        var resolved = ResolvePropertyElementMember(propertyElement, typeSystem);
+        if (resolved?.PropertyType is not { } propertyType)
+        {
+            return false;
+        }
+
+        if (propertyType is INamedTypeSymbol namedPropertyType &&
+            typeSystem.Capabilities.ResourceDictionary is { } resourceDictionary &&
+            XamlTypeSystem.IsAssignableTo(namedPropertyType, resourceDictionary))
+        {
+            return true;
+        }
+
+        return typeSystem.Capabilities.ResourceDictionary is { } ownerDictionary &&
+            resolved.Value.Owner is { } owner &&
+            XamlTypeSystem.IsAssignableTo(owner, ownerDictionary) &&
+            string.Equals(resolved.Value.MemberName, "ThemeDictionaries", StringComparison.Ordinal);
+    }
+
+    internal static ITypeSymbol? ResolveMarkupArgumentType(
+        XamlMarkupExtension extension,
+        XamlNamespaceScope scope,
+        string argumentName,
+        XamlTypeSystem typeSystem) =>
+        ResolveMarkupArgumentType(extension.Name?.FullName, scope, argumentName, typeSystem);
+
+    internal static ITypeSymbol? ResolveMarkupArgumentType(
+        string? extensionName,
+        XamlNamespaceScope scope,
+        string argumentName,
+        XamlTypeSystem typeSystem)
+    {
+        var extensionType = ResolveMarkupExtensionType(extensionName, scope, typeSystem);
+        var argumentType = extensionType is null
+            ? null
+            : typeSystem.FindMember(extensionType, argumentName)?.Type;
+        if (argumentType is not null || !IsXBindName(extensionName, scope, typeSystem))
+        {
+            return argumentType;
+        }
+
+        return argumentName switch
+        {
+            "Mode" => typeSystem.Capabilities.BindingMode,
+            "UpdateSourceTrigger" => typeSystem.Capabilities.UpdateSourceTrigger,
+            _ => null,
+        };
+    }
+
+    internal static bool IsXBindName(
+        string? extensionName,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem)
+    {
+        if (string.IsNullOrEmpty(extensionName))
+        {
+            return false;
+        }
+
+        SplitQualified(extensionName!, out var prefix, out var localName);
+        if (!string.Equals(localName, "Bind", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (prefix.Length == 0)
+        {
+            return ResolveMarkupExtensionType(extensionName, scope, typeSystem) is null;
+        }
+
+        return scope.TryResolvePrefix(prefix, out var namespaceUri)
+            ? string.Equals(namespaceUri, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal)
+            : string.Equals(prefix, "x", StringComparison.Ordinal);
+    }
+
     internal static INamedTypeSymbol? ResolveMarkupExtensionType(
         string? extensionName,
         XamlNamespaceScope scope,
@@ -230,10 +762,7 @@ internal static class XamlSemanticFacts
                 return suffixedType;
             }
 
-            if (!string.Equals(
-                    namespaceUri,
-                    XamlTypeSystem.PresentationNamespace,
-                    StringComparison.Ordinal))
+            if (!IsPresentationNamespace(namespaceUri))
             {
                 return null;
             }
@@ -255,15 +784,26 @@ internal static class XamlSemanticFacts
         string text,
         XamlNamespaceScope scope,
         XamlTypeSystem typeSystem,
-        bool usePresentationNamespaceForUnprefixed = false)
+        bool usePresentationNamespaceForUnprefixed = false,
+        bool allowMetadataNameFallback = false)
     {
+        text = text.Trim();
+        if (text.Length == 0)
+        {
+            return null;
+        }
+
         SplitQualified(text, out var prefix, out var localName);
-        return ResolveType(
+        var resolved = ResolveType(
             prefix,
             localName,
             scope,
             typeSystem,
             usePresentationNamespaceForUnprefixed);
+        return resolved ??
+            (allowMetadataNameFallback && prefix.Length == 0
+                ? typeSystem.ResolveMetadataType(text)
+                : null);
     }
 
     private static INamedTypeSymbol? ResolveType(
@@ -310,7 +850,7 @@ internal static class XamlSemanticFacts
         var elementType = ResolveElementType(element, typeSystem);
         return elementType is null
             ? null
-            : typeSystem.FindMember(elementType, attribute.Name.LocalName)?.Type;
+            : typeSystem.FindAttributeMember(elementType, attribute.Name.LocalName)?.Type;
     }
 
     private static void SplitQualified(string text, out string prefix, out string localName)

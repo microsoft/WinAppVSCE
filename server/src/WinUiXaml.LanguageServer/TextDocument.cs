@@ -8,10 +8,11 @@ internal sealed class TextDocument
 {
     private readonly int[] _lineStarts;
 
-    public TextDocument(string uri, string text)
+    public TextDocument(string uri, string text, int? version = null)
     {
         Uri = uri;
         Text = text;
+        Version = version;
         Parsed = XamlParser.Parse(text);
         _lineStarts = ComputeLineStarts(text);
     }
@@ -19,6 +20,8 @@ internal sealed class TextDocument
     public string Uri { get; }
 
     public string Text { get; }
+
+    public int? Version { get; }
 
     public XamlDocument Parsed { get; }
 

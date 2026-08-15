@@ -118,6 +118,37 @@ public sealed class XamlTypeSystemTests
         Assert.Null(ts.Capabilities.Setter);
     }
 
+    [Fact]
+    public void IsAssignableToSupportsBasesObjectAndInheritedInterfaces()
+    {
+        const string source = """
+            namespace TestTypes
+            {
+                public interface IBase { }
+                public interface IDerived : IBase { }
+                public interface IUnrelated { }
+                public class Base : IDerived { }
+                public class Derived : Base { }
+            }
+            """;
+        var (compilation, referenced) = CompileLibraryAndConsumer(source);
+        var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
+        var derived = ts.ResolveMetadataType("TestTypes.Derived")!;
+        var baseType = ts.ResolveMetadataType("TestTypes.Base")!;
+        var derivedInterface = ts.ResolveMetadataType("TestTypes.IDerived")!;
+        var baseInterface = ts.ResolveMetadataType("TestTypes.IBase")!;
+        var unrelatedInterface = ts.ResolveMetadataType("TestTypes.IUnrelated")!;
+        var objectType = compilation.GetSpecialType(SpecialType.System_Object);
+
+        Assert.True(XamlTypeSystem.IsAssignableTo(derived, derived));
+        Assert.True(XamlTypeSystem.IsAssignableTo(derived, baseType));
+        Assert.True(XamlTypeSystem.IsAssignableTo(derived, objectType));
+        Assert.True(XamlTypeSystem.IsAssignableTo(derived, derivedInterface));
+        Assert.True(XamlTypeSystem.IsAssignableTo(derived, baseInterface));
+        Assert.False(XamlTypeSystem.IsAssignableTo(baseType, derived));
+        Assert.False(XamlTypeSystem.IsAssignableTo(derived, unrelatedInterface));
+    }
+
     [Theory]
     [InlineData(null, true)]
     [InlineData("RelativePanel", false)]

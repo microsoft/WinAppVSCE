@@ -50,6 +50,12 @@ internal sealed class InitializeParams
 internal sealed class InitializationOptions
 {
     [JsonPropertyName("allowedRoots")] public string[]? AllowedRoots { get; set; }
+    [JsonPropertyName("diagnosticsLevel")] public string? DiagnosticsLevel { get; set; }
+}
+
+internal sealed class DidChangeConfigurationParams
+{
+    [JsonPropertyName("settings")] public InitializationOptions? Settings { get; set; }
 }
 
 internal sealed class InitializeResult
@@ -138,6 +144,9 @@ internal sealed class Location
 internal sealed class TextDocumentIdentifier
 {
     [JsonPropertyName("uri")] public string Uri { get; set; } = string.Empty;
+    [JsonPropertyName("version")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Version { get; set; }
 }
 
 internal sealed class TextDocumentItem
@@ -220,6 +229,9 @@ internal sealed class DocumentHighlight
 internal sealed class PublishDiagnosticsParams
 {
     [JsonPropertyName("uri")] public string Uri { get; set; } = string.Empty;
+    [JsonPropertyName("version")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Version { get; set; }
     [JsonPropertyName("diagnostics")] public List<Diagnostic> Diagnostics { get; set; } = new();
 }
 

@@ -694,6 +694,41 @@ namespace WinUiXaml.Workspace
         public XamlMemberInfo? FindMember(INamedTypeSymbol type, string memberName) =>
             GetMembers(type).FirstOrDefault(m => string.Equals(m.Name, memberName, StringComparison.Ordinal));
 
+        /// <summary>Enumerates members accepted in attribute syntax, including SDK-supported
+        /// concise collection syntax such as Grid.RowDefinitions="Auto,*".</summary>
+        public IEnumerable<XamlMemberInfo> GetAttributeMembers(INamedTypeSymbol type)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var member in GetMembers(type))
+            {
+                if (seen.Add(member.Name))
+                {
+                    yield return member;
+                }
+            }
+
+            foreach (var member in GetPropertyElementMembers(type))
+            {
+                if (member.Type is not null &&
+                    IsGridDefinitionCollection(member.Type) &&
+                    seen.Add(member.Name))
+                {
+                    yield return member;
+                }
+            }
+        }
+
+        /// <summary>Finds a member accepted in attribute syntax.</summary>
+        public XamlMemberInfo? FindAttributeMember(INamedTypeSymbol type, string memberName) =>
+            GetAttributeMembers(type)
+                .FirstOrDefault(member => string.Equals(member.Name, memberName, StringComparison.Ordinal));
+
+        public bool IsGridDefinitionCollection(ITypeSymbol type) =>
+            Capabilities.RowDefinitionCollection is { } rows &&
+                SymbolEqualityComparer.Default.Equals(type, rows) ||
+            Capabilities.ColumnDefinitionCollection is { } columns &&
+                SymbolEqualityComparer.Default.Equals(type, columns);
+
         /// <summary>True when the type or a base type declares any public instance property or event with the given name.</summary>
         public bool HasMember(INamedTypeSymbol type, string memberName)
         {
@@ -743,30 +778,9 @@ namespace WinUiXaml.Workspace
         /// <summary>Candidate member NAMES for a misspelled ATTRIBUTE on type, mirroring HasMember: every public</summary>
         public IEnumerable<string> GetAttributeCandidateNames(INamedTypeSymbol type)
         {
-            if (type is null)
+            foreach (var member in GetAttributeMembers(type))
             {
-                yield break;
-            }
-
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            for (INamedTypeSymbol? t = type; t is not null; t = t.BaseType)
-            {
-                foreach (var member in t.GetMembers())
-                {
-                    if (member.DeclaredAccessibility != Accessibility.Public || member.IsStatic)
-                    {
-                        continue;
-                    }
-
-                    if (member is IPropertySymbol { IsIndexer: false } p && seen.Add(p.Name))
-                    {
-                        yield return p.Name;
-                    }
-                    else if (member is IEventSymbol e && seen.Add(e.Name))
-                    {
-                        yield return e.Name;
-                    }
-                }
+                yield return member.Name;
             }
         }
 
@@ -1076,7 +1090,14 @@ namespace WinUiXaml.Workspace
         /// <summary>The type of the elements accepted as XAML child content of type: resolves the [ContentProperty] (walking the base chain for the most-derived declaration, since XAML inherits it)</summary>
         public ITypeSymbol? GetContentPropertyType(INamedTypeSymbol type)
         {
-            if (type is null)
+            var propertyType = GetContentPropertyDeclaredType(type);
+            return GetCollectionElementType(propertyType) ?? propertyType;
+        }
+
+        /// <summary>Gets the declared type of the SDK-described XAML content property, before collection unwrapping.</summary>
+        public ITypeSymbol? GetContentPropertyDeclaredType(INamedTypeSymbol type)
+        {
+            if (type is null || Capabilities.ContentPropertyAttribute is not { } contentPropertyAttribute)
             {
                 return null;
             }
@@ -1085,7 +1106,7 @@ namespace WinUiXaml.Workspace
             {
                 foreach (var attr in t.GetAttributes())
                 {
-                    if (attr.AttributeClass?.Name != "ContentPropertyAttribute")
+                    if (!SymbolEqualityComparer.Default.Equals(attr.AttributeClass, contentPropertyAttribute))
                     {
                         continue;
                     }
@@ -1117,7 +1138,7 @@ namespace WinUiXaml.Workspace
                         return null;
                     }
 
-                    return GetCollectionElementType(propertyType) ?? propertyType;
+                    return propertyType;
                 }
             }
 
@@ -1158,6 +1179,13 @@ namespace WinUiXaml.Workspace
         /// <summary> True when <paramref name="candidate"/> is <paramref name="target"/> or derives from it (class base chain). Used to scope property-element child completion to assignable types.</summary>
         public static bool IsAssignableTo(ITypeSymbol candidate, ITypeSymbol target)
         {
+            if (SymbolEqualityComparer.Default.Equals(candidate, target) ||
+                target.SpecialType == SpecialType.System_Object ||
+                candidate.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, target)))
+            {
+                return true;
+            }
+
             foreach (var t in SelfAndBases(candidate))
             {
                 if (SymbolEqualityComparer.Default.Equals(t, target))

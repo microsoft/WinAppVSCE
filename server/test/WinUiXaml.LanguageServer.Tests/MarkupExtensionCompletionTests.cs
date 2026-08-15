@@ -38,6 +38,216 @@ public sealed class MarkupExtensionCompletionTests
     }
 
     [Fact]
+    public void ClassicBindingWithoutKnownDataContextOffersArgumentNames()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  Tag="{Binding |}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("Path", labels);
+        Assert.Contains("Mode", labels);
+        Assert.Contains("Converter", labels);
+        Assert.Contains("ElementName", labels);
+        Assert.Contains("RelativeSource", labels);
+    }
+
+    [Fact]
+    public void MarkupName_OffersSdkBindingCapability()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  Tag="{Bi|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("Binding", labels);
+    }
+
+    [Fact]
+    public void ClassicBindingPathValueDoesNotOfferArgumentNames()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  Tag="{Binding Path=Mo|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.DoesNotContain("Mode", labels);
+        Assert.DoesNotContain("Converter", labels);
+    }
+
+    [Fact]
+    public void ClassicBindingPathSupportsPresentationNamespaceAlias()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:p="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  xmlns:local="using:App">
+              <DataTemplate x:DataType="local:ViewModel">
+                <TextBlock Text="{p:Binding Gre|}" />
+              </DataTemplate>
+            </Page>
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("Greeting", labels);
+    }
+
+    [Fact]
+    public void CustomBindingLookalikeDoesNotReceiveBindingPathCompletion()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ext="using:App.Extensions"
+                  xmlns:local="using:App">
+              <DataTemplate x:DataType="local:ViewModel">
+                <TextBlock Text="{ext:Binding Gre|}" />
+              </DataTemplate>
+            </Page>
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.DoesNotContain("Greeting", labels);
+    }
+
+    [Fact]
+    public void AliasedXBindUsesAliasedDataTypeForPathCompletion()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:lang="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:local="using:App">
+              <DataTemplate lang:DataType="local:ViewModel">
+                <TextBlock Text="{lang:Bind Gre|}" />
+              </DataTemplate>
+            </Page>
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("Greeting", labels);
+    }
+
+    [Fact]
+    public void AliasedXBindOffersCompiledBindingArgumentNames()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:lang="http://schemas.microsoft.com/winfx/2006/xaml"
+                  Tag="{lang:Bind Greeting, Mo|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("Mode", labels);
+    }
+
+    [Fact]
+    public void CustomMarkupElementNameArgumentDoesNotReceiveBindingNames()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ext="using:App.Extensions">
+              <TextBlock x:Name="TitleText"
+                         Text="{ext:CurrentTheme ElementName=|}" />
+            </Page>
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.DoesNotContain("TitleText", labels);
+    }
+
+    [Fact]
+    public void XBindCompletesNamedElementAndItsMembers()
+    {
+        const string marked = """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  x:Class="App.ProbePage">
+              <TextBlock x:Name="TitleText" Text="{x:Bind TitleText.Te|}" />
+            </Page>
+            """;
+        var typeSystem = CreateTypeSystem(includeMarkupExtensionBase: true);
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        var labels = CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            typeSystem,
+            typeSystem.ResolveMetadataType("App.ProbePage"))
+            .Items.Select(item => item.Label);
+
+        Assert.Contains("Text", labels);
+    }
+
+    [Fact]
+    public void XBindRootCompletesNamedElement()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  x:Class="App.ProbePage">
+              <TextBlock x:Name="TitleText" Text="{x:Bind Tit|}" />
+            </Page>
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("TitleText", labels);
+    }
+
+    [Fact]
+    public void XBindNamedElementsStayWithinTemplateNameScope()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  x:Class="App.ProbePage">
+              <TextBlock x:Name="Outside" />
+              <DataTemplate>
+                <TextBlock x:Name="Inside" Text="{x:Bind |}" />
+              </DataTemplate>
+            </Page>
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("Inside", labels);
+        Assert.DoesNotContain("Outside", labels);
+    }
+
+    [Fact]
+    public void BindingElementNameCompletionStaysWithinTemplateNameScope()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  x:Class="App.ProbePage">
+              <TextBlock x:Name="Outside" />
+              <DataTemplate>
+                <TextBlock x:Name="Inside" Text="{Binding ElementName=|}" />
+              </DataTemplate>
+            </Page>
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("Inside", labels);
+        Assert.DoesNotContain("Outside", labels);
+    }
+
+    [Fact]
     public void MarkupArgument_CompletesCustomEnumDespiteExactNameLookalike()
     {
         var labels = Complete(
@@ -101,6 +311,30 @@ public sealed class MarkupExtensionCompletionTests
                   Tag="{x:T|}" />
             """,
             CreateTypeSystem(includeMarkupExtensionBase: true)));
+    }
+
+    [Fact]
+    public void MarkupName_UsingMicrosoftXamlDefaultOffersSdkBinding()
+    {
+        var labels = Complete(
+            """<Page xmlns="using:Microsoft.UI.Xaml" Tag="{Bi|}" />""",
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("Binding", labels);
+    }
+
+    [Fact]
+    public void MarkupName_UsingMicrosoftXamlAliasOffersSdkBinding()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:App.Extensions"
+                  xmlns:ui="using:Microsoft.UI.Xaml"
+                  Tag="{ui:Bi|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("ui:Binding", labels);
     }
 
     [Fact]
@@ -223,6 +457,31 @@ public sealed class MarkupExtensionCompletionTests
             namespace Microsoft.UI.Xaml
             {
                 public class Page { public object Tag { get; set; } }
+                public class FrameworkTemplate { }
+                public class DataTemplate : FrameworkTemplate { }
+                public class TextBlock
+                {
+                    public string Text { get; set; } = "";
+                }
+            }
+            namespace Microsoft.UI.Xaml.Data
+            {
+                public class Binding : Microsoft.UI.Xaml.Markup.MarkupExtension
+                {
+                    public string Path { get; set; } = "";
+                    public string Mode { get; set; } = "";
+                    public object Converter { get; set; } = new();
+                    public string ElementName { get; set; } = "";
+                    public object RelativeSource { get; set; } = new();
+                }
+            }
+            namespace App
+            {
+                public partial class ProbePage : Microsoft.UI.Xaml.Page { }
+                public sealed class ViewModel
+                {
+                    public string Greeting { get; set; } = "";
+                }
             }
             namespace App.Extensions
             {

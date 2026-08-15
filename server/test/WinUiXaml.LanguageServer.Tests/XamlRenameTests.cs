@@ -49,8 +49,12 @@ public class XamlRenameTests
         const string source = """
             namespace Microsoft.UI.Xaml
             {
-                public class UIElement { }
+                public class FrameworkElement { public string Name { get; set; } = ""; }
+                public class UIElement : FrameworkElement { }
                 public class Setter { }
+                public class FrameworkTemplate { }
+                public class DataTemplate : FrameworkTemplate { }
+                public class ResourceDictionary { }
             }
             namespace Microsoft.UI.Xaml.Markup
             {
@@ -83,6 +87,11 @@ public class XamlRenameTests
                     public static string GetTargetProperty(Microsoft.UI.Xaml.UIElement element) => "";
                     public static void SetTargetProperty(Microsoft.UI.Xaml.UIElement element, string value) { }
                 }
+            }
+            namespace Contoso
+            {
+                public class Plain { public string Name { get; set; } = ""; }
+                public class AppResources : Microsoft.UI.Xaml.ResourceDictionary { }
             }
             """;
         var compilation = CSharpCompilation.Create(
@@ -172,6 +181,50 @@ public class XamlRenameTests
     }
 
     [Fact]
+    public void Rename_NameDoesNotCrossTemplateNameScope()
+    {
+        const string buffer = """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Grid x:Name="Sha|red" />
+              <controls:TextBox Text="{Binding ElementName=Shared}" />
+              <DataTemplate>
+                <controls:Grid x:Name="Shared" />
+                <controls:TextBox Text="{Binding ElementName=Shared}" />
+              </DataTemplate>
+            </Page>
+            """;
+
+        var edits = RenameEdits(buffer, "Outer", CreateFrameworkTypeSystem());
+
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("Outer", edit.NewText));
+    }
+
+    [Fact]
+    public void Rename_NameInsideTemplateDoesNotCrossToOuterNameScope()
+    {
+        const string buffer = """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Grid x:Name="Shared" />
+              <controls:TextBox Text="{Binding ElementName=Shared}" />
+              <DataTemplate>
+                <controls:Grid x:Name="Sha|red" />
+                <controls:TextBox Text="{Binding ElementName=Shared}" />
+              </DataTemplate>
+            </Page>
+            """;
+
+        var edits = RenameEdits(buffer, "Inner", CreateFrameworkTypeSystem());
+
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("Inner", edit.NewText));
+    }
+
+    [Fact]
     public void Rename_Name_DoesNotRewriteCustomMarkupExtensionElementNameArgument()
     {
         const string source = """
@@ -244,10 +297,177 @@ public class XamlRenameTests
             "</Page.Resources>\n" +
             "  <Grid Background=\"{StaticResource Accent}\" />\n" +
             "  <Border Background=\"{ThemeResource Accent}\" />\n" +
+            "  <Border Background=\"{CustomResource Accent}\" />\n" +
             "</Page>";
         var edits = RenameEdits(buffer, "Brand");
-        Assert.Equal(3, edits.Count);
+        Assert.Equal(4, edits.Count);
         Assert.All(edits, e => Assert.Equal("Brand", e.NewText));
+    }
+
+    [Fact]
+    public void Rename_ResourceKeySupportsPresentationNamespaceAlias()
+    {
+        var buffer =
+            "<Page xmlns:p=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"><Page.Resources>\n" +
+            "  <SolidColorBrush x:Key=\"Acc|ent\" Color=\"Red\" />\n" +
+            "</Page.Resources>\n" +
+            "  <Grid Background=\"{p:StaticResource Accent}\" />\n" +
+            "  <Border Background=\"{p:ThemeResource Accent}\" />\n" +
+            "</Page>";
+
+        var edits = RenameEdits(buffer, "Brand");
+
+        Assert.Equal(3, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("Brand", edit.NewText));
+    }
+
+    [Fact]
+    public void Rename_ResourceKeyDoesNotCrossShadowingScopes()
+    {
+        const string buffer = """
+            <Page>
+              <Page.Resources>
+                <SolidColorBrush x:Key="Shared" />
+              </Page.Resources>
+              <Border Background="{StaticResource Shared}" />
+              <Grid>
+                <Grid.Resources>
+                  <SolidColorBrush x:Key="Sha|red" />
+                </Grid.Resources>
+                <Border Background="{StaticResource Shared}" />
+              </Grid>
+            </Page>
+            """;
+
+        var edits = RenameEdits(buffer, "Inner");
+
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("Inner", edit.NewText));
+    }
+
+    [Fact]
+    public void Rename_OuterResourceKeyDoesNotCrossIntoShadowingScope()
+    {
+        const string buffer = """
+            <Page>
+              <Page.Resources>
+                <SolidColorBrush x:Key="Sha|red" />
+              </Page.Resources>
+              <Border Background="{StaticResource Shared}" />
+              <Grid>
+                <Grid.Resources>
+                  <SolidColorBrush x:Key="Shared" />
+                </Grid.Resources>
+                <Border Background="{StaticResource Shared}" />
+              </Grid>
+            </Page>
+            """;
+
+        var edits = RenameEdits(buffer, "Outer");
+
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("Outer", edit.NewText));
+    }
+
+    [Fact]
+    public void Rename_ResourceKeyInStandaloneDictionary()
+    {
+        const string buffer = """
+            <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <SolidColorBrush x:Key="Shared" />
+              <Style BasedOn="{StaticResource Sha|red}" />
+            </ResourceDictionary>
+            """;
+
+        var edits = RenameEdits(buffer, "DictionaryKey");
+
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("DictionaryKey", edit.NewText));
+    }
+
+    [Fact]
+    public void Rename_ResourceKeyInDerivedStandaloneDictionary()
+    {
+        const string buffer = """
+            <local:AppResources xmlns:local="using:Contoso"
+                                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <SolidColorBrush x:Key="Shared" />
+              <Style BasedOn="{StaticResource Sha|red}" />
+            </local:AppResources>
+            """;
+
+        var edits = RenameEdits(buffer, "DerivedKey", FrameworkTypeSystem);
+
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("DerivedKey", edit.NewText));
+    }
+
+    [Fact]
+    public void Rename_OuterResourceIgnoresNestedTemplateResource()
+    {
+        const string buffer = """
+            <Page>
+              <Page.Resources>
+                <Style x:Key="ContainerStyle">
+                  <Style.Template>
+                    <ControlTemplate>
+                      <Grid>
+                        <Grid.Resources>
+                          <SolidColorBrush x:Key="Shared" />
+                        </Grid.Resources>
+                        <Border Background="{StaticResource Shared}" />
+                      </Grid>
+                    </ControlTemplate>
+                  </Style.Template>
+                </Style>
+                <SolidColorBrush x:Key="Sha|red" />
+              </Page.Resources>
+              <Border Background="{StaticResource Shared}" />
+            </Page>
+            """;
+
+        var edits = RenameEdits(buffer, "PageKey");
+
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("PageKey", edit.NewText));
+    }
+
+    [Fact]
+    public void Rename_BareNameRejectsNonFrameworkElements()
+    {
+        var (doc, offset) = Caret(
+            "<local:Plain xmlns:local=\"using:Contoso\" Name=\"Val|ue\" />");
+
+        Assert.Null(XamlRename.PrepareRename(doc, offset, FrameworkTypeSystem));
+        Assert.Null(XamlRename.Rename(doc, offset, "Other", FrameworkTypeSystem));
+    }
+
+    [Fact]
+    public void Rename_RejectsDanglingElementNameReferences()
+    {
+        var (doc, offset) = Caret(
+            "<TextBox xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+            "Text=\"{Binding ElementName=Miss|ing}\" />");
+
+        Assert.Null(XamlRename.PrepareRename(doc, offset, FrameworkTypeSystem));
+        Assert.Null(XamlRename.Rename(doc, offset, "Other", FrameworkTypeSystem));
+    }
+
+    [Fact]
+    public void Rename_ResourceKeySupportsAlternateXamlPrefix()
+    {
+        var buffer =
+            "<Page xmlns:lang=\"http://schemas.microsoft.com/winfx/2006/xaml\"><Page.Resources>\n" +
+            "  <SolidColorBrush lang:Key=\"Acc|ent\" Color=\"Red\" />\n" +
+            "</Page.Resources>\n" +
+            "  <Grid Background=\"{StaticResource Accent}\" />\n" +
+            "</Page>";
+
+        var edits = RenameEdits(buffer, "Brand");
+
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("Brand", edit.NewText));
     }
 
     [Fact]

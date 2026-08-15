@@ -329,12 +329,14 @@ internal static partial class CompletionProvider
         }
 
         var extName = text.Substring(nameStart, i - nameStart);
-        if (extName != "x:Bind" && extName != "Bind" && extName != "Binding")
+        int colon = extName.IndexOf(':');
+        var localName = colon >= 0 ? extName.Substring(colon + 1) : extName;
+        if (localName != "Bind" && localName != "Binding")
         {
             return null; // only compiled bindings and classic {Binding} offer a statically typed path
         }
 
-        bool isClassic = extName == "Binding";
+        bool isClassic = localName == "Binding";
 
         // A classic {Binding} roots its path away from the DataContext when its source is redirected.
         string? bindElementName = null;
@@ -523,12 +525,12 @@ internal static partial class CompletionProvider
         int dot = pathSoFar.LastIndexOf('.');
         if (dot < 0)
         {
-            return new Context(ContextKind.BindPath, pathSoFar, pathStart, bindPrefixPath: string.Empty, bindCastType: bindCastType, isClassicBinding: isClassic, bindElementName: bindElementName);
+            return new Context(ContextKind.BindPath, pathSoFar, pathStart, bindPrefixPath: string.Empty, markupExtension: extName, bindCastType: bindCastType, isClassicBinding: isClassic, bindElementName: bindElementName, isExplicitBindingPath: eq >= 0);
         }
 
         var prefixPath = pathSoFar.Substring(0, dot);
         var memberPartial = pathSoFar.Substring(dot + 1);
-        return new Context(ContextKind.BindPath, memberPartial, pathStart + dot + 1, bindPrefixPath: prefixPath, bindCastType: bindCastType, isClassicBinding: isClassic, bindElementName: bindElementName);
+        return new Context(ContextKind.BindPath, memberPartial, pathStart + dot + 1, bindPrefixPath: prefixPath, markupExtension: extName, bindCastType: bindCastType, isClassicBinding: isClassic, bindElementName: bindElementName, isExplicitBindingPath: eq >= 0);
     }
 
     /// <summary>How a classic <c>{Binding}</c> roots the path being completed.</summary>
