@@ -18,8 +18,8 @@ Try the WinApp extension today: [**VS Code Markplace**](https://marketplace.visu
 
 ### Command Palette
 
-All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **WinApp** for CLI and
-packaging commands, or **WinUI XAML** for language-service commands.
+All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **WinApp** to find CLI,
+packaging, and language-service commands.
 
 | Command | Description |
 |---------|-------------|
@@ -40,8 +40,8 @@ packaging commands, or **WinUI XAML** for language-service commands.
 | **WinApp: Sign File** | Sign an MSIX/APPX package, executable, or library with a certificate. |
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
-| **WinUI XAML: Show Info** | Show whether the WinUI XAML language server is running, the editor is in syntax-only mode, or IntelliSense is disabled in Settings. |
-| **WinUI XAML: Restart Language Server** | Restart the WinUI XAML language server (e.g. after changing server settings). |
+| **WinApp: Show Info** | Show whether the WinUI XAML language server is running, the editor is in syntax-only mode, or IntelliSense is disabled in Settings. |
+| **WinApp: Restart Language Server** | Restart the WinUI XAML language server (e.g. after changing server settings). |
 
 #### Workspace & Multi-Project Support
 
@@ -210,7 +210,7 @@ The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, 
 | **Semantic tokens** | Richer, type-aware colorization layered on top of the TextMate grammar. |
 | **Code actions** | Add or remove namespace declarations and apply other XAML-aware quick fixes. |
 
-The self-contained language server starts automatically when you open a `.xaml` file. No separate .NET 10 runtime or SDK is required to launch it. Project-aware features use the MSBuild toolset from your WinUI build environment (Visual Studio, Visual Studio Build Tools, or a compatible SDK) and derive their capabilities from the WinUI SDK types resolved by that project; they do not substitute a bundled, potentially stale framework catalog. This includes completion and hover for public, concrete project types derived from the SDK's `MarkupExtension` base type. If the toolset or required SDK metadata is unavailable, the server reports the missing prerequisite when applicable and keeps project-independent XAML features available. If the bundled server cannot start, XAML gracefully degrades to **syntax highlighting only** and the rest of the extension is unaffected. Use **WinUI XAML: Show Info** to check the server status and **WinUI XAML: Restart Language Server** to restart it.
+The self-contained language server starts automatically when you open a `.xaml` file. No separate .NET 10 runtime or SDK is required to launch it. Project-aware features use the MSBuild toolset from your WinUI build environment (Visual Studio, Visual Studio Build Tools, or a compatible SDK) and derive their capabilities from the WinUI SDK types resolved by that project; they do not substitute a bundled, potentially stale framework catalog. This includes completion and hover for public, concrete project types derived from the SDK's `MarkupExtension` base type. If the toolset or required SDK metadata is unavailable, the server reports the missing prerequisite when applicable and keeps project-independent XAML features available. If the bundled server cannot start, XAML gracefully degrades to **syntax highlighting only** and the rest of the extension is unaffected. Use **WinApp: Show Info** to check the server status and **WinApp: Restart Language Server** to restart it.
 
 XAML tooling supports these settings:
 
@@ -242,8 +242,6 @@ There is currently a [known C# Dev Kit limitation for WinUI XAML-generated code]
 - `InitializeComponent()`
 - fields generated from XAML `x:Name` declarations
 - other members that exist only in generated `.g.cs` or `.g.i.cs` files
-
-This limitation applies to every XAML-backed code-behind file; it is not specific to `MainWindow.xaml.cs` or to a particular WinUI control. A successful command-line build remains authoritative. Rebuilding or changing the code-behind filename does not make these generated members available to C# Dev Kit.
 
 ### AppxManifest IntelliSense
 

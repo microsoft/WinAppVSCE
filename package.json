@@ -165,12 +165,12 @@
       {
         "command": "winui-xaml.showInfo",
         "title": "Show Info",
-        "category": "WinUI XAML"
+        "category": "WinApp"
       },
       {
         "command": "winui-xaml.restartServer",
         "title": "Restart Language Server",
-        "category": "WinUI XAML"
+        "category": "WinApp"
       },
       {
         "command": "winapp.openManifestEditor",
