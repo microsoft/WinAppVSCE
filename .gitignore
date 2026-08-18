@@ -437,8 +437,8 @@ test-results/
 *.msm
 *.msp
 
-# XSD schemas synced from Windows SDK NuGet packages (run `npm run sync-schemas`)
-schemas/*.xsd
+# XSD schemas are checked in on the v0.3.0 release branch so the network-isolated
+# release pipeline does not need to restore Windows SDK NuGet packages.
 
 # winapp workspace (SDK packages cache)
 .winapp/
