@@ -14,7 +14,9 @@ const VSCODE_EXE =
 	path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
 const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-	? []
+	? process.env.E2E_EXTENSIONS_DIR
+		? [`--extensions-dir=${process.env.E2E_EXTENSIONS_DIR}`]
+		: []
 	: [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
 const pendingApps = new Set<ElectronApplication>();
 const pendingDirectories = new Set<string>();

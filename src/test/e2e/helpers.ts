@@ -20,7 +20,9 @@ const VSCODE_EXE =
 
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
 const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-    ? []
+    ? process.env.E2E_EXTENSIONS_DIR
+        ? [`--extensions-dir=${process.env.E2E_EXTENSIONS_DIR}`]
+        : []
     : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
 
 const FIXTURES_DIR = path.resolve(__dirname, '..', 'fixtures');
@@ -33,6 +35,7 @@ export interface VSCodeTestContext {
     app: ElectronApplication;
     page: Page;
     workspacePath: string;
+    userDataPath: string;
 }
 
 /**
@@ -53,12 +56,14 @@ export function createTempWorkspace(fixtureName: string): string {
  */
 export async function launchVSCode(workspacePath: string): Promise<VSCodeTestContext> {
     const manifestPath = path.join(workspacePath, 'AppxManifest.xml');
+    const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'manifest-e2e-user-'));
     const app = await electron.launch({
         executablePath: VSCODE_EXE,
         args: [
             workspacePath,
             manifestPath,
             '--new-window',
+            `--user-data-dir=${userDataPath}`,
             ...EXTENSION_ARGS,
             '--disable-telemetry',
             '--skip-release-notes',
@@ -72,7 +77,7 @@ export async function launchVSCode(workspacePath: string): Promise<VSCodeTestCon
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(5_000);
 
-    return { app, page, workspacePath };
+    return { app, page, workspacePath, userDataPath };
 }
 
 /**
@@ -128,6 +133,9 @@ export async function teardown(ctx: VSCodeTestContext): Promise<void> {
     } catch { /* already closed */ }
     try {
         fs.rmSync(ctx.workspacePath, { recursive: true, force: true });
+    } catch { /* best-effort */ }
+    try {
+        fs.rmSync(ctx.userDataPath, { recursive: true, force: true });
     } catch { /* best-effort */ }
 }
 

@@ -38,18 +38,36 @@ const VSCODE_EXE =
 
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
 const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-    ? []
+    ? process.env.E2E_EXTENSIONS_DIR
+        ? [`--extensions-dir=${process.env.E2E_EXTENSIONS_DIR}`]
+        : []
     : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+const pendingUserDataDirectories = new Set<string>();
+
+test.afterEach(async () => {
+    for (const directory of pendingUserDataDirectories) {
+        await fs.promises.rm(directory, {
+            recursive: true,
+            force: true,
+            maxRetries: 20,
+            retryDelay: 250,
+        });
+        pendingUserDataDirectories.delete(directory);
+    }
+});
 
 /**
  * Launch VS Code with our extension loaded, opening the given folder.
  */
 async function launchVSCodeForFolder(folderPath: string): Promise<{ app: ElectronApplication; page: Page }> {
+    const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-e2e-user-'));
+    pendingUserDataDirectories.add(userDataPath);
     const app = await electron.launch({
         executablePath: VSCODE_EXE,
         args: [
             folderPath,
             '--new-window',
+            `--user-data-dir=${userDataPath}`,
             ...EXTENSION_ARGS,
             '--disable-telemetry',
             '--skip-release-notes',
