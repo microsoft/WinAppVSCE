@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="SmokeFixture.DiPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:SmokeFixture"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Padding="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock
+            x:Name="DiPageTitle"
+            Grid.Row="0"
+            AutomationProperties.AutomationId="DiPageTitle"
+            Foreground="{StaticResource SmokeAccentBrush}"
+            Style="{StaticResource TitleTextBlockStyle}"
+            Text="DI Page" />
+
+        <TextBlock
+            x:Name="DiMessage"
+            Grid.Row="1"
+            AutomationProperties.AutomationId="DiMessage"
+            Style="{StaticResource BodyStrongTextBlockStyle}"
+            Text="{x:Bind ViewModel.Message}" />
+    </Grid>
+</Page>
