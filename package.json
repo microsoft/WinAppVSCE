@@ -323,7 +323,7 @@
     "test": "vscode-test",
     "test:e2e": "npx playwright test --config=playwright.config.ts",
     "build:server:debug": "dotnet build server/src/WinUiXaml.LanguageServer/WinUiXaml.LanguageServer.csproj -c Debug --nologo && dotnet build server/src/WinUiXaml.DotnetHost/WinUiXaml.DotnetHost.csproj -c Debug --nologo",
-    "test:server": "dotnet test server/test/WinUiXaml.Xaml.Tests/WinUiXaml.Xaml.Tests.csproj -c Debug --nologo && dotnet test server/test/WinUiXaml.Workspace.Tests/WinUiXaml.Workspace.Tests.csproj -c Debug --nologo && dotnet test server/test/WinUiXaml.LanguageServer.Tests/WinUiXaml.LanguageServer.Tests.csproj -c Debug --nologo",
+    "test:server": "npm run restore:fixture && dotnet test server/test/WinUiXaml.Xaml.Tests/WinUiXaml.Xaml.Tests.csproj -c Debug --nologo && dotnet test server/test/WinUiXaml.Workspace.Tests/WinUiXaml.Workspace.Tests.csproj -c Debug --nologo && dotnet test server/test/WinUiXaml.LanguageServer.Tests/WinUiXaml.LanguageServer.Tests.csproj -c Debug --nologo",
     "bundle:server": "node scripts/ensure-server-bundle.mjs",
     "restore:fixture": "dotnet restore test/fixtures/xaml/fixture/SmokeFixture.csproj --configfile server/nuget.config",
     "test:xaml-smoke": "npm run build:server:debug && npm run restore:fixture && node server/test/lsp-smoke/smoke.mjs",
