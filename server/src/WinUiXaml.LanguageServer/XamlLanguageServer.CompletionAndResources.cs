@@ -15,9 +15,9 @@ internal sealed partial class XamlLanguageServer
             return new CompletionList();
         }
 
-        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
-        if (context == null)
+        if (!TryGetAcceptedContext(doc, out var context))
         {
+            WarmUp(doc.Uri);
             return new CompletionList();
         }
 
@@ -26,7 +26,16 @@ internal sealed partial class XamlLanguageServer
         return CompletionProvider.Provide(doc, offset, context.TypeSystem, context.Resolution.ClassSymbol, appKeys);
     }
 
-    internal sealed record XamlProjectContext(XamlResolution Resolution, XamlTypeSystem TypeSystem);
+    internal enum XamlProjectStage
+    {
+        Framework,
+        Full,
+    }
+
+    internal sealed record XamlProjectContext(
+        XamlResolution Resolution,
+        XamlTypeSystem TypeSystem,
+        XamlProjectStage Stage);
 
     /// <summary> Collects the <c>x:Key</c> resource keys declared in the project's App.xaml and its reachable merged dictionaries. Returns an empty set when there is no App.xaml.</summary>
     private string[] GetAppResourceKeys(XamlProjectContext context)
@@ -143,18 +152,31 @@ internal sealed partial class XamlLanguageServer
     /// <summary> Resolves the document to its project <see cref="XamlResolution"/> (for the x:Class symbol) plus the cached <see cref="XamlTypeSystem"/> for its compilation.</summary>
     private async Task<XamlProjectContext?> GetContextAsync(string uri)
     {
+        if (_documents.TryGetValue(uri, out var document) &&
+            TryGetAcceptedContext(document, out var accepted))
+        {
+            return accepted;
+        }
+
         var task = GetOrStartContext(uri);
         return await task.WaitAsync(_requestCancellation.Value).ConfigureAwait(false);
     }
 
-    private async Task<XamlProjectContext?> GetContextAsync(string uri, CancellationToken cancellationToken)
+    private async Task<XamlProjectContext?> GetFullContextAsync(
+        string uri,
+        CancellationToken cancellationToken)
     {
-        var task = GetOrStartContext(uri);
-        return await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var context = await GetOrStartContext(uri)
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return context?.Stage == XamlProjectStage.Full ? context : null;
     }
 
     private Task<XamlProjectContext?> GetOrStartContext(string uri)
-        => _contexts.GetOrStart(uri, cancellationToken => LoadContextAsync(uri, cancellationToken));
+        => _contexts.GetOrStart(
+            uri,
+            (cancellationToken, publishIntermediate) =>
+                LoadContextAsync(uri, cancellationToken, publishIntermediate));
 
     private bool TryGetReadyContext(
         string uri,
@@ -198,35 +220,52 @@ internal sealed partial class XamlLanguageServer
         var className = XamlIntrospection.GetClass(document.Text);
         context = new XamlProjectContext(
             accepted.Resolution.WithClassName(className),
-            accepted.TypeSystem);
+            accepted.TypeSystem,
+            accepted.Stage);
         return true;
     }
 
     private async Task<XamlProjectContext?> LoadContextAsync(
         string uri,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<XamlProjectContext, bool> publishIntermediate)
     {
+        await NotifyProjectContextStatusAsync(uri, "loading").ConfigureAwait(false);
         var path = UriToPath(uri);
         if (path == null)
         {
-            Console.Error.WriteLine($"[winui-xaml-ls] context: UriToPath returned null for '{uri}'");
+            const string message = "The XAML document path could not be resolved.";
+            Console.Error.WriteLine($"[winui-xaml-ls] context: {message} Uri: '{uri}'");
+            await NotifyProjectContextStatusAsync(uri, "error", message).ConfigureAwait(false);
             return null;
         }
 
-        XamlResolution? resolution;
-        try
+        var xamlText = _documents.TryGetValue(uri, out var document) ? document.Text : null;
+        XamlProjectContext? latestContext = null;
+        if (_contexts.TryGetLatest(uri, out var latest))
         {
-            var xamlText = _documents.TryGetValue(uri, out var document) ? document.Text : null;
-            if (_contexts.TryGetLatest(uri, out var latestContext))
+            latestContext = latest;
+            if (latest.Stage == XamlProjectStage.Full)
             {
                 var className = xamlText is null
-                    ? latestContext.Resolution.ClassName
+                    ? latest.Resolution.ClassName
                     : XamlIntrospection.GetClass(xamlText);
-                resolution = latestContext.Resolution.WithClassName(className);
-                return new XamlProjectContext(resolution, latestContext.TypeSystem);
+                return new XamlProjectContext(
+                    latest.Resolution.WithClassName(className),
+                    latest.TypeSystem,
+                    latest.Stage);
             }
+        }
 
-            resolution = await ResolveIfAllowedAsync(path, cancellationToken, xamlText).ConfigureAwait(false);
+        XamlResolution? frameworkResolution;
+        try
+        {
+            frameworkResolution = latestContext?.Stage == XamlProjectStage.Framework
+                ? latestContext.Resolution.WithClassName(
+                    xamlText is null
+                        ? latestContext.Resolution.ClassName
+                        : XamlIntrospection.GetClass(xamlText))
+                : await ResolveFrameworkIfAllowedAsync(path, cancellationToken, xamlText).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -235,28 +274,90 @@ internal sealed partial class XamlLanguageServer
         catch (MsBuildUnavailableException ex)
         {
             await NotifyMsBuildUnavailableAsync(ex).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(uri, "error", ex.Message).ConfigureAwait(false);
             return null;
         }
         catch (ProjectRestoreRequiredException ex)
         {
             await NotifyProjectRestoreRequiredAsync(ex).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(uri, "error", ex.Message).ConfigureAwait(false);
             return null;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[winui-xaml-ls] resolve failed: {ex.Message}");
+            await NotifyProjectContextStatusAsync(
+                uri,
+                "error",
+                $"Project-aware XAML IntelliSense failed to load: {ex.Message}").ConfigureAwait(false);
             return null;
         }
 
-        if (resolution == null)
+        if (frameworkResolution == null)
         {
             Console.Error.WriteLine($"[winui-xaml-ls] context: resolver returned null for path '{path}'");
+            await NotifyProjectContextStatusAsync(
+                uri,
+                "error",
+                "No owning project was found for this XAML document.").ConfigureAwait(false);
             return null;
         }
 
-        var typeSystem = _typeSystems.GetValue(resolution.Compilation, _ => XamlTypeSystem.FromResolution(resolution));
-        return new XamlProjectContext(resolution, typeSystem);
+        var frameworkTypeSystem = latestContext?.Stage == XamlProjectStage.Framework
+            ? latestContext.TypeSystem
+            : _typeSystems.GetValue(
+                frameworkResolution.Compilation,
+                _ => XamlTypeSystem.FromResolution(frameworkResolution));
+        var frameworkContext = new XamlProjectContext(
+            frameworkResolution,
+            frameworkTypeSystem,
+            XamlProjectStage.Framework);
+        if (publishIntermediate(frameworkContext))
+        {
+            await NotifyProjectContextStatusAsync(uri, "framework-ready").ConfigureAwait(false);
+        }
+
+        XamlResolution? fullResolution;
+        try
+        {
+            fullResolution = await ResolveIfAllowedAsync(path, cancellationToken, xamlText).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[winui-xaml-ls] full project resolve failed: {ex.Message}");
+            await NotifyProjectContextStatusAsync(
+                uri,
+                "error",
+                $"Full project XAML IntelliSense failed to load: {ex.Message}").ConfigureAwait(false);
+            return null;
+        }
+
+        if (fullResolution == null)
+        {
+            await NotifyProjectContextStatusAsync(
+                uri,
+                "error",
+                "The owning project could not be compiled for full XAML IntelliSense.").ConfigureAwait(false);
+            return null;
+        }
+
+        var fullTypeSystem = _typeSystems.GetValue(
+            fullResolution.Compilation,
+            _ => XamlTypeSystem.FromResolution(fullResolution));
+        return new XamlProjectContext(fullResolution, fullTypeSystem, XamlProjectStage.Full);
     }
+
+    private Task NotifyProjectContextStatusAsync(
+        string uri,
+        string state,
+        string? message = null) =>
+        _connection.SendNotificationAsync(
+            "winui-xaml/projectContextStatus",
+            new { uri, state, message });
 
     /// <summary>Shared pipeline for definition/hover: map the caret to a member name on the page's x:Class type (either an event-handler attribute value or an x:Bind path segment) and resolve it</summary>
     private async Task<(ISymbol? Symbol, MemberTarget? Target)> ResolveSymbolAtAsync(TextDocumentPositionParams p)
@@ -670,7 +771,7 @@ internal sealed partial class XamlLanguageServer
         string TypeName,
         string FileLabel);
 
-    private void WarmUp(string uri)
+    private void WarmUp(string uri, bool requireOpenDocument = true)
     {
         var path = UriToPath(uri);
         if (path == null)
@@ -685,13 +786,25 @@ internal sealed partial class XamlLanguageServer
         }
 
         // Cache the complete context, not just the workspace, so all later features share one
-        // compilation and type system. A short delay gives immediate editor requests priority.
+        // compilation and type system. Interactive opens yield briefly to immediate editor
+        // requests; the explicit workspace preload starts immediately.
         _ = Task.Run(async () =>
         {
-            await Task.Delay(500).ConfigureAwait(false);
-            if (_documents.ContainsKey(uri))
+            if (requireOpenDocument)
             {
-                await GetOrStartContext(uri).ConfigureAwait(false);
+                await Task.Delay(500).ConfigureAwait(false);
+            }
+            if (requireOpenDocument && !_documents.ContainsKey(uri))
+            {
+                return;
+            }
+
+            var context = await GetOrStartContext(uri).ConfigureAwait(false);
+            if (context is not null)
+            {
+                await NotifyProjectContextStatusAsync(
+                    uri,
+                    context.Stage == XamlProjectStage.Full ? "ready" : "framework-ready").ConfigureAwait(false);
             }
         });
     }

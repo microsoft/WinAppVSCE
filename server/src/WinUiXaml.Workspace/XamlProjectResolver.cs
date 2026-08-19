@@ -27,6 +27,8 @@ namespace WinUiXaml.Workspace
         private readonly object _gate = new object();
         private readonly Dictionary<string, Task<RoslynProjectWorkspace>> _projects =
             new Dictionary<string, Task<RoslynProjectWorkspace>>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Task<MsBuildFrameworkProject?>> _frameworkProjects =
+            new Dictionary<string, Task<MsBuildFrameworkProject?>>(StringComparer.OrdinalIgnoreCase);
         private readonly IReadOnlyDictionary<string, string> _globalProperties;
         private bool _disposed;
 
@@ -123,6 +125,65 @@ namespace WinUiXaml.Workspace
                 workspace.ApplicationDefinitionPath);
         }
 
+        /// <summary>
+        /// Resolves framework metadata from the owning project's exact MSBuild-selected references
+        /// without compiling project sources or running source generators.
+        /// </summary>
+        public async Task<XamlResolution?> ResolveFrameworkAsync(
+            string xamlPath,
+            string? searchRoot = null,
+            CancellationToken cancellationToken = default,
+            string? xamlText = null)
+        {
+            if (xamlPath == null)
+            {
+                throw new ArgumentNullException(nameof(xamlPath));
+            }
+
+            var projectPath = FindOwningProject(xamlPath, searchRoot);
+            if (projectPath == null)
+            {
+                return null;
+            }
+
+            var normalizedXaml = Path.GetFullPath(xamlPath);
+            var className = xamlText is null
+                ? TryReadClassName(normalizedXaml)
+                : XamlIntrospection.GetClass(xamlText);
+            var frameworkProject = await GetOrLoadFrameworkAsync(projectPath)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (frameworkProject is not null)
+            {
+                var compilation = frameworkProject.Compilation;
+                return new XamlResolution(
+                    normalizedXaml,
+                    Path.GetFullPath(projectPath),
+                    className,
+                    classSymbol: null,
+                    compilation,
+                    compilation.SourceModule.ReferencedAssemblySymbols,
+                    frameworkProject.XamlFiles,
+                    frameworkProject.ApplicationDefinitionPath);
+            }
+
+            // Unsupported custom project systems retain the existing authoritative path.
+            var workspace = await GetOrLoadAsync(projectPath, cancellationToken)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var fallbackCompilation = workspace.GetFrameworkCompilation();
+            return new XamlResolution(
+                normalizedXaml,
+                Path.GetFullPath(projectPath),
+                className,
+                classSymbol: null,
+                fallbackCompilation,
+                fallbackCompilation.SourceModule.ReferencedAssemblySymbols,
+                workspace.XamlFiles,
+                workspace.ApplicationDefinitionPath);
+        }
+
         private static bool IsWithin(string path, string root)
         {
             var relative = Path.GetRelativePath(root, path);
@@ -156,6 +217,7 @@ namespace WinUiXaml.Workspace
                     _projects.Remove(key);
                     removed = task;
                 }
+                _frameworkProjects.Remove(key);
             }
 
             DisposeWhenComplete(removed);
@@ -169,6 +231,7 @@ namespace WinUiXaml.Workspace
             {
                 removed = _projects.Values.ToList();
                 _projects.Clear();
+                _frameworkProjects.Clear();
             }
 
             foreach (var task in removed)
@@ -212,6 +275,50 @@ namespace WinUiXaml.Workspace
                     TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
 
+                return task;
+            }
+        }
+
+        private Task<MsBuildFrameworkProject?> GetOrLoadFrameworkAsync(string projectPath)
+        {
+            var key = Path.GetFullPath(projectPath);
+            lock (_gate)
+            {
+                if (_disposed)
+                {
+                    throw new ObjectDisposedException(nameof(XamlProjectResolver));
+                }
+
+                if (_frameworkProjects.TryGetValue(key, out var existing))
+                {
+                    return existing;
+                }
+
+                var task = Task.Run(
+                    () => MsBuildFrameworkProject.Load(key, _globalProperties),
+                    CancellationToken.None);
+                _frameworkProjects[key] = task;
+                _ = task.ContinueWith(
+                    completed =>
+                    {
+                        if (completed.Status == TaskStatus.RanToCompletion &&
+                            completed.Result is not null)
+                        {
+                            return;
+                        }
+
+                        lock (_gate)
+                        {
+                            if (_frameworkProjects.TryGetValue(key, out var current) &&
+                                ReferenceEquals(current, completed))
+                            {
+                                _frameworkProjects.Remove(key);
+                            }
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
                 return task;
             }
         }
@@ -272,6 +379,7 @@ namespace WinUiXaml.Workspace
                 _disposed = true;
                 tasks = _projects.Values.ToList();
                 _projects.Clear();
+                _frameworkProjects.Clear();
             }
 
             foreach (var task in tasks)

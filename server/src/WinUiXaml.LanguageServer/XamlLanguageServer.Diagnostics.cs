@@ -104,9 +104,10 @@ internal sealed partial class XamlLanguageServer
                 return;
             }
 
-            var context = TryGetAcceptedContext(doc, out var accepted)
+            var context = TryGetAcceptedContext(doc, out var accepted) &&
+                accepted.Stage == XamlProjectStage.Full
                 ? accepted
-                : await GetContextAsync(doc.Uri, cancellation.Token).ConfigureAwait(false);
+                : await GetFullContextAsync(doc.Uri, cancellation.Token).ConfigureAwait(false);
             if (context == null || !IsCurrentDiagnostics(doc, diagnosticsGeneration))
             {
                 return;

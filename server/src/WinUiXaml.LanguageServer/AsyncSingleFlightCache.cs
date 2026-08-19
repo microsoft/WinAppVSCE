@@ -22,6 +22,11 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
     public Task<TValue?> GetOrStart(
         TKey key,
         Func<CancellationToken, Task<TValue?>> factory)
+        => GetOrStart(key, (cancellationToken, _) => factory(cancellationToken));
+
+    public Task<TValue?> GetOrStart(
+        TKey key,
+        Func<CancellationToken, Func<TValue, bool>, Task<TValue?>> factory)
     {
         Entry entry;
         lock (_gate)
@@ -107,12 +112,18 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
         TKey key,
         Entry entry,
         long generation,
-        Func<CancellationToken, Task<TValue?>> factory)
+        Func<CancellationToken, Func<TValue, bool>, Task<TValue?>> factory)
     {
         var cancellationToken = entry.CancellationToken;
         try
         {
-            var value = await factory(cancellationToken).ConfigureAwait(false);
+            var value = await factory(
+                cancellationToken,
+                intermediate => TryPublishIntermediate(
+                    key,
+                    entry,
+                    generation,
+                    intermediate)).ConfigureAwait(false);
             lock (_gate)
             {
                 if (!_entries.TryGetValue(key, out var current) ||
@@ -154,6 +165,26 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
         finally
         {
             await entry.DisposeCancellationAsync().ConfigureAwait(false);
+        }
+    }
+
+    private bool TryPublishIntermediate(
+        TKey key,
+        Entry entry,
+        long generation,
+        TValue value)
+    {
+        lock (_gate)
+        {
+            if (!_entries.TryGetValue(key, out var current) ||
+                !ReferenceEquals(current, entry) ||
+                generation != _generation)
+            {
+                return false;
+            }
+
+            _latest[key] = value;
+            return true;
         }
     }
 

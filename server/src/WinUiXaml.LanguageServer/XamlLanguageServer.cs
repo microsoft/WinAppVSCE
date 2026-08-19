@@ -19,6 +19,7 @@ internal sealed partial class XamlLanguageServer
     private readonly JsonRpcConnection _connection;
     private readonly XamlProjectResolver _resolver;
     private readonly ConcurrentDictionary<string, TextDocument> _documents = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _preloadUris = new(StringComparer.OrdinalIgnoreCase);
     private readonly AsyncSingleFlightCache<string, XamlProjectContext> _contexts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, XamlTypeSystem> _typeSystems = new();
@@ -110,6 +111,9 @@ internal sealed partial class XamlLanguageServer
                 break;
             case "workspace/didChangeConfiguration":
                 await DidChangeConfigurationAsync(Deserialize<DidChangeConfigurationParams>(@params)).ConfigureAwait(false);
+                break;
+            case "winui-xaml/warmUp":
+                Preload(Deserialize<TextDocumentIdentifier>(@params).Uri);
                 break;
             case "exit":
                 Environment.Exit(_shuttingDown ? 0 : 1);
@@ -385,6 +389,23 @@ internal sealed partial class XamlLanguageServer
         return _resolver.ResolveAsync(canonicalPath, allowedRoot, cancellationToken, xamlText);
     }
 
+    private Task<XamlResolution?> ResolveFrameworkIfAllowedAsync(
+        string path,
+        CancellationToken cancellationToken,
+        string? xamlText)
+    {
+        if (!TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot))
+        {
+            return Task.FromResult<XamlResolution?>(null);
+        }
+
+        return _resolver.ResolveFrameworkAsync(
+            canonicalPath,
+            allowedRoot,
+            cancellationToken,
+            xamlText);
+    }
+
     private Task<object?> Shutdown()
     {
         _shuttingDown = true;
@@ -400,6 +421,10 @@ internal sealed partial class XamlLanguageServer
             p.TextDocument.Text,
             p.TextDocument.Version);
         _documents[p.TextDocument.Uri] = doc;
+        _preloadUris.TryRemove(doc.Uri, out _);
+        // A workspace preload may have cached this URI using the on-disk x:Class. Refresh the
+        // lightweight document context from the editor text without discarding the project cache.
+        _contexts.Invalidate(doc.Uri);
         await PublishDiagnosticsAsync(doc).ConfigureAwait(false);
         WarmUp(doc.Uri);
     }
@@ -437,6 +462,10 @@ internal sealed partial class XamlLanguageServer
             _documents.TryRemove(p.TextDocument.Uri, out _);
             CancelSemanticDiagnostics(p.TextDocument.Uri);
             _contexts.Invalidate(p.TextDocument.Uri, discardLatest: true);
+            await _connection.SendNotificationAsync(
+                "winui-xaml/projectContextStatus",
+                new { uri = p.TextDocument.Uri, state = "idle" })
+                .ConfigureAwait(false);
             await _connection.SendNotificationAsync(
                 "textDocument/publishDiagnostics",
                 new PublishDiagnosticsParams { Uri = p.TextDocument.Uri, Diagnostics = new List<Diagnostic>() })
@@ -539,7 +568,7 @@ internal sealed partial class XamlLanguageServer
         if (invalidateAllProjects)
         {
             _resolver.InvalidateAll();
-            ResetContextsAndWarmOpenDocuments();
+            ResetContextsAndWarmDocuments();
         }
         else
         {
@@ -549,7 +578,7 @@ internal sealed partial class XamlLanguageServer
             }
             if (projectsToInvalidate.Count > 0)
             {
-                ResetContextsAndWarmOpenDocuments();
+                ResetContextsAndWarmDocuments();
             }
         }
 
@@ -588,15 +617,22 @@ internal sealed partial class XamlLanguageServer
             System.IO.Path.GetFileName(directory).Equals("obj", StringComparison.OrdinalIgnoreCase);
     }
 
-    private void ResetContextsAndWarmOpenDocuments()
+    private void ResetContextsAndWarmDocuments()
     {
         _contexts.InvalidateAll();
 
-        // Rebuild invalidated contexts for every open trusted document. WarmUp retains the
-        // trusted-root gate, and GetOrStartContext keeps this single-flight per document.
+        // Rebuild invalidated contexts for open documents and unopened workspace preloads.
+        // WarmUp retains the trusted-root gate, and GetOrStartContext keeps this single-flight.
         foreach (var uri in _documents.Keys)
         {
             WarmUp(uri);
+        }
+        foreach (var uri in _preloadUris.Keys)
+        {
+            if (!_documents.ContainsKey(uri))
+            {
+                WarmUp(uri, requireOpenDocument: false);
+            }
         }
     }
 
@@ -607,6 +643,22 @@ internal sealed partial class XamlLanguageServer
         {
             WarmUp(uri);
         }
+        else if (_preloadUris.ContainsKey(uri))
+        {
+            WarmUp(uri, requireOpenDocument: false);
+        }
+    }
+
+    private void Preload(string uri)
+    {
+        var path = UriToPath(uri);
+        if (path == null || !TryGetAllowedRoot(path, out _, out _))
+        {
+            return;
+        }
+
+        _preloadUris[uri] = 0;
+        WarmUp(uri, requireOpenDocument: false);
     }
 
     private void InvalidateIfSavedClassChanged(string canonicalPath)

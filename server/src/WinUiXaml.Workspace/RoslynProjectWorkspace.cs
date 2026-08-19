@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.MSBuild;
 
 namespace WinUiXaml.Workspace
@@ -109,7 +110,7 @@ namespace WinUiXaml.Workspace
             }
         }
 
-        private static (
+        internal static (
             ImmutableArray<string> Files,
             string? ApplicationDefinition,
             string? ProjectAssetsFile,
@@ -163,6 +164,17 @@ namespace WinUiXaml.Workspace
         /// <summary>Gets the C# compilation for the loaded project.</summary>
         public Task<Compilation?> GetCompilationAsync(CancellationToken cancellationToken = default) =>
             Project.GetCompilationAsync(cancellationToken);
+
+        /// <summary>
+        /// Creates a source-free compilation over the exact references selected by MSBuild.
+        /// This makes framework metadata available without waiting for project sources and
+        /// source generators to compile.
+        /// </summary>
+        public Compilation GetFrameworkCompilation() =>
+            CSharpCompilation.Create(
+                Project.AssemblyName ?? "WinUiXaml.Framework",
+                references: Project.MetadataReferences,
+                options: Project.CompilationOptions as CSharpCompilationOptions);
 
         /// <summary> Resolves a type by its metadata name.</summary>
         public async Task<INamedTypeSymbol?> ResolveTypeAsync(string metadataName, CancellationToken cancellationToken = default)

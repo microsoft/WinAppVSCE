@@ -259,6 +259,48 @@ public sealed class AsyncSingleFlightCacheTests
     }
 
     [Fact]
+    public async Task IntermediateValueIsAcceptedOnlyWhileLoadIsCurrent()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>();
+        var staleRelease = new TaskCompletionSource<Value?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Func<Value, bool>? stalePublish = null;
+        var stale = cache.GetOrStart(
+            "page",
+            (_, publish) =>
+            {
+                stalePublish = publish;
+                return staleRelease.Task;
+            });
+
+        Assert.True(stalePublish!(new Value("framework")));
+        Assert.True(cache.TryGetLatest("page", out var framework));
+        Assert.Equal("framework", framework.Name);
+
+        cache.Invalidate("page", discardLatest: true);
+        var freshRelease = new TaskCompletionSource<Value?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Func<Value, bool>? freshPublish = null;
+        var fresh = cache.GetOrStart(
+            "page",
+            (_, publish) =>
+            {
+                freshPublish = publish;
+                return freshRelease.Task;
+            });
+
+        Assert.True(freshPublish!(new Value("fresh-framework")));
+        Assert.False(stalePublish(new Value("stale-framework")));
+        Assert.True(cache.TryGetLatest("page", out var freshFramework));
+        Assert.Equal("fresh-framework", freshFramework.Name);
+
+        staleRelease.SetResult(new Value("stale-full"));
+        freshRelease.SetResult(new Value("fresh-full"));
+        Assert.Null(await stale);
+        Assert.Equal("fresh-full", (await fresh)?.Name);
+    }
+
+    [Fact]
     public async Task GlobalDiscardRemovesAllAcceptedSnapshots()
     {
         var cache = new AsyncSingleFlightCache<string, Value>();

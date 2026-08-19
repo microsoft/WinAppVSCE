@@ -33,6 +33,13 @@ import {
   ProjectRestoreNotificationGate,
 } from "./projectRestoreNotification";
 import {
+  PROJECT_CONTEXT_STATUS_NOTIFICATION,
+  ProjectContextStatus,
+  getRelevantProjectContextStatuses,
+  getProjectContextStatusPresentation,
+  selectProjectContextStatus,
+} from "./projectContextStatus";
+import {
   normalizeDiagnosticsLevel,
   getXamlStatus,
   getXamlStatusEffect,
@@ -40,9 +47,14 @@ import {
   shouldRestartXamlLanguageServer,
   XamlStatusAction,
 } from "./xamlConfiguration";
+import { findFirstWorkspaceXaml } from "./workspacePreload";
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
+let projectStatusItem: vscode.StatusBarItem | undefined;
+let readyStatusTimer: NodeJS.Timeout | undefined;
+const projectContextStatuses = new Map<string, ProjectContextStatus>();
+let workspacePreloadUri: vscode.Uri | undefined;
 
 // The client does not own caller-supplied watchers.
 let fileWatchers: vscode.FileSystemWatcher[] = [];
@@ -67,18 +79,25 @@ function log(message: string): void {
 export async function activateXaml(context: vscode.ExtensionContext): Promise<void> {
   // Allow reactivation in the same host process.
   lifecycle.reset();
+  workspacePreloadUri = undefined;
   output = vscode.window.createOutputChannel("WinUI XAML");
+  projectStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  projectStatusItem.name = "WinApp XAML IntelliSense";
+  projectStatusItem.command = "winui-xaml.showOutput";
   context.subscriptions.push(output);
+  context.subscriptions.push(projectStatusItem);
   log("WinUI XAML Tools activating…");
 
   context.subscriptions.push(
     vscode.commands.registerCommand("winui-xaml.showInfo", () => showXamlInfo()),
+    vscode.commands.registerCommand("winui-xaml.showOutput", () => output?.show(true)),
     vscode.commands.registerCommand("winui-xaml.restartServer", () => restartClient(context, true)),
+    vscode.window.onDidChangeActiveTextEditor(() => renderProjectContextStatus()),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("winapp.xaml.intelliSense.enable")) {
         if (!shouldRestartXamlLanguageServer(
           client !== undefined,
-          vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")
+          hasXamlDemand()
         )) {
           log("XAML configuration changed — changes will apply when a XAML document opens.");
           return;
@@ -106,7 +125,7 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
     }),
     // Start semantic processing only after the workspace becomes trusted.
     vscode.workspace.onDidGrantWorkspaceTrust(() => {
-      if (vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")) {
+      if (hasXamlDemand()) {
         log("Workspace trust granted — restarting language server.");
         return restartClient(context);
       }
@@ -168,7 +187,30 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
 
   if (vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")) {
     await startClient(context);
+  } else if (vscode.workspace.workspaceFolders?.length) {
+    try {
+      workspacePreloadUri = await findFirstWorkspaceXaml((include, exclude, maxResults) =>
+        vscode.workspace.findFiles(include, exclude, maxResults)
+      );
+    } catch (error) {
+      log(
+        `Workspace XAML preload search failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+    if (workspacePreloadUri) {
+      log(`Found workspace XAML for project preload: ${workspacePreloadUri.fsPath}`);
+      await startClient(context);
+    }
   }
+}
+
+function hasXamlDemand(): boolean {
+  return (
+    workspacePreloadUri !== undefined ||
+    vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")
+  );
 }
 
 function showXamlInfo(): void {
@@ -349,6 +391,10 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     PROJECT_RESTORE_NOTIFICATION,
     ({ projectPath }: { projectPath?: string }) => notifyProjectRestoreRequired(projectPath)
   );
+  candidate.onNotification(
+    PROJECT_CONTEXT_STATUS_NOTIFICATION,
+    (status: ProjectContextStatus) => updateProjectContextStatus(status)
+  );
 
   try {
     await candidate.start();
@@ -361,6 +407,17 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     await candidate.sendNotification("workspace/didChangeConfiguration", {
       settings: { diagnosticsLevel: latestDiagnosticsLevel },
     });
+    if (
+      workspacePreloadUri &&
+      !vscode.workspace.textDocuments.some(
+        (document) => document.uri.toString() === workspacePreloadUri?.toString()
+      )
+    ) {
+      await candidate.sendNotification("winui-xaml/warmUp", {
+        uri: workspacePreloadUri.toString(),
+      });
+      log(`Preloading XAML IntelliSense project for: ${workspacePreloadUri.fsPath}`);
+    }
     lastDegradedCause = undefined;
     log("Language server started.");
     if (userInitiated) {
@@ -483,6 +540,79 @@ function disposeFileWatcher(): void {
   fileWatchers = [];
 }
 
+function updateProjectContextStatus(status: ProjectContextStatus): void {
+  if (
+    !status.uri ||
+    !["loading", "framework-ready", "ready", "error", "idle"].includes(status.state)
+  ) {
+    return;
+  }
+
+  if (status.state === "idle") {
+    projectContextStatuses.delete(status.uri);
+  } else {
+    projectContextStatuses.set(status.uri, status);
+  }
+  renderProjectContextStatus();
+}
+
+function renderProjectContextStatus(): void {
+  if (readyStatusTimer) {
+    clearTimeout(readyStatusTimer);
+    readyStatusTimer = undefined;
+  }
+
+  const activeEditor = vscode.window.activeTextEditor;
+  const activeDocumentUri = activeEditor
+    ? activeEditor.document.languageId === "xaml"
+      ? activeEditor.document.uri.toString()
+      : null
+    : undefined;
+  const relevantStatuses = getRelevantProjectContextStatuses(
+    projectContextStatuses.values(),
+    activeDocumentUri
+  );
+  const selected = selectProjectContextStatus(relevantStatuses);
+  const presentation = selected
+    ? getProjectContextStatusPresentation(selected)
+    : undefined;
+  if (!projectStatusItem || !selected || !presentation) {
+    projectStatusItem?.hide();
+    return;
+  }
+
+  projectStatusItem.text = presentation.text;
+  projectStatusItem.tooltip = presentation.tooltip;
+  projectStatusItem.show();
+  if (presentation.transient) {
+    readyStatusTimer = setTimeout(() => {
+      const currentEditor = vscode.window.activeTextEditor;
+      const currentUri = currentEditor
+        ? currentEditor.document.languageId === "xaml"
+          ? currentEditor.document.uri.toString()
+          : null
+        : undefined;
+      if (
+        selectProjectContextStatus(
+          getRelevantProjectContextStatuses(projectContextStatuses.values(), currentUri)
+        )?.state === "ready"
+      ) {
+        projectStatusItem?.hide();
+      }
+      readyStatusTimer = undefined;
+    }, 3000);
+  }
+}
+
+function clearProjectContextStatus(): void {
+  projectContextStatuses.clear();
+  if (readyStatusTimer) {
+    clearTimeout(readyStatusTimer);
+    readyStatusTimer = undefined;
+  }
+  projectStatusItem?.hide();
+}
+
 /** Stops the server without interleaving with another lifecycle operation. */
 async function stopClient(): Promise<void> {
   return lifecycle.runExclusive(doStop);
@@ -490,6 +620,7 @@ async function stopClient(): Promise<void> {
 
 async function doStop(): Promise<void> {
   disposeFileWatcher();
+  clearProjectContextStatus();
   const current = client;
   client = undefined;
   if (!current) {

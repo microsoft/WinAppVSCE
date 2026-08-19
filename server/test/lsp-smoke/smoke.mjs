@@ -179,6 +179,30 @@ async function main() {
 
   // 2) didOpen -> expect diagnostics (0 for the clean fixture)
   const diagPromise = waitFor(notification("textDocument/publishDiagnostics"), 15000, "publishDiagnostics");
+  const loadingStatusPromise = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectContextStatus" &&
+      message.params?.uri === xamlUri &&
+      message.params?.state === "loading",
+    15000,
+    "project context loading status"
+  );
+  const frameworkReadyStatusPromise = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectContextStatus" &&
+      message.params?.uri === xamlUri &&
+      message.params?.state === "framework-ready",
+    90000,
+    "project context framework-ready status"
+  );
+  const readyStatusPromise = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectContextStatus" &&
+      message.params?.uri === xamlUri &&
+      message.params?.state === "ready",
+    90000,
+    "project context ready status"
+  );
   send({
     method: "textDocument/didOpen",
     params: { textDocument: { uri: xamlUri, languageId: "xaml", version: 1, text: xamlText } },
@@ -189,6 +213,7 @@ async function main() {
   if (diag.params.diagnostics.length !== 0) {
     fail(`expected 0 diagnostics for the clean fixture, got ${diag.params.diagnostics.length}`);
   }
+  await loadingStatusPromise;
   console.log("[ok] didOpen: 0 syntactic diagnostics for the valid fixture");
 
   // Project-independent directive quick info must not wait for the cold design-time build.
@@ -215,22 +240,14 @@ async function main() {
   });
   const coldElementHover = await waitFor(responseFor(101), 5000, "cold element hover");
   const coldElementMs = performance.now() - coldElementStarted;
-  const coldElementText = coldElementHover.result?.contents?.value ?? "";
-  const coldElementDescription = (coldElementText.split("```")[2] || "").trim();
-  if (!coldElementText.includes("Page") || !/XAML element[\s\S]+presentation/i.test(coldElementDescription)) {
-    fail(`cold element hover had no description: ${coldElementText}`);
+  if (coldElementHover.result !== null) {
+    fail(`cold element hover should be suppressed while project IntelliSense loads: ${JSON.stringify(coldElementHover.result)}`);
   }
-  if (/loading/i.test(coldElementText)) fail(`cold element hover exposed loading state: ${coldElementText}`);
   if (coldElementMs >= 1000) fail(`cold element hover took ${coldElementMs.toFixed(0)} ms (contract: <1000 ms)`);
-  console.log(`[ok] hover(cold element): Page (${coldElementMs.toFixed(0)} ms)`);
+  console.log(`[ok] hover(cold element): suppressed while loading (${coldElementMs.toFixed(0)} ms)`);
 
   for (const [id, position, label, expected] of [
-    [103, navigationCaret, "NavigationCacheMode attribute", /XAML attribute[\s\S]+NavigationCacheMode[\s\S]+Page[\s\S]+Required/i],
-    [104, requiredCaret, "Required enum value", /Literal value[\s\S]+Required[\s\S]+NavigationCacheMode[\s\S]+Page/i],
     [105, ignorableCaret, "mc:Ignorable", /namespace prefixes/i],
-    [106, contentCaret, "Content attribute", /XAML attribute[\s\S]+Content[\s\S]+Button[\s\S]+Go to Page 2/i],
-    [107, contentValueCaret, "Content value", /Literal value[\s\S]+Go to Page 2[\s\S]+Content[\s\S]+Button/i],
-    [191, bindCaret, "x:Bind expression", /XAML markup expression[\s\S]+x:Bind GreetingText[\s\S]+TextBlock/i],
     [192, resCaret, "resource reference", /References a XAML resource by key/i],
   ]) {
     const started = performance.now();
@@ -265,6 +282,9 @@ async function main() {
     fail(`definition landed on line ${loc.range?.start?.line}, expected ${EXPECTED_HANDLER_LINE}`);
   }
   console.log(`[ok] definition: OnGo_Click -> ${loc.uri} @ line ${loc.range.start.line} (${coldDefinitionMs.toFixed(0)} ms cold)`);
+  await frameworkReadyStatusPromise;
+  await readyStatusPromise;
+  console.log("[ok] project context status: loading -> framework-ready -> ready");
 
   const warmHoverStarted = performance.now();
   send({
@@ -281,6 +301,18 @@ async function main() {
   }
   if (warmHoverMs >= 1000) fail(`warm element hover took ${warmHoverMs.toFixed(0)} ms (contract: <1000 ms)`);
   console.log(`[ok] hover(warm element): Button (${warmHoverMs.toFixed(0)} ms)`);
+
+  for (const [id, position, label, expected] of [
+    [103, navigationCaret, "NavigationCacheMode attribute", /NavigationCacheMode[\s\S]+Page/i],
+    [104, requiredCaret, "Required enum value", /NavigationCacheMode\.Required/i],
+    [106, contentCaret, "Content attribute", /ContentControl\.Content/i],
+    [191, bindCaret, "x:Bind expression", /SmokePage\.GreetingText/i],
+  ]) {
+    send({ id, method: "textDocument/hover", params: { textDocument: { uri: xamlUri }, position } });
+    const response = await waitFor(responseFor(id), 5000, `warm ${label} hover`);
+    const text = response.result?.contents?.value ?? "";
+    if (!expected.test(text)) fail(`warm ${label} hover was not semantic: ${text}`);
+  }
 
   // Actual generated-file watcher traffic must not invalidate authoritative context.
   send({
@@ -331,13 +363,11 @@ async function main() {
     method: "textDocument/hover",
     params: { textDocument: { uri: xamlUri }, position: pageCaret },
   });
-  const fallbackResponse = await waitFor(responseFor(108), 5000, "post-invalidation fallback hover");
+  const fallbackResponse = await waitFor(responseFor(108), 5000, "post-invalidation suppressed hover");
   const fallbackMs = performance.now() - fallbackStarted;
-  const fallbackText = fallbackResponse.result?.contents?.value ?? "";
   if (fallbackMs >= 1000) fail(`post-invalidation fallback hover took ${fallbackMs.toFixed(0)} ms`);
-  if (/loading/i.test(fallbackText)) fail(`post-invalidation hover exposed loading state: ${fallbackText}`);
-  if (!fallbackText.includes("Page") || !(fallbackText.split("```")[2] || "").trim()) {
-    fail(`post-invalidation hover had no useful fallback prose: ${fallbackText}`);
+  if (fallbackResponse.result !== null) {
+    fail(`post-invalidation hover should be suppressed while reloading: ${JSON.stringify(fallbackResponse.result)}`);
   }
 
   send({
@@ -364,7 +394,7 @@ async function main() {
       !/Represents|page/i.test((authoritativeText.split("```")[2] || ""))) {
     fail(`context did not restore authoritative Page hover after invalidation: ${authoritativeText}`);
   }
-  console.log(`[ok] hover remains useful during invalidation and is authoritative after reload (${fallbackMs.toFixed(0)} ms fallback, ${authoritativeMs.toFixed(0)} ms restored)`);
+  console.log(`[ok] hover is suppressed during invalidation and authoritative after reload (${fallbackMs.toFixed(0)} ms suppressed, ${authoritativeMs.toFixed(0)} ms restored)`);
 
   cleanImportedBuild();
   process.removeListener("exit", cleanImportedBuild);
@@ -917,6 +947,37 @@ async function main() {
   )) {
     fail("didClose allowed pending semantic diagnostics to publish");
   }
+
+  // A workspace preload warms an owning project without opening or syncing the XAML document.
+  const preloadLoading = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectContextStatus" &&
+      message.params?.uri === xamlUri &&
+      message.params?.state === "loading",
+    10000,
+    "workspace preload loading status"
+  );
+  send({ method: "winui-xaml/warmUp", params: { uri: xamlUri } });
+  await preloadLoading;
+  const preloadReady = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectContextStatus" &&
+      message.params?.uri === xamlUri &&
+      message.params?.state === "ready",
+    30000,
+    "workspace preload ready after invalidation"
+  );
+  send({
+    method: "workspace/didChangeWatchedFiles",
+    params: {
+      changes: [{
+        uri: pathToFileURL(join(dirname(XAML), "SmokePage.xaml.cs")).href,
+        type: 2,
+      }],
+    },
+  });
+  await preloadReady;
+  console.log("[ok] workspace preload survives project invalidation without an open XAML document");
 
   // Reopening the same URI with a different class must not serve definitions from the closed
   // SmokePage context.

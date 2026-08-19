@@ -26,7 +26,7 @@ internal sealed partial class XamlLanguageServer
 
         // didOpen eagerly starts the trusted project context, but a cold MSBuild design-time build
         // takes seconds. Never queue project-independent quick info behind it.
-        if (!TryGetReadyContext(p.TextDocument.Uri, out _))
+        if (!TryGetAcceptedContext(document, out _))
         {
             // An invalidation clears ready contexts while the document remains open. Ensure the
             // existing trusted, single-flight warm-up is running before returning immediate prose.
@@ -56,7 +56,7 @@ internal sealed partial class XamlLanguageServer
                 return markup;
             }
 
-            return ResolveSyntacticHover(document, offset);
+            return null;
         }
 
         var resourceHover = await ResolveResourceKeyHoverAsync(p).ConfigureAwait(false);
@@ -314,69 +314,6 @@ internal sealed partial class XamlLanguageServer
             Range = document.RangeOf(name.Span),
         };
     }
-
-    internal static Hover? ResolveSyntacticHover(TextDocument document, int offset)
-    {
-        for (var node = document.Parsed.FindNode(offset); node is not null; node = node.Parent)
-        {
-            if (node is XamlAttribute attribute && attribute.Parent is XamlElement owner)
-            {
-                if (!attribute.IsNamespaceDeclaration && attribute.Name.Span.ContainsInclusive(offset))
-                {
-                    var ownerName = owner.Name?.FullName ?? "the containing element";
-                    var literal = attribute.Value is { IsMarkupExtension: false } attributeValue
-                        ? $" The current literal value is `{EscapeMarkdownCode(attributeValue.Text)}`."
-                        : string.Empty;
-                    return PlainXamlHover(
-                        $"attribute {attribute.Name.FullName}",
-                        $"XAML attribute `{attribute.Name.FullName}` on the `{ownerName}` element.{literal}",
-                        document.RangeOf(attribute.Name.Span));
-                }
-
-                if (!attribute.IsNamespaceDeclaration &&
-                    attribute.Value is { } value &&
-                    value.InnerSpan.ContainsInclusive(offset))
-                {
-                    var ownerName = owner.Name?.FullName ?? "the containing element";
-                    var valueDescription = value.IsMarkupExtension
-                        ? $"XAML markup expression `{EscapeMarkdownCode(value.Text)}` assigned to the `{attribute.Name.FullName}` attribute on the `{ownerName}` element."
-                        : $"Literal value `{EscapeMarkdownCode(value.Text)}` assigned to the `{attribute.Name.FullName}` attribute on the `{ownerName}` element.";
-                    return PlainXamlHover(
-                        $"value for {attribute.Name.FullName}",
-                        valueDescription,
-                        document.RangeOf(value.InnerSpan));
-                }
-            }
-
-            if (node is XamlElement element &&
-                element.Name is { } name &&
-                name.Span.ContainsInclusive(offset))
-            {
-                var namespaceText = element.NamespaceScope.TryResolvePrefix(name.Prefix, out var namespaceUri)
-                    ? $" in the `{EscapeMarkdownCode(namespaceUri)}` namespace"
-                    : string.Empty;
-                return PlainXamlHover(
-                    $"element {name.FullName}",
-                    $"XAML element `{name.FullName}`{namespaceText}.",
-                    document.RangeOf(name.Span));
-            }
-        }
-
-        return null;
-    }
-
-    private static string EscapeMarkdownCode(string text) => text.Replace("`", "\\`", StringComparison.Ordinal);
-
-    private static Hover PlainXamlHover(string signature, string description, Lsp.Range range) =>
-        new()
-        {
-            Contents = new MarkupContent
-            {
-                Kind = "markdown",
-                Value = $"```xaml\n({signature})\n```\n\n{description}",
-            },
-            Range = range,
-        };
 
     /// <summary>Hover for an enum value inside a markup-extension named argument.</summary>
     private Hover? ResolveMarkupArgumentEnumHover(

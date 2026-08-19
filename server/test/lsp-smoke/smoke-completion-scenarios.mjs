@@ -1072,10 +1072,19 @@ export async function runCompletionScenarios(ctx) {
     let found = false;
     try {
       writeFileSync(codeBehind, changed, "utf8");
+      const projectReady = waitFor(
+        (message) =>
+          message.method === "winui-xaml/projectContextStatus" &&
+          message.params?.uri === xamlUri &&
+          message.params?.state === "ready",
+        90000,
+        "full project context after C# watcher invalidation"
+      );
       send({
         method: "workspace/didChangeWatchedFiles",
         params: { changes: [{ uri: pathToFileURL(codeBehind).href, type: 2 }] },
       });
+      await projectReady;
       const items = await completeItemsWith(
         555,
         pageCls(`<TextBlock Text="{x:Bind WatcherAdded|}" />`),
