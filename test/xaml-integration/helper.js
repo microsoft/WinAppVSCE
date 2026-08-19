@@ -263,7 +263,9 @@ function delay(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Warms the language server: opens the probe, then polls element completion until the project has loaded (the first request pays the design-time build cost, ~several seconds cold).
+// Opens the probe and waits for full project context by resolving a fixture source method.
+// Framework metadata can include a prior project output assembly, so merely resolving a fixture
+// type is not sufficient to prove source documents and generated members are ready.
 async function warmUp(timeoutMs = 170000) {
   await openProbe();
   const started = Date.now();
@@ -271,13 +273,13 @@ async function warmUp(timeoutMs = 170000) {
   let lastErr;
   while (Date.now() - started < timeoutMs) {
     try {
-      const items = await completionItemsAt(
-        `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <But|\n</Page>`
+      const definitions = await definitionsAt(
+        `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n` +
+        `  <Button Click="OnGo_|Click" />\n` +
+        `</Page>`
       );
-      if (items.some((item) =>
-        item.label === "Button" &&
-        typeof item.detail === "string" &&
-        item.detail.startsWith("Microsoft.UI.Xaml"))) {
+      if (definitions.some((definition) =>
+        path.basename(definition.fsPath).toLowerCase() === "smokepage.xaml.cs")) {
         readySince ??= Date.now();
         if (Date.now() - readySince >= 500) {
           return;
@@ -286,7 +288,9 @@ async function warmUp(timeoutMs = 170000) {
         continue;
       }
       readySince = undefined;
-      lastErr = new Error(`semantic element completion did not yet include Button (got ${items.length} items)`);
+      lastErr = new Error(
+        `full project context did not yet resolve OnGo_Click (got ${JSON.stringify(definitions)})`
+      );
     } catch (e) {
       readySince = undefined;
       lastErr = e;

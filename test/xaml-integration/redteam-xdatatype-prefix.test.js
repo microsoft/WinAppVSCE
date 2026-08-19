@@ -106,7 +106,7 @@ describe("WinUI XAML — red-team 53 (x:DataType prefix)", function () {
     expectLacks(items, "GreetingText", "undeclared zzz:DataType must not root classic Binding at SmokePage");
   });
 
-  it("does not recognize a non-x prefix even when it maps to the XAML namespace", async () => {
+  it("recognizes an alternate prefix mapped to the XAML namespace", async () => {
     const items = await labelsAt(pageWith('xmlns:xx="http://schemas.microsoft.com/winfx/2006/xaml"', [
       "<ListView>",
       "  <ListView.ItemTemplate>",
@@ -116,7 +116,7 @@ describe("WinUI XAML — red-team 53 (x:DataType prefix)", function () {
       "  </ListView.ItemTemplate>",
       "</ListView>",
     ].join("\n  ")));
-    expectLacks(items, "GreetingText", "xx:DataType mapped to XAML URI must not root completion");
+    expectHas(items, "GreetingText", "xx:DataType mapped to the XAML URI should root completion");
   });
 
   it("does not recognize a non-x prefix mapped to the fixture namespace", async () => {
@@ -193,7 +193,7 @@ describe("WinUI XAML — red-team 53 (x:DataType prefix)", function () {
     expectLacks(items, "Length", "inner foreign-prefix DataType must not root at String");
   });
 
-  it("matches the x prefix case-sensitively", async () => {
+  it("recognizes a capitalized prefix mapped to the XAML namespace", async () => {
     const items = await labelsAt(pageWith('xmlns:X="http://schemas.microsoft.com/winfx/2006/xaml"', [
       "<ListView>",
       "  <ListView.ItemTemplate>",
@@ -203,7 +203,7 @@ describe("WinUI XAML — red-team 53 (x:DataType prefix)", function () {
       "  </ListView.ItemTemplate>",
       "</ListView>",
     ].join("\n  ")));
-    expectLacks(items, "GreetingText", "capital X:DataType must not be recognized as literal x:DataType");
+    expectHas(items, "GreetingText", "capital X:DataType mapped to the XAML URI should root completion");
   });
 
   it("matches the DataType local name case-sensitively", async () => {

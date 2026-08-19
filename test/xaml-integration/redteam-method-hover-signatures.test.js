@@ -120,13 +120,13 @@ describe("WinUI XAML red-team 70 (method hover returns/params adversarial)", fun
     assertNoMethodDetails(md, `buffer=${JSON.stringify(buffer)} caret=${caretOffset(buffer)}`);
   });
 
-  it("red-team 70 undocumented user handler is byte-identical fence-only", async () => {
+  it("red-team 70 undocumented user handler has deterministic metadata prose", async () => {
     const buffer = page('<TextBlock Text="{x:Bind OnGo_C|lick()}" />');
     const md = await h.hoverAt(buffer);
     assert.strictEqual(
       md,
-      "```csharp\nvoid SmokePage.OnGo_Click(object sender, RoutedEventArgs e)\n```",
-      `undocumented method hover must be exactly fence-only; buffer=${JSON.stringify(buffer)} caret=${caretOffset(buffer)}`
+      "```csharp\nvoid SmokePage.OnGo_Click(object sender, RoutedEventArgs e)\n```\n\nMethod `OnGo_Click` declared by `SmokeFixture.SmokePage`.",
+      `undocumented method hover must use deterministic metadata prose; buffer=${JSON.stringify(buffer)} caret=${caretOffset(buffer)}`
     );
   });
 
@@ -192,14 +192,14 @@ describe("WinUI XAML red-team 70 (method hover returns/params adversarial)", fun
     assert.doesNotMatch(md, /\*\*Returns:\*\*/, `a void method (no <returns>) must NOT emit a Returns section; got: ${md}`);
   });
 
-  it("red-team 70 event-handler VALUE hover (undocumented method) is byte-identical fence-only", async () => {
-    // Distinct resolution path from the {x:Bind ...()} function binding: the handler ATTRIBUTE VALUE resolves to the OnGo_Click method directly. Undocumented => must stay fence-only (no phantom sections).
+  it("red-team 70 event-handler VALUE hover uses deterministic metadata prose", async () => {
+    // Distinct resolution path from the {x:Bind ...()} function binding: the handler ATTRIBUTE VALUE resolves to the OnGo_Click method directly.
     const buffer = page('<Button Click="OnGo_C|lick" />');
     const md = await h.hoverAt(buffer);
     assert.strictEqual(
       md,
-      "```csharp\nvoid SmokePage.OnGo_Click(object sender, RoutedEventArgs e)\n```",
-      `undocumented event-handler value hover must be exactly fence-only; buffer=${JSON.stringify(buffer)} caret=${caretOffset(buffer)}`
+      "```csharp\nvoid SmokePage.OnGo_Click(object sender, RoutedEventArgs e)\n```\n\nMethod `OnGo_Click` declared by `SmokeFixture.SmokePage`.",
+      `undocumented event-handler value hover must use deterministic metadata prose; buffer=${JSON.stringify(buffer)} caret=${caretOffset(buffer)}`
     );
   });
 

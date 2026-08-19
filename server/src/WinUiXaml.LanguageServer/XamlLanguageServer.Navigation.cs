@@ -97,16 +97,7 @@ internal sealed partial class XamlLanguageServer
     {
         // x:Name: the caret is on a usage (ElementName=/Storyboard.TargetName) or on the declaration itself.
         var reference = FindNameReferenceAt(doc, offset, typeSystem);
-        var name = reference is null
-            ? FindNameDeclarationAt(doc, offset, typeSystem)
-            : typeSystem is null ||
-              XamlSemanticFacts.FindNamedElementInScope(
-                  doc,
-                  doc.Parsed.FindNode(reference.Value.Span.Start),
-                  reference.Value.Name,
-                  typeSystem) is not null
-                ? reference.Value.Name
-                : null;
+        var name = reference?.Name ?? FindNameDeclarationAt(doc, offset, typeSystem);
         if (name is { Length: > 0 })
         {
             return (XamlRenameKind.Name, name);

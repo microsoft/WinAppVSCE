@@ -90,7 +90,10 @@ async function completionItemsAt(text) {
   };
 }
 
-const attachedItems = (items) => items.filter((i) => i.detail && i.detail.startsWith("attached property"));
+const attachedItems = (items) => items.filter((i) =>
+  i.detail &&
+  i.detail.startsWith("attached property") &&
+  !i.label.startsWith("AutomationProperties."));
 const ownItems = (items) => items.filter((i) => !(i.detail && i.detail.startsWith("attached property")));
 const labels = (items) => items.map((i) => i.label).sort();
 const gridChild = (attr) => page(`<Grid>

@@ -277,7 +277,11 @@ internal static class XamlValidator
         }
 
         // A property element (<Grid.RowDefinitions>) names a member of an owner type, not an element type, so it has no element-type/attribute surface — validate the member against the owner and stop.
-        if (name.IsDotted)
+        var propertyElement = name.IsDotted
+            ? XamlSemanticFacts.ResolvePropertyElementMember(name, uri, typeSystem)
+            : null;
+        if (name.IsDotted &&
+            (!name.HasPrefix || propertyElement?.PropertyType is not null))
         {
             ValidatePropertyElement(element, name, uri, typeSystem, doc, diagnostics);
             return;

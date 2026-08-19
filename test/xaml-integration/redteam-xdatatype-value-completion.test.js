@@ -192,14 +192,14 @@ describe("WinUI XAML — red-team 54 (x:DataType value type completion)", functi
     assertNoSmokeType(items, "lowercase x:datatype must not be treated as x:DataType");
   });
 
-  it("matches the reserved x prefix case-sensitively", async () => {
+  it("recognizes a capitalized prefix mapped to the XAML namespace", async () => {
     const items = await itemsAt(pageWith('xmlns:X="http://schemas.microsoft.com/winfx/2006/xaml"', '<ListView><ListView.ItemTemplate><DataTemplate X:DataType="local:Smo|"><TextBlock /></DataTemplate></ListView.ItemTemplate></ListView>'));
-    assertNoSmokeType(items, "capital X:DataType must not be treated as literal x:DataType");
+    findSmokeType(items, "capital X:DataType mapped to the XAML URI should offer project types");
   });
 
-  it("does not recognize a foreign prefix mapped to the XAML namespace", async () => {
+  it("recognizes an alternate prefix mapped to the XAML namespace", async () => {
     const items = await itemsAt(pageWith('xmlns:zzz="http://schemas.microsoft.com/winfx/2006/xaml"', '<ListView><ListView.ItemTemplate><DataTemplate zzz:DataType="local:Smo|"><TextBlock /></DataTemplate></ListView.ItemTemplate></ListView>'));
-    assertNoSmokeType(items, "zzz:DataType mapped to XAML URI must not be treated as literal x:DataType");
+    findSmokeType(items, "zzz:DataType mapped to the XAML URI should offer project types");
   });
 
   it("does not recognize a foreign prefix mapped to the project namespace", async () => {

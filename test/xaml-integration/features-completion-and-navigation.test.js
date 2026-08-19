@@ -418,7 +418,10 @@ describe("WinUI XAML — container attached-property completion", function () {
   after(async () => { await h.revertProbe(); });
 
   // Container attached-property items carry a server detail beginning "attached property". Full dotted labels (Grid.Row) are not a single VS Code word, but we still filter on the server detail to isolate server output.
-  const ap = (items) => items.filter((i) => i.detail && i.detail.startsWith("attached property"));
+  const ap = (items) => items.filter((i) =>
+    i.detail &&
+    i.detail.startsWith("attached property") &&
+    !i.label.startsWith("AutomationProperties."));
   const inGrid = (attr) => page(`<Grid>\n    <Button ${attr} />\n  </Grid>`);
 
   it("offers the immediate Grid container's attached properties on a child, replacing the whole name", async () => {

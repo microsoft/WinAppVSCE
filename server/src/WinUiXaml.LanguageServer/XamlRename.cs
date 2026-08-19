@@ -54,7 +54,7 @@ internal static class XamlRename
 
         var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
         if (occurrences is null ||
-            (symbol.Kind == XamlRenameKind.Key &&
+            ((symbol.Kind == XamlRenameKind.Key || symbol.Kind == XamlRenameKind.Name) &&
              !occurrences.Any(occurrence => occurrence.IsDeclaration)))
         {
             return null;
@@ -99,7 +99,7 @@ internal static class XamlRename
         var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
         if (occurrences is null ||
             occurrences.Count == 0 ||
-            (symbol.Kind == XamlRenameKind.Key &&
+            ((symbol.Kind == XamlRenameKind.Key || symbol.Kind == XamlRenameKind.Name) &&
              !occurrences.Any(occurrence => occurrence.IsDeclaration)))
         {
             return null;

@@ -703,12 +703,17 @@ internal static class XamlSemanticFacts
             return argumentType;
         }
 
-        return argumentName switch
+        if (string.Equals(argumentName, "Mode", StringComparison.OrdinalIgnoreCase))
         {
-            "Mode" => typeSystem.Capabilities.BindingMode,
-            "UpdateSourceTrigger" => typeSystem.Capabilities.UpdateSourceTrigger,
-            _ => null,
-        };
+            return typeSystem.Capabilities.BindingMode;
+        }
+
+        return string.Equals(
+            argumentName,
+            "UpdateSourceTrigger",
+            StringComparison.OrdinalIgnoreCase)
+                ? typeSystem.Capabilities.UpdateSourceTrigger
+                : null;
     }
 
     internal static bool IsXBindName(
