@@ -19,7 +19,6 @@ internal sealed partial class XamlLanguageServer
     private readonly JsonRpcConnection _connection;
     private readonly XamlProjectResolver _resolver;
     private readonly ConcurrentDictionary<string, TextDocument> _documents = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, byte> _preloadUris = new(StringComparer.OrdinalIgnoreCase);
     private readonly AsyncSingleFlightCache<string, XamlProjectContext> _contexts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, XamlTypeSystem> _typeSystems = new();
@@ -111,9 +110,6 @@ internal sealed partial class XamlLanguageServer
                 break;
             case "workspace/didChangeConfiguration":
                 await DidChangeConfigurationAsync(Deserialize<DidChangeConfigurationParams>(@params)).ConfigureAwait(false);
-                break;
-            case "winui-xaml/warmUp":
-                Preload(Deserialize<TextDocumentIdentifier>(@params).Uri);
                 break;
             case "exit":
                 Environment.Exit(_shuttingDown ? 0 : 1);
@@ -421,10 +417,6 @@ internal sealed partial class XamlLanguageServer
             p.TextDocument.Text,
             p.TextDocument.Version);
         _documents[p.TextDocument.Uri] = doc;
-        _preloadUris.TryRemove(doc.Uri, out _);
-        // A workspace preload may have cached this URI using the on-disk x:Class. Refresh the
-        // lightweight document context from the editor text without discarding the project cache.
-        _contexts.Invalidate(doc.Uri);
         await PublishDiagnosticsAsync(doc).ConfigureAwait(false);
         WarmUp(doc.Uri);
     }
@@ -621,18 +613,10 @@ internal sealed partial class XamlLanguageServer
     {
         _contexts.InvalidateAll();
 
-        // Rebuild invalidated contexts for open documents and unopened workspace preloads.
-        // WarmUp retains the trusted-root gate, and GetOrStartContext keeps this single-flight.
+        // Rebuild invalidated contexts only for documents the user has opened.
         foreach (var uri in _documents.Keys)
         {
             WarmUp(uri);
-        }
-        foreach (var uri in _preloadUris.Keys)
-        {
-            if (!_documents.ContainsKey(uri))
-            {
-                WarmUp(uri, requireOpenDocument: false);
-            }
         }
     }
 
@@ -643,22 +627,6 @@ internal sealed partial class XamlLanguageServer
         {
             WarmUp(uri);
         }
-        else if (_preloadUris.ContainsKey(uri))
-        {
-            WarmUp(uri, requireOpenDocument: false);
-        }
-    }
-
-    private void Preload(string uri)
-    {
-        var path = UriToPath(uri);
-        if (path == null || !TryGetAllowedRoot(path, out _, out _))
-        {
-            return;
-        }
-
-        _preloadUris[uri] = 0;
-        WarmUp(uri, requireOpenDocument: false);
     }
 
     private void InvalidateIfSavedClassChanged(string canonicalPath)

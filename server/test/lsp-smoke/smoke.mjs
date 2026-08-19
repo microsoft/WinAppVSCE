@@ -948,37 +948,6 @@ async function main() {
     fail("didClose allowed pending semantic diagnostics to publish");
   }
 
-  // A workspace preload warms an owning project without opening or syncing the XAML document.
-  const preloadLoading = waitFor(
-    (message) =>
-      message.method === "winui-xaml/projectContextStatus" &&
-      message.params?.uri === xamlUri &&
-      message.params?.state === "loading",
-    10000,
-    "workspace preload loading status"
-  );
-  send({ method: "winui-xaml/warmUp", params: { uri: xamlUri } });
-  await preloadLoading;
-  const preloadReady = waitFor(
-    (message) =>
-      message.method === "winui-xaml/projectContextStatus" &&
-      message.params?.uri === xamlUri &&
-      message.params?.state === "ready",
-    30000,
-    "workspace preload ready after invalidation"
-  );
-  send({
-    method: "workspace/didChangeWatchedFiles",
-    params: {
-      changes: [{
-        uri: pathToFileURL(join(dirname(XAML), "SmokePage.xaml.cs")).href,
-        type: 2,
-      }],
-    },
-  });
-  await preloadReady;
-  console.log("[ok] workspace preload survives project invalidation without an open XAML document");
-
   // Reopening the same URI with a different class must not serve definitions from the closed
   // SmokePage context.
   const reopenedText =

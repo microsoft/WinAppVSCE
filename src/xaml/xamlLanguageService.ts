@@ -47,14 +47,13 @@ import {
   shouldRestartXamlLanguageServer,
   XamlStatusAction,
 } from "./xamlConfiguration";
-import { findFirstWorkspaceXaml } from "./workspacePreload";
+import { hasOpenXamlDocument } from "./xamlDemand";
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
 let projectStatusItem: vscode.StatusBarItem | undefined;
 let readyStatusTimer: NodeJS.Timeout | undefined;
 const projectContextStatuses = new Map<string, ProjectContextStatus>();
-let workspacePreloadUri: vscode.Uri | undefined;
 
 // The client does not own caller-supplied watchers.
 let fileWatchers: vscode.FileSystemWatcher[] = [];
@@ -79,7 +78,6 @@ function log(message: string): void {
 export async function activateXaml(context: vscode.ExtensionContext): Promise<void> {
   // Allow reactivation in the same host process.
   lifecycle.reset();
-  workspacePreloadUri = undefined;
   output = vscode.window.createOutputChannel("WinUI XAML");
   projectStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   projectStatusItem.name = "WinApp XAML IntelliSense";
@@ -135,7 +133,7 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument((document) => {
       recommendCsharpDevKit(document, context);
-      if (document.languageId === "xaml") {
+      if (hasOpenXamlDocument([document])) {
         return startClient(context);
       }
     }),
@@ -185,32 +183,13 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
 
   vscode.workspace.textDocuments.forEach((document) => recommendCsharpDevKit(document, context));
 
-  if (vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")) {
+  if (hasOpenXamlDocument(vscode.workspace.textDocuments)) {
     await startClient(context);
-  } else if (vscode.workspace.workspaceFolders?.length) {
-    try {
-      workspacePreloadUri = await findFirstWorkspaceXaml((include, exclude, maxResults) =>
-        vscode.workspace.findFiles(include, exclude, maxResults)
-      );
-    } catch (error) {
-      log(
-        `Workspace XAML preload search failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-    if (workspacePreloadUri) {
-      log(`Found workspace XAML for project preload: ${workspacePreloadUri.fsPath}`);
-      await startClient(context);
-    }
   }
 }
 
 function hasXamlDemand(): boolean {
-  return (
-    workspacePreloadUri !== undefined ||
-    vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")
-  );
+  return hasOpenXamlDocument(vscode.workspace.textDocuments);
 }
 
 function showXamlInfo(): void {
@@ -407,17 +386,6 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     await candidate.sendNotification("workspace/didChangeConfiguration", {
       settings: { diagnosticsLevel: latestDiagnosticsLevel },
     });
-    if (
-      workspacePreloadUri &&
-      !vscode.workspace.textDocuments.some(
-        (document) => document.uri.toString() === workspacePreloadUri?.toString()
-      )
-    ) {
-      await candidate.sendNotification("winui-xaml/warmUp", {
-        uri: workspacePreloadUri.toString(),
-      });
-      log(`Preloading XAML IntelliSense project for: ${workspacePreloadUri.fsPath}`);
-    }
     lastDegradedCause = undefined;
     log("Language server started.");
     if (userInitiated) {

@@ -771,7 +771,7 @@ internal sealed partial class XamlLanguageServer
         string TypeName,
         string FileLabel);
 
-    private void WarmUp(string uri, bool requireOpenDocument = true)
+    private void WarmUp(string uri)
     {
         var path = UriToPath(uri);
         if (path == null)
@@ -786,15 +786,11 @@ internal sealed partial class XamlLanguageServer
         }
 
         // Cache the complete context, not just the workspace, so all later features share one
-        // compilation and type system. Interactive opens yield briefly to immediate editor
-        // requests; the explicit workspace preload starts immediately.
+        // compilation and type system. Yield briefly to immediate editor requests.
         _ = Task.Run(async () =>
         {
-            if (requireOpenDocument)
-            {
-                await Task.Delay(500).ConfigureAwait(false);
-            }
-            if (requireOpenDocument && !_documents.ContainsKey(uri))
+            await Task.Delay(500).ConfigureAwait(false);
+            if (!_documents.ContainsKey(uri))
             {
                 return;
             }
