@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  ============================================================================
+  WinApp VS Code extension - release blog header template
+  ============================================================================
+
+  This file renders the collage image that sits at the top of each release
+  blog post. It is version agnostic: copy it, fill in the placeholders, render
+  it to PNG, and drop the PNG into the post.
+
+  ---------------------------------------------------------------------------
+  HOW TO USE
+  ---------------------------------------------------------------------------
+  1. Copy this file to images/blog-vX.Y.Z/header.html.
+  2. Edit only the blocks marked "TEMPLATE:" below. Everything else - the
+     gradient, typography, spacing, and panel geometry - is intentionally
+     fixed so that headers stay consistent from release to release.
+  3. Render it to a 1600x900 PNG (see "RENDERING" below).
+  4. Reference the PNG from the top of the blog post markdown.
+
+  ---------------------------------------------------------------------------
+  WHAT TO EDIT (all placeholders are marked with "TEMPLATE:" comments)
+  ---------------------------------------------------------------------------
+  A. <title>              - the release version, for convenience only.
+  B. .headline            - "Announcing WinApp VS / Code Extension vX.Y.Z".
+                            Update the version inside <span class="version">.
+                            Keep the <br> where it is: it makes
+                            "Code Extension vX.Y.Z" sit on a single line.
+  C. .sub                 - one sentence naming the headline feature.
+                            Aim for roughly 90-120 characters so it wraps to
+                            two lines and clears the editor panel.
+  D. .editor contents     - the mock VS Code screenshot showing the headline
+                            feature in action. Replace the tab name, the code
+                            in .xml, and any overlays (.suggest, .problem).
+                            Delete overlays that do not apply to the feature.
+
+  Do NOT change: .hero, .orb, .content, .eyebrow, .brand, or the .editor
+  positioning. The panel is deliberately cropped off the right edge to match
+  the established header style.
+
+  ---------------------------------------------------------------------------
+  RENDERING
+  ---------------------------------------------------------------------------
+  Headless Edge (Windows), from the repository root:
+
+    & 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' `
+      --headless=new --disable-gpu --hide-scrollbars `
+      --force-device-scale-factor=1 --window-size=1600,900 `
+      --screenshot="<ABSOLUTE-PATH>\header-vX.Y.Z.png" `
+      --user-data-dir="$env:TEMP\edge-header-render" `
+      "file:///<ABSOLUTE-PATH>/header.html"
+
+  Notes:
+    - The screenshot path must be absolute.
+    - Use a fresh --user-data-dir for each render.
+    - Crashpad "settings.dat" warnings on stderr are harmless; the exit code
+      is still 0 and the PNG is written.
+
+  ---------------------------------------------------------------------------
+  ASSETS
+  ---------------------------------------------------------------------------
+  The logo is loaded from ../icon.png, which resolves to images/icon.png when
+  this file lives in images/<something>/. If you move the file, update the src.
+
+  ---------------------------------------------------------------------------
+  DESIGN TOKENS (for reference; change only if the brand style changes)
+  ---------------------------------------------------------------------------
+    Background gradient  #a9cef1 -> #d9ebf8 -> #c5e1f6
+    Headline text        #10233f
+    Version accent       #3478dc
+    Subtitle text        #2b4a6b
+    Eyebrow text         #184f87
+    Canvas               1600 x 900
+-->
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- TEMPLATE A: update the version. -->
+  <title>WinApp vX.Y.Z release header</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 1600px; height: 900px; overflow: hidden; }
+    body {
+      font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+      color: #10233f;
+      background: #eaf3fb;
+    }
+    .hero {
+      position: relative;
+      width: 1600px;
+      height: 900px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 82% 10%, rgba(255,255,255,.92), transparent 32%),
+        radial-gradient(circle at 8% 90%, rgba(41,127,221,.22), transparent 36%),
+        linear-gradient(135deg, #a9cef1 0%, #d9ebf8 52%, #c5e1f6 100%);
+    }
+    .orb {
+      position: absolute;
+      width: 560px;
+      height: 560px;
+      right: -180px;
+      top: -220px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,.65);
+      box-shadow: 0 0 0 70px rgba(255,255,255,.12), 0 0 0 140px rgba(255,255,255,.08);
+    }
+    .content {
+      position: absolute;
+      left: 96px;
+      top: 96px;
+      width: 640px;
+      z-index: 2;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 14px;
+      padding: 13px 22px;
+      color: #184f87;
+      background: rgba(255,255,255,.67);
+      border: 1px solid rgba(255,255,255,.92);
+      border-radius: 999px;
+      box-shadow: 0 14px 38px rgba(25,83,140,.12);
+      font-size: 18px;
+      font-weight: 650;
+      letter-spacing: 3px;
+    }
+    .windows {
+      display: grid;
+      grid-template-columns: 10px 10px;
+      gap: 2px;
+    }
+    .windows i { width: 10px; height: 10px; background: #1875d1; }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      margin-top: 54px;
+    }
+    .brand img {
+      width: 116px;
+      height: 116px;
+      filter: drop-shadow(0 15px 24px rgba(15,76,139,.25));
+    }
+    h1 {
+      margin: 0;
+      font-size: 92px;
+      line-height: .95;
+      letter-spacing: -4px;
+    }
+    .headline {
+      margin-top: 48px;
+      max-width: 640px;
+      font-size: 48px;
+      font-weight: 700;
+      line-height: 1.08;
+      letter-spacing: -1.2px;
+    }
+    .headline .version {
+      color: #3478dc;
+    }
+    .sub {
+      margin-top: 32px;
+      max-width: 600px;
+      color: #2b4a6b;
+      font-size: 27px;
+      line-height: 1.45;
+    }
+    .editor {
+      position: absolute;
+      right: -140px;
+      top: 92px;
+      width: 920px;
+      height: 700px;
+      overflow: hidden;
+      color: #d4d4d4;
+      background: #181818;
+      border: 1px solid rgba(255,255,255,.7);
+      border-radius: 18px;
+      box-shadow: 0 40px 90px rgba(14,48,86,.35);
+    }
+    .titlebar {
+      display: flex;
+      align-items: center;
+      height: 48px;
+      padding: 0 18px;
+      color: #c8c8c8;
+      background: #202020;
+      border-bottom: 1px solid #303030;
+      font-size: 15px;
+    }
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      height: 48px;
+      padding: 0 19px;
+      background: #181818;
+      border-top: 2px solid #3794ff;
+    }
+    .xml {
+      padding: 28px 28px 20px 52px;
+      font: 18px/1.65 Consolas, "Cascadia Code", monospace;
+      white-space: pre;
+    }
+    .ln {
+      position: absolute;
+      left: 17px;
+      color: #6e7681;
+      user-select: none;
+    }
+    /* VS Code Dark+ syntax colors. */
+    .tag { color: #569cd6; }
+    .attr { color: #9cdcfe; }
+    .str { color: #ce9178; }
+    .cursor { display: inline-block; width: 2px; height: 22px; margin-left: 2px; vertical-align: -4px; background: #fff; }
+    /* Completion popup. Position it under the line holding the cursor. */
+    .suggest {
+      position: absolute;
+      left: 160px;
+      top: 298px;
+      width: 430px;
+      color: #cccccc;
+      background: #252526;
+      border: 1px solid #454545;
+      border-radius: 5px;
+      box-shadow: 0 16px 38px rgba(0,0,0,.5);
+      font: 16px/1.25 "Segoe UI", sans-serif;
+    }
+    .suggest-row {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 8px 11px;
+    }
+    .suggest-row.active { color: white; background: #04395e; }
+    .cube { color: #75beff; font-size: 13px; }
+    .required {
+      margin-left: auto;
+      color: #b7b7b7;
+      font-size: 13px;
+    }
+    .doc {
+      padding: 13px 15px 15px;
+      color: #d6d6d6;
+      background: #1f1f1f;
+      border-top: 1px solid #3b3b3b;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    /* Inline error callout pinned to the bottom of the editor panel. */
+    .problem {
+      position: absolute;
+      left: 52px;
+      right: 30px;
+      bottom: 32px;
+      padding: 13px 16px;
+      color: #f2f2f2;
+      background: #3b2528;
+      border-left: 4px solid #f14c4c;
+      border-radius: 4px;
+      font: 14px/1.35 "Segoe UI", sans-serif;
+    }
+    .problem b { color: #ff8585; }
+  </style>
+</head>
+<body>
+  <main class="hero">
+    <div class="orb"></div>
+
+    <!-- Fixed branding. Do not edit. -->
+    <section class="content">
+      <div class="eyebrow">
+        <span class="windows"><i></i><i></i><i></i><i></i></span>
+        VS CODE EXTENSION
+      </div>
+      <div class="brand">
+        <img src="../icon.png" alt="">
+        <h1>WinApp</h1>
+      </div>
+
+      <!-- TEMPLATE B: update the version inside <span class="version">.
+           Keep the <br> after "VS" so the second line reads
+           "Code Extension vX.Y.Z" without wrapping. -->
+      <div class="headline">Announcing WinApp VS<br>Code Extension <span class="version">vX.Y.Z</span></div>
+
+      <!-- TEMPLATE C: one sentence naming the headline feature of this
+           release. Roughly 90-120 characters. Use &mdash; for the dash. -->
+      <p class="sub">Now with {HEADLINE FEATURE} &mdash; {short benefit statement}.</p>
+    </section>
+
+    <!-- TEMPLATE D: mock screenshot of the headline feature.
+         Replace the tab filename, the code sample, and the overlays.
+         Remove .suggest or .problem entirely if the feature does not
+         involve completions or diagnostics.
+
+         The sample below is the v0.3.0 header (AppxManifest IntelliSense),
+         kept as a worked example of the expected density and framing. -->
+    <section class="editor" aria-label="{Headline feature} screenshot">
+      <div class="titlebar">
+        <div class="tab"><span style="color:#e37933">&lt;/&gt;</span> Package.appxmanifest</div>
+      </div>
+
+      <!-- Each line starts with <span class="ln">N</span> for the gutter
+           number. Whitespace is significant: .xml uses white-space: pre. -->
+      <div class="xml"><span class="ln">1</span><span class="tag">&lt;Package</span> <span class="attr">xmlns</span>=<span class="str">"http://schemas.microsoft.com/appx/manifest/foundation/windows10"</span><span class="tag">&gt;</span>
+<span class="ln">2</span>  <span class="tag">&lt;Identity</span> <span class="attr">Name</span>=<span class="str">"Contoso.PhotoApp"</span> <span class="attr">Publisher</span>=<span class="str">"CN=Contoso"</span> <span class="attr">Version</span>=<span class="str">"1.0.0.0"</span> <span class="tag">/&gt;</span>
+<span class="ln">3</span>  <span class="tag">&lt;Properties&gt;</span>
+<span class="ln">4</span>    <span class="tag">&lt;DisplayName&gt;</span>Contoso Photos<span class="tag">&lt;/DisplayName&gt;</span>
+<span class="ln">5</span>  <span class="tag">&lt;/Properties&gt;</span>
+<span class="ln">6</span>  <span class="tag">&lt;</span><span class="cursor"></span>
+<span class="ln">7</span><span class="tag">&lt;/Package&gt;</span></div>
+
+      <!-- Optional: completion popup. -->
+      <div class="suggest">
+        <div class="suggest-row active"><span class="cube">&#9670;</span><b>Dependencies</b><span class="required">required</span></div>
+        <div class="suggest-row"><span class="cube">&#9670;</span>Resources</div>
+        <div class="suggest-row"><span class="cube">&#9670;</span>Applications</div>
+        <div class="suggest-row"><span class="cube">&#9670;</span>Capabilities</div>
+        <div class="doc"><b>Dependencies</b><br>Declares packages and device families that this package depends on.</div>
+      </div>
+
+      <!-- Optional: inline error callout. -->
+      <div class="problem"><b>&#10006; Missing required element</b> &lt;Dependencies&gt; in &lt;Package&gt;</div>
+    </section>
+  </main>
+</body>
+</html>
