@@ -360,6 +360,7 @@ export function getApplicationsScript(): string {
                         const subtab = tab.getAttribute('data-subtab');
                         const appIdx = tab.getAttribute('data-app-idx');
                         activeAppSubTabs[appIdx] = subtab;
+                        saveUiState();
                         card.querySelectorAll('.app-sub-tab').forEach(t => t.classList.remove('active'));
                         card.querySelectorAll('.app-sub-content').forEach(c => c.classList.remove('active'));
                         tab.classList.add('active');
