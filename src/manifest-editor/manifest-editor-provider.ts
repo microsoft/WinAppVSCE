@@ -15,7 +15,8 @@ import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { AssetCopyTokenStore } from './asset-copy-token-store';
-import { resolveMrtAsset, MrtResolution } from './mrt-asset-helper';
+import { MrtResolution } from './mrt-asset-helper';
+import { resolveManifestImagePath } from './image-path-resolver';
 import { checkAspectRatio } from './asset-dimensions';
 
 export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
@@ -252,18 +253,6 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                         case 'checkImagePath': {
                             const imgPath = message.imagePath;
                             const manifestDirPath = path.dirname(document.uri.fsPath);
-                            const resolved = path.resolve(manifestDirPath, imgPath);
-                            const usesWorkspaceFallback = imgPath.startsWith('..\\') || imgPath.startsWith('../');
-                            const isWithinRoot = (candidatePath: string, rootPath: string): boolean => {
-                                const relativePath = path.relative(rootPath, candidatePath);
-                                return relativePath !== ''
-                                    && !relativePath.startsWith('..')
-                                    && !path.isAbsolute(relativePath);
-                            };
-                            const workspaceRoot = vscode.workspace.workspaceFolders?.find(wf =>
-                                resolved.toLowerCase() === wf.uri.fsPath.toLowerCase()
-                                || isWithinRoot(resolved, wf.uri.fsPath)
-                            )?.uri.fsPath;
 
                             // An MSIX manifest references the unqualified asset name; MRT resolves it
                             // at runtime against qualifier-suffixed files (Logo.scale-200.png). Probe
@@ -274,9 +263,11 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                     ? checkAspectRatio(message.field, dims.width, dims.height, resolution.qualifiers)
                                     : null;
                                 // The webview builds preview URIs relative to the manifest folder,
-                                // so only a relative path can be previewed.
+                                // so only a path inside that folder can be previewed.
                                 const previewRelative = path.relative(manifestDirPath, resolution.resolvedPath);
-                                const canPreview = previewRelative !== '' && !path.isAbsolute(previewRelative);
+                                const canPreview = previewRelative !== ''
+                                    && !previewRelative.startsWith('..')
+                                    && !path.isAbsolute(previewRelative);
                                 webviewPanel.webview.postMessage({
                                     type: 'imagePathStatus',
                                     field: message.field,
@@ -290,41 +281,17 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                 });
                             };
 
-                            const packageResolution = resolveMrtAsset(manifestDirPath, imgPath);
+                            const workspaceRoots = (vscode.workspace.workspaceFolders ?? []).map(wf => wf.uri.fsPath);
+                            const outcome = resolveManifestImagePath(manifestDirPath, imgPath, workspaceRoots);
 
-                            // Check if the resolved path is inside the package directory AND exists
-                            const normalizedManifestDir = manifestDirPath.toLowerCase() + path.sep;
-                            if (packageResolution && packageResolution.resolvedPath.toLowerCase().startsWith(normalizedManifestDir)) {
-                                postFound(packageResolution);
-                                return;
-                            }
-
-                            if (!path.isAbsolute(imgPath) && usesWorkspaceFallback && workspaceRoot && packageResolution) {
-                                postFound(packageResolution);
-                                return;
-                            }
-
-                            // The path resolves outside the package dir (e.g., ..\..\Downloads\img.png)
-                            // or is an absolute path — check if the file exists at the resolved location
-                            if (packageResolution) {
-                                const copyToken = assetCopyTokens.issue(packageResolution.resolvedPath);
+                            if (outcome.status === 'found') {
+                                postFound(outcome.resolution);
+                            } else if (outcome.status === 'external') {
+                                const copyToken = assetCopyTokens.issue(outcome.sourcePath);
                                 webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', copyToken });
-                                return;
+                            } else {
+                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'notFound' });
                             }
-
-                            // Only fall back to workspace-root resolution for paths that
-                            // explicitly escape the manifest folder (for example ..\Assets\logo.png).
-                            if (usesWorkspaceFallback && vscode.workspace.workspaceFolders) {
-                                for (const wf of vscode.workspace.workspaceFolders) {
-                                    const candidate = resolveMrtAsset(wf.uri.fsPath, imgPath);
-                                    if (candidate) {
-                                        postFound(candidate);
-                                        return;
-                                    }
-                                }
-                            }
-
-                            webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'notFound' });
                             return;
                         }
 

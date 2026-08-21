@@ -22,6 +22,15 @@ let ctx: VSCodeTestContext;
 let frame: FrameLocator;
 let assetsDir: string;
 
+/** Files this spec writes into the shared workspace, removed individually in afterAll. */
+const ASSET_FILES = [
+    'MrtLogo.scale-100.png',
+    'MrtLogo.scale-200.png',
+    'MrtLogo.targetsize-24_altform-unplated.png',
+    'OnlyBackup.backup.png',
+    'PlainLogo.png',
+];
+
 /** Minimal valid 1×1 PNG so the editor can read dimensions. */
 const PNG_1X1 = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -42,13 +51,9 @@ test.beforeAll(async () => {
     fs.mkdirSync(assetsDir, { recursive: true });
     // Only qualifier-suffixed files — no unqualified MrtLogo.png, matching the
     // standard WinUI 3 / Windows App SDK template layout.
-    fs.writeFileSync(path.join(assetsDir, 'MrtLogo.scale-100.png'), PNG_1X1);
-    fs.writeFileSync(path.join(assetsDir, 'MrtLogo.scale-200.png'), PNG_1X1);
-    fs.writeFileSync(path.join(assetsDir, 'MrtLogo.targetsize-24_altform-unplated.png'), PNG_1X1);
-    // A same-prefix file that is NOT an MRT variant.
-    fs.writeFileSync(path.join(assetsDir, 'OnlyBackup.backup.png'), PNG_1X1);
-    // A plain, unqualified asset.
-    fs.writeFileSync(path.join(assetsDir, 'PlainLogo.png'), PNG_1X1);
+    for (const name of ASSET_FILES) {
+        fs.writeFileSync(path.join(assetsDir, name), PNG_1X1);
+    }
 
     // The image check runs when the editor renders the manifest, so load a fixture
     // that already references these assets rather than typing paths in.
@@ -57,7 +62,11 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    if (assetsDir) { fs.rmSync(assetsDir, { recursive: true, force: true }); }
+    // Other specs share this workspace and its Assets folder — remove only what we wrote.
+    if (!assetsDir) { return; }
+    for (const name of ASSET_FILES) {
+        fs.rmSync(path.join(assetsDir, name), { force: true });
+    }
 });
 
 test('unqualified logo backed only by MRT variants is not reported as missing', async () => {

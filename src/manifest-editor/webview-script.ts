@@ -689,11 +689,17 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             if (!formGroup) return;
             const msg = formGroup.querySelector('.validation-msg');
             if (!msg) return;
-            if (!logoPath || !isImagePath(logoPath)) {
+            // Drop any previous found/MRT/not-found status right away — the round-trip below is
+            // debounced, and a stale "Resolved via MRT to OldLogo.scale-200.png" under a path the
+            // user just retyped is worse than a blank line.
+            if (!msg.classList.contains('error')) {
                 formGroup.classList.remove('has-warning');
-                if (!msg.classList.contains('error')) { msg.textContent = ''; msg.classList.remove('warning'); msg.innerHTML = ''; }
-                return;
+                msg.textContent = '';
+                msg.innerHTML = '';
+                msg.classList.remove('warning');
+                msg.classList.remove('info');
             }
+            if (!logoPath || !isImagePath(logoPath)) { return; }
             vscode.postMessage({ type: 'checkImagePath', imagePath: logoPath, field: fieldName || '', index: fieldIndex });
         }
 

@@ -233,6 +233,32 @@ describe('resolveMrtAsset', () => {
         assert.equal(path.dirname(result.resolvedPath).endsWith('scale-200'), true);
     });
 
+    it('resolves compound qualifier-folder names', () => {
+        write('app7b/Assets/scale-200_contrast-high/SplashScreen.png');
+
+        const result = resolveMrtAsset(path.join(tmpDir, 'app7b'), 'Assets\\SplashScreen.png');
+
+        assert.ok(result);
+        assert.deepEqual(result.qualifiers, ['scale-200', 'contrast-high']);
+    });
+
+    it('ignores folders whose names are not qualifiers', () => {
+        write('app7c/Assets/backup/SplashScreen.png');
+
+        assert.equal(resolveMrtAsset(path.join(tmpDir, 'app7c'), 'Assets\\SplashScreen.png'), null);
+    });
+
+    it('prefers sibling variants over qualifier-folder variants', () => {
+        write('app7d/Assets/Logo.scale-100.png');
+        write('app7d/Assets/scale-400/Logo.png');
+
+        const result = resolveMrtAsset(path.join(tmpDir, 'app7d'), 'Assets\\Logo.png');
+
+        assert.ok(result);
+        assert.equal(path.basename(result.resolvedPath), 'Logo.scale-100.png');
+        assert.equal(result.variants.length, 1);
+    });
+
     it('handles forward-slash and subdirectory references', () => {
         write('app8/Assets/Nested/Logo.scale-200.png');
 
@@ -260,6 +286,28 @@ describe('resolveMrtAsset', () => {
         fs.mkdirSync(path.join(tmpDir, 'app11', 'Assets', 'Logo.png'), { recursive: true });
 
         assert.equal(resolveMrtAsset(path.join(tmpDir, 'app11'), 'Assets\\Logo.png'), null);
+    });
+
+    // Parity check, not an endorsement: MrtAssetHelper.IsMrtVariantName in the WinApp CLI
+    // compares only the first dot-separated segment, so a base name containing dots never
+    // matches its own variants. Pinned here so the two implementations can't silently diverge.
+    it('matches the CLI by not resolving variants of a dotted base name', () => {
+        write('app12/Assets/Contoso.Logo.scale-200.png');
+
+        assert.equal(resolveMrtAsset(path.join(tmpDir, 'app12'), 'Assets\\Contoso.Logo.png'), null);
+    });
+
+    it('skips variant probing outside the allowed probe roots', () => {
+        write('app13/Assets/Logo.scale-200.png');
+        write('app13/Assets/Exact.png');
+        const appDir = path.join(tmpDir, 'app13');
+
+        // Probing is confined to the app directory, so a reference escaping it gets the
+        // literal check only — no readdir of an arbitrary (or UNC) directory.
+        assert.equal(resolveMrtAsset(appDir, 'Assets\\Logo.png', { probeRoots: [path.join(tmpDir, 'other')] }), null);
+        assert.ok(resolveMrtAsset(appDir, 'Assets\\Logo.png', { probeRoots: [appDir] }));
+        // The literal file still resolves regardless of probe roots.
+        assert.ok(resolveMrtAsset(appDir, 'Assets\\Exact.png', { probeRoots: [] })?.isExact);
     });
 });
 

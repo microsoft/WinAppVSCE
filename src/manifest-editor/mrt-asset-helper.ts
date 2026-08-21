@@ -55,7 +55,13 @@ export function isQualifierToken(token: string): boolean {
 
 /**
  * Returns true if `candidateNameWithoutExtension` is a valid MRT variant of
- * `logicalBaseName` (dots are allowed inside the base name).
+ * `logicalBaseName`.
+ *
+ * Only the first dot-separated segment is compared against the base name, so a base name
+ * that itself contains dots ("Contoso.Logo") never matches its own variants. That mirrors
+ * `MrtAssetHelper.IsMrtVariantName` in the WinApp CLI, which does the same `Split('.')` and
+ * `parts[0]` comparison. Diverging here would make the editor accept assets the CLI does not
+ * package, which is worse than the shared limitation — keep the two in lockstep.
  */
 export function isMrtVariantName(logicalBaseName: string, candidateNameWithoutExtension: string): boolean {
     if (!logicalBaseName?.trim() || !candidateNameWithoutExtension?.trim()) { return false; }
@@ -145,6 +151,22 @@ function compareScores(a: number[], b: number[]): number {
     return 0;
 }
 
+/** True when `candidate` is `root` or sits underneath it (case-insensitive, Windows paths). */
+export function isPathWithin(root: string, candidate: string): boolean {
+    if (!root) { return false; }
+    const relative = path.relative(root, candidate);
+    return !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+export interface ResolveMrtAssetOptions {
+    /**
+     * Directories that MRT probing is allowed to enumerate. A reference resolving outside all
+     * of them falls back to a plain existence check, so a manifest can't drive the extension
+     * host into listing arbitrary local or UNC directories.
+     */
+    probeRoots?: string[];
+}
+
 function safeReadDir(dir: string): fs.Dirent[] {
     try {
         return fs.readdirSync(dir, { withFileTypes: true });
@@ -162,8 +184,11 @@ function safeReadDir(dir: string): fs.Dirent[] {
  *  3. qualifier-folder layouts (`Assets\scale-200\Logo.png`).
  *
  * Returns null only when none of those exist — the one case that warrants a warning.
+ *
+ * Steps 2 and 3 enumerate a directory, so they run only when the reference resolves inside
+ * `options.probeRoots` (when supplied). Everything else gets the literal check alone.
  */
-export function resolveMrtAsset(baseDir: string, referencePath: string): MrtResolution | null {
+export function resolveMrtAsset(baseDir: string, referencePath: string, options?: ResolveMrtAssetOptions): MrtResolution | null {
     if (!referencePath) { return null; }
 
     let absolute: string;
@@ -184,6 +209,8 @@ export function resolveMrtAsset(baseDir: string, referencePath: string): MrtReso
     const ext = path.extname(fileName);
     // An extensionless reference is an MRT key, not a file path — nothing to probe for.
     if (!ext) { return null; }
+    // Probing enumerates `dir`; refuse to do that outside the roots the caller trusts.
+    if (options?.probeRoots && !options.probeRoots.some(root => isPathWithin(root, dir))) { return null; }
     const logicalBase = getMrtVariantBaseName(fileName.slice(0, fileName.length - ext.length));
 
     // 2. Qualifier-suffixed siblings.
