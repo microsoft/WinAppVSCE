@@ -546,6 +546,35 @@ export function getEditorStyles(nonce: string): string {
         .custom-dropdown-menu.open { display:block; }
         .custom-dropdown-item { padding:6px 12px; cursor:pointer; font-size:12px; color:var(--vscode-foreground); border-radius:4px; }
         .custom-dropdown-item:hover { background:var(--vscode-list-hoverBackground, rgba(255,255,255,0.05)); }
+
+        /* ─── Parse-error overlay ──────────────────────────── */
+        /* Shown in place when the XML becomes unparseable, instead of rebuilding the whole
+           webview document (which would discard tab, scroll and expanded-field state). */
+        .parse-error-overlay {
+            position: fixed; inset: 0; z-index: 100;
+            display: flex; align-items: center; justify-content: center;
+            padding: 24px;
+            background: var(--vscode-editor-background);
+            opacity: 0.97;
+        }
+        .parse-error-overlay[hidden] { display: none; }
+        .parse-error-box { max-width: 520px; text-align: center; }
+        .parse-error-title {
+            font-size: 16px; font-weight: 600; margin-bottom: 12px;
+            color: var(--vscode-errorForeground, #f44747);
+        }
+        .parse-error-message {
+            font-size: 13px; color: var(--vscode-descriptionForeground);
+            margin-bottom: 16px; line-height: 1.5;
+        }
+        .parse-error-detail {
+            font-family: var(--vscode-editor-font-family, monospace);
+            font-size: 12px; background: var(--vscode-input-background);
+            border: 1px solid var(--vscode-input-border, transparent);
+            border-radius: 4px; padding: 10px; text-align: left;
+            white-space: pre-wrap; word-break: break-word;
+            color: var(--vscode-errorForeground, #f44747);
+        }
     </style>`;
 }
 

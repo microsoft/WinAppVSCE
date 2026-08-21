@@ -46,7 +46,30 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (130 tests)
+## Test inventory (137 tests)
+
+### `webview-state.spec.ts` — 4 tests
+
+Renders the generated webview document directly in Chromium (with a stubbed `acquireVsCodeApi`), so
+UI-state behaviour can be verified without launching VS Code. Regression coverage for #192.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | external updates preserve the active tab, app sub-tab and scroll position | A force-update from the extension keeps the selected tab, per-app sub-tab and scroll offset |
+| 2 | a parse error is shown as an overlay without discarding the editor or its state | `parseError` shows the in-place overlay, leaves the editor document intact, and `update` clears it |
+| 3 | UI state is restored after the webview document is rebuilt | State persisted via `vscode.setState()` restores the tab, sub-tab and scroll offset in a fresh script context |
+| 4 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
+
+### `external-edit-state.spec.ts` — 3 tests
+
+Full VS Code coverage for #192: edits made to the manifest outside the webview must not reset the
+visual editor. Launches its own VS Code instance.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | keeps the selected tab, app sub-tab and scroll position across an external edit that breaks the XML mid-way | Transiently-invalid XML (as produced by typing an element in the text editor) doesn't reset the editor |
+| 2 | exactly one top-level tab button is marked active after an external edit | Tab button/panel selection stays in sync |
+| 3 | shows an in-place overlay — not a rebuilt document — while the XML is invalid | Invalid XML shows the overlay, and recovering restores the previous view |
 
 ### `sign-quickpick.spec.ts` — 6 tests
 

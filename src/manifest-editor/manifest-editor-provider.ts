@@ -16,6 +16,9 @@ import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { AssetCopyTokenStore } from './asset-copy-token-store';
 
+/** Debounce window for external document changes (e.g. typing in the XML text editor). */
+const EXTERNAL_CHANGE_DEBOUNCE_MS = 250;
+
 export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'winapp.manifestEditor';
 
@@ -67,29 +70,29 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
 
         // Track whether we're currently applying an edit to avoid feedback loops
         let isApplyingEdit = false;
-        let showingErrorView = false;
+        // Which document the webview currently hosts. Reassigning `webview.html` destroys the
+        // script context (and therefore all webview UI state), so it is only done when switching
+        // between the two documents — never for a parse error while the editor is already loaded.
+        let documentMode: 'editor' | 'errorPage' = 'editor';
+        let errorPageMessage: string | undefined;
+        let externalChangeTimer: NodeJS.Timeout | undefined;
         const assetCopyTokens = new AssetCopyTokenStore();
-
-        /** Try to parse — if it fails, show error view; if it succeeds, show/update editor. */
-        const tryParseOrShowError = (text: string): boolean => {
-            try {
-                parseManifest(text);
-                return true;
-            } catch (e) {
-                const errMsg = e instanceof Error ? e.message : String(e);
-                if (!showingErrorView) {
-                    showingErrorView = true;
-                    webviewPanel.webview.html = getParseErrorContent(webviewPanel.webview, freshNonce(), errMsg);
-                }
-                return false;
-            }
-        };
 
         /** Load the full editor view. */
         const showEditorView = () => {
-            showingErrorView = false;
+            documentMode = 'editor';
+            errorPageMessage = undefined;
             webviewPanel.webview.html = getWebviewContent(webviewPanel.webview, freshNonce(), manifestDirUri);
             // The editor will send 'ready' once loaded, which triggers updateWebview
+        };
+
+        /** Load the standalone parse-error page (only used when the editor never loaded). */
+        const showErrorPage = (errMsg: string) => {
+            // Avoid rebuilding an identical page on every keystroke while the XML stays broken.
+            if (documentMode === 'errorPage' && errorPageMessage === errMsg) { return; }
+            documentMode = 'errorPage';
+            errorPageMessage = errMsg;
+            webviewPanel.webview.html = getParseErrorContent(webviewPanel.webview, freshNonce(), errMsg);
         };
 
         // Table-driven dispatch for simple XML operations
@@ -149,36 +152,45 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                 data = parseManifest(text);
             } catch (e) {
                 const errMsg = e instanceof Error ? e.message : String(e);
-                if (!showingErrorView) {
-                    showingErrorView = true;
-                    webviewPanel.webview.html = getParseErrorContent(webviewPanel.webview, freshNonce(), errMsg);
+                if (documentMode === 'editor') {
+                    // Keep the loaded editor document alive and surface the failure as an overlay.
+                    // Rebuilding the document here would wipe tab/scroll/expanded-field state every
+                    // time the XML is transiently invalid while the user types in the text editor.
+                    webviewPanel.webview.postMessage({ type: 'parseError', message: errMsg });
+                } else {
+                    showErrorPage(errMsg);
                 }
                 return;
             }
-            if (showingErrorView) { showEditorView(); }
+            if (documentMode !== 'editor') {
+                // Recovered from an unparseable initial load — swap in the editor document.
+                // It posts 'ready' when loaded, which calls back into updateWebview.
+                showEditorView();
+                return;
+            }
             const errors = validateManifest(data, this.getSchema());
             webviewPanel.webview.postMessage({ type: 'update', data, errors, forceAll });
         };
 
         // Initial load: check if XML is valid
-        if (tryParseOrShowError(document.getText())) {
-            webviewPanel.webview.html = getWebviewContent(webviewPanel.webview, freshNonce(), manifestDirUri);
+        try {
+            parseManifest(document.getText());
+            showEditorView();
+        } catch (e) {
+            showErrorPage(e instanceof Error ? e.message : String(e));
         }
 
-        // Listen for document changes (e.g., from the text editor, undo, or external edits)
+        // Listen for document changes (e.g., from the text editor, undo, or external edits).
+        // This fires on every keystroke, so debounce it: re-rendering mid-word is wasted work, and
+        // half-typed elements make the XML transiently unparseable.
         const changeDocSub = vscode.workspace.onDidChangeTextDocument(e => {
-            if (e.document.uri.toString() === document.uri.toString() && !isApplyingEdit) {
-                if (showingErrorView) {
-                    // Check if the XML is now valid — if so, switch to editor
-                    const text = document.getText();
-                    if (tryParseOrShowError(text)) {
-                        showEditorView();
-                    }
-                } else {
-                    // External change (undo, redo, text editor) — force-update all fields
-                    updateWebview(true);
-                }
-            }
+            if (e.document.uri.toString() !== document.uri.toString() || isApplyingEdit) { return; }
+            if (externalChangeTimer) { clearTimeout(externalChangeTimer); }
+            externalChangeTimer = setTimeout(() => {
+                externalChangeTimer = undefined;
+                // External change (undo, redo, text editor) — force-update all fields
+                updateWebview(true);
+            }, EXTERNAL_CHANGE_DEBOUNCE_MS);
         });
 
         // Flush pending webview input changes before save so Ctrl+S captures edits
@@ -205,6 +217,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         });
 
         webviewPanel.onDidDispose(() => {
+            if (externalChangeTimer) { clearTimeout(externalChangeTimer); }
             changeDocSub.dispose();
             willSaveSub.dispose();
         });

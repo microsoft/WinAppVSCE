@@ -55,12 +55,6 @@ ${getErrorPageStyles(nonce)}
         document.getElementById('open-as-text').addEventListener('click', () => {
             vscode.postMessage({ type: 'openAsText' });
         });
-        // Listen for retry signal when document is fixed externally
-        window.addEventListener('message', event => {
-            if (event.data.type === 'retryParse') {
-                vscode.postMessage({ type: 'ready' });
-            }
-        });
     </script>
 </body>
 </html>`;
@@ -82,6 +76,16 @@ export function getWebviewContent(webview: vscode.Webview, nonce: string, manife
 ${getEditorStyles(nonce)}
 </head>
 <body>
+    <div class="parse-error-overlay" id="parse-error-overlay" hidden>
+        <div class="parse-error-box" role="alert">
+            <div class="parse-error-title">⚠ XML syntax error</div>
+            <div class="parse-error-message">
+                The manifest can't be parsed right now, so editing is paused. Fix the XML in the text
+                editor and the editor will resume automatically — your current view is preserved.
+            </div>
+            <div class="parse-error-detail" id="parse-error-detail"></div>
+        </div>
+    </div>
     <div class="tab-bar" role="tablist">
         <button class="tab-btn active" role="tab" data-tab="identity" aria-selected="true" tabindex="0">Identity</button>
         <button class="tab-btn" role="tab" data-tab="properties" aria-selected="false" tabindex="-1">Properties</button>
