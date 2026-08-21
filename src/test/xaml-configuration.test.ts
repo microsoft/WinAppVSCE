@@ -1,12 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  DOTNET_REQUIRED_STATUS,
   getXamlStatus,
   getXamlStatusEffect,
   normalizeDiagnosticsLevel,
   readXamlLanguageServerConfiguration,
   shouldRestartXamlLanguageServer,
 } from "../xaml/xamlConfiguration";
+
+test("defines the persistent missing-runtime status and recovery command", () => {
+  assert.deepEqual(DOTNET_REQUIRED_STATUS, {
+    text: "$(warning) XAML: .NET 10 required",
+    tooltip:
+      "WinUI XAML IntelliSense requires .NET 10. Select for install and restart options.",
+    command: "winui-xaml.showInfo",
+  });
+});
 
 test("reports disabled, running, and degraded XAML status actions", () => {
   assert.deepEqual(getXamlStatus(false, false, true, false), {
@@ -23,6 +33,10 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     "Restart Language Server",
     "Show Output",
   ]);
+  assert.deepEqual(getXamlStatus(true, false, true, true, true), {
+    message: "WinUI XAML Tools — .NET 10 is required; XAML syntax highlighting remains active.",
+    actions: ["Install .NET", "Restart Language Server", "Show Output"],
+  });
   assert.deepEqual(getXamlStatus(true, false, false, true).actions, [
     "Manage Workspace Trust",
     "Show Output",
@@ -46,6 +60,9 @@ test("maps every XAML status action to its recovery effect", () => {
     command: "workbench.trust.manage",
   });
   assert.deepEqual(getXamlStatusEffect("Show Output"), { showOutput: true });
+  assert.deepEqual(getXamlStatusEffect("Install .NET"), {
+    url: "https://dotnet.microsoft.com/download/dotnet/10.0",
+  });
   assert.equal(getXamlStatusEffect(undefined), undefined);
 });
 

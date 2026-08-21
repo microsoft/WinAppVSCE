@@ -256,6 +256,27 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     assert.ok(recovered.includes("Button"), "server should recover after clearing the missing-DLL seam");
   });
 
+  it("degrades to syntax-only without .NET 10, then recovers after restart", async function () {
+    process.env.WINUI_XAML_FORCE_NO_DOTNET = "1";
+    try {
+      await assert.doesNotReject(
+        () => vscode.commands.executeCommand("winui-xaml.restartServer"),
+        "restartServer must not reject when the required runtime is absent"
+      );
+      const degraded = await waitForSemanticButton(false);
+      assert.ok(
+        !degraded.found,
+        `expected syntax-only degradation without .NET 10; got: ${degraded.labels.join(", ")}`
+      );
+    } finally {
+      delete process.env.WINUI_XAML_FORCE_NO_DOTNET;
+      await vscode.commands.executeCommand("winui-xaml.restartServer");
+    }
+
+    const recovered = await waitForSemanticButton(true, 60000);
+    assert.ok(recovered.found, "server should recover after .NET 10 becomes available");
+  });
+
   it("degrades to syntax-only when the workspace is untrusted, then recovers (WINUI_XAML_FORCE_UNTRUSTED)", async function () {
     // The harness is trusted; this seam exercises the untrusted security boundary. Clearing it follows the same restart path as granting workspace trust.
     process.env.WINUI_XAML_FORCE_UNTRUSTED = "1";

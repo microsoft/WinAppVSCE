@@ -11,8 +11,11 @@ import {
 import { firstExistingPath } from "../winapp-cli-utils";
 import {
   buildDegradedNotification,
+  DOTNET_RUNTIME_DISMISSED_KEY,
   DegradedAction,
   DegradedCause,
+  executeDegradedAction,
+  shouldShowDegradedNotification,
 } from "./degradedNotification";
 import {
   CSHARP_DEV_KIT_DISMISSED_KEY,
@@ -21,7 +24,7 @@ import {
   CSHARP_DEV_KIT_RECOMMENDATION,
   CsharpDevKitNotificationGate,
 } from "./csharpDevKitNotification";
-import { getWindowsServerRid } from "./serverArchitecture";
+import { findCompatibleDotnet } from "./dotnetRuntime";
 import { ServerLifecycle } from "./serverLifecycle";
 import {
   shouldTriggerAutomaticXamlSuggestions,
@@ -41,6 +44,7 @@ import {
 } from "./projectContextStatus";
 import {
   normalizeDiagnosticsLevel,
+  DOTNET_REQUIRED_STATUS,
   getXamlStatus,
   getXamlStatusEffect,
   readXamlLanguageServerConfiguration,
@@ -200,7 +204,8 @@ function showXamlInfo(): void {
     configuration.enabled,
     client?.isRunning() ?? false,
     vscode.workspace.isTrusted,
-    vscode.workspace.textDocuments.some((document) => document.languageId === "xaml")
+    vscode.workspace.textDocuments.some((document) => document.languageId === "xaml"),
+    lastDegradedCause === "dotnet"
   );
   void vscode.window
     .showInformationMessage<XamlStatusAction>(status.message, ...status.actions)
@@ -211,6 +216,9 @@ function showXamlInfo(): void {
       }
       if (effect && "showOutput" in effect) {
         output?.show();
+      }
+      if (effect && "url" in effect) {
+        return vscode.env.openExternal(vscode.Uri.parse(effect.url));
       }
       return undefined;
     });
@@ -313,29 +321,47 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     notifyDegraded(
       "Workspace is untrusted — language server not started (syntax-only until trust is granted).",
       "untrusted",
-      userInitiated
+      userInitiated,
+      context
     );
     return;
   }
 
-  const server = resolveServer(context);
-  if (!server) {
+  const serverPath = resolveServerPath(context);
+  if (!serverPath) {
     notifyDegraded(
-      "Bundled language server executable not found. IntelliSense, diagnostics, and navigation are unavailable; " +
+      "Framework-dependent language server DLL not found. IntelliSense, diagnostics, and navigation are unavailable; " +
         "syntax highlighting remains available.",
       "server",
-      userInitiated
+      userInitiated,
+      context
     );
     return;
   }
 
-  log(`Starting language server: ${server.command} ${server.args.join(" ")}`);
+  const dotnet = process.env.WINUI_XAML_FORCE_NO_DOTNET === "1"
+    ? undefined
+    : await findCompatibleDotnet();
+  if (!dotnet) {
+    notifyDegraded(
+      "A compatible installed Microsoft.NETCore.App 10.x runtime was not found.",
+      "dotnet",
+      userInitiated,
+      context
+    );
+    return;
+  }
+
+  log(`Starting language server: ${dotnet} ${serverPath}`);
 
   const executable: Executable = {
-    command: server.command,
-    args: server.args,
+    command: dotnet,
+    args: [serverPath],
     transport: TransportKind.stdio,
-    options: { cwd: server.cwd },
+    options: {
+      cwd: path.dirname(serverPath),
+      env: { ...process.env, DOTNET_HOST_PATH: dotnet },
+    },
   };
 
   const serverOptions: ServerOptions = { run: executable, debug: executable };
@@ -387,6 +413,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
       settings: { diagnosticsLevel: latestDiagnosticsLevel },
     });
     lastDegradedCause = undefined;
+    renderProjectContextStatus();
     log("Language server started.");
     if (userInitiated) {
       void vscode.window.showInformationMessage("WinUI XAML language server restarted.");
@@ -405,10 +432,11 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     // The client never took ownership of this watcher.
     disposeFileWatcher();
     notifyDegraded(
-      `Failed to start language server (${server.command}): ${detail}. ` +
+      `Failed to start language server (${dotnet}): ${detail}. ` +
         "Syntax highlighting remains available.",
       "server",
-      userInitiated
+      userInitiated,
+      context
     );
   }
 }
@@ -536,6 +564,13 @@ function renderProjectContextStatus(): void {
       ? activeEditor.document.uri.toString()
       : null
     : undefined;
+  if (projectStatusItem && activeDocumentUri && lastDegradedCause === "dotnet") {
+    projectStatusItem.text = DOTNET_REQUIRED_STATUS.text;
+    projectStatusItem.tooltip = DOTNET_REQUIRED_STATUS.tooltip;
+    projectStatusItem.command = DOTNET_REQUIRED_STATUS.command;
+    projectStatusItem.show();
+    return;
+  }
   const relevantStatuses = getRelevantProjectContextStatuses(
     projectContextStatuses.values(),
     activeDocumentUri
@@ -551,6 +586,7 @@ function renderProjectContextStatus(): void {
 
   projectStatusItem.text = presentation.text;
   projectStatusItem.tooltip = presentation.tooltip;
+  projectStatusItem.command = "winui-xaml.showOutput";
   projectStatusItem.show();
   if (presentation.transient) {
     readyStatusTimer = setTimeout(() => {
@@ -605,77 +641,73 @@ async function doStop(): Promise<void> {
 function notifyDegraded(
   reason: string,
   cause: DegradedCause = "server",
-  forceNotification = false
+  forceNotification = false,
+  context?: vscode.ExtensionContext
 ): void {
   log(reason);
-  if (!forceNotification && cause === lastDegradedCause) {
+  const shouldShow = shouldShowDegradedNotification(
+    cause,
+    lastDegradedCause,
+    context?.globalState.get(DOTNET_RUNTIME_DISMISSED_KEY, false) ?? false,
+    forceNotification
+  );
+  lastDegradedCause = cause;
+  renderProjectContextStatus();
+  if (!shouldShow) {
     return;
   }
-  lastDegradedCause = cause;
-
   const { message, actions } = buildDegradedNotification(cause, reason);
   void vscode.window
     .showWarningMessage(message, ...actions.map((a) => a.label))
     .then((choice) => {
       const action = actions.find((a) => a.label === choice);
       if (action) {
-        void runDegradedAction(action);
+        void runDegradedAction(action, context);
       }
     });
 }
 
 /** Executes a degraded-state action. */
-function runDegradedAction(action: DegradedAction): Thenable<unknown> | void {
-  if (action.showOutput) {
-    output?.show(true);
-    return;
-  }
-  if (action.url) {
-    return vscode.env.openExternal(vscode.Uri.parse(action.url));
-  }
-  if (action.command) {
-    const primary =
-      action.commandArg !== undefined
-        ? vscode.commands.executeCommand(action.command, action.commandArg)
-        : vscode.commands.executeCommand(action.command);
-    // Support both workspace-trust command identifiers.
-    return Promise.resolve(primary).then(undefined, () =>
-      action.fallbackCommand ? vscode.commands.executeCommand(action.fallbackCommand) : undefined
-    );
-  }
+function runDegradedAction(
+  action: DegradedAction,
+  context?: vscode.ExtensionContext
+): Thenable<unknown> | void {
+  return executeDegradedAction(action, {
+    dismissDotnetRequirement: () =>
+      context?.globalState.update(DOTNET_RUNTIME_DISMISSED_KEY, true) ??
+      Promise.resolve(),
+    showOutput: () => output?.show(true),
+    openUrl: (url) => vscode.env.openExternal(vscode.Uri.parse(url)),
+    executeCommand: (command, commandArg) =>
+      commandArg === undefined
+        ? vscode.commands.executeCommand(command)
+        : vscode.commands.executeCommand(command, commandArg),
+  });
 }
 
-/** Locates the bundled server or a development-only environment override. */
-function resolveServer(
-  context: vscode.ExtensionContext
-): { command: string; args: string[]; cwd: string } | undefined {
+/** Locates the framework-dependent server DLL or a development-only DLL override. */
+function resolveServerPath(context: vscode.ExtensionContext): string | undefined {
   // Exercise missing-server degradation in the integration harness.
   if (process.env.WINUI_XAML_FORCE_NO_SERVER === "1") {
     return undefined;
   }
+  const configured = process.env.WINUI_XAML_SERVER_PATH;
   const candidates =
     process.env.WINUI_XAML_REQUIRE_BUNDLED === "1"
       ? [bundledServer(context)]
-      : [
-          process.env.WINUI_XAML_SERVER_PATH ?? "",
-          bundledServer(context),
-        ];
-  const serverPath = firstExistingPath(candidates);
-  if (!serverPath) {
-    return undefined;
-  }
-  return path.extname(serverPath).toLowerCase() === ".dll"
-    ? { command: "dotnet", args: [serverPath], cwd: path.dirname(serverPath) }
-    : { command: serverPath, args: [], cwd: path.dirname(serverPath) };
+      : configured
+        ? [configured, bundledServer(context)]
+        : [bundledServer(context)];
+  return firstExistingPath(
+    candidates.filter((candidate) => path.extname(candidate).toLowerCase() === ".dll")
+  );
 }
 
 function bundledServer(context: vscode.ExtensionContext): string {
-  const rid = getWindowsServerRid();
   return path.join(
     context.extensionPath,
     "dist",
     "server",
-    rid,
-    "WinUiXaml.LanguageServer.exe"
+    "WinUiXaml.LanguageServer.dll"
   );
 }

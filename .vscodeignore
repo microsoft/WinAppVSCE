@@ -26,9 +26,8 @@ EDITOR_SUPPORT.md
 # WinUI XAML language service:
 #   - exclude the C# server sources + build output and the test harness/fixtures
 #   - the published server (dist/server, produced by `bundle:server`) is NOT excluded and ships in the VSIX
-#   - trim runtime-irrelevant publish artifacts (debug symbols and XML doc comments). The apphost
-#     WinUiXaml.LanguageServer.exe and Roslyn BuildHost executables are required at runtime.
-#   - package-vsc.ps1 asserts both architecture-specific apphosts are present in the VSIX.
+#   - trim debug symbols and XML doc comments
+#   - the framework-dependent server DLL and Roslyn BuildHost ship without a .NET runtime
 server/**
 test/**
 .vscode-test.mjs

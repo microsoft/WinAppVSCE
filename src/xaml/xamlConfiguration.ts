@@ -11,22 +11,32 @@ export type XamlStatusAction =
   | "Open Settings"
   | "Restart Language Server"
   | "Manage Workspace Trust"
-  | "Show Output";
+  | "Show Output"
+  | "Install .NET";
 
 export interface XamlStatus {
   message: string;
   actions: XamlStatusAction[];
 }
 
+export const DOTNET_REQUIRED_STATUS = {
+  text: "$(warning) XAML: .NET 10 required",
+  tooltip:
+    "WinUI XAML IntelliSense requires .NET 10. Select for install and restart options.",
+  command: "winui-xaml.showInfo",
+} as const;
+
 export type XamlStatusEffect =
   | { command: string; args?: string[] }
-  | { showOutput: true };
+  | { showOutput: true }
+  | { url: string };
 
 export function getXamlStatus(
   enabled: boolean,
   running: boolean,
   trusted: boolean,
-  hasOpenXamlDocument: boolean
+  hasOpenXamlDocument: boolean,
+  requiresDotnet = false
 ): XamlStatus {
   if (!enabled) {
     return {
@@ -48,6 +58,14 @@ export function getXamlStatus(
       message:
         "WinUI XAML Tools — ready; the language server starts when a XAML file is opened.",
       actions: [],
+    };
+  }
+
+  if (requiresDotnet) {
+    return {
+      message:
+        "WinUI XAML Tools — .NET 10 is required; XAML syntax highlighting remains active.",
+      actions: ["Install .NET", "Restart Language Server", "Show Output"],
     };
   }
 
@@ -75,6 +93,8 @@ export function getXamlStatusEffect(
       return { command: "workbench.trust.manage" };
     case "Show Output":
       return { showOutput: true };
+    case "Install .NET":
+      return { url: "https://dotnet.microsoft.com/download/dotnet/10.0" };
     default:
       return undefined;
   }

@@ -15,7 +15,7 @@ const SERVER_DLL = resolve(
   here,
   "../../src/WinUiXaml.LanguageServer/bin/Debug/net10.0/WinUiXaml.LanguageServer.dll"
 );
-// Allow pointing the smoke test at an alternate DLL or a self-contained packaged apphost.
+// Allow pointing the smoke test at an alternate framework-dependent DLL.
 const serverPath =
   process.env.WINUI_XAML_SERVER_PATH || SERVER_DLL;
 const XAML = process.env.WINUI_XAML_FIXTURE_XAML || resolve(here, "../../../test/fixtures/xaml/fixture/SmokePage.xaml");
@@ -92,8 +92,8 @@ if (resIdx < 0) fail("could not find {StaticResource SmokeAccentBrush} in the fi
 const resCaretOffset = xamlText.indexOf("SmokeAccentBrush", resIdx) + 3;
 const resCaret = offsetToPosition(xamlText, resCaretOffset);
 
-const isDll = serverPath.toLowerCase().endsWith(".dll");
-server = spawn(isDll ? "dotnet" : serverPath, isDll ? [serverPath] : [], {
+if (!serverPath.toLowerCase().endsWith(".dll")) fail(`server must be a framework-dependent DLL: ${serverPath}`);
+server = spawn("dotnet", [serverPath], {
   stdio: ["pipe", "pipe", "inherit"],
   cwd: dirname(serverPath),
 });

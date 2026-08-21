@@ -196,7 +196,7 @@ When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer 
 
 ### WinUI XAML Language Service
 
-The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, powered by a bundled .NET language server. Beyond syntax highlighting, it provides project-aware editing that understands your app's types, `x:Class`, `x:Bind` targets, and `App.xaml` resources:
+The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, powered by a packaged framework-dependent .NET language server. Beyond syntax highlighting, it provides project-aware editing that understands your app's types, `x:Class`, `x:Bind` targets, and `App.xaml` resources:
 
 | Feature | What it does |
 |---------|--------------|
@@ -210,7 +210,7 @@ The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, 
 | **Semantic tokens** | Richer, type-aware colorization layered on top of the TextMate grammar. |
 | **Code actions** | Add or remove namespace declarations and apply other XAML-aware quick fixes. |
 
-The self-contained language server starts automatically when you open a `.xaml` file. No separate .NET 10 runtime or SDK is required to launch it. Project-aware features use the MSBuild toolset from your WinUI build environment (Visual Studio, Visual Studio Build Tools, or a compatible SDK) and derive their capabilities from the WinUI SDK types resolved by that project; they do not substitute a bundled, potentially stale framework catalog. This includes completion and hover for public, concrete project types derived from the SDK's `MarkupExtension` base type. If the toolset or required SDK metadata is unavailable, the server reports the missing prerequisite when applicable and keeps project-independent XAML features available. If the bundled server cannot start, XAML gracefully degrades to **syntax highlighting only** and the rest of the extension is unaffected. Use **WinApp: Show Info** to check the server status and **WinApp: Restart Language Server** to restart it.
+The framework-dependent language server starts automatically when you open a `.xaml` file and requires an installed .NET 10 runtime. If a compatible runtime is not found, WinApp offers to open the official .NET download page or dismiss the prompt; it never installs a runtime automatically. Project-aware features use the MSBuild toolset from your WinUI build environment (Visual Studio, Visual Studio Build Tools, or a compatible SDK) and derive their capabilities from the WinUI SDK types resolved by that project; they do not substitute a bundled, potentially stale framework catalog. This includes completion and hover for public, concrete project types derived from the SDK's `MarkupExtension` base type. If the runtime, toolset, or required SDK metadata is unavailable, XAML gracefully degrades to **syntax highlighting only** and the rest of the extension is unaffected. Use **WinApp: Show Info** to check the server status and **WinApp: Restart Language Server** to restart it.
 
 XAML tooling supports these settings:
 
@@ -221,7 +221,7 @@ XAML tooling supports these settings:
 
 #### C# code-behind IntelliSense
 
-For IntelliSense in `.xaml.cs` code-behind files, install the [C# Dev Kit](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csdevkit). Unlike the bundled XAML language server, C# Dev Kit requires the .NET SDK used by your project.
+For IntelliSense in `.xaml.cs` code-behind files, install the [C# Dev Kit](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csdevkit). Unlike the packaged XAML language server, C# Dev Kit requires the .NET SDK used by your project.
 
 1. Open the folder containing the WinUI `.csproj`, rather than opening a code-behind file by itself.
 2. Install the .NET SDK version targeted by the project.
@@ -337,7 +337,7 @@ The winapp CLI (and this extension) works with any Windows app framework:
 
 - Windows 10 or later
 - Visual Studio Code 1.109.0 or later
-- The WinUI XAML language server is bundled as self-contained `win-x64` and `win-arm64` executables, so users do not need to install .NET 10. Project-aware features require the MSBuild toolset already used to build the WinUI project.
+- The WinUI XAML language server is framework-dependent and requires an installed .NET 10 runtime. The extension does not install or bundle .NET. Project-aware features also require the MSBuild toolset already used to build the WinUI project.
 
 The winapp CLI is bundled with the extension — no separate installation required.
 

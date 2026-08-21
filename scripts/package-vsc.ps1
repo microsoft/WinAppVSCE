@@ -183,12 +183,12 @@ try
         Write-Host "[VSC] Skipping server build; reusing pre-published dist/server..." -ForegroundColor Blue
         # Preserve the downloaded ESRP signatures instead of rebuilding over them. The mode is
         # restored in the finally block so it never leaks into the caller's shell. The prepublish
-        # helper is the canonical completeness check and fails closed if either RID is missing.
+        # helper is the canonical completeness check and rejects apphost or runtime payloads.
         $env:WINUI_XAML_SERVER_BUNDLE_MODE = "artifact"
         $ServerBundleModeSet = $true
     } else {
         # Normal packaging: DON'T publish the server here. The `vsce package` step below triggers
-        # vscode:prepublish -> ensure-server-bundle.mjs publishes a fresh self-contained dist/server.
+        # vscode:prepublish -> ensure-server-bundle.mjs publishes a fresh framework-dependent dist/server.
         # Publishing here too would build the server twice for every package.
         $env:WINUI_XAML_SERVER_BUNDLE_MODE = "source"
         $ServerBundleModeSet = $true

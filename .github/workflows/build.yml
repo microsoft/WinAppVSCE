@@ -56,16 +56,16 @@ jobs:
     - name: Run XAML language server tests
       run: npm run test:server
 
-    - name: Publish self-contained XAML language servers
+    - name: Publish framework-dependent XAML language server
       run: npm run bundle:server
 
     - name: Run XAML LSP smoke test
       run: npm run test:xaml-smoke
 
-    - name: Run self-contained XAML LSP smoke test
+    - name: Run packaged framework-dependent XAML LSP smoke test
       env:
-        WINUI_XAML_SERVER_PATH: ${{ github.workspace }}\dist\server\win-x64\WinUiXaml.LanguageServer.exe
-      run: npm run test:xaml-self-contained
+        WINUI_XAML_SERVER_PATH: ${{ github.workspace }}\dist\server\WinUiXaml.LanguageServer.dll
+      run: npm run test:xaml-framework-dependent
 
     - name: Run XAML integration tests
       env:
@@ -226,15 +226,14 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
-    - name: Publish native ARM64 language server
+    - name: Publish framework-dependent language server on ARM64
       run: |
-        dotnet publish server\src\WinUiXaml.LanguageServer\WinUiXaml.LanguageServer.csproj -c Release -r win-arm64 --self-contained true -o dist\server\win-arm64
-        dotnet publish server\src\WinUiXaml.DotnetHost\WinUiXaml.DotnetHost.csproj -c Release -r win-arm64 --self-contained true -o dist\server\win-arm64
+        dotnet publish server\src\WinUiXaml.LanguageServer\WinUiXaml.LanguageServer.csproj -c Release --self-contained false -p:UseAppHost=false -o dist\server
 
     - name: Restore smoke fixture
       run: dotnet restore test\fixtures\xaml\fixture\SmokeFixture.csproj --configfile server\nuget.config
 
-    - name: Run native ARM64 self-contained smoke
+    - name: Run framework-dependent smoke on ARM64
       env:
-        WINUI_XAML_SERVER_PATH: ${{ github.workspace }}\dist\server\win-arm64\WinUiXaml.LanguageServer.exe
+        WINUI_XAML_SERVER_PATH: ${{ github.workspace }}\dist\server\WinUiXaml.LanguageServer.dll
       run: node server\test\lsp-smoke\smoke.mjs

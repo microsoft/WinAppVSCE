@@ -1,10 +1,12 @@
 // Kept independent of the VS Code API for unit testing.
 
 /** Why the language server is not running. */
-export type DegradedCause = "untrusted" | "server";
+export type DegradedCause = "untrusted" | "dotnet" | "server";
 
 /** Settings query for the degraded-state action. */
 export const SERVER_SETTINGS_QUERY = "winapp.xaml";
+export const DOTNET_RUNTIME_DISMISSED_KEY = "winui-xaml.dotnetRuntimeRequirementDismissed";
+export const DOTNET_DOWNLOAD_URL = "https://dotnet.microsoft.com/download/dotnet/10.0";
 
 /** An action displayed in the degraded-state warning. */
 export interface DegradedAction {
@@ -20,6 +22,8 @@ export interface DegradedAction {
   readonly url?: string;
   /** Reveal the WinUI XAML output channel. */
   readonly showOutput?: boolean;
+  /** Persist that the user dismissed the missing-runtime prompt. */
+  readonly dismissDotnetRequirement?: boolean;
 }
 
 export interface DegradedNotification {
@@ -48,6 +52,19 @@ export function buildDegradedNotification(
     };
   }
 
+  if (cause === "dotnet") {
+    return {
+      message:
+        "WinUI XAML IntelliSense requires the .NET 10 runtime, but a compatible installation " +
+        "was not found. XAML syntax highlighting remains available. After installing .NET, run " +
+        "WinApp: Restart Language Server.",
+      actions: [
+        { label: "Install .NET", url: DOTNET_DOWNLOAD_URL },
+        { label: "Don't Show Again", dismissDotnetRequirement: true },
+      ],
+    };
+  }
+
   return {
     message:
       "WinUI XAML: language server not started — XAML is syntax-only. " +
@@ -59,4 +76,50 @@ export function buildDegradedNotification(
       { label: "Show Output", showOutput: true },
     ],
   };
+}
+
+export interface DegradedActionHandlers {
+  readonly dismissDotnetRequirement: () => Thenable<unknown>;
+  readonly showOutput: () => void;
+  readonly openUrl: (url: string) => Thenable<unknown>;
+  readonly executeCommand: (command: string, commandArg?: string) => Thenable<unknown>;
+}
+
+/** Determines whether a degraded warning should interrupt the user. */
+export function shouldShowDegradedNotification(
+  cause: DegradedCause,
+  previousCause: DegradedCause | undefined,
+  dotnetRequirementDismissed: boolean,
+  forceNotification: boolean
+): boolean {
+  if (forceNotification) {
+    return true;
+  }
+  return cause !== previousCause &&
+    !(cause === "dotnet" && dotnetRequirementDismissed);
+}
+
+/** Executes a degraded action through injected host operations. */
+export function executeDegradedAction(
+  action: DegradedAction,
+  handlers: DegradedActionHandlers
+): Thenable<unknown> | void {
+  if (action.dismissDotnetRequirement) {
+    return handlers.dismissDotnetRequirement();
+  }
+  if (action.showOutput) {
+    handlers.showOutput();
+    return;
+  }
+  if (action.url) {
+    return handlers.openUrl(action.url);
+  }
+  if (action.command) {
+    const primary = handlers.executeCommand(action.command, action.commandArg);
+    return Promise.resolve(primary).then(undefined, () =>
+      action.fallbackCommand
+        ? handlers.executeCommand(action.fallbackCommand)
+        : undefined
+    );
+  }
 }

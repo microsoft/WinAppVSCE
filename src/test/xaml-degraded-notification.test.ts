@@ -2,6 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	buildDegradedNotification,
+	DOTNET_DOWNLOAD_URL,
+	DOTNET_RUNTIME_DISMISSED_KEY,
+	executeDegradedAction,
+	shouldShowDegradedNotification,
 	SERVER_SETTINGS_QUERY,
 } from '../xaml/degradedNotification';
 
@@ -36,6 +40,72 @@ describe('buildDegradedNotification', () => {
 		assert.equal(showOutput.showOutput, true);
 		assert.equal(showOutput.command, undefined);
 		assert.equal(showOutput.url, undefined);
+	});
+
+	it('shows the first warning, suppresses duplicates and dismissal, and honors explicit retries', () => {
+		assert.equal(shouldShowDegradedNotification('dotnet', undefined, false, false), true);
+		assert.equal(shouldShowDegradedNotification('dotnet', 'dotnet', false, false), false);
+		assert.equal(shouldShowDegradedNotification('dotnet', undefined, true, false), false);
+		assert.equal(shouldShowDegradedNotification('dotnet', 'dotnet', true, true), true);
+	});
+
+	it('dotnet cause: offers only explicit install and dismiss actions', () => {
+		const { message, actions } = buildDegradedNotification('dotnet');
+
+		assert.match(message, /\.NET 10 runtime/i);
+		assert.match(message, /not found/i);
+		assert.match(message, /Restart Language Server/i);
+		assert.deepEqual(actions.map((a) => a.label), ['Install .NET', "Don't Show Again"]);
+		assert.equal(actions[0].url, DOTNET_DOWNLOAD_URL);
+		assert.equal(actions[1].dismissDotnetRequirement, true);
+		assert.equal(DOTNET_RUNTIME_DISMISSED_KEY, 'winui-xaml.dotnetRuntimeRequirementDismissed');
+	});
+
+	it('executes Install .NET and persistent dismissal through host operations', async () => {
+		const actions = buildDegradedNotification('dotnet').actions;
+		const opened: string[] = [];
+		let dismissed = false;
+		const handlers = {
+			dismissDotnetRequirement: async () => { dismissed = true; },
+			showOutput: () => undefined,
+			openUrl: async (url: string) => { opened.push(url); },
+			executeCommand: async () => undefined,
+		};
+
+		await executeDegradedAction(actions[0], handlers);
+		assert.deepEqual(opened, [DOTNET_DOWNLOAD_URL]);
+		await executeDegradedAction(actions[1], handlers);
+		assert.equal(dismissed, true);
+	});
+
+	it('executes commands, command fallbacks, and output actions through host operations', async () => {
+		const commands: Array<[string, string | undefined]> = [];
+		let outputShown = false;
+		const handlers = {
+			dismissDotnetRequirement: async () => undefined,
+			showOutput: () => { outputShown = true; },
+			openUrl: async () => undefined,
+			executeCommand: async (command: string, commandArg?: string) => {
+				commands.push([command, commandArg]);
+				if (command === 'workbench.trust.manage') {
+					throw new Error('command unavailable');
+				}
+			},
+		};
+
+		const serverActions = buildDegradedNotification('server').actions;
+		await executeDegradedAction(serverActions[0], handlers);
+		await executeDegradedAction(serverActions[1], handlers);
+		executeDegradedAction(serverActions[2], handlers);
+		await executeDegradedAction(buildDegradedNotification('untrusted').actions[0], handlers);
+
+		assert.deepEqual(commands, [
+			['winui-xaml.restartServer', undefined],
+			['workbench.action.openSettings', SERVER_SETTINGS_QUERY],
+			['workbench.trust.manage', undefined],
+			['workbench.action.manageTrust', undefined],
+		]);
+		assert.equal(outputShown, true);
 	});
 
 	it('untrusted cause: offers a single Manage Workspace Trust action with a version fallback', () => {
