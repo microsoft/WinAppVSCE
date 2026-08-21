@@ -588,6 +588,11 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     break;
                 }
                 case 'imagePathStatus': {
+                    // When MRT resolved the reference to a qualified variant, point the
+                    // preview at that variant — the unqualified path itself 404s.
+                    if (msg.status === 'found' && msg.previewPath) {
+                        applyResolvedPreview(msg.field, msg.index, msg.previewPath);
+                    }
                     // Find the form-group for this field
                     let fg = null;
                     if (msg.field === 'logo') {
@@ -605,18 +610,27 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     if (msg.status === 'found') {
                         if (msg.aspectWarning) {
                             fg.classList.add('has-warning');
+                            vmsg.classList.remove('info');
                             vmsg.classList.add('warning');
                             vmsg.textContent = msg.aspectWarning;
+                        } else if (msg.mrtNote) {
+                            // Valid MRT authoring — informational, not a problem to fix.
+                            fg.classList.remove('has-warning');
+                            vmsg.classList.remove('warning');
+                            vmsg.classList.add('info');
+                            vmsg.textContent = msg.mrtNote;
                         } else {
                             fg.classList.remove('has-warning');
-                            vmsg.textContent = ''; vmsg.classList.remove('warning'); vmsg.innerHTML = '';
+                            vmsg.textContent = ''; vmsg.classList.remove('warning'); vmsg.classList.remove('info'); vmsg.innerHTML = '';
                         }
                     } else if (msg.status === 'external') {
                         fg.classList.add('has-warning');
+                        vmsg.classList.remove('info');
                         vmsg.classList.add('warning');
                         vmsg.innerHTML = 'Image not in package directory. <a href="#" class="copy-to-assets-link" data-copy-token="' + escapeHtml(msg.copyToken) + '" data-field="' + escapeHtml(msg.field) + '" data-index="' + (msg.index !== undefined ? msg.index : '') + '">Copy to Assets folder?</a>';
                     } else {
                         fg.classList.add('has-warning');
+                        vmsg.classList.remove('info');
                         vmsg.classList.add('warning');
                         vmsg.textContent = '⚠ Image not found in package directory';
                     }
@@ -654,6 +668,21 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                 imgEl.removeAttribute('alt');
                 if (captionEl) { captionEl.textContent = ''; }
             }
+        }
+
+        // Repoints a logo preview at the file MRT actually resolved to
+        // (e.g. Square150x150Logo.scale-200.png for a Square150x150Logo.png reference).
+        function applyResolvedPreview(field, index, previewPath) {
+            let imgEl = null;
+            let captionEl = null;
+            if (field === 'logo') {
+                imgEl = document.getElementById('store-logo-preview');
+                captionEl = document.getElementById('store-logo-caption');
+            } else if (field === 'visualElements.square150x150Logo' && index !== undefined) {
+                imgEl = document.querySelector('.app-logo-preview[data-app-idx="' + index + '"]');
+                captionEl = document.querySelector('.app-logo-caption[data-app-idx="' + index + '"]');
+            }
+            if (imgEl) { updateLogoPreview(imgEl, previewPath, captionEl); }
         }
 
         function checkImagePathWarning(formGroup, logoPath, fieldName, fieldIndex) {

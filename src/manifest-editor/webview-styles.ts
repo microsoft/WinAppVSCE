@@ -248,6 +248,10 @@ export function getEditorStyles(nonce: string): string {
             color: var(--vscode-editorWarning-foreground, #cca700);
             display: block;
         }
+        .validation-msg.info {
+            color: var(--vscode-descriptionForeground, #9d9d9d);
+            display: block;
+        }
         .form-group.has-error input,
         .form-group.has-error select,
         .form-group.has-error textarea,

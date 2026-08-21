@@ -15,6 +15,8 @@ import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { AssetCopyTokenStore } from './asset-copy-token-store';
+import { resolveMrtAsset, MrtResolution } from './mrt-asset-helper';
+import { checkAspectRatio } from './asset-dimensions';
 
 export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'winapp.manifestEditor';
@@ -263,34 +265,49 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                 || isWithinRoot(resolved, wf.uri.fsPath)
                             )?.uri.fsPath;
 
+                            // An MSIX manifest references the unqualified asset name; MRT resolves it
+                            // at runtime against qualifier-suffixed files (Logo.scale-200.png). Probe
+                            // those variants so correct MRT authoring isn't flagged as a broken path.
+                            const postFound = (resolution: MrtResolution): void => {
+                                const dims = getImageDimensions(resolution.resolvedPath);
+                                const aspectWarning = dims
+                                    ? checkAspectRatio(message.field, dims.width, dims.height, resolution.qualifiers)
+                                    : null;
+                                // The webview builds preview URIs relative to the manifest folder,
+                                // so only a relative path can be previewed.
+                                const previewRelative = path.relative(manifestDirPath, resolution.resolvedPath);
+                                const canPreview = previewRelative !== '' && !path.isAbsolute(previewRelative);
+                                webviewPanel.webview.postMessage({
+                                    type: 'imagePathStatus',
+                                    field: message.field,
+                                    index: message.index,
+                                    status: 'found',
+                                    aspectWarning: aspectWarning || undefined,
+                                    mrtNote: resolution.isExact
+                                        ? undefined
+                                        : `Resolved via MRT to ${path.basename(resolution.resolvedPath)}`,
+                                    previewPath: canPreview && !resolution.isExact ? previewRelative.replace(/\\/g, '/') : undefined,
+                                });
+                            };
+
+                            const packageResolution = resolveMrtAsset(manifestDirPath, imgPath);
+
                             // Check if the resolved path is inside the package directory AND exists
-                            const normalizedResolved = resolved.toLowerCase();
                             const normalizedManifestDir = manifestDirPath.toLowerCase() + path.sep;
-                            if (normalizedResolved.startsWith(normalizedManifestDir) && fs.existsSync(resolved)) {
-                                const dims = getImageDimensions(resolved);
-                                const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
-                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
+                            if (packageResolution && packageResolution.resolvedPath.toLowerCase().startsWith(normalizedManifestDir)) {
+                                postFound(packageResolution);
                                 return;
                             }
 
-                            if (!path.isAbsolute(imgPath) && usesWorkspaceFallback && workspaceRoot && fs.existsSync(resolved)) {
-                                const dims = getImageDimensions(resolved);
-                                const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
-                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
+                            if (!path.isAbsolute(imgPath) && usesWorkspaceFallback && workspaceRoot && packageResolution) {
+                                postFound(packageResolution);
                                 return;
                             }
 
                             // The path resolves outside the package dir (e.g., ..\..\Downloads\img.png)
                             // or is an absolute path — check if the file exists at the resolved location
-                            if (fs.existsSync(resolved)) {
-                                const copyToken = assetCopyTokens.issue(resolved);
-                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', copyToken });
-                                return;
-                            }
-
-                            // Check if it's an absolute path that exists
-                            if (path.isAbsolute(imgPath) && fs.existsSync(imgPath)) {
-                                const copyToken = assetCopyTokens.issue(imgPath);
+                            if (packageResolution) {
+                                const copyToken = assetCopyTokens.issue(packageResolution.resolvedPath);
                                 webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', copyToken });
                                 return;
                             }
@@ -299,11 +316,9 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             // explicitly escape the manifest folder (for example ..\Assets\logo.png).
                             if (usesWorkspaceFallback && vscode.workspace.workspaceFolders) {
                                 for (const wf of vscode.workspace.workspaceFolders) {
-                                    const candidate = path.resolve(wf.uri.fsPath, imgPath);
-                                    if (fs.existsSync(candidate)) {
-                                        const dims = getImageDimensions(candidate);
-                                        const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
-                                        webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
+                                    const candidate = resolveMrtAsset(wf.uri.fsPath, imgPath);
+                                    if (candidate) {
+                                        postFound(candidate);
                                         return;
                                     }
                                 }
@@ -492,26 +507,3 @@ function getImageDimensions(filePath: string): { width: number; height: number }
 }
 
 /** Expected aspect ratios for manifest image fields (width:height). */
-const EXPECTED_RATIOS: Record<string, { w: number; h: number; label: string }> = {
-    'visualElements.square150x150Logo': { w: 1, h: 1, label: '1:1 (square)' },
-    'visualElements.square44x44Logo': { w: 1, h: 1, label: '1:1 (square)' },
-    'visualElements.square71x71Logo': { w: 1, h: 1, label: '1:1 (square)' },
-    'visualElements.square310x310Logo': { w: 1, h: 1, label: '1:1 (square)' },
-    'visualElements.wide310x150Logo': { w: 310, h: 150, label: '310:150 (wide)' },
-    'visualElements.badgeLogo': { w: 1, h: 1, label: '1:1 (square)' },
-    'visualElements.splashScreenImage': { w: 620, h: 300, label: '620:300 (wide)' },
-    'logo': { w: 1, h: 1, label: '1:1 (square)' },
-};
-
-/** Returns a warning string if the image aspect ratio doesn't match expectations (±5% tolerance). */
-function checkAspectRatio(field: string, width: number, height: number): string | null {
-    const expected = EXPECTED_RATIOS[field];
-    if (!expected || width === 0 || height === 0) { return null; }
-    const actualRatio = width / height;
-    const expectedRatio = expected.w / expected.h;
-    const tolerance = 0.05;
-    if (Math.abs(actualRatio - expectedRatio) / expectedRatio > tolerance) {
-        return `Image is ${width}×${height} — expected ${expected.label} aspect ratio`;
-    }
-    return null;
-}
