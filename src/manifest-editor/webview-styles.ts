@@ -555,10 +555,11 @@ export function getEditorStyles(nonce: string): string {
             display: flex; align-items: center; justify-content: center;
             padding: 24px;
             background: var(--vscode-editor-background);
-            opacity: 0.97;
         }
         .parse-error-overlay[hidden] { display: none; }
         .parse-error-box { max-width: 520px; text-align: center; }
+        .parse-error-box:focus { outline: none; }
+        .parse-error-actions { margin-top: 16px; }
         .parse-error-title {
             font-size: 16px; font-weight: 600; margin-bottom: 12px;
             color: var(--vscode-errorForeground, #f44747);

@@ -275,6 +275,7 @@
     "lint": "eslint src",
     "test": "vscode-test",
     "test:e2e": "npx playwright test --config=playwright.config.ts",
+    "pretest:e2e": "npm run verify-schemas",
     "clean": "node -e \"require('fs').rmSync('bin', {recursive: true, force: true}); require('fs').rmSync('out', {recursive: true, force: true}); require('fs').rmSync('dist', {recursive: true, force: true});\"",
     "download-cli": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1\"",
     "download-cli:latest": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1 -Tag latest\"",

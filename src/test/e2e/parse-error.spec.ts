@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
     createTempWorkspace,
+    getWebviewFrame,
     launchVSCode,
     teardown,
     type VSCodeTestContext,
@@ -59,4 +60,22 @@ test('shows error view for malformed XML', async () => {
     await expect(innerFrame.locator('.error-detail')).toBeVisible();
     await expect(innerFrame.locator('#open-as-text')).toBeVisible();
     await expect(innerFrame.locator('#open-as-text')).toContainText('Open in Text Editor');
+});
+
+test('recovers into the editor once the XML is fixed', async () => {
+    // Repair the file on disk, as the user would in the text editor. The provider must
+    // swap the standalone error page for the editor document and populate the form.
+    const manifestPath = path.join(ctx.workspacePath, 'AppxManifest.xml');
+    const validXml = fs.readFileSync(
+        path.resolve(__dirname, '..', 'fixtures', 'winui-gallery.appxmanifest'),
+        'utf-8'
+    );
+    fs.writeFileSync(manifestPath, validXml, 'utf-8');
+
+    const frame = await getWebviewFrame(ctx.page);
+    await expect(frame.locator('.error-container')).toHaveCount(0);
+    await expect(frame.locator('.tab-bar')).toBeVisible({ timeout: 20_000 });
+    // The form is populated from the repaired document, not left blank.
+    await expect(frame.locator('#identity-name')).not.toHaveValue('', { timeout: 20_000 });
+    await expect(frame.locator('#parse-error-overlay')).toBeHidden();
 });

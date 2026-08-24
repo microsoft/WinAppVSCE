@@ -137,6 +137,50 @@ test('UI state is restored after the webview document is rebuilt', async ({ page
     await reloaded.close();
 });
 
+test('a saved tab that is hidden on the first update is restored once it becomes available', async ({ page }) => {
+    // Applications is hidden for a framework package, so the first update cannot restore it.
+    // Restoration must stay pending rather than being consumed and lost.
+    await loadEditor(page, { activeTab: 'applications', activeAppSubTabs: {}, userOpenedOptionalFields: [], scrollPositions: {} });
+
+    const frameworkData = JSON.parse(JSON.stringify(manifestData));
+    frameworkData.properties.framework = 'true';
+    await postUpdate(page, frameworkData);
+    await expect(page.locator('.tab-btn[data-tab="applications"]')).toHaveClass(/hidden-tab/);
+    await expect(page.locator('.tab-btn[data-tab="identity"]')).toHaveClass(/active/);
+
+    // A later update makes the tab available again — the saved selection should apply now.
+    await postUpdate(page, manifestData, true);
+    await expect(page.locator('.tab-btn[data-tab="applications"]')).toHaveClass(/active/);
+});
+
+test('the parse-error overlay is modal — the form behind it is inert', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+
+    await expect(page.locator('.tab-bar')).not.toHaveAttribute('inert', '');
+    await postParseError(page, 'unclosed tag: Package');
+
+    // The overlay offers the same recovery action as the standalone parse-error page.
+    await expect(page.locator('#parse-error-open-text')).toBeVisible();
+
+    // Content behind the overlay must not remain keyboard- or AT-reachable.
+    await expect(page.locator('.tab-bar')).toHaveAttribute('inert', '');
+    await expect(page.locator('#tab-identity')).toHaveAttribute('aria-hidden', 'true');
+    expect(await page.evaluate(() =>
+        (globalThis as unknown as { document: { activeElement: { id: string } | null } }).document.activeElement?.id,
+    )).toBe('parse-error-box');
+
+    await page.locator('#parse-error-open-text').click();
+    expect(await page.evaluate(() =>
+        (globalThis as unknown as { __posted: { type: string }[] }).__posted.some(m => m.type === 'openAsText'),
+    )).toBe(true);
+
+    // Recovery lifts the modality again.
+    await postUpdate(page, manifestData, true);
+    await expect(page.locator('.tab-bar')).not.toHaveAttribute('inert', '');
+    await expect(page.locator('#identity-name')).toBeEditable();
+});
+
 test('hiding a tab for a non-application package clears its button selection', async ({ page }) => {
     await loadEditor(page);
     await postUpdate(page, manifestData);

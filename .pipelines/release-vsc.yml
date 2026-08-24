@@ -131,6 +131,14 @@ extends:
 
                 $env:VSCODE_PATH = $codePath
                 $env:E2E_USE_INSTALLED_EXTENSION = "1"
+
+                # webview-state.spec.ts renders the generated webview HTML in Chromium.
+                npx playwright install chromium
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "Failed to install Playwright Chromium"
+                    exit $LASTEXITCODE
+                }
+
                 npm run test:e2e -- --grep-invert "adding empty custom capability|adding invalid format custom capability|adding valid custom capability|custom capability appears in the custom capabilities list|invalid inputFolder|cancelling the artifact QuickPick|selecting Browse|cancelling the certificate QuickPick"
                 if ($LASTEXITCODE -ne 0) {
                     Write-Error "E2E tests failed"

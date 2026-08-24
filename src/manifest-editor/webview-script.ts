@@ -117,6 +117,9 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         document.getElementById('open-xml-link').addEventListener('click', () => {
             vscode.postMessage({ type: 'openAsText' });
         });
+        document.getElementById('parse-error-open-text').addEventListener('click', () => {
+            vscode.postMessage({ type: 'openAsText' });
+        });
 
         // ─── Validation helper ──────────────────────────────
         function setGroupValidation(group, level, message) {
@@ -618,25 +621,64 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         }
 
         // ─── Parse-error overlay ────────────────────────────
+        // The overlay covers the form while the XML is unparseable. It must also be modal:
+        // without inerting the content behind it, keyboard and screen-reader users can still
+        // tab into fields that the overlay says are paused.
+        let focusBeforeParseError = null;
+
+        function setEditorContentInert(isInert) {
+            const overlay = document.getElementById('parse-error-overlay');
+            Array.from(document.body.children).forEach(el => {
+                if (el === overlay || el.tagName === 'SCRIPT') { return; }
+                if (isInert) {
+                    el.setAttribute('inert', '');
+                    el.setAttribute('aria-hidden', 'true');
+                } else {
+                    el.removeAttribute('inert');
+                    el.removeAttribute('aria-hidden');
+                }
+            });
+        }
+
         function setParseError(message) {
             const overlay = document.getElementById('parse-error-overlay');
             if (!overlay) { return; }
             const detail = document.getElementById('parse-error-detail');
+            const wasShowing = !overlay.hidden;
             if (message) {
                 if (detail) { detail.textContent = message; }
                 overlay.hidden = false;
+                if (!wasShowing) {
+                    focusBeforeParseError = document.activeElement;
+                    setEditorContentInert(true);
+                    const box = document.getElementById('parse-error-box');
+                    if (box) { box.focus(); }
+                }
             } else {
                 overlay.hidden = true;
+                if (wasShowing) {
+                    setEditorContentInert(false);
+                    if (focusBeforeParseError && document.contains(focusBeforeParseError)) {
+                        focusBeforeParseError.focus();
+                    }
+                    focusBeforeParseError = null;
+                }
             }
         }
 
         // ─── Restore persisted UI state ─────────────────────
+        // Returns false when the saved tab exists but is still hidden (e.g. Applications
+        // before the first update that carries applications), so the caller can retry.
         function restoreUiState() {
             const btn = document.querySelector('.tab-btn[data-tab="' + activeTabId + '"]');
-            if (btn && !btn.classList.contains('hidden-tab') && !btn.classList.contains('active')) {
-                activateTab(btn, false);
+            if (!btn || btn.classList.contains('hidden-tab')) {
+                applyScrollPositions(scrollPositions);
+                return false;
             }
+            if (!btn.classList.contains('active')) { activateTab(btn, false); }
+            // Must run after the tab is active: a hidden panel can't take a scroll offset.
             applyScrollPositions(scrollPositions);
+            return true;
         }
 
         // ─── Message handler ────────────────────────────────
@@ -648,8 +690,7 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     populateForm(msg.data, msg.forceAll);
                     showValidationErrors(msg.errors || []);
                     if (!uiStateRestored) {
-                        uiStateRestored = true;
-                        restoreUiState();
+                        uiStateRestored = restoreUiState();
                     }
                     break;
                 case 'parseError':

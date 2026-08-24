@@ -13,11 +13,19 @@ cd src/winapp-VSC
 # Install dependencies (first time only)
 npm install
 
+# Download the AppxManifest XSD schemas (first time only).
+# Without these the editor's validation throws before the form is populated,
+# and specs fail with confusing "element not found" errors.
+npm run sync-schemas
+
+# Install the Chromium build used by webview-state.spec.ts (first time only)
+npx playwright install chromium
+
 # Run the full E2E suite
 npm run test:e2e
 ```
 
-> **Prerequisites** – VS Code must be installed at the default location and all other VS Code windows must be closed before running (Playwright needs exclusive access to the Electron process).
+> **Prerequisites** – VS Code must be installed at the default location. Each run creates its own throwaway VS Code profile (`--user-data-dir` / `--extensions-dir`), so other VS Code windows can stay open.
 
 > **`@playwright/test` version** – pinned with a caret range starting at `1.61.1` (not `1.62.1`) because the approved package feed does not mirror a stable `1.62.1` for `@playwright/test`/`playwright`/`playwright-core` (only prereleases). `^1.61.1` still resolves through that feed and picks up newer compatible stable releases (e.g. `1.62.0`) as they land, without requiring a version the feed can't serve.
 
@@ -46,9 +54,9 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (137 tests)
+## Test inventory (140 tests)
 
-### `webview-state.spec.ts` — 4 tests
+### `webview-state.spec.ts` — 6 tests
 
 Renders the generated webview document directly in Chromium (with a stubbed `acquireVsCodeApi`), so
 UI-state behaviour can be verified without launching VS Code. Regression coverage for #192.
@@ -59,6 +67,8 @@ UI-state behaviour can be verified without launching VS Code. Regression coverag
 | 2 | a parse error is shown as an overlay without discarding the editor or its state | `parseError` shows the in-place overlay, leaves the editor document intact, and `update` clears it |
 | 3 | UI state is restored after the webview document is rebuilt | State persisted via `vscode.setState()` restores the tab, sub-tab and scroll offset in a fresh script context |
 | 4 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
+| 5 | a saved tab that is hidden on the first update is restored once it becomes available | Restoration stays pending while the saved tab is hidden, instead of being consumed and lost |
+| 6 | the parse-error overlay is modal — the form behind it is inert | The overlay exposes "Open in Text Editor", takes focus, and inerts/hides the form behind it until recovery |
 
 ### `external-edit-state.spec.ts` — 3 tests
 
@@ -236,13 +246,14 @@ Validates all four capability categories, checkbox toggling, hover descriptions,
 | 15 | adding valid custom capability succeeds | Valid custom capability is accepted and written to XML |
 | 16 | custom capability appears in the custom capabilities list | New custom capability appears in the list |
 
-### `parse-error.spec.ts` — 1 test
+### `parse-error.spec.ts` — 2 tests
 
 Validates error handling for malformed manifests. This spec launches its own VS Code instance with broken XML.
 
 | # | Test | Validates |
 |---|------|-----------|
 | 1 | shows error view for malformed XML | Malformed manifest XML opens the error view with expected message and "Open in Text Editor" action |
+| 2 | recovers into the editor once the XML is fixed | Repairing the file on disk swaps the standalone error page for the editor document and populates the form |
 
 ### `open-manifest-editor-command.spec.ts` — 2 tests
 

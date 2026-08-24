@@ -58,30 +58,43 @@ export async function launchVSCode(workspacePath: string): Promise<VSCodeTestCon
     // launched process forwards its arguments to any VS Code already running on the
     // machine and immediately exits, which closes Playwright's Electron handle.
     const profilePath = fs.mkdtempSync(path.join(os.tmpdir(), 'manifest-e2e-profile-'));
-    const app = await electron.launch({
-        executablePath: VSCODE_EXE,
-        args: [
-            workspacePath,
-            manifestPath,
-            '--new-window',
-            ...EXTENSION_ARGS,
-            `--user-data-dir=${path.join(profilePath, 'user-data')}`,
-            `--extensions-dir=${path.join(profilePath, 'extensions')}`,
-            '--disable-telemetry',
-            '--disable-updates',
-            '--skip-welcome',
-            '--skip-release-notes',
-            '--disable-workspace-trust',
-        ],
-        timeout: 60_000,
-    });
+    let app;
+    try {
+        app = await electron.launch({
+            executablePath: VSCODE_EXE,
+            args: [
+                workspacePath,
+                manifestPath,
+                '--new-window',
+                ...EXTENSION_ARGS,
+                `--user-data-dir=${path.join(profilePath, 'user-data')}`,
+                `--extensions-dir=${path.join(profilePath, 'extensions')}`,
+                '--disable-telemetry',
+                '--disable-updates',
+                '--skip-welcome',
+                '--skip-release-notes',
+                '--disable-workspace-trust',
+            ],
+            timeout: 60_000,
+        });
 
-    const page = await app.firstWindow();
-    // Wait for VS Code to settle
-    await page.waitForLoadState('domcontentloaded');
-    await page.waitForTimeout(5_000);
+        const page = await app.firstWindow();
+        // Wait for VS Code to settle
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(5_000);
 
-    return { app, page, workspacePath, profilePath };
+        return { app, page, workspacePath, profilePath };
+    } catch (err) {
+        // Nothing owns the profile dir until a context is returned, so clean it up here
+        // rather than leaving one behind on every failed launch.
+        try {
+            await app?.close();
+        } catch { /* best-effort */ }
+        try {
+            fs.rmSync(profilePath, { recursive: true, force: true });
+        } catch { /* best-effort */ }
+        throw err;
+    }
 }
 
 /**

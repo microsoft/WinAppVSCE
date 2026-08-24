@@ -88,8 +88,15 @@ test('shows an in-place overlay — not a rebuilt document — while the XML is 
     await expect(frame.locator('.tab-bar')).toBeAttached();
     await expect(frame.locator('.tab-btn[data-tab="applications"]')).toHaveClass(/active/);
 
+    // The overlay offers the same recovery action as the standalone error page…
+    await expect(frame.locator('#parse-error-open-text')).toBeVisible();
+    // …and is modal: the form behind it must not stay reachable by keyboard or AT.
+    await expect(frame.locator('.tab-bar')).toHaveAttribute('inert', '');
+    await expect(frame.locator('.tab-bar')).toHaveAttribute('aria-hidden', 'true');
+
     // Restoring valid XML clears the overlay and keeps the selected tab.
     writeManifest(original);
     await expect(frame.locator('#parse-error-overlay')).toBeHidden({ timeout: 20_000 });
     await expect(frame.locator('.tab-btn[data-tab="applications"]')).toHaveClass(/active/);
+    await expect(frame.locator('.tab-bar')).not.toHaveAttribute('inert', '');
 });
