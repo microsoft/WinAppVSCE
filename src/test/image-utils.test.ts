@@ -1,10 +1,11 @@
 /**
- * Unit tests for MRT (Modern Resource Technology) asset resolution.
+ * Unit tests for the manifest editor's image utilities: MRT (Modern Resource Technology)
+ * asset resolution, editor branch selection, and aspect-ratio checking.
  *
- * Mirrors the WinApp CLI's MrtAssetHelperTests so both implementations of the
- * qualifier grammar stay in agreement. Regression coverage for issue #191:
- * a manifest referencing the unqualified asset name must not be flagged as broken
- * when only qualifier-suffixed files exist on disk.
+ * The qualifier-grammar suites mirror the WinApp CLI's MrtAssetHelperTests so both
+ * implementations stay in agreement. Regression coverage for issue #191: a manifest
+ * referencing the unqualified asset name must not be flagged as broken when only
+ * qualifier-suffixed files exist on disk.
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -21,8 +22,9 @@ import {
     getVariantScale,
     hasTargetSizeQualifier,
     resolveMrtAsset,
-} from '../manifest-editor/mrt-asset-helper';
-import { checkAspectRatio } from '../manifest-editor/asset-dimensions';
+    resolveManifestImagePath,
+    checkAspectRatio,
+} from '../manifest-editor/image-utils';
 
 describe('isSingleQualifierToken', () => {
     const valid = [
@@ -162,7 +164,6 @@ describe('resolveMrtAsset', () => {
 
         assert.ok(result, 'expected the reference to resolve via MRT variants');
         assert.equal(result.isExact, false);
-        assert.equal(result.variants.length, 3);
         // scale-200 is the preferred preview variant
         assert.equal(path.basename(result.resolvedPath), 'Square150x150Logo.scale-200.png');
         assert.deepEqual(result.qualifiers, ['scale-200']);
@@ -206,7 +207,6 @@ describe('resolveMrtAsset', () => {
         const result = resolveMrtAsset(path.join(tmpDir, 'app5'), 'Assets\\Square44x44Logo.png');
 
         assert.ok(result);
-        assert.equal(result.variants.length, 3);
         // The plain scaled variant is preferred over altform variants for preview
         assert.equal(path.basename(result.resolvedPath), 'Square44x44Logo.scale-200.png');
     });
@@ -229,7 +229,6 @@ describe('resolveMrtAsset', () => {
 
         assert.ok(result);
         assert.equal(result.isExact, false);
-        assert.equal(result.variants.length, 2);
         assert.equal(path.dirname(result.resolvedPath).endsWith('scale-200'), true);
     });
 
@@ -256,7 +255,6 @@ describe('resolveMrtAsset', () => {
 
         assert.ok(result);
         assert.equal(path.basename(result.resolvedPath), 'Logo.scale-100.png');
-        assert.equal(result.variants.length, 1);
     });
 
     it('handles forward-slash and subdirectory references', () => {
@@ -332,5 +330,108 @@ describe('checkAspectRatio with MRT qualifiers', () => {
 
     it('ignores fields without an expected ratio', () => {
         assert.equal(checkAspectRatio('visualElements.unknownLogo', 10, 99), null);
+    });
+});
+
+// ─── Editor branch selection ────────────────────────────
+
+/**
+ * Covers the branches that used to live inline in the webview `checkImagePath` switch: the
+ * package hit, the `..\`-escaping workspace fallback, the external copy-to-Assets offer, and
+ * paths that resolve nowhere.
+ */
+describe('resolveManifestImagePath', () => {
+    let pathTmpDir: string;
+    let workspaceDir: string;
+    let manifestDir: string;
+    let outsideDir: string;
+
+    const writeUnder = (relative: string): void => {
+        const full = path.join(pathTmpDir, relative);
+        fs.mkdirSync(path.dirname(full), { recursive: true });
+        fs.writeFileSync(full, '');
+    };
+
+    before(() => {
+        pathTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-imgpath-'));
+        workspaceDir = path.join(pathTmpDir, 'workspace');
+        manifestDir = path.join(workspaceDir, 'app');
+        outsideDir = path.join(pathTmpDir, 'outside');
+
+        writeUnder('workspace/app/Assets/MrtLogo.scale-200.png');
+        writeUnder('workspace/app/Assets/PlainLogo.png');
+        writeUnder('workspace/Shared/SharedLogo.scale-200.png');
+        writeUnder('outside/External.png');
+        writeUnder('outside/ExternalMrt.scale-200.png');
+    });
+
+    after(() => {
+        fs.rmSync(pathTmpDir, { recursive: true, force: true });
+    });
+
+    const resolve = (imagePath: string) =>
+        resolveManifestImagePath(manifestDir, imagePath, [workspaceDir]);
+
+    it('reports an in-package MRT variant as found', () => {
+        const outcome = resolve('Assets\\MrtLogo.png');
+
+        assert.equal(outcome.status, 'found');
+        assert.equal(outcome.status === 'found' && outcome.resolution.isExact, false);
+        assert.equal(
+            outcome.status === 'found' && path.basename(outcome.resolution.resolvedPath),
+            'MrtLogo.scale-200.png',
+        );
+    });
+
+    it('reports an in-package literal file as found and exact', () => {
+        const outcome = resolve('Assets\\PlainLogo.png');
+
+        assert.equal(outcome.status, 'found');
+        assert.equal(outcome.status === 'found' && outcome.resolution.isExact, true);
+    });
+
+    it('resolves a workspace-relative reference that escapes the package', () => {
+        const outcome = resolve('..\\Shared\\SharedLogo.png');
+
+        assert.equal(outcome.status, 'found');
+        assert.equal(
+            outcome.status === 'found' && path.basename(outcome.resolution.resolvedPath),
+            'SharedLogo.scale-200.png',
+        );
+    });
+
+    it('offers to copy an existing file outside the package', () => {
+        const outcome = resolveManifestImagePath(manifestDir, path.join(outsideDir, 'External.png'), [workspaceDir]);
+
+        assert.equal(outcome.status, 'external');
+        assert.equal(outcome.status === 'external' && path.basename(outcome.sourcePath), 'External.png');
+    });
+
+    // Copying a variant would rewrite the manifest to "Assets\ExternalMrt.scale-200.png",
+    // which is a qualified name the user never typed and MRT would then re-qualify.
+    it('does not offer to copy an out-of-package MRT variant', () => {
+        const outcome = resolveManifestImagePath(manifestDir, path.join(outsideDir, 'ExternalMrt.png'), [workspaceDir]);
+
+        assert.equal(outcome.status, 'notFound');
+    });
+
+    it('reports genuinely missing references as not found', () => {
+        assert.equal(resolve('Assets\\DoesNotExist.png').status, 'notFound');
+        assert.equal(resolve('').status, 'notFound');
+    });
+
+    it('does not use the workspace fallback for plain relative references', () => {
+        // "Shared\SharedLogo.png" means app\Shared\..., not workspace\Shared\...
+        assert.equal(resolve('Shared\\SharedLogo.png').status, 'notFound');
+    });
+
+    it('treats an extensionless value as an MRT key rather than a file', () => {
+        assert.equal(resolve('Assets\\MrtLogo').status, 'notFound');
+    });
+
+    it('does not resolve outside the workspace when no folder is open', () => {
+        const outcome = resolveManifestImagePath(manifestDir, '..\\Shared\\SharedLogo.png', []);
+
+        assert.equal(outcome.status, 'notFound');
     });
 });

@@ -15,9 +15,7 @@ import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { AssetCopyTokenStore } from './asset-copy-token-store';
-import { MrtResolution } from './mrt-asset-helper';
-import { resolveManifestImagePath } from './image-path-resolver';
-import { checkAspectRatio } from './asset-dimensions';
+import { MrtResolution, checkAspectRatio, getImageDimensions, resolveManifestImagePath } from './image-utils';
 
 export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'winapp.manifestEditor';
@@ -430,47 +428,3 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         });
     }
 }
-
-/** Reads width/height from PNG or JPEG file headers without loading the full image. */
-function getImageDimensions(filePath: string): { width: number; height: number } | null {
-    try {
-        const fd = fs.openSync(filePath, 'r');
-        const header = Buffer.alloc(32);
-        fs.readSync(fd, header, 0, 32, 0);
-
-        // PNG: bytes 0-7 are signature, IHDR chunk starts at byte 8, width at 16, height at 20
-        if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) {
-            const width = header.readUInt32BE(16);
-            const height = header.readUInt32BE(20);
-            fs.closeSync(fd);
-            return { width, height };
-        }
-
-        // JPEG: scan for SOF0/SOF2 marker (0xFF 0xC0 or 0xFF 0xC2)
-        if (header[0] === 0xFF && header[1] === 0xD8) {
-            const buf = Buffer.alloc(65536);
-            fs.readSync(fd, buf, 0, buf.length, 0);
-            fs.closeSync(fd);
-            let offset = 2;
-            while (offset < buf.length - 9) {
-                if (buf[offset] !== 0xFF) break;
-                const marker = buf[offset + 1];
-                if (marker === 0xC0 || marker === 0xC2) {
-                    const height = buf.readUInt16BE(offset + 5);
-                    const width = buf.readUInt16BE(offset + 7);
-                    return { width, height };
-                }
-                const len = buf.readUInt16BE(offset + 2);
-                offset += 2 + len;
-            }
-            return null;
-        }
-
-        fs.closeSync(fd);
-        return null;
-    } catch {
-        return null;
-    }
-}
-
-/** Expected aspect ratios for manifest image fields (width:height). */

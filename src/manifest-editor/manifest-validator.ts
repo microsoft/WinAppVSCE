@@ -61,7 +61,7 @@ function hasUnsupportedImageExtension(path: string): boolean {
     const ext = filename.substring(dotIdx).toLowerCase();
     // Allow known image extensions and MRT qualifier patterns (e.g. .scale-200, .contrast-high)
     if (ext === '.png' || ext === '.jpg' || ext === '.jpeg') { return false; }
-    // Deliberately narrower than `isQualifierToken` in mrt-asset-helper.ts: that grammar treats
+    // Deliberately narrower than `isQualifierToken` in image-utils.ts: that grammar treats
     // any 2-3 letter token as a BCP-47 language tag, so reusing it here would silently accept
     // ".bmp", ".svg", and ".gif" as qualifiers. Prefixed qualifier spellings are unambiguous.
     if (/^\.(scale|contrast|targetsize|theme|layoutdirection|language|dxfeaturelevel|altform|device-family|homeregion|configuration)-/i.test(ext)) { return false; }

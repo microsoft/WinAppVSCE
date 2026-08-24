@@ -1,13 +1,15 @@
 /**
- * MRT (Modern Resource Technology) asset resolution.
+ * Image helpers for the manifest editor: MRT-aware asset resolution, image header
+ * measurement, and aspect-ratio checking.
  *
  * An MSIX manifest references the *unqualified* asset name (Assets\Logo.png) while the
  * files that actually ship are qualifier-suffixed (Assets\Logo.scale-200.png,
  * Assets\Logo.targetsize-24_altform-unplated.png, ...). MRT resolves the reference at
  * runtime, so a missing literal file is correct authoring — not an error.
  *
- * The qualifier grammar and variant-matching rules here mirror
- * `MrtAssetHelper` in the WinApp CLI (microsoft/winappCli) so that both tools agree.
+ * The qualifier grammar and variant-matching rules here mirror `MrtAssetHelper` in the
+ * WinApp CLI (microsoft/winappCli) so that both tools agree. This module is kept free of
+ * `vscode` imports so all of it stays unit-testable.
  */
 
 import * as path from 'path';
@@ -123,32 +125,34 @@ export interface MrtResolution {
     relativePath: string;
     /** True when the literal (unqualified) path exists on disk. */
     isExact: boolean;
-    /** Absolute paths of every MRT variant found (empty when the literal file was used). */
-    variants: string[];
     /** Qualifier tokens of the resolved variant (empty when `isExact`). */
     qualifiers: string[];
 }
 
-/**
- * Ranks variants so the preview shows the most representative image:
- * plain (unqualified or scale-only) beats altform/targetsize/contrast/theme variants,
- * and scale-200 beats other scales, then higher scales beat lower ones.
- */
-function scoreVariant(qualifiers: string[]): number[] {
-    const isPlain = qualifiers.every(q => SCALE_QUALIFIER.test(q));
-    const scale = getVariantScale(qualifiers);
-    return [
-        isPlain ? 0 : 1,
-        scale === 200 ? 0 : 1,
-        -(scale ?? 0),
-    ];
-}
+type Candidate = { file: string; qualifiers: string[] };
 
-function compareScores(a: number[], b: number[]): number {
-    for (let i = 0; i < a.length; i++) {
-        if (a[i] !== b[i]) { return a[i] - b[i]; }
-    }
-    return 0;
+/**
+ * Picks the variant that best represents the reference in a preview: plain (unqualified or
+ * scale-only) beats altform/targetsize/contrast/theme variants, scale-200 beats other scales,
+ * higher scales beat lower ones, and file name breaks ties so the result is deterministic.
+ */
+function pickBest(candidates: Candidate[]): Candidate {
+    const rank = ({ qualifiers, file }: Candidate): [number, number, number, string] => {
+        const scale = getVariantScale(qualifiers);
+        return [
+            qualifiers.every(q => SCALE_QUALIFIER.test(q)) ? 0 : 1,
+            scale === 200 ? 0 : 1,
+            -(scale ?? 0),
+            file,
+        ];
+    };
+    return candidates.reduce((best, current) => {
+        const [a, b] = [rank(current), rank(best)];
+        for (let i = 0; i < a.length; i++) {
+            if (a[i] !== b[i]) { return a[i] < b[i] ? current : best; }
+        }
+        return best;
+    });
 }
 
 /** True when `candidate` is `root` or sits underneath it (case-insensitive, Windows paths). */
@@ -172,6 +176,14 @@ function safeReadDir(dir: string): fs.Dirent[] {
         return fs.readdirSync(dir, { withFileTypes: true });
     } catch {
         return [];
+    }
+}
+
+function fileExists(candidate: string): boolean {
+    try {
+        return fs.statSync(candidate).isFile();
+    } catch {
+        return false;
     }
 }
 
@@ -199,9 +211,15 @@ export function resolveMrtAsset(baseDir: string, referencePath: string, options?
     }
 
     const relativeTo = (candidate: string): string => path.relative(baseDir, candidate) || path.basename(candidate);
+    const resolutionFor = (best: Candidate): MrtResolution => ({
+        resolvedPath: best.file,
+        relativePath: relativeTo(best.file),
+        isExact: false,
+        qualifiers: best.qualifiers,
+    });
 
     if (fileExists(absolute)) {
-        return { resolvedPath: absolute, relativePath: relativeTo(absolute), isExact: true, variants: [], qualifiers: [] };
+        return { resolvedPath: absolute, relativePath: relativeTo(absolute), isExact: true, qualifiers: [] };
     }
 
     const dir = path.dirname(absolute);
@@ -214,7 +232,7 @@ export function resolveMrtAsset(baseDir: string, referencePath: string, options?
     const logicalBase = getMrtVariantBaseName(fileName.slice(0, fileName.length - ext.length));
 
     // 2. Qualifier-suffixed siblings.
-    const siblings: { file: string; qualifiers: string[] }[] = [];
+    const siblings: Candidate[] = [];
     for (const entry of safeReadDir(dir)) {
         if (!entry.isFile()) { continue; }
         const entryExt = path.extname(entry.name);
@@ -224,19 +242,10 @@ export function resolveMrtAsset(baseDir: string, referencePath: string, options?
         siblings.push({ file: path.join(dir, entry.name), qualifiers: getVariantQualifiers(logicalBase, nameWithoutExt) });
     }
 
-    if (siblings.length > 0) {
-        const best = pickBest(siblings);
-        return {
-            resolvedPath: best.file,
-            relativePath: relativeTo(best.file),
-            isExact: false,
-            variants: siblings.map(s => s.file).sort((a, b) => a.localeCompare(b)),
-            qualifiers: best.qualifiers,
-        };
-    }
+    if (siblings.length > 0) { return resolutionFor(pickBest(siblings)); }
 
     // 3. Qualifier-folder layouts: Assets\scale-200\Logo.png
-    const folderMatches: { file: string; qualifiers: string[] }[] = [];
+    const folderMatches: Candidate[] = [];
     for (const entry of safeReadDir(dir)) {
         if (!entry.isDirectory() || !isQualifierToken(entry.name)) { continue; }
         const candidate = path.join(dir, entry.name, fileName);
@@ -245,33 +254,142 @@ export function resolveMrtAsset(baseDir: string, referencePath: string, options?
         }
     }
 
-    if (folderMatches.length > 0) {
-        const best = pickBest(folderMatches);
-        return {
-            resolvedPath: best.file,
-            relativePath: relativeTo(best.file),
-            isExact: false,
-            variants: folderMatches.map(f => f.file).sort((a, b) => a.localeCompare(b)),
-            qualifiers: best.qualifiers,
-        };
-    }
+    if (folderMatches.length > 0) { return resolutionFor(pickBest(folderMatches)); }
 
     return null;
 }
 
-function pickBest(candidates: { file: string; qualifiers: string[] }[]): { file: string; qualifiers: string[] } {
-    return candidates.reduce((best, current) => {
-        const cmp = compareScores(scoreVariant(current.qualifiers), scoreVariant(best.qualifiers));
-        if (cmp < 0) { return current; }
-        if (cmp > 0) { return best; }
-        return current.file.localeCompare(best.file) < 0 ? current : best;
-    });
+export type ImagePathResolution =
+    /** The reference resolves inside the package (or a workspace folder) — show a preview. */
+    | { status: 'found'; resolution: MrtResolution }
+    /** The literal file exists outside the package — offer to copy it into Assets. */
+    | { status: 'external'; sourcePath: string }
+    | { status: 'notFound' };
+
+/**
+ * Decides how a manifest image reference should be reported in the editor.
+ *
+ * @param manifestDir Directory containing AppxManifest.xml — the package root.
+ * @param imagePath   The raw manifest/field value.
+ * @param workspaceRoots Open workspace folder paths, used for `..\`-escaping references.
+ */
+export function resolveManifestImagePath(
+    manifestDir: string,
+    imagePath: string,
+    workspaceRoots: readonly string[],
+): ImagePathResolution {
+    if (!imagePath) { return { status: 'notFound' }; }
+
+    // Only these directories may be enumerated while probing for MRT variants.
+    const probeRoots = [manifestDir, ...workspaceRoots];
+    const escapesPackage = imagePath.startsWith('..\\') || imagePath.startsWith('../');
+    const resolved = path.resolve(manifestDir, imagePath);
+    const inWorkspace = workspaceRoots.some(root =>
+        resolved.toLowerCase() === root.toLowerCase() || isPathWithin(root, resolved));
+
+    const packageResolution = resolveMrtAsset(manifestDir, imagePath, { probeRoots });
+
+    if (packageResolution && isPathWithin(manifestDir, packageResolution.resolvedPath)) {
+        return { status: 'found', resolution: packageResolution };
+    }
+
+    if (packageResolution && escapesPackage && inWorkspace && !path.isAbsolute(imagePath)) {
+        return { status: 'found', resolution: packageResolution };
+    }
+
+    // Outside the package (for example ..\..\Downloads\img.png or an absolute path). Only the
+    // literal file is offered for copying: copying a variant would rewrite the manifest to a
+    // qualified name like Logo.scale-200.png, which is not what the user typed.
+    if (packageResolution?.isExact) {
+        return { status: 'external', sourcePath: packageResolution.resolvedPath };
+    }
+
+    // Fall back to workspace-root resolution only for references that explicitly escape the
+    // manifest folder (for example ..\Assets\logo.png).
+    if (escapesPackage) {
+        for (const root of workspaceRoots) {
+            const candidate = resolveMrtAsset(root, imagePath, { probeRoots });
+            if (candidate) { return { status: 'found', resolution: candidate }; }
+        }
+    }
+
+    return { status: 'notFound' };
 }
 
-function fileExists(candidate: string): boolean {
+/** Reads width/height from PNG or JPEG file headers without loading the full image. */
+export function getImageDimensions(filePath: string): { width: number; height: number } | null {
     try {
-        return fs.statSync(candidate).isFile();
+        const fd = fs.openSync(filePath, 'r');
+        const header = Buffer.alloc(32);
+        fs.readSync(fd, header, 0, 32, 0);
+
+        // PNG: bytes 0-7 are signature, IHDR chunk starts at byte 8, width at 16, height at 20
+        if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) {
+            const width = header.readUInt32BE(16);
+            const height = header.readUInt32BE(20);
+            fs.closeSync(fd);
+            return { width, height };
+        }
+
+        // JPEG: scan for SOF0/SOF2 marker (0xFF 0xC0 or 0xFF 0xC2)
+        if (header[0] === 0xFF && header[1] === 0xD8) {
+            const buf = Buffer.alloc(65536);
+            fs.readSync(fd, buf, 0, buf.length, 0);
+            fs.closeSync(fd);
+            let offset = 2;
+            while (offset < buf.length - 9) {
+                if (buf[offset] !== 0xFF) break;
+                const marker = buf[offset + 1];
+                if (marker === 0xC0 || marker === 0xC2) {
+                    const height = buf.readUInt16BE(offset + 5);
+                    const width = buf.readUInt16BE(offset + 7);
+                    return { width, height };
+                }
+                const len = buf.readUInt16BE(offset + 2);
+                offset += 2 + len;
+            }
+            return null;
+        }
+
+        fs.closeSync(fd);
+        return null;
     } catch {
-        return false;
+        return null;
     }
+}
+
+/**
+ * Expected aspect ratios for manifest image fields (width:height).
+ *
+ * Mirrors the WinApp CLI's `ManifestService.ExtractAssetReferencesFromManifest` table.
+ */
+export const EXPECTED_RATIOS: Record<string, { w: number; h: number; label: string }> = {
+    'visualElements.square150x150Logo': { w: 1, h: 1, label: '1:1 (square)' },
+    'visualElements.square44x44Logo': { w: 1, h: 1, label: '1:1 (square)' },
+    'visualElements.square71x71Logo': { w: 1, h: 1, label: '1:1 (square)' },
+    'visualElements.square310x310Logo': { w: 1, h: 1, label: '1:1 (square)' },
+    'visualElements.wide310x150Logo': { w: 310, h: 150, label: '310:150 (wide)' },
+    'visualElements.badgeLogo': { w: 1, h: 1, label: '1:1 (square)' },
+    'visualElements.splashScreenImage': { w: 620, h: 300, label: '620:300 (wide)' },
+    'logo': { w: 1, h: 1, label: '1:1 (square)' },
+};
+
+/**
+ * Returns a warning string if the image aspect ratio doesn't match expectations (±5% tolerance).
+ * `qualifiers` are the MRT qualifier tokens of the file that was actually measured: a
+ * `scale-200` file is legitimately 2× the base size (ratio is scale invariant), but a
+ * `targetsize-N` file is a square N×N icon regardless of the field it is attached to, so it
+ * must not be ratio-checked against, say, a wide tile.
+ */
+export function checkAspectRatio(field: string, width: number, height: number, qualifiers: string[] = []): string | null {
+    const expected = EXPECTED_RATIOS[field];
+    if (!expected || width === 0 || height === 0) { return null; }
+    if (hasTargetSizeQualifier(qualifiers)) { return null; }
+    const actualRatio = width / height;
+    const expectedRatio = expected.w / expected.h;
+    const tolerance = 0.05;
+    if (Math.abs(actualRatio - expectedRatio) / expectedRatio > tolerance) {
+        return `Image is ${width}×${height} — expected ${expected.label} aspect ratio`;
+    }
+    return null;
 }
