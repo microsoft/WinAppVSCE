@@ -95,6 +95,22 @@ public sealed class XamlTypeSystemTests
     }
 
     [Fact]
+    public void ResolvesWindowsColorFromPresentationNamespace()
+    {
+        const string source = """
+            namespace Microsoft.UI.Xaml { public class Page { } }
+            namespace Windows.UI { public struct Color { } }
+            """;
+        var (compilation, referenced) = CompileLibraryAndConsumer(source);
+        var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
+
+        var color = ts.ResolveType(Presentation, "Color");
+
+        Assert.NotNull(color);
+        Assert.Equal("Windows.UI.Color", color.ToDisplayString());
+    }
+
+    [Fact]
     public void UnknownElementResolvesToNull()
     {
         var (compilation, referenced) = CompileLibraryAndConsumer(WinUiLikeSource);

@@ -69,6 +69,10 @@ internal static class XamlValidator
     public const string InvalidRootClassCode = "WXAML0021";
     /// <summary>An x:Bind Mode is absent from the SDK BindingMode enum.</summary>
     public const string InvalidBindModeCode = "WXAML0022";
+    /// <summary>An x:Class directive names no type in the authoritative project compilation.</summary>
+    public const string UnknownRootClassCode = "WXAML0023";
+    /// <summary>Classic Binding in an untyped DataTemplate prevents compiled binding generation.</summary>
+    public const string BindingDataTypeRecommendedCode = "WMC1510";
 
     private const int SeverityError = 1;
     private const int SeverityWarning = 2;
@@ -86,11 +90,6 @@ internal static class XamlValidator
         if (doc.Parsed.Root is { } root)
         {
             var resourceKeys = new HashSet<string>(System.StringComparer.Ordinal);
-            foreach (var key in CompletionProvider.CollectResourceKeys(doc.Parsed))
-            {
-                resourceKeys.Add(key);
-            }
-
             if (projectResourceKeys is not null)
             {
                 foreach (var key in projectResourceKeys)
@@ -101,6 +100,7 @@ internal static class XamlValidator
 
             // Unresolved binding roots remain silent to avoid false positives.
             var pageClass = ResolvePageClass(root, typeSystem);
+            ValidateRootClassExists(root, pageClass, doc, diagnostics);
             ValidateRootClass(root, pageClass, typeSystem, doc, diagnostics);
             Walk(root, doc, typeSystem, diagnostics, pageClass, pageClass, resourceKeys, styleTargetType: null, dataTemplateNeedsDataType: false);
 
@@ -151,7 +151,7 @@ internal static class XamlValidator
         }
 
         ValidateElement(element, doc, typeSystem, diagnostics, effectiveRoot, pageClass, effectiveStyleTarget, effectiveTemplateNeedsDataType);
-        ValidateResourceReferences(element, doc, diagnostics, resourceKeys);
+        ValidateResourceReferences(element, doc, typeSystem, diagnostics, resourceKeys);
 
         foreach (var child in element.Content)
         {
@@ -165,14 +165,10 @@ internal static class XamlValidator
     private static void ValidateResourceReferences(
         XamlElement element,
         TextDocument doc,
+        XamlTypeSystem typeSystem,
         List<Diagnostic> diagnostics,
         IReadOnlySet<string> resourceKeys)
     {
-        if (resourceKeys.Count == 0)
-        {
-            return;
-        }
-
         foreach (var attribute in element.Attributes)
         {
             if (attribute.Value is not { } value)
@@ -195,20 +191,25 @@ internal static class XamlValidator
                         candidate.NestedExtension is null &&
                         candidate.Value is { Length: > 0 });
                 if (argument?.Value is not { } key ||
-                    argument.ValueSpan is not { } keySpan ||
-                    resourceKeys.Contains(key))
+                    argument.ValueSpan is not { } keySpan)
+                {
+                    continue;
+                }
+
+                bool allowForwardReference =
+                    extension.Name?.LocalName is "ThemeResource" or "CustomResource";
+                if (resourceKeys.Contains(key) ||
+                    IsLocalResourceVisible(
+                        element,
+                        extension.Span.Start,
+                        key,
+                        allowForwardReference,
+                        typeSystem))
                 {
                     continue;
                 }
 
                 var suggestion = SuggestData(key, resourceKeys);
-                if (suggestion is null)
-                {
-                    // Referenced assemblies can contribute resources that are not visible in the
-                    // project or SDK catalogs. Only diagnose high-confidence spelling mistakes.
-                    continue;
-                }
-
                 diagnostics.Add(Diag(
                     doc,
                     keySpan,
@@ -218,6 +219,86 @@ internal static class XamlValidator
                     suggestion));
             }
         }
+    }
+
+    private static bool IsLocalResourceVisible(
+        XamlElement element,
+        int referenceStart,
+        string key,
+        bool allowForwardReference,
+        XamlTypeSystem typeSystem)
+    {
+        for (XamlElement? current = element; current is not null;
+             current = current.Parent as XamlElement)
+        {
+            if (IsResourceScopeBoundary(current, typeSystem) &&
+                ScopeContainsKey(current, key, referenceStart, allowForwardReference, typeSystem))
+            {
+                return true;
+            }
+
+            // Resources owned by an ancestor element are fully initialized before its
+            // ordinary child content is created, regardless of their textual position.
+            foreach (var child in current.Content.OfType<XamlElement>())
+            {
+                if (XamlSemanticFacts.IsResourceDictionaryPropertyElement(child, typeSystem) &&
+                    !IsAncestorOf(child, element) &&
+                    ScopeContainsKey(
+                        child,
+                        key,
+                        allowForwardReference ? int.MaxValue : referenceStart,
+                        allowForwardReference,
+                        typeSystem))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ScopeContainsKey(
+        XamlElement scope,
+        string key,
+        int referenceStart,
+        bool allowForwardReference,
+        XamlTypeSystem typeSystem)
+    {
+        foreach (var entry in scope.Content.OfType<XamlElement>())
+        {
+            if (XamlSemanticFacts.IsResourceDictionaryPropertyElement(entry, typeSystem))
+            {
+                if (ScopeContainsKey(entry, key, referenceStart, allowForwardReference, typeSystem))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (TryGetResourceKey(entry, typeSystem, out var candidate, out _) &&
+                string.Equals(candidate, "s:" + key, StringComparison.Ordinal) &&
+                (allowForwardReference || entry.Span.Start < referenceStart))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsAncestorOf(XamlElement ancestor, XamlElement element)
+    {
+        for (XamlNode? current = element; current is not null; current = current.Parent)
+        {
+            if (ReferenceEquals(current, ancestor))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void ValidateElement(
@@ -231,6 +312,10 @@ internal static class XamlValidator
         foreach (var attribute in element.Attributes)
         {
             ValidateBindMode(attribute, scope, typeSystem, doc, diagnostics);
+            if (dataTemplateNeedsDataType)
+            {
+                ValidateUntypedTemplateBinding(attribute, scope, typeSystem, doc, diagnostics);
+            }
             if (dataTemplateNeedsDataType && XamlSemanticFacts.IsXBind(attribute, scope))
             {
                 diagnostics.Add(Diag(doc, attribute.Value!.InnerSpan, SeverityError, DataTemplateDataTypeRequiredCode,
@@ -333,7 +418,7 @@ internal static class XamlValidator
         // Attached property (Owner.Member): validate the member against the OWNER type, not the element.
         if (name.IsDotted)
         {
-            ValidateAttachedProperty(attribute, scope, typeSystem, doc, diagnostics);
+            ValidateAttachedProperty(attribute, elementType, scope, typeSystem, doc, diagnostics);
             return;
         }
 
@@ -399,6 +484,7 @@ internal static class XamlValidator
     /// <summary>Validates an Owner.Member attached-property attribute: resolves the owner type through the attribute's namespace and checks it actually exposes the member.</summary>
     private static void ValidateAttachedProperty(
         XamlAttribute attribute,
+        INamedTypeSymbol elementType,
         XamlNamespaceScope scope,
         XamlTypeSystem typeSystem,
         TextDocument doc,
@@ -425,7 +511,24 @@ internal static class XamlValidator
         var owner = typeSystem.ResolveType(uri, ownerLocal);
         if (owner is null)
         {
-            return; // unknown owner: stay silent
+            var ownerSpan = new TextSpan(name.LocalNameSpan.Start, name.LocalNameSpan.Start + dot);
+            diagnostics.Add(Diag(
+                doc,
+                ownerSpan,
+                SeverityWarning,
+                UnknownTypeCode,
+                $"The attached-property owner '{ownerLocal}' was not found in the XAML namespace '{uri}'.",
+                SuggestData(ownerLocal, typeSystem.GetAllTypes(uri).Select(type => type.Name))));
+            return;
+        }
+
+        // Owner.Property is also legal for an ordinary property when Owner is the
+        // element's own type (or one of its bases), for example Grid.ColumnDefinitions.
+        if (XamlTypeSystem.IsAssignableTo(elementType, owner) &&
+            typeSystem.FindAttributeMember(elementType, memberName) is { Kind: XamlMemberKind.Property, Type: { } ordinaryType })
+        {
+            ValidateLiteralAttributeValue(attribute, ordinaryType, typeSystem, doc, diagnostics);
+            return;
         }
 
         var memberType = typeSystem.GetAttachedMemberType(owner, memberName);
@@ -637,7 +740,9 @@ internal static class XamlValidator
         foreach (var child in children)
         {
             var childType = ResolveElementType(child, typeSystem);
-            if (childType is not null && !XamlTypeSystem.IsAssignableTo(childType, expectedType))
+            if (childType is not null &&
+                !XamlTypeSystem.IsAssignableTo(childType, propertyType) &&
+                !XamlTypeSystem.IsAssignableTo(childType, expectedType))
             {
                 diagnostics.Add(Diag(doc, child.Name?.Span ?? child.Span, SeverityError,
                     InvalidPropertyElementChildCode,
@@ -756,6 +861,51 @@ internal static class XamlValidator
         {
             diagnostics.Add(Diag(doc, span, SeverityError, InvalidBindModeCode,
                 $"'{mode}' is not a valid x:Bind mode.", SuggestData(mode, names)));
+        }
+    }
+
+    private static void ValidateUntypedTemplateBinding(
+        XamlAttribute attribute,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        if (attribute.Value?.MarkupExtension is not { IsClosed: true } extension ||
+            !XamlSemanticFacts.IsBindingMarkupExtension(extension, scope, typeSystem))
+        {
+            return;
+        }
+
+        diagnostics.Add(Diag(
+            doc,
+            extension.Name?.Span ?? extension.Span,
+            SeverityWarning,
+            BindingDataTypeRecommendedCode,
+            "Binding inside a DataTemplate has no x:DataType and cannot be compiled."));
+    }
+
+    private static void ValidateRootClassExists(
+        XamlElement root,
+        INamedTypeSymbol? pageClass,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        if (pageClass is not null ||
+            XamlSemanticFacts.GetDirectiveAttribute(root, "Class")?.Value is not { } value)
+        {
+            return;
+        }
+
+        var className = value.Text.Trim();
+        if (className.Length > 0)
+        {
+            diagnostics.Add(Diag(
+                doc,
+                value.InnerSpan,
+                SeverityError,
+                UnknownRootClassCode,
+                $"The x:Class type '{className}' was not found in the project compilation."));
         }
     }
 

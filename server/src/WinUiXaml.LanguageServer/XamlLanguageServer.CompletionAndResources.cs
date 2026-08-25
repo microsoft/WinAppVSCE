@@ -63,6 +63,38 @@ internal sealed partial class XamlLanguageServer
         }
     }
 
+    private string[] GetAppResourceKeysExceptDocument(
+        XamlProjectContext context,
+        TextDocument document)
+    {
+        try
+        {
+            var resolution = context.Resolution;
+            var appXaml = FindAppXamlPath(resolution);
+            var documentPath = LspUri.ToPath(document.Uri);
+            if (appXaml is null || documentPath is null)
+            {
+                return GetAppResourceKeys(context);
+            }
+
+            var canonicalDocumentPath = CanonicalizePath(documentPath);
+            var projectRoot = System.IO.Path.GetDirectoryName(resolution.ProjectPath)!;
+            return ReadResourceGraph(appXaml, projectRoot, context.TypeSystem)
+                .Where(file => !string.Equals(
+                    CanonicalizePath(file.Path),
+                    canonicalDocumentPath,
+                    StringComparison.OrdinalIgnoreCase))
+                .SelectMany(file => file.Keys)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[winui-xaml-ls] app resources excluding document: {ex.Message}");
+            return Array.Empty<string>();
+        }
+    }
+
     private IReadOnlyList<XamlResourceGraph.ResourceFile> ReadResourceGraph(
         string rootPath,
         string projectRoot,

@@ -47,4 +47,26 @@ public sealed class XamlDiagnosticConfigurationTests
 
         Assert.Contains("\"version\":7", payload);
     }
+
+    [Fact]
+    public void PublishedDiagnosticsSerializeRuleCode()
+    {
+        var payload = JsonSerializer.Serialize(
+            new PublishDiagnosticsParams
+            {
+                Uri = "file:///C:/Page.xaml",
+                Diagnostics =
+                [
+                    new Diagnostic
+                    {
+                        Severity = 2,
+                        Code = XamlValidator.UnknownTypeCode,
+                        Message = "unknown",
+                    },
+                ],
+            },
+            LspJson.Options);
+
+        Assert.Contains($"\"code\":\"{XamlValidator.UnknownTypeCode}\"", payload);
+    }
 }

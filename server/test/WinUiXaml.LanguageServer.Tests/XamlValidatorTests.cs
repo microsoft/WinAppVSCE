@@ -65,11 +65,18 @@ public class XamlValidatorTests
             public class Grid
             {
                 public System.Collections.Generic.List<RowDefinition> RowDefinitions { get; } = new();
+                public Microsoft.UI.Xaml.Controls.ColumnDefinitionCollection ColumnDefinitions { get; } = new();
+                public TransitionCollection ChildrenTransitions { get; } = new();
                 public static int GetRow(object value) => 0;
                 public static void SetRow(object value, int row) { }
             }
 
             public class RowDefinition { }
+            public class ColumnDefinition { }
+            public class Transition { }
+            public class RepositionThemeTransition : Transition { }
+            public class TransitionCollection : System.Collections.Generic.List<Transition> { }
+            public class Button { }
             public class SampleRow
             {
                 public System.Collections.ObjectModel.ObservableCollection<RowSample> SampleCards { get; } = new();
@@ -123,6 +130,12 @@ public class XamlValidatorTests
         namespace Microsoft.UI.Xaml.Data
         {
             public enum BindingMode { OneTime, OneWay, TwoWay }
+            public class Binding { }
+        }
+
+        namespace Microsoft.UI.Xaml.Controls
+        {
+            public class ColumnDefinitionCollection : System.Collections.Generic.List<TestApp.ColumnDefinition> { }
         }
 
         namespace Microsoft.UI.Xaml.Media
@@ -342,17 +355,17 @@ public class XamlValidatorTests
     }
 
     [Fact]
-    public void KnownAndUncataloguedResourceKeys_RemainValid()
+    public void KnownResourceKey_RemainsValidAndMissingKeyIsReported()
     {
         var known = Validate(
             Page("""Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" """),
             "TextFillColorSecondaryBrush");
-        var uncatalogued = Validate(
+        var missing = Validate(
             Page("""Foreground="{ui:ThemeResource LibraryProvidedBrush}" """),
             "TextFillColorSecondaryBrush");
 
         Assert.DoesNotContain(known, item => item.Code == XamlValidator.UnknownResourceKeyCode);
-        Assert.DoesNotContain(uncatalogued, item => item.Code == XamlValidator.UnknownResourceKeyCode);
+        Assert.Contains(missing, item => item.Code == XamlValidator.UnknownResourceKeyCode);
     }
 
     [Fact]
@@ -363,6 +376,64 @@ public class XamlValidatorTests
             "AccentBrush");
 
         Assert.Contains(diagnostics, item => item.Code == XamlValidator.UnknownResourceKeyCode);
+    }
+
+    [Fact]
+    public void MissingConverterResource_IsReportedWithoutNearMatch()
+    {
+        var diagnostics = Validate(
+            Page("""Text="{ui:Binding Converter={ui:StaticResource CompletelyMissingConverter}}" """),
+            "AccentBrush");
+
+        Assert.Contains(
+            diagnostics,
+            item => item.Code == XamlValidator.UnknownResourceKeyCode &&
+                item.Message.Contains("CompletelyMissingConverter", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void StaticResourceRejectsForwardReferenceButThemeResourceAllowsIt()
+    {
+        const string staticReference = """
+            <ResourceDictionary
+                xmlns="using:Microsoft.UI.Xaml"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:local="using:TestApp">
+              <local:Child x:Key="Consumer" Text="{StaticResource Later}" />
+              <local:Child x:Key="Later" />
+            </ResourceDictionary>
+            """;
+        var themeReference = staticReference.Replace(
+            "{StaticResource Later}",
+            "{ThemeResource Later}",
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            Validate(staticReference),
+            item => item.Code == XamlValidator.UnknownResourceKeyCode);
+        Assert.DoesNotContain(
+            Validate(themeReference),
+            item => item.Code == XamlValidator.UnknownResourceKeyCode);
+    }
+
+    [Fact]
+    public void NestedResourceDictionaryKey_DoesNotLeakToOuterScope()
+    {
+        const string xaml = """
+            <ResourceDictionary
+                xmlns="using:Microsoft.UI.Xaml"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:local="using:TestApp">
+              <ResourceDictionary x:Key="Nested">
+                <local:Child x:Key="NestedOnly" />
+              </ResourceDictionary>
+              <local:Child x:Key="Consumer" Text="{StaticResource NestedOnly}" />
+            </ResourceDictionary>
+            """;
+
+        Assert.Contains(
+            Validate(xaml),
+            item => item.Code == XamlValidator.UnknownResourceKeyCode);
     }
 
     [Fact]
@@ -769,6 +840,62 @@ public class XamlValidatorTests
     }
 
     [Fact]
+    public void CollectionPropertyElement_AcceptsExplicitCollectionWrapper()
+    {
+        const string xaml = """
+            <Grid xmlns="using:TestApp">
+              <Grid.ChildrenTransitions>
+                <TransitionCollection>
+                  <RepositionThemeTransition />
+                </TransitionCollection>
+              </Grid.ChildrenTransitions>
+            </Grid>
+            """;
+
+        Assert.DoesNotContain(
+            Validate(xaml),
+            diagnostic => diagnostic.Code == XamlValidator.InvalidPropertyElementChildCode);
+    }
+
+    [Fact]
+    public void SelfOwnerDottedAttribute_ResolvesOrdinaryProperty()
+    {
+        const string xaml = """
+            <Grid xmlns="using:TestApp" Grid.ColumnDefinitions="*,*" />
+            """;
+
+        Assert.DoesNotContain(
+            Validate(xaml),
+            diagnostic => diagnostic.Code == XamlValidator.UnknownAttachedPropertyCode);
+    }
+
+    [Fact]
+    public void UnknownNuGetAttachedPropertyOwner_IsReportedInKnownNamespace()
+    {
+        const string xaml = """
+            <Button xmlns="using:TestApp"
+                    xmlns:ui="using:CommunityToolkit.WinUI"
+                    ui:NoSuchExtension.Value="1" />
+            """;
+        const string source = Types + """
+
+            namespace CommunityToolkit.WinUI
+            {
+                public static class FrameworkElementExtensions
+                {
+                    public static int GetValue(object element) => 0;
+                    public static void SetValue(object element, int value) { }
+                }
+            }
+            """;
+
+        Assert.Contains(
+            ValidateWithSource(xaml, source),
+            diagnostic => diagnostic.Code == XamlValidator.UnknownTypeCode &&
+                diagnostic.Message.Contains("NoSuchExtension", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void DictionaryPropertyElement_AcceptsKeyedValueObjects()
     {
         const string xaml = """
@@ -821,6 +948,22 @@ public class XamlValidatorTests
     }
 
     [Fact]
+    public void PresentationNamespaceColor_ResolvesAsResourceElement()
+    {
+        const string xaml = """
+            <ResourceDictionary
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Color x:Key="AccentColor">#ee9bbf</Color>
+            </ResourceDictionary>
+            """;
+
+        Assert.DoesNotContain(
+            Validate(xaml),
+            diagnostic => diagnostic.Code == XamlValidator.UnknownTypeCode);
+    }
+
+    [Fact]
     public void XClass_MustBeAssignableToResolvedRoot()
     {
         const string valid = """
@@ -834,6 +977,46 @@ public class XamlValidatorTests
 
         Assert.DoesNotContain(Validate(valid), d => d.Code == XamlValidator.InvalidRootClassCode);
         Assert.Contains(Validate(invalid), d => d.Code == XamlValidator.InvalidRootClassCode);
+    }
+
+    [Fact]
+    public void XClass_MustResolveInProjectCompilation()
+    {
+        const string xaml = """
+            <BaseControl xmlns="using:TestApp"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         x:Class="TestApp.MissingPage" />
+            """;
+
+        Assert.Contains(
+            Validate(xaml),
+            diagnostic => diagnostic.Code == XamlValidator.UnknownRootClassCode);
+    }
+
+    [Fact]
+    public void ClassicBinding_InUntypedDataTemplate_ReportsWmc1510()
+    {
+        const string xaml = """
+            <ui:DataTemplate xmlns="using:TestApp"
+                             xmlns:ui="using:Microsoft.UI.Xaml">
+              <Page Text="{ui:Binding Name}" />
+            </ui:DataTemplate>
+            """;
+        const string typed = """
+            <ui:DataTemplate xmlns="using:TestApp"
+                             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                             xmlns:ui="using:Microsoft.UI.Xaml"
+                             x:DataType="Child">
+              <Page Text="{ui:Binding Name}" />
+            </ui:DataTemplate>
+            """;
+
+        Assert.Contains(
+            Validate(xaml),
+            diagnostic => diagnostic.Code == XamlValidator.BindingDataTypeRecommendedCode);
+        Assert.DoesNotContain(
+            Validate(typed),
+            diagnostic => diagnostic.Code == XamlValidator.BindingDataTypeRecommendedCode);
     }
 
     [Theory]

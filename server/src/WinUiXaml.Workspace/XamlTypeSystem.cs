@@ -141,6 +141,17 @@ namespace WinUiXaml.Workspace
                 }
             }
 
+            // WinUI's presentation namespace exposes Color even though the CLR type lives
+            // outside the Microsoft.UI.Xaml namespace roots and is not consistently covered
+            // by SDK XmlnsDefinition metadata.
+            if ((string.Equals(xmlnsUri, PresentationNamespace, StringComparison.Ordinal) ||
+                 string.Equals(xmlnsUri, "using:Microsoft.UI.Xaml", StringComparison.Ordinal) ||
+                 string.Equals(xmlnsUri, "using:Windows.UI.Xaml", StringComparison.Ordinal)) &&
+                string.Equals(localName, "Color", StringComparison.Ordinal))
+            {
+                return _compilation.GetTypeByMetadataName("Windows.UI.Color");
+            }
+
             return null;
         }
 
@@ -692,7 +703,7 @@ namespace WinUiXaml.Workspace
         }
 
         /// <summary>True when the xmlns URI is understood by this type system — it maps to at least one CLR namespace that actually contains usable types.</summary>
-        public bool IsKnownNamespace(string xmlnsUri) => GetTypes(xmlnsUri).Any();
+        public bool IsKnownNamespace(string xmlnsUri) => GetAllTypes(xmlnsUri).Any();
 
         /// <summary>Enumerates the members usable as XAML attributes on type: public settable properties and public events, walking base types (most-derived wins on name collisions).</summary>
         public IEnumerable<XamlMemberInfo> GetMembers(INamedTypeSymbol type)
