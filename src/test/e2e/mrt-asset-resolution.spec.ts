@@ -94,6 +94,14 @@ test('application visual assets resolve through MRT variants', async () => {
     expect(msg).toContain('Resolved via MRT');
 });
 
+test('application logo preview falls back to the resolved MRT variant', async () => {
+    await switchTab(frame, 'applications');
+    await switchAppSubTab(frame, 0, 'visual');
+
+    const src = await frame.locator('.app-logo-preview[data-app-idx="0"]').getAttribute('src');
+    expect(src).toContain('MrtLogo.scale-200.png');
+});
+
 test('an unqualified file that exists is used as-is with no note', async () => {
     await switchTab(frame, 'applications');
     await switchAppSubTab(frame, 0, 'visual');
