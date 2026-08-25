@@ -100,3 +100,24 @@ test('shows an in-place overlay — not a rebuilt document — while the XML is 
     await expect(frame.locator('.tab-btn[data-tab="applications"]')).toHaveClass(/active/);
     await expect(frame.locator('.tab-bar')).not.toHaveAttribute('inert', '');
 });
+
+test('saving while the XML is unparseable stores the raw text instead of rewriting the document', async () => {
+    writeManifest(original.replace('</Package>', '<Unclosed>'));
+    await expect(frame.locator('#parse-error-overlay')).toBeVisible({ timeout: 20_000 });
+
+    // Open the raw XML in the text editor and make it dirty, so that saving actually runs the
+    // provider's onWillSaveTextDocument flush against a document that cannot be parsed.
+    // This test runs last: it leaves the text editor, not the custom editor, focused.
+    await frame.locator('#parse-error-open-text').click();
+    await ctx.page.waitForTimeout(2000);
+    await ctx.page.keyboard.type('<Another>');
+    await ctx.page.waitForTimeout(500);
+    await ctx.page.keyboard.press('Control+S');
+    await ctx.page.waitForTimeout(3000);
+
+    // The save must complete and persist exactly what the user typed. If the provider applied
+    // pending field changes here it would have serialised valid XML over the broken text.
+    const saved = fs.readFileSync(manifestPath, 'utf-8');
+    expect(saved.startsWith('<Another>')).toBe(true);
+    expect(saved).toContain('<Unclosed>');
+});

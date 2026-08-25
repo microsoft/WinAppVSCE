@@ -401,21 +401,33 @@ export function getApplicationsScript(): string {
                     });
                 });
 
-                // Bind editable extension field inputs
+                // Bind editable extension field inputs. These go through the shared debounce queue
+                // so a save flushes them and a parse error discards them, same as every other field.
                 card.querySelectorAll('input[data-ext-field]').forEach(inp => {
-                    let extDebounce = null;
+                    const appIndex = parseInt(inp.getAttribute('data-app-index'), 10);
+                    const extIndex = parseInt(inp.getAttribute('data-ext-index'), 10);
+                    const fieldPath = inp.getAttribute('data-ext-field');
+                    const key = 'ext:' + appIndex + ':' + extIndex + ':' + fieldPath;
+                    const describe = () => ({
+                        kind: 'extField',
+                        appIndex: appIndex,
+                        extIndex: extIndex,
+                        fieldPath: fieldPath,
+                        value: inp.value,
+                        isTextContent: inp.hasAttribute('data-ext-text-content')
+                    });
                     inp.addEventListener('input', () => {
-                        clearTimeout(extDebounce);
-                        extDebounce = setTimeout(() => {
+                        queueDebouncedChange(key, describe, () => {
+                            const c = describe();
                             vscode.postMessage({
                                 type: 'updateExtensionField',
-                                appIndex: parseInt(inp.getAttribute('data-app-index'), 10),
-                                extIndex: parseInt(inp.getAttribute('data-ext-index'), 10),
-                                fieldPath: inp.getAttribute('data-ext-field'),
-                                value: inp.value,
-                                isTextContent: inp.hasAttribute('data-ext-text-content')
+                                appIndex: c.appIndex,
+                                extIndex: c.extIndex,
+                                fieldPath: c.fieldPath,
+                                value: c.value,
+                                isTextContent: c.isTextContent
                             });
-                        }, 300);
+                        });
                     });
                 });
 

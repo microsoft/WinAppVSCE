@@ -191,10 +191,16 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         }
 
         // Listen for document changes (e.g., from the text editor, undo, or external edits).
-        // This fires on every keystroke, so debounce it: re-rendering mid-word is wasted work, and
-        // half-typed elements make the XML transiently unparseable.
+        // This fires on every keystroke, so debounce the re-render: re-rendering mid-word is wasted
+        // work, and half-typed elements make the XML transiently unparseable.
         const changeDocSub = vscode.workspace.onDidChangeTextDocument(e => {
             if (e.document.uri.toString() !== document.uri.toString() || isApplyingEdit) { return; }
+            // Tell the webview to drop input still sitting in its 300ms debounce *immediately*,
+            // ahead of the debounced re-render. That input was typed against the pre-edit document,
+            // so replaying it would overwrite the change that just arrived from the text editor.
+            // Waiting for the parse-error overlay to do this isn't enough: XML that breaks and is
+            // fixed again inside the debounce window never shows an overlay at all.
+            webviewPanel.webview.postMessage({ type: 'externalChange' });
             if (externalChangeTimer) { clearTimeout(externalChangeTimer); }
             externalChangeTimer = setTimeout(() => {
                 externalChangeTimer = undefined;
@@ -263,7 +269,9 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                 }
                                 let result = text;
                                 for (const change of message.changes) {
-                                    result = applyFieldChange(result, change.section, change.field, change.value, change.index);
+                                    result = change.kind === 'extField'
+                                        ? updateExtensionField(result, change.appIndex, change.extIndex, change.fieldPath, change.value, change.isTextContent)
+                                        : applyFieldChange(result, change.section, change.field, change.value, change.index);
                                 }
                                 const edits = result !== text
                                     ? [vscode.TextEdit.replace(new vscode.Range(0, 0, document.lineCount, 0), result)]

@@ -150,30 +150,41 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         // Debounce helper for text inputs
         let debounceTimers = {};
         let pendingElements = {};
-        function debouncedFieldChange(el) {
-            const field = el.getAttribute('data-field-name') || '';
-            const idx = el.getAttribute('data-index') || '';
-            const key = el.id || (field + ':' + idx);
+
+        /**
+         * Queues a debounced edit. The describe() callback returns the change descriptor used when
+         * a save flushes the queue; send() posts the edit normally when the debounce elapses. Every
+         * debounced edit must go through here so that save-flush and parse-error discard apply
+         * uniformly — a private setTimeout would be invisible to both.
+         */
+        function queueDebouncedChange(key, describe, send) {
             clearTimeout(debounceTimers[key]);
-            pendingElements[key] = el;
+            pendingElements[key] = describe;
             debounceTimers[key] = setTimeout(() => {
-                onFieldChange(el);
+                send();
                 delete pendingElements[key];
                 delete debounceTimers[key];
             }, 300);
         }
 
+        function debouncedFieldChange(el) {
+            const field = el.getAttribute('data-field-name') || '';
+            const idx = el.getAttribute('data-index') || '';
+            const key = el.id || (field + ':' + idx);
+            queueDebouncedChange(key, () => ({
+                kind: 'field',
+                section: el.getAttribute('data-section'),
+                field: el.getAttribute('data-field-name'),
+                value: el.value,
+                index: parseInt(el.getAttribute('data-index') || '0', 10),
+            }), () => onFieldChange(el));
+        }
+
         function flushPendingChanges() {
             const changes = [];
             for (const key in pendingElements) {
-                const el = pendingElements[key];
                 clearTimeout(debounceTimers[key]);
-                changes.push({
-                    section: el.getAttribute('data-section'),
-                    field: el.getAttribute('data-field-name'),
-                    value: el.value,
-                    index: parseInt(el.getAttribute('data-index') || '0', 10),
-                });
+                changes.push(pendingElements[key]());
             }
             debounceTimers = {};
             pendingElements = {};
@@ -771,6 +782,11 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     break;
                 case 'parseError':
                     setParseError(msg.message || 'The manifest XML could not be parsed.');
+                    break;
+                case 'externalChange':
+                    // The document changed underneath us. Anything still queued was typed against
+                    // the previous text, so sending it would clobber the incoming edit.
+                    discardPendingChanges();
                     break;
                 case 'validationErrors':
                     showValidationErrors(msg.errors || []);

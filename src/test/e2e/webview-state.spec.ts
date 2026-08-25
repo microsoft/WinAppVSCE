@@ -244,8 +244,76 @@ test('a parse error discards input still sitting in the debounce', async ({ page
     expect(posted).toBe(0);
 });
 
-test('Tab stays inside the parse-error dialog while it is open', async ({ page }) => {
+/** Types into an input that lives in a collapsed sub-tab, where `fill` cannot reach it. */
+async function typeIntoHiddenInput(page: Page, selector: string, value: string): Promise<void> {
+    await page.evaluate(([sel, val]) => {
+        const doc = (globalThis as unknown as { document: { querySelector(s: string): unknown } }).document;
+        const el = doc.querySelector(sel) as { value: string; dispatchEvent(e: unknown): void } | null;
+        if (!el) { throw new Error('no element for ' + sel); }
+        el.value = val;
+        el.dispatchEvent(new (globalThis as unknown as { Event: new (t: string, o: unknown) => unknown })
+            .Event('input', { bubbles: true }));
+    }, [selector, value] as [string, string]);
+}
+
+/** Mimics the extension asking the webview to flush its debounce queue during a save. */
+async function postFlush(page: Page, nonce: string): Promise<void> {
+    await page.evaluate((n) => {
+        (globalThis as unknown as { postMessage(m: unknown, o: string): void })
+            .postMessage({ type: 'flushChanges', nonce: n }, '*');
+    }, nonce);
+    await page.waitForTimeout(100);
+}
+
+test('an external document change discards input still sitting in the debounce', async ({ page }) => {
     await loadEditor(page);
+    await postUpdate(page, manifestData);
+
+    // Typed against the pre-edit document, so replaying it would clobber the text-editor change.
+    await page.locator('#identity-name').fill('MidTypeValue');
+    await page.evaluate(() => {
+        (globalThis as unknown as { postMessage(m: unknown, o: string): void })
+            .postMessage({ type: 'externalChange' }, '*');
+    });
+
+    await page.waitForTimeout(600);
+    const posted = await page.evaluate(() =>
+        (globalThis as unknown as { __posted: { type: string }[] }).__posted.filter(m => m.type === 'fieldChanged').length);
+    expect(posted).toBe(0);
+});
+
+test('a save flushes extension-field input still sitting in the debounce', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+
+    await typeIntoHiddenInput(page, 'input[data-ext-field]', 'flushed.example.com');
+    // Save before the 300 ms debounce elapses — the keystroke must not be lost.
+    await postFlush(page, 'nonce-1');
+
+    const flushed = await page.evaluate(() =>
+        (globalThis as unknown as { __posted: { type: string; changes?: Record<string, unknown>[] }[] })
+            .__posted.filter(m => m.type === 'changesFlushed').pop());
+    const extChanges = (flushed?.changes ?? []).filter(c => c.kind === 'extField');
+    expect(extChanges).toHaveLength(1);
+    expect(extChanges[0].value).toBe('flushed.example.com');
+    expect(extChanges[0].fieldPath).toBe('Host.Name');
+});
+
+test('a parse error discards extension-field input still sitting in the debounce', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+
+    await typeIntoHiddenInput(page, 'input[data-ext-field]', 'discarded.example.com');
+    await postParseError(page, 'unclosed tag: Package');
+
+    await page.waitForTimeout(600);
+    const posted = await page.evaluate(() =>
+        (globalThis as unknown as { __posted: { type: string }[] }).__posted
+            .filter(m => m.type === 'updateExtensionField').length);
+    expect(posted).toBe(0);
+});
+
+test('Tab stays inside the parse-error dialog while it is open', async ({ page }) => {    await loadEditor(page);
     await postUpdate(page, manifestData);
     await postParseError(page, 'unclosed tag: Package');
 

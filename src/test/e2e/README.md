@@ -52,9 +52,9 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (144 tests)
+## Test inventory (148 tests)
 
-### `webview-state.spec.ts` — 10 tests
+### `webview-state.spec.ts` — 13 tests
 
 Renders the generated webview document directly in Chromium (with a stubbed `acquireVsCodeApi`), so
 UI-state behaviour can be verified without launching VS Code. Regression coverage for #192.
@@ -68,11 +68,14 @@ UI-state behaviour can be verified without launching VS Code. Regression coverag
 | 5 | the parse-error overlay is modal — the form behind it is inert | The overlay exposes "Open in Text Editor", takes focus, and inerts/hides the form behind it until recovery, handing `aria-hidden` back to the tab system afterwards |
 | 6 | recovery restores focus to the rebuilt control, not a destroyed element | Focus captured before the overlay is re-applied *after* the form is repopulated, so it lands on the replacement input rather than falling back to `<body>` |
 | 7 | a parse error discards input still sitting in the debounce | In-flight webview input is dropped when the XML stops parsing, so the extension is never asked to rewrite unparseable XML |
-| 8 | Tab stays inside the parse-error dialog while it is open | Tab/Shift+Tab cycle between the dialog and its button instead of escaping the modal |
-| 9 | a saved tab that never becomes available leaves a valid fallback selected | Endless restore retries don't strand an invalid selection or override a manual tab change |
-| 10 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
+| 8 | an external document change discards input still sitting in the debounce | Queued input typed against the pre-edit text is dropped as soon as the document changes, so it can't replay over the newer text-editor edit |
+| 9 | a save flushes extension-field input still sitting in the debounce | Extension-field edits share the common debounce queue, so Ctrl+S captures them like any other field |
+| 10 | a parse error discards extension-field input still sitting in the debounce | The same queue means extension-field edits are also dropped when the XML stops parsing |
+| 11 | Tab stays inside the parse-error dialog while it is open | Tab/Shift+Tab cycle between the dialog and its button instead of escaping the modal |
+| 12 | a saved tab that never becomes available leaves a valid fallback selected | Endless restore retries don't strand an invalid selection or override a manual tab change |
+| 13 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
 
-### `external-edit-state.spec.ts` — 3 tests
+### `external-edit-state.spec.ts` — 4 tests
 
 Full VS Code coverage for #192: edits made to the manifest outside the webview must not reset the
 visual editor. Launches its own VS Code instance.
@@ -82,6 +85,7 @@ visual editor. Launches its own VS Code instance.
 | 1 | keeps the selected tab, app sub-tab and scroll position across an external edit that breaks the XML mid-way | Transiently-invalid XML (as produced by typing an element in the text editor) doesn't reset the editor |
 | 2 | exactly one top-level tab button is marked active after an external edit | Tab button/panel selection stays in sync |
 | 3 | shows an in-place overlay — not a rebuilt document — while the XML is invalid | Invalid XML shows the overlay, and recovering restores the previous view |
+| 4 | saving while the XML is unparseable stores the raw text instead of rewriting the document | The save-flush guard resolves with no edits when the document can't be parsed, so Ctrl+S persists the user's raw text and never hangs |
 
 ### `sign-quickpick.spec.ts` — 6 tests
 
