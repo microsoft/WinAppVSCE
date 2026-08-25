@@ -225,7 +225,7 @@ internal static class XamlCodeActions
         string raw = RangeText(doc, diagnostic.Range);
         int colon = raw.IndexOf(':');
         string prefix = (colon >= 0 ? raw.Substring(0, colon) : raw).Trim();
-        if (prefix.Length == 0 || !TryGetRootXmlnsInsertion(doc, out var pos))
+        if (prefix.Length == 0)
         {
             return;
         }
@@ -235,8 +235,15 @@ internal static class XamlCodeActions
         {
             if (seen.Add(prefix + "\0" + wellKnownUri))
             {
+                var declarationEdit =
+                    XamlNamespaceImport.BuildRootDeclarationEditForUri(doc, prefix, wellKnownUri);
+                if (declarationEdit is null)
+                {
+                    return;
+                }
+
                 actions.Add(BuildAddXmlnsAction(
-                    uri, prefix, wellKnownUri, pos, $"Add xmlns:{prefix} declaration", isPreferred: true, diagnostic));
+                    uri, declarationEdit, $"Add xmlns:{prefix} declaration", isPreferred: true, diagnostic));
             }
 
             return;
@@ -264,38 +271,21 @@ internal static class XamlCodeActions
                 continue;
             }
 
-            actions.Add(BuildAddXmlnsAction(
-                uri, prefix, usingUri, pos, $"Add xmlns:{prefix}=\"{usingUri}\"", isPreferred: single, diagnostic));
-        }
-    }
-
-    /// <summary>The insertion point for a new xmlns declaration on the root element: grouped after any existing xmlns declarations, otherwise right after the root element name.</summary>
-    private static bool TryGetRootXmlnsInsertion(TextDocument doc, out Position pos)
-    {
-        pos = default!;
-        var root = doc.Parsed.Root;
-        if (root?.Name is null)
-        {
-            return false;
-        }
-
-        // Group with existing xmlns declarations; otherwise place it right after the root element name. Always a single zero-width insertion so existing formatting is left untouched.
-        int insertAt = root.Name.Span.End;
-        foreach (var attribute in root.Attributes)
-        {
-            if (attribute.IsNamespaceDeclaration && attribute.Span.End > insertAt)
+            var declarationEdit =
+                XamlNamespaceImport.BuildRootDeclarationEditForUri(doc, prefix, usingUri);
+            if (declarationEdit is null)
             {
-                insertAt = attribute.Span.End;
+                continue;
             }
-        }
 
-        pos = doc.PositionAt(insertAt);
-        return true;
+            actions.Add(BuildAddXmlnsAction(
+                uri, declarationEdit, $"Add xmlns:{prefix}=\"{usingUri}\"", isPreferred: single, diagnostic));
+        }
     }
 
-    /// <summary>Builds a single zero-width "Add xmlns:PREFIX=…" quick fix at the given root insertion point.</summary>
+    /// <summary>Builds a single zero-width "Add xmlns:PREFIX=…" quick fix.</summary>
     private static CodeAction BuildAddXmlnsAction(
-        string uri, string prefix, string namespaceUri, Position pos, string title, bool isPreferred, Diagnostic diagnostic)
+        string uri, TextEdit declarationEdit, string title, bool isPreferred, Diagnostic diagnostic)
     {
         return new CodeAction
         {
@@ -307,7 +297,7 @@ internal static class XamlCodeActions
             {
                 Changes = new Dictionary<string, List<TextEdit>>
                 {
-                    [uri] = new List<TextEdit> { new() { Range = new Lsp.Range(pos, pos), NewText = $" xmlns:{prefix}=\"{namespaceUri}\"" } },
+                    [uri] = new List<TextEdit> { declarationEdit },
                 },
             },
         };

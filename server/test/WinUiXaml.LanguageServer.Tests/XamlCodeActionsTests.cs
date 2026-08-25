@@ -481,6 +481,61 @@ public class XamlCodeActionsTests
     }
 
     [Fact]
+    public void UnknownUnprefixedProjectType_DiagnosticDrivesImport()
+    {
+        var ts = BuildWinUiTypeSystem(
+            "namespace SampleApp.Controls { public class CustomButton : Microsoft.UI.Xaml.DependencyObject { } }");
+        const string xaml = """
+            <DependencyObject xmlns="using:Microsoft.UI.Xaml">
+              <CustomButton />
+            </DependencyObject>
+            """;
+        var doc = new TextDocument(Uri, xaml);
+        var diagnostic = Assert.Single(
+            XamlValidator.Validate(doc, ts),
+            item => item.Code == XamlValidator.UnknownTypeCode);
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts));
+
+        Assert.Equal(1, diagnostic.Severity);
+        Assert.Equal("Import 'CustomButton' from 'SampleApp.Controls'", action.Title);
+        Assert.True(action.IsPreferred);
+    }
+
+    [Fact]
+    public void UnknownUnprefixedType_MultilineNamespaces_AddsAlignedLine()
+    {
+        var ts = BuildWinUiTypeSystem(
+            "namespace SampleApp.Controls { public class InfoCard : Microsoft.UI.Xaml.DependencyObject { } }");
+        const string xaml = """
+            <Page
+                xmlns="P"
+                xmlns:x="X"
+                x:Class="SampleApp.Page">
+              <InfoCard />
+            </Page>
+            """;
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("InfoCard", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode,
+            doc.RangeOf(new WinUiXaml.Xaml.TextSpan(nameAt, nameAt + "InfoCard".Length)),
+            Data("InfoCard"));
+
+        var edit = XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts)
+            .Single()
+            .Edit!.Changes[Uri]
+            .Single(item => item.NewText.Contains("xmlns:controls", System.StringComparison.Ordinal));
+        var xmlnsX = doc.Parsed.Root!.Attributes.Single(
+            attribute => attribute.Name.FullName == "xmlns:x");
+
+        Assert.Equal(
+            System.Environment.NewLine + "    xmlns:controls=\"using:SampleApp.Controls\"",
+            edit.NewText);
+        Assert.Equal(xmlnsX.Span.End, doc.OffsetAt(edit.Range.Start));
+    }
+
+    [Fact]
     public void UnknownUnprefixedType_PairedElement_QualifiesOpeningAndClosingTags()
     {
         var ts = BuildWinUiTypeSystem(

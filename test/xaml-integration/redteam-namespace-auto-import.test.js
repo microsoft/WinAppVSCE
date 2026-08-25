@@ -28,7 +28,7 @@ function clean(buffer) {
 
 function assertZeroWidthRootXmlnsEdit(buffer, edit, expectedText) {
   assert.deepStrictEqual(edit.range.start, edit.range.end, "xmlns edit must be zero-width");
-  assert.strictEqual(edit.newText, expectedText, "xmlns edit text");
+  assert.strictEqual(edit.newText.replaceAll("\r\n", "\n"), expectedText, "xmlns edit text");
   const noCaret = clean(buffer);
   const insertAt = lineCharToOffset(noCaret, edit.range.start);
   const rootOpenEnd = noCaret.indexOf(">");
@@ -51,7 +51,7 @@ function applyAdditionalEdits(text, edits) {
 
 function assertAppliedSettEdit(buffer, item, expectedPrefix) {
   assert.strictEqual(item.additionalTextEdits.length, 1, "generated-prefix completion should carry exactly one xmlns edit");
-  assertZeroWidthRootXmlnsEdit(buffer, item.additionalTextEdits[0], ` xmlns:${expectedPrefix}="${TOOLKIT_XMLNS}"`);
+  assertZeroWidthRootXmlnsEdit(buffer, item.additionalTextEdits[0], `\n    xmlns:${expectedPrefix}="${TOOLKIT_XMLNS}"`);
   const withoutCaret = clean(buffer);
   const afterXmlns = applyAdditionalEdits(withoutCaret, item.additionalTextEdits);
   const applied = afterXmlns.replace("<Sett", `<${item.newText}`);

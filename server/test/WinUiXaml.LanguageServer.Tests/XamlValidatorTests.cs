@@ -149,6 +149,11 @@ public class XamlValidatorTests
         {
             public class ObservableCollection<T> : System.Collections.Generic.List<T> { }
         }
+
+        namespace TestApp.Controls
+        {
+            public class CustomButton : Microsoft.UI.Xaml.FrameworkElement { }
+        }
         """;
 
     [Fact]
@@ -797,6 +802,22 @@ public class XamlValidatorTests
         Assert.DoesNotContain(
             Validate(xaml),
             diagnostic => diagnostic.Code == XamlValidator.UnknownTypeCode);
+    }
+
+    [Fact]
+    public void UnqualifiedProjectControlInAnotherNamespace_IsAnError()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp">
+              <CustomButton />
+            </Page>
+            """;
+
+        var diagnostic = Assert.Single(
+            Validate(xaml),
+            item => item.Code == XamlValidator.UnknownTypeCode);
+
+        Assert.Equal(1, diagnostic.Severity);
     }
 
     [Fact]

@@ -88,7 +88,11 @@ function findUsingFix(r, prefix, namespaceName = "SmokeFixture") {
   assert.ok(fix, `expected ${dump(title)} quickfix; diag=${dump(r.diagnostic)} actions=${dump(titles(r))}`);
   assert.strictEqual(fix.isPreferred, true, `${title} should be preferred for the single fixture namespace`);
   assert.strictEqual(fix.edits.length, 1, `${title} should have exactly one edit`);
-  assert.strictEqual(fix.edits[0].newText, ` xmlns:${prefix}="using:${namespaceName}"`, `${title} inserted text`);
+  assert.match(
+    fix.edits[0].newText,
+    new RegExp(`^\\s+xmlns:${prefix}="using:${namespaceName}"$`),
+    `${title} inserted text`
+  );
   assertZeroWidth(fix.edits[0], `${title} edit`);
   return fix;
 }
@@ -99,7 +103,11 @@ function findStandardFix(r, prefix) {
   assert.ok(fix, `expected ${dump(title)} quickfix; diag=${dump(r.diagnostic)} actions=${dump(titles(r))}`);
   assert.strictEqual(fix.isPreferred, true, `${title} should be preferred`);
   assert.strictEqual(fix.edits.length, 1, `${title} should have exactly one edit`);
-  assert.strictEqual(fix.edits[0].newText, ` xmlns:${prefix}="${URI[prefix]}"`, `${title} inserted URI`);
+  assert.match(
+    fix.edits[0].newText,
+    new RegExp(`^\\s+xmlns:${prefix}="${URI[prefix]}"$`),
+    `${title} inserted URI`
+  );
   assertZeroWidth(fix.edits[0], `${title} edit`);
   return fix;
 }
@@ -151,6 +159,7 @@ describe("WinUI XAML — red-team 49 (custom using: inference)", function () {
     const buffer = page("<zzz:SmokePage />");
     const r = await h.codeActionsAt(buffer, "WXAML0001", "zzz");
     const edit = findUsingFix(r, "zzz").edits[0];
+    assert.strictEqual(edit.newText.replaceAll("\r\n", "\n"), '\n    xmlns:zzz="using:SmokeFixture"');
     assert.ok(edit.line > 0, `expected insertion on a wrapped xmlns line; edit=${dump(edit)}`);
     assertEditAtOffset(buffer, edit, buffer.indexOf('xmlns:local="using:SmokeFixture"') + 'xmlns:local="using:SmokeFixture"'.length, "after local xmlns");
   });
@@ -222,9 +231,9 @@ describe("WinUI XAML — red-team 49 (custom using: inference)", function () {
   it("inserts after the last existing xmlns and before non-xmlns attributes", async () => {
     const buffer = page("<zzz:SmokePage />");
     const edit = findUsingFix(await h.codeActionsAt(buffer, "WXAML0001", "zzz"), "zzz").edits[0];
-    const fixed = applySingleEdit(buffer, edit);
+    const fixed = applySingleEdit(buffer, edit).replaceAll("\r\n", "\n");
     assert.ok(
-      fixed.includes('xmlns:local="using:SmokeFixture" xmlns:zzz="using:SmokeFixture"\n    mc:Ignorable="d"\n    x:Class='),
+      fixed.includes('xmlns:local="using:SmokeFixture"\n    xmlns:zzz="using:SmokeFixture"\n    mc:Ignorable="d"\n    x:Class='),
       fixed
     );
   });
@@ -302,8 +311,8 @@ describe("WinUI XAML — red-team 49 (custom using: inference)", function () {
     const buffer = page("<zzz:SmokePage />\n  <ctl:App />");
     const zzzFix = findUsingFix(await h.codeActionsAt(buffer, "WXAML0001", "zzz"), "zzz");
     const ctlFix = findUsingFix(await h.codeActionsAt(buffer, "WXAML0001", "ctl"), "ctl");
-    assert.strictEqual(zzzFix.edits[0].newText, ' xmlns:zzz="using:SmokeFixture"');
-    assert.strictEqual(ctlFix.edits[0].newText, ' xmlns:ctl="using:SmokeFixture"');
+    assert.strictEqual(zzzFix.edits[0].newText.replaceAll("\r\n", "\n"), '\n    xmlns:zzz="using:SmokeFixture"');
+    assert.strictEqual(ctlFix.edits[0].newText.replaceAll("\r\n", "\n"), '\n    xmlns:ctl="using:SmokeFixture"');
   });
 
   it("is case-sensitive and does not fix lowercase smokepage", async () => {

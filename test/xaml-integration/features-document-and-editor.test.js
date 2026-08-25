@@ -996,7 +996,7 @@ describe("WinUI XAML — code actions", function () {
     assert.strictEqual(fix.isPreferred, true, "a single inferred namespace should be preferred");
     const edit = fix.edits[0];
     assert.ok(edit, "the fix must carry an edit");
-    assert.strictEqual(edit.newText, ' xmlns:zzz="using:SmokeFixture"', `edit should declare the inferred using: namespace; got ${edit.newText}`);
+    assert.strictEqual(edit.newText.replaceAll("\r\n", "\n"), '\n    xmlns:zzz="using:SmokeFixture"', `edit should declare the inferred using: namespace; got ${edit.newText}`);
     // A pure zero-width insertion grouped onto the root's xmlns block.
     assert.strictEqual(edit.line, edit.endLine, "insertion must be zero-width (same line)");
     assert.strictEqual(edit.character, edit.endCharacter, "insertion must be zero-width (same char)");
@@ -1066,7 +1066,7 @@ describe("WinUI XAML — third-party control completion (gap #4)", function () {
   after(async () => { await h.revertProbe(); });
 
   const TOOLKIT_NS = "CommunityToolkit.WinUI.Controls";
-  const XMLNS_EDIT = ` xmlns:controls="using:${TOOLKIT_NS}"`;
+  const XMLNS_EDIT = `\n    xmlns:controls="using:${TOOLKIT_NS}"`;
 
   // A <Page> with an EXTRA xmlns already declared on the root (for the prefix-reuse probe).
   function pageWith(extraXmlns, inner) {
@@ -1083,7 +1083,7 @@ describe("WinUI XAML — third-party control completion (gap #4)", function () {
     );
     assert.strictEqual(card.additionalTextEdits.length, 1, "exactly one additional edit (the xmlns injection)");
     const edit = card.additionalTextEdits[0];
-    assert.strictEqual(edit.newText, XMLNS_EDIT, `the injected xmlns declaration; got ${edit.newText}`);
+    assert.strictEqual(edit.newText.replaceAll("\r\n", "\n"), XMLNS_EDIT, `the injected xmlns declaration; got ${edit.newText}`);
     // Pure zero-width insertion (never overwrites existing text).
     assert.deepStrictEqual(edit.range.start, edit.range.end, "the xmlns injection is a zero-width insertion");
   });
@@ -1093,7 +1093,7 @@ describe("WinUI XAML — third-party control completion (gap #4)", function () {
     const exp = items.find((i) => i.newText === "controls:SettingsExpander");
     assert.ok(exp, `expected controls:SettingsExpander; got ${JSON.stringify(items.map((i) => i.newText))}`);
     assert.strictEqual(exp.additionalTextEdits.length, 1, "SettingsExpander also injects the xmlns");
-    assert.strictEqual(exp.additionalTextEdits[0].newText, XMLNS_EDIT);
+    assert.strictEqual(exp.additionalTextEdits[0].newText.replaceAll("\r\n", "\n"), XMLNS_EDIT);
   });
 
   it("filters third-party controls by the typed partial", async () => {

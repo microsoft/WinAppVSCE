@@ -68,6 +68,12 @@ internal static class XamlNamespaceImport
     }
 
     internal static TextEdit? BuildRootDeclarationEdit(TextDocument doc, string prefix, string clrNamespace)
+        => BuildRootDeclarationEditForUri(doc, prefix, "using:" + clrNamespace);
+
+    internal static TextEdit? BuildRootDeclarationEditForUri(
+        TextDocument doc,
+        string prefix,
+        string namespaceUri)
     {
         var root = doc.Parsed.Root;
         if (root?.Name is null)
@@ -76,19 +82,51 @@ internal static class XamlNamespaceImport
         }
 
         var insertAt = root.Name.Span.End;
+        XamlAttribute? lastNamespace = null;
         foreach (var attribute in root.Attributes)
         {
             if (attribute.IsNamespaceDeclaration && attribute.Span.End > insertAt)
             {
                 insertAt = attribute.Span.End;
+                lastNamespace = attribute;
             }
+        }
+
+        var leading = " ";
+        if (lastNamespace is not null &&
+            TryGetLineIndent(doc.Text, lastNamespace.Span.Start, out var indent))
+        {
+            leading = DetectNewLine(doc.Text) + indent;
         }
 
         var pos = doc.PositionAt(insertAt);
         return new TextEdit
         {
             Range = new Lsp.Range(pos, pos),
-            NewText = $" xmlns:{prefix}=\"using:{clrNamespace}\"",
+            NewText = $"{leading}xmlns:{prefix}=\"{namespaceUri}\"",
         };
     }
+
+    private static bool TryGetLineIndent(string text, int offset, out string indent)
+    {
+        var lineStart = offset > 0
+            ? text.LastIndexOf('\n', offset - 1) + 1
+            : 0;
+        var length = offset - lineStart;
+        for (var index = 0; index < length; index++)
+        {
+            var ch = text[lineStart + index];
+            if (ch != ' ' && ch != '\t')
+            {
+                indent = string.Empty;
+                return false;
+            }
+        }
+
+        indent = text.Substring(lineStart, length);
+        return true;
+    }
+
+    private static string DetectNewLine(string text) =>
+        text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
 }

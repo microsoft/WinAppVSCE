@@ -15,7 +15,7 @@ internal static class XamlValidator
     /// <summary>An undeclared xmlns prefix — certain, so reported as an error.</summary>
     public const string UndeclaredPrefixCode = "WXAML0001";
 
-    /// <summary>A type not found in a known namespace — heuristic, so reported as a warning.</summary>
+    /// <summary>A type not found in a known namespace.</summary>
     public const string UnknownTypeCode = "WXAML0002";
 
     /// <summary>An attribute that is not a member of the element's type — heuristic, so a warning.</summary>
@@ -297,7 +297,7 @@ internal static class XamlValidator
         var elementType = typeSystem.ResolveType(uri, name.LocalName);
         if (elementType is null)
         {
-            diagnostics.Add(Diag(doc, name.LocalNameSpan, SeverityWarning, UnknownTypeCode,
+            diagnostics.Add(Diag(doc, name.LocalNameSpan, SeverityError, UnknownTypeCode,
                 $"The type '{name.LocalName}' was not found in the XAML namespace '{uri}'.",
                 SuggestData(name.LocalName, typeSystem.GetAllTypes(uri).Select(t => t.Name))));
             return;
@@ -464,7 +464,7 @@ internal static class XamlValidator
             var ownerSpan = new TextSpan(
                 name.LocalNameSpan.Start,
                 name.LocalNameSpan.Start + ownerLocal.Length);
-            diagnostics.Add(Diag(doc, ownerSpan, SeverityWarning, UnknownTypeCode,
+            diagnostics.Add(Diag(doc, ownerSpan, SeverityError, UnknownTypeCode,
                 $"The type '{ownerLocal}' was not found in the XAML namespace '{uri}'.",
                 SuggestData(ownerLocal, typeSystem.GetAllTypes(uri).Select(t => t.Name))));
             return;

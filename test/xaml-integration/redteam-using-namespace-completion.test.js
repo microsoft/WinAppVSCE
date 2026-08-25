@@ -226,6 +226,6 @@ describe("WinUI XAML — red-team 50 (using: namespace completion)", function ()
     assert.strictEqual(fix.kind, "quickfix");
     assert.strictEqual(fix.isPreferred, true);
     assert.strictEqual(fix.edits.length, 1, `expected one edit; got ${JSON.stringify(fix.edits)}`);
-    assert.strictEqual(fix.edits[0].newText, ' xmlns:zzz="using:SmokeFixture"');
+    assert.strictEqual(fix.edits[0].newText.replaceAll("\r\n", "\n"), '\n    xmlns:zzz="using:SmokeFixture"');
   });
 });

@@ -41,7 +41,11 @@ function findAddXmlnsFix(r, prefix) {
   assert.strictEqual(fix.kind, "quickfix", `${title} kind`);
   assert.strictEqual(fix.isPreferred, true, `${title} should be preferred`);
   assert.strictEqual(fix.edits.length, 1, `${title} should have exactly one edit`);
-  assert.strictEqual(fix.edits[0].newText, ` xmlns:${prefix}="${URI[prefix]}"`, `${title} inserted URI`);
+  assert.match(
+    fix.edits[0].newText,
+    new RegExp(`^\\s+xmlns:${prefix}="${URI[prefix]}"$`),
+    `${title} inserted URI`
+  );
   assertZeroWidth(fix.edits[0], `${title} edit`);
   return fix;
 }
@@ -157,8 +161,9 @@ describe("WinUI XAML — red-team 48 (Add xmlns quick fix)", function () {
     const buffer = `<Page ${defaultNS} ${xNS} Tag="keep" d:IsHidden="True">\n  <Grid />\n</Page>`;
     const r = await h.codeActionsAt(buffer, "WXAML0001", "d");
     const edit = findAddXmlnsFix(r, "d").edits[0];
+    assert.strictEqual(edit.newText, ` xmlns:d="${URI.d}"`);
     assertEditAtOffset(buffer, edit, buffer.indexOf(xNS) + xNS.length, "insertion after last xmlns");
-    const fixed = applySingleEdit(buffer, edit);
+    const fixed = applySingleEdit(buffer, edit).replaceAll("\r\n", "\n");
     assert.ok(fixed.includes(`${xNS} xmlns:d="${URI.d}" Tag="keep"`), fixed);
   });
 
@@ -166,9 +171,10 @@ describe("WinUI XAML — red-team 48 (Add xmlns quick fix)", function () {
     const buffer = `<Page\n  ${defaultNS}\n  Tag="keep"\n  ${xNS}\n  d:IsHidden="True">\n  <Grid />\n</Page>`;
     const r = await h.codeActionsAt(buffer, "WXAML0001", "d");
     const edit = findAddXmlnsFix(r, "d").edits[0];
+    assert.strictEqual(edit.newText.replaceAll("\r\n", "\n"), `\n  xmlns:d="${URI.d}"`);
     assertEditAtOffset(buffer, edit, buffer.indexOf(xNS) + xNS.length, "wrapped insertion after x xmlns");
-    const fixed = applySingleEdit(buffer, edit);
-    assert.ok(fixed.includes(`${xNS} xmlns:d="${URI.d}"\n  d:IsHidden`), fixed);
+    const fixed = applySingleEdit(buffer, edit).replaceAll("\r\n", "\n");
+    assert.ok(fixed.includes(`${xNS}\n  xmlns:d="${URI.d}"\n  d:IsHidden`), fixed);
   });
 
   it("inserts after the root element name when the root has no xmlns declarations", async () => {
