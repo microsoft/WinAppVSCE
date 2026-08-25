@@ -531,7 +531,10 @@ internal static class XamlValidator
             return;
         }
 
-        var memberType = typeSystem.GetAttachedMemberType(owner, memberName);
+        var memberType = typeSystem.GetAttachedMemberType(
+            owner,
+            memberName,
+            elementType);
         if (memberType is not null)
         {
             ValidateLiteralAttributeValue(attribute, memberType, typeSystem, doc, diagnostics);

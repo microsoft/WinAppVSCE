@@ -610,10 +610,58 @@ public sealed class XamlTypeSystemTests
         var (compilation, referenced) = CompileLibraryAndConsumer(WinUiLikeSource, appSource);
         var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
 
-        // Only namespaces that DIRECTLY declare a public, non-static class qualify: StaticOnly (no
-        // instantiable class), HiddenOnly (non-public), the global namespace (GlobalThing), and the empty
-        // parent "Outer" (only a child namespace, no direct type) are all excluded.
-        Assert.Equal(new[] { "Ok", "Outer.Inner" }, ts.GetUsingNamespaces().ToArray());
+        // Internal source types are valid XAML types within their own assembly. StaticOnly (no
+        // instantiable class), the global namespace (GlobalThing), and the empty parent "Outer"
+        // (only a child namespace, no direct type) are excluded.
+        Assert.Equal(new[] { "HiddenOnly", "Ok", "Outer.Inner" }, ts.GetUsingNamespaces().ToArray());
+    }
+
+    [Fact]
+    public void TypeEnumeration_IncludesInternalProjectTypesButNotInternalReferencedTypes()
+    {
+        const string librarySource = """
+            namespace Microsoft.UI.Xaml { public class DependencyObject { } }
+            namespace Library.Controls
+            {
+                public class PublicLibraryControl : Microsoft.UI.Xaml.DependencyObject { }
+                internal class InternalLibraryControl : Microsoft.UI.Xaml.DependencyObject { }
+                internal class InternalLibraryModel { }
+            }
+            """;
+        const string appSource = """
+            namespace App.Controls
+            {
+                public class PublicAppControl : Microsoft.UI.Xaml.DependencyObject { }
+                internal class InternalAppControl : Microsoft.UI.Xaml.DependencyObject { }
+                internal class InternalAppModel { }
+            }
+            """;
+        var (compilation, referenced) =
+            CompileLibraryAndConsumer(librarySource, appSource);
+        var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
+
+        var appElements = ts.GetTypes("using:App.Controls")
+            .Select(type => type.Name).ToHashSet();
+        var appTypes = ts.GetAllTypes("using:App.Controls")
+            .Select(type => type.Name).ToHashSet();
+        var libraryElements = ts.GetTypes("using:Library.Controls")
+            .Select(type => type.Name).ToHashSet();
+        var libraryTypes = ts.GetAllTypes("using:Library.Controls")
+            .Select(type => type.Name).ToHashSet();
+
+        Assert.Contains("InternalAppControl", appElements);
+        Assert.Contains("InternalAppModel", appTypes);
+        Assert.NotNull(
+            ts.ResolveType(
+                "using:App.Controls",
+                "InternalAppControl"));
+        Assert.Contains("PublicLibraryControl", libraryElements);
+        Assert.DoesNotContain("InternalLibraryControl", libraryElements);
+        Assert.DoesNotContain("InternalLibraryModel", libraryTypes);
+        Assert.Null(
+            ts.ResolveType(
+                "using:Library.Controls",
+                "InternalLibraryControl"));
     }
 
     [Fact]
@@ -629,6 +677,26 @@ public sealed class XamlTypeSystemTests
         // Consistent with FindNamespacesForTypeName: a using: element target is an instantiable class, so a
         // namespace containing only an enum/struct is not offered.
         Assert.Equal(new[] { "HasClass" }, ts.GetUsingNamespaces().ToArray());
+    }
+
+    [Fact]
+    public void StaticAttachedPropertyNamespaceIsKnownForValidation()
+    {
+        const string appSource = """
+            namespace Extensions
+            {
+                public static class LayoutExtensions
+                {
+                    public static int GetOrder(object value) => 0;
+                    public static void SetOrder(object value, int order) { }
+                }
+            }
+            """;
+        var (compilation, referenced) =
+            CompileLibraryAndConsumer(WinUiLikeSource, appSource);
+        var ts = XamlTypeSystem.FromCompilation(compilation, referenced);
+
+        Assert.True(ts.IsKnownNamespace("using:Extensions"));
     }
 
     [Fact]

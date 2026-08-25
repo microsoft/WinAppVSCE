@@ -13,7 +13,7 @@ public sealed class AttributeCompletionTests
     private const string Types = """
         namespace TestApp
         {
-            public class DependencyObject { }
+            public class DependencyObject : Microsoft.UI.Xaml.DependencyObject { }
             public class Page : DependencyObject
             {
                 public Microsoft.UI.Xaml.ResourceDictionary Resources { get; } = new();
@@ -52,6 +52,8 @@ public sealed class AttributeCompletionTests
             public class RowDefinition : DependencyObject { }
             public class ColumnDefinition : DependencyObject { }
             public class DoubleAnimation : DependencyObject { }
+            public class HelperService { }
+            public class ClickEventArgs : System.EventArgs { }
 
             public static class AutomationProperties
             {
@@ -72,6 +74,7 @@ public sealed class AttributeCompletionTests
 
         namespace Microsoft.UI.Xaml
         {
+            public class DependencyObject { }
             public struct Thickness { }
             public class FrameworkTemplate { }
             public class DataTemplate : FrameworkTemplate { }
@@ -95,6 +98,21 @@ public sealed class AttributeCompletionTests
                 public static void SetTargetName(object value, string name) { }
                 public static string GetTargetProperty(object value) => "";
                 public static void SetTargetProperty(object value, string name) { }
+            }
+        }
+
+        namespace Toolkit
+        {
+            public static class FrameworkElementExtensions
+            {
+                public static bool GetIsEnabled(TestApp.DependencyObject value) => false;
+                public static void SetIsEnabled(TestApp.DependencyObject value, bool enabled) { }
+            }
+
+            public static class GridExtensions
+            {
+                public static int GetColumn(TestApp.Grid value) => 0;
+                public static void SetColumn(TestApp.Grid value, int column) { }
             }
         }
         """;
@@ -456,6 +474,76 @@ public sealed class AttributeCompletionTests
             candidate => candidate.Label == "AutomationProperties.AccessibilityView");
 
         Assert.Equal("editor.action.triggerSuggest", item.Command?.Name);
+    }
+
+    [Fact]
+    public void NamespacePrefixCompletion_OffersAttachedPropertiesWithValidationCompatibleName()
+    {
+        const string marked = """
+            <Button xmlns="using:TestApp"
+                    xmlns:ui="using:Toolkit"
+                    ui:| />
+            """;
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        var item = Assert.Single(
+            CompletionProvider.Provide(
+                new TextDocument("file:///C:/test/Page.xaml", text),
+                offset,
+                CreateTypeSystem()).Items,
+            candidate =>
+                candidate.Label ==
+                "ui:FrameworkElementExtensions.IsEnabled");
+
+        Assert.Equal(
+            "ui:FrameworkElementExtensions.IsEnabled=\"$0\"",
+            item.TextEdit!.NewText);
+        Assert.StartsWith("attached property", item.Detail);
+    }
+
+    [Fact]
+    public void NamespacePrefixCompletion_FiltersIncompatibleAndExistingAttachedProperties()
+    {
+        const string marked = """
+            <Button xmlns="using:TestApp"
+                    xmlns:ui="using:Toolkit"
+                    ui:FrameworkElementExtensions.IsEnabled="true"
+                    ui:| />
+            """;
+        var labels = CompleteLabels(marked);
+
+        Assert.DoesNotContain(
+            "ui:FrameworkElementExtensions.IsEnabled",
+            labels);
+        Assert.DoesNotContain("ui:GridExtensions.Column", labels);
+    }
+
+    [Fact]
+    public void TargetTypeCompletion_OnlyOffersDependencyObjectTypes()
+    {
+        const string marked = """
+            <Style xmlns="using:Microsoft.UI.Xaml"
+                   xmlns:app="using:TestApp"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   TargetType="app:|" />
+            """;
+        var labels = CompleteLabels(marked);
+
+        Assert.Contains("Button", labels);
+        Assert.DoesNotContain("HelperService", labels);
+        Assert.DoesNotContain("ClickEventArgs", labels);
+    }
+
+    [Fact]
+    public void TargetTypeCompletion_DoesNotOfferXamlIntrinsicTypes()
+    {
+        const string marked = """
+            <Style xmlns="using:Microsoft.UI.Xaml"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   TargetType="x:|" />
+            """;
+
+        Assert.Empty(CompleteLabels(marked));
     }
 
     [Fact]

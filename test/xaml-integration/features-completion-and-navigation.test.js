@@ -26,6 +26,14 @@ describe("WinUI XAML — completion", function () {
     assert.ok(items.includes("Button"), `expected Button; got ${items.join(", ")}`);
   });
 
+  it("includes internal project controls in element names", async () => {
+    const items = await h.completionItemsAt(page("<local:Internal|"));
+    assert.ok(
+      items.some((item) => item.label === "InternalCard" && item.newText === "local:InternalCard"),
+      `expected internal project control completion; got ${JSON.stringify(items.slice(0, 30))}`
+    );
+  });
+
   it("attribute names (properties + events)", async () => {
     const items = await h.completionsAt(page("<Button |/>"));
     assert.ok(items.includes("Content"), "expected Content property");
@@ -809,14 +817,9 @@ describe("WinUI XAML — XAML intrinsic type completion", function () {
     assert.ok(!items.some((i) => i.label === "Boolean" && i.detail === "System"), `x:Str| must not offer Boolean; got ${JSON.stringify(items.slice(0, 20))}`);
   });
 
-  it("kind-filters TargetType intrinsics to reference types (round 56)", async () => {
+  it("filters TargetType to DependencyObject-derived XAML types", async () => {
     const items = await h.completionItemsAt(page('<Style TargetType="x:|" />'));
-    for (const refAlias of ["String", "Object", "Type"]) {
-      assert.ok(items.find((i) => i.label === refAlias && i.newText === `x:${refAlias}` && i.detail === "System"), `TargetType="x:|" (class-only) should offer the reference-type intrinsic ${refAlias}; got ${JSON.stringify(items.slice(0, 20))}`);
-    }
-    for (const valAlias of ["Int32", "Boolean"]) {
-      assert.ok(!items.some((i) => i.label === valAlias && i.detail === "System"), `TargetType="x:|" (class-only) must NOT offer the value-type intrinsic ${valAlias}; got ${JSON.stringify(items.slice(0, 20))}`);
-    }
+    assert.ok(!items.some((i) => i.detail === "System"), `TargetType="x:|" must not offer non-XAML System types; got ${JSON.stringify(items.slice(0, 20))}`);
   });
 
   it("keeps value-type intrinsics in kind-permissive sites like {x:Type x:|} (round 56)", async () => {

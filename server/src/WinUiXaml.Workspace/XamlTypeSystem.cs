@@ -135,7 +135,7 @@ namespace WinUiXaml.Workspace
             foreach (var binding in NamespacesFor(xmlnsUri))
             {
                 var type = FindType(binding, localName);
-                if (type is not null)
+                if (type is not null && IsUsableType(type))
                 {
                     return type;
                 }
@@ -255,7 +255,7 @@ namespace WinUiXaml.Workspace
             return _compilation
                 .GetSymbolsWithName(simpleName, SymbolFilter.Type)
                 .OfType<INamedTypeSymbol>()
-                .Where(t => t.TypeKind == TypeKind.Class && !t.IsStatic &&
+                .Where(t => IsUsableClass(t) &&
                     t.ContainingNamespace is { IsGlobalNamespace: false })
                 .Select(t => t.ContainingNamespace.ToDisplayString())
                 .Where(ns => !string.IsNullOrEmpty(ns))
@@ -268,7 +268,10 @@ namespace WinUiXaml.Workspace
         public IReadOnlyList<string> GetUsingNamespaces()
         {
             var result = new SortedSet<string>(StringComparer.Ordinal);
-            CollectUsableNamespaces(_compilation.Assembly.GlobalNamespace, result);
+            CollectUsableNamespaces(
+                _compilation.Assembly.GlobalNamespace,
+                result,
+                allowInternal: true);
             return result.ToList();
         }
 
@@ -281,7 +284,10 @@ namespace WinUiXaml.Workspace
             }
 
             var all = new SortedSet<string>(StringComparer.Ordinal);
-            CollectUsableNamespaces(_compilation.GlobalNamespace, all);
+            CollectUsableNamespaces(
+                _compilation.GlobalNamespace,
+                all,
+                allowInternal: false);
             all.ExceptWith(GetUsingNamespaces());
 
             return _referencedUsingNamespaces = all.ToList();
@@ -341,7 +347,7 @@ namespace WinUiXaml.Workspace
                          .GetSymbolsWithName(simpleName, SymbolFilter.Type)
                          .OfType<INamedTypeSymbol>())
             {
-                if (IsPublicClass(type) && !type.IsAbstract &&
+                if (IsUsableClass(type) && !type.IsAbstract &&
                     IsAssignableTo(type, dependencyObject) && seen.Add(type))
                 {
                     result.Add(type);
@@ -532,23 +538,26 @@ namespace WinUiXaml.Workspace
             return resources.Values.OrderBy(resource => resource.Key, StringComparer.Ordinal).ToList();
         }
 
-        private static void CollectUsableNamespaces(INamespaceSymbol ns, SortedSet<string> into)
+        private static void CollectUsableNamespaces(
+            INamespaceSymbol ns,
+            SortedSet<string> into,
+            bool allowInternal)
         {
             if (!ns.IsGlobalNamespace &&
                 ns.GetTypeMembers().Any(t =>
                     t.TypeKind == TypeKind.Class && !t.IsStatic &&
-                    t.DeclaredAccessibility == Accessibility.Public))
+                    IsAccessibleTopLevelType(t, allowInternal)))
             {
                 into.Add(ns.ToDisplayString());
             }
 
             foreach (var child in ns.GetNamespaceMembers())
             {
-                CollectUsableNamespaces(child, into);
+                CollectUsableNamespaces(child, into, allowInternal);
             }
         }
 
-        /// <summary> Enumerates the public, instantiable types available under an xmlns URI. This is the raw candidate set for element-name completion.</summary>
+        /// <summary>Enumerates instantiable types available under an xmlns URI. Internal types are usable from the active project assembly; referenced assemblies remain public-only.</summary>
         public IEnumerable<INamedTypeSymbol> GetTypes(string xmlnsUri)
         {
             var seen = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
@@ -562,7 +571,7 @@ namespace WinUiXaml.Workspace
 
                 foreach (var type in ns.GetTypeMembers())
                 {
-                    if (IsPublicClass(type) && seen.Add(type))
+                    if (IsUsableClass(type) && seen.Add(type))
                     {
                         yield return type;
                     }
@@ -570,7 +579,7 @@ namespace WinUiXaml.Workspace
             }
         }
 
-        /// <summary>Enumerates every public type available under an xmlns URI — classes (including static classes), structs, enums, interfaces, and delegates.</summary>
+        /// <summary>Enumerates every usable type under an xmlns URI. Internal types are usable from the active project assembly; referenced assemblies remain public-only.</summary>
         public IEnumerable<INamedTypeSymbol> GetAllTypes(string xmlnsUri)
         {
             var seen = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
@@ -584,7 +593,7 @@ namespace WinUiXaml.Workspace
 
                 foreach (var type in ns.GetTypeMembers())
                 {
-                    if (IsPublicType(type) && seen.Add(type))
+                    if (IsUsableType(type) && seen.Add(type))
                     {
                         yield return type;
                     }
@@ -967,6 +976,13 @@ namespace WinUiXaml.Workspace
         public bool HasAttachedMember(INamedTypeSymbol owner, string member)
             => GetAttachedMemberType(owner, member) is not null;
 
+        /// <summary>True when an attached-property accessor accepts the target element as its receiver.</summary>
+        public static bool IsAttachedPropertyApplicable(
+            XamlMemberInfo member,
+            ITypeSymbol targetType) =>
+            member.Symbol is IMethodSymbol { Parameters.Length: > 0 } accessor &&
+            IsAssignableTo(targetType, accessor.Parameters[0].Type);
+
         /// <summary>Enumerates the members bindable via {x:Bind} on type: public instance properties (with a getter), fields, and ordinary methods.</summary>
         public IEnumerable<ISymbol> GetBindableMembers(ITypeSymbol? type, bool includeRootNonPublic = false)
         {
@@ -1047,6 +1063,13 @@ namespace WinUiXaml.Workspace
 
         /// <summary>Returns the value type of an attached-property accessor, accepting either accessor half.</summary>
         public ITypeSymbol? GetAttachedMemberType(INamedTypeSymbol owner, string member)
+            => GetAttachedMemberType(owner, member, targetType: null);
+
+        /// <summary>Returns the value type of an attached-property accessor that accepts the optional target element.</summary>
+        public ITypeSymbol? GetAttachedMemberType(
+            INamedTypeSymbol owner,
+            string member,
+            ITypeSymbol? targetType)
         {
             if (owner is null || string.IsNullOrEmpty(member))
             {
@@ -1063,13 +1086,17 @@ namespace WinUiXaml.Workspace
                     }
 
                     if (string.Equals(m.Name, "Get" + member, StringComparison.Ordinal) &&
-                        m.Parameters.Length == 1 && !m.ReturnsVoid)
+                        m.Parameters.Length == 1 && !m.ReturnsVoid &&
+                        (targetType is null ||
+                         IsAssignableTo(targetType, m.Parameters[0].Type)))
                     {
                         return m.ReturnType;
                     }
 
                     if (string.Equals(m.Name, "Set" + member, StringComparison.Ordinal) &&
-                        m.Parameters.Length == 2 && m.ReturnsVoid)
+                        m.Parameters.Length == 2 && m.ReturnsVoid &&
+                        (targetType is null ||
+                         IsAssignableTo(targetType, m.Parameters[0].Type)))
                     {
                         return m.Parameters[1].Type;
                     }
@@ -1378,6 +1405,31 @@ namespace WinUiXaml.Workspace
             type.DeclaredAccessibility == Accessibility.Public &&
             type.TypeKind == TypeKind.Class &&
             !type.IsStatic;
+
+        private bool IsUsableClass(INamedTypeSymbol type) =>
+            IsAccessibleTopLevelType(
+                type,
+                SymbolEqualityComparer.Default.Equals(
+                    type.ContainingAssembly,
+                    _compilation.Assembly)) &&
+            type.TypeKind == TypeKind.Class &&
+            !type.IsStatic;
+
+        private bool IsUsableType(INamedTypeSymbol type) =>
+            IsAccessibleTopLevelType(
+                type,
+                SymbolEqualityComparer.Default.Equals(
+                    type.ContainingAssembly,
+                    _compilation.Assembly)) &&
+            type.TypeKind is TypeKind.Class or TypeKind.Struct or TypeKind.Enum
+                or TypeKind.Interface or TypeKind.Delegate;
+
+        private static bool IsAccessibleTopLevelType(
+            INamedTypeSymbol type,
+            bool allowInternal) =>
+            type.DeclaredAccessibility == Accessibility.Public ||
+            (allowInternal &&
+             type.DeclaredAccessibility == Accessibility.Internal);
 
         private static bool IsPublicType(INamedTypeSymbol type) =>
             type.DeclaredAccessibility == Accessibility.Public &&

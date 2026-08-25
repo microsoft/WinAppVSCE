@@ -9,6 +9,33 @@ namespace WinUiXaml.LanguageServer.Tests;
 
 public sealed class CompletionProviderResourceTests
 {
+    [Fact]
+    public void LargeResourceCompletionMarksTruncatedListIncomplete()
+    {
+        var typeSystem = CreateTypeSystem(
+            Path.Combine(
+                Path.GetTempPath(),
+                "WinUiXaml.Tests",
+                Guid.NewGuid().ToString("N")));
+        const string marked =
+            """<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Background="{ThemeResource |}" />""";
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        var keys = Enumerable.Range(0, 2_001)
+            .Select(index => $"ProjectKey{index:D4}")
+            .ToArray();
+
+        var result = CompletionProvider.Provide(
+            new TextDocument("file:///Page.xaml", text),
+            offset,
+            typeSystem,
+            appResourceKeys: keys);
+
+        Assert.True(result.IsIncomplete);
+        Assert.Equal(2_000, result.Items.Count);
+        Assert.Contains(result.Items, item => item.Label == "ProjectKey0000");
+    }
+
     private const string Presentation = XamlTypeSystem.PresentationNamespace;
     private const string Xaml = XamlTypeSystem.XamlLanguageNamespace;
 

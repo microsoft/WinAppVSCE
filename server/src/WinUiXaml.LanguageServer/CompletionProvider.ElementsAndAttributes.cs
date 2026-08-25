@@ -397,14 +397,6 @@ internal static partial class CompletionProvider
         int nameEnd = AttributeNameTokenEnd(doc.Text, offset);
         bool appendValue = NextNonWhitespace(doc.Text, nameEnd) != '=';
         var nameReplaceRange = doc.RangeOf(new TextSpan(ctx.ReplaceStart, nameEnd));
-
-        // "Owner.member" partial -> attached-property completion for the owner type.
-        int dot = ctx.Partial.LastIndexOf('.');
-        if (dot >= 0)
-        {
-            return CompleteAttachedProperty(ctx, dot, scope, typeSystem, nameReplaceRange, appendValue);
-        }
-
         var elementType = ResolveElementType(element.Name, scope, typeSystem);
         if (elementType is null)
         {
@@ -416,6 +408,32 @@ internal static partial class CompletionProvider
                 .Where(a => !a.IsNamespaceDeclaration && a.Name.LocalNameSpan.Start != ctx.ReplaceStart)
                 .Select(a => a.Name.FullName),
             StringComparer.Ordinal);
+
+        // "Owner.member" partial -> attached-property completion for the owner type.
+        int dot = ctx.Partial.LastIndexOf('.');
+        if (dot >= 0)
+        {
+            return CompleteAttachedProperty(ctx, dot, scope, typeSystem, nameReplaceRange, appendValue);
+        }
+
+        int colon = ctx.Partial.IndexOf(':');
+        if (colon > 0 &&
+            scope.TryResolvePrefix(ctx.Partial.Substring(0, colon), out var attributeNamespace) &&
+            !string.Equals(
+                attributeNamespace,
+                XamlTypeSystem.XamlLanguageNamespace,
+                StringComparison.Ordinal))
+        {
+            return CompletePrefixedAttachedProperties(
+                ctx.Partial.Substring(0, colon),
+                ctx.Partial.Substring(colon + 1),
+                attributeNamespace,
+                elementType,
+                existing,
+                typeSystem,
+                nameReplaceRange,
+                appendValue);
+        }
         var existingDirectives = new HashSet<string>(
             element.Attributes
                 .Where(attribute =>
@@ -751,6 +769,58 @@ internal static partial class CompletionProvider
         return Finish(items);
     }
 
+    /// <summary>Completes attached properties when only a namespace prefix or owner partial has been typed, for example <c>ui:|</c> or <c>ui:Framework|</c>.</summary>
+    private static CompletionList CompletePrefixedAttachedProperties(
+        string prefix,
+        string ownerPartial,
+        string namespaceUri,
+        INamedTypeSymbol elementType,
+        HashSet<string> existing,
+        XamlTypeSystem typeSystem,
+        Lsp.Range replaceRange,
+        bool appendValue)
+    {
+        var items = new List<CompletionItem>();
+        foreach (var owner in typeSystem.GetAllTypes(namespaceUri))
+        {
+            if (!StartsWith(owner.Name, ownerPartial))
+            {
+                continue;
+            }
+
+            foreach (var member in typeSystem.GetAttachedProperties(owner))
+            {
+                var qualified = prefix + ":" + owner.Name + "." + member.Name;
+                if (existing.Contains(qualified) ||
+                    !XamlTypeSystem.IsAttachedPropertyApplicable(
+                        member,
+                        elementType))
+                {
+                    continue;
+                }
+
+                items.Add(new CompletionItem
+                {
+                    Label = qualified,
+                    Kind = CompletionItemKind.Property,
+                    Documentation = CompletionDoc(member.Symbol),
+                    Detail = "attached property" + (member.Type != null ? " : " + member.Type.ToDisplayString() : string.Empty),
+                    TextEdit = new TextEdit
+                    {
+                        Range = replaceRange,
+                        NewText = appendValue ? qualified + "=\"$0\"" : qualified,
+                    },
+                    InsertTextFormat = appendValue ? SnippetInsertFormat : null,
+                    Command = AttributeValueSuggestionCommand(member, typeSystem, appendValue),
+                    FilterText = qualified,
+                    SortText = owner.Name + "." + member.Name,
+                });
+            }
+        }
+
+        return Finish(items);
+    }
+
     private static Lsp.Command? AttributeValueSuggestionCommand(
         XamlMemberInfo member,
         XamlTypeSystem typeSystem,
@@ -876,7 +946,13 @@ internal static partial class CompletionProvider
             string.Equals(ctx.AttributeName, "TargetType", StringComparison.Ordinal) &&
             ctx.AttributeName!.IndexOf(':') < 0)
         {
-            return CompleteTypeNameValue(ctx.Partial, scope, typeSystem, replaceRange);
+            return CompleteTypeNameValue(
+                ctx.Partial,
+                scope,
+                typeSystem,
+                replaceRange,
+                requiredBaseType: typeSystem.ResolveMetadataType(
+                    "Microsoft.UI.Xaml.DependencyObject"));
         }
 
         // x:DataType roots binding completion and accepts any type kind.
@@ -1026,7 +1102,8 @@ internal static partial class CompletionProvider
     /// <summary>Completes type names for a type-valued attribute.</summary>
     private static CompletionList CompleteTypeNameValue(
         string partial, XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange,
-        bool allTypeKinds = false)
+        bool allTypeKinds = false,
+        INamedTypeSymbol? requiredBaseType = null)
     {
         SplitQualified(partial, out var prefix, out var local);
         if (!scope.TryResolvePrefix(prefix, out var uri))
@@ -1039,7 +1116,10 @@ internal static partial class CompletionProvider
         var types = allTypeKinds ? typeSystem.GetAllTypes(uri) : typeSystem.GetTypes(uri);
         foreach (var type in types)
         {
-            if (!StartsWith(type.Name, local) || !seen.Add(type.Name))
+            if (!StartsWith(type.Name, local) ||
+                (requiredBaseType is not null &&
+                 !XamlTypeSystem.IsAssignableTo(type, requiredBaseType)) ||
+                !seen.Add(type.Name))
             {
                 continue;
             }
@@ -1063,7 +1143,12 @@ internal static partial class CompletionProvider
             foreach (var intrinsic in typeSystem.GetXamlIntrinsicTypes(allTypeKinds))
             {
                 var alias = intrinsic.Key;
-                if (!StartsWith(alias, local) || !seen.Add(alias))
+                if (!StartsWith(alias, local) ||
+                    (requiredBaseType is not null &&
+                     !XamlTypeSystem.IsAssignableTo(
+                         intrinsic.Value,
+                         requiredBaseType)) ||
+                    !seen.Add(alias))
                 {
                     continue;
                 }

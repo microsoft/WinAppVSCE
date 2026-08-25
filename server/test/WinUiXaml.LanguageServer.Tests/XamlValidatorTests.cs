@@ -149,6 +149,21 @@ public class XamlValidatorTests
             public struct Color { }
         }
 
+        namespace Toolkit
+        {
+            public static class FrameworkElementExtensions
+            {
+                public static bool GetIsEnabled(Microsoft.UI.Xaml.FrameworkElement value) => false;
+                public static void SetIsEnabled(Microsoft.UI.Xaml.FrameworkElement value, bool enabled) { }
+            }
+
+            public static class ChildExtensions
+            {
+                public static int GetRank(TestApp.Child value) => 0;
+                public static void SetRank(TestApp.Child value, int rank) { }
+            }
+        }
+
         namespace Microsoft.UI
         {
             public static class Colors
@@ -1049,6 +1064,43 @@ public class XamlValidatorTests
             Validate(invalid),
             diagnostic => diagnostic.Code == XamlValidator.UnknownBindMemberCode &&
                 diagnostic.Message.Contains("'Missing'"));
+    }
+
+    [Fact]
+    public void PrefixedAttachedPropertyDiscoveredByCompletionIsValidated()
+    {
+        const string valid = """
+            <Page xmlns="using:TestApp"
+                  xmlns:ui="using:Toolkit"
+                  ui:FrameworkElementExtensions.IsEnabled="true" />
+            """;
+        const string invalid = """
+            <Page xmlns="using:TestApp"
+                  xmlns:ui="using:Toolkit"
+                  ui:FrameworkElementExtensions.IsEnabld="true" />
+            """;
+
+        Assert.DoesNotContain(
+            Validate(valid),
+            diagnostic =>
+                diagnostic.Code ==
+                XamlValidator.UnknownAttachedPropertyCode);
+        Assert.Contains(
+            Validate(invalid),
+            diagnostic =>
+                diagnostic.Code ==
+                XamlValidator.UnknownAttachedPropertyCode);
+
+        const string incompatible = """
+            <Page xmlns="using:TestApp"
+                  xmlns:ui="using:Toolkit"
+                  ui:ChildExtensions.Rank="1" />
+            """;
+        Assert.Contains(
+            Validate(incompatible),
+            diagnostic =>
+                diagnostic.Code ==
+                XamlValidator.UnknownAttachedPropertyCode);
     }
 
     [Fact]

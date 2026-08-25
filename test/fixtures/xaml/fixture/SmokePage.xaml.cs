@@ -29,3 +29,12 @@ public sealed partial class SmokePage : Page
         Frame.Navigate(typeof(Page2));
     }
 }
+
+internal sealed class InternalCard : Control
+{
+}
+
+internal sealed class InternalViewModel
+{
+    public string Title { get; } = "Internal";
+}

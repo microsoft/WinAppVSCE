@@ -129,6 +129,15 @@ describe("WinUI XAML — red-team 54 (x:DataType value type completion)", functi
     findSmokeType(items, "local:Smo partial should offer SmokePage as a prefix-qualified type item");
   });
 
+  it("offers internal project models for x:DataType", async () => {
+    const items = await itemsAt(page('<ListView><ListView.ItemTemplate><DataTemplate x:DataType="local:Internal|"><TextBlock /></DataTemplate></ListView.ItemTemplate></ListView>'));
+    findItem(
+      items,
+      (item) => item.label === "InternalViewModel" && item.newText === "local:InternalViewModel" && item.detail === "SmokeFixture",
+      "internal project models should remain valid x:DataType candidates within their own assembly"
+    );
+  });
+
   it("replaces the partial project type token instead of corrupting it", async () => {
     const probe = page('<ListView><ListView.ItemTemplate><DataTemplate x:DataType="local:Smo|"><TextBlock /></DataTemplate></ListView.ItemTemplate></ListView>');
     const { clean, items } = await completionItemsWithRangesAt(probe);
