@@ -78,6 +78,10 @@ public sealed class AttributeCompletionTests
             public struct Thickness { }
             public class FrameworkTemplate { }
             public class DataTemplate : FrameworkTemplate { }
+            public class Style : DependencyObject
+            {
+                public System.Type TargetType { get; set; } = typeof(object);
+            }
             public class ResourceDictionary
             {
                 public System.Collections.Generic.Dictionary<string, ResourceDictionary> ThemeDictionaries { get; } = new();
