@@ -179,4 +179,32 @@ describe("WinUI XAML — gap #4 red-team", function () {
     assert.ok(card, `expected controls:SettingsCard; got ${JSON.stringify(toolkitItems(items))}`);
     assertAppliedSettEdit(buffer, card, "controls");
   });
+
+  it("offers Ctrl+. import edits for an unresolved referenced control", async () => {
+    const buffer = page("<Grid><SettingsCard></SettingsCard></Grid>");
+    const result = await h.codeActionsAt(buffer, "WXAML0002", "SettingsCard");
+    const action = result.actions.find(
+      (candidate) =>
+        candidate.title === `Import 'SettingsCard' from '${TOOLKIT_NS}'` &&
+        candidate.kind === "quickfix"
+    );
+
+    assert.ok(action, `expected SettingsCard import quick fix; got ${JSON.stringify(result.actions)}`);
+    assert.strictEqual(action.isPreferred, true, "the sole matching namespace should be preferred");
+    assert.strictEqual(action.edits.length, 3, "the fix should edit xmlns plus opening and closing tags");
+
+    const applied = applyAdditionalEdits(
+      buffer,
+      action.edits.map((edit) => ({
+        range: {
+          start: { line: edit.line, character: edit.character },
+          end: { line: edit.endLine, character: edit.endCharacter },
+        },
+        newText: edit.newText,
+      }))
+    );
+    assert.ok(applied.includes(`xmlns:controls="${TOOLKIT_XMLNS}"`), `missing toolkit xmlns: ${applied}`);
+    assert.ok(applied.includes("<controls:SettingsCard>"), `opening tag was not qualified: ${applied}`);
+    assert.ok(applied.includes("</controls:SettingsCard>"), `closing tag was not qualified: ${applied}`);
+  });
 });

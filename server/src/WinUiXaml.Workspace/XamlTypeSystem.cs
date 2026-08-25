@@ -315,6 +315,43 @@ namespace WinUiXaml.Workspace
             return _referencedElementTypes = result;
         }
 
+        /// <summary>Finds public, concrete WinUI element types with the given simple name in the project and its references.</summary>
+        public IReadOnlyList<INamedTypeSymbol> FindElementTypesByName(string simpleName)
+        {
+            if (string.IsNullOrEmpty(simpleName) ||
+                _compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.DependencyObject") is not { } dependencyObject)
+            {
+                return System.Array.Empty<INamedTypeSymbol>();
+            }
+
+            var result = new List<INamedTypeSymbol>();
+            var seen = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+            foreach (var type in _compilation
+                         .GetSymbolsWithName(simpleName, SymbolFilter.Type)
+                         .OfType<INamedTypeSymbol>())
+            {
+                if (IsPublicClass(type) && !type.IsAbstract &&
+                    IsAssignableTo(type, dependencyObject) && seen.Add(type))
+                {
+                    result.Add(type);
+                }
+            }
+
+            foreach (var type in GetReferencedElementTypes())
+            {
+                if (string.Equals(type.Name, simpleName, StringComparison.Ordinal) &&
+                    !type.IsAbstract && seen.Add(type))
+                {
+                    result.Add(type);
+                }
+            }
+
+            return result
+                .OrderBy(type => type.ContainingNamespace?.ToDisplayString(), StringComparer.Ordinal)
+                .ThenBy(type => type.ContainingAssembly?.Name, StringComparer.Ordinal)
+                .ToList();
+        }
+
         /// <summary>The distinct CLR namespaces reachable through an xmlns URI (using:, clr-namespace:, or a registered XmlnsDefinitionAttribute).</summary>
         public IEnumerable<string> ClrNamespacesForUri(string xmlnsUri)
         {
@@ -1145,7 +1182,10 @@ namespace WinUiXaml.Workspace
             return null;
         }
 
-        /// <summary>If type is an array or a generic collection (implements IEnumerable{T}), returns the element type T; otherwise null.</summary>
+        /// <summary>
+        /// Returns the XAML child type for an array or generic collection.
+        /// Dictionary content consists of keyed values rather than CLR KeyValuePair entries.
+        /// </summary>
         public static ITypeSymbol? GetCollectionElementType(ITypeSymbol? type)
         {
             if (type is null)
@@ -1162,6 +1202,16 @@ namespace WinUiXaml.Workspace
             if (type is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface)
             {
                 interfaces = new[] { iface }.Concat(interfaces);
+            }
+
+            foreach (var i in interfaces)
+            {
+                if (i is { IsGenericType: true, TypeArguments.Length: 2 } &&
+                    i.ConstructedFrom.MetadataName == "IDictionary`2" &&
+                    i.ConstructedFrom.ContainingNamespace.ToDisplayString() == "System.Collections.Generic")
+                {
+                    return i.TypeArguments[1];
+                }
             }
 
             foreach (var i in interfaces)

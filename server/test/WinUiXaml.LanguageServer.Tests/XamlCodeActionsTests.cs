@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Collections.Immutable;
@@ -330,6 +331,46 @@ public class XamlCodeActionsTests
         return XamlTypeSystem.FromCompilation(compilation, ImmutableArray<IAssemblySymbol>.Empty);
     }
 
+    private static XamlTypeSystem BuildWinUiTypeSystem(string controls)
+    {
+        var source = $$"""
+            namespace Microsoft.UI.Xaml
+            {
+                public class DependencyObject { }
+            }
+            {{controls}}
+            """;
+        return BuildTypeSystem(source);
+    }
+
+    private static XamlTypeSystem BuildReferencedWinUiTypeSystem(string controls)
+    {
+        var frameworkReference = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+        var library = CSharpCompilation.Create(
+            "ControlLibrary",
+            new[] { CSharpSyntaxTree.ParseText($$"""
+                namespace Microsoft.UI.Xaml
+                {
+                    public class DependencyObject { }
+                }
+                {{controls}}
+                """) },
+            new[] { frameworkReference },
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        using var image = new MemoryStream();
+        var emit = library.Emit(image);
+        Assert.True(emit.Success, string.Join("; ", emit.Diagnostics));
+        var libraryReference = MetadataReference.CreateFromImage(image.ToArray());
+        var consumer = CSharpCompilation.Create(
+            "TestApp",
+            references: new[] { frameworkReference, libraryReference },
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var libraryAssembly = Assert.IsAssignableFrom<IAssemblySymbol>(
+            consumer.GetAssemblyOrModuleSymbol(libraryReference));
+        return XamlTypeSystem.FromCompilation(consumer, ImmutableArray.Create(libraryAssembly));
+    }
+
     [Fact]
     public void UndeclaredCustomPrefix_WithTypeSystem_InfersUsingForSourceType()
     {
@@ -414,5 +455,190 @@ public class XamlCodeActionsTests
         Assert.Equal(
             " xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\"",
             Assert.Single(action.Edit!.Changes[Uri]).NewText);
+    }
+
+    // ── WXAML0002: import an unresolved unprefixed element type ─────────────────────────────────────
+
+    [Fact]
+    public void UnknownUnprefixedType_SelfClosing_AddsNamespaceAndQualifiesElement()
+    {
+        var ts = BuildWinUiTypeSystem(
+            "namespace SampleApp.Controls { public class InfoCard : Microsoft.UI.Xaml.DependencyObject { } }");
+        var xaml = "<Page xmlns=\"P\"><InfoCard /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("InfoCard");
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode, R(0, nameAt, nameAt + "InfoCard".Length), Data("InfoCard"));
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts));
+
+        Assert.Equal("Import 'InfoCard' from 'SampleApp.Controls'", action.Title);
+        Assert.True(action.IsPreferred);
+        var edits = action.Edit!.Changes[Uri];
+        Assert.Contains(edits, edit => edit.NewText == " xmlns:controls=\"using:SampleApp.Controls\"");
+        var qualifier = Assert.Single(edits, edit => edit.NewText == "controls:");
+        Assert.Equal(nameAt, doc.OffsetAt(qualifier.Range.Start));
+    }
+
+    [Fact]
+    public void UnknownUnprefixedType_PairedElement_QualifiesOpeningAndClosingTags()
+    {
+        var ts = BuildWinUiTypeSystem(
+            "namespace SampleApp.Controls { public class InfoCard : Microsoft.UI.Xaml.DependencyObject { } }");
+        var xaml = "<Page xmlns=\"P\"><InfoCard></InfoCard></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int openAt = xaml.IndexOf("InfoCard");
+        int closeAt = xaml.LastIndexOf("InfoCard");
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode, R(0, openAt, openAt + "InfoCard".Length), Data("InfoCard"));
+
+        var edits = XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts)
+            .Single(action => action.Kind == "quickfix")
+            .Edit!.Changes[Uri];
+        var qualifiers = edits.Where(edit => edit.NewText == "controls:").ToList();
+
+        Assert.Equal(2, qualifiers.Count);
+        Assert.Contains(qualifiers, edit => doc.OffsetAt(edit.Range.Start) == openAt);
+        Assert.Contains(qualifiers, edit => doc.OffsetAt(edit.Range.Start) == closeAt);
+    }
+
+    [Fact]
+    public void UnknownUnprefixedType_ReusesExistingNamespacePrefix()
+    {
+        var ts = BuildWinUiTypeSystem(
+            "namespace SampleApp.Controls { public class InfoCard : Microsoft.UI.Xaml.DependencyObject { } }");
+        var xaml =
+            "<Page xmlns=\"P\" xmlns:kit=\"using:SampleApp.Controls\"><InfoCard /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("InfoCard");
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode, R(0, nameAt, nameAt + "InfoCard".Length), Data("InfoCard"));
+
+        var edits = XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts)
+            .Single(action => action.Kind == "quickfix")
+            .Edit!.Changes[Uri];
+
+        Assert.Single(edits);
+        Assert.Equal("kit:", edits[0].NewText);
+    }
+
+    [Fact]
+    public void UnknownUnprefixedType_ConflictingGeneratedPrefixGetsNumericSuffix()
+    {
+        var ts = BuildWinUiTypeSystem(
+            "namespace SampleApp.Controls { public class InfoCard : Microsoft.UI.Xaml.DependencyObject { } }");
+        var xaml = "<Page xmlns=\"P\" xmlns:controls=\"using:Other.Controls\"><InfoCard /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("InfoCard");
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode, R(0, nameAt, nameAt + "InfoCard".Length), Data("InfoCard"));
+
+        var edits = XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts)
+            .Single(action => action.Kind == "quickfix")
+            .Edit!.Changes[Uri];
+
+        Assert.Contains(edits, edit => edit.NewText == "controls2:");
+        Assert.Contains(
+            edits,
+            edit => edit.NewText == " xmlns:controls2=\"using:SampleApp.Controls\"");
+    }
+
+    [Fact]
+    public void UnknownUnprefixedType_AmbiguousNamespaces_OffersOneNonPreferredActionPerNamespace()
+    {
+        var ts = BuildWinUiTypeSystem("""
+            namespace Alpha.Controls
+            {
+                public class InfoCard : Microsoft.UI.Xaml.DependencyObject { }
+            }
+            namespace Beta.Controls
+            {
+                public class InfoCard : Microsoft.UI.Xaml.DependencyObject { }
+            }
+            """);
+        var xaml = "<Page xmlns=\"P\"><InfoCard /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("InfoCard");
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode, R(0, nameAt, nameAt + "InfoCard".Length), Data("InfoCard"));
+
+        var actions = XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts);
+
+        Assert.Equal(2, actions.Count);
+        Assert.Contains(actions, action => action.Title == "Import 'InfoCard' from 'Alpha.Controls'");
+        Assert.Contains(actions, action => action.Title == "Import 'InfoCard' from 'Beta.Controls'");
+        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
+    }
+
+    [Fact]
+    public void UnknownUnprefixedType_ReferencedControl_IsImportable()
+    {
+        var ts = BuildReferencedWinUiTypeSystem(
+            "namespace Contoso.Controls { public class InfoCard : Microsoft.UI.Xaml.DependencyObject { } }");
+        var xaml = "<Page xmlns=\"P\"><InfoCard /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("InfoCard");
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode, R(0, nameAt, nameAt + "InfoCard".Length), Data("InfoCard"));
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts));
+
+        Assert.Equal("Import 'InfoCard' from 'Contoso.Controls'", action.Title);
+        Assert.Contains(
+            action.Edit!.Changes[Uri],
+            edit => edit.NewText == " xmlns:controls=\"using:Contoso.Controls\"");
+    }
+
+    [Fact]
+    public void UnknownUnprefixedType_NonWinUiClass_ProducesNoImportAction()
+    {
+        var ts = BuildWinUiTypeSystem("namespace SampleApp.Controls { public class InfoCard { } }");
+        var xaml = "<Page xmlns=\"P\"><InfoCard /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("InfoCard");
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode, R(0, nameAt, nameAt + "InfoCard".Length), Data("InfoCard"));
+
+        Assert.Empty(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts));
+    }
+
+    [Fact]
+    public void UnknownUnprefixedType_IncompleteOpenTag_StillOffersImport()
+    {
+        var ts = BuildWinUiTypeSystem(
+            "namespace SampleApp.Controls { public class InfoCard : Microsoft.UI.Xaml.DependencyObject { } }");
+        var xaml = "<InfoCard";
+        var doc = new TextDocument(Uri, xaml);
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode, R(0, 1, 9), Data("InfoCard"));
+
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts));
+
+        Assert.Equal("Import 'InfoCard' from 'SampleApp.Controls'", action.Title);
+        Assert.Contains(action.Edit!.Changes[Uri], edit => edit.NewText == "controls:");
+        Assert.Contains(
+            action.Edit.Changes[Uri],
+            edit => edit.NewText == " xmlns:controls=\"using:SampleApp.Controls\"");
+    }
+
+    [Fact]
+    public void UnknownUnprefixedType_ImportAndSpellingFix_HaveSinglePreferredAction()
+    {
+        var ts = BuildWinUiTypeSystem(
+            "namespace SampleApp.Controls { public class InfoCard : Microsoft.UI.Xaml.DependencyObject { } }");
+        var xaml = "<Page xmlns=\"P\"><InfoCard /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("InfoCard");
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode,
+            R(0, nameAt, nameAt + "InfoCard".Length),
+            Data("InfoCard", "InfoBar"));
+
+        var actions = XamlCodeActions.Compute(Uri, doc, Context(diagnostic), ts);
+        var import = actions.Single(action => action.Title.StartsWith("Import ", System.StringComparison.Ordinal));
+        var spelling = actions.Single(action => action.Title.StartsWith("Change ", System.StringComparison.Ordinal));
+
+        Assert.True(import.IsPreferred);
+        Assert.NotEqual(true, spelling.IsPreferred);
     }
 }

@@ -268,7 +268,7 @@ internal static class XamlValidator
             return;
         }
 
-        // Out of scope: the x: language namespace (built-in primitives) and any namespace the type system cannot model (design-time, third-party). A property element carries no prefix, so it resolves through the default namespace like any other element here.
+        // Out of scope: the x: language namespace (built-in primitives) and any namespace the type system cannot model (design-time, third-party).
         if (!scope.TryResolvePrefix(name.Prefix, out var uri) ||
             uri == XamlTypeSystem.XamlLanguageNamespace ||
             !typeSystem.IsKnownNamespace(uri))
@@ -284,6 +284,13 @@ internal static class XamlValidator
             (!name.HasPrefix || propertyElement?.PropertyType is not null))
         {
             ValidatePropertyElement(element, name, uri, typeSystem, doc, diagnostics);
+            return;
+        }
+
+        // StaticResource also has a compiler-defined object form for keyed resource aliases,
+        // but WinUI exposes no corresponding CLR type in project metadata.
+        if (XamlSemanticFacts.IsStaticResourceElement(name, uri))
+        {
             return;
         }
 

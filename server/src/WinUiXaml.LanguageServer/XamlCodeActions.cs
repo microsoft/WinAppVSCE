@@ -57,6 +57,13 @@ internal static class XamlCodeActions
                     continue;
                 }
 
+                bool preferredImportAdded = false;
+                if (string.Equals(diagnostic.Code, XamlValidator.UnknownTypeCode, StringComparison.Ordinal))
+                {
+                    preferredImportAdded =
+                        AddUnprefixedTypeImportFixes(actions, uri, doc, diagnostic, typeSystem);
+                }
+
                 if (!SuggestibleCodes.Contains(diagnostic.Code))
                 {
                     continue;
@@ -82,7 +89,7 @@ internal static class XamlCodeActions
                         Title = bad.Length == 0 ? $"Change to '{suggestion}'" : $"Change '{bad}' to '{suggestion}'",
                         Kind = "quickfix",
                         Diagnostics = new List<Diagnostic> { diagnostic },
-                        IsPreferred = i == 0 ? true : null,
+                        IsPreferred = i == 0 && !preferredImportAdded ? true : null,
                         Edit = new WorkspaceEdit
                         {
                             Changes = new Dictionary<string, List<TextEdit>>
@@ -340,6 +347,110 @@ internal static class XamlCodeActions
                 {
                     return found;
                 }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool AddUnprefixedTypeImportFixes(
+        List<CodeAction> actions,
+        string uri,
+        TextDocument? doc,
+        Diagnostic diagnostic,
+        XamlTypeSystem? typeSystem)
+    {
+        if (doc?.Parsed.Root is null || typeSystem is null)
+        {
+            return false;
+        }
+
+        var target = FindUnprefixedElement(doc.Parsed.Root, doc.OffsetAt(diagnostic.Range.Start));
+        if (target?.Name is not { HasPrefix: false, IsDotted: false } name ||
+            name.LocalName.Length == 0)
+        {
+            return false;
+        }
+
+        var defaultNamespaces = new HashSet<string>(StringComparer.Ordinal);
+        if (target.NamespaceScope.TryResolvePrefix(string.Empty, out var defaultUri))
+        {
+            foreach (var clrNamespace in typeSystem.ClrNamespacesForUri(defaultUri))
+            {
+                defaultNamespaces.Add(clrNamespace);
+            }
+        }
+
+        var candidates = typeSystem.FindElementTypesByName(name.LocalName)
+            .Where(type => type.ContainingNamespace is { IsGlobalNamespace: false })
+            .GroupBy(type => type.ContainingNamespace.ToDisplayString(), StringComparer.Ordinal)
+            .Where(group => !defaultNamespaces.Contains(group.Key))
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .ToList();
+        bool single = candidates.Count == 1;
+        bool preferredAdded = false;
+
+        foreach (var candidate in candidates)
+        {
+            if (!XamlNamespaceImport.TryPlan(
+                    doc, target.NamespaceScope, typeSystem, candidate.Key,
+                    out var prefix, out var declarationEdit))
+            {
+                continue;
+            }
+
+            var edits = new List<TextEdit>();
+            if (declarationEdit is not null)
+            {
+                edits.Add(declarationEdit);
+            }
+
+            edits.Add(new TextEdit
+            {
+                Range = doc.RangeOf(new TextSpan(name.Span.Start, name.Span.Start)),
+                NewText = prefix + ":",
+            });
+
+            if (target.EndTagName is { HasPrefix: false } endName &&
+                string.Equals(endName.LocalName, name.LocalName, StringComparison.Ordinal))
+            {
+                edits.Add(new TextEdit
+                {
+                    Range = doc.RangeOf(new TextSpan(endName.Span.Start, endName.Span.Start)),
+                    NewText = prefix + ":",
+                });
+            }
+
+            actions.Add(new CodeAction
+            {
+                Title = $"Import '{name.LocalName}' from '{candidate.Key}'",
+                Kind = "quickfix",
+                Diagnostics = new List<Diagnostic> { diagnostic },
+                IsPreferred = single ? true : null,
+                Edit = new WorkspaceEdit
+                {
+                    Changes = new Dictionary<string, List<TextEdit>> { [uri] = edits },
+                },
+            });
+            preferredAdded |= single;
+        }
+
+        return preferredAdded;
+    }
+
+    private static XamlElement? FindUnprefixedElement(XamlElement element, int offset)
+    {
+        if (element.Name is { HasPrefix: false } name && name.LocalNameSpan.ContainsInclusive(offset))
+        {
+            return element;
+        }
+
+        foreach (var child in element.Content)
+        {
+            if (child is XamlElement childElement &&
+                FindUnprefixedElement(childElement, offset) is { } found)
+            {
+                return found;
             }
         }
 

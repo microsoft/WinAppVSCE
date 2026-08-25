@@ -70,6 +70,11 @@ public class XamlValidatorTests
             }
 
             public class RowDefinition { }
+            public class SampleRow
+            {
+                public System.Collections.ObjectModel.ObservableCollection<RowSample> SampleCards { get; } = new();
+            }
+            public class RowSample { }
             public class StyledControl { public string Text { get; set; } = ""; }
             public class BaseControl { }
             public class GoodRoot : BaseControl { }
@@ -79,6 +84,14 @@ public class XamlValidatorTests
             public class ContentHost
             {
                 public object Content { get; set; }
+            }
+
+            [Microsoft.UI.Xaml.Markup.ContentProperty(Name = "Header")]
+            public class SettingsExpander
+            {
+                public object Header { get; set; }
+                public object ItemsHeader { get; set; }
+                public Microsoft.UI.Xaml.DataTemplate ItemTemplate { get; set; }
             }
         }
 
@@ -130,6 +143,11 @@ public class XamlValidatorTests
                 public static Windows.UI.Color Red => default;
                 public static Windows.UI.Color Transparent => default;
             }
+        }
+
+        namespace System.Collections.ObjectModel
+        {
+            public class ObservableCollection<T> : System.Collections.Generic.List<T> { }
         }
         """;
 
@@ -608,6 +626,28 @@ public class XamlValidatorTests
     }
 
     [Fact]
+    public void ScalarContent_IgnoresNamespaceQualifiedPropertyElements()
+    {
+        const string xaml = """
+            <toolkit:SettingsExpander
+                xmlns="using:TestApp"
+                xmlns:toolkit="using:TestApp">
+              <Child />
+              <toolkit:SettingsExpander.ItemsHeader>
+                <Child />
+              </toolkit:SettingsExpander.ItemsHeader>
+              <toolkit:SettingsExpander.ItemTemplate>
+                <DataTemplate />
+              </toolkit:SettingsExpander.ItemTemplate>
+            </toolkit:SettingsExpander>
+            """;
+
+        Assert.DoesNotContain(
+            Validate(xaml),
+            d => d.Code == XamlValidator.MultipleScalarChildrenCode);
+    }
+
+    [Fact]
     public void SetterProperty_IsCheckedAgainstResolvedStyleTarget()
     {
         const string xaml = """
@@ -705,6 +745,58 @@ public class XamlValidatorTests
             """;
 
         Assert.Single(Validate(xaml), d => d.Code == XamlValidator.InvalidPropertyElementChildCode);
+    }
+
+    [Fact]
+    public void ObservableCollectionPropertyElement_AcceptsItsItemType()
+    {
+        const string xaml = """
+            <SampleRow xmlns="using:TestApp">
+              <SampleRow.SampleCards>
+                <RowSample />
+              </SampleRow.SampleCards>
+            </SampleRow>
+            """;
+
+        Assert.DoesNotContain(
+            Validate(xaml),
+            diagnostic => diagnostic.Code == XamlValidator.InvalidPropertyElementChildCode);
+    }
+
+    [Fact]
+    public void DictionaryPropertyElement_AcceptsKeyedValueObjects()
+    {
+        const string xaml = """
+            <ResourceDictionary
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default" />
+              </ResourceDictionary.ThemeDictionaries>
+            </ResourceDictionary>
+            """;
+
+        Assert.DoesNotContain(
+            Validate(xaml),
+            diagnostic => diagnostic.Code == XamlValidator.InvalidPropertyElementChildCode);
+    }
+
+    [Fact]
+    public void StaticResourceObjectElement_IsACompilerIntrinsic()
+    {
+        const string xaml = """
+            <ResourceDictionary
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <StaticResource
+                  x:Key="RailNavigationIconForegroundBrush"
+                  ResourceKey="ControlAAFillColorDefaultBrush" />
+            </ResourceDictionary>
+            """;
+
+        Assert.DoesNotContain(
+            Validate(xaml),
+            diagnostic => diagnostic.Code == XamlValidator.UnknownTypeCode);
     }
 
     [Fact]

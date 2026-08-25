@@ -209,25 +209,6 @@ internal static partial class CompletionProvider
             }
         }
 
-        // CLR namespace -> the prefix already declared for it, so a type in an explicitly-declared third-party namespace reuses that prefix (no duplicate xmlns injection).
-        var declaredPrefixes = new HashSet<string>(scope.Declarations.Keys, StringComparer.Ordinal);
-        var prefixByNamespace = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var declaration in scope.Declarations)
-        {
-            if (declaration.Key.Length == 0)
-            {
-                continue;
-            }
-
-            foreach (var clrNs in typeSystem.ClrNamespacesForUri(declaration.Value))
-            {
-                if (!prefixByNamespace.ContainsKey(clrNs))
-                {
-                    prefixByNamespace[clrNs] = declaration.Key;
-                }
-            }
-        }
-
         foreach (var type in candidates)
         {
             if (!StartsWith(type.Name, local) || seen.Contains(type.Name))
@@ -246,25 +227,14 @@ internal static partial class CompletionProvider
                 continue;
             }
 
-            List<TextEdit>? additionalEdits = null;
-            string itemPrefix;
-            if (prefixByNamespace.TryGetValue(clrNamespace!, out var existingPrefix))
+            if (!XamlNamespaceImport.TryPlan(
+                    doc, scope, typeSystem, clrNamespace!, out var itemPrefix, out var declarationEdit))
             {
-                itemPrefix = existingPrefix;
-            }
-            else
-            {
-                itemPrefix = GenerateXmlnsPrefix(clrNamespace!, declaredPrefixes);
-                var rootEdit = BuildRootXmlnsEdit(doc, itemPrefix, clrNamespace!);
-                if (rootEdit is null)
-                {
-                    // No root element to anchor the xmlns to — offering the type would produce an undeclared prefix, so skip it.
-                    continue;
-                }
-
-                additionalEdits = new List<TextEdit> { rootEdit };
+                // No root element to anchor the xmlns to — offering the type would produce an undeclared prefix.
+                continue;
             }
 
+            var additionalEdits = declarationEdit is null ? null : new List<TextEdit> { declarationEdit };
             seen.Add(type.Name);
             var newText = itemPrefix + ":" + type.Name;
             items.Add(new CompletionItem
@@ -281,55 +251,6 @@ internal static partial class CompletionProvider
                 SortText = "\uffff" + type.Name,
             });
         }
-    }
-
-    /// <summary>Generates a fresh xmlns prefix for a CLR namespace — the last dotted segment lowercased.</summary>
-    private static string GenerateXmlnsPrefix(string clrNamespace, HashSet<string> declaredPrefixes)
-    {
-        var last = clrNamespace;
-        var dot = clrNamespace.LastIndexOf('.');
-        if (dot >= 0 && dot < clrNamespace.Length - 1)
-        {
-            last = clrNamespace.Substring(dot + 1);
-        }
-
-        var basePrefix = last.ToLowerInvariant();
-        if (basePrefix.Length == 0)
-        {
-            basePrefix = "ns";
-        }
-
-        var candidate = basePrefix;
-        var counter = 2;
-        while (declaredPrefixes.Contains(candidate))
-        {
-            candidate = basePrefix + counter;
-            counter++;
-        }
-
-        return candidate;
-    }
-
-    /// <summary>Builds the AdditionalTextEdits entry that declares xmlns:PREFIX="using:NAMESPACE" on the root element — grouped after any existing xmlns declarations</summary>
-    private static TextEdit? BuildRootXmlnsEdit(TextDocument doc, string prefix, string clrNamespace)
-    {
-        var root = doc.Parsed.Root;
-        if (root?.Name is null)
-        {
-            return null;
-        }
-
-        var insertAt = root.Name.Span.End;
-        foreach (var attribute in root.Attributes)
-        {
-            if (attribute.IsNamespaceDeclaration && attribute.Span.End > insertAt)
-            {
-                insertAt = attribute.Span.End;
-            }
-        }
-
-        var pos = doc.PositionAt(insertAt);
-        return new TextEdit { Range = new Lsp.Range(pos, pos), NewText = $" xmlns:{prefix}=\"using:{clrNamespace}\"" };
     }
 
     /// <summary>Completes an end tag (&lt;/…) with the name of the element it is closing, so typing &lt;/ inside an open &lt;Grid&gt; offers Grid and yields &lt;/Grid&gt</summary>

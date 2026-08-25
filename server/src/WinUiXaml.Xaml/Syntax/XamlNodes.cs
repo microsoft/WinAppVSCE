@@ -172,8 +172,8 @@ namespace WinUiXaml.Xaml
 
         public bool IsClosed => IsSelfClosing || HasEndTag;
 
-        /// <summary>True for a property element.</summary>
-        public bool IsPropertyElement => Name != null && !Name.HasPrefix && Name.IsDotted;
+        /// <summary>True for a property element, including namespace-qualified owners.</summary>
+        public bool IsPropertyElement => Name != null && Name.IsDotted;
 
         public override XamlNodeKind Kind => XamlNodeKind.Element;
 

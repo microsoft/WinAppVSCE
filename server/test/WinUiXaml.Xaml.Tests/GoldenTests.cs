@@ -70,6 +70,24 @@ namespace WinUiXaml.Xaml.Tests
         }
 
         [Fact]
+        public void NamespaceQualifiedPropertyElement_IsRecognized()
+        {
+            const string xaml = """
+                <toolkit:SettingsExpander xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
+                  <toolkit:SettingsExpander.ItemTemplate />
+                </toolkit:SettingsExpander>
+                """;
+
+            var doc = XamlParser.Parse(xaml);
+            var itemTemplate = TreeQuery.Elements(doc)
+                .First(e => e.Name?.LocalName == "SettingsExpander.ItemTemplate");
+
+            Assert.True(itemTemplate.IsPropertyElement);
+            Assert.Equal("toolkit", itemTemplate.Name!.Prefix);
+            Assert.True(itemTemplate.Name.IsDotted);
+        }
+
+        [Fact]
         public void AttachedProperty_GridRow_ParsesAsDottedAttribute()
         {
             var doc = XamlParser.Parse(Fixtures.SmokePage);

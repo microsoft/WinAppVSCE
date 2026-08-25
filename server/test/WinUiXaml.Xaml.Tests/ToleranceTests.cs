@@ -35,6 +35,39 @@ namespace WinUiXaml.Xaml.Tests
             Assert.Contains(doc.Diagnostics, d => d.Id == XamlDiagnosticIds.UnterminatedString);
         }
 
+        [Theory]
+        [InlineData("\n")]
+        [InlineData("\r\n")]
+        public void QuotedAttributeValue_CanSpanLines(string newline)
+        {
+            var xaml =
+                $"<Button Content=\"{{ui:FontIcon Glyph=&#xE74D;,{newline} FontSize=14}}\" />";
+
+            var doc = ParseNoThrow(xaml);
+
+            Assert.DoesNotContain(
+                doc.Diagnostics,
+                diagnostic => diagnostic.Id == XamlDiagnosticIds.UnterminatedString);
+            var content = Assert.Single(doc.Root!.Attributes);
+            Assert.Equal(
+                $"{{ui:FontIcon Glyph=&#xE74D;,{newline} FontSize=14}}",
+                content.Value!.Text);
+            Assert.True(content.Value.MarkupExtension!.IsClosed);
+            Assert.Equal("ui:FontIcon", content.Value.MarkupExtension.Name!.FullName);
+            Assert.Equal(2, content.Value.MarkupExtension.Arguments.Count);
+        }
+
+        [Fact]
+        public void SingleQuotedAttributeValue_CanSpanLines()
+        {
+            var doc = ParseNoThrow("<Button Content='first\nsecond' />");
+
+            Assert.DoesNotContain(
+                doc.Diagnostics,
+                diagnostic => diagnostic.Id == XamlDiagnosticIds.UnterminatedString);
+            Assert.Equal("first\nsecond", doc.Root!.GetAttribute("Content")!.Value!.Text);
+        }
+
         [Fact]
         public void StrayEndTag_IsReported()
         {

@@ -659,7 +659,7 @@ internal sealed partial class XamlLanguageServer
 
             case XamlElement { IsPropertyElement: true } propertyElement:
             {
-                // F12/hover on a no-prefix property element.
+                // F12/hover on a property element.
                 var peName = NameHitInElement(propertyElement, offset);
                 if (peName == null)
                 {

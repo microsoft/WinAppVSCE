@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
@@ -151,9 +152,118 @@ namespace WinUiXaml.Workspace
             }
         }
 
-        internal static bool RequiresRestore(string? projectAssetsFile, bool hasPackageReferences) =>
-            hasPackageReferences &&
-            (string.IsNullOrWhiteSpace(projectAssetsFile) || !File.Exists(projectAssetsFile));
+        internal static bool RequiresRestore(string? projectAssetsFile, bool hasPackageReferences)
+        {
+            if (!hasPackageReferences)
+            {
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(projectAssetsFile) || !File.Exists(projectAssetsFile))
+            {
+                return true;
+            }
+
+            return AssetsContainRestoreErrors(projectAssetsFile) ||
+                CacheReportsFailedRestore(Path.Combine(
+                    Path.GetDirectoryName(projectAssetsFile)!,
+                    "project.nuget.cache"));
+        }
+
+        private static bool AssetsContainRestoreErrors(string projectAssetsFile)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(projectAssetsFile));
+                if (document.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    return true;
+                }
+
+                if (!document.RootElement.TryGetProperty("targets", out var targets) ||
+                    targets.ValueKind != JsonValueKind.Object ||
+                    !document.RootElement.TryGetProperty("libraries", out var libraries) ||
+                    libraries.ValueKind != JsonValueKind.Object ||
+                    !document.RootElement.TryGetProperty("project", out var project) ||
+                    project.ValueKind != JsonValueKind.Object)
+                {
+                    return true;
+                }
+
+                if (!document.RootElement.TryGetProperty("logs", out var logs))
+                {
+                    return false;
+                }
+
+                if (logs.ValueKind != JsonValueKind.Array)
+                {
+                    return true;
+                }
+
+                foreach (var log in logs.EnumerateArray())
+                {
+                    if (log.ValueKind != JsonValueKind.Object ||
+                        !log.TryGetProperty("level", out var level) ||
+                        level.ValueKind != JsonValueKind.String)
+                    {
+                        return true;
+                    }
+
+                    if (string.Equals(
+                            level.GetString(), "Error", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return true;
+            }
+            catch (JsonException)
+            {
+                return true;
+            }
+        }
+
+        private static bool CacheReportsFailedRestore(string projectNuGetCache)
+        {
+            if (!File.Exists(projectNuGetCache))
+            {
+                return false;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(projectNuGetCache));
+                if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                    !document.RootElement.TryGetProperty("success", out var success) ||
+                    success.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                {
+                    return true;
+                }
+
+                return !success.GetBoolean();
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return true;
+            }
+            catch (JsonException)
+            {
+                return true;
+            }
+        }
 
         internal static bool IsMissingRestoreFailure(string message) =>
             message.Contains("NETSDK1004", StringComparison.OrdinalIgnoreCase) ||

@@ -104,6 +104,10 @@ internal static class XamlSemanticFacts
             ? !name.HasPrefix
             : IsPresentationNamespace(namespaceUri));
 
+    internal static bool IsStaticResourceElement(XamlName name, string namespaceUri) =>
+        name.LocalName == "StaticResource" &&
+        IsPresentationNamespace(namespaceUri);
+
     internal static bool IsPresentationNamespace(string namespaceUri) =>
         string.Equals(
             namespaceUri,

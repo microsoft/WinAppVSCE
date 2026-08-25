@@ -288,7 +288,9 @@ namespace WinUiXaml.Xaml
             {
                 _pos++; // consume opening quote
                 int innerStart = _pos;
-                while (_pos < _text.Length && _text[_pos] != q && _text[_pos] != '\n')
+                // XML permits line breaks inside quoted attribute values. Keep scanning until the
+                // matching quote; stopping at a newline produces false unterminated-value errors.
+                while (_pos < _text.Length && _text[_pos] != q)
                 {
                     _pos++;
                 }

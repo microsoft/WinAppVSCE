@@ -122,6 +122,47 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
         Assert.NotSame(first.Compilation, second.Compilation);
     }
 
+    [Fact]
+    public async Task FullProjectCompilationResolvesWinUiBaseTypesAndInheritedMembers()
+    {
+        var xamlPath = GetWinUiFixturePath("SmokePage.xaml");
+        using var resolver = new XamlProjectResolver(WinUiProperties);
+        var resolution = await resolver.ResolveAsync(xamlPath);
+        Assert.NotNull(resolution);
+        Assert.NotNull(resolution!.ClassSymbol);
+        Assert.NotEqual(TypeKind.Error, resolution.ClassSymbol!.BaseType?.TypeKind);
+        var typeSystem = XamlTypeSystem.FromResolution(resolution);
+        var userControl = typeSystem.ResolveType(
+            XamlTypeSystem.PresentationNamespace, "UserControl");
+        Assert.NotNull(userControl);
+
+        Assert.NotNull(typeSystem.FindAttributeMember(resolution.ClassSymbol, "Background"));
+        Assert.NotNull(typeSystem.FindAttributeMember(resolution.ClassSymbol, "Margin"));
+        Assert.NotNull(typeSystem.FindAttributeMember(userControl!, "VerticalContentAlignment"));
+        Assert.NotNull(typeSystem.FindAttributeMember(userControl!, "Background"));
+        Assert.NotNull(typeSystem.FindAttributeMember(userControl!, "Margin"));
+        var bindableNames = typeSystem.GetBindableMembers(userControl)
+            .Select(member => member.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("HorizontalContentAlignment", bindableNames);
+        Assert.Contains("VerticalContentAlignment", bindableNames);
+        Assert.Contains("Background", bindableNames);
+        Assert.Contains("BorderBrush", bindableNames);
+        Assert.Contains("BorderThickness", bindableNames);
+        Assert.Contains("CornerRadius", bindableNames);
+        Assert.Contains(
+            typeSystem.GetThemeResources(),
+            resource => resource.Key == "PaneToggleButtonSize");
+        var observableCollection = resolution.Compilation.GetTypeByMetadataName(
+            "System.Collections.ObjectModel.ObservableCollection`1");
+        Assert.NotNull(observableCollection);
+        var rowSampleCollection = observableCollection!.Construct(
+            resolution.Compilation.GetSpecialType(SpecialType.System_String));
+        Assert.Equal(
+            SpecialType.System_String,
+            XamlTypeSystem.GetCollectionElementType(rowSampleCollection)?.SpecialType);
+    }
+
     private static string GetWinUiFixturePath(string fileName)
     {
         return Path.GetFullPath(
