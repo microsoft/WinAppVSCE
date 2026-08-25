@@ -156,6 +156,9 @@ test('a saved tab that is hidden on the first update is restored once it becomes
 test('the parse-error overlay is modal — the form behind it is inert', async ({ page }) => {
     await loadEditor(page);
     await postUpdate(page, manifestData);
+    // Select a tab so activateTab establishes the per-panel aria-hidden the overlay must not clobber.
+    await page.click('.tab-btn[data-tab="properties"]');
+    await expect(page.locator('#tab-properties')).toHaveAttribute('aria-hidden', 'false');
 
     await expect(page.locator('.tab-bar')).not.toHaveAttribute('inert', '');
     await postParseError(page, 'unclosed tag: Package');
@@ -175,10 +178,40 @@ test('the parse-error overlay is modal — the form behind it is inert', async (
         (globalThis as unknown as { __posted: { type: string }[] }).__posted.some(m => m.type === 'openAsText'),
     )).toBe(true);
 
-    // Recovery lifts the modality again.
+    // Recovery lifts the modality again, and hands per-panel aria-hidden back to the tab system.
     await postUpdate(page, manifestData, true);
     await expect(page.locator('.tab-bar')).not.toHaveAttribute('inert', '');
     await expect(page.locator('#identity-name')).toBeEditable();
+    await expect(page.locator('.tab-bar')).not.toHaveAttribute('aria-hidden', 'true');
+    await expect(page.locator('#tab-properties')).toHaveAttribute('aria-hidden', 'false');
+    await expect(page.locator('#tab-identity')).toHaveAttribute('aria-hidden', 'true');
+});
+
+test('recovery never leaves focus inside the hidden overlay or on a destroyed element', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+    await page.click('.tab-btn[data-tab="applications"]');
+
+    // Inputs in the applications list are rebuilt wholesale by a forced re-render, so the
+    // element focus is restored to may no longer be in the document.
+    const appInput = page.locator('#tab-applications input[data-app-index]').first();
+    await appInput.focus();
+
+    await postParseError(page, 'unclosed tag: Package');
+    await postUpdate(page, manifestData, true);
+
+    const focus = await page.evaluate(() => {
+        const doc = (globalThis as unknown as {
+            document: { activeElement: { closest(s: string): unknown; isConnected: boolean } | null };
+        }).document;
+        const el = doc.activeElement;
+        return {
+            connected: !!el && el.isConnected,
+            inOverlay: !!el && el.closest('#parse-error-overlay') !== null,
+        };
+    });
+    expect(focus.connected).toBe(true);
+    expect(focus.inOverlay).toBe(false);
 });
 
 test('hiding a tab for a non-application package clears its button selection', async ({ page }) => {

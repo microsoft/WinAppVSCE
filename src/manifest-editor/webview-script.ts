@@ -632,10 +632,22 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                 if (el === overlay || el.tagName === 'SCRIPT') { return; }
                 if (isInert) {
                     el.setAttribute('inert', '');
+                    // Snapshot any aria-hidden owned by another system (activateTab manages it
+                    // on .tab-content panels) so un-inerting restores it instead of erasing it.
+                    if (!el.hasAttribute('data-prior-aria-hidden')) {
+                        const prior = el.getAttribute('aria-hidden');
+                        el.setAttribute('data-prior-aria-hidden', prior === null ? '' : prior);
+                    }
                     el.setAttribute('aria-hidden', 'true');
                 } else {
                     el.removeAttribute('inert');
-                    el.removeAttribute('aria-hidden');
+                    const prior = el.getAttribute('data-prior-aria-hidden');
+                    if (prior) {
+                        el.setAttribute('aria-hidden', prior);
+                    } else {
+                        el.removeAttribute('aria-hidden');
+                    }
+                    el.removeAttribute('data-prior-aria-hidden');
                 }
             });
         }

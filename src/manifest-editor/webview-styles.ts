@@ -557,8 +557,14 @@ export function getEditorStyles(nonce: string): string {
             background: var(--vscode-editor-background);
         }
         .parse-error-overlay[hidden] { display: none; }
-        .parse-error-box { max-width: 520px; text-align: center; }
-        .parse-error-box:focus { outline: none; }
+        .parse-error-box {
+            max-width: 520px; text-align: center;
+            padding: 16px; border-radius: 4px;
+        }
+        .parse-error-box:focus {
+            outline: 1px solid var(--vscode-focusBorder, #007fd4);
+            outline-offset: 2px;
+        }
         .parse-error-actions { margin-top: 16px; }
         .parse-error-title {
             font-size: 16px; font-weight: 600; margin-bottom: 12px;

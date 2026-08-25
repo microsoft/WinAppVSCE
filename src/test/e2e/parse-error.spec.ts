@@ -15,12 +15,11 @@ import {
 } from './helpers';
 
 let ctx: VSCodeTestContext;
+let innerFrame: FrameLocator;
 
-test.afterAll(async () => {
-    if (ctx) await teardown(ctx);
-});
-
-test('shows error view for malformed XML', async () => {
+// Launching VS Code with a malformed manifest is shared setup rather than the work of the
+// first test, so each test in this file can run on its own (e.g. under --grep).
+test.beforeAll(async () => {
     // Create a workspace with a broken manifest
     const tmpDir = createTempWorkspace('winui-gallery.appxmanifest');
     const manifestPath = path.join(tmpDir, 'AppxManifest.xml');
@@ -51,8 +50,14 @@ test('shows error view for malformed XML', async () => {
     // Navigate into the webview frames
     const webviewOuterFrame = ctx.page.frames().find(f => f.url().includes('vscode-webview://') && !f.url().includes('fake.html'));
     expect(webviewOuterFrame).toBeTruthy();
-    const innerFrame = webviewOuterFrame!.frameLocator('#active-frame');
+    innerFrame = webviewOuterFrame!.frameLocator('#active-frame');
+});
 
+test.afterAll(async () => {
+    if (ctx) await teardown(ctx);
+});
+
+test('shows error view for malformed XML', async () => {
     // Should show the error view
     const errorContainer = innerFrame.locator('.error-container');
     await expect(errorContainer).toBeVisible({ timeout: 15_000 });

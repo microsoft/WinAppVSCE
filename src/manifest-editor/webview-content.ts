@@ -77,9 +77,9 @@ ${getEditorStyles(nonce)}
 </head>
 <body>
     <div class="parse-error-overlay" id="parse-error-overlay" hidden>
-        <div class="parse-error-box" role="alert" aria-labelledby="parse-error-title" tabindex="-1" id="parse-error-box">
+        <div class="parse-error-box" role="alertdialog" aria-modal="true" aria-labelledby="parse-error-title" aria-describedby="parse-error-message parse-error-detail" tabindex="-1" id="parse-error-box">
             <div class="parse-error-title" id="parse-error-title">⚠ XML syntax error</div>
-            <div class="parse-error-message">
+            <div class="parse-error-message" id="parse-error-message">
                 The manifest can't be parsed right now, so editing is paused. Fix the XML in the text
                 editor and the editor will resume automatically — your current view is preserved.
             </div>

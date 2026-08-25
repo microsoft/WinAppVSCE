@@ -18,10 +18,8 @@ npm install
 # and specs fail with confusing "element not found" errors.
 npm run sync-schemas
 
-# Install the Chromium build used by webview-state.spec.ts (first time only)
-npx playwright install chromium
-
-# Run the full E2E suite
+# Run the full E2E suite. The `pretest:e2e` hook verifies schemas/ and installs the
+# Chromium build that webview-state.spec.ts renders the webview document in.
 npm run test:e2e
 ```
 
@@ -54,9 +52,9 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (140 tests)
+## Test inventory (141 tests)
 
-### `webview-state.spec.ts` — 6 tests
+### `webview-state.spec.ts` — 7 tests
 
 Renders the generated webview document directly in Chromium (with a stubbed `acquireVsCodeApi`), so
 UI-state behaviour can be verified without launching VS Code. Regression coverage for #192.
@@ -66,9 +64,10 @@ UI-state behaviour can be verified without launching VS Code. Regression coverag
 | 1 | external updates preserve the active tab, app sub-tab and scroll position | A force-update from the extension keeps the selected tab, per-app sub-tab and scroll offset |
 | 2 | a parse error is shown as an overlay without discarding the editor or its state | `parseError` shows the in-place overlay, leaves the editor document intact, and `update` clears it |
 | 3 | UI state is restored after the webview document is rebuilt | State persisted via `vscode.setState()` restores the tab, sub-tab and scroll offset in a fresh script context |
-| 4 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
-| 5 | a saved tab that is hidden on the first update is restored once it becomes available | Restoration stays pending while the saved tab is hidden, instead of being consumed and lost |
-| 6 | the parse-error overlay is modal — the form behind it is inert | The overlay exposes "Open in Text Editor", takes focus, and inerts/hides the form behind it until recovery |
+| 4 | a saved tab that is hidden on the first update is restored once it becomes available | Restoration stays pending while the saved tab is hidden, instead of being consumed and lost |
+| 5 | the parse-error overlay is modal — the form behind it is inert | The overlay exposes "Open in Text Editor", takes focus, and inerts/hides the form behind it until recovery, handing `aria-hidden` back to the tab system afterwards |
+| 6 | recovery never leaves focus inside the hidden overlay or on a destroyed element | Focus saved before the overlay is restored safely even when the re-render destroys that element |
+| 7 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
 
 ### `external-edit-state.spec.ts` — 3 tests
 
@@ -312,4 +311,4 @@ These tests occasionally fail on the first attempt but pass on retry (Playwright
 | Test | Reason |
 |------|--------|
 | `background-task-fixture.spec.ts` › identity fields are populated correctly | Timing — editor may not have fully reloaded after fixture swap |
-| `parse-error.spec.ts` › shows error view for malformed XML | Launches its own VS Code instance — sensitive to startup timing |
+| `parse-error.spec.ts` › both tests | Shared `beforeAll` launches its own VS Code instance — sensitive to startup timing, so a slow launch fails both tests |
