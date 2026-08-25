@@ -23,6 +23,14 @@ public class XamlFormatterTests
         return Apply(text, edits, doc);
     }
 
+    private static List<TextEdit> GetEdits(string text, int tabSize = 2, bool insertSpaces = true)
+    {
+        var doc = new TextDocument("file:///test.xaml", text);
+        return XamlFormatter.Format(
+            doc,
+            new FormattingOptions { TabSize = tabSize, InsertSpaces = insertSpaces });
+    }
+
     private static string Apply(string text, List<TextEdit> edits, TextDocument doc)
     {
         var sb = new StringBuilder(text);
@@ -70,6 +78,53 @@ public class XamlFormatterTests
         var once = Format(input);
         var twice = Format(once);
         Assert.Equal(once, twice);
+        Assert.Empty(GetEdits(once));
+    }
+
+    [Fact]
+    public void ComboBoxStyleConvergesWithoutReflowOrFileGrowth()
+    {
+        var input = Lines(
+            "<ResourceDictionary>",
+            "            <Style",
+            "                x:Key=\"DefaultComboBoxStyle\"",
+            "                TargetType=\"ComboBox\">",
+            "                    <Setter Property=\"FontSize\" Value=\"{ThemeResource ControlContentThemeFontSize}\" />",
+            "                    <Setter Property=\"Padding\"",
+            "                            Value=\"8,4\" />",
+            "            </Style>",
+            "</ResourceDictionary>");
+        var expected = Lines(
+            "<ResourceDictionary>",
+            "  <Style",
+            "                x:Key=\"DefaultComboBoxStyle\"",
+            "                TargetType=\"ComboBox\">",
+            "    <Setter Property=\"FontSize\" Value=\"{ThemeResource ControlContentThemeFontSize}\" />",
+            "    <Setter Property=\"Padding\"",
+            "                            Value=\"8,4\" />",
+            "  </Style>",
+            "</ResourceDictionary>");
+
+        var once = Format(input);
+
+        Assert.Equal(expected, once);
+        Assert.True(once.Length <= input.Length);
+        Assert.Equal(input.Split('\n').Length, once.Split('\n').Length);
+        Assert.Equal(once, Format(once));
+        Assert.Empty(GetEdits(once));
+    }
+
+    [Fact]
+    public void ConventionallyFormattedShortElementsProduceNoEdits()
+    {
+        var input = Lines(
+            "<Style TargetType=\"ComboBox\">",
+            "  <Setter Property=\"Background\" Value=\"{ThemeResource ComboBoxBackground}\" />",
+            "  <Setter Property=\"BorderThickness\" Value=\"1\" />",
+            "</Style>");
+
+        Assert.Equal(input, Format(input));
+        Assert.Empty(GetEdits(input));
     }
 
     [Fact]
