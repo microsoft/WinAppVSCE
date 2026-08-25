@@ -45,7 +45,7 @@ ${getErrorPageStyles(nonce)}
         <div class="error-title">Unable to Open Manifest Editor</div>
         <div class="error-message">
             The appxmanifest file contains XML syntax errors that prevent the AppxManifest Editor from loading.
-            Please open the file in the text editor to fix the errors, then reopen this editor.
+            Fix the errors in the text editor — this editor loads automatically once the XML parses.
         </div>
         <div class="error-detail">${errorMessage.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
         <button class="btn" id="open-as-text">Open in Text Editor</button>

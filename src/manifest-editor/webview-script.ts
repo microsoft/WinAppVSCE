@@ -180,6 +180,19 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             return changes;
         }
 
+        /**
+         * Drops input still sitting in the 300 ms debounce without sending it. Used when the
+         * document stops parsing: the extension can't safely rewrite unparseable XML, and the
+         * form is repopulated from the document once the XML is valid again.
+         */
+        function discardPendingChanges() {
+            for (const key in debounceTimers) {
+                clearTimeout(debounceTimers[key]);
+            }
+            debounceTimers = {};
+            pendingElements = {};
+        }
+
         // ─── Shared custom-select wiring helper ────────────────
         function wireCustomSelect(triggerEl, optionsEl, onChange) {
             // ARIA setup
@@ -625,6 +638,34 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         // without inerting the content behind it, keyboard and screen-reader users can still
         // tab into fields that the overlay says are paused.
         let focusBeforeParseError = null;
+        // Set when the overlay clears, consumed after the form is repopulated: the element that
+        // was focused is often destroyed by the re-render, so restoring before it would put
+        // focus on a detached node (i.e. drop it on <body>).
+        let pendingParseErrorFocus = null;
+
+        /** Best-effort stable selector for re-finding a control after the form is rebuilt. */
+        function focusDescriptorFor(el) {
+            if (!el || !el.getAttribute) { return null; }
+            if (el.id) { return '#' + el.id; }
+            const parts = ['data-section', 'data-field-name', 'data-index', 'data-app-index', 'data-ext-index', 'data-ext-field']
+                .filter(a => el.hasAttribute(a))
+                .map(a => '[' + a + '="' + el.getAttribute(a).replace(/"/g, '\\"') + '"]');
+            return parts.length ? el.tagName.toLowerCase() + parts.join('') : null;
+        }
+
+        function restoreParseErrorFocus() {
+            const target = pendingParseErrorFocus;
+            if (!target) { return; }
+            pendingParseErrorFocus = null;
+            if (target.el && document.contains(target.el)) {
+                target.el.focus();
+                return;
+            }
+            if (target.selector) {
+                const replacement = document.querySelector(target.selector);
+                if (replacement) { replacement.focus(); }
+            }
+        }
 
         function setEditorContentInert(isInert) {
             const overlay = document.getElementById('parse-error-overlay');
@@ -661,7 +702,13 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                 if (detail) { detail.textContent = message; }
                 overlay.hidden = false;
                 if (!wasShowing) {
-                    focusBeforeParseError = document.activeElement;
+                    // Editing is paused, so anything still in the input debounce must not be
+                    // sent: the extension would be asked to rewrite XML it cannot parse.
+                    discardPendingChanges();
+                    focusBeforeParseError = {
+                        el: document.activeElement,
+                        selector: focusDescriptorFor(document.activeElement),
+                    };
                     setEditorContentInert(true);
                     const box = document.getElementById('parse-error-box');
                     if (box) { box.focus(); }
@@ -670,13 +717,29 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                 overlay.hidden = true;
                 if (wasShowing) {
                     setEditorContentInert(false);
-                    if (focusBeforeParseError && document.contains(focusBeforeParseError)) {
-                        focusBeforeParseError.focus();
-                    }
+                    // Deferred until after populateForm — see pendingParseErrorFocus.
+                    pendingParseErrorFocus = focusBeforeParseError;
                     focusBeforeParseError = null;
                 }
             }
         }
+
+        // The inert attribute keeps the form behind the dialog unreachable, but Tab from the last
+        // control inside the dialog would still escape into the host chrome, so cycle it manually.
+        document.addEventListener('keydown', e => {
+            if (e.key !== 'Tab') { return; }
+            const overlay = document.getElementById('parse-error-overlay');
+            if (!overlay || overlay.hidden) { return; }
+            const box = document.getElementById('parse-error-box');
+            if (!box) { return; }
+            const stops = [box].concat(Array.from(box.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')));
+            const current = stops.indexOf(document.activeElement);
+            const next = e.shiftKey
+                ? (current <= 0 ? stops.length - 1 : current - 1)
+                : (current === -1 || current === stops.length - 1 ? 0 : current + 1);
+            e.preventDefault();
+            stops[next].focus();
+        });
 
         // ─── Restore persisted UI state ─────────────────────
         // Returns false when the saved tab exists but is still hidden (e.g. Applications
@@ -704,6 +767,7 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     if (!uiStateRestored) {
                         uiStateRestored = restoreUiState();
                     }
+                    restoreParseErrorFocus();
                     break;
                 case 'parseError':
                     setParseError(msg.message || 'The manifest XML could not be parsed.');

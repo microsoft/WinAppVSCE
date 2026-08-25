@@ -187,31 +187,102 @@ test('the parse-error overlay is modal — the form behind it is inert', async (
     await expect(page.locator('#tab-identity')).toHaveAttribute('aria-hidden', 'true');
 });
 
-test('recovery never leaves focus inside the hidden overlay or on a destroyed element', async ({ page }) => {
+test('recovery restores focus to the rebuilt control, not a destroyed element', async ({ page }) => {
     await loadEditor(page);
     await postUpdate(page, manifestData);
     await page.click('.tab-btn[data-tab="applications"]');
 
     // Inputs in the applications list are rebuilt wholesale by a forced re-render, so the
-    // element focus is restored to may no longer be in the document.
-    const appInput = page.locator('#tab-applications input[data-app-index]').first();
+    // element focus was captured on no longer exists by the time the overlay clears.
+    const appInput = page.locator('#tab-applications input[data-section="applications"][data-field-name="executable"]').first();
     await appInput.focus();
+    const expected = await appInput.evaluate((el: { getAttribute(n: string): string | null }) => ({
+        field: el.getAttribute('data-field-name'),
+        appIndex: el.getAttribute('data-index'),
+    }));
 
     await postParseError(page, 'unclosed tag: Package');
     await postUpdate(page, manifestData, true);
 
     const focus = await page.evaluate(() => {
         const doc = (globalThis as unknown as {
-            document: { activeElement: { closest(s: string): unknown; isConnected: boolean } | null };
+            document: {
+                activeElement:
+                    | { closest(s: string): unknown; isConnected: boolean; tagName: string; getAttribute(n: string): string | null }
+                    | null;
+            };
         }).document;
         const el = doc.activeElement;
         return {
             connected: !!el && el.isConnected,
             inOverlay: !!el && el.closest('#parse-error-overlay') !== null,
+            tag: el ? el.tagName : null,
+            field: el ? el.getAttribute('data-field-name') : null,
+            appIndex: el ? el.getAttribute('data-index') : null,
         };
     });
     expect(focus.connected).toBe(true);
     expect(focus.inOverlay).toBe(false);
+    // Focus landed on the replacement control, not on <body>.
+    expect(focus.tag).toBe('INPUT');
+    expect(focus.field).toBe(expected.field);
+    expect(focus.appIndex).toBe(expected.appIndex);
+});
+
+test('a parse error discards input still sitting in the debounce', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+
+    // Type without waiting out the 300 ms input debounce, then break the XML.
+    await page.locator('#identity-name').fill('MidTypeValue');
+    await postParseError(page, 'unclosed tag: Package');
+
+    // The extension must never be asked to rewrite XML it cannot parse.
+    await page.waitForTimeout(600);
+    const posted = await page.evaluate(() =>
+        (globalThis as unknown as { __posted: { type: string }[] }).__posted.filter(m => m.type === 'fieldChanged').length);
+    expect(posted).toBe(0);
+});
+
+test('Tab stays inside the parse-error dialog while it is open', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+    await postParseError(page, 'unclosed tag: Package');
+
+    const activeId = () => page.evaluate(() =>
+        (globalThis as unknown as { document: { activeElement: { id: string } | null } }).document.activeElement?.id);
+
+    expect(await activeId()).toBe('parse-error-box');
+    await page.keyboard.press('Tab');
+    expect(await activeId()).toBe('parse-error-open-text');
+    // Wraps back to the dialog rather than escaping into the inert form behind it.
+    await page.keyboard.press('Tab');
+    expect(await activeId()).toBe('parse-error-box');
+    await page.keyboard.press('Shift+Tab');
+    expect(await activeId()).toBe('parse-error-open-text');
+});
+
+test('a saved tab that never becomes available leaves a valid fallback selected', async ({ page }) => {
+    await loadEditor(page, { activeTab: 'applications', activeAppSubTabs: {}, userOpenedOptionalFields: [], scrollPositions: {} });
+
+    const frameworkData = JSON.parse(JSON.stringify(manifestData));
+    frameworkData.properties.framework = 'true';
+
+    // Applications stays hidden across repeated updates; restoration keeps retrying.
+    for (let i = 0; i < 3; i++) {
+        await postUpdate(page, frameworkData, true);
+    }
+
+    await expect(page.locator('.tab-btn[data-tab="applications"]')).toHaveClass(/hidden-tab/);
+    await expect(page.locator('.tab-btn[data-tab="applications"]')).not.toHaveClass(/active/);
+    await expect(page.locator('.tab-btn.active')).toHaveCount(1);
+    await expect(page.locator('.tab-content.active')).toHaveCount(1);
+    await expect(page.locator('.tab-btn[data-tab="identity"]')).toHaveClass(/active/);
+
+    // A manual selection while the saved tab is still unavailable must not be overridden.
+    await page.click('.tab-btn[data-tab="properties"]');
+    await postUpdate(page, frameworkData, true);
+    await expect(page.locator('.tab-btn[data-tab="properties"]')).toHaveClass(/active/);
 });
 
 test('hiding a tab for a non-application package clears its button selection', async ({ page }) => {

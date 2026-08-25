@@ -78,6 +78,16 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         let externalChangeTimer: NodeJS.Timeout | undefined;
         const assetCopyTokens = new AssetCopyTokenStore();
 
+        /** Whether the document currently parses, i.e. whether it is safe to rewrite. */
+        const documentParses = (xml: string): boolean => {
+            try {
+                parseManifest(xml);
+                return true;
+            } catch {
+                return false;
+            }
+        };
+
         /** Load the full editor view. */
         const showEditorView = () => {
             documentMode = 'editor';
@@ -241,6 +251,16 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             // Apply all pending field changes and resolve the save promise
                             // Match nonce to prevent stale resolution from rapid double-saves
                             if (pendingSaveResolve && message.nonce === pendingSaveNonce) {
+                                const resolve = pendingSaveResolve;
+                                pendingSaveResolve = null;
+                                pendingSaveNonce = null;
+                                // Same hazard as the debounced edit path: never rewrite a
+                                // document we could not parse. Resolve with no edits so the
+                                // save still completes.
+                                if (!documentParses(text)) {
+                                    resolve([]);
+                                    return;
+                                }
                                 let result = text;
                                 for (const change of message.changes) {
                                     result = applyFieldChange(result, change.section, change.field, change.value, change.index);
@@ -248,9 +268,6 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                 const edits = result !== text
                                     ? [vscode.TextEdit.replace(new vscode.Range(0, 0, document.lineCount, 0), result)]
                                     : [];
-                                const resolve = pendingSaveResolve;
-                                pendingSaveResolve = null;
-                                pendingSaveNonce = null;
                                 resolve(edits);
                             }
                             return;
@@ -442,6 +459,14 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             }
 
             if (newText !== undefined && newText !== text) {
+                // The webview debounces input for 300 ms, and the parse-error overlay no longer
+                // tears down the webview script context, so an edit can arrive after the document
+                // became unparseable. Rewriting the whole document from XML we could not parse
+                // would clobber what the user is typing in the text editor, so drop it — the
+                // webview is repopulated from the document once the XML is valid again.
+                if (!documentParses(text)) {
+                    return;
+                }
                 isApplyingEdit = true;
                 try {
                     const edit = new vscode.WorkspaceEdit();

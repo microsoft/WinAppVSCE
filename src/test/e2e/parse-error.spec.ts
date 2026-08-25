@@ -16,12 +16,14 @@ import {
 
 let ctx: VSCodeTestContext;
 let innerFrame: FrameLocator;
+// Tracked separately from `ctx` so a failed launch still cleans up the workspace.
+let tmpDir: string | undefined;
 
 // Launching VS Code with a malformed manifest is shared setup rather than the work of the
 // first test, so each test in this file can run on its own (e.g. under --grep).
 test.beforeAll(async () => {
     // Create a workspace with a broken manifest
-    const tmpDir = createTempWorkspace('winui-gallery.appxmanifest');
+    tmpDir = createTempWorkspace('winui-gallery.appxmanifest');
     const manifestPath = path.join(tmpDir, 'AppxManifest.xml');
     fs.writeFileSync(manifestPath, '<Package><broken xml here', 'utf-8');
 
@@ -54,7 +56,12 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-    if (ctx) await teardown(ctx);
+    if (ctx) {
+        await teardown(ctx);
+    } else if (tmpDir) {
+        // Launch failed before `ctx` existed, so teardown can't clean the workspace.
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
 });
 
 test('shows error view for malformed XML', async () => {

@@ -52,9 +52,9 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (141 tests)
+## Test inventory (144 tests)
 
-### `webview-state.spec.ts` — 7 tests
+### `webview-state.spec.ts` — 10 tests
 
 Renders the generated webview document directly in Chromium (with a stubbed `acquireVsCodeApi`), so
 UI-state behaviour can be verified without launching VS Code. Regression coverage for #192.
@@ -66,8 +66,11 @@ UI-state behaviour can be verified without launching VS Code. Regression coverag
 | 3 | UI state is restored after the webview document is rebuilt | State persisted via `vscode.setState()` restores the tab, sub-tab and scroll offset in a fresh script context |
 | 4 | a saved tab that is hidden on the first update is restored once it becomes available | Restoration stays pending while the saved tab is hidden, instead of being consumed and lost |
 | 5 | the parse-error overlay is modal — the form behind it is inert | The overlay exposes "Open in Text Editor", takes focus, and inerts/hides the form behind it until recovery, handing `aria-hidden` back to the tab system afterwards |
-| 6 | recovery never leaves focus inside the hidden overlay or on a destroyed element | Focus saved before the overlay is restored safely even when the re-render destroys that element |
-| 7 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
+| 6 | recovery restores focus to the rebuilt control, not a destroyed element | Focus captured before the overlay is re-applied *after* the form is repopulated, so it lands on the replacement input rather than falling back to `<body>` |
+| 7 | a parse error discards input still sitting in the debounce | In-flight webview input is dropped when the XML stops parsing, so the extension is never asked to rewrite unparseable XML |
+| 8 | Tab stays inside the parse-error dialog while it is open | Tab/Shift+Tab cycle between the dialog and its button instead of escaping the modal |
+| 9 | a saved tab that never becomes available leaves a valid fallback selected | Endless restore retries don't strand an invalid selection or override a manual tab change |
+| 10 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
 
 ### `external-edit-state.spec.ts` — 3 tests
 
