@@ -44,6 +44,7 @@ import {
 } from "./projectContextStatus";
 import {
   normalizeDiagnosticsLevel,
+  getDiagnosticsLevelValidationMessage,
   DOTNET_REQUIRED_STATUS,
   getXamlStatus,
   getXamlStatusEffect,
@@ -69,6 +70,7 @@ const lifecycle = new ServerLifecycle();
 let lastDegradedCause: DegradedCause | undefined;
 const csharpDevKitNotificationGate = new CsharpDevKitNotificationGate();
 const projectRestoreNotificationGate = new ProjectRestoreNotificationGate();
+let lastInvalidDiagnosticsLevel: string | undefined;
 
 // The integration harness cannot read OutputChannel contents.
 function log(message: string): void {
@@ -109,11 +111,11 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
       }
 
       if (event.affectsConfiguration("winapp.xaml.diagnostics.level")) {
-        const diagnosticsLevel = normalizeDiagnosticsLevel(
-          vscode.workspace
-            .getConfiguration("winapp.xaml")
-            .get("diagnostics.level", "warning")
-        );
+        const configuredLevel = vscode.workspace
+          .getConfiguration("winapp.xaml")
+          .get<unknown>("diagnostics.level", "all");
+        reportInvalidDiagnosticsLevel(configuredLevel);
+        const diagnosticsLevel = normalizeDiagnosticsLevel(configuredLevel);
         if (!client?.isRunning()) {
           log("XAML diagnostics level changed — it will apply when the language server is running.");
           return;
@@ -289,6 +291,11 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
   }
 
   const xamlConfiguration = vscode.workspace.getConfiguration("winapp.xaml");
+  const configuredDiagnosticsLevel = xamlConfiguration.get<unknown>(
+    "diagnostics.level",
+    "all"
+  );
+  reportInvalidDiagnosticsLevel(configuredDiagnosticsLevel);
   const serverConfiguration = readXamlLanguageServerConfiguration(
     (section, defaultValue) => xamlConfiguration.get(section, defaultValue)
   );
@@ -407,7 +414,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     const latestDiagnosticsLevel = normalizeDiagnosticsLevel(
       vscode.workspace
         .getConfiguration("winapp.xaml")
-        .get("diagnostics.level", "warning")
+        .get("diagnostics.level", "all")
     );
     await candidate.sendNotification("workspace/didChangeConfiguration", {
       settings: { diagnosticsLevel: latestDiagnosticsLevel },
@@ -439,6 +446,30 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
       context
     );
   }
+}
+
+function reportInvalidDiagnosticsLevel(value: unknown): void {
+  const message = getDiagnosticsLevelValidationMessage(value);
+  if (!message) {
+    lastInvalidDiagnosticsLevel = undefined;
+    return;
+  }
+
+  log(message);
+  const key = String(value);
+  if (lastInvalidDiagnosticsLevel === key) {
+    return;
+  }
+  lastInvalidDiagnosticsLevel = key;
+  void vscode.window.showWarningMessage(message, "Open Settings").then((choice) => {
+    if (choice === "Open Settings") {
+      return vscode.commands.executeCommand(
+        "workbench.action.openSettings",
+        "winapp.xaml.diagnostics.level"
+      );
+    }
+    return undefined;
+  });
 }
 
 function notifyProjectRestoreRequired(projectPath: string | undefined): void {

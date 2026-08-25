@@ -64,9 +64,9 @@ export function getProjectContextStatusPresentation(
       };
     case "framework-ready":
       return {
-        text: "$(sync~spin) WinApp: XAML framework IntelliSense ready",
+        text: "$(sync~spin) WinApp: XAML project loading",
         tooltip:
-          "WinUI types and properties are ready. Project symbols and diagnostics are still loading.",
+          "Framework IntelliSense is available. Project symbols and diagnostics are still loading.",
         transient: false,
       };
     case "ready":

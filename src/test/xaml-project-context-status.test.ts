@@ -43,9 +43,9 @@ test("shows framework readiness while project symbols continue loading", () => {
 
   assert.deepEqual(selectProjectContextStatus([ready, frameworkReady]), frameworkReady);
   assert.deepEqual(getProjectContextStatusPresentation(frameworkReady), {
-    text: "$(sync~spin) WinApp: XAML framework IntelliSense ready",
+    text: "$(sync~spin) WinApp: XAML project loading",
     tooltip:
-      "WinUI types and properties are ready. Project symbols and diagnostics are still loading.",
+      "Framework IntelliSense is available. Project symbols and diagnostics are still loading.",
     transient: false,
   });
 

@@ -216,6 +216,22 @@ async function main() {
   await loadingStatusPromise;
   console.log("[ok] didOpen: 0 syntactic diagnostics for the valid fixture");
 
+  // Completion requested during the cold-load window must be explicitly provisional rather than
+  // looking like an authoritative empty result.
+  send({
+    id: 103,
+    method: "textDocument/completion",
+    params: {
+      textDocument: { uri: xamlUri },
+      position: { line: 6, character: 5 },
+    },
+  });
+  const coldCompletion = await waitFor(responseFor(103), 5000, "cold completion");
+  if (coldCompletion.result?.isIncomplete !== true) {
+    fail(`cold completion must be marked incomplete while project metadata loads: ${JSON.stringify(coldCompletion.result)}`);
+  }
+  console.log("[ok] completion(cold): provisional result is marked incomplete");
+
   // Project-independent directive quick info must not wait for the cold design-time build.
   const coldHoverStarted = performance.now();
   send({

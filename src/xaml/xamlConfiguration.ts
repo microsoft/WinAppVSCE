@@ -1,4 +1,8 @@
 export type XamlDiagnosticsLevel = "off" | "warning" | "error";
+export type XamlDiagnosticsLevelSetting =
+  | XamlDiagnosticsLevel
+  | "all"
+  | "errorsOnly";
 
 export interface XamlLanguageServerConfiguration {
   enabled: boolean;
@@ -100,8 +104,32 @@ export function getXamlStatusEffect(
   }
 }
 
-export function normalizeDiagnosticsLevel(value: string): XamlDiagnosticsLevel {
-  return value === "off" || value === "error" ? value : "warning";
+export function normalizeDiagnosticsLevel(value: unknown): XamlDiagnosticsLevel {
+  if (value === "off") {
+    return "off";
+  }
+  if (value === "error" || value === "errorsOnly") {
+    return "error";
+  }
+  return "warning";
+}
+
+export function getDiagnosticsLevelValidationMessage(
+  value: unknown
+): string | undefined {
+  if (
+    value === "all" ||
+    value === "errorsOnly" ||
+    value === "off" ||
+    value === "warning" ||
+    value === "error"
+  ) {
+    return undefined;
+  }
+
+  return `Invalid winapp.xaml.diagnostics.level value '${String(
+    value
+  )}'. Using 'all'; choose all, errorsOnly, or off.`;
 }
 
 export function readXamlLanguageServerConfiguration(
@@ -111,7 +139,7 @@ export function readXamlLanguageServerConfiguration(
     enabled: get("intelliSense.enable", true),
     initializationOptions: {
       diagnosticsLevel: normalizeDiagnosticsLevel(
-        get("diagnostics.level", "warning")
+        get("diagnostics.level", "all")
       ),
     },
   };

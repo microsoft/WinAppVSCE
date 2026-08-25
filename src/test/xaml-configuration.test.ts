@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   DOTNET_REQUIRED_STATUS,
+  getDiagnosticsLevelValidationMessage,
   getXamlStatus,
   getXamlStatusEffect,
   normalizeDiagnosticsLevel,
@@ -68,6 +69,8 @@ test("maps every XAML status action to its recovery effect", () => {
 
 test("normalizes supported XAML diagnostic levels", () => {
   assert.equal(normalizeDiagnosticsLevel("off"), "off");
+  assert.equal(normalizeDiagnosticsLevel("all"), "warning");
+  assert.equal(normalizeDiagnosticsLevel("errorsOnly"), "error");
   assert.equal(normalizeDiagnosticsLevel("warning"), "warning");
   assert.equal(normalizeDiagnosticsLevel("error"), "error");
 });
@@ -75,6 +78,16 @@ test("normalizes supported XAML diagnostic levels", () => {
 test("defaults unknown XAML diagnostic levels to warning", () => {
   assert.equal(normalizeDiagnosticsLevel("unexpected"), "warning");
   assert.equal(normalizeDiagnosticsLevel(""), "warning");
+});
+
+test("validates diagnostic aliases and explains invalid values", () => {
+  for (const value of ["all", "errorsOnly", "off", "warning", "error"]) {
+    assert.equal(getDiagnosticsLevelValidationMessage(value), undefined);
+  }
+  assert.match(
+    getDiagnosticsLevelValidationMessage("syntax") ?? "",
+    /Invalid winapp\.xaml\.diagnostics\.level value 'syntax'.*all, errorsOnly, or off/
+  );
 });
 
 test("reads startup enablement and diagnostics initialization options together", () => {

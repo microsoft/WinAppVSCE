@@ -215,9 +215,16 @@
           },
           "winapp.xaml.diagnostics.level": {
             "type": "string",
-            "enum": ["off", "warning", "error"],
-            "default": "warning",
-            "description": "Diagnostic filter for WinUI XAML validation. Set to 'off' to disable diagnostics, 'warning' to show all diagnostics, or 'error' to show only errors."
+            "enum": ["all", "errorsOnly", "off", "warning", "error"],
+            "enumDescriptions": [
+              "Show errors and warnings.",
+              "Show errors only.",
+              "Disable XAML diagnostics while keeping other IntelliSense features enabled.",
+              "Legacy alias for 'all'.",
+              "Legacy alias for 'errorsOnly'."
+            ],
+            "default": "all",
+            "description": "Diagnostic filter for WinUI XAML validation. Existing 'warning' and 'error' values remain supported as aliases for 'all' and 'errorsOnly'."
           }
         }
       }

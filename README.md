@@ -217,7 +217,7 @@ XAML tooling supports these settings:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `winapp.xaml.intelliSense.enable` | `true` | Starts the XAML language server when XAML files are opened. Disabling it keeps syntax highlighting active. |
-| `winapp.xaml.diagnostics.level` | `warning` | Controls XAML diagnostics: `off`, `warning` (all diagnostics), or `error` (errors only). Changes apply immediately to open XAML documents. |
+| `winapp.xaml.diagnostics.level` | `all` | Controls XAML diagnostics: `all`, `errorsOnly`, or `off`. Existing `warning` and `error` values remain supported as aliases for `all` and `errorsOnly`. Changes apply immediately to open XAML documents. |
 
 #### C# code-behind IntelliSense
 

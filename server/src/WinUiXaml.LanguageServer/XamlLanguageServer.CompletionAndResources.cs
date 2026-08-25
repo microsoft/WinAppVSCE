@@ -18,7 +18,7 @@ internal sealed partial class XamlLanguageServer
         if (!TryGetAcceptedContext(doc, out var context))
         {
             WarmUp(doc.Uri);
-            return new CompletionList();
+            return new CompletionList { IsIncomplete = true };
         }
 
         int offset = doc.OffsetAt(p.Position);
@@ -786,9 +786,11 @@ internal sealed partial class XamlLanguageServer
         }
 
         // Cache the complete context, not just the workspace, so all later features share one
-        // compilation and type system. Yield briefly to immediate editor requests.
+        // compilation and type system. Publish the loading state before yielding so the intentional
+        // delay cannot look like a ready-but-empty language service.
         _ = Task.Run(async () =>
         {
+            await NotifyProjectContextStatusAsync(uri, "loading").ConfigureAwait(false);
             await Task.Delay(500).ConfigureAwait(false);
             if (!_documents.ContainsKey(uri))
             {

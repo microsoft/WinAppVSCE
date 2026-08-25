@@ -172,7 +172,12 @@ internal sealed partial class XamlLanguageServer
     }
 
     private static string NormalizeDiagnosticsLevel(string? value) =>
-        value is "off" or "error" ? value : "warning";
+        value switch
+        {
+            "off" => "off",
+            "error" or "errorsOnly" => "error",
+            _ => "warning",
+        };
 
     /// <summary>Computes the workspace-trust boundary from initialize params.</summary>
     private static string[] ResolveAllowedRoots(InitializeParams p)
