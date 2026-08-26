@@ -111,7 +111,7 @@ export function getApplicationsScript(): string {
                 // Build add extension dropdown
                 let addExtDropdown = '<div class="custom-dropdown add-ext-dropdown">' +
                     '<button class="custom-dropdown-btn add-ext-btn">+ Add Extension</button>' +
-                    '<div class="custom-dropdown-menu add-ext-menu">';
+                    '<div class="custom-dropdown-menu add-ext-menu" data-app-index="' + idx + '">';
                 extensionTemplates.forEach(t => {
                     addExtDropdown += '<div class="custom-dropdown-item add-ext-item" data-app-index="' + idx + '" data-xml="' + escapeHtml(t.xml) + '">' + escapeHtml(t.label) + '</div>';
                 });

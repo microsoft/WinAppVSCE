@@ -350,6 +350,11 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             // the scroll container's height and the browser clamps scrollTop to 0.
             const scrollSnapshot = currentScrollPositions();
 
+            // A background re-render must not close a dropdown the user just opened. Menus are
+            // rebuilt wholesale by renderApplications, so snapshot which ones are open and reopen
+            // them afterwards, the same way scroll offsets and focus are preserved.
+            const openMenus = openDropdownKeys();
+
             // Save focused element info before DOM rebuild. With forceAll the focused element's
             // value is overwritten too (the document is the source of truth), but focus itself is
             // still restored afterwards.
@@ -510,6 +515,32 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             }
 
             applyScrollPositions(scrollSnapshot);
+            reopenDropdowns(openMenus);
+        }
+
+        /** Identifies a dropdown menu stably enough to survive its card being re-rendered. */
+        function dropdownKeyFor(menu) {
+            if (menu.id) { return menu.id; }
+            const owner = menu.closest('[data-app-index], [data-app-idx]');
+            const appIdx = owner
+                ? (owner.getAttribute('data-app-index') || owner.getAttribute('data-app-idx'))
+                : '';
+            return menu.className.replace('open', '').trim() + '#' + appIdx;
+        }
+
+        function openDropdownKeys() {
+            const keys = [];
+            document.querySelectorAll('.custom-dropdown-menu.open').forEach(m => {
+                keys.push(dropdownKeyFor(m));
+            });
+            return keys;
+        }
+
+        function reopenDropdowns(keys) {
+            if (!keys || !keys.length) { return; }
+            document.querySelectorAll('.custom-dropdown-menu').forEach(m => {
+                if (keys.indexOf(dropdownKeyFor(m)) !== -1) { m.classList.add('open'); }
+            });
         }
 
         function setValueIfNotFocused(elementId, value, focusedEl) {

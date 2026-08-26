@@ -332,6 +332,22 @@ test('two extension inputs sharing a field path queue independently', async ({ p
     expect(values).toContain('second.example.com');
 });
 
+test('a background re-render keeps an open dropdown open', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+
+    await page.locator('.tab-btn[data-tab="applications"]').click();
+    await page.locator('.app-card').first().locator('.app-sub-tab[data-subtab="extensions"]').click();
+    const menu = page.locator('.add-ext-menu').first();
+    await page.locator('.add-ext-btn').first().click();
+    await expect(menu).toHaveClass(/open/);
+
+    // A force-update landing while the menu is open must not close it — otherwise the click the
+    // user is about to make on a menu item lands on nothing.
+    await postUpdate(page, manifestData, true);
+    await expect(menu).toHaveClass(/open/);
+});
+
 test('a parse error discards extension-field input still sitting in the debounce', async ({ page }) => {
     await loadEditor(page);
     await postUpdate(page, manifestData);
