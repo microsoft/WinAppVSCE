@@ -351,23 +351,22 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             // renderApplications rebuilds the menus wholesale.
             const openMenus = openDropdownKeys();
 
-            // Save focused element info before DOM rebuild. With forceAll the focused element's
-            // value is overwritten too, but focus itself is still restored afterwards.
-            const activeEl = document.activeElement;
-            const focused = forceAll ? null : activeEl;
+            // Save focused element info before DOM rebuild. Skipped for forceAll (external edits)
+            // so a re-render never pulls focus away from the text editor.
+            const focused = forceAll ? null : document.activeElement;
             let focusInfo = null;
-            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT' || activeEl.classList.contains('custom-select-trigger'))) {
+            if (focused && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA' || focused.tagName === 'SELECT' || focused.classList.contains('custom-select-trigger'))) {
                 focusInfo = {
-                    section: activeEl.getAttribute('data-section'),
-                    fieldName: activeEl.getAttribute('data-field-name'),
-                    index: activeEl.getAttribute('data-index'),
-                    id: activeEl.id,
-                    selectionStart: activeEl.selectionStart,
-                    selectionEnd: activeEl.selectionEnd,
-                    type: activeEl.type,
-                    extField: activeEl.getAttribute('data-ext-field'),
-                    appIndex: activeEl.getAttribute('data-app-index'),
-                    extIndex: activeEl.getAttribute('data-ext-index')
+                    section: focused.getAttribute('data-section'),
+                    fieldName: focused.getAttribute('data-field-name'),
+                    index: focused.getAttribute('data-index'),
+                    id: focused.id,
+                    selectionStart: focused.selectionStart,
+                    selectionEnd: focused.selectionEnd,
+                    type: focused.type,
+                    extField: focused.getAttribute('data-ext-field'),
+                    appIndex: focused.getAttribute('data-app-index'),
+                    extIndex: focused.getAttribute('data-ext-index')
                 };
             }
 
@@ -671,39 +670,9 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         }
 
         // ─── Parse-error overlay ────────────────────────────
-        // Covers the form while the XML is unparseable. Must be modal: without inerting the
-        // content behind it, keyboard and screen-reader users can still tab into paused fields.
-        let focusBeforeParseError = null;
-        // Set when the overlay clears, consumed after the form is repopulated: the re-render
-        // usually destroys the focused element, so restoring earlier would drop focus on <body>.
-        let pendingParseErrorFocus = null;
-
-        /** Best-effort stable selector for re-finding a control after the form is rebuilt. */
-        function focusDescriptorFor(el) {
-            if (!el || !el.getAttribute) { return null; }
-            if (el.id) { return '#' + el.id; }
-            const parts = ['data-section', 'data-field-name', 'data-index', 'data-app-index', 'data-ext-index', 'data-ext-field']
-                .filter(a => el.hasAttribute(a))
-                .map(a => '[' + a + '="' + el.getAttribute(a).replace(/"/g, '\\"') + '"]');
-            return parts.length ? el.tagName.toLowerCase() + parts.join('') : null;
-        }
-
-        function restoreParseErrorFocus() {
-            const target = pendingParseErrorFocus;
-            if (!target) { return; }
-            pendingParseErrorFocus = null;
-            // Same reasoning as taking focus: don't pull it back from wherever the user now is.
-            if (!document.hasFocus()) { return; }
-            if (target.el && document.contains(target.el)) {
-                target.el.focus();
-                return;
-            }
-            if (target.selector) {
-                const replacement = document.querySelector(target.selector);
-                if (replacement) { replacement.focus(); }
-            }
-        }
-
+        // Covers the form while the XML is unparseable. Inerts the content behind it so keyboard
+        // and screen-reader users cannot tab into paused fields. It never moves focus itself:
+        // the XML usually breaks while the user types in the text editor.
         function setEditorContentInert(isInert) {
             const overlay = document.getElementById('parse-error-overlay');
             Array.from(document.body.children).forEach(el => {
@@ -742,24 +711,12 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     // Editing is paused, so anything still in the input debounce must not be
                     // sent: the extension would be asked to rewrite XML it cannot parse.
                     discardPendingChanges();
-                    // Only take focus if the webview already had it. The XML usually breaks while
-                    // the user types in the text editor, and stealing focus there eats keystrokes.
-                    const hadFocus = document.hasFocus();
-                    focusBeforeParseError = hadFocus ? {
-                        el: document.activeElement,
-                        selector: focusDescriptorFor(document.activeElement),
-                    } : null;
                     setEditorContentInert(true);
-                    const box = document.getElementById('parse-error-box');
-                    if (box && hadFocus) { box.focus(); }
                 }
             } else {
                 overlay.hidden = true;
                 if (wasShowing) {
                     setEditorContentInert(false);
-                    // Deferred until after populateForm — see pendingParseErrorFocus.
-                    pendingParseErrorFocus = focusBeforeParseError;
-                    focusBeforeParseError = null;
                 }
             }
         }
@@ -807,7 +764,6 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     if (!uiStateRestored) {
                         uiStateRestored = restoreUiState();
                     }
-                    restoreParseErrorFocus();
                     break;
                 case 'parseError':
                     setParseError(msg.message || 'The manifest XML could not be parsed.');

@@ -63,9 +63,18 @@ async function postParseError(page: Page, message: string): Promise<void> {
     await page.waitForTimeout(150);
 }
 
+/** True when focus sits inside the parse-error dialog. */
+function focusIsInOverlay(page: Page): Promise<boolean> {
+    return page.evaluate(() => {
+        const el = (globalThis as unknown as {
+            document: { activeElement: { closest(s: string): unknown } | null };
+        }).document.activeElement;
+        return !!el && el.closest('#parse-error-overlay') !== null;
+    });
+}
+
 /** Reads the state the webview persisted through `vscode.setState`. */
-function readPersistedState(page: Page): Promise<unknown> {
-    return page.evaluate(() => (globalThis as unknown as { __state: unknown }).__state);
+function readPersistedState(page: Page): Promise<unknown> {    return page.evaluate(() => (globalThis as unknown as { __state: unknown }).__state);
 }
 
 test('external updates preserve the active tab, app sub-tab and scroll position', async ({ page }) => {
@@ -169,9 +178,7 @@ test('the parse-error overlay is modal, so the form behind it is inert', async (
     // Content behind the overlay must not remain keyboard- or AT-reachable.
     await expect(page.locator('.tab-bar')).toHaveAttribute('inert', '');
     await expect(page.locator('#tab-identity')).toHaveAttribute('aria-hidden', 'true');
-    expect(await page.evaluate(() =>
-        (globalThis as unknown as { document: { activeElement: { id: string } | null } }).document.activeElement?.id,
-    )).toBe('parse-error-box');
+    expect(await focusIsInOverlay(page)).toBe(false);
 
     await page.locator('#parse-error-open-text').click();
     expect(await page.evaluate(() =>
@@ -187,76 +194,28 @@ test('the parse-error overlay is modal, so the form behind it is inert', async (
     await expect(page.locator('#tab-identity')).toHaveAttribute('aria-hidden', 'true');
 });
 
-test('recovery restores focus to the rebuilt control, not a destroyed element', async ({ page }) => {
+test('the overlay never moves focus, whether or not the webview is focused', async ({ page }) => {
     await loadEditor(page);
     await postUpdate(page, manifestData);
     await page.click('.tab-btn[data-tab="applications"]');
 
-    // Inputs in the applications list are rebuilt wholesale by a forced re-render, so the
-    // element focus was captured on no longer exists by the time the overlay clears.
+    // Inputs in the applications list are rebuilt wholesale by a forced re-render, so this is
+    // also the case where a focus-restoring implementation would have to re-find the control.
     const appInput = page.locator('#tab-applications input[data-section="applications"][data-field-name="executable"]').first();
     await appInput.focus();
-    const expected = await appInput.evaluate((el: { getAttribute(n: string): string | null }) => ({
-        field: el.getAttribute('data-field-name'),
-        appIndex: el.getAttribute('data-index'),
-    }));
 
     await postParseError(page, 'unclosed tag: Package');
+    // Inerting the form blurs the field, which is fine. What must not happen is focus landing in
+    // the overlay: the XML usually breaks while the user types in the text editor, and taking
+    // focus there pulls the caret out mid-keystroke.
+    expect(await focusIsInOverlay(page)).toBe(false);
+
+    // Recovery must not push focus anywhere either.
     await postUpdate(page, manifestData, true);
-
-    const focus = await page.evaluate(() => {
-        const doc = (globalThis as unknown as {
-            document: {
-                activeElement:
-                    | { closest(s: string): unknown; isConnected: boolean; tagName: string; getAttribute(n: string): string | null }
-                    | null;
-            };
-        }).document;
-        const el = doc.activeElement;
-        return {
-            connected: !!el && el.isConnected,
-            inOverlay: !!el && el.closest('#parse-error-overlay') !== null,
-            tag: el ? el.tagName : null,
-            field: el ? el.getAttribute('data-field-name') : null,
-            appIndex: el ? el.getAttribute('data-index') : null,
-        };
-    });
-    expect(focus.connected).toBe(true);
-    expect(focus.inOverlay).toBe(false);
-    // Focus landed on the replacement control, not on <body>.
-    expect(focus.tag).toBe('INPUT');
-    expect(focus.field).toBe(expected.field);
-    expect(focus.appIndex).toBe(expected.appIndex);
-});
-
-test('the overlay does not steal focus when the webview is not focused', async ({ page }) => {
-    await loadEditor(page);
-    await postUpdate(page, manifestData);
-    await page.locator('#identity-name').focus();
-
-    // The XML normally breaks while the user is typing in the text editor, so the webview does
-    // not have focus. Grabbing it there would pull the caret out mid-keystroke.
-    await page.evaluate(() => {
-        const g = globalThis as unknown as { document: Record<string, unknown> };
-        g.document.hasFocus = () => false;
-    });
-    await postParseError(page, 'unclosed tag: Package');
-
-    // Marking the form inert blurs the field, which is fine. What must not happen is focus being
-    // pulled into the overlay, since that moves the caret out of the text editor.
-    const inOverlay = () => page.evaluate(() => {
-        const el = (globalThis as unknown as {
-            document: { activeElement: { closest(s: string): unknown } | null };
-        }).document.activeElement;
-        return !!el && el.closest('#parse-error-overlay') !== null;
-    });
-    expect(await inOverlay()).toBe(false);
-
-    // Recovery must not yank focus back into the webview either.
-    await postUpdate(page, manifestData, true);
-    const afterId = await page.evaluate(() =>
-        (globalThis as unknown as { document: { activeElement: { id: string } | null } }).document.activeElement?.id);
-    expect(afterId).not.toBe('identity-name');
+    expect(await focusIsInOverlay(page)).toBe(false);
+    const afterTag = await page.evaluate(() =>
+        (globalThis as unknown as { document: { activeElement: { tagName: string } | null } }).document.activeElement?.tagName);
+    expect(afterTag).toBe('BODY');
 });
 
 test('a parse error discards input still sitting in the debounce', async ({ page }) => {
@@ -400,6 +359,10 @@ test('Tab stays inside the parse-error dialog while it is open', async ({ page }
     const activeId = () => page.evaluate(() =>
         (globalThis as unknown as { document: { activeElement: { id: string } | null } }).document.activeElement?.id);
 
+    // Focus starts outside the dialog now that the overlay never takes it, so the first Tab is
+    // what brings the user in rather than letting them escape into the host chrome.
+    expect(await activeId()).not.toBe('parse-error-box');
+    await page.keyboard.press('Tab');
     expect(await activeId()).toBe('parse-error-box');
     await page.keyboard.press('Tab');
     expect(await activeId()).toBe('parse-error-open-text');
