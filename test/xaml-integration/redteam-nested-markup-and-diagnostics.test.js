@@ -3,6 +3,7 @@
 // Nested markup extensions and diagnostic false positives.
 
 const assert = require("node:assert");
+const fs = require("node:fs");
 const path = require("node:path");
 const h = require("./helper");
 
@@ -15,6 +16,13 @@ function page(inner) {
 
 function diagSummary(diags) {
   return diags.map((d) => `${d.code}:${d.message}`).join("; ");
+}
+
+function lineOf(file, needle) {
+  const text = fs.readFileSync(file, "utf8");
+  const offset = text.indexOf(needle);
+  assert.ok(offset >= 0, `expected ${needle} in ${file}`);
+  return text.slice(0, offset).split(/\r?\n/).length - 1;
 }
 
 describe("WinUI XAML red-team 2 — nested markup extensions", function () {
@@ -31,7 +39,8 @@ describe("WinUI XAML red-team 2 — nested markup extensions", function () {
     const defs = await h.definitionsAt(page('<Border Tag="{Binding Source={StaticResource SmokeAccent|Brush}}" />'));
     assert.ok(defs.length > 0, "expected a definition for nested StaticResource key");
     assert.strictEqual(path.basename(defs[0].fsPath), APP, `expected ${APP}; got ${defs[0].fsPath}`);
-    assert.strictEqual(defs[0].line, 14, `expected SmokeAccentBrush at 0-based line 14; got ${defs[0].line}`);
+    const expectedLine = lineOf(defs[0].fsPath, 'x:Key="SmokeAccentBrush"');
+    assert.strictEqual(defs[0].line, expectedLine, `expected SmokeAccentBrush at 0-based line ${expectedLine}; got ${defs[0].line}`);
   });
 
   it("hover on a nested Binding Source StaticResource key describes the resource", async () => {

@@ -58,25 +58,6 @@ function rangeShape(range) {
   };
 }
 
-function lineStartsOf(text) {
-  const starts = [0];
-  for (let i = 0; i < text.length; i++) if (text[i] === "\n") starts.push(i + 1);
-  return starts;
-}
-
-function offsetOf(starts, text, line, character) {
-  assert.ok(line < starts.length, `line ${line} should exist in ${JSON.stringify(text)}`);
-  return Math.min(starts[line] + character, text.length);
-}
-
-function applySingleEdit(text, item) {
-  assert.ok(item.range, `completion item should carry a textEdit range: ${JSON.stringify(item)}`);
-  const starts = lineStartsOf(text);
-  const start = offsetOf(starts, text, item.range.start.line, item.range.start.character);
-  const end = offsetOf(starts, text, item.range.end.line, item.range.end.character);
-  return text.slice(0, start) + item.newText + text.slice(end);
-}
-
 async function completionItemsWithRangesAt(text) {
   const { clean, position } = caretPosition(text);
   await h.setBuffer(clean);
@@ -156,13 +137,9 @@ function dataTemplateDataType(valueWithCaret) {
   return page(`<ListView><ListView.ItemTemplate><DataTemplate x:DataType="${valueWithCaret}"><TextBlock /></DataTemplate></ListView.ItemTemplate></ListView>`);
 }
 
-function assertReferenceOnlyClassIntrinsics(items, prefix = "x") {
-  for (const alias of REFERENCE_INTRINSICS) {
-    const item = requireIntrinsic(items, alias, prefix);
-    assert.strictEqual(item.kind, vscode.CompletionItemKind.Class, `${prefix}:${alias} should be a Class completion`);
-  }
-  for (const alias of VALUE_INTRINSICS) {
-    assertNoIntrinsic(items, alias, `${prefix}: class-only site must not offer value-type intrinsic ${alias}`);
+function assertNoTargetTypeIntrinsics(items) {
+  for (const alias of ALL_INTRINSICS) {
+    assertNoIntrinsic(items, alias, `TargetType must not offer non-DependencyObject intrinsic ${alias}`);
   }
 }
 
@@ -171,37 +148,26 @@ describe("WinUI XAML — red-team 56 (kind-filtered XAML intrinsic type aliases)
   before(async () => { await h.warmUp(); });
   after(async () => { await h.revertProbe(); });
 
-  it("kind-filters Style TargetType x:| to reference-type intrinsics only", async () => {
-    assertReferenceOnlyClassIntrinsics(await itemsAt(styleTargetType("x:|")));
+  it("excludes XAML intrinsics from Style TargetType x:|", async () => {
+    assertNoTargetTypeIntrinsics(await itemsAt(styleTargetType("x:|")));
   });
 
-  it("kind-filters ControlTemplate TargetType x:| to reference-type intrinsics only", async () => {
-    assertReferenceOnlyClassIntrinsics(await itemsAt(controlTemplateTargetType("x:|")));
+  it("excludes XAML intrinsics from ControlTemplate TargetType x:|", async () => {
+    assertNoTargetTypeIntrinsics(await itemsAt(controlTemplateTargetType("x:|")));
   });
 
-  it("preserves TargetType partial filtering while excluding value-type lookalikes", async () => {
+  it("excludes XAML intrinsics from partially typed TargetType values", async () => {
     const cases = [
-      ["x:T|", ["Type"], ["TimeSpan"]],
-      ["x:Int|", [], ["Int16", "Int32", "Int64"]],
-      ["x:Str|", ["String"], ["Boolean", "Int32"]],
-      ["x:U|", ["Uri"], ["Int32"]],
-      ["x:O|", ["Object"], ["Int32"]],
-      ["x:D|", [], ["Decimal", "Double"]],
-      ["x:By|", [], ["Byte"]],
-      ["x:Ch|", [], ["Char"]],
-      ["x:Si|", [], ["Single"]],
-      ["x:De|", [], ["Decimal"]],
+      "x:T|", "x:Int|", "x:Str|", "x:U|", "x:O|", "x:D|", "x:By|", "x:Ch|", "x:Si|", "x:De|",
     ];
-    for (const [partial, yes, no] of cases) {
-      const items = await itemsAt(styleTargetType(partial));
-      for (const alias of yes) requireIntrinsic(items, alias);
-      for (const alias of no) assertNoIntrinsic(items, alias, `${partial} should not offer ${alias} in class-only TargetType`);
+    for (const partial of cases) {
+      assertNoTargetTypeIntrinsics(await itemsAt(styleTargetType(partial)));
     }
   });
 
-  it("kind-filters a custom XAML-URI prefix in TargetType and preserves that prefix in newText", async () => {
+  it("excludes a custom XAML-URI prefix from TargetType", async () => {
     const items = await itemsAt(pageWith(`xmlns:sys="${XAML_NS}"`, '<Page.Resources><Style TargetType="sys:|"><Setter Property="Tag" Value="probe" /></Style></Page.Resources>'));
-    assertReferenceOnlyClassIntrinsics(items, "sys");
+    assertNoTargetTypeIntrinsics(items);
   });
 
   it("keeps all 14 intrinsics in DataTemplate x:DataType x:|", async () => {
@@ -233,10 +199,9 @@ describe("WinUI XAML — red-team 56 (kind-filtered XAML intrinsic type aliases)
     assertNoIntrinsic(items, "Type", "{x:Type x:Ti|} should not offer Type");
   });
 
-  it("keeps framework type completion in TargetType while filtering value intrinsics", async () => {
+  it("keeps framework DependencyObject completion in TargetType while filtering intrinsics", async () => {
     const items = await itemsAt(styleTargetType("x:|"));
-    requireIntrinsic(items, "String");
-    assertNoIntrinsic(items, "Int32", "TargetType x:| should filter Int32");
+    assertNoTargetTypeIntrinsics(items);
 
     const frameworkItems = await itemsAt(styleTargetType("Butt|"));
     findItem(frameworkItems, (i) => i.label === "Button" && i.detail !== "System", "TargetType Butt| should still offer WinUI Button");
@@ -266,20 +231,12 @@ describe("WinUI XAML — red-team 56 (kind-filtered XAML intrinsic type aliases)
     }
   });
 
-  it("applies the String edit over TargetType x:Str| without corrupting the prefix or local", async () => {
-    const probe = styleTargetType("x:Str|");
-    const { clean, items } = await completionItemsWithRangesAt(probe);
-    const edited = applySingleEdit(clean, requireIntrinsic(items, "String"));
-    assert.ok(edited.includes('TargetType="x:String"'), `edit should yield exactly x:String; got ${edited}`);
-    assert.ok(!edited.includes("x:x:String") && !edited.includes("x:StrString") && !edited.includes("x:Stringing"), `edit must not duplicate prefix/local; got ${edited}`);
+  it("does not offer String over TargetType x:Str|", async () => {
+    assertNoIntrinsic(await itemsAt(styleTargetType("x:Str|")), "String", "TargetType must reject System.String");
   });
 
-  it("applies the Type edit over TargetType x:| without duplicating x:", async () => {
-    const probe = styleTargetType("x:|");
-    const { clean, items } = await completionItemsWithRangesAt(probe);
-    const edited = applySingleEdit(clean, requireIntrinsic(items, "Type"));
-    assert.ok(edited.includes('TargetType="x:Type"'), `edit should yield exactly x:Type; got ${edited}`);
-    assert.ok(!edited.includes("x:x:Type") && !edited.includes("x:TypeType"), `edit must not duplicate prefix/local; got ${edited}`);
+  it("does not offer Type over TargetType x:|", async () => {
+    assertNoIntrinsic(await itemsAt(styleTargetType("x:|")), "Type", "TargetType must reject System.Type");
   });
 
   it("returns arrays without throwing for malformed TargetType prefix contexts", async () => {
@@ -300,8 +257,7 @@ describe("WinUI XAML — red-team 56 (kind-filtered XAML intrinsic type aliases)
 
   it("uses the resolved namespace URI, not the literal x prefix, for positive and foreign-prefix negatives", async () => {
     const aliasItems = await itemsAt(pageWith(`xmlns:alias56="${XAML_NS}"`, '<Page.Resources><Style TargetType="alias56:Str|"><Setter Property="Tag" Value="probe" /></Style></Page.Resources>'));
-    requireIntrinsic(aliasItems, "String", "alias56");
-    assertNoIntrinsic(aliasItems, "Int32", "alias56 TargetType should still be class-only");
+    assertNoTargetTypeIntrinsics(aliasItems);
 
     const foreignItems = await itemsAt(pageWith('xmlns:foreign56="using:SmokeFixture"', '<Page.Resources><Style TargetType="foreign56:Str|"><Setter Property="Tag" Value="probe" /></Style></Page.Resources>'));
     assertNoIntrinsic(foreignItems, "String", "foreign prefix must not be treated as XAML intrinsics");

@@ -3,6 +3,7 @@
 // WinUI XAML language-feature edge cases driven through VS Code APIs.
 
 const assert = require("node:assert");
+const fs = require("node:fs");
 const path = require("node:path");
 const h = require("./helper");
 
@@ -12,6 +13,13 @@ const XAML = "SmokePage.xaml";
 
 function page(inner) {
   return `<Page ${h.NS}\n    x:Class="SmokeFixture.SmokePage">\n  ${inner}\n</Page>`;
+}
+
+function lineOf(file, needle) {
+  const text = fs.readFileSync(file, "utf8");
+  const offset = text.indexOf(needle);
+  assert.ok(offset >= 0, `expected ${needle} in ${file}`);
+  return text.slice(0, offset).split(/\r?\n/).length - 1;
 }
 
 describe("WinUI XAML red-team — completion", function () {
@@ -130,7 +138,8 @@ describe("WinUI XAML red-team — definition (F12)", function () {
     const defs = await h.definitionsAt(page('<Grid Background="{ThemeResource SmokeAccent|Brush}" />'));
     assert.ok(defs.length > 0, "expected a definition");
     assert.strictEqual(path.basename(defs[0].fsPath), APP, `expected ${APP}; got ${defs[0].fsPath}`);
-    assert.strictEqual(defs[0].line, 14, `expected SmokeAccentBrush at 0-based line 14; got ${defs[0].line}`);
+    const expectedLine = lineOf(defs[0].fsPath, 'x:Key="SmokeAccentBrush"');
+    assert.strictEqual(defs[0].line, expectedLine, `expected SmokeAccentBrush at 0-based line ${expectedLine}; got ${defs[0].line}`);
   });
 
   it.skip("GAP: property-element F12 is not implemented", async () => {

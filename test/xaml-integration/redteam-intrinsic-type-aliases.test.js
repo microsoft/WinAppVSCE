@@ -220,13 +220,11 @@ describe("WinUI XAML — red-team 55 (intrinsic aliases in type references)", fu
     for (const alias of ["String", "Int32", "Type"]) assertNoIntrinsic(items, alias, "undeclared zzzz: must not offer XAML intrinsics");
   });
 
-  it("kind-filters Style TargetType intrinsics to reference types (refined by round 56)", async () => {
+  it("excludes non-DependencyObject intrinsics from Style TargetType", async () => {
     const items = await itemsAt(page('<Page.Resources><Style TargetType="x:|"><Setter Property="Tag" Value="probe" /></Style></Page.Resources>'));
-    requireIntrinsic(items, "String");
-    requireIntrinsic(items, "Object");
-    requireIntrinsic(items, "Type");
-    assertNoIntrinsic(items, "Int32", "TargetType is class-only so value-type intrinsics are filtered out");
-    assertNoIntrinsic(items, "Boolean", "TargetType is class-only so value-type intrinsics are filtered out");
+    for (const alias of ["String", "Object", "Type", "Int32", "Boolean"]) {
+      assertNoIntrinsic(items, alias, "TargetType only accepts DependencyObject-derived types");
+    }
   });
 
   it("offers intrinsics in {x:Type x:|} markup-extension type arguments", async () => {

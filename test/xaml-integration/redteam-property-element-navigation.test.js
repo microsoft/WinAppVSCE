@@ -144,10 +144,10 @@ describe("WinUI XAML red-team 19 — property-element hover/F12 adversarial prob
     });
   }
 
-  it("does not treat a prefixed dotted local element as a property-element member", async () => {
+  it("resolves a prefixed custom property element as a member", async () => {
     const buffer = page("<local:SmokePage.Greeting|Text>hello</local:SmokePage.GreetingText>");
     const md = await h.hoverAt(buffer);
-    assert.ok(!/string\s+SmokePage\.GreetingText/.test(md), `prefixed dotted element must not hover as the GreetingText member; buffer=${buffer}; got ${md}`);
+    assert.ok(/string\s+SmokePage\.GreetingText/.test(md), `prefixed custom property element should hover as the GreetingText member; buffer=${buffer}; got ${md}`);
     const defs = await h.definitionsAt(buffer);
     assert.ok(Array.isArray(defs), `prefixed dotted element F12 should be stable; buffer=${buffer}; got ${JSON.stringify(defs)}`);
   });

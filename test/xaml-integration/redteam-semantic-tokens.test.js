@@ -145,16 +145,16 @@ describe("WinUI XAML — red-team 43 (semantic tokens)", function () {
       "</local:My.Thing>";
     const result = await getChecked(buffer, "prefix and dotted names");
     assert.deepStrictEqual(shapes(result.tokens), tokensFromNeedles(buffer, [
-      { needle: "<local:My.Thing", text: "local", type: "namespace" }, { needle: "<local:My.Thing", text: "My.Thing", type: "class" },
+      { needle: "<local:My.Thing", text: "local", type: "namespace" }, { needle: "<local:My.Thing", text: "My.Thing", type: "property" },
       { needle: "local:Attached.Prop", text: "local", type: "namespace" }, { needle: "local:Attached.Prop", text: "Attached.Prop", type: "property" },
       { needle: "x:Key", text: "x", type: "namespace" }, { needle: "x:Key", text: "Key", type: "property" },
-      { needle: "<local:My.Thing.Bar", text: "local", type: "namespace" }, { needle: "<local:My.Thing.Bar", text: "My.Thing.Bar", type: "class" },
+      { needle: "<local:My.Thing.Bar", text: "local", type: "namespace" }, { needle: "<local:My.Thing.Bar", text: "My.Thing.Bar", type: "property" },
       { needle: "<Grid.RowDefinitions", text: "Grid.RowDefinitions", type: "property" },
       { needle: "<RowDefinition", text: "RowDefinition", type: "class" },
       { needle: "</Grid.RowDefinitions>", text: "Grid.RowDefinitions", type: "property" },
       { needle: "<Grid.Row>", text: "Grid.Row", type: "property" }, { needle: "</Grid.Row>", text: "Grid.Row", type: "property" },
-      { needle: "</local:My.Thing.Bar>", text: "local", type: "namespace" }, { needle: "</local:My.Thing.Bar>", text: "My.Thing.Bar", type: "class" },
-      { needle: "</local:My.Thing>", text: "local", type: "namespace" }, { needle: "</local:My.Thing>", text: "My.Thing", type: "class" },
+      { needle: "</local:My.Thing.Bar>", text: "local", type: "namespace" }, { needle: "</local:My.Thing.Bar>", text: "My.Thing.Bar", type: "property" },
+      { needle: "</local:My.Thing>", text: "local", type: "namespace" }, { needle: "</local:My.Thing>", text: "My.Thing", type: "property" },
     ]));
   });
 

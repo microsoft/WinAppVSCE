@@ -101,11 +101,6 @@ function assertNoClr(items, label) {
   assert.deepStrictEqual(clr(items), [], `${label}: expected no CLR namespace items; got ${JSON.stringify(clr(items))}`);
 }
 
-function assertNoFrameworkLeak(items) {
-  const leaked = items.filter((i) => /^(Microsoft\.UI|Microsoft\.|Windows\.|System\.)/.test(i.label));
-  assert.deepStrictEqual(leaked, [], `using: must be source-only; leaked ${JSON.stringify(leaked)}`);
-}
-
 function codeActionTitles(result) {
   return result.actions.map((a) => a.title);
 }
@@ -121,8 +116,10 @@ describe("WinUI XAML — red-team 50 (using: namespace completion)", function ()
     findSmoke(items, "expected the project namespace 'SmokeFixture'");
   });
 
-  it("is source-only and never leaks framework/library namespaces", async () => {
-    assertNoFrameworkLeak(await clrAt(page('<Grid xmlns:zzz="using:|" />')));
+  it("includes namespaces from referenced assemblies", async () => {
+    const items = await clrAt(page('<Grid xmlns:zzz="using:|" />'));
+    assert.ok(items.some((item) => item.label === "Microsoft.WindowsAppSDK"),
+      `expected a namespace from a referenced assembly; got ${JSON.stringify(items)}`);
   });
 
   it("also fires for a default xmlns using: value", async () => {
