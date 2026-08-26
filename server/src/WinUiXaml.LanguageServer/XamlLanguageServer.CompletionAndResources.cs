@@ -52,7 +52,9 @@ internal sealed partial class XamlLanguageServer
         XamlProjectStage Stage);
 
     /// <summary> Collects the <c>x:Key</c> resource keys declared in the project's App.xaml and its reachable merged dictionaries. Returns an empty set when there is no App.xaml.</summary>
-    private string[] GetAppResourceKeys(XamlProjectContext context)
+    private string[] GetAppResourceKeys(
+        XamlProjectContext context,
+        string? excludedDocumentPath = null)
     {
         try
         {
@@ -63,11 +65,13 @@ internal sealed partial class XamlLanguageServer
                 return System.Array.Empty<string>();
             }
 
+            var excludedCanonicalPath = excludedDocumentPath is null
+                ? null
+                : CanonicalizePath(excludedDocumentPath);
             var projectRoot = System.IO.Path.GetDirectoryName(resolution.ProjectPath)!;
-            return ReadResourceGraph(appXaml, projectRoot, context.TypeSystem)
-                .SelectMany(file => file.Keys)
-                .Distinct(System.StringComparer.Ordinal)
-                .ToArray();
+            return CollectResourceKeys(
+                ReadResourceGraph(appXaml, projectRoot, context.TypeSystem),
+                excludedCanonicalPath);
         }
 
         catch (System.Exception ex)
@@ -77,37 +81,18 @@ internal sealed partial class XamlLanguageServer
         }
     }
 
-    private string[] GetAppResourceKeysExceptDocument(
-        XamlProjectContext context,
-        TextDocument document)
-    {
-        try
-        {
-            var resolution = context.Resolution;
-            var appXaml = FindAppXamlPath(resolution);
-            var documentPath = LspUri.ToPath(document.Uri);
-            if (appXaml is null || documentPath is null)
-            {
-                return GetAppResourceKeys(context);
-            }
-
-            var canonicalDocumentPath = CanonicalizePath(documentPath);
-            var projectRoot = System.IO.Path.GetDirectoryName(resolution.ProjectPath)!;
-            return ReadResourceGraph(appXaml, projectRoot, context.TypeSystem)
-                .Where(file => !string.Equals(
+    internal static string[] CollectResourceKeys(
+        IEnumerable<XamlResourceGraph.ResourceFile> files,
+        string? excludedCanonicalPath = null) =>
+        files
+            .Where(file => excludedCanonicalPath is null ||
+                !string.Equals(
                     CanonicalizePath(file.Path),
-                    canonicalDocumentPath,
+                    excludedCanonicalPath,
                     StringComparison.OrdinalIgnoreCase))
-                .SelectMany(file => file.Keys)
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[winui-xaml-ls] app resources excluding document: {ex.Message}");
-            return Array.Empty<string>();
-        }
-    }
+            .SelectMany(file => file.Keys)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
     private IReadOnlyList<XamlResourceGraph.ResourceFile> ReadResourceGraph(
         string rootPath,

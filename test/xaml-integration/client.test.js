@@ -209,10 +209,16 @@ describe("WinUI XAML — client commands & lifecycle", function () {
       );
       await waitForSemanticButton(true);
       const errorsOnly = await h.diagnosticsFor(
-        `<Page ${h.NS}>\n  <zzz:Widget />\n</Page>`,
-        (diagnostics) => hasCode(diagnostics, "WXAML0001")
+        `<Page ${h.NS}>\n  <local:NoSuchControl />\n  <zzz:Widget />\n</Page>`,
+        (diagnostics) =>
+          hasCode(diagnostics, "WXAML0001") &&
+          hasCode(diagnostics, "WXAML0002")
       );
       assert.ok(hasCode(errorsOnly, "WXAML0001"), "error level should preserve errors");
+      assert.ok(
+        hasCode(errorsOnly, "WXAML0002"),
+        "error level should preserve authoritative unknown-type errors"
+      );
       assert.ok(
         errorsOnly.every((diagnostic) => diagnostic.severity === vscode.DiagnosticSeverity.Error),
         "error level should filter non-error diagnostics"

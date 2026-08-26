@@ -113,12 +113,16 @@ internal sealed partial class XamlLanguageServer
                 return;
             }
 
-            var resourceKeys = GetAppResourceKeysExceptDocument(context, doc)
+            var resourceKeys = GetAppResourceKeys(context, LspUri.ToPath(doc.Uri))
                 .Concat(context.TypeSystem.GetThemeResources().Select(resource => resource.Key))
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
             var semantic = FilterDiagnosticsForLevel(
-                XamlValidator.Validate(doc, context.TypeSystem, resourceKeys),
+                XamlValidator.Validate(
+                    doc,
+                    context.TypeSystem,
+                    resourceKeys,
+                    context.TypeSystem.IsResourceCatalogAuthoritative),
                 diagnosticsLevel);
             if (semantic.Count == 0 || !IsCurrentDiagnostics(doc, diagnosticsGeneration))
             {

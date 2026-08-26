@@ -42,7 +42,7 @@ describe("WinUI XAML red-team 23 — unknown-owner property-element (WXAML0002) 
     const only = wxaml(diags);
     assert.strictEqual(only.length, 1, `expected exactly 1 WXAML diagnostic; got ${summary(only)}`);
     assert.strictEqual(only[0].code, "WXAML0002", `expected WXAML0002; got ${summary(only)}`);
-    assert.strictEqual(only[0].severity, 1, `WXAML0002 should remain a VS Code warning; got severity ${only[0].severity}`);
+    assert.strictEqual(only[0].severity, 0, `WXAML0002 should be a VS Code error; got severity ${only[0].severity}`);
     assertNamesOwnerOnly(only[0], "Bogus", "Foo");
   });
 

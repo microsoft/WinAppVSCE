@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using WinUiXaml.Workspace;
+using WinUiXaml.Xaml;
 using Xunit;
 
 namespace WinUiXaml.LanguageServer.Tests;
@@ -57,6 +58,33 @@ public sealed class XamlSemanticFactsTests
             "TargetName",
             element.NamespaceScope,
             TypeSystem));
+    }
+
+    [Fact]
+    public void ResourceIndex_PrefersLocalDeclarationOverMergedDictionary()
+    {
+        const string xaml = """
+            <ResourceDictionary
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary>
+                  <Child x:Key="Shared" Text="FromMerged" />
+                </ResourceDictionary>
+              </ResourceDictionary.MergedDictionaries>
+              <Child x:Key="Shared" Text="FromLocal" />
+              <Child Text="{StaticResource Shared}" />
+            </ResourceDictionary>
+            """;
+        var root = XamlParser.Parse(xaml).Root!;
+        var reference = root.DescendantNodesAndSelf()
+            .OfType<XamlElement>()
+            .Last(element => element.GetAttribute("Text")?.Value?.Text.Contains("StaticResource") == true);
+
+        var declaration = XamlSemanticFacts.CreateResourceIndex(root, typeSystem: null)
+            .FindDeclaration(reference, "Shared", int.MaxValue, allowForwardReference: true);
+
+        Assert.Equal("FromLocal", declaration?.GetAttribute("Text")?.Value?.Text);
     }
 
     [Fact]

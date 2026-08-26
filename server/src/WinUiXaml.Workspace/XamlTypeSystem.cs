@@ -714,6 +714,17 @@ namespace WinUiXaml.Workspace
         /// <summary>True when the xmlns URI is understood by this type system — it maps to at least one CLR namespace that actually contains usable types.</summary>
         public bool IsKnownNamespace(string xmlnsUri) => GetAllTypes(xmlnsUri).Any();
 
+        /// <summary>
+        /// True when every XAML-bearing referenced namespace belongs to the platform catalog.
+        /// Third-party libraries can contribute runtime resources that are not discoverable from
+        /// project dictionaries, so their absence cannot be treated as authoritative.
+        /// </summary>
+        public bool IsResourceCatalogAuthoritative =>
+            !GetReferencedUsingNamespaces().Any(ns =>
+                !ns.StartsWith("System", StringComparison.Ordinal) &&
+                !ns.StartsWith("Microsoft.UI", StringComparison.Ordinal) &&
+                !ns.StartsWith("Windows.UI", StringComparison.Ordinal));
+
         /// <summary>Enumerates the members usable as XAML attributes on type: public settable properties and public events, walking base types (most-derived wins on name collisions).</summary>
         public IEnumerable<XamlMemberInfo> GetMembers(INamedTypeSymbol type)
         {

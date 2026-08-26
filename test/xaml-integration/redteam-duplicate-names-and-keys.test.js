@@ -66,7 +66,7 @@ describe("WinUI XAML red-team 25 — duplicate x:Name/x:Key structural diagnosti
   before(async () => { await h.warmUp(); });
   after(async () => { await h.revertProbe(); });
 
-  it("empirically confirms VS Code severity mapping for new errors and an older warning", async () => {
+  it("empirically confirms VS Code error severity mapping", async () => {
     const buffer = pageWithResources(
       `${duplicateKeySentinel}`,
       `<StackPanel>\n    <Bogus.Foo />\n    <Button x:Name="SeverityProbe25" />\n    <TextBlock x:Name="SeverityProbe25" />\n  </StackPanel>`
@@ -75,7 +75,7 @@ describe("WinUI XAML red-team 25 — duplicate x:Name/x:Key structural diagnosti
       countByCode(d, "WXAML0002") >= 1 &&
       hasDiagnosticText(d, "WXAML0007", "SeverityProbe25") &&
       hasDiagnosticText(d, "WXAML0008", "__SentinelKey25"));
-    assert.strictEqual(byCode(diags, "WXAML0002")[0].severity, 1, `WXAML0002 should be VS Code warning=1; got ${summary(diags)}`);
+    assert.strictEqual(byCode(diags, "WXAML0002")[0].severity, 0, `WXAML0002 should be VS Code error=0; got ${summary(diags)}`);
     assert.strictEqual(byCode(diags, "WXAML0007")[0].severity, 0, `WXAML0007 should be VS Code error=0; got ${summary(diags)}`);
     assert.strictEqual(byCode(diags, "WXAML0008")[0].severity, 0, `WXAML0008 should be VS Code error=0; got ${summary(diags)}`);
   });

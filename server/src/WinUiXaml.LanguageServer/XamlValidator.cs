@@ -84,7 +84,8 @@ internal static class XamlValidator
     public static List<Diagnostic> Validate(
         TextDocument doc,
         XamlTypeSystem typeSystem,
-        IReadOnlyCollection<string>? projectResourceKeys = null)
+        IReadOnlyCollection<string>? projectResourceKeys = null,
+        bool resourceCatalogIsAuthoritative = true)
     {
         var diagnostics = new List<Diagnostic>();
         if (doc.Parsed.Root is { } root)
@@ -99,10 +100,11 @@ internal static class XamlValidator
             }
 
             // Unresolved binding roots remain silent to avoid false positives.
+            var resourceIndex = XamlSemanticFacts.CreateResourceIndex(root, typeSystem);
             var pageClass = ResolvePageClass(root, typeSystem);
             ValidateRootClassExists(root, pageClass, doc, diagnostics);
             ValidateRootClass(root, pageClass, typeSystem, doc, diagnostics);
-            Walk(root, doc, typeSystem, diagnostics, pageClass, pageClass, resourceKeys, styleTargetType: null, dataTemplateNeedsDataType: false);
+            Walk(root, doc, typeSystem, diagnostics, pageClass, pageClass, resourceKeys, resourceIndex, resourceCatalogIsAuthoritative, styleTargetType: null, dataTemplateNeedsDataType: false);
 
             ValidateUniqueNames(root, doc, typeSystem, diagnostics);
             ValidateUniqueResourceKeys(root, doc, typeSystem, diagnostics);
@@ -119,6 +121,8 @@ internal static class XamlValidator
         INamedTypeSymbol? bindRoot,
         INamedTypeSymbol? pageClass,
         IReadOnlySet<string> resourceKeys,
+        XamlSemanticFacts.ResourceScopeIndex resourceIndex,
+        bool resourceCatalogIsAuthoritative,
         INamedTypeSymbol? styleTargetType,
         bool dataTemplateNeedsDataType)
     {
@@ -151,13 +155,19 @@ internal static class XamlValidator
         }
 
         ValidateElement(element, doc, typeSystem, diagnostics, effectiveRoot, pageClass, effectiveStyleTarget, effectiveTemplateNeedsDataType);
-        ValidateResourceReferences(element, doc, typeSystem, diagnostics, resourceKeys);
+        ValidateResourceReferences(
+            element,
+            doc,
+            diagnostics,
+            resourceKeys,
+            resourceIndex,
+            resourceCatalogIsAuthoritative);
 
         foreach (var child in element.Content)
         {
             if (child is XamlElement childElement)
             {
-                Walk(childElement, doc, typeSystem, diagnostics, effectiveRoot, pageClass, resourceKeys, effectiveStyleTarget, effectiveTemplateNeedsDataType);
+                Walk(childElement, doc, typeSystem, diagnostics, effectiveRoot, pageClass, resourceKeys, resourceIndex, resourceCatalogIsAuthoritative, effectiveStyleTarget, effectiveTemplateNeedsDataType);
             }
         }
     }
@@ -165,9 +175,10 @@ internal static class XamlValidator
     private static void ValidateResourceReferences(
         XamlElement element,
         TextDocument doc,
-        XamlTypeSystem typeSystem,
         List<Diagnostic> diagnostics,
-        IReadOnlySet<string> resourceKeys)
+        IReadOnlySet<string> resourceKeys,
+        XamlSemanticFacts.ResourceScopeIndex resourceIndex,
+        bool resourceCatalogIsAuthoritative)
     {
         foreach (var attribute in element.Attributes)
         {
@@ -199,17 +210,21 @@ internal static class XamlValidator
                 bool allowForwardReference =
                     extension.Name?.LocalName is "ThemeResource" or "CustomResource";
                 if (resourceKeys.Contains(key) ||
-                    IsLocalResourceVisible(
+                    resourceIndex.FindDeclaration(
                         element,
-                        extension.Span.Start,
                         key,
-                        allowForwardReference,
-                        typeSystem))
+                        extension.Span.Start,
+                        allowForwardReference) is not null)
                 {
                     continue;
                 }
 
                 var suggestion = SuggestData(key, resourceKeys);
+                if (!resourceCatalogIsAuthoritative && suggestion is null)
+                {
+                    continue;
+                }
+
                 diagnostics.Add(Diag(
                     doc,
                     keySpan,
@@ -219,86 +234,6 @@ internal static class XamlValidator
                     suggestion));
             }
         }
-    }
-
-    private static bool IsLocalResourceVisible(
-        XamlElement element,
-        int referenceStart,
-        string key,
-        bool allowForwardReference,
-        XamlTypeSystem typeSystem)
-    {
-        for (XamlElement? current = element; current is not null;
-             current = current.Parent as XamlElement)
-        {
-            if (IsResourceScopeBoundary(current, typeSystem) &&
-                ScopeContainsKey(current, key, referenceStart, allowForwardReference, typeSystem))
-            {
-                return true;
-            }
-
-            // Resources owned by an ancestor element are fully initialized before its
-            // ordinary child content is created, regardless of their textual position.
-            foreach (var child in current.Content.OfType<XamlElement>())
-            {
-                if (XamlSemanticFacts.IsResourceDictionaryPropertyElement(child, typeSystem) &&
-                    !IsAncestorOf(child, element) &&
-                    ScopeContainsKey(
-                        child,
-                        key,
-                        allowForwardReference ? int.MaxValue : referenceStart,
-                        allowForwardReference,
-                        typeSystem))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static bool ScopeContainsKey(
-        XamlElement scope,
-        string key,
-        int referenceStart,
-        bool allowForwardReference,
-        XamlTypeSystem typeSystem)
-    {
-        foreach (var entry in scope.Content.OfType<XamlElement>())
-        {
-            if (XamlSemanticFacts.IsResourceDictionaryPropertyElement(entry, typeSystem))
-            {
-                if (ScopeContainsKey(entry, key, referenceStart, allowForwardReference, typeSystem))
-                {
-                    return true;
-                }
-
-                continue;
-            }
-
-            if (TryGetResourceKey(entry, typeSystem, out var candidate, out _) &&
-                string.Equals(candidate, "s:" + key, StringComparison.Ordinal) &&
-                (allowForwardReference || entry.Span.Start < referenceStart))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool IsAncestorOf(XamlElement ancestor, XamlElement element)
-    {
-        for (XamlNode? current = element; current is not null; current = current.Parent)
-        {
-            if (ReferenceEquals(current, ancestor))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static void ValidateElement(
@@ -515,7 +450,7 @@ internal static class XamlValidator
             diagnostics.Add(Diag(
                 doc,
                 ownerSpan,
-                SeverityWarning,
+                SeverityError,
                 UnknownTypeCode,
                 $"The attached-property owner '{ownerLocal}' was not found in the XAML namespace '{uri}'.",
                 SuggestData(ownerLocal, typeSystem.GetAllTypes(uri).Select(type => type.Name))));

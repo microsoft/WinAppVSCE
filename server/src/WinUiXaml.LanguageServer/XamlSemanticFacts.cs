@@ -222,67 +222,186 @@ internal static class XamlSemanticFacts
         XamlElement reference,
         string key,
         XamlTypeSystem? typeSystem = null)
+        => CreateResourceIndex(reference, typeSystem)
+            .FindDeclaration(reference, key, int.MaxValue, allowForwardReference: true);
+
+    internal static XamlElement? FindResourceDeclarationInScope(
+        ResourceScopeIndex index,
+        XamlElement reference,
+        string key) =>
+        index.FindDeclaration(reference, key, int.MaxValue, allowForwardReference: true);
+
+    internal static ResourceScopeIndex CreateResourceIndex(
+        XamlElement element,
+        XamlTypeSystem? typeSystem)
     {
-        for (XamlElement? scope = reference; scope is not null; scope = ParentElement(scope))
+        var root = element;
+        while (ParentElement(root) is { } parent)
         {
-            if (IsResourceDictionaryScope(scope, typeSystem) &&
-                FindDirectResourceDeclaration(scope, key, typeSystem) is { } dictionaryDeclaration)
+            root = parent;
+        }
+
+        return new ResourceScopeIndex(root, typeSystem);
+    }
+
+    internal sealed class ResourceScopeIndex
+    {
+        private readonly XamlTypeSystem? _typeSystem;
+        private readonly Dictionary<XamlElement, Dictionary<string, XamlElement>> _declarations = new();
+
+        internal ResourceScopeIndex(XamlElement root, XamlTypeSystem? typeSystem)
+        {
+            _typeSystem = typeSystem;
+            foreach (var element in root.DescendantNodesAndSelf().OfType<XamlElement>())
             {
-                return dictionaryDeclaration;
+                if (IsResourceDictionaryScope(element, typeSystem) ||
+                    IsResourceOwnerPropertyScope(element, typeSystem))
+                {
+                    _declarations[element] = BuildDeclarations(element);
+                }
+            }
+        }
+
+        internal XamlElement? FindDeclaration(
+            XamlElement reference,
+            string key,
+            int referenceStart,
+            bool allowForwardReference)
+        {
+            XamlElement? previousDictionary = null;
+            bool sameLogicalDictionary = true;
+            bool foundDictionary = false;
+            for (XamlElement? scope = reference; scope is not null; scope = ParentElement(scope))
+            {
+                if (IsResourceDictionaryScope(scope, _typeSystem) ||
+                    IsResourceOwnerPropertyScope(scope, _typeSystem))
+                {
+                    if (foundDictionary &&
+                        (previousDictionary is null ||
+                         GetKeyAttribute(previousDictionary) is not null))
+                    {
+                        sameLogicalDictionary = false;
+                    }
+
+                    foundDictionary = true;
+                    if (TryFind(
+                            scope,
+                            key,
+                            enforceOrder: sameLogicalDictionary && !allowForwardReference,
+                            referenceStart,
+                            out var declaration))
+                    {
+                        return declaration;
+                    }
+
+                    previousDictionary = scope;
+                }
+                else if (foundDictionary)
+                {
+                    sameLogicalDictionary = false;
+                    previousDictionary = null;
+                }
+
+                foreach (var child in scope.Content.OfType<XamlElement>())
+                {
+                    if (IsResourceOwnerPropertyScope(child, _typeSystem) &&
+                        !IsAncestorOf(child, reference) &&
+                        TryFind(child, key, enforceOrder: false, referenceStart, out var declaration))
+                    {
+                        return declaration;
+                    }
+                }
             }
 
-            foreach (var child in scope.Content.OfType<XamlElement>())
+            return null;
+        }
+
+        internal IReadOnlyCollection<string> Keys =>
+            _declarations.Values.SelectMany(scope => scope.Keys).Distinct(StringComparer.Ordinal).ToArray();
+
+        private bool TryFind(
+            XamlElement scope,
+            string key,
+            bool enforceOrder,
+            int referenceStart,
+            out XamlElement? declaration)
+        {
+            if (_declarations.TryGetValue(scope, out var entries) &&
+                entries.TryGetValue(key, out declaration) &&
+                (!enforceOrder || declaration.Span.Start < referenceStart))
             {
-                if (!IsResourceDictionaryPropertyScope(child, typeSystem))
+                return true;
+            }
+
+            declaration = null;
+            return false;
+        }
+
+        private Dictionary<string, XamlElement> BuildDeclarations(XamlElement container)
+        {
+            var result = new Dictionary<string, XamlElement>(StringComparer.Ordinal);
+            CollectDeclarations(container, result, collectionWrapper: false);
+            return result;
+        }
+
+        private void CollectDeclarations(
+            XamlElement container,
+            Dictionary<string, XamlElement> result,
+            bool collectionWrapper)
+        {
+            var entries = container.Content.OfType<XamlElement>();
+            if (collectionWrapper)
+            {
+                entries = entries.Reverse();
+            }
+
+            foreach (var entry in entries)
+            {
+                if (collectionWrapper)
+                {
+                    CollectDeclarations(entry, result, collectionWrapper: false);
+                    continue;
+                }
+
+                if (IsResourceDictionaryCollectionScope(entry, _typeSystem))
                 {
                     continue;
                 }
 
-                var declaration = FindDirectResourceDeclaration(child, key, typeSystem);
-                if (declaration is not null)
+                if (GetKeyAttribute(entry)?.Value is { IsMarkupExtension: false } value)
                 {
-                    return declaration;
+                    result.TryAdd(value.Text.Trim(), entry);
+                    continue;
+                }
+
+                if (IsResourceDictionaryScope(entry, _typeSystem))
+                {
+                    CollectDeclarations(entry, result, collectionWrapper: false);
+                }
+            }
+
+            if (!collectionWrapper)
+            {
+                foreach (var entry in container.Content.OfType<XamlElement>()
+                             .Where(entry => IsResourceDictionaryCollectionScope(entry, _typeSystem)))
+                {
+                    CollectDeclarations(entry, result, collectionWrapper: true);
                 }
             }
         }
 
-        return null;
-    }
-
-    private static XamlElement? FindDirectResourceDeclaration(
-        XamlElement container,
-        string key,
-        XamlTypeSystem? typeSystem)
-    {
-        foreach (var entry in container.Content.OfType<XamlElement>())
+        private static bool IsAncestorOf(XamlElement ancestor, XamlElement element)
         {
-            if (GetKeyAttribute(entry)?.Value is { IsMarkupExtension: false } value &&
-                string.Equals(value.Text.Trim(), key, StringComparison.Ordinal))
+            for (XamlNode? current = element; current is not null; current = current.Parent)
             {
-                return entry;
-            }
-
-            // A property element may wrap its entries in an explicit ResourceDictionary.
-            if (IsResourceDictionaryScope(entry, typeSystem) &&
-                GetKeyAttribute(entry) is null &&
-                FindDirectResourceDeclaration(entry, key, typeSystem) is { } wrappedDeclaration)
-            {
-                return wrappedDeclaration;
-            }
-
-            if (IsResourceDictionaryCollectionScope(entry, typeSystem))
-            {
-                foreach (var dictionary in entry.Content.OfType<XamlElement>().Reverse())
+                if (ReferenceEquals(current, ancestor))
                 {
-                    if (FindDirectResourceDeclaration(dictionary, key, typeSystem) is { } mergedDeclaration)
-                    {
-                        return mergedDeclaration;
-                    }
+                    return true;
                 }
             }
-        }
 
-        return null;
+            return false;
+        }
     }
 
     private static bool IsResourceDictionaryScope(
@@ -317,6 +436,12 @@ internal static class XamlSemanticFacts
 
         return element.Name?.FullName.EndsWith(".Resources", StringComparison.Ordinal) == true;
     }
+
+    private static bool IsResourceOwnerPropertyScope(
+        XamlElement element,
+        XamlTypeSystem? typeSystem) =>
+        IsResourceDictionaryPropertyScope(element, typeSystem) &&
+        !IsResourceDictionaryCollectionScope(element, typeSystem);
 
     private static bool IsResourceDictionaryCollectionScope(
         XamlElement element,

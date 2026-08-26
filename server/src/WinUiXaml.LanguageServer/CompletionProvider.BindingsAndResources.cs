@@ -408,6 +408,9 @@ internal static partial class CompletionProvider
             : new Dictionary<string, XamlElement>(StringComparer.Ordinal);
         var referenceElement = NearestElement(
             doc.Parsed.FindNode(Math.Max(0, offset - 1)));
+        var resourceIndex = doc.Parsed.Root is { } resourceRoot
+            ? XamlSemanticFacts.CreateResourceIndex(resourceRoot, typeSystem)
+            : null;
 
         var items = new List<CompletionItem>();
         var visibleProjectKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -418,9 +421,9 @@ internal static partial class CompletionProvider
             var visibleDeclaration = referenceElement is null
                 ? null
                 : XamlSemanticFacts.FindResourceDeclarationInScope(
+                    resourceIndex!,
                     referenceElement,
-                    key,
-                    typeSystem);
+                    key);
             var isAppResource = appResourceKeys?.Contains(key) == true;
             if (visibleDeclaration is null &&
                 docLocalDecls.ContainsKey(key) &&

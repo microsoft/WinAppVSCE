@@ -86,10 +86,34 @@ public class XamlResourceGraphTests
                 new[] { "App.xaml", "Last.xaml", "First.xaml" },
                 files.Select(file => Path.GetFileName(file.Path)));
         }
+
         finally
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void CollectResourceKeys_ExcludesCurrentDocumentFromServerCatalog()
+    {
+        var current = new XamlResourceGraph.ResourceFile(
+            Path.GetFullPath(@"C:\project\App.xaml"),
+            string.Empty,
+            WinUiXaml.Xaml.XamlParser.Parse("<ResourceDictionary />"),
+            ["CurrentOnly"],
+            0);
+        var merged = new XamlResourceGraph.ResourceFile(
+            Path.GetFullPath(@"C:\project\Merged.xaml"),
+            string.Empty,
+            WinUiXaml.Xaml.XamlParser.Parse("<ResourceDictionary />"),
+            ["MergedOnly"],
+            0);
+
+        var keys = XamlLanguageServer.CollectResourceKeys(
+            [current, merged],
+            Path.GetFullPath(@"C:\project\App.xaml"));
+
+        Assert.Equal(["MergedOnly"], keys);
     }
 
     [Fact]

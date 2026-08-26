@@ -452,6 +452,114 @@ public class XamlValidatorTests
     }
 
     [Fact]
+    public void ExplicitResourceDictionaryWrapper_IsTransparentButKeyedDictionaryIsNot()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="using:Microsoft.UI.Xaml"
+                  x:Class="TestApp.Page">
+              <Page.Resources>
+                <ui:ResourceDictionary>
+                  <Child x:Key="Wrapped" />
+                  <ui:ResourceDictionary x:Key="Nested">
+                    <Child x:Key="NestedOnly" />
+                  </ui:ResourceDictionary>
+                </ui:ResourceDictionary>
+              </Page.Resources>
+              <Child Text="{ui:StaticResource Wrapped}" />
+              <Child Text="{ui:StaticResource NestedOnly}" />
+            </Page>
+            """;
+
+        var missing = Validate(xaml)
+            .Where(item => item.Code == XamlValidator.UnknownResourceKeyCode)
+            .ToArray();
+        Assert.Single(missing);
+        Assert.Contains("NestedOnly", missing[0].Message);
+    }
+
+    [Fact]
+    public void ThemeDictionaryKeysAreVisibleButThemeDictionaryNamesDoNotLeak()
+    {
+        const string xaml = """
+            <ui:ResourceDictionary
+                xmlns="using:TestApp"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:ui="using:Microsoft.UI.Xaml">
+              <ui:ResourceDictionary.ThemeDictionaries>
+                <ui:ResourceDictionary x:Key="Default">
+                  <Child x:Key="ThemeValue" />
+                </ui:ResourceDictionary>
+              </ui:ResourceDictionary.ThemeDictionaries>
+              <Child x:Key="Good" Text="{ui:ThemeResource ThemeValue}" />
+              <Child x:Key="Bad" Text="{ui:StaticResource Default}" />
+            </ui:ResourceDictionary>
+            """;
+
+        var missing = Validate(xaml)
+            .Where(item => item.Code == XamlValidator.UnknownResourceKeyCode)
+            .ToArray();
+        Assert.Single(missing);
+        Assert.Contains("Default", missing[0].Message);
+    }
+
+    [Fact]
+    public void AncestorResourcesIgnoreTextualOrderWhileSameDictionaryDoesNot()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="using:Microsoft.UI.Xaml"
+                  x:Class="TestApp.Page">
+              <Child Text="{ui:StaticResource LaterAncestor}" />
+              <Page.Resources>
+                <Child x:Key="LaterAncestor" />
+              </Page.Resources>
+            </Page>
+            """;
+
+        Assert.DoesNotContain(
+            Validate(xaml),
+            item => item.Code == XamlValidator.UnknownResourceKeyCode);
+
+        const string sameDictionary = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="using:Microsoft.UI.Xaml"
+                  x:Class="TestApp.Page">
+              <Page.Resources>
+                <Child x:Key="First" Text="{ui:StaticResource Later}" />
+                <Child x:Key="Later" />
+              </Page.Resources>
+            </Page>
+            """;
+        Assert.Contains(
+            Validate(sameDictionary),
+            item => item.Code == XamlValidator.UnknownResourceKeyCode);
+    }
+
+    [Fact]
+    public void IncompleteExternalResourceCatalogOnlyReportsHighConfidenceTypos()
+    {
+        var arbitrary = ValidateWithAuthority(
+            Page("""Text="{ui:StaticResource RuntimeLibraryKey}" """),
+            resourceCatalogIsAuthoritative: false,
+            "KnownProjectKey");
+        var typo = ValidateWithAuthority(
+            Page("""Text="{ui:StaticResource KnownProjectKe}" """),
+            resourceCatalogIsAuthoritative: false,
+            "KnownProjectKey");
+
+        Assert.DoesNotContain(
+            arbitrary,
+            item => item.Code == XamlValidator.UnknownResourceKeyCode);
+        Assert.Contains(
+            typo,
+            item => item.Code == XamlValidator.UnknownResourceKeyCode);
+    }
+
+    [Fact]
     public void FrameworkTemplateSubclass_StartsIndependentNameScope()
     {
         const string xaml = """
@@ -1186,5 +1294,27 @@ public class XamlValidatorTests
         var document = new TextDocument("file:///C:/test/Page.xaml", xaml);
 
         return XamlValidator.Validate(document, typeSystem, resourceKeys);
+    }
+
+    private static System.Collections.Generic.List<Lsp.Diagnostic> ValidateWithAuthority(
+        string xaml,
+        bool resourceCatalogIsAuthoritative,
+        params string[] resourceKeys)
+    {
+        var compilation = CSharpCompilation.Create(
+            "TestApp",
+            [CSharpSyntaxTree.ParseText(Types)],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var typeSystem = XamlTypeSystem.FromCompilation(
+            compilation,
+            ImmutableArray<IAssemblySymbol>.Empty);
+        var document = new TextDocument("file:///C:/test/Page.xaml", xaml);
+
+        return XamlValidator.Validate(
+            document,
+            typeSystem,
+            resourceKeys,
+            resourceCatalogIsAuthoritative);
     }
 }
