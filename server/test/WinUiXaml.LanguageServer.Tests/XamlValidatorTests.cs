@@ -560,6 +560,48 @@ public class XamlValidatorTests
     }
 
     [Fact]
+    public void IncompleteExternalResourceCatalogSuggestsScopedDocumentResource()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="using:Microsoft.UI.Xaml"
+                  x:Class="TestApp.Page">
+              <Page.Resources>
+                <Child x:Key="LocalAccentBrush" />
+              </Page.Resources>
+              <Child Text="{ui:StaticResource LocalAcentBrush}" />
+            </Page>
+            """;
+
+        var diagnostic = Assert.Single(
+            ValidateWithAuthority(xaml, resourceCatalogIsAuthoritative: false),
+            item => item.Code == XamlValidator.UnknownResourceKeyCode);
+        var data = Assert.IsType<DiagnosticData>(diagnostic.Data);
+        Assert.Contains("LocalAccentBrush", data.Suggestions);
+    }
+
+    [Fact]
+    public void IncompleteExternalResourceCatalogStillReportsLocalForwardReference()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="using:Microsoft.UI.Xaml"
+                  x:Class="TestApp.Page">
+              <Page.Resources>
+                <Child Text="{ui:StaticResource Later}" />
+                <Child x:Key="Later" />
+              </Page.Resources>
+            </Page>
+            """;
+
+        Assert.Contains(
+            ValidateWithAuthority(xaml, resourceCatalogIsAuthoritative: false),
+            item => item.Code == XamlValidator.UnknownResourceKeyCode);
+    }
+
+    [Fact]
     public void FrameworkTemplateSubclass_StartsIndependentNameScope()
     {
         const string xaml = """
@@ -1134,9 +1176,11 @@ public class XamlValidatorTests
             </ui:DataTemplate>
             """;
 
-        Assert.Contains(
+        var diagnostic = Assert.Single(
             Validate(xaml),
-            diagnostic => diagnostic.Code == XamlValidator.BindingDataTypeRecommendedCode);
+            item => item.Code == XamlValidator.BindingDataTypeRecommendedCode);
+        Assert.Contains("Native AOT", diagnostic.Message);
+        Assert.DoesNotContain("cannot be compiled", diagnostic.Message);
         Assert.DoesNotContain(
             Validate(typed),
             diagnostic => diagnostic.Code == XamlValidator.BindingDataTypeRecommendedCode);

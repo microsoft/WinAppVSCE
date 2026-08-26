@@ -204,7 +204,7 @@ internal sealed partial class XamlLanguageServer
         level switch
         {
             "off" => new List<Diagnostic>(),
-            "error" => diagnostics
+            "error" or "errorsOnly" => diagnostics
                 .Where(diagnostic => diagnostic.Severity == 1)
                 .ToList(),
             _ => diagnostics.ToList(),

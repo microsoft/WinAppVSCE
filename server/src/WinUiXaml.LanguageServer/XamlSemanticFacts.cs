@@ -248,6 +248,8 @@ internal static class XamlSemanticFacts
     {
         private readonly XamlTypeSystem? _typeSystem;
         private readonly Dictionary<XamlElement, Dictionary<string, XamlElement>> _declarations = new();
+        private readonly string[] _keys;
+        internal int LookupCount { get; private set; }
 
         internal ResourceScopeIndex(XamlElement root, XamlTypeSystem? typeSystem)
         {
@@ -260,6 +262,11 @@ internal static class XamlSemanticFacts
                     _declarations[element] = BuildDeclarations(element);
                 }
             }
+
+            _keys = _declarations.Values
+                .SelectMany(scope => scope.Keys)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
         }
 
         internal XamlElement? FindDeclaration(
@@ -268,6 +275,7 @@ internal static class XamlSemanticFacts
             int referenceStart,
             bool allowForwardReference)
         {
+            LookupCount++;
             XamlElement? previousDictionary = null;
             bool sameLogicalDictionary = true;
             bool foundDictionary = false;
@@ -316,8 +324,7 @@ internal static class XamlSemanticFacts
             return null;
         }
 
-        internal IReadOnlyCollection<string> Keys =>
-            _declarations.Values.SelectMany(scope => scope.Keys).Distinct(StringComparer.Ordinal).ToArray();
+        internal IReadOnlyCollection<string> Keys => _keys;
 
         private bool TryFind(
             XamlElement scope,

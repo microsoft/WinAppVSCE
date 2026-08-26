@@ -171,7 +171,7 @@ internal sealed partial class XamlLanguageServer
         };
     }
 
-    private static string NormalizeDiagnosticsLevel(string? value) =>
+    internal static string NormalizeDiagnosticsLevel(string? value) =>
         value switch
         {
             "off" => "off",

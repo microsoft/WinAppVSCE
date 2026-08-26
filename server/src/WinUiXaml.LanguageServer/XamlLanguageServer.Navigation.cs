@@ -11,7 +11,8 @@ internal sealed partial class XamlLanguageServer
         TextDocument doc,
         XamlElement root,
         int offset,
-        XamlTypeSystem? typeSystem = null)
+        XamlTypeSystem? typeSystem = null,
+        XamlSemanticFacts.ResourceScopeIndex? resourceIndex = null)
     {
         // Malformed, still-being-typed markup: stay silent when the caret sits inside an unterminated extension (self or an enclosing one).
         if (IsInsideUnterminatedExtension(root, offset))
@@ -51,6 +52,7 @@ internal sealed partial class XamlLanguageServer
         }
         else
         {
+            resourceIndex ??= XamlSemanticFacts.CreateResourceIndex(root, typeSystem);
             var targetDeclaration = FindResourceDeclarationAt(doc, offset);
             if (targetDeclaration is null &&
                 FindResourceKeyReferenceAt(doc, offset) is { } reference)
@@ -59,7 +61,7 @@ internal sealed partial class XamlLanguageServer
                     doc,
                     reference.Span.Start,
                     symbol.Name,
-                    typeSystem);
+                    resourceIndex);
                 if (targetDeclaration is null)
                 {
                     CollectResourceOccurrences(
@@ -68,7 +70,7 @@ internal sealed partial class XamlLanguageServer
                         doc,
                         occurrences,
                         onlyUnresolvedReferences: true,
-                        typeSystem: typeSystem);
+                        resourceIndex: resourceIndex);
                     return DedupeAndSort(occurrences);
                 }
             }
@@ -83,7 +85,7 @@ internal sealed partial class XamlLanguageServer
                 doc,
                 occurrences,
                 targetDeclaration,
-                typeSystem: typeSystem);
+                resourceIndex: resourceIndex);
         }
 
         return DedupeAndSort(occurrences);
@@ -173,12 +175,12 @@ internal sealed partial class XamlLanguageServer
         TextDocument doc,
         int referenceOffset,
         string key,
-        XamlTypeSystem? typeSystem) =>
+        XamlSemanticFacts.ResourceScopeIndex resourceIndex) =>
         NearestEnclosingElement(doc, referenceOffset) is { } referenceElement
             ? XamlSemanticFacts.FindResourceDeclarationInScope(
+                resourceIndex,
                 referenceElement,
-                key,
-                typeSystem)
+                key)
             : null;
 
     /// <summary>The trimmed value of a non-markup attribute whose name matches nameMatches and whose value literal contains the caret — used to start a reference search from the declaration.</summary>
@@ -317,7 +319,7 @@ internal sealed partial class XamlLanguageServer
         List<(Lsp.Range Range, bool IsDeclaration)> results,
         XamlElement? targetDeclaration = null,
         bool onlyUnresolvedReferences = false,
-        XamlTypeSystem? typeSystem = null)
+        XamlSemanticFacts.ResourceScopeIndex? resourceIndex = null)
     {
         if (XamlSemanticFacts.GetKeyAttribute(element) is { Value: { IsMarkupExtension: false } keyValue } &&
             string.Equals(keyValue.Text.Trim(), key, StringComparison.Ordinal) &&
@@ -345,11 +347,12 @@ internal sealed partial class XamlLanguageServer
                         if (!arg.IsNamed && arg.Value is { Length: > 0 } v &&
                             string.Equals(v.Trim(), key, StringComparison.Ordinal))
                         {
-                            var resolvedDeclaration =
-                                XamlSemanticFacts.FindResourceDeclarationInScope(
+                            var resolvedDeclaration = resourceIndex is null
+                                ? null
+                                : XamlSemanticFacts.FindResourceDeclarationInScope(
+                                    resourceIndex,
                                     element,
-                                    key,
-                                    typeSystem);
+                                    key);
                             if ((onlyUnresolvedReferences && resolvedDeclaration is null) ||
                                 (!onlyUnresolvedReferences &&
                                  (targetDeclaration is null ||
@@ -374,7 +377,7 @@ internal sealed partial class XamlLanguageServer
                     results,
                     targetDeclaration,
                     onlyUnresolvedReferences,
-                    typeSystem);
+                    resourceIndex);
             }
         }
     }
@@ -453,12 +456,17 @@ internal sealed partial class XamlLanguageServer
         var context = TryGetAcceptedContext(doc, out var acceptedContext)
             ? acceptedContext
             : await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var resourceIndex = doc.Parsed.Root is { } root
+            ? XamlSemanticFacts.CreateResourceIndex(root, context?.TypeSystem)
+            : null;
         var localElement = referenceElement is null
             ? null
-            : XamlSemanticFacts.FindResourceDeclarationInScope(
-                referenceElement,
-                key,
-                context?.TypeSystem);
+            : resourceIndex is null
+                ? null
+                : XamlSemanticFacts.FindResourceDeclarationInScope(
+                    resourceIndex,
+                    referenceElement,
+                    key);
 
         var local = localElement is null
             ? null
@@ -491,9 +499,9 @@ internal sealed partial class XamlLanguageServer
             var declaration = resourceFile.Parsed.Root is { } resourceRoot
                 ? ToResourceDeclaration(
                     XamlSemanticFacts.FindResourceDeclarationInScope(
+                        XamlSemanticFacts.CreateResourceIndex(resourceRoot, context.TypeSystem),
                         resourceRoot,
-                        key,
-                        context.TypeSystem))
+                        key))
                 : null;
             if (declaration is null)
             {

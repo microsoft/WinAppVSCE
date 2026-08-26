@@ -1115,11 +1115,39 @@ public sealed class XamlTypeSystemTests
         {
             var (absentTypeSystem, genericXaml) = CreateFileBackedWinUiTypeSystem(root);
             Assert.Empty(absentTypeSystem.GetThemeResources());
+            Assert.False(absentTypeSystem.IsResourceCatalogAuthoritative);
 
             Directory.CreateDirectory(Path.GetDirectoryName(genericXaml)!);
             File.WriteAllText(genericXaml, """<!DOCTYPE x [<!ENTITY e SYSTEM "file:///ignored">]><x>&e;</x>""");
             var (malformedTypeSystem, _) = CreateFileBackedWinUiTypeSystem(root);
             Assert.Empty(malformedTypeSystem.GetThemeResources());
+            Assert.False(malformedTypeSystem.IsResourceCatalogAuthoritative);
+
+            WriteGenericXaml(genericXaml, string.Empty);
+            var (emptyTypeSystem, _) = CreateFileBackedWinUiTypeSystem(root);
+            Assert.Empty(emptyTypeSystem.GetThemeResources());
+            Assert.False(emptyTypeSystem.IsResourceCatalogAuthoritative);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResourceCatalogAuthorityRequiresPlatformOnlyReferences()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var (platformTypeSystem, genericXaml) = CreateFileBackedWinUiTypeSystem(root);
+            WriteGenericXaml(genericXaml, """<Style x:Key="FrameworkStyle" />""");
+            Assert.True(platformTypeSystem.IsResourceCatalogAuthoritative);
+
+            var (thirdPartyTypeSystem, _) = CreateFileBackedWinUiTypeSystem(
+                root,
+                """namespace Contoso.Controls { public class FancyControl { } }""");
+            Assert.False(thirdPartyTypeSystem.IsResourceCatalogAuthoritative);
         }
         finally
         {
@@ -1176,7 +1204,9 @@ public sealed class XamlTypeSystemTests
 
     // --- helpers -----------------------------------------------------------------------------------
 
-    private static (XamlTypeSystem TypeSystem, string GenericXaml) CreateFileBackedWinUiTypeSystem(string root)
+    private static (XamlTypeSystem TypeSystem, string GenericXaml) CreateFileBackedWinUiTypeSystem(
+        string root,
+        string? additionalLibrarySource = null)
     {
         const string source = """
             namespace Microsoft.UI.Xaml.Media
@@ -1205,12 +1235,35 @@ public sealed class XamlTypeSystemTests
         Assert.True(emit.Success, string.Join("; ", emit.Diagnostics));
 
         var winUiReference = MetadataReference.CreateFromFile(dllPath);
+        MetadataReference? additionalReference = null;
+        if (additionalLibrarySource is not null)
+        {
+            var additionalLibrary = CSharpCompilation.Create(
+                "Contoso.Controls",
+                new[] { CSharpSyntaxTree.ParseText(additionalLibrarySource) },
+                references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            AssertNoErrors(additionalLibrary);
+            var additionalPath = Path.Combine(root, "Contoso.Controls.dll");
+            var additionalEmit = additionalLibrary.Emit(additionalPath);
+            Assert.True(additionalEmit.Success, string.Join("; ", additionalEmit.Diagnostics));
+            additionalReference = MetadataReference.CreateFromFile(additionalPath);
+        }
+
+        var consumerReferences = additionalReference is null
+            ? references.Append(winUiReference)
+            : references.Append(winUiReference).Append(additionalReference);
         var consumer = CSharpCompilation.Create(
             "TestApp",
-            references: references.Append(winUiReference),
+            references: consumerReferences,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var assembly = (IAssemblySymbol)consumer.GetAssemblyOrModuleSymbol(winUiReference)!;
-        var typeSystem = XamlTypeSystem.FromCompilation(consumer, ImmutableArray.Create(assembly));
+        var assemblies = additionalReference is null
+            ? ImmutableArray.Create(assembly)
+            : ImmutableArray.Create(
+                assembly,
+                (IAssemblySymbol)consumer.GetAssemblyOrModuleSymbol(additionalReference)!);
+        var typeSystem = XamlTypeSystem.FromCompilation(consumer, assemblies);
         var genericXaml = Path.Combine(managedDirectory, "Microsoft.WinUI", "Themes", "generic.xaml");
         return (typeSystem, genericXaml);
     }

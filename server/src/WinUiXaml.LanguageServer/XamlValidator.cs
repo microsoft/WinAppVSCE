@@ -71,7 +71,7 @@ internal static class XamlValidator
     public const string InvalidBindModeCode = "WXAML0022";
     /// <summary>An x:Class directive names no type in the authoritative project compilation.</summary>
     public const string UnknownRootClassCode = "WXAML0023";
-    /// <summary>Classic Binding in an untyped DataTemplate prevents compiled binding generation.</summary>
+    /// <summary>Classic Binding in an untyped DataTemplate is not safe for Native AOT.</summary>
     public const string BindingDataTypeRecommendedCode = "WMC1510";
 
     private const int SeverityError = 1;
@@ -219,8 +219,12 @@ internal static class XamlValidator
                     continue;
                 }
 
-                var suggestion = SuggestData(key, resourceKeys);
-                if (!resourceCatalogIsAuthoritative && suggestion is null)
+                var suggestion = SuggestData(
+                    key,
+                    resourceKeys.Concat(resourceIndex.Keys).Distinct(StringComparer.Ordinal));
+                if (!resourceCatalogIsAuthoritative &&
+                    suggestion is null &&
+                    !resourceIndex.Keys.Contains(key, StringComparer.Ordinal))
                 {
                     continue;
                 }
@@ -820,7 +824,7 @@ internal static class XamlValidator
             extension.Name?.Span ?? extension.Span,
             SeverityWarning,
             BindingDataTypeRecommendedCode,
-            "Binding inside a DataTemplate has no x:DataType and cannot be compiled."));
+            "Binding inside a DataTemplate without x:DataType is not safe for Native AOT."));
     }
 
     private static void ValidateRootClassExists(

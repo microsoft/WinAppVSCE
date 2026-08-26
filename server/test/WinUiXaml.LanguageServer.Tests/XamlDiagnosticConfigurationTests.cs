@@ -29,6 +29,19 @@ public sealed class XamlDiagnosticConfigurationTests
     }
 
     [Fact]
+    public void CanonicalErrorsOnlyLevelKeepsOnlyErrors()
+    {
+        Assert.Equal(
+            "error",
+            XamlLanguageServer.NormalizeDiagnosticsLevel("errorsOnly"));
+        Assert.Same(
+            Error,
+            Assert.Single(XamlLanguageServer.FilterDiagnosticsForLevel(
+                new[] { Error, Warning },
+                "errorsOnly")));
+    }
+
+    [Fact]
     public void OffLevelSuppressesAllDiagnostics()
     {
         Assert.Empty(XamlLanguageServer.FilterDiagnosticsForLevel(

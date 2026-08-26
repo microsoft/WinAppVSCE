@@ -305,6 +305,34 @@ public class XamlRenameTests
     }
 
     [Fact]
+    public void ResourceNavigation_ReusesOneIndexForManyReferences()
+    {
+        const int referenceCount = 250;
+        var references = string.Join(
+            "\n",
+            Enumerable.Range(0, referenceCount)
+                .Select(_ => """  <Border Background="{StaticResource Accent}" />"""));
+        var (doc, offset) = Caret(
+            "<Page><Page.Resources>\n" +
+            "  <SolidColorBrush x:Key=\"Acc|ent\" />\n" +
+            "</Page.Resources>\n" +
+            references +
+            "\n</Page>");
+        var root = doc.Parsed.Root!;
+        var index = XamlSemanticFacts.CreateResourceIndex(root, FrameworkTypeSystem);
+
+        var occurrences = XamlLanguageServer.ResolveOccurrences(
+            doc,
+            root,
+            offset,
+            FrameworkTypeSystem,
+            index);
+
+        Assert.Equal(referenceCount + 1, occurrences?.Count);
+        Assert.Equal(referenceCount, index.LookupCount);
+    }
+
+    [Fact]
     public void Rename_ResourceKeySupportsPresentationNamespaceAlias()
     {
         var buffer =

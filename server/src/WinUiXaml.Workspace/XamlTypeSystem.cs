@@ -37,6 +37,7 @@ namespace WinUiXaml.Workspace
         private IReadOnlyList<string>? _fontWeights;
 
         private IReadOnlyList<ThemeResourceInfo>? _themeResources;
+        private bool _themeResourceCatalogDiscovered;
 
         // Cache referenced controls because walking the reference closure is expensive.
         private IReadOnlyList<INamedTypeSymbol>? _referencedElementTypes;
@@ -441,7 +442,9 @@ namespace WinUiXaml.Workspace
 
                 try
                 {
-                    return _themeResources = ParseThemeResources(path);
+                    _themeResources = ParseThemeResources(path);
+                    _themeResourceCatalogDiscovered = _themeResources.Count > 0;
+                    return _themeResources;
                 }
                 catch (IOException)
                 {
@@ -715,15 +718,30 @@ namespace WinUiXaml.Workspace
         public bool IsKnownNamespace(string xmlnsUri) => GetAllTypes(xmlnsUri).Any();
 
         /// <summary>
-        /// True when every XAML-bearing referenced namespace belongs to the platform catalog.
+        /// True when framework resources were discovered successfully and every XAML-bearing
+        /// referenced assembly belongs to the platform catalog.
         /// Third-party libraries can contribute runtime resources that are not discoverable from
         /// project dictionaries, so their absence cannot be treated as authoritative.
         /// </summary>
         public bool IsResourceCatalogAuthoritative =>
-            !GetReferencedUsingNamespaces().Any(ns =>
-                !ns.StartsWith("System", StringComparison.Ordinal) &&
-                !ns.StartsWith("Microsoft.UI", StringComparison.Ordinal) &&
-                !ns.StartsWith("Windows.UI", StringComparison.Ordinal));
+            GetThemeResources().Count > 0 &&
+            _themeResourceCatalogDiscovered &&
+            !_assemblies.Any(assembly =>
+                !SymbolEqualityComparer.Default.Equals(assembly, _compilation.Assembly) &&
+                !IsPlatformResourceAssembly(assembly.Identity.Name));
+
+        private static bool IsPlatformResourceAssembly(string name) =>
+            name.Equals("Microsoft.WinUI", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("Microsoft.UI.Xaml", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("Microsoft.WindowsAppRuntime", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("WinRT.Runtime", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("System", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("mscorlib", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("netstandard", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("Microsoft.CSharp", StringComparison.OrdinalIgnoreCase) ||
+            name.StartsWith("Microsoft.VisualBasic", StringComparison.OrdinalIgnoreCase) ||
+            name.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ||
+            name.StartsWith("Windows.", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>Enumerates the members usable as XAML attributes on type: public settable properties and public events, walking base types (most-derived wins on name collisions).</summary>
         public IEnumerable<XamlMemberInfo> GetMembers(INamedTypeSymbol type)
