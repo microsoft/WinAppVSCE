@@ -31,6 +31,36 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     message: "WinUI XAML Tools — language server running (Host B).",
     actions: [],
   });
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, false, {
+      state: "loading",
+    }),
+    {
+      message: "WinUI XAML Tools — loading authoritative project metadata.",
+      actions: ["Show Output"],
+    }
+  );
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, false, {
+      state: "framework-ready",
+    }),
+    {
+      message:
+        "WinUI XAML Tools — framework IntelliSense is available; project symbols and diagnostics are still loading.",
+      actions: ["Show Output"],
+    }
+  );
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, false, {
+      state: "error",
+      message: "Restore required.",
+    }),
+    {
+      message:
+        "WinUI XAML Tools — project IntelliSense unavailable: Restore required.",
+      actions: ["Restart Language Server", "Show Output"],
+    }
+  );
   assert.deepEqual(getXamlStatus(true, false, true, true).actions, [
     "Restart Language Server",
     "Show Output",

@@ -32,6 +32,11 @@ export interface XamlStatus {
   actions: XamlStatusAction[];
 }
 
+export interface XamlProjectContextSummary {
+  state: "loading" | "framework-ready" | "ready" | "error" | "idle";
+  message?: string;
+}
+
 export const DOTNET_REQUIRED_STATUS = {
   text: "$(warning) XAML: .NET 10 required",
   tooltip:
@@ -49,7 +54,8 @@ export function getXamlStatus(
   running: boolean,
   trusted: boolean,
   hasOpenXamlDocument: boolean,
-  requiresDotnet = false
+  requiresDotnet = false,
+  projectContext?: XamlProjectContextSummary
 ): XamlStatus {
   if (!enabled) {
     return {
@@ -60,6 +66,28 @@ export function getXamlStatus(
   }
 
   if (running) {
+    if (projectContext?.state === "error") {
+      return {
+        message: `WinUI XAML Tools — project IntelliSense unavailable: ${
+          projectContext.message ?? "project metadata failed to load."
+        }`,
+        actions: ["Restart Language Server", "Show Output"],
+      };
+    }
+    if (projectContext?.state === "loading") {
+      return {
+        message:
+          "WinUI XAML Tools — loading authoritative project metadata.",
+        actions: ["Show Output"],
+      };
+    }
+    if (projectContext?.state === "framework-ready") {
+      return {
+        message:
+          "WinUI XAML Tools — framework IntelliSense is available; project symbols and diagnostics are still loading.",
+        actions: ["Show Output"],
+      };
+    }
     return {
       message: "WinUI XAML Tools — language server running (Host B).",
       actions: [],

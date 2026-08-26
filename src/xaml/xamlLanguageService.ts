@@ -215,12 +215,25 @@ function showXamlInfo(): void {
   const configuration = readXamlLanguageServerConfiguration((section, defaultValue) =>
     vscode.workspace.getConfiguration("winapp.xaml").get(section, defaultValue)
   );
+  const activeEditor = vscode.window.activeTextEditor;
+  const activeDocumentUri = activeEditor
+    ? activeEditor.document.languageId === "xaml"
+      ? activeEditor.document.uri.toString()
+      : null
+    : undefined;
+  const projectContext = selectProjectContextStatus(
+    getRelevantProjectContextStatuses(
+      projectContextStatuses.values(),
+      activeDocumentUri
+    )
+  );
   const status = getXamlStatus(
     configuration.enabled,
     client?.isRunning() ?? false,
     vscode.workspace.isTrusted,
     vscode.workspace.textDocuments.some((document) => document.languageId === "xaml"),
-    lastDegradedCause === "dotnet"
+    lastDegradedCause === "dotnet",
+    projectContext
   );
   void vscode.window
     .showInformationMessage<XamlStatusAction>(status.message, ...status.actions)
