@@ -408,8 +408,7 @@ export function getApplicationsScript(): string {
                     const extIndex = parseInt(inp.getAttribute('data-ext-index'), 10);
                     const fieldPath = inp.getAttribute('data-ext-field');
                     // The ordinal keeps the key unique: an extension can render two inputs with the
-                    // same field path (e.g. two <Host> elements both bound to Host.Name), and
-                    // without it one input's queued edit would silently replace the other's.
+                    // same field path (e.g. two <Host> elements both bound to Host.Name).
                     const key = 'ext:' + appIndex + ':' + extIndex + ':' + fieldPath + ':' + inpOrdinal;
                     const describe = () => ({
                         kind: 'extField',

@@ -153,7 +153,7 @@ test('a saved tab that is hidden on the first update is restored once it becomes
     await expect(page.locator('.tab-btn[data-tab="applications"]')).toHaveClass(/active/);
 });
 
-test('the parse-error overlay is modal — the form behind it is inert', async ({ page }) => {
+test('the parse-error overlay is modal, so the form behind it is inert', async ({ page }) => {
     await loadEditor(page);
     await postUpdate(page, manifestData);
     // Select a tab so activateTab establishes the per-panel aria-hidden the overlay must not clobber.

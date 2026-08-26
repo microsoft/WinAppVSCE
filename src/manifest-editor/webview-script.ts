@@ -152,10 +152,8 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         let pendingElements = {};
 
         /**
-         * Queues a debounced edit. The describe() callback returns the change descriptor used when
-         * a save flushes the queue; send() posts the edit normally when the debounce elapses. Every
-         * debounced edit must go through here so that save-flush and parse-error discard apply
-         * uniformly — a private setTimeout would be invisible to both.
+         * Queues a debounced edit. describe() returns the descriptor used when a save flushes the
+         * queue; send() posts the edit when the debounce elapses. All debounced edits must use this.
          */
         function queueDebouncedChange(key, describe, send) {
             clearTimeout(debounceTimers[key]);
@@ -192,9 +190,8 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         }
 
         /**
-         * Drops input still sitting in the 300 ms debounce without sending it. Used when the
-         * document stops parsing: the extension can't safely rewrite unparseable XML, and the
-         * form is repopulated from the document once the XML is valid again.
+         * Drops input still in the 300 ms debounce without sending it. Used when the document stops
+         * parsing, since the extension can't safely rewrite unparseable XML.
          */
         function discardPendingChanges() {
             for (const key in debounceTimers) {
@@ -350,14 +347,12 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             // the scroll container's height and the browser clamps scrollTop to 0.
             const scrollSnapshot = currentScrollPositions();
 
-            // A background re-render must not close a dropdown the user just opened. Menus are
-            // rebuilt wholesale by renderApplications, so snapshot which ones are open and reopen
-            // them afterwards, the same way scroll offsets and focus are preserved.
+            // A background re-render must not close a dropdown the user just opened, and
+            // renderApplications rebuilds the menus wholesale.
             const openMenus = openDropdownKeys();
 
             // Save focused element info before DOM rebuild. With forceAll the focused element's
-            // value is overwritten too (the document is the source of truth), but focus itself is
-            // still restored afterwards.
+            // value is overwritten too, but focus itself is still restored afterwards.
             const activeEl = document.activeElement;
             const focused = forceAll ? null : activeEl;
             let focusInfo = null;
@@ -463,7 +458,7 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             const isNonAppPackage = data.properties.framework === 'true' || data.properties.resourcePackage === 'true' || data.properties.modificationPackage === 'true';
             const isResourcePackage = data.properties.resourcePackage === 'true';
 
-            // Keep the tab button and its panel in sync — hiding a tab must also clear the button's
+            // Keep the tab button and its panel in sync: hiding a tab must clear the button's
             // selected state, otherwise two tabs can look selected at once.
             function setTabHidden(name, shouldHide) {
                 const btn = document.querySelector('.tab-btn[data-tab="' + name + '"]');
@@ -676,13 +671,11 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         }
 
         // ─── Parse-error overlay ────────────────────────────
-        // The overlay covers the form while the XML is unparseable. It must also be modal:
-        // without inerting the content behind it, keyboard and screen-reader users can still
-        // tab into fields that the overlay says are paused.
+        // Covers the form while the XML is unparseable. Must be modal: without inerting the
+        // content behind it, keyboard and screen-reader users can still tab into paused fields.
         let focusBeforeParseError = null;
-        // Set when the overlay clears, consumed after the form is repopulated: the element that
-        // was focused is often destroyed by the re-render, so restoring before it would put
-        // focus on a detached node (i.e. drop it on <body>).
+        // Set when the overlay clears, consumed after the form is repopulated: the re-render
+        // usually destroys the focused element, so restoring earlier would drop focus on <body>.
         let pendingParseErrorFocus = null;
 
         /** Best-effort stable selector for re-finding a control after the form is rebuilt. */

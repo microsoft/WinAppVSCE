@@ -10,7 +10,7 @@ import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { parseManifest, applyFieldChange, addCapability, removeCapability, addPackageDependency, removePackageDependency, addTargetDeviceFamily, removeTargetDeviceFamily, moveTargetDeviceFamily, movePackageDependency, addMainPackageDependency, removeMainPackageDependency, moveMainPackageDependency, addDriverConstraint, removeDriverConstraint, moveDriverConstraint, addOSPackageDependency, removeOSPackageDependency, moveOSPackageDependency, addHostRuntimeDependency, removeHostRuntimeDependency, moveHostRuntimeDependency, addExternalDependency, removeExternalDependency, moveExternalDependency, addApplication, removeApplication, addExtension, removeExtension, updateExtensionField, addResource, removeResource, moveResource, setShowNameOnTiles, addPhoneIdentity, removePhoneIdentity, removeVisualAsset } from './manifest-parser';
 import { validateManifest } from './manifest-validator';
-import { getWebviewContent, getParseErrorContent } from './webview-content';
+import { getWebviewContent } from './webview-content';
 import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
@@ -70,11 +70,6 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
 
         // Track whether we're currently applying an edit to avoid feedback loops
         let isApplyingEdit = false;
-        // Which document the webview currently hosts. Reassigning `webview.html` destroys the
-        // script context (and therefore all webview UI state), so it is only done when switching
-        // between the two documents — never for a parse error while the editor is already loaded.
-        let documentMode: 'editor' | 'errorPage' = 'editor';
-        let errorPageMessage: string | undefined;
         let externalChangeTimer: NodeJS.Timeout | undefined;
         const assetCopyTokens = new AssetCopyTokenStore();
 
@@ -88,21 +83,11 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             }
         };
 
-        /** Load the full editor view. */
+        /** Load the editor document. Reassigning `webview.html` destroys all webview UI state,
+            so this runs once per panel: parse failures surface as an overlay instead. */
         const showEditorView = () => {
-            documentMode = 'editor';
-            errorPageMessage = undefined;
             webviewPanel.webview.html = getWebviewContent(webviewPanel.webview, freshNonce(), manifestDirUri);
             // The editor will send 'ready' once loaded, which triggers updateWebview
-        };
-
-        /** Load the standalone parse-error page (only used when the editor never loaded). */
-        const showErrorPage = (errMsg: string) => {
-            // Avoid rebuilding an identical page on every keystroke while the XML stays broken.
-            if (documentMode === 'errorPage' && errorPageMessage === errMsg) { return; }
-            documentMode = 'errorPage';
-            errorPageMessage = errMsg;
-            webviewPanel.webview.html = getParseErrorContent(webviewPanel.webview, freshNonce(), errMsg);
         };
 
         // Table-driven dispatch for simple XML operations
@@ -161,45 +146,26 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             try {
                 data = parseManifest(text);
             } catch (e) {
+                // Surface the failure as an overlay rather than rebuilding the document, which
+                // would wipe tab/scroll/expanded-field state every time the XML is transiently bad.
                 const errMsg = e instanceof Error ? e.message : String(e);
-                if (documentMode === 'editor') {
-                    // Keep the loaded editor document alive and surface the failure as an overlay.
-                    // Rebuilding the document here would wipe tab/scroll/expanded-field state every
-                    // time the XML is transiently invalid while the user types in the text editor.
-                    webviewPanel.webview.postMessage({ type: 'parseError', message: errMsg });
-                } else {
-                    showErrorPage(errMsg);
-                }
-                return;
-            }
-            if (documentMode !== 'editor') {
-                // Recovered from an unparseable initial load — swap in the editor document.
-                // It posts 'ready' when loaded, which calls back into updateWebview.
-                showEditorView();
+                webviewPanel.webview.postMessage({ type: 'parseError', message: errMsg });
                 return;
             }
             const errors = validateManifest(data, this.getSchema());
             webviewPanel.webview.postMessage({ type: 'update', data, errors, forceAll });
         };
 
-        // Initial load: check if XML is valid
-        try {
-            parseManifest(document.getText());
-            showEditorView();
-        } catch (e) {
-            showErrorPage(e instanceof Error ? e.message : String(e));
-        }
+        // The editor document loads even when the XML is currently unparseable: it posts 'ready',
+        // and the resulting updateWebview raises the overlay over the empty form.
+        showEditorView();
 
         // Listen for document changes (e.g., from the text editor, undo, or external edits).
-        // This fires on every keystroke, so debounce the re-render: re-rendering mid-word is wasted
-        // work, and half-typed elements make the XML transiently unparseable.
+        // Debounced: re-rendering mid-word is wasted work and half-typed XML doesn't parse.
         const changeDocSub = vscode.workspace.onDidChangeTextDocument(e => {
             if (e.document.uri.toString() !== document.uri.toString() || isApplyingEdit) { return; }
-            // Tell the webview to drop input still sitting in its 300ms debounce *immediately*,
-            // ahead of the debounced re-render. That input was typed against the pre-edit document,
-            // so replaying it would overwrite the change that just arrived from the text editor.
-            // Waiting for the parse-error overlay to do this isn't enough: XML that breaks and is
-            // fixed again inside the debounce window never shows an overlay at all.
+            // Drop input still in the webview's 300ms debounce before the re-render: it was typed
+            // against the pre-edit document, so replaying it would overwrite the incoming change.
             webviewPanel.webview.postMessage({ type: 'externalChange' });
             if (externalChangeTimer) { clearTimeout(externalChangeTimer); }
             externalChangeTimer = setTimeout(() => {
@@ -260,9 +226,8 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                 const resolve = pendingSaveResolve;
                                 pendingSaveResolve = null;
                                 pendingSaveNonce = null;
-                                // Same hazard as the debounced edit path: never rewrite a
-                                // document we could not parse. Resolve with no edits so the
-                                // save still completes.
+                                // Never rewrite a document we could not parse. Resolve with no
+                                // edits so the save still completes.
                                 if (!documentParses(text)) {
                                     resolve([]);
                                     return;
@@ -467,11 +432,8 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             }
 
             if (newText !== undefined && newText !== text) {
-                // The webview debounces input for 300 ms, and the parse-error overlay no longer
-                // tears down the webview script context, so an edit can arrive after the document
-                // became unparseable. Rewriting the whole document from XML we could not parse
-                // would clobber what the user is typing in the text editor, so drop it — the
-                // webview is repopulated from the document once the XML is valid again.
+                // A debounced edit can arrive after the document stopped parsing. Rewriting it from
+                // XML we could not parse would clobber what the user is typing in the text editor.
                 if (!documentParses(text)) {
                     return;
                 }

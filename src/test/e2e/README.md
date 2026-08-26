@@ -65,7 +65,7 @@ UI-state behaviour can be verified without launching VS Code. Regression coverag
 | 2 | a parse error is shown as an overlay without discarding the editor or its state | `parseError` shows the in-place overlay, leaves the editor document intact, and `update` clears it |
 | 3 | UI state is restored after the webview document is rebuilt | State persisted via `vscode.setState()` restores the tab, sub-tab and scroll offset in a fresh script context |
 | 4 | a saved tab that is hidden on the first update is restored once it becomes available | Restoration stays pending while the saved tab is hidden, instead of being consumed and lost |
-| 5 | the parse-error overlay is modal — the form behind it is inert | The overlay exposes "Open in Text Editor", takes focus, and inerts/hides the form behind it until recovery, handing `aria-hidden` back to the tab system afterwards |
+| 5 | the parse-error overlay is modal, so the form behind it is inert | The overlay exposes "Open in Text Editor", takes focus, and inerts/hides the form behind it until recovery, handing `aria-hidden` back to the tab system afterwards |
 | 6 | recovery restores focus to the rebuilt control, not a destroyed element | Focus captured before the overlay is re-applied *after* the form is repopulated, so it lands on the replacement input rather than falling back to `<body>` |
 | 7 | a parse error discards input still sitting in the debounce | In-flight webview input is dropped when the XML stops parsing, so the extension is never asked to rewrite unparseable XML |
 | 8 | an external document change discards input still sitting in the debounce | Queued input typed against the pre-edit text is dropped as soon as the document changes, so it can't replay over the newer text-editor edit |
@@ -260,8 +260,8 @@ Validates error handling for malformed manifests. This spec launches its own VS 
 
 | # | Test | Validates |
 |---|------|-----------|
-| 1 | shows error view for malformed XML | Malformed manifest XML opens the error view with expected message and "Open in Text Editor" action |
-| 2 | recovers into the editor once the XML is fixed | Repairing the file on disk swaps the standalone error page for the editor document and populates the form |
+| 1 | shows the parse-error overlay for malformed XML | Malformed manifest XML raises the shared parse-error overlay with its message and "Open in Text Editor" action |
+| 2 | recovers into the editor once the XML is fixed | Repairing the file on disk clears the overlay and populates the form |
 
 ### `open-manifest-editor-command.spec.ts` — 2 tests
 

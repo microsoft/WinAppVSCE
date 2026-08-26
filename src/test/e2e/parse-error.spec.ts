@@ -64,19 +64,17 @@ test.afterAll(async () => {
     }
 });
 
-test('shows error view for malformed XML', async () => {
-    // Should show the error view
-    const errorContainer = innerFrame.locator('.error-container');
-    await expect(errorContainer).toBeVisible({ timeout: 15_000 });
-    await expect(innerFrame.locator('.error-title')).toContainText('Unable to Open Manifest Editor');
-    await expect(innerFrame.locator('.error-detail')).toBeVisible();
-    await expect(innerFrame.locator('#open-as-text')).toBeVisible();
-    await expect(innerFrame.locator('#open-as-text')).toContainText('Open in Text Editor');
+test('shows the parse-error overlay for malformed XML', async () => {
+    const overlay = innerFrame.locator('#parse-error-overlay');
+    await expect(overlay).toBeVisible({ timeout: 15_000 });
+    await expect(innerFrame.locator('#parse-error-title')).toContainText('Unable to read the manifest');
+    await expect(innerFrame.locator('#parse-error-detail')).toBeVisible();
+    await expect(innerFrame.locator('#parse-error-open-text')).toContainText('Open in Text Editor');
 });
 
 test('recovers into the editor once the XML is fixed', async () => {
-    // Repair the file on disk, as the user would in the text editor. The provider must
-    // swap the standalone error page for the editor document and populate the form.
+    // Repair the file on disk, as the user would in the text editor. The overlay must clear
+    // and the form must populate.
     const manifestPath = path.join(ctx.workspacePath, 'AppxManifest.xml');
     const validXml = fs.readFileSync(
         path.resolve(__dirname, '..', 'fixtures', 'winui-gallery.appxmanifest'),
@@ -85,7 +83,6 @@ test('recovers into the editor once the XML is fixed', async () => {
     fs.writeFileSync(manifestPath, validXml, 'utf-8');
 
     const frame = await getWebviewFrame(ctx.page);
-    await expect(frame.locator('.error-container')).toHaveCount(0);
     await expect(frame.locator('.tab-bar')).toBeVisible({ timeout: 20_000 });
     // The form is populated from the repaired document, not left blank.
     await expect(frame.locator('#identity-name')).not.toHaveValue('', { timeout: 20_000 });
