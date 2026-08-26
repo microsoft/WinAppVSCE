@@ -456,6 +456,11 @@ internal static class XamlSemanticFacts
         {
             var declarations = new Dictionary<string, XamlElement>(StringComparer.Ordinal);
             var sourceDictionaries = new List<XamlElement>();
+            if (IsResourceDictionaryScope(container, _typeSystem))
+            {
+                AddSourceDictionary(container, sourceDictionaries);
+            }
+
             CollectDeclarations(container, declarations, collectionWrapper: false);
             CollectSourceDictionaries(
                 container,

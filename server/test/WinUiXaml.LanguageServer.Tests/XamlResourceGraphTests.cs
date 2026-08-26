@@ -93,6 +93,37 @@ public class XamlResourceGraphTests
     }
 
     [Fact]
+    public void ReadReachable_FollowsRootDictionarySource()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var proxy = Path.Combine(root, "Proxy.xaml");
+            var target = Path.Combine(root, "Target.xaml");
+            File.WriteAllText(
+                proxy,
+                """
+                <ResourceDictionary
+                    xmlns="using:Microsoft.UI.Xaml"
+                    Source="Target.xaml" />
+                """);
+            File.WriteAllText(target, Dictionary("TargetKey"));
+
+            var files = Read(new XamlResourceGraph(), proxy, root);
+
+            Assert.Equal(
+                new[] { "Proxy.xaml", "Target.xaml" },
+                files.Select(file => Path.GetFileName(file.Path)));
+            Assert.Contains(files, file => file.Keys.Contains("TargetKey"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ReadReachable_ExportsOnlyKeysVisibleFromEachFileRoot()
     {
         var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

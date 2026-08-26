@@ -197,6 +197,16 @@ describe("WinUI XAML red-team 29 — resource navigation and scoping", function 
     assert.ok(!resources.includes("AppChildOnlyBrush"), `resource inside child element scope must not leak globally; got ${JSON.stringify(resources)}`);
   });
 
+  it("completion follows a resource file rooted at a literal Source dictionary", async () => {
+    const items = await h.completionItemsAt(
+      page('<Border Background="{StaticResource RootSource|}" />')
+    );
+    assert.ok(
+      items.some((item) => item.label === "RootSourceBrush" && item.detail === "resource"),
+      `App.xaml root-Source proxy must export its target key cross-file; got ${JSON.stringify(items)}`
+    );
+  });
+
   it("diagnostics use root-visible App.xaml keys but ignore nested-scope keys", async () => {
     const buffer = page([
       "<StackPanel>",
