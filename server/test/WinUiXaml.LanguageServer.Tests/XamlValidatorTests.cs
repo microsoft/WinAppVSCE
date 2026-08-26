@@ -601,6 +601,42 @@ public class XamlValidatorTests
             item => item.Code == XamlValidator.UnknownResourceKeyCode);
     }
 
+    [Theory]
+    [InlineData("""
+        <Page.Resources>
+          <Child x:Key="Container">
+            <Child.Resources>
+              <Child x:Key="ExternalOrNestedKey" />
+            </Child.Resources>
+          </Child>
+        </Page.Resources>
+        <Child Text="{ui:StaticResource ExternalOrNestedKey}" />
+        """)]
+    [InlineData("""
+        <Child>
+          <Child.Resources>
+            <Child x:Key="ExternalOrNestedKey" />
+          </Child.Resources>
+        </Child>
+        <Child Text="{ui:StaticResource ExternalOrNestedKey}" />
+        """)]
+    public void IncompleteExternalResourceCatalogIgnoresInaccessibleSameNamedResource(
+        string content)
+    {
+        const string prefix = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="using:Microsoft.UI.Xaml"
+                  x:Class="TestApp.Page">
+            """;
+
+        Assert.DoesNotContain(
+            ValidateWithAuthority(
+                prefix + content + "</Page>",
+                resourceCatalogIsAuthoritative: false),
+            item => item.Code == XamlValidator.UnknownResourceKeyCode);
+    }
+
     [Fact]
     public void FrameworkTemplateSubclass_StartsIndependentNameScope()
     {

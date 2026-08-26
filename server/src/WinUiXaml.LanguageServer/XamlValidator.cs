@@ -224,7 +224,11 @@ internal static class XamlValidator
                     resourceKeys.Concat(resourceIndex.Keys).Distinct(StringComparer.Ordinal));
                 if (!resourceCatalogIsAuthoritative &&
                     suggestion is null &&
-                    !resourceIndex.Keys.Contains(key, StringComparer.Ordinal))
+                    (allowForwardReference ||
+                     !resourceIndex.HasSameDictionaryForwardDeclaration(
+                         element,
+                         key,
+                         extension.Span.Start)))
                 {
                     continue;
                 }

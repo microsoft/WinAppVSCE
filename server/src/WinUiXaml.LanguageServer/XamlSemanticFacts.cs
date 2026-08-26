@@ -326,6 +326,44 @@ internal static class XamlSemanticFacts
 
         internal IReadOnlyCollection<string> Keys => _keys;
 
+        internal bool HasSameDictionaryForwardDeclaration(
+            XamlElement reference,
+            string key,
+            int referenceStart)
+        {
+            bool foundDictionary = false;
+            XamlElement? previousDictionary = null;
+            for (XamlElement? scope = reference; scope is not null; scope = ParentElement(scope))
+            {
+                if (IsResourceDictionaryScope(scope, _typeSystem) ||
+                    IsResourceOwnerPropertyScope(scope, _typeSystem))
+                {
+                    if (foundDictionary &&
+                        (previousDictionary is null ||
+                         GetKeyAttribute(previousDictionary) is not null))
+                    {
+                        return false;
+                    }
+
+                    foundDictionary = true;
+                    if (_declarations.TryGetValue(scope, out var entries) &&
+                        entries.TryGetValue(key, out var declaration) &&
+                        declaration.Span.Start > referenceStart)
+                    {
+                        return true;
+                    }
+
+                    previousDictionary = scope;
+                }
+                else if (foundDictionary)
+                {
+                    return false;
+                }
+            }
+
+            return false;
+        }
+
         private bool TryFind(
             XamlElement scope,
             string key,
