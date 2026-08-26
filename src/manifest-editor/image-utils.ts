@@ -225,8 +225,7 @@ export function resolveManifestImagePath(
     const probeRoots = [manifestDir, ...workspaceRoots];
     const escapesPackage = imagePath.startsWith('..\\') || imagePath.startsWith('../');
     const resolved = path.resolve(manifestDir, imagePath);
-    const inWorkspace = workspaceRoots.some(root =>
-        resolved.toLowerCase() === root.toLowerCase() || isPathWithin(root, resolved));
+    const inWorkspace = workspaceRoots.some(root => isPathWithin(root, resolved));
 
     const packageResolution = resolveMrtAsset(manifestDir, imagePath, { probeRoots });
 
