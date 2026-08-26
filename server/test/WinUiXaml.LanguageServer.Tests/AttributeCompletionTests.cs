@@ -523,6 +523,35 @@ public sealed class AttributeCompletionTests
     }
 
     [Fact]
+    public void DottedOwnerCompletion_FiltersIncompatibleReceiver()
+    {
+        const string marked = """
+            <Button xmlns="using:TestApp"
+                    xmlns:ui="using:Toolkit"
+                    ui:GridExtensions.| />
+            """;
+
+        Assert.DoesNotContain(
+            "ui:GridExtensions.Column",
+            CompleteLabels(marked));
+    }
+
+    [Fact]
+    public void DottedOwnerCompletion_FiltersExistingAttachedProperty()
+    {
+        const string marked = """
+            <Button xmlns="using:TestApp"
+                    xmlns:ui="using:Toolkit"
+                    ui:FrameworkElementExtensions.IsEnabled="true"
+                    ui:FrameworkElementExtensions.| />
+            """;
+
+        Assert.DoesNotContain(
+            "ui:FrameworkElementExtensions.IsEnabled",
+            CompleteLabels(marked));
+    }
+
+    [Fact]
     public void TargetTypeCompletion_OnlyOffersDependencyObjectTypes()
     {
         const string marked = """

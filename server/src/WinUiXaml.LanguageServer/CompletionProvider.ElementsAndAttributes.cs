@@ -413,7 +413,15 @@ internal static partial class CompletionProvider
         int dot = ctx.Partial.LastIndexOf('.');
         if (dot >= 0)
         {
-            return CompleteAttachedProperty(ctx, dot, scope, typeSystem, nameReplaceRange, appendValue);
+            return CompleteAttachedProperty(
+                ctx,
+                dot,
+                scope,
+                elementType,
+                existing,
+                typeSystem,
+                nameReplaceRange,
+                appendValue);
         }
 
         int colon = ctx.Partial.IndexOf(':');
@@ -728,13 +736,34 @@ internal static partial class CompletionProvider
     }
 
     private static CompletionList CompleteAttachedProperty(
-        Context ctx, int dot, XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange, bool appendValue = false)
+        Context ctx,
+        int dot,
+        XamlNamespaceScope scope,
+        INamedTypeSymbol elementType,
+        HashSet<string> existing,
+        XamlTypeSystem typeSystem,
+        Lsp.Range replaceRange,
+        bool appendValue = false)
         => CompleteAttachedProperty(
-            ctx.Partial.Substring(0, dot), ctx.Partial.Substring(dot + 1), scope, typeSystem, replaceRange, appendValue);
+            ctx.Partial.Substring(0, dot),
+            ctx.Partial.Substring(dot + 1),
+            scope,
+            typeSystem,
+            replaceRange,
+            appendValue,
+            elementType,
+            existing);
 
     /// <summary>Completes the members of a dotted attached-property partial (Owner.member) as Owner.Member items</summary>
     private static CompletionList CompleteAttachedProperty(
-        string ownerName, string memberPartial, XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange, bool appendValue = false)
+        string ownerName,
+        string memberPartial,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        Lsp.Range replaceRange,
+        bool appendValue = false,
+        INamedTypeSymbol? elementType = null,
+        HashSet<string>? existing = null)
     {
         var ownerXamlName = ParseQualified(ownerName);
         var owner = ResolveElementType(ownerXamlName, scope, typeSystem);
@@ -752,6 +781,15 @@ internal static partial class CompletionProvider
             }
 
             var qualified = ownerName + "." + member.Name;
+            if (!IsAttachedPropertyCompletionCandidate(
+                    qualified,
+                    member,
+                    elementType,
+                    existing))
+            {
+                continue;
+            }
+
             items.Add(new CompletionItem
             {
                 Label = qualified,
@@ -791,10 +829,11 @@ internal static partial class CompletionProvider
             foreach (var member in typeSystem.GetAttachedProperties(owner))
             {
                 var qualified = prefix + ":" + owner.Name + "." + member.Name;
-                if (existing.Contains(qualified) ||
-                    !XamlTypeSystem.IsAttachedPropertyApplicable(
+                if (!IsAttachedPropertyCompletionCandidate(
+                        qualified,
                         member,
-                        elementType))
+                        elementType,
+                        existing))
                 {
                     continue;
                 }
@@ -820,6 +859,17 @@ internal static partial class CompletionProvider
 
         return Finish(items);
     }
+
+    private static bool IsAttachedPropertyCompletionCandidate(
+        string qualifiedName,
+        XamlMemberInfo member,
+        INamedTypeSymbol? elementType,
+        HashSet<string>? existing) =>
+        (existing is null || !existing.Contains(qualifiedName)) &&
+        (elementType is null ||
+         XamlTypeSystem.IsAttachedPropertyApplicable(
+             member,
+             elementType));
 
     private static Lsp.Command? AttributeValueSuggestionCommand(
         XamlMemberInfo member,
