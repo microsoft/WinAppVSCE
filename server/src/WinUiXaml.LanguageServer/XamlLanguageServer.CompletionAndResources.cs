@@ -22,7 +22,9 @@ internal sealed partial class XamlLanguageServer
         }
 
         int offset = doc.OffsetAt(p.Position);
-        var appKeys = GetAppResourceKeys(context);
+        var appKeys = GetAppResourceKeys(
+            context,
+            LspUri.ToPath(doc.Uri));
         var completions = CompletionProvider.Provide(
             doc,
             offset,

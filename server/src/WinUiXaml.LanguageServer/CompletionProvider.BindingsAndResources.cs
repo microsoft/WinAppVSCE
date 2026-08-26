@@ -385,11 +385,16 @@ internal static partial class CompletionProvider
             return new CompletionList();
         }
 
-        var projectKeys = new SortedSet<string>(StringComparer.Ordinal);
-        if (doc.Parsed.Root is { } root)
-        {
-            CollectResourceKeysCore(root, projectKeys);
-        }
+        var referenceElement = NearestElement(
+            doc.Parsed.FindNode(Math.Max(0, offset - 1)));
+        var resourceIndex = doc.Parsed.Root is { } resourceRoot
+            ? XamlSemanticFacts.CreateResourceIndex(resourceRoot, typeSystem)
+            : null;
+        var documentKeys = resourceIndex?.Keys.ToHashSet(StringComparer.Ordinal)
+            ?? new HashSet<string>(StringComparer.Ordinal);
+        var projectKeys = new SortedSet<string>(
+            documentKeys,
+            StringComparer.Ordinal);
 
         if (appResourceKeys != null)
         {
@@ -401,16 +406,6 @@ internal static partial class CompletionProvider
 
         // A null target accepts every resource key.
         var targetType = ResolveResourceTargetType(doc, offset, ctx, scope, typeSystem);
-
-        // Exclude local keys only when their declaring type is definitely incompatible.
-        var docLocalDecls = doc.Parsed.Root is { } declRoot
-            ? CollectDocLocalKeyDeclarations(declRoot)
-            : new Dictionary<string, XamlElement>(StringComparer.Ordinal);
-        var referenceElement = NearestElement(
-            doc.Parsed.FindNode(Math.Max(0, offset - 1)));
-        var resourceIndex = doc.Parsed.Root is { } resourceRoot
-            ? XamlSemanticFacts.CreateResourceIndex(resourceRoot, typeSystem)
-            : null;
 
         var items = new List<CompletionItem>();
         var visibleProjectKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -424,10 +419,8 @@ internal static partial class CompletionProvider
                     resourceIndex!,
                     referenceElement,
                     key);
-            var isAppResource = appResourceKeys?.Contains(key) == true;
             if (visibleDeclaration is null &&
-                docLocalDecls.ContainsKey(key) &&
-                !isAppResource)
+                documentKeys.Contains(key))
             {
                 continue;
             }
@@ -514,6 +507,13 @@ internal static partial class CompletionProvider
             return true;
         }
 
+        // Framework Color resources are usable through XAML conversion in contexts that
+        // are broader than CLR assignability can express, so keep them conservative.
+        if (string.Equals(resource.LocalTypeName, "Color", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
         var typeIdentity = (resource.TypeNamespace, resource.LocalTypeName);
         if (compatibilityByType.TryGetValue(typeIdentity, out var isCompatible))
         {
@@ -545,13 +545,15 @@ internal static partial class CompletionProvider
         var keys = new HashSet<string>(StringComparer.Ordinal);
         if (document.Root is { } root)
         {
-            CollectResourceKeysCore(root, keys);
+            CollectAllResourceKeysCore(root, keys);
         }
 
         return keys.ToList();
     }
 
-    private static void CollectResourceKeysCore(XamlElement element, ISet<string> into)
+    private static void CollectAllResourceKeysCore(
+        XamlElement element,
+        ISet<string> into)
     {
         if (XamlSemanticFacts.GetKeyAttribute(element)?.Value is { } value &&
             value.Text.Length > 0)
@@ -563,33 +565,7 @@ internal static partial class CompletionProvider
         {
             if (child is XamlElement childElement)
             {
-                CollectResourceKeysCore(childElement, into);
-            }
-        }
-    }
-
-    /// <summary>Maps each document-local x:Key value to the element that DECLARES it (the resource object element carrying the x:Key)</summary>
-    private static Dictionary<string, XamlElement> CollectDocLocalKeyDeclarations(XamlElement root)
-    {
-        var map = new Dictionary<string, XamlElement>(StringComparer.Ordinal);
-        CollectKeyDeclarationsCore(root, map);
-        return map;
-    }
-
-    private static void CollectKeyDeclarationsCore(XamlElement element, Dictionary<string, XamlElement> into)
-    {
-        if (XamlSemanticFacts.GetKeyAttribute(element)?.Value is { } value &&
-            value.Text.Length > 0 &&
-            !into.ContainsKey(value.Text))
-        {
-            into.Add(value.Text, element);
-        }
-
-        foreach (var child in element.Content)
-        {
-            if (child is XamlElement childElement)
-            {
-                CollectKeyDeclarationsCore(childElement, into);
+                CollectAllResourceKeysCore(childElement, into);
             }
         }
     }

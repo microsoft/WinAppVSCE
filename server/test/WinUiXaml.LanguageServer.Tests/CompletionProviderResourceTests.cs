@@ -162,6 +162,92 @@ public sealed class CompletionProviderResourceTests
     }
 
     [Fact]
+    public void AppXamlCompletionDoesNotLeakKeyedDictionaryResourcesIntoOuterScope()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "WinUiXaml.Tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var typeSystem = CreateTypeSystem(root);
+            var text = $$"""
+                <ResourceDictionary xmlns="{{Presentation}}" xmlns:x="{{Xaml}}">
+                  <SolidColorBrush x:Key="OuterBrush" />
+                  <ResourceDictionary x:Key="NestedDictionary">
+                    <SolidColorBrush x:Key="NestedOnlyBrush" />
+                  </ResourceDictionary>
+                  <SolidColorBrush Color="{StaticResource |}" />
+                </ResourceDictionary>
+                """;
+            var offset = text.IndexOf('|');
+            text = text.Remove(offset, 1);
+
+            var labels = CompletionProvider.Provide(
+                    new TextDocument("file:///C:/project/App.xaml", text),
+                    offset,
+                    typeSystem,
+                    appResourceKeys: new[]
+                    {
+                        "OuterBrush",
+                        "NestedDictionary",
+                        "NestedOnlyBrush",
+                    })
+                .Items.Select(item => item.Label)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Contains("OuterBrush", labels);
+            Assert.Contains("NestedDictionary", labels);
+            Assert.DoesNotContain("NestedOnlyBrush", labels);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AppXamlCompletionDoesNotLeakSiblingOwnerResourcesIntoOuterScope()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "WinUiXaml.Tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var typeSystem = CreateTypeSystem(root);
+            var text = $$"""
+                <Page xmlns="{{Presentation}}" xmlns:x="{{Xaml}}">
+                  <Grid>
+                    <Grid.Resources>
+                      <SolidColorBrush x:Key="GridOnlyBrush" />
+                    </Grid.Resources>
+                  </Grid>
+                  <Border Background="{StaticResource |}" />
+                </Page>
+                """;
+            var offset = text.IndexOf('|');
+            text = text.Remove(offset, 1);
+
+            var labels = CompletionProvider.Provide(
+                    new TextDocument("file:///C:/project/App.xaml", text),
+                    offset,
+                    typeSystem,
+                    appResourceKeys: new[] { "GridOnlyBrush" })
+                .Items.Select(item => item.Label)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.DoesNotContain("GridOnlyBrush", labels);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void VisibleLocalResourceStillFiltersWhenAppDefinesTheSameKey()
     {
         var root = Path.Combine(Path.GetTempPath(), "WinUiXaml.Tests", Guid.NewGuid().ToString("N"));
