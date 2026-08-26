@@ -610,27 +610,18 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     if (msg.status === 'found') {
                         if (msg.aspectWarning) {
                             fg.classList.add('has-warning');
-                            vmsg.classList.remove('info');
                             vmsg.classList.add('warning');
                             vmsg.textContent = msg.aspectWarning;
-                        } else if (msg.mrtNote) {
-                            // Valid MRT authoring — informational, not a problem to fix.
-                            fg.classList.remove('has-warning');
-                            vmsg.classList.remove('warning');
-                            vmsg.classList.add('info');
-                            vmsg.textContent = msg.mrtNote;
                         } else {
                             fg.classList.remove('has-warning');
-                            vmsg.textContent = ''; vmsg.classList.remove('warning'); vmsg.classList.remove('info'); vmsg.innerHTML = '';
+                            vmsg.textContent = ''; vmsg.classList.remove('warning'); vmsg.innerHTML = '';
                         }
                     } else if (msg.status === 'external') {
                         fg.classList.add('has-warning');
-                        vmsg.classList.remove('info');
                         vmsg.classList.add('warning');
                         vmsg.innerHTML = 'Image not in package directory. <a href="#" class="copy-to-assets-link" data-copy-token="' + escapeHtml(msg.copyToken) + '" data-field="' + escapeHtml(msg.field) + '" data-index="' + (msg.index !== undefined ? msg.index : '') + '">Copy to Assets folder?</a>';
                     } else {
                         fg.classList.add('has-warning');
-                        vmsg.classList.remove('info');
                         vmsg.classList.add('warning');
                         vmsg.textContent = '⚠ Image not found in package directory';
                     }
@@ -694,14 +685,13 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             if (!formGroup) return;
             const msg = formGroup.querySelector('.validation-msg');
             if (!msg) return;
-            // Drop any previous found/MRT/not-found status right away — the round-trip below is
-            // debounced, so a stale MRT note would otherwise sit under a path the user just retyped.
+            // Drop any previous found/not-found status right away — the round-trip below is
+            // debounced, so a stale warning would otherwise sit under a path the user just retyped.
             if (!msg.classList.contains('error')) {
                 formGroup.classList.remove('has-warning');
                 msg.textContent = '';
                 msg.innerHTML = '';
                 msg.classList.remove('warning');
-                msg.classList.remove('info');
             }
             if (!logoPath || !isImagePath(logoPath)) { return; }
             vscode.postMessage({ type: 'checkImagePath', imagePath: logoPath, field: fieldName || '', index: fieldIndex });

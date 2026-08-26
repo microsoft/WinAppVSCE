@@ -92,8 +92,6 @@ export function hasTargetSizeQualifier(qualifiers: string[]): boolean {
 export interface MrtResolution {
     /** Absolute path of the file that represents the reference. */
     resolvedPath: string;
-    /** Path of `resolvedPath` relative to the directory the reference was resolved against. */
-    relativePath: string;
     /** True when the literal (unqualified) path exists on disk. */
     isExact: boolean;
     /** Qualifier tokens of the resolved variant (empty when `isExact`). */
@@ -155,16 +153,14 @@ export function resolveMrtAsset(baseDir: string, referencePath: string, options?
         return null;
     }
 
-    const relativeTo = (candidate: string): string => path.relative(baseDir, candidate) || path.basename(candidate);
     const resolutionFor = (best: Candidate): MrtResolution => ({
         resolvedPath: best.file,
-        relativePath: relativeTo(best.file),
         isExact: false,
         qualifiers: best.qualifiers,
     });
 
     if (fileExists(absolute)) {
-        return { resolvedPath: absolute, relativePath: relativeTo(absolute), isExact: true, qualifiers: [] };
+        return { resolvedPath: absolute, isExact: true, qualifiers: [] };
     }
 
     const dir = path.dirname(absolute);

@@ -274,11 +274,6 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                     index: message.index,
                                     status: 'found',
                                     aspectWarning: aspectWarning || undefined,
-                                    mrtNote: resolution.isExact
-                                        ? undefined
-                                        // relativePath, not basename: a qualifier-folder layout needs
-                                        // the folder shown for the note to say anything useful.
-                                        : `Resolved via MRT to ${resolution.relativePath}`,
                                     previewPath: resolution.isExact ? undefined : previewPath,
                                 });
                             };

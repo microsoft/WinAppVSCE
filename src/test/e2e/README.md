@@ -220,11 +220,11 @@ Validates MRT-aware resolution of visual asset paths (issue #191). Uses the `mrt
 
 | # | Test | Validates |
 |---|------|-----------|
-| 1 | unqualified logo backed only by MRT variants is not reported as missing | `Assets\MrtLogo.png` resolves through `MrtLogo.scale-200.png` and shows an informational "Resolved via MRT" note instead of a not-found warning |
+| 1 | unqualified logo backed only by MRT variants is not reported as missing | `Assets\MrtLogo.png` resolves through `MrtLogo.scale-200.png`, so no not-found warning is shown |
 | 2 | logo preview falls back to the resolved MRT variant | Store logo thumbnail loads the resolved qualified variant |
 | 3 | application visual assets resolve through MRT variants | Visual asset fields on the Applications tab use the same MRT resolution |
 | 4 | application logo preview falls back to the resolved MRT variant | Applications tab thumbnail loads the resolved qualified variant |
-| 5 | an unqualified file that exists is used as-is with no note | A literal file on disk resolves exactly, with no message |
+| 5 | an unqualified file that exists is used as-is | A literal file on disk resolves exactly, with no message |
 | 6 | a non-variant sibling does not satisfy the reference | `OnlyBackup.backup.png` is not treated as a variant of `OnlyBackup.png` |
 | 7 | a genuinely missing asset still warns | A reference with neither literal file nor variants still warns |
 

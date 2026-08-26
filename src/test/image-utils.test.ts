@@ -259,7 +259,10 @@ describe('resolveMrtAsset', () => {
         const result = resolveMrtAsset(path.join(tmpDir, 'app8'), 'Assets/Nested/Logo.png');
 
         assert.ok(result);
-        assert.equal(result.relativePath.replace(/\\/g, '/'), 'Assets/Nested/Logo.scale-200.png');
+        assert.equal(
+            path.relative(path.join(tmpDir, 'app8'), result.resolvedPath).replace(/\\/g, '/'),
+            'Assets/Nested/Logo.scale-200.png',
+        );
     });
 
     it('matches variants only within the same extension', () => {
