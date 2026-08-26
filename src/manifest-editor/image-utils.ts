@@ -1,16 +1,5 @@
-/**
- * Image helpers for the manifest editor: MRT-aware asset resolution, image header
- * measurement, and aspect-ratio checking.
- *
- * An MSIX manifest references the *unqualified* asset name (Assets\Logo.png) while the
- * files that actually ship are qualifier-suffixed (Assets\Logo.scale-200.png,
- * Assets\Logo.targetsize-24_altform-unplated.png, ...). MRT resolves the reference at
- * runtime, so a missing literal file is correct authoring — not an error.
- *
- * The qualifier grammar and variant-matching rules here mirror `MrtAssetHelper` in the
- * WinApp CLI (microsoft/winappCli) so that both tools agree. This module is kept free of
- * `vscode` imports so all of it stays unit-testable.
- */
+// Image helpers for the manifest editor: MRT-aware asset resolution, image measurement, and
+// aspect-ratio checking. Qualifier rules mirror `MrtAssetHelper` in the WinApp CLI.
 
 import * as path from 'path';
 import * as fs from 'fs';
@@ -56,19 +45,12 @@ export function isQualifierToken(token: string): boolean {
 }
 
 /**
- * Returns true if `candidateNameWithoutExtension` is a valid MRT variant of
- * `logicalBaseName`.
- *
- * Only the first dot-separated segment is compared against the base name, so a base name
- * that itself contains dots ("Contoso.Logo") never matches its own variants. That mirrors
- * `MrtAssetHelper.IsMrtVariantName` in the WinApp CLI, which does the same `Split('.')` and
- * `parts[0]` comparison. Diverging here would make the editor accept assets the CLI does not
- * package, which is worse than the shared limitation — keep the two in lockstep.
+ * True when `candidateNameWithoutExtension` is an MRT variant of `logicalBaseName`. Only the
+ * first dot-separated segment is compared, matching `MrtAssetHelper.IsMrtVariantName`.
  */
 export function isMrtVariantName(logicalBaseName: string, candidateNameWithoutExtension: string): boolean {
     if (!logicalBaseName?.trim() || !candidateNameWithoutExtension?.trim()) { return false; }
 
-    // "Logo.scale-200.theme-dark" -> ["Logo", "scale-200", "theme-dark"]
     const parts = candidateNameWithoutExtension.split('.');
     if (parts[0].toLowerCase() !== logicalBaseName.toLowerCase()) { return false; }
     if (parts.length === 1) { return true; }
@@ -77,9 +59,8 @@ export function isMrtVariantName(logicalBaseName: string, candidateNameWithoutEx
 }
 
 /**
- * For a qualified logical name like "Logo.scale-100" or "Logo.targetsize-24_altform-unplated",
- * returns the unqualified asset family base ("Logo"). Names without trailing qualifier tokens
- * are returned unchanged, so "Assets.Logo" stays "Assets.Logo".
+ * Strips trailing qualifier tokens to get the asset family base: "Logo.scale-100" -> "Logo".
+ * Names without trailing qualifiers are returned unchanged.
  */
 export function getMrtVariantBaseName(logicalBaseName: string): string {
     if (!logicalBaseName?.trim()) { return logicalBaseName; }
@@ -87,7 +68,6 @@ export function getMrtVariantBaseName(logicalBaseName: string): string {
     const parts = logicalBaseName.split('.');
     if (parts.length <= 1) { return logicalBaseName; }
 
-    // Find the earliest segment where every remaining segment is a valid qualifier token.
     for (let i = 1; i < parts.length; i++) {
         if (parts.slice(i).every(part => isQualifierToken(part))) {
             return parts.slice(0, i).join('.');
@@ -103,15 +83,6 @@ export function getVariantQualifiers(logicalBaseName: string, candidateNameWitho
         .flatMap(part => part.split('_'));
 }
 
-/** Scale factor encoded in a variant's qualifiers, or null when unscaled. */
-export function getVariantScale(qualifiers: string[]): number | null {
-    for (const q of qualifiers) {
-        const m = SCALE_QUALIFIER.exec(q);
-        if (m) { return parseInt(m[1], 10); }
-    }
-    return null;
-}
-
 /** True when any qualifier is a targetsize-N (those assets are square regardless of the field). */
 export function hasTargetSizeQualifier(qualifiers: string[]): boolean {
     return qualifiers.some(q => TARGET_SIZE_QUALIFIER.test(q));
@@ -119,7 +90,7 @@ export function hasTargetSizeQualifier(qualifiers: string[]): boolean {
 
 /** How a manifest image reference was resolved on disk. */
 export interface MrtResolution {
-    /** Absolute path of the file that best represents the reference. */
+    /** Absolute path of the file that represents the reference. */
     resolvedPath: string;
     /** Path of `resolvedPath` relative to the directory the reference was resolved against. */
     relativePath: string;
@@ -131,28 +102,12 @@ export interface MrtResolution {
 
 type Candidate = { file: string; qualifiers: string[] };
 
-/**
- * Picks the variant that best represents the reference in a preview: plain (unqualified or
- * scale-only) beats altform/targetsize/contrast/theme variants, scale-200 beats other scales,
- * higher scales beat lower ones, and file name breaks ties so the result is deterministic.
- */
-function pickBest(candidates: Candidate[]): Candidate {
-    const rank = ({ qualifiers, file }: Candidate): [number, number, number, string] => {
-        const scale = getVariantScale(qualifiers);
-        return [
-            qualifiers.every(q => SCALE_QUALIFIER.test(q)) ? 0 : 1,
-            scale === 200 ? 0 : 1,
-            -(scale ?? 0),
-            file,
-        ];
-    };
-    return candidates.reduce((best, current) => {
-        const [a, b] = [rank(current), rank(best)];
-        for (let i = 0; i < a.length; i++) {
-            if (a[i] !== b[i]) { return a[i] < b[i] ? current : best; }
-        }
-        return best;
-    });
+/** Keeps the scale-200 variant when there is one, otherwise the first match alphabetically. */
+function preferVariant(best: Candidate | null, next: Candidate): Candidate {
+    if (!best) { return next; }
+    const isPreferred = (c: Candidate): boolean => c.qualifiers.some(q => q.toLowerCase() === 'scale-200');
+    if (isPreferred(best) !== isPreferred(next)) { return isPreferred(next) ? next : best; }
+    return path.basename(next.file).localeCompare(path.basename(best.file)) < 0 ? next : best;
 }
 
 /** True when `candidate` is `root` or sits underneath it (case-insensitive, Windows paths). */
@@ -164,9 +119,8 @@ export function isPathWithin(root: string, candidate: string): boolean {
 
 export interface ResolveMrtAssetOptions {
     /**
-     * Directories that MRT probing is allowed to enumerate. A reference resolving outside all
-     * of them falls back to a plain existence check, so a manifest can't drive the extension
-     * host into listing arbitrary local or UNC directories.
+     * Directories that MRT probing may enumerate, so a manifest can't drive the extension host
+     * into listing arbitrary local or UNC directories.
      */
     probeRoots?: string[];
 }
@@ -188,17 +142,8 @@ function fileExists(candidate: string): boolean {
 }
 
 /**
- * Resolves a manifest-relative (or absolute) image reference, MRT-aware.
- *
- * Resolution order, mirroring the CLI:
- *  1. the literal file, when it exists;
- *  2. qualifier-suffixed siblings (`Logo.scale-200.png`, `Logo.targetsize-24_altform-unplated.png`);
- *  3. qualifier-folder layouts (`Assets\scale-200\Logo.png`).
- *
- * Returns null only when none of those exist — the one case that warrants a warning.
- *
- * Steps 2 and 3 enumerate a directory, so they run only when the reference resolves inside
- * `options.probeRoots` (when supplied). Everything else gets the literal check alone.
+ * Resolves an image reference to the literal file, a qualifier-suffixed sibling, or a
+ * qualifier-folder entry. Returns null only when none exist — the one case worth warning about.
  */
 export function resolveMrtAsset(baseDir: string, referencePath: string, options?: ResolveMrtAssetOptions): MrtResolution | null {
     if (!referencePath) { return null; }
@@ -231,32 +176,31 @@ export function resolveMrtAsset(baseDir: string, referencePath: string, options?
     if (options?.probeRoots && !options.probeRoots.some(root => isPathWithin(root, dir))) { return null; }
     const logicalBase = getMrtVariantBaseName(fileName.slice(0, fileName.length - ext.length));
 
-    // 2. Qualifier-suffixed siblings.
-    const siblings: Candidate[] = [];
+    // Qualifier-suffixed siblings: Assets\Logo.scale-200.png
+    let best: Candidate | null = null;
     for (const entry of safeReadDir(dir)) {
         if (!entry.isFile()) { continue; }
         const entryExt = path.extname(entry.name);
         if (entryExt.toLowerCase() !== ext.toLowerCase()) { continue; }
         const nameWithoutExt = entry.name.slice(0, entry.name.length - entryExt.length);
         if (!isMrtVariantName(logicalBase, nameWithoutExt)) { continue; }
-        siblings.push({ file: path.join(dir, entry.name), qualifiers: getVariantQualifiers(logicalBase, nameWithoutExt) });
+        best = preferVariant(best, {
+            file: path.join(dir, entry.name),
+            qualifiers: getVariantQualifiers(logicalBase, nameWithoutExt),
+        });
     }
+    if (best) { return resolutionFor(best); }
 
-    if (siblings.length > 0) { return resolutionFor(pickBest(siblings)); }
-
-    // 3. Qualifier-folder layouts: Assets\scale-200\Logo.png
-    const folderMatches: Candidate[] = [];
+    // Qualifier-folder layouts: Assets\scale-200\Logo.png
     for (const entry of safeReadDir(dir)) {
         if (!entry.isDirectory() || !isQualifierToken(entry.name)) { continue; }
         const candidate = path.join(dir, entry.name, fileName);
         if (fileExists(candidate)) {
-            folderMatches.push({ file: candidate, qualifiers: entry.name.split('_') });
+            best = preferVariant(best, { file: candidate, qualifiers: entry.name.split('_') });
         }
     }
 
-    if (folderMatches.length > 0) { return resolutionFor(pickBest(folderMatches)); }
-
-    return null;
+    return best ? resolutionFor(best) : null;
 }
 
 export type ImagePathResolution =
@@ -268,10 +212,7 @@ export type ImagePathResolution =
 
 /**
  * Decides how a manifest image reference should be reported in the editor.
- *
- * @param manifestDir Directory containing AppxManifest.xml — the package root.
- * @param imagePath   The raw manifest/field value.
- * @param workspaceRoots Open workspace folder paths, used for `..\`-escaping references.
+ * `workspaceRoots` are the open workspace folders, used for `..\`-escaping references.
  */
 export function resolveManifestImagePath(
     manifestDir: string,
@@ -297,17 +238,14 @@ export function resolveManifestImagePath(
         return { status: 'found', resolution: packageResolution };
     }
 
-    // Outside the package (for example ..\..\Downloads\img.png or an absolute path). Only the
-    // literal file is offered for copying: copying a variant would rewrite the manifest to a
-    // qualified name like Logo.scale-200.png, which is not what the user typed.
+    // Outside the package. Only the literal file is offered for copying: copying a variant would
+    // rewrite the manifest to a qualified name the user never typed.
     if (packageResolution?.isExact) {
         return { status: 'external', sourcePath: packageResolution.resolvedPath };
     }
 
-    // Fall back to workspace-root resolution only for references that explicitly escape the
-    // manifest folder (for example ..\Assets\logo.png). The candidate must land inside the
-    // workspace root it was resolved against: resolveMrtAsset returns a literal file before it
-    // applies probeRoots, so without this a ..\..\..\ reference would resolve anywhere on disk.
+    // Pre-existing workspace-root fallback for references that escape the manifest folder. The
+    // candidate must land inside the root, since resolveMrtAsset returns literal files unprobed.
     if (escapesPackage) {
         for (const root of workspaceRoots) {
             const candidate = resolveMrtAsset(root, imagePath, { probeRoots });
@@ -364,11 +302,7 @@ export function getImageDimensions(filePath: string): { width: number; height: n
     }
 }
 
-/**
- * Expected aspect ratios for manifest image fields (width:height).
- *
- * Mirrors the WinApp CLI's `ManifestService.ExtractAssetReferencesFromManifest` table.
- */
+/** Expected aspect ratios per manifest image field, mirroring the WinApp CLI's asset table. */
 export const EXPECTED_RATIOS: Record<string, { w: number; h: number; label: string }> = {
     'visualElements.square150x150Logo': { w: 1, h: 1, label: '1:1 (square)' },
     'visualElements.square44x44Logo': { w: 1, h: 1, label: '1:1 (square)' },
@@ -381,11 +315,8 @@ export const EXPECTED_RATIOS: Record<string, { w: number; h: number; label: stri
 };
 
 /**
- * Returns a warning string if the image aspect ratio doesn't match expectations (±5% tolerance).
- * `qualifiers` are the MRT qualifier tokens of the file that was actually measured: a
- * `scale-200` file is legitimately 2× the base size (ratio is scale invariant), but a
- * `targetsize-N` file is a square N×N icon regardless of the field it is attached to, so it
- * must not be ratio-checked against, say, a wide tile.
+ * Warns when the aspect ratio doesn't match the field's expectation (±5%). Skipped for
+ * targetsize-N variants, which are square N×N icons whatever field they hang off.
  */
 export function checkAspectRatio(field: string, width: number, height: number, qualifiers: string[] = []): string | null {
     const expected = EXPECTED_RATIOS[field];

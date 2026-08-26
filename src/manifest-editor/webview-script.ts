@@ -695,8 +695,7 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             const msg = formGroup.querySelector('.validation-msg');
             if (!msg) return;
             // Drop any previous found/MRT/not-found status right away — the round-trip below is
-            // debounced, and a stale "Resolved via MRT to OldLogo.scale-200.png" under a path the
-            // user just retyped is worse than a blank line.
+            // debounced, so a stale MRT note would otherwise sit under a path the user just retyped.
             if (!msg.classList.contains('error')) {
                 formGroup.classList.remove('has-warning');
                 msg.textContent = '';

@@ -253,16 +253,14 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             const manifestDirPath = path.dirname(document.uri.fsPath);
 
                             // An MSIX manifest references the unqualified asset name; MRT resolves it
-                            // at runtime against qualifier-suffixed files (Logo.scale-200.png). Probe
-                            // those variants so correct MRT authoring isn't flagged as a broken path.
+                            // at runtime against qualifier-suffixed files (Logo.scale-200.png).
                             const postFound = (resolution: MrtResolution): void => {
                                 const dims = getImageDimensions(resolution.resolvedPath);
                                 const aspectWarning = dims
                                     ? checkAspectRatio(message.field, dims.width, dims.height, resolution.qualifiers)
                                     : null;
-                                // The webview builds preview URIs relative to the manifest folder,
-                                // so anything outside it has to be sent as an absolute webview URI
-                                // (workspace folders are already in localResourceRoots).
+                                // The webview builds preview URIs relative to the manifest folder, so
+                                // anything outside it has to be sent as an absolute webview URI.
                                 const previewRelative = path.relative(manifestDirPath, resolution.resolvedPath);
                                 const insideManifestDir = previewRelative !== ''
                                     && !previewRelative.startsWith('..')
@@ -278,9 +276,8 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                     aspectWarning: aspectWarning || undefined,
                                     mrtNote: resolution.isExact
                                         ? undefined
-                                        // relativePath, not basename: for a qualifier-folder layout the
-                                        // basename is the reference the user already typed, so the note
-                                        // has to show the folder to say anything useful.
+                                        // relativePath, not basename: a qualifier-folder layout needs
+                                        // the folder shown for the note to say anything useful.
                                         : `Resolved via MRT to ${resolution.relativePath}`,
                                     previewPath: resolution.isExact ? undefined : previewPath,
                                 });

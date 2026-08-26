@@ -19,7 +19,6 @@ import {
     isMrtVariantName,
     getMrtVariantBaseName,
     getVariantQualifiers,
-    getVariantScale,
     hasTargetSizeQualifier,
     resolveMrtAsset,
     resolveManifestImagePath,
@@ -114,7 +113,7 @@ describe('getMrtVariantBaseName', () => {
     });
 });
 
-describe('getVariantQualifiers / getVariantScale / hasTargetSizeQualifier', () => {
+describe('getVariantQualifiers / hasTargetSizeQualifier', () => {
     it('splits compound qualifiers into tokens', () => {
         assert.deepEqual(
             getVariantQualifiers('Square44x44Logo', 'Square44x44Logo.targetsize-24_altform-unplated'),
@@ -124,11 +123,6 @@ describe('getVariantQualifiers / getVariantScale / hasTargetSizeQualifier', () =
 
     it('returns no qualifiers for the exact name', () => {
         assert.deepEqual(getVariantQualifiers('Logo', 'Logo'), []);
-    });
-
-    it('reads the scale factor', () => {
-        assert.equal(getVariantScale(['scale-200']), 200);
-        assert.equal(getVariantScale(['targetsize-24', 'altform-unplated']), null);
     });
 
     it('detects targetsize qualifiers', () => {
@@ -166,7 +160,7 @@ describe('resolveMrtAsset', () => {
 
         assert.ok(result, 'expected the reference to resolve via MRT variants');
         assert.equal(result.isExact, false);
-        // scale-200 is the preferred preview variant
+        // scale-200 is the preferred variant
         assert.equal(path.basename(result.resolvedPath), 'Square150x150Logo.scale-200.png');
         assert.deepEqual(result.qualifiers, ['scale-200']);
     });
@@ -209,7 +203,7 @@ describe('resolveMrtAsset', () => {
         const result = resolveMrtAsset(path.join(tmpDir, 'app5'), 'Assets\\Square44x44Logo.png');
 
         assert.ok(result);
-        // The plain scaled variant is preferred over altform variants for preview
+        // scale-200 is preferred; the altform variants are still a valid resolution
         assert.equal(path.basename(result.resolvedPath), 'Square44x44Logo.scale-200.png');
     });
 
