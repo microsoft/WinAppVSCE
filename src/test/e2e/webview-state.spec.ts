@@ -299,6 +299,39 @@ test('a save flushes extension-field input still sitting in the debounce', async
     expect(extChanges[0].fieldPath).toBe('Host.Name');
 });
 
+/** Types into the nth match of a selector, for inputs a collapsed sub-tab hides from `fill`. */
+async function typeIntoHiddenInputAt(page: Page, selector: string, nth: number, value: string): Promise<void> {
+    await page.evaluate(([sel, idx, val]) => {
+        const doc = (globalThis as unknown as { document: { querySelectorAll(s: string): unknown[] } }).document;
+        const el = doc.querySelectorAll(sel)[idx as number] as { value: string; dispatchEvent(e: unknown): void } | undefined;
+        if (!el) { throw new Error('no element ' + idx + ' for ' + sel); }
+        el.value = val as string;
+        el.dispatchEvent(new (globalThis as unknown as { Event: new (t: string, o: unknown) => unknown })
+            .Event('input', { bubbles: true }));
+    }, [selector, nth, value] as [string, number, string]);
+}
+
+test('two extension inputs sharing a field path queue independently', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+
+    // Two <Host> elements render two inputs with the same data-ext-field, so a queue key built
+    // only from the field path would let one keystroke silently drop the other.
+    const count = await page.locator('input[data-ext-field="Host.Name"]').count();
+    expect(count).toBeGreaterThan(1);
+
+    await typeIntoHiddenInputAt(page, 'input[data-ext-field="Host.Name"]', 0, 'first.example.com');
+    await typeIntoHiddenInputAt(page, 'input[data-ext-field="Host.Name"]', 1, 'second.example.com');
+    await postFlush(page, 'nonce-2');
+
+    const flushed = await page.evaluate(() =>
+        (globalThis as unknown as { __posted: { type: string; changes?: Record<string, unknown>[] }[] })
+            .__posted.filter(m => m.type === 'changesFlushed').pop());
+    const values = (flushed?.changes ?? []).filter(c => c.kind === 'extField').map(c => c.value);
+    expect(values).toContain('first.example.com');
+    expect(values).toContain('second.example.com');
+});
+
 test('a parse error discards extension-field input still sitting in the debounce', async ({ page }) => {
     await loadEditor(page);
     await postUpdate(page, manifestData);
@@ -313,7 +346,8 @@ test('a parse error discards extension-field input still sitting in the debounce
     expect(posted).toBe(0);
 });
 
-test('Tab stays inside the parse-error dialog while it is open', async ({ page }) => {    await loadEditor(page);
+test('Tab stays inside the parse-error dialog while it is open', async ({ page }) => {
+    await loadEditor(page);
     await postUpdate(page, manifestData);
     await postParseError(page, 'unclosed tag: Package');
 

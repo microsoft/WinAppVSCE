@@ -52,9 +52,9 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (148 tests)
+## Test inventory (149 tests)
 
-### `webview-state.spec.ts` — 13 tests
+### `webview-state.spec.ts` — 14 tests
 
 Renders the generated webview document directly in Chromium (with a stubbed `acquireVsCodeApi`), so
 UI-state behaviour can be verified without launching VS Code. Regression coverage for #192.
@@ -70,10 +70,11 @@ UI-state behaviour can be verified without launching VS Code. Regression coverag
 | 7 | a parse error discards input still sitting in the debounce | In-flight webview input is dropped when the XML stops parsing, so the extension is never asked to rewrite unparseable XML |
 | 8 | an external document change discards input still sitting in the debounce | Queued input typed against the pre-edit text is dropped as soon as the document changes, so it can't replay over the newer text-editor edit |
 | 9 | a save flushes extension-field input still sitting in the debounce | Extension-field edits share the common debounce queue, so Ctrl+S captures them like any other field |
-| 10 | a parse error discards extension-field input still sitting in the debounce | The same queue means extension-field edits are also dropped when the XML stops parsing |
-| 11 | Tab stays inside the parse-error dialog while it is open | Tab/Shift+Tab cycle between the dialog and its button instead of escaping the modal |
-| 12 | a saved tab that never becomes available leaves a valid fallback selected | Endless restore retries don't strand an invalid selection or override a manual tab change |
-| 13 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
+| 10 | two extension inputs sharing a field path queue independently | Two `<Host>` inputs bound to the same `data-ext-field` get distinct debounce keys, so neither keystroke silently replaces the other |
+| 11 | a parse error discards extension-field input still sitting in the debounce | The same queue means extension-field edits are also dropped when the XML stops parsing |
+| 12 | Tab stays inside the parse-error dialog while it is open | Tab/Shift+Tab cycle between the dialog and its button instead of escaping the modal |
+| 13 | a saved tab that never becomes available leaves a valid fallback selected | Endless restore retries don't strand an invalid selection or override a manual tab change |
+| 14 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
 
 ### `external-edit-state.spec.ts` — 4 tests
 

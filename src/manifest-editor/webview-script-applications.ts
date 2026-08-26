@@ -403,11 +403,14 @@ export function getApplicationsScript(): string {
 
                 // Bind editable extension field inputs. These go through the shared debounce queue
                 // so a save flushes them and a parse error discards them, same as every other field.
-                card.querySelectorAll('input[data-ext-field]').forEach(inp => {
+                card.querySelectorAll('input[data-ext-field]').forEach((inp, inpOrdinal) => {
                     const appIndex = parseInt(inp.getAttribute('data-app-index'), 10);
                     const extIndex = parseInt(inp.getAttribute('data-ext-index'), 10);
                     const fieldPath = inp.getAttribute('data-ext-field');
-                    const key = 'ext:' + appIndex + ':' + extIndex + ':' + fieldPath;
+                    // The ordinal keeps the key unique: an extension can render two inputs with the
+                    // same field path (e.g. two <Host> elements both bound to Host.Name), and
+                    // without it one input's queued edit would silently replace the other's.
+                    const key = 'ext:' + appIndex + ':' + extIndex + ':' + fieldPath + ':' + inpOrdinal;
                     const describe = () => ({
                         kind: 'extField',
                         appIndex: appIndex,
