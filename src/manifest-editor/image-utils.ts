@@ -234,7 +234,7 @@ export function resolveManifestImagePath(
         return { status: 'found', resolution: packageResolution };
     }
 
-    if (packageResolution && escapesPackage && inWorkspace && !path.isAbsolute(imagePath)) {
+    if (packageResolution && escapesPackage && inWorkspace) {
         return { status: 'found', resolution: packageResolution };
     }
 
@@ -242,17 +242,6 @@ export function resolveManifestImagePath(
     // rewrite the manifest to a qualified name the user never typed.
     if (packageResolution?.isExact) {
         return { status: 'external', sourcePath: packageResolution.resolvedPath };
-    }
-
-    // Pre-existing workspace-root fallback for references that escape the manifest folder. The
-    // candidate must land inside the root, since resolveMrtAsset returns literal files unprobed.
-    if (escapesPackage) {
-        for (const root of workspaceRoots) {
-            const candidate = resolveMrtAsset(root, imagePath, { probeRoots });
-            if (candidate && isPathWithin(root, candidate.resolvedPath)) {
-                return { status: 'found', resolution: candidate };
-            }
-        }
     }
 
     return { status: 'notFound' };

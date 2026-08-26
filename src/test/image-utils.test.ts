@@ -333,8 +333,7 @@ describe('checkAspectRatio with MRT qualifiers', () => {
 
 /**
  * Covers the branches that used to live inline in the webview `checkImagePath` switch: the
- * package hit, the `..\`-escaping workspace fallback, the external copy-to-Assets offer, and
- * paths that resolve nowhere.
+ * package hit, the `..\`-escaping in-workspace case, the external copy offer, and misses.
  */
 describe('resolveManifestImagePath', () => {
     let pathTmpDir: string;
@@ -431,14 +430,12 @@ describe('resolveManifestImagePath', () => {
         assert.equal(outcome.status, 'notFound');
     });
 
-    // resolveMrtAsset returns a literal file before it consults probeRoots, so the workspace
-    // fallback has to re-check containment itself or a ..\ chain reaches anywhere on disk.
-    it('does not let the workspace fallback resolve outside the workspace root', () => {
-        // Escapes `workspace` when resolved from the workspace root, but stays inside
-        // pathTmpDir, so the file genuinely exists — only containment can reject it.
-        const outcome = resolve('..\\outside\\External.png');
+    // A reference that escapes into a real file outside every workspace root must not be
+    // reported as found — it is only ever offered as a copy-into-Assets source.
+    it('does not report an escaping reference outside the workspace as found', () => {
+        const outcome = resolve('..\\..\\outside\\External.png');
 
-        assert.notEqual(outcome.status, 'found');
+        assert.equal(outcome.status, 'external');
     });
 });
 
