@@ -165,6 +165,24 @@ describe("WinUI XAML red-team 29 — resource navigation and scoping", function 
     assert.match(targetLine(defs[0]), /Color="Red"/, `sibling reference should land on Page.Resources, not inner dictionary; buffer=${buffer}; got line: ${targetLine(defs[0])}`);
   });
 
+  it("completion keeps an App.xaml key when an inaccessible page resource has the same name", async () => {
+    const buffer = page([
+      "<StackPanel>",
+      "  <Grid>",
+      "    <Grid.Resources>",
+      '      <SolidColorBrush x:Key="SmokeAccentBrush" Color="Orange" />',
+      "    </Grid.Resources>",
+      "  </Grid>",
+      '  <Border Background="{StaticResource SmokeAccent|}" />',
+      "</StackPanel>",
+    ].join("\n  "));
+    const items = await h.completionItemsAt(buffer);
+    assert.ok(
+      items.some((item) => item.label === "SmokeAccentBrush" && item.detail === "resource"),
+      `the distinct App.xaml SmokeAccentBrush must remain available outside the page-local resource scope; got ${JSON.stringify(items)}`
+    );
+  });
+
   it("ThemeResource F12 resolves an entry inside ResourceDictionary.ThemeDictionaries, not the Light dictionary key", async () => {
     const buffer = page([
       "<Page.Resources>",

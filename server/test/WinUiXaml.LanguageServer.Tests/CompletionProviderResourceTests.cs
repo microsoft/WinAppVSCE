@@ -188,12 +188,7 @@ public sealed class CompletionProviderResourceTests
                     new TextDocument("file:///C:/project/App.xaml", text),
                     offset,
                     typeSystem,
-                    appResourceKeys: new[]
-                    {
-                        "OuterBrush",
-                        "NestedDictionary",
-                        "NestedOnlyBrush",
-                    })
+                    appResourceKeys: System.Array.Empty<string>())
                 .Items.Select(item => item.Label)
                 .ToHashSet(StringComparer.Ordinal);
 
@@ -235,11 +230,48 @@ public sealed class CompletionProviderResourceTests
                     new TextDocument("file:///C:/project/App.xaml", text),
                     offset,
                     typeSystem,
-                    appResourceKeys: new[] { "GridOnlyBrush" })
+                    appResourceKeys: System.Array.Empty<string>())
                 .Items.Select(item => item.Label)
                 .ToHashSet(StringComparer.Ordinal);
 
             Assert.DoesNotContain("GridOnlyBrush", labels);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void InaccessibleDocumentResourceDoesNotSuppressDistinctAppResourceWithSameKey()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WinUiXaml.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var typeSystem = CreateTypeSystem(root);
+            var text = $$"""
+                <Page xmlns="{{Presentation}}" xmlns:x="{{Xaml}}">
+                  <Grid>
+                    <Grid.Resources>
+                      <SolidColorBrush x:Key="Shared" />
+                    </Grid.Resources>
+                  </Grid>
+                  <Border Background="{ThemeResource Sha|}" />
+                </Page>
+                """;
+            var offset = text.IndexOf('|');
+            text = text.Remove(offset, 1);
+
+            var labels = CompletionProvider.Provide(
+                    new TextDocument("file:///C:/project/Page.xaml", text),
+                    offset,
+                    typeSystem,
+                    appResourceKeys: new[] { "Shared" })
+                .Items.Select(item => item.Label)
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Contains("Shared", labels);
         }
         finally
         {

@@ -420,7 +420,8 @@ internal static partial class CompletionProvider
                     referenceElement,
                     key);
             if (visibleDeclaration is null &&
-                documentKeys.Contains(key))
+                documentKeys.Contains(key) &&
+                appResourceKeys?.Contains(key) != true)
             {
                 continue;
             }
