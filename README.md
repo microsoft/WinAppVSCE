@@ -212,6 +212,15 @@ The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, 
 
 The framework-dependent language server starts automatically when you open a `.xaml` file and requires an installed .NET 10 runtime. If a compatible runtime is not found, WinApp offers to open the official .NET download page or dismiss the prompt; it never installs a runtime automatically. Project-aware features use the MSBuild toolset from your WinUI build environment (Visual Studio, Visual Studio Build Tools, or a compatible SDK) and derive their capabilities from the WinUI SDK types resolved by that project; they do not substitute a bundled, potentially stale framework catalog. This includes completion and hover for public, concrete project types derived from the SDK's `MarkupExtension` base type. If the runtime, toolset, or required SDK metadata is unavailable, XAML gracefully degrades to **syntax highlighting only** and the rest of the extension is unaffected. Use **WinApp: Show Info** to check the server status and **WinApp: Restart Language Server** to restart it.
 
+The status bar reports project-loading progress for the active XAML document:
+
+| Status | Meaning |
+|--------|---------|
+| **WinApp: XAML IntelliSense loading** | Authoritative project metadata is loading; project-aware results are not ready yet. |
+| **WinApp: XAML project loading** | Framework IntelliSense is available while project symbols and diagnostics continue loading. |
+| **WinApp: XAML IntelliSense ready** | Project-aware XAML IntelliSense is ready. This confirmation hides after a few seconds. |
+| **WinApp: XAML IntelliSense unavailable** | Project IntelliSense failed to load. Select the status to open the **WinUI XAML** output for details, then use **WinApp: Show Info** for the appropriate restore, runtime, trust, or restart action. |
+
 XAML tooling supports these settings:
 
 | Setting | Default | Description |
