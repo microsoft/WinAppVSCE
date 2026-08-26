@@ -305,11 +305,15 @@ export function resolveManifestImagePath(
     }
 
     // Fall back to workspace-root resolution only for references that explicitly escape the
-    // manifest folder (for example ..\Assets\logo.png).
+    // manifest folder (for example ..\Assets\logo.png). The candidate must land inside the
+    // workspace root it was resolved against: resolveMrtAsset returns a literal file before it
+    // applies probeRoots, so without this a ..\..\..\ reference would resolve anywhere on disk.
     if (escapesPackage) {
         for (const root of workspaceRoots) {
             const candidate = resolveMrtAsset(root, imagePath, { probeRoots });
-            if (candidate) { return { status: 'found', resolution: candidate }; }
+            if (candidate && isPathWithin(root, candidate.resolvedPath)) {
+                return { status: 'found', resolution: candidate };
+            }
         }
     }
 
@@ -318,43 +322,45 @@ export function resolveManifestImagePath(
 
 /** Reads width/height from PNG or JPEG file headers without loading the full image. */
 export function getImageDimensions(filePath: string): { width: number; height: number } | null {
+    let fd: number | undefined;
     try {
-        const fd = fs.openSync(filePath, 'r');
+        fd = fs.openSync(filePath, 'r');
         const header = Buffer.alloc(32);
-        fs.readSync(fd, header, 0, 32, 0);
+        const headerBytes = fs.readSync(fd, header, 0, 32, 0);
 
         // PNG: bytes 0-7 are signature, IHDR chunk starts at byte 8, width at 16, height at 20
         if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) {
-            const width = header.readUInt32BE(16);
-            const height = header.readUInt32BE(20);
-            fs.closeSync(fd);
-            return { width, height };
+            // A truncated PNG would read zeroes out of the zero-filled buffer and report 0x0.
+            if (headerBytes < 24) { return null; }
+            return { width: header.readUInt32BE(16), height: header.readUInt32BE(20) };
         }
 
         // JPEG: scan for SOF0/SOF2 marker (0xFF 0xC0 or 0xFF 0xC2)
         if (header[0] === 0xFF && header[1] === 0xD8) {
             const buf = Buffer.alloc(65536);
-            fs.readSync(fd, buf, 0, buf.length, 0);
-            fs.closeSync(fd);
+            const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
             let offset = 2;
-            while (offset < buf.length - 9) {
-                if (buf[offset] !== 0xFF) break;
+            while (offset < bytes - 9) {
+                if (buf[offset] !== 0xFF) { break; }
                 const marker = buf[offset + 1];
                 if (marker === 0xC0 || marker === 0xC2) {
-                    const height = buf.readUInt16BE(offset + 5);
-                    const width = buf.readUInt16BE(offset + 7);
-                    return { width, height };
+                    return { width: buf.readUInt16BE(offset + 7), height: buf.readUInt16BE(offset + 5) };
                 }
                 const len = buf.readUInt16BE(offset + 2);
+                // A zero/negative segment length would spin here forever.
+                if (len < 2) { break; }
                 offset += 2 + len;
             }
             return null;
         }
 
-        fs.closeSync(fd);
         return null;
     } catch {
         return null;
+    } finally {
+        if (fd !== undefined) {
+            try { fs.closeSync(fd); } catch { /* already closed */ }
+        }
     }
 }
 

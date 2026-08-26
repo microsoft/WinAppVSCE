@@ -261,11 +261,15 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                     ? checkAspectRatio(message.field, dims.width, dims.height, resolution.qualifiers)
                                     : null;
                                 // The webview builds preview URIs relative to the manifest folder,
-                                // so only a path inside that folder can be previewed.
+                                // so anything outside it has to be sent as an absolute webview URI
+                                // (workspace folders are already in localResourceRoots).
                                 const previewRelative = path.relative(manifestDirPath, resolution.resolvedPath);
-                                const canPreview = previewRelative !== ''
+                                const insideManifestDir = previewRelative !== ''
                                     && !previewRelative.startsWith('..')
                                     && !path.isAbsolute(previewRelative);
+                                const previewPath = insideManifestDir
+                                    ? previewRelative.replace(/\\/g, '/')
+                                    : webviewPanel.webview.asWebviewUri(vscode.Uri.file(resolution.resolvedPath)).toString();
                                 webviewPanel.webview.postMessage({
                                     type: 'imagePathStatus',
                                     field: message.field,
@@ -278,7 +282,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                         // basename is the reference the user already typed, so the note
                                         // has to show the folder to say anything useful.
                                         : `Resolved via MRT to ${resolution.relativePath}`,
-                                    previewPath: canPreview && !resolution.isExact ? previewRelative.replace(/\\/g, '/') : undefined,
+                                    previewPath: resolution.isExact ? undefined : previewPath,
                                 });
                             };
 

@@ -48,6 +48,13 @@ function prepareUserDataDir(): void {
     );
 }
 
+/** Removes the throwaway profile. Call only after VS Code has exited. */
+export function cleanupUserDataDir(): void {
+    try {
+        fs.rmSync(USER_DATA_DIR, { recursive: true, force: true });
+    } catch { /* best-effort — a locked file just leaves a temp dir behind */ }
+}
+
 // ──────────────────────────────────────────────────────
 // Launch helpers
 // ──────────────────────────────────────────────────────

@@ -23,6 +23,8 @@ import {
     hasTargetSizeQualifier,
     resolveMrtAsset,
     resolveManifestImagePath,
+    isPathWithin,
+    getImageDimensions,
     checkAspectRatio,
 } from '../manifest-editor/image-utils';
 
@@ -433,5 +435,128 @@ describe('resolveManifestImagePath', () => {
         const outcome = resolveManifestImagePath(manifestDir, '..\\Shared\\SharedLogo.png', []);
 
         assert.equal(outcome.status, 'notFound');
+    });
+
+    // resolveMrtAsset returns a literal file before it consults probeRoots, so the workspace
+    // fallback has to re-check containment itself or a ..\ chain reaches anywhere on disk.
+    it('does not let the workspace fallback resolve outside the workspace root', () => {
+        // Escapes `workspace` when resolved from the workspace root, but stays inside
+        // pathTmpDir, so the file genuinely exists — only containment can reject it.
+        const outcome = resolve('..\\outside\\External.png');
+
+        assert.notEqual(outcome.status, 'found');
+    });
+});
+
+// ─── Path containment ───────────────────────────────────
+
+/**
+ * `isPathWithin` gates every directory enumeration MRT probing performs, so its failure
+ * modes are security-relevant rather than cosmetic.
+ */
+describe('isPathWithin', () => {
+    const root = path.join('C:', 'pkg');
+
+    it('accepts the root itself and its descendants', () => {
+        assert.equal(isPathWithin(root, root), true);
+        assert.equal(isPathWithin(root, path.join(root, 'Assets')), true);
+        assert.equal(isPathWithin(root, path.join(root, 'Assets', 'scale-200', 'Logo.png')), true);
+    });
+
+    it('rejects a sibling whose name merely starts with the root', () => {
+        assert.equal(isPathWithin(root, path.join('C:', 'pkg-evil', 'Logo.png')), false);
+        assert.equal(isPathWithin(root, path.join('C:', 'pkgevil')), false);
+    });
+
+    it('rejects parents and ..-traversal back out of the root', () => {
+        assert.equal(isPathWithin(root, path.join('C:', 'Windows', 'System32')), false);
+        assert.equal(isPathWithin(root, path.join(root, '..', 'other', 'Logo.png')), false);
+        assert.equal(isPathWithin(root, path.join(root, 'Assets', '..', '..', 'Logo.png')), false);
+    });
+
+    it('ignores a trailing separator on the root', () => {
+        assert.equal(isPathWithin(root + path.sep, path.join(root, 'Assets')), true);
+    });
+
+    it('rejects an empty root rather than matching everything', () => {
+        assert.equal(isPathWithin('', path.join(root, 'Logo.png')), false);
+    });
+});
+
+// ─── Image header parsing ───────────────────────────────
+
+describe('getImageDimensions', () => {
+    let dimTmpDir: string;
+
+    const writeBytes = (name: string, bytes: number[]): string => {
+        const full = path.join(dimTmpDir, name);
+        fs.writeFileSync(full, Buffer.from(bytes));
+        return full;
+    };
+
+    /** Minimal PNG: 8-byte signature, IHDR length/type, then width and height. */
+    const png = (width: number, height: number): number[] => {
+        const buf = Buffer.alloc(32);
+        Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).copy(buf, 0);
+        buf.writeUInt32BE(13, 8);
+        buf.write('IHDR', 12, 'ascii');
+        buf.writeUInt32BE(width, 16);
+        buf.writeUInt32BE(height, 20);
+        return [...buf];
+    };
+
+    /** Minimal JPEG: SOI followed directly by an SOF0 frame header. */
+    const jpeg = (width: number, height: number): number[] => {
+        const buf = Buffer.alloc(24);
+        buf.writeUInt16BE(0xFFD8, 0);
+        buf.writeUInt16BE(0xFFC0, 2);
+        buf.writeUInt16BE(17, 4);
+        buf.writeUInt8(8, 6);
+        buf.writeUInt16BE(height, 7);
+        buf.writeUInt16BE(width, 9);
+        return [...buf];
+    };
+
+    before(() => {
+        dimTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-imgdim-'));
+    });
+
+    after(() => {
+        fs.rmSync(dimTmpDir, { recursive: true, force: true });
+    });
+
+    it('reads PNG dimensions', () => {
+        assert.deepEqual(getImageDimensions(writeBytes('logo.png', png(310, 150))), { width: 310, height: 150 });
+    });
+
+    it('reads JPEG SOF0 dimensions', () => {
+        assert.deepEqual(getImageDimensions(writeBytes('logo.jpg', jpeg(600, 400))), { width: 600, height: 400 });
+    });
+
+    it('reads a JPEG SOF2 (progressive) frame header', () => {
+        const bytes = jpeg(120, 90);
+        bytes[3] = 0xC2;
+
+        assert.deepEqual(getImageDimensions(writeBytes('progressive.jpg', bytes)), { width: 120, height: 90 });
+    });
+
+    it('returns null for a truncated PNG instead of reporting 0x0', () => {
+        assert.equal(getImageDimensions(writeBytes('cut.png', png(64, 64).slice(0, 16))), null);
+    });
+
+    it('returns null for a JPEG whose segment length would never advance', () => {
+        // A zero-length segment used to spin the marker walk forever.
+        const bytes = [...Buffer.alloc(24)];
+        bytes[0] = 0xFF; bytes[1] = 0xD8;
+        bytes[2] = 0xFF; bytes[3] = 0xE0;
+        bytes[4] = 0x00; bytes[5] = 0x00;
+
+        assert.equal(getImageDimensions(writeBytes('stuck.jpg', bytes)), null);
+    });
+
+    it('returns null for an unsupported format, an empty file, and a missing file', () => {
+        assert.equal(getImageDimensions(writeBytes('anim.gif', [...Buffer.from('GIF89a'), 0, 0, 0, 0])), null);
+        assert.equal(getImageDimensions(writeBytes('empty.png', [])), null);
+        assert.equal(getImageDimensions(path.join(dimTmpDir, 'missing.png')), null);
     });
 });

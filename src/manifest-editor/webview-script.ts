@@ -651,18 +651,23 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
 
         function updateLogoPreview(imgEl, logoPath, captionEl) {
             if (logoPath && manifestDirUri && imgEl) {
+                // An MRT variant outside the manifest folder arrives as a ready-made
+                // webview URI; anything else is relative to the manifest folder.
+                const isAbsoluteUri = logoPath.indexOf('://') !== -1;
                 imgEl.classList.remove('loaded');
                 imgEl.removeAttribute('alt');
                 if (captionEl) { captionEl.textContent = ''; }
                 imgEl.onload = function() {
                     imgEl.classList.add('loaded');
                     if (captionEl) {
-                        const parts = logoPath.replace(/\\\\/g, '/').split('/');
-                        captionEl.textContent = parts[parts.length - 1];
+                        const parts = logoPath.split('?')[0].replace(/\\\\/g, '/').split('/');
+                        captionEl.textContent = decodeURIComponent(parts[parts.length - 1]);
                     }
                 };
                 imgEl.onerror = function() { imgEl.classList.remove('loaded'); if (captionEl) captionEl.textContent = ''; };
-                imgEl.src = manifestDirUri + '/' + encodeURI(logoPath.replace(/\\\\/g, '/')) + '?t=' + Date.now();
+                imgEl.src = isAbsoluteUri
+                    ? logoPath + (logoPath.indexOf('?') !== -1 ? '&' : '?') + 't=' + Date.now()
+                    : manifestDirUri + '/' + encodeURI(logoPath.replace(/\\\\/g, '/')) + '?t=' + Date.now();
             } else if (imgEl) {
                 imgEl.classList.remove('loaded');
                 imgEl.removeAttribute('alt');
