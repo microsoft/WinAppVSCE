@@ -23,7 +23,21 @@ internal sealed partial class XamlLanguageServer
 
         int offset = doc.OffsetAt(p.Position);
         var appKeys = GetAppResourceKeys(context);
-        return CompletionProvider.Provide(doc, offset, context.TypeSystem, context.Resolution.ClassSymbol, appKeys);
+        var completions = CompletionProvider.Provide(
+            doc,
+            offset,
+            context.TypeSystem,
+            context.Resolution.ClassSymbol,
+            appKeys);
+        return ApplyProjectStageToCompletionList(completions, context.Stage);
+    }
+
+    internal static CompletionList ApplyProjectStageToCompletionList(
+        CompletionList completions,
+        XamlProjectStage stage)
+    {
+        completions.IsIncomplete |= stage != XamlProjectStage.Full;
+        return completions;
     }
 
     internal enum XamlProjectStage

@@ -1,8 +1,17 @@
-export type XamlDiagnosticsLevel = "off" | "warning" | "error";
+export type XamlDiagnosticsLevel = "off" | "all" | "errorsOnly";
 export type XamlDiagnosticsLevelSetting =
   | XamlDiagnosticsLevel
-  | "all"
-  | "errorsOnly";
+  | "warning"
+  | "error";
+
+export interface DiagnosticsLevelInteractionHost {
+  log(message: string): void;
+  showWarningMessage(
+    message: string,
+    action: "Open Settings"
+  ): PromiseLike<string | undefined>;
+  openSettings(): PromiseLike<unknown>;
+}
 
 export interface XamlLanguageServerConfiguration {
   enabled: boolean;
@@ -109,9 +118,9 @@ export function normalizeDiagnosticsLevel(value: unknown): XamlDiagnosticsLevel 
     return "off";
   }
   if (value === "error" || value === "errorsOnly") {
-    return "error";
+    return "errorsOnly";
   }
-  return "warning";
+  return "all";
 }
 
 export function getDiagnosticsLevelValidationMessage(
@@ -130,6 +139,43 @@ export function getDiagnosticsLevelValidationMessage(
   return `Invalid winapp.xaml.diagnostics.level value '${String(
     value
   )}'. Using 'all'; choose all, errorsOnly, or off.`;
+}
+
+export class DiagnosticsLevelInteraction {
+  private lastInvalidValue: string | undefined;
+
+  constructor(private readonly host: DiagnosticsLevelInteractionHost) {}
+
+  resolve(value: unknown): XamlDiagnosticsLevel {
+    const message = getDiagnosticsLevelValidationMessage(value);
+    if (!message) {
+      this.lastInvalidValue = undefined;
+      return normalizeDiagnosticsLevel(value);
+    }
+
+    this.host.log(message);
+    const key = String(value);
+    if (this.lastInvalidValue !== key) {
+      this.lastInvalidValue = key;
+      void Promise.resolve(
+        this.host.showWarningMessage(message, "Open Settings")
+      ).then((choice) => {
+        if (choice === "Open Settings") {
+          return this.host.openSettings();
+        }
+        return undefined;
+      });
+    }
+
+    return "all";
+  }
+
+  async transmit(
+    value: unknown,
+    send: (level: XamlDiagnosticsLevel) => PromiseLike<unknown>
+  ): Promise<void> {
+    await send(this.resolve(value));
+  }
 }
 
 export function readXamlLanguageServerConfiguration(

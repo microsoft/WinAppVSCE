@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   DOTNET_REQUIRED_STATUS,
+  DiagnosticsLevelInteraction,
   getDiagnosticsLevelValidationMessage,
   getXamlStatus,
   getXamlStatusEffect,
@@ -69,15 +70,15 @@ test("maps every XAML status action to its recovery effect", () => {
 
 test("normalizes supported XAML diagnostic levels", () => {
   assert.equal(normalizeDiagnosticsLevel("off"), "off");
-  assert.equal(normalizeDiagnosticsLevel("all"), "warning");
-  assert.equal(normalizeDiagnosticsLevel("errorsOnly"), "error");
-  assert.equal(normalizeDiagnosticsLevel("warning"), "warning");
-  assert.equal(normalizeDiagnosticsLevel("error"), "error");
+  assert.equal(normalizeDiagnosticsLevel("all"), "all");
+  assert.equal(normalizeDiagnosticsLevel("errorsOnly"), "errorsOnly");
+  assert.equal(normalizeDiagnosticsLevel("warning"), "all");
+  assert.equal(normalizeDiagnosticsLevel("error"), "errorsOnly");
 });
 
-test("defaults unknown XAML diagnostic levels to warning", () => {
-  assert.equal(normalizeDiagnosticsLevel("unexpected"), "warning");
-  assert.equal(normalizeDiagnosticsLevel(""), "warning");
+test("defaults unknown XAML diagnostic levels to all", () => {
+  assert.equal(normalizeDiagnosticsLevel("unexpected"), "all");
+  assert.equal(normalizeDiagnosticsLevel(""), "all");
 });
 
 test("validates diagnostic aliases and explains invalid values", () => {
@@ -102,8 +103,53 @@ test("reads startup enablement and diagnostics initialization options together",
 
   assert.deepEqual(configuration, {
     enabled: false,
-    initializationOptions: { diagnosticsLevel: "error" },
+    initializationOptions: { diagnosticsLevel: "errorsOnly" },
   });
+});
+
+test("transmits canonical diagnostic levels through mocked extension interactions", async () => {
+  const sent: string[] = [];
+  const interaction = new DiagnosticsLevelInteraction({
+    log: () => {},
+    showWarningMessage: async () => undefined,
+    openSettings: async () => {},
+  });
+
+  await interaction.transmit("warning", async (level) => sent.push(level));
+  await interaction.transmit("error", async (level) => sent.push(level));
+
+  assert.deepEqual(sent, ["all", "errorsOnly"]);
+});
+
+test("warns once for an invalid value, falls back, and opens settings", async () => {
+  const logs: string[] = [];
+  const warnings: string[] = [];
+  const opened: string[] = [];
+  const sent: string[] = [];
+  const interaction = new DiagnosticsLevelInteraction({
+    log: (message) => logs.push(message),
+    showWarningMessage: async (message, action) => {
+      warnings.push(`${message}|${action}`);
+      return "Open Settings";
+    },
+    openSettings: async () => {
+      opened.push("winapp.xaml.diagnostics.level");
+    },
+  });
+
+  await interaction.transmit("syntax", async (level) => sent.push(level));
+  await interaction.transmit("syntax", async (level) => sent.push(level));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(sent, ["all", "all"]);
+  assert.equal(logs.length, 2);
+  assert.equal(warnings.length, 1);
+  assert.deepEqual(opened, ["winapp.xaml.diagnostics.level"]);
+
+  interaction.resolve("all");
+  interaction.resolve("syntax");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(warnings.length, 2, "a valid value resets warning deduplication");
 });
 
 test("restarts on configuration changes only for an active or needed server", () => {

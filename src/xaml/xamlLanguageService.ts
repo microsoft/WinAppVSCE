@@ -44,7 +44,7 @@ import {
 } from "./projectContextStatus";
 import {
   normalizeDiagnosticsLevel,
-  getDiagnosticsLevelValidationMessage,
+  DiagnosticsLevelInteraction,
   DOTNET_REQUIRED_STATUS,
   getXamlStatus,
   getXamlStatusEffect,
@@ -70,7 +70,16 @@ const lifecycle = new ServerLifecycle();
 let lastDegradedCause: DegradedCause | undefined;
 const csharpDevKitNotificationGate = new CsharpDevKitNotificationGate();
 const projectRestoreNotificationGate = new ProjectRestoreNotificationGate();
-let lastInvalidDiagnosticsLevel: string | undefined;
+const diagnosticsLevelInteraction = new DiagnosticsLevelInteraction({
+  log,
+  showWarningMessage: (message, action) =>
+    vscode.window.showWarningMessage(message, action),
+  openSettings: () =>
+    vscode.commands.executeCommand(
+      "workbench.action.openSettings",
+      "winapp.xaml.diagnostics.level"
+    ),
+});
 
 // The integration harness cannot read OutputChannel contents.
 function log(message: string): void {
@@ -114,17 +123,21 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
         const configuredLevel = vscode.workspace
           .getConfiguration("winapp.xaml")
           .get<unknown>("diagnostics.level", "all");
-        reportInvalidDiagnosticsLevel(configuredLevel);
-        const diagnosticsLevel = normalizeDiagnosticsLevel(configuredLevel);
         if (!client?.isRunning()) {
+          diagnosticsLevelInteraction.resolve(configuredLevel);
           log("XAML diagnostics level changed — it will apply when the language server is running.");
           return;
         }
 
-        log(`XAML diagnostics level changed to '${diagnosticsLevel}'.`);
-        return client.sendNotification("workspace/didChangeConfiguration", {
-          settings: { diagnosticsLevel },
-        });
+        return diagnosticsLevelInteraction.transmit(
+          configuredLevel,
+          (diagnosticsLevel) => {
+            log(`XAML diagnostics level changed to '${diagnosticsLevel}'.`);
+            return client!.sendNotification("workspace/didChangeConfiguration", {
+              settings: { diagnosticsLevel },
+            });
+          }
+        );
       }
     }),
     // Start semantic processing only after the workspace becomes trusted.
@@ -295,7 +308,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     "diagnostics.level",
     "all"
   );
-  reportInvalidDiagnosticsLevel(configuredDiagnosticsLevel);
+  diagnosticsLevelInteraction.resolve(configuredDiagnosticsLevel);
   const serverConfiguration = readXamlLanguageServerConfiguration(
     (section, defaultValue) => xamlConfiguration.get(section, defaultValue)
   );
@@ -446,30 +459,6 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
       context
     );
   }
-}
-
-function reportInvalidDiagnosticsLevel(value: unknown): void {
-  const message = getDiagnosticsLevelValidationMessage(value);
-  if (!message) {
-    lastInvalidDiagnosticsLevel = undefined;
-    return;
-  }
-
-  log(message);
-  const key = String(value);
-  if (lastInvalidDiagnosticsLevel === key) {
-    return;
-  }
-  lastInvalidDiagnosticsLevel = key;
-  void vscode.window.showWarningMessage(message, "Open Settings").then((choice) => {
-    if (choice === "Open Settings") {
-      return vscode.commands.executeCommand(
-        "workbench.action.openSettings",
-        "winapp.xaml.diagnostics.level"
-      );
-    }
-    return undefined;
-  });
 }
 
 function notifyProjectRestoreRequired(projectPath: string | undefined): void {
