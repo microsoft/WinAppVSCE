@@ -540,37 +540,6 @@ internal static partial class CompletionProvider
         SortText = sortGroup + key,
     };
 
-    /// <summary>Gathers every XAML key directive value declared anywhere in <paramref name="document"/>.</summary>
-    public static List<string> CollectResourceKeys(XamlDocument document)
-    {
-        var keys = new HashSet<string>(StringComparer.Ordinal);
-        if (document.Root is { } root)
-        {
-            CollectAllResourceKeysCore(root, keys);
-        }
-
-        return keys.ToList();
-    }
-
-    private static void CollectAllResourceKeysCore(
-        XamlElement element,
-        ISet<string> into)
-    {
-        if (XamlSemanticFacts.GetKeyAttribute(element)?.Value is { } value &&
-            value.Text.Length > 0)
-        {
-            into.Add(value.Text);
-        }
-
-        foreach (var child in element.Content)
-        {
-            if (child is XamlElement childElement)
-            {
-                CollectAllResourceKeysCore(childElement, into);
-            }
-        }
-    }
-
     private static XamlElement? NearestElement(XamlNode? node)
     {
         for (var current = node; current is not null; current = current.Parent)

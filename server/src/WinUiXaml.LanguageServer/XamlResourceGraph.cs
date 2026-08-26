@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using WinUiXaml.Workspace;
 using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
@@ -35,9 +36,9 @@ internal sealed class XamlResourceGraph
         string projectRoot,
         Func<string, string?> authorizePath,
         Action<string> log,
-        Func<XamlElement, bool> isResourceDictionary,
         Func<string, string?>? getOpenDocumentText = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        XamlTypeSystem? typeSystem = null)
     {
         var result = new List<ResourceFile>();
         var pending = new Stack<(string Path, int Depth)>();
@@ -73,10 +74,21 @@ internal sealed class XamlResourceGraph
                 continue;
             }
 
-            totalBytes += file.Value.ByteCount;
-            result.Add(file.Value);
+            var resourceFile = file.Value;
+            if (resourceFile.Parsed.Root is { } root)
+            {
+                resourceFile = resourceFile with
+                {
+                    Keys = XamlSemanticFacts.CreateResourceIndex(root, typeSystem)
+                        .GetVisibleKeys(root)
+                        .ToArray(),
+                };
+            }
+
+            totalBytes += resourceFile.ByteCount;
+            result.Add(resourceFile);
             // A ResourceDictionary resolves duplicate keys from its local entries first, then from merged dictionaries in reverse declaration order. Pushing sources forward onto a stack visits the last declared dictionary first and preserves that runtime lookup precedence.
-            foreach (var source in CollectSources(file.Value.Parsed, isResourceDictionary))
+            foreach (var source in CollectSources(resourceFile.Parsed, typeSystem))
             {
                 var resolved = ResolveSourcePath(path, projectRoot, source);
                 if (resolved is not null)
@@ -182,24 +194,23 @@ internal sealed class XamlResourceGraph
             path,
             text,
             parsed,
-            CompletionProvider.CollectResourceKeys(parsed).ToArray(),
+            System.Array.Empty<string>(),
             byteCount);
     }
 
     private static IEnumerable<string> CollectSources(
         XamlDocument document,
-        Func<XamlElement, bool> isResourceDictionary)
+        XamlTypeSystem? typeSystem)
     {
         if (document.Root is null)
         {
             yield break;
         }
 
-        foreach (var node in document.Root.DescendantNodesAndSelf())
+        var index = XamlSemanticFacts.CreateResourceIndex(document.Root, typeSystem);
+        foreach (var dictionary in index.GetVisibleSourceDictionaries(document.Root))
         {
-            if (node is XamlElement dictionary &&
-                isResourceDictionary(dictionary) &&
-                dictionary.GetAttribute("Source")?.Value is
+            if (dictionary.GetAttribute("Source")?.Value is
                 {
                     MarkupExtension: null,
                     Text.Length: > 0,

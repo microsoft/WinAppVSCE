@@ -183,6 +183,42 @@ describe("WinUI XAML red-team 29 — resource navigation and scoping", function 
     );
   });
 
+  it("completion exports root-visible App.xaml keys but not keyed-nested or child-scope keys", async () => {
+    const items = await h.completionItemsAt(
+      page('<Border Background="{StaticResource |}" />')
+    );
+    const resources = items
+      .filter((item) => item.detail === "resource")
+      .map((item) => item.label);
+    assert.ok(resources.includes("SmokeAccentBrush"), `root-visible App key must be global; got ${JSON.stringify(resources)}`);
+    assert.ok(resources.includes("AppNestedDictionary"), `keyed nested dictionary itself must remain root-visible; got ${JSON.stringify(resources)}`);
+    assert.ok(resources.includes("AppScopedOwner"), `keyed root entry must remain root-visible; got ${JSON.stringify(resources)}`);
+    assert.ok(!resources.includes("AppNestedOnlyBrush"), `resource inside keyed nested dictionary must not leak globally; got ${JSON.stringify(resources)}`);
+    assert.ok(!resources.includes("AppChildOnlyBrush"), `resource inside child element scope must not leak globally; got ${JSON.stringify(resources)}`);
+  });
+
+  it("diagnostics use root-visible App.xaml keys but ignore nested-scope keys", async () => {
+    const buffer = page([
+      "<StackPanel>",
+      '  <Border Background="{StaticResource SmokeAccentBrus}" />',
+      '  <Border Background="{StaticResource AppNestedOnlyBrus}" />',
+      "</StackPanel>",
+    ].join("\n  "));
+    const diagnostics = await h.diagnosticsFor(
+      buffer,
+      (items) => items.some((item) => item.message.includes("SmokeAccentBrus")),
+      12000
+    );
+    assert.ok(
+      diagnostics.some((item) => item.message.includes("SmokeAccentBrus")),
+      `root-visible App key should make a close typo diagnosable; got ${JSON.stringify(diagnostics)}`
+    );
+    assert.ok(
+      !diagnostics.some((item) => item.message.includes("AppNestedOnlyBrus")),
+      `nested-scope App key must not make a close typo diagnosable cross-document; got ${JSON.stringify(diagnostics)}`
+    );
+  });
+
   it("ThemeResource F12 resolves an entry inside ResourceDictionary.ThemeDictionaries, not the Light dictionary key", async () => {
     const buffer = page([
       "<Page.Resources>",

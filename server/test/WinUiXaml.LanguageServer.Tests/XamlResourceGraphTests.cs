@@ -55,8 +55,7 @@ public class XamlResourceGraphTests
                 path => Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase)
                     ? Path.GetFullPath(path)
                     : null,
-                _ => { },
-                IsResourceDictionary);
+                _ => { });
 
             Assert.Equal(2, files.Count);
             Assert.Contains(files, file => file.Keys.Contains("AppKey"));
@@ -87,6 +86,83 @@ public class XamlResourceGraphTests
                 files.Select(file => Path.GetFileName(file.Path)));
         }
 
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReadReachable_ExportsOnlyKeysVisibleFromEachFileRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var app = Path.Combine(root, "App.xaml");
+            File.WriteAllText(
+                app,
+                """
+                <ResourceDictionary
+                    xmlns="using:Microsoft.UI.Xaml"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                  <ResourceDictionary.MergedDictionaries>
+                    <ResourceDictionary Source="Merged.xaml" />
+                  </ResourceDictionary.MergedDictionaries>
+                  <SolidColorBrush x:Key="RootVisible" />
+                  <ResourceDictionary x:Key="NestedDictionary">
+                    <ResourceDictionary.MergedDictionaries>
+                      <ResourceDictionary Source="NestedMerged.xaml" />
+                    </ResourceDictionary.MergedDictionaries>
+                    <SolidColorBrush x:Key="NestedOnly" />
+                  </ResourceDictionary>
+                  <Grid>
+                    <Grid.Resources>
+                      <ResourceDictionary>
+                        <ResourceDictionary.MergedDictionaries>
+                          <ResourceDictionary Source="ChildMerged.xaml" />
+                        </ResourceDictionary.MergedDictionaries>
+                        <SolidColorBrush x:Key="ChildOnly" />
+                      </ResourceDictionary>
+                    </Grid.Resources>
+                  </Grid>
+                  <ResourceDictionary.ThemeDictionaries>
+                    <ResourceDictionary x:Key="Light">
+                      <ResourceDictionary.MergedDictionaries>
+                        <ResourceDictionary Source="ThemeMerged.xaml" />
+                      </ResourceDictionary.MergedDictionaries>
+                      <SolidColorBrush x:Key="ThemeVisible" />
+                    </ResourceDictionary>
+                  </ResourceDictionary.ThemeDictionaries>
+                </ResourceDictionary>
+                """);
+            File.WriteAllText(Path.Combine(root, "Merged.xaml"), Dictionary("MergedVisible"));
+            File.WriteAllText(Path.Combine(root, "ThemeMerged.xaml"), Dictionary("ThemeMergedVisible"));
+            File.WriteAllText(Path.Combine(root, "NestedMerged.xaml"), Dictionary("NestedMergedOnly"));
+            File.WriteAllText(Path.Combine(root, "ChildMerged.xaml"), Dictionary("ChildMergedOnly"));
+
+            var files = Read(new XamlResourceGraph(), app, root);
+            var appFile = Assert.Single(
+                files,
+                file => string.Equals(file.Path, app, StringComparison.OrdinalIgnoreCase));
+            var mergedFile = Assert.Single(
+                files,
+                file => string.Equals(
+                    Path.GetFileName(file.Path),
+                    "Merged.xaml",
+                    StringComparison.OrdinalIgnoreCase));
+
+            Assert.Contains("RootVisible", appFile.Keys);
+            Assert.Contains("NestedDictionary", appFile.Keys);
+            Assert.Contains("ThemeVisible", appFile.Keys);
+            Assert.DoesNotContain("NestedOnly", appFile.Keys);
+            Assert.DoesNotContain("ChildOnly", appFile.Keys);
+            Assert.DoesNotContain("Light", appFile.Keys);
+            Assert.Contains("MergedVisible", mergedFile.Keys);
+            Assert.Contains(files, file => file.Keys.Contains("ThemeMergedVisible"));
+            Assert.DoesNotContain(files, file => file.Keys.Contains("NestedMergedOnly"));
+            Assert.DoesNotContain(files, file => file.Keys.Contains("ChildMergedOnly"));
+        }
         finally
         {
             Directory.Delete(root, recursive: true);
@@ -132,7 +208,6 @@ public class XamlResourceGraphTests
                 root,
                 path => Path.GetFullPath(path),
                 _ => { },
-                IsResourceDictionary,
                 path => string.Equals(path, app, StringComparison.OrdinalIgnoreCase)
                     ? Dictionary("OpenKey")
                     : null);
@@ -183,11 +258,7 @@ public class XamlResourceGraphTests
                 root,
                 path => File.Exists(path) ? Path.GetFullPath(path) : null,
                 _ => { },
-                element => XamlSemanticFacts.IsElement(
-                    element,
-                    typeSystem.Capabilities.ResourceDictionary,
-                    typeSystem,
-                    allowDerived: true));
+                typeSystem: typeSystem);
 
             Assert.Equal(2, files.Count);
             Assert.Contains(files, file => file.Keys.Contains("IncludedKey"));
@@ -225,8 +296,7 @@ public class XamlResourceGraphTests
                 app,
                 root,
                 authorize,
-                _ => { },
-                _ => false));
+                _ => { }));
 
             var typeSystem = CreateResourceDictionaryTypeSystem();
             var reclassified = graph.ReadReachable(
@@ -234,11 +304,7 @@ public class XamlResourceGraphTests
                 root,
                 authorize,
                 _ => { },
-                element => XamlSemanticFacts.IsElement(
-                    element,
-                    typeSystem.Capabilities.ResourceDictionary,
-                    typeSystem,
-                    allowDerived: true));
+                typeSystem: typeSystem);
 
             Assert.Equal(2, reclassified.Count);
             Assert.Contains(
@@ -286,7 +352,6 @@ public class XamlResourceGraphTests
                 @"C:\project",
                 path => path,
                 _ => { },
-                IsResourceDictionary,
                 cancellationToken: cancellation.Token));
     }
 
@@ -299,7 +364,6 @@ public class XamlResourceGraphTests
             @"C:\project",
             path => path,
             logged.Add,
-            IsResourceDictionary,
             _ => new string(' ', checked((int)(XamlResourceGraph.MaxFileBytes / 2 + 1))));
 
         Assert.Empty(files);
@@ -354,11 +418,7 @@ public class XamlResourceGraphTests
                     ? full
                     : null;
             },
-            _ => { },
-            IsResourceDictionary);
-
-    private static bool IsResourceDictionary(WinUiXaml.Xaml.XamlElement element) =>
-        element.Name is { LocalName: "ResourceDictionary", IsDotted: false };
+            _ => { });
 
     private static XamlTypeSystem CreateResourceDictionaryTypeSystem()
     {

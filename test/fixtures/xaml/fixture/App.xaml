@@ -15,6 +15,14 @@
                     <SolidColorBrush x:Key="SmokeAccentBrush" Color="#FF3B82F6" />
                 </ResourceDictionary>
             </ResourceDictionary.MergedDictionaries>
+            <ResourceDictionary x:Key="AppNestedDictionary">
+                <SolidColorBrush x:Key="AppNestedOnlyBrush" Color="Red" />
+            </ResourceDictionary>
+            <Grid x:Key="AppScopedOwner">
+                <Grid.Resources>
+                    <SolidColorBrush x:Key="AppChildOnlyBrush" Color="Blue" />
+                </Grid.Resources>
+            </Grid>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

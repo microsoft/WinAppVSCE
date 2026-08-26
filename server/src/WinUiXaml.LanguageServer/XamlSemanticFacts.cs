@@ -250,6 +250,7 @@ internal static class XamlSemanticFacts
         private readonly Dictionary<XamlElement, Dictionary<string, XamlElement>> _declarations = new();
         private readonly string[] _keys;
         internal int LookupCount { get; private set; }
+        private readonly Dictionary<XamlElement, IReadOnlyList<XamlElement>> _sourceDictionaries = new();
 
         internal ResourceScopeIndex(XamlElement root, XamlTypeSystem? typeSystem)
         {
@@ -259,7 +260,9 @@ internal static class XamlSemanticFacts
                 if (IsResourceDictionaryScope(element, typeSystem) ||
                     IsResourceOwnerPropertyScope(element, typeSystem))
                 {
-                    _declarations[element] = BuildDeclarations(element);
+                    var (declarations, sourceDictionaries) = BuildDeclarations(element);
+                    _declarations[element] = declarations;
+                    _sourceDictionaries[element] = sourceDictionaries;
                 }
             }
 
@@ -381,6 +384,53 @@ internal static class XamlSemanticFacts
             return false;
         }
 
+        internal IReadOnlyCollection<string> GetVisibleKeys(XamlElement reference) =>
+            Keys.Where(key =>
+                    FindDeclaration(
+                        reference,
+                        key,
+                        int.MaxValue,
+                        allowForwardReference: true) is not null)
+                .ToArray();
+
+        internal IReadOnlyCollection<XamlElement> GetVisibleSourceDictionaries(
+            XamlElement reference)
+        {
+            var result = new List<XamlElement>();
+            var seen = new HashSet<XamlElement>();
+            for (XamlElement? scope = reference; scope is not null; scope = ParentElement(scope))
+            {
+                AddSources(scope, result, seen);
+                foreach (var child in scope.Content.OfType<XamlElement>())
+                {
+                    if (IsResourceOwnerPropertyScope(child, _typeSystem) &&
+                        !IsAncestorOf(child, reference))
+                    {
+                        AddSources(child, result, seen);
+                    }
+                }
+            }
+
+            return result.ToArray();
+        }
+
+        private void AddSources(
+            XamlElement scope,
+            ICollection<XamlElement> result,
+            ISet<XamlElement> seen)
+        {
+            if (_sourceDictionaries.TryGetValue(scope, out var sources))
+            {
+                foreach (var source in sources)
+                {
+                    if (seen.Add(source))
+                    {
+                        result.Add(source);
+                    }
+                }
+            }
+        }
+
         private bool TryFind(
             XamlElement scope,
             string key,
@@ -399,11 +449,19 @@ internal static class XamlSemanticFacts
             return false;
         }
 
-        private Dictionary<string, XamlElement> BuildDeclarations(XamlElement container)
+        private (
+            Dictionary<string, XamlElement> Declarations,
+            IReadOnlyList<XamlElement> SourceDictionaries) BuildDeclarations(
+                XamlElement container)
         {
-            var result = new Dictionary<string, XamlElement>(StringComparer.Ordinal);
-            CollectDeclarations(container, result, collectionWrapper: false);
-            return result;
+            var declarations = new Dictionary<string, XamlElement>(StringComparer.Ordinal);
+            var sourceDictionaries = new List<XamlElement>();
+            CollectDeclarations(container, declarations, collectionWrapper: false);
+            CollectSourceDictionaries(
+                container,
+                sourceDictionaries,
+                collectionWrapper: false);
+            return (declarations, sourceDictionaries);
         }
 
         private void CollectDeclarations(
@@ -449,6 +507,65 @@ internal static class XamlSemanticFacts
                 {
                     CollectDeclarations(entry, result, collectionWrapper: true);
                 }
+            }
+        }
+
+        private void CollectSourceDictionaries(
+            XamlElement container,
+            List<XamlElement> result,
+            bool collectionWrapper)
+        {
+            foreach (var entry in container.Content.OfType<XamlElement>())
+            {
+                if (collectionWrapper)
+                {
+                    if (IsResourceDictionaryScope(entry, _typeSystem))
+                    {
+                        AddSourceDictionary(entry, result);
+                        CollectSourceDictionaries(entry, result, collectionWrapper: false);
+                    }
+
+                    continue;
+                }
+
+                if (IsResourceDictionaryCollectionScope(entry, _typeSystem))
+                {
+                    continue;
+                }
+
+                if (GetKeyAttribute(entry) is not null)
+                {
+                    continue;
+                }
+
+                if (IsResourceDictionaryScope(entry, _typeSystem))
+                {
+                    AddSourceDictionary(entry, result);
+                    CollectSourceDictionaries(entry, result, collectionWrapper: false);
+                }
+            }
+
+            if (!collectionWrapper)
+            {
+                foreach (var entry in container.Content.OfType<XamlElement>()
+                             .Where(entry => IsResourceDictionaryCollectionScope(entry, _typeSystem)))
+                {
+                    CollectSourceDictionaries(entry, result, collectionWrapper: true);
+                }
+            }
+        }
+
+        private static void AddSourceDictionary(
+            XamlElement dictionary,
+            ICollection<XamlElement> result)
+        {
+            if (dictionary.GetAttribute("Source")?.Value is
+                {
+                    MarkupExtension: null,
+                    Text.Length: > 0,
+                })
+            {
+                result.Add(dictionary);
             }
         }
 

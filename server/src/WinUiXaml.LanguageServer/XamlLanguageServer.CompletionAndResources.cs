@@ -119,13 +119,9 @@ internal sealed partial class XamlLanguageServer
                     : null;
             },
             message => System.Console.Error.WriteLine($"[winui-xaml-ls] {message}"),
-            element => XamlSemanticFacts.IsElement(
-                element,
-                typeSystem.Capabilities.ResourceDictionary,
-                typeSystem,
-                allowDerived: true),
             GetOpenDocumentText,
-            _requestCancellation.Value);
+            _requestCancellation.Value,
+            typeSystem);
     }
 
     private string? GetOpenDocumentText(string canonicalPath)
