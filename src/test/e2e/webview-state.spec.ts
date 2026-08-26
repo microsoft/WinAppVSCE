@@ -229,6 +229,36 @@ test('recovery restores focus to the rebuilt control, not a destroyed element', 
     expect(focus.appIndex).toBe(expected.appIndex);
 });
 
+test('the overlay does not steal focus when the webview is not focused', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+    await page.locator('#identity-name').focus();
+
+    // The XML normally breaks while the user is typing in the text editor, so the webview does
+    // not have focus. Grabbing it there would pull the caret out mid-keystroke.
+    await page.evaluate(() => {
+        const g = globalThis as unknown as { document: Record<string, unknown> };
+        g.document.hasFocus = () => false;
+    });
+    await postParseError(page, 'unclosed tag: Package');
+
+    // Marking the form inert blurs the field, which is fine. What must not happen is focus being
+    // pulled into the overlay, since that moves the caret out of the text editor.
+    const inOverlay = () => page.evaluate(() => {
+        const el = (globalThis as unknown as {
+            document: { activeElement: { closest(s: string): unknown } | null };
+        }).document.activeElement;
+        return !!el && el.closest('#parse-error-overlay') !== null;
+    });
+    expect(await inOverlay()).toBe(false);
+
+    // Recovery must not yank focus back into the webview either.
+    await postUpdate(page, manifestData, true);
+    const afterId = await page.evaluate(() =>
+        (globalThis as unknown as { document: { activeElement: { id: string } | null } }).document.activeElement?.id);
+    expect(afterId).not.toBe('identity-name');
+});
+
 test('a parse error discards input still sitting in the debounce', async ({ page }) => {
     await loadEditor(page);
     await postUpdate(page, manifestData);

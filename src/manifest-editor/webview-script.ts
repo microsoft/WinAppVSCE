@@ -692,6 +692,8 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             const target = pendingParseErrorFocus;
             if (!target) { return; }
             pendingParseErrorFocus = null;
+            // Same reasoning as taking focus: don't pull it back from wherever the user now is.
+            if (!document.hasFocus()) { return; }
             if (target.el && document.contains(target.el)) {
                 target.el.focus();
                 return;
@@ -740,13 +742,16 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     // Editing is paused, so anything still in the input debounce must not be
                     // sent: the extension would be asked to rewrite XML it cannot parse.
                     discardPendingChanges();
-                    focusBeforeParseError = {
+                    // Only take focus if the webview already had it. The XML usually breaks while
+                    // the user types in the text editor, and stealing focus there eats keystrokes.
+                    const hadFocus = document.hasFocus();
+                    focusBeforeParseError = hadFocus ? {
                         el: document.activeElement,
                         selector: focusDescriptorFor(document.activeElement),
-                    };
+                    } : null;
                     setEditorContentInert(true);
                     const box = document.getElementById('parse-error-box');
-                    if (box) { box.focus(); }
+                    if (box && hadFocus) { box.focus(); }
                 }
             } else {
                 overlay.hidden = true;
