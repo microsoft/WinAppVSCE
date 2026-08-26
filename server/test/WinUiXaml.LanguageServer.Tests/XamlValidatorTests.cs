@@ -610,7 +610,7 @@ public class XamlValidatorTests
             </Child.Resources>
           </Child>
         </Page.Resources>
-        <Child Text="{ui:StaticResource ExternalOrNestedKey}" />
+        <Child Text="{ui:StaticResource ExternalOrNestedKe}" />
         """)]
     [InlineData("""
         <Child>
@@ -618,9 +618,9 @@ public class XamlValidatorTests
             <Child x:Key="ExternalOrNestedKey" />
           </Child.Resources>
         </Child>
-        <Child Text="{ui:StaticResource ExternalOrNestedKey}" />
+        <Child Text="{ui:StaticResource ExternalOrNestedKe}" />
         """)]
-    public void IncompleteExternalResourceCatalogIgnoresInaccessibleSameNamedResource(
+    public void IncompleteExternalResourceCatalogIgnoresNearMissInaccessibleResource(
         string content)
     {
         const string prefix = """

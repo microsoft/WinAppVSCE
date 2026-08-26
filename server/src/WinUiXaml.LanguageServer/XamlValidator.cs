@@ -221,7 +221,10 @@ internal static class XamlValidator
 
                 var suggestion = SuggestData(
                     key,
-                    resourceKeys.Concat(resourceIndex.Keys).Distinct(StringComparer.Ordinal));
+                    resourceKeys.Concat(resourceIndex.GetVisibleKeys(
+                        element,
+                        extension.Span.Start,
+                        allowForwardReference)));
                 if (!resourceCatalogIsAuthoritative &&
                     suggestion is null &&
                     (allowForwardReference ||

@@ -276,6 +276,23 @@ internal static class XamlSemanticFacts
             bool allowForwardReference)
         {
             LookupCount++;
+            return FindDeclarationCore(reference, key, referenceStart, allowForwardReference);
+        }
+
+        internal IReadOnlyCollection<string> GetVisibleKeys(
+            XamlElement reference,
+            int referenceStart,
+            bool allowForwardReference) =>
+            _keys.Where(key =>
+                    FindDeclarationCore(reference, key, referenceStart, allowForwardReference) is not null)
+                .ToArray();
+
+        private XamlElement? FindDeclarationCore(
+            XamlElement reference,
+            string key,
+            int referenceStart,
+            bool allowForwardReference)
+        {
             XamlElement? previousDictionary = null;
             bool sameLogicalDictionary = true;
             bool foundDictionary = false;
