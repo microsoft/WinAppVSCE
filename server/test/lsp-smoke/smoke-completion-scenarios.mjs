@@ -242,20 +242,11 @@ export async function runCompletionScenarios(ctx) {
     fail(`x:DataType="x:Str|" must filter intrinsics to String only (got ${JSON.stringify(xiFilterLabels)})`);
   }
 
-  // Cross-cutting + Round 56: TargetType uses the CLASS-ONLY type list, so intrinsics are kind-filtered
-  // to match — reference-type aliases (String/Object/Type/Uri) are offered, value-type aliases
-  // (Int32/Boolean/Double/…) are NOT, exactly as a value-type CLR struct would be filtered out here.
+  // TargetType only accepts DependencyObject-derived types, so XAML language intrinsics are excluded.
   const xiTarget = `${diNs}\n  <Style TargetType="x:|" />\n</Page>`;
   const xiTargetLabels = await completeWith(412, xiTarget, "intrinsic-targettype");
-  for (const refAlias of ["String", "Object", "Type", "Uri"]) {
-    if (!xiTargetLabels.includes(refAlias)) {
-      fail(`TargetType="x:|" must offer the reference-type intrinsic ${refAlias} (got ${JSON.stringify(xiTargetLabels)})`);
-    }
-  }
-  for (const valAlias of ["Int32", "Boolean", "Double"]) {
-    if (xiTargetLabels.includes(valAlias)) {
-      fail(`TargetType="x:|" (class-only) must NOT offer the value-type intrinsic ${valAlias} (got ${JSON.stringify(xiTargetLabels)})`);
-    }
+  if (xiTargetLabels.length !== 0) {
+    fail(`TargetType="x:|" must not offer non-DependencyObject intrinsics (got ${JSON.stringify(xiTargetLabels)})`);
   }
 
   // The intrinsics are keyed by the resolved URI, not the literal "x" prefix: a custom prefix mapped to
@@ -284,7 +275,7 @@ export async function runCompletionScenarios(ctx) {
       fail(`{x:Type x:|} (all-kinds) must still offer the intrinsic ${alias} incl. value types (got ${JSON.stringify(xiTypeArgLabels)})`);
     }
   }
-  console.log(`[ok] XAML intrinsics: full set in x:DataType/{x:Type} (all kinds); TargetType kind-filtered to reference types only (round 56); partial-filtered; keyed by the resolved XAML URI (custom prefix works)`);
+  console.log(`[ok] XAML intrinsics: full set in x:DataType/{x:Type} (all kinds); excluded from DependencyObject-only TargetType; partial-filtered; keyed by the resolved XAML URI (custom prefix works)`);
 
   // Round 57: {d:DesignInstance …} type-argument completion — the AUTHORING counterpart to the round-52
   // CONSUMPTION cases (400-403). The TYPE arg (positional or Type=) completes type names; the extension
@@ -1065,9 +1056,10 @@ export async function runCompletionScenarios(ctx) {
     const codeBehind = resolve(dirname(XAML), "SmokePage.xaml.cs");
     const original = readFileSync(codeBehind, "utf8");
     const changed = original.replace(
-      /\r?\n}\s*$/,
-      `\n\n    public string WatcherAddedText { get; } = "updated";\n}\n`
+      /\r?\n}\r?\n\r?\n(internal sealed class InternalCard)/,
+      `\n\n    public string WatcherAddedText { get; } = "updated";\n}\n\n$1`
     );
+    if (changed === original) fail("could not inject WatcherAddedText into SmokePage");
     let labels = [];
     let found = false;
     try {

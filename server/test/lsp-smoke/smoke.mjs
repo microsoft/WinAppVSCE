@@ -23,7 +23,7 @@ const EXPECTED_CODE_BEHIND = "smokepage.xaml.cs";
 const EXPECTED_HANDLER_LINE = 26; // OnGo_Click is on line 27 (1-based) of SmokePage.xaml.cs
 const EXPECTED_GREETING_LINE = 15; // GreetingText is on line 16 (1-based) of SmokePage.xaml.cs
 const EXPECTED_APP_XAML = "app.xaml";
-const EXPECTED_ACCENT_KEY_LINE = 14; // <SolidColorBrush x:Key="SmokeAccentBrush"> is on line 15 (1-based) of App.xaml
+const APP_XAML = resolve(dirname(XAML), "App.xaml");
 
 let server;
 
@@ -51,6 +51,12 @@ function offsetToPosition(text, offset) {
   }
   return { line, character: offset - last };
 }
+
+if (!existsSync(APP_XAML)) fail(`fixture not found: ${APP_XAML}`);
+const appXamlText = readFileSync(APP_XAML, "utf8");
+const accentKeyOffset = appXamlText.indexOf('x:Key="SmokeAccentBrush"');
+if (accentKeyOffset < 0) fail('could not find x:Key="SmokeAccentBrush" in App.xaml');
+const EXPECTED_ACCENT_KEY_LINE = offsetToPosition(appXamlText, accentKeyOffset).line;
 
 // Caret a few chars into the OnGo_Click handler value.
 const handlerIdx = xamlText.indexOf('Click="OnGo_Click"');

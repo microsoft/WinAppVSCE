@@ -710,10 +710,10 @@ export async function runCoreScenarios(ctx) {
   if (unknownType.length !== 1) {
     fail(`expected exactly 1 unknown-type diagnostic on the fixture, got ${unknownType.length}: ${JSON.stringify(typeDiags.map((t) => t.message))}`);
   }
-  if (unknownType[0].severity !== 2) fail(`unknown-type should be a warning (severity 2), got ${unknownType[0].severity}`);
+  if (unknownType[0].severity !== 1) fail(`unknown-type should be an error (severity 1), got ${unknownType[0].severity}`);
   // The whole fixture (every real control + attribute) must produce no OTHER diagnostics.
   if (typeDiags.length !== 1) fail(`expected exactly 1 total diagnostic on the fixture, got ${typeDiags.length}: ${JSON.stringify(typeDiags.map((t) => `${t.code}:${t.message}`))}`);
-  console.log(`[ok] validation: fixture + <Buton> -> exactly 1 unknown-type warning, zero false positives`);
+  console.log(`[ok] validation: fixture + <Buton> -> exactly 1 unknown-type error, zero false positives`);
 
   // Attribute typo on a known element -> unknown-property warning. Injecting into the real fixture also
   // guards against false positives across every valid attribute (NavigationCacheMode, Foreground, ...).
