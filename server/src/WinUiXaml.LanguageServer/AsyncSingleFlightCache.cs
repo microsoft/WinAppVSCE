@@ -7,6 +7,7 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
     private readonly Dictionary<TKey, Entry> _entries;
     private readonly Dictionary<TKey, TValue> _ready;
     private readonly Dictionary<TKey, TValue> _latest;
+    private readonly Dictionary<TKey, TValue> _stale;
     private long _generation;
 
     public AsyncSingleFlightCache(IEqualityComparer<TKey>? comparer = null)
@@ -14,6 +15,7 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
         _entries = new Dictionary<TKey, Entry>(comparer);
         _ready = new Dictionary<TKey, TValue>(comparer);
         _latest = new Dictionary<TKey, TValue>(comparer);
+        _stale = new Dictionary<TKey, TValue>(comparer);
     }
 
     public Task<TValue?> GetOrStart(TKey key, Func<Task<TValue?>> factory)
@@ -65,6 +67,14 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
         }
     }
 
+    public bool TryGetStale(TKey key, out TValue value)
+    {
+        lock (_gate)
+        {
+            return _stale.TryGetValue(key, out value!);
+        }
+    }
+
     public void Invalidate(TKey key, bool discardLatest = false)
     {
         Entry? removed;
@@ -75,6 +85,7 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
             if (discardLatest)
             {
                 _latest.Remove(key);
+                _stale.Remove(key);
             }
         }
 
@@ -96,7 +107,30 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
             if (discardLatest)
             {
                 _latest.Clear();
+                _stale.Clear();
             }
+        }
+
+        foreach (var entry in removed)
+        {
+            CancelIfRunning(entry);
+        }
+    }
+
+    public void RestartAllPreservingLatest()
+    {
+        Entry[] removed;
+        lock (_gate)
+        {
+            _generation++;
+            removed = _entries.Values.ToArray();
+            _entries.Clear();
+            _ready.Clear();
+            foreach (var pair in _latest)
+            {
+                _stale.TryAdd(pair.Key, pair.Value);
+            }
+            _latest.Clear();
         }
 
         foreach (var entry in removed)
@@ -136,11 +170,13 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
                 if (value is null)
                 {
                     _entries.Remove(key);
+                    _stale.Remove(key);
                 }
                 else
                 {
                     _ready[key] = value;
                     _latest[key] = value;
+                    _stale.Remove(key);
                 }
             }
 
@@ -158,6 +194,7 @@ internal sealed class AsyncSingleFlightCache<TKey, TValue> where TKey : notnull 
                 {
                     _entries.Remove(key);
                     _ready.Remove(key);
+                    _stale.Remove(key);
                 }
             }
             throw;

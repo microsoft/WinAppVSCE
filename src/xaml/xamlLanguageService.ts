@@ -1,5 +1,8 @@
 import * as path from "path";
 import * as vscode from "vscode";
+import {
+  saveGeneratedEventHandlerDocument,
+} from "./generatedEventHandlerSave";
 import { spawn } from "child_process";
 import {
   LanguageClient,
@@ -57,6 +60,21 @@ import { hasOpenXamlDocument } from "./xamlDemand";
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
 let projectStatusItem: vscode.StatusBarItem | undefined;
+const APPLY_GENERATED_EVENT_HANDLER_COMMAND = "winui-xaml.applyGeneratedEventHandler";
+
+function findOpenDocument(documentUri: string): vscode.TextDocument | undefined {
+  const target = vscode.Uri.parse(documentUri);
+  const targetPath = path.normalize(target.fsPath);
+  return vscode.workspace.textDocuments.find((candidate) =>
+    candidate.uri.scheme === target.scheme &&
+    (target.scheme === "file"
+      ? path.normalize(candidate.uri.fsPath).localeCompare(
+          targetPath,
+          undefined,
+          { sensitivity: process.platform === "win32" ? "accent" : "variant" },
+        ) === 0
+      : candidate.uri.toString() === target.toString()));
+}
 let readyStatusTimer: NodeJS.Timeout | undefined;
 const projectContextStatuses = new Map<string, ProjectContextStatus>();
 
@@ -105,6 +123,57 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
     vscode.commands.registerCommand("winui-xaml.showInfo", () => showXamlInfo()),
     vscode.commands.registerCommand("winui-xaml.showOutput", () => output?.show(true)),
     vscode.commands.registerCommand("winui-xaml.restartServer", () => restartClient(context, true)),
+    vscode.commands.registerCommand(
+      "winui-xaml.saveGeneratedEventHandler",
+      async (documentUri: string) => {
+        const uri = vscode.Uri.parse(documentUri);
+        const document =
+          findOpenDocument(documentUri) ?? (await vscode.workspace.openTextDocument(uri));
+        await saveGeneratedEventHandlerDocument(
+          document,
+          uri.fsPath,
+          async (message, action) =>
+            (await vscode.window.showWarningMessage(
+              message,
+              { modal: true },
+              action,
+            )) === action,
+        );
+      },
+    ),
+    vscode.commands.registerCommand(
+      APPLY_GENERATED_EVENT_HANDLER_COMMAND,
+      async (
+        documentUri: string,
+        edit: vscode.WorkspaceEdit,
+        originalCommand: vscode.Command,
+        wasDirty: boolean,
+        originalVersion: number | undefined,
+      ) => {
+        const openDocument = findOpenDocument(documentUri);
+        if (wasDirty || openDocument?.isDirty) {
+          if (openDocument?.isDirty) {
+            await vscode.commands.executeCommand(originalCommand.command, documentUri);
+          }
+          if (!openDocument?.isDirty) {
+            void vscode.window.showInformationMessage(
+              "Code-behind changes were saved. Retry Generate Event Handler.",
+            );
+          }
+          return;
+        }
+        if (openDocument && originalVersion !== undefined && openDocument.version !== originalVersion) {
+          void vscode.window.showInformationMessage(
+            "The code-behind changed. Retry Generate Event Handler.",
+          );
+          return;
+        }
+        if (!(await vscode.workspace.applyEdit(edit))) {
+          throw new Error("Could not apply the generated event handler edit.");
+        }
+        await vscode.commands.executeCommand(originalCommand.command, documentUri);
+      },
+    ),
     vscode.window.onDidChangeActiveTextEditor(() => renderProjectContextStatus()),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("winapp.xaml.intelliSense.enable")) {
@@ -416,6 +485,42 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     initializationOptions: { allowedRoots, diagnosticsLevel },
     synchronize: {
       fileEvents: fileWatchers,
+    },
+    middleware: {
+      provideCodeActions: async (document, range, context, token, next) => {
+        const actions = await next(document, range, context, token);
+        return actions?.map((action) => {
+          if (!(action instanceof vscode.CodeAction) ||
+              action.edit === undefined ||
+              action.command?.command !== "winui-xaml.saveGeneratedEventHandler" ||
+              typeof action.command.arguments?.[0] !== "string") {
+            return action;
+          }
+
+          const documentUri = action.command.arguments[0];
+          const target = findOpenDocument(documentUri);
+          const recovery = new vscode.CodeAction(
+            target?.isDirty
+              ? "Save code-behind changes, then retry Generate Event Handler"
+              : action.title,
+            action.kind,
+          );
+          recovery.command = {
+            command: APPLY_GENERATED_EVENT_HANDLER_COMMAND,
+            title: recovery.title,
+            arguments: [
+              documentUri,
+              action.edit,
+              action.command,
+              target?.isDirty ?? false,
+              target?.version,
+            ],
+          };
+          recovery.diagnostics = action.diagnostics;
+          recovery.isPreferred = action.isPreferred;
+          return recovery;
+        });
+      },
     },
   };
 

@@ -296,7 +296,7 @@ describe("WinUI XAML red-team 31 — Style/ControlTemplate authoring depth", fun
     assert.match(md, /Style/, `BasedOn hover should include Style resource type; buffer=${buffer}; got: ${md}`);
   });
 
-  it("reports the invalid forward reference without hanging on self and circular BasedOn resources", async () => {
+  it("allows same-dictionary forward references without hanging on self and circular BasedOn resources", async () => {
     const buffer = page([
       "<Page.Resources>",
       '  <Style x:Key="SelfStyle31" TargetType="Button" BasedOn="{StaticResource SelfStyle31}" />',
@@ -305,13 +305,13 @@ describe("WinUI XAML red-team 31 — Style/ControlTemplate authoring depth", fun
       "</Page.Resources>",
       '<StackPanel><Button Style="{StaticResource SelfStyle31}" /><TextBlock Text="{x:Bind __SentinelMissing31}" /></StackPanel>',
     ].join("\n  "));
-    const diags = await h.diagnosticsFor(buffer, (d) =>
-      byCode(d, "WXAML0005").some((x) => x.message.includes("__SentinelMissing31")) &&
-      byCode(d, "WXAML0013").some((x) => diagText(x) === "CircleB31"), 15000);
+    const diags = await h.diagnosticsFor(
+      buffer,
+      (d) => byCode(d, "WXAML0005").some((x) => x.message.includes("__SentinelMissing31")),
+      15000);
     assert.strictEqual(byCode(diags, "WXAML0005").length, 1, `expected only the sentinel x:Bind diagnostic; got ${summary(diags)}`);
     const resourceDiags = byCode(diags, "WXAML0013");
-    assert.strictEqual(resourceDiags.length, 1, `expected one StaticResource forward-reference diagnostic; got ${summary(diags)}`);
-    assert.strictEqual(diagText(resourceDiags[0]), "CircleB31", `expected the later CircleB31 reference; got ${summary(diags)}`);
+    assert.strictEqual(resourceDiags.length, 0, `same-dictionary forward references should be valid; got ${summary(diags)}`);
   });
 
   it("completes VisualState Setter.Target from the referenced element and keeps the markup diagnostic-silent", async () => {

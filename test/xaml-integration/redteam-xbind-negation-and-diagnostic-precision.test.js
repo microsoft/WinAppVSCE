@@ -45,7 +45,7 @@ describe("WinUI XAML red-team 13 — x:Bind negation and path edges", function (
   });
 
   it("stays silent for a valid negated x:Bind path combined with Mode=OneWay", async () => {
-    const buffer = page('<TextBlock Text="{x:Bind !Items, Mode=OneWay}" />');
+    const buffer = page('<TextBlock Text="{x:Bind !IsReady, Mode=OneWay}" />');
     const diags = await h.diagnosticsFor(buffer, () => false, 3500);
     const bad = diags.find((x) => /^WXAML/.test(String(x.code || "")));
     assert.ok(!bad, `valid negated x:Bind with Mode should stay silent; buffer=${buffer}; got ${diagSummary(diags)}`);
@@ -68,7 +68,7 @@ describe("WinUI XAML red-team 13 — x:Bind negation and path edges", function (
   it("does not flag valid explicit Path= function and indexer bindings", async () => {
     const buffer = page([
       '<StackPanel>',
-      '  <TextBlock Text="{x:Bind Path=OnGo_Click(GreetingText, Items[0])}" />',
+      '  <TextBlock Text="{x:Bind Path=FormatPair(GreetingText, Items[0])}" />',
       '  <TextBlock Text="{x:Bind Path=Items[0].Length, Mode=OneWay}" />',
       '</StackPanel>',
     ].join("\n  "));

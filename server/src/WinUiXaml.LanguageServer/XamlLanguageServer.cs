@@ -616,7 +616,7 @@ internal sealed partial class XamlLanguageServer
 
     private void ResetContextsAndWarmDocuments()
     {
-        _contexts.InvalidateAll();
+        _contexts.RestartAllPreservingLatest();
 
         // Rebuild invalidated contexts only for documents the user has opened.
         foreach (var uri in _documents.Keys)

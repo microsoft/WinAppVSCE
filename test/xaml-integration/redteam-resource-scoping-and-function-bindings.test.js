@@ -207,7 +207,7 @@ describe("WinUI XAML red-team 29 — resource navigation and scoping", function 
     );
   });
 
-  it("diagnostics use root-visible App.xaml keys but ignore nested-scope keys", async () => {
+  it("diagnostics report unresolved keys without treating nested-scope App keys as visible", async () => {
     const buffer = page([
       "<StackPanel>",
       '  <Border Background="{StaticResource SmokeAccentBrus}" />',
@@ -224,8 +224,11 @@ describe("WinUI XAML red-team 29 — resource navigation and scoping", function 
       `root-visible App key should make a close typo diagnosable; got ${JSON.stringify(diagnostics)}`
     );
     assert.ok(
-      !diagnostics.some((item) => item.message.includes("AppNestedOnlyBrus")),
-      `nested-scope App key must not make a close typo diagnosable cross-document; got ${JSON.stringify(diagnostics)}`
+      diagnostics.some((item) =>
+        item.code === "WXAML0013" &&
+        item.severity === vscode.DiagnosticSeverity.Warning &&
+        item.message.includes("AppNestedOnlyBrus")),
+      `an unresolved key must remain a warning when project resources are non-authoritative; got ${JSON.stringify(diagnostics)}`
     );
   });
 

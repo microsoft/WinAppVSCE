@@ -61,6 +61,41 @@ public sealed class XamlSemanticFactsTests
     }
 
     [Fact]
+    public void EventHandlersRespectCrossAssemblyAccessibility()
+    {
+        var reference = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+        var baseCompilation = CSharpCompilation.Create(
+            "External",
+            [CSharpSyntaxTree.ParseText("""
+                public class ExternalPage
+                {
+                    public void PublicHandler() { }
+                    protected void ProtectedHandler() { }
+                    internal void InternalHandler() { }
+                    private protected void PrivateProtectedHandler() { }
+                    private void PrivateHandler() { }
+                }
+                """)],
+            [reference],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var pageCompilation = CSharpCompilation.Create(
+            "PageAssembly",
+            [CSharpSyntaxTree.ParseText("public class Page : ExternalPage { }")],
+            [reference, baseCompilation.ToMetadataReference()],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var page = pageCompilation.GetTypeByMetadataName("Page")!;
+
+        var typeSystem = XamlTypeSystem.FromCompilation(
+            pageCompilation,
+            ImmutableArray<IAssemblySymbol>.Empty);
+        Assert.Single(XamlSemanticFacts.EnumerateEventHandlerMethods(page, "PublicHandler", typeSystem));
+        Assert.Single(XamlSemanticFacts.EnumerateEventHandlerMethods(page, "ProtectedHandler", typeSystem));
+        Assert.Empty(XamlSemanticFacts.EnumerateEventHandlerMethods(page, "InternalHandler", typeSystem));
+        Assert.Empty(XamlSemanticFacts.EnumerateEventHandlerMethods(page, "PrivateProtectedHandler", typeSystem));
+        Assert.Empty(XamlSemanticFacts.EnumerateEventHandlerMethods(page, "PrivateHandler", typeSystem));
+    }
+
+    [Fact]
     public void ResourceIndex_PrefersLocalDeclarationOverMergedDictionary()
     {
         const string xaml = """

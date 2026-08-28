@@ -48,6 +48,27 @@ namespace WinUiXaml.Workspace
         private readonly object _missingMarkupExtensionNamespacesGate = new();
         private const int MaxMissingMarkupExtensionNamespaces = 256;
 
+        public bool HasImplicitConversion(ITypeSymbol source, ITypeSymbol target) =>
+            _compilation.ClassifyCommonConversion(source, target).IsImplicit;
+
+        public bool IsSymbolAccessibleWithin(ISymbol symbol, ISymbol within) =>
+            _compilation.IsSymbolAccessibleWithin(symbol, within);
+
+        public bool IsSymbolAccessibleWithin(ISymbol symbol, ISymbol within, ITypeSymbol throughType) =>
+            _compilation.IsSymbolAccessibleWithin(symbol, within, throughType);
+
+        public bool IsReadableSymbolAccessible(ISymbol symbol, ISymbol? within, ITypeSymbol? throughType = null)
+        {
+            var accessibilitySymbol = symbol is IPropertySymbol { GetMethod: { } getter }
+                ? getter
+                : symbol;
+            return accessibilitySymbol.DeclaredAccessibility == Accessibility.Public ||
+                   (within is not null &&
+                    (throughType is null
+                        ? _compilation.IsSymbolAccessibleWithin(accessibilitySymbol, within)
+                        : _compilation.IsSymbolAccessibleWithin(accessibilitySymbol, within, throughType)));
+        }
+
         private readonly Dictionary<string, List<NamespaceBinding>> _xmlnsMap;
         private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, string>> _documentationFiles =
             new(StringComparer.OrdinalIgnoreCase);
@@ -1013,7 +1034,10 @@ namespace WinUiXaml.Workspace
             IsAssignableTo(targetType, accessor.Parameters[0].Type);
 
         /// <summary>Enumerates the members bindable via {x:Bind} on type: public instance properties (with a getter), fields, and ordinary methods.</summary>
-        public IEnumerable<ISymbol> GetBindableMembers(ITypeSymbol? type, bool includeRootNonPublic = false)
+        public IEnumerable<ISymbol> GetBindableMembers(
+            ITypeSymbol? type,
+            bool includeRootNonPublic = false,
+            ISymbol? accessWithin = null)
         {
             if (type is null)
             {
@@ -1021,13 +1045,24 @@ namespace WinUiXaml.Workspace
             }
 
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            bool isRoot = true;
             foreach (var t in SelfAndBases(type))
             {
-                bool allowNonPublic = includeRootNonPublic && isRoot;
                 foreach (var member in t.GetMembers())
                 {
-                    if ((member.DeclaredAccessibility != Accessibility.Public && !allowNonPublic) ||
+                    var accessibilitySymbol = member is IPropertySymbol { GetMethod: { } getter }
+                        ? getter
+                        : member;
+                    bool contextuallyAccessible =
+                        accessWithin is not null &&
+                        IsSymbolAccessibleWithin(accessibilitySymbol, accessWithin, type);
+                    bool rootNonPublic =
+                        includeRootNonPublic &&
+                        (accessWithin is null ||
+                         SymbolEqualityComparer.Default.Equals(type, accessWithin)) &&
+                        IsSymbolAccessibleWithin(accessibilitySymbol, accessWithin ?? type, type);
+                    if ((accessibilitySymbol.DeclaredAccessibility != Accessibility.Public &&
+                         !contextuallyAccessible &&
+                         !rootNonPublic) ||
                         member.IsStatic || member.IsImplicitlyDeclared)
                     {
                         continue;
@@ -1048,13 +1083,14 @@ namespace WinUiXaml.Workspace
                             break;
                     }
                 }
-
-                isRoot = false;
             }
         }
 
         /// <summary>Enumerates every callable method available to an x:Bind root, preserving overloads so function-binding validation can check argument counts.</summary>
-        public IEnumerable<IMethodSymbol> GetBindableMethods(ITypeSymbol? type, bool includeRootNonPublic = false)
+        public IEnumerable<IMethodSymbol> GetBindableMethods(
+            ITypeSymbol? type,
+            bool includeRootNonPublic = false,
+            ISymbol? accessWithin = null)
         {
             if (type is null)
             {
@@ -1062,16 +1098,20 @@ namespace WinUiXaml.Workspace
             }
 
             var seenNames = new HashSet<string>(StringComparer.Ordinal);
-            bool isRoot = true;
             foreach (var t in SelfAndBases(type))
             {
-                bool allowNonPublic = includeRootNonPublic && isRoot;
                 var methods = t.GetMembers().OfType<IMethodSymbol>()
                     .Where(method =>
                         method.MethodKind == MethodKind.Ordinary &&
                         !method.IsStatic &&
                         !method.IsImplicitlyDeclared &&
-                        (method.DeclaredAccessibility == Accessibility.Public || allowNonPublic))
+                        (method.DeclaredAccessibility == Accessibility.Public ||
+                         (accessWithin is not null &&
+                          IsSymbolAccessibleWithin(method, accessWithin, type)) ||
+                         (includeRootNonPublic &&
+                          (accessWithin is null ||
+                           SymbolEqualityComparer.Default.Equals(type, accessWithin)) &&
+                          IsSymbolAccessibleWithin(method, accessWithin ?? type, type))))
                     .ToArray();
                 foreach (var method in methods)
                 {
@@ -1085,8 +1125,42 @@ namespace WinUiXaml.Workspace
                 {
                     seenNames.Add(name);
                 }
+            }
+        }
 
-                isRoot = false;
+        public IEnumerable<ISymbol> GetBindableStaticMembers(ITypeSymbol? type, ISymbol? accessWithin = null)
+        {
+            if (type is null)
+            {
+                yield break;
+            }
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var current in SelfAndBases(type))
+            {
+                var members = current.GetMembers()
+                    .Where(member =>
+                        member.IsStatic &&
+                        !member.IsImplicitlyDeclared &&
+                        IsReadableSymbolAccessible(member, accessWithin, type))
+                    .ToArray();
+                foreach (var group in members.GroupBy(member => member.Name, StringComparer.Ordinal))
+                {
+                    if (!seen.Add(group.Key))
+                    {
+                        continue;
+                    }
+
+                    foreach (var member in group)
+                    {
+                        if (member is IPropertySymbol { IsIndexer: false, GetMethod: not null } or
+                            IFieldSymbol or
+                            IMethodSymbol { MethodKind: MethodKind.Ordinary })
+                        {
+                            yield return member;
+                        }
+                    }
+                }
             }
         }
 

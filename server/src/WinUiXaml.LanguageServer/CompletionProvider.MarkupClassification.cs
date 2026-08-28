@@ -516,7 +516,7 @@ internal static partial class CompletionProvider
         var pathSoFar = text.Substring(pathStart, offset - pathStart);
         foreach (var ch in pathSoFar)
         {
-            if (!char.IsLetterOrDigit(ch) && ch != '_' && ch != '.' && ch != '[' && ch != ']')
+            if (!char.IsLetterOrDigit(ch) && ch != '_' && ch != '.' && ch != ':' && ch != '[' && ch != ']')
             {
                 return null;
             }

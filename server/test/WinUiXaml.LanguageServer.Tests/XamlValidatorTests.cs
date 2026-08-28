@@ -17,21 +17,37 @@ public class XamlValidatorTests
             {
                 public string Hidden(string first, string second) => first;
                 public void OnBaseClick() { }
+                private void PrivateBaseClick() { }
+                protected string ProtectedText { get; } = "";
+                internal string InternalText { get; } = "";
+                private protected string PrivateProtectedText { get; } = "";
             }
 
             public class Page : BasePage
             {
                 public double Width { get; set; }
                 public bool IsEnabled { get; set; }
+                public Microsoft.UI.Xaml.Visibility Visibility { get; set; }
+                public double? OptionalWidth { get; set; }
+                public double? OptionalWidthTarget { get; set; }
+                public ConvertibleWidth ConvertibleWidth { get; set; }
+                public Microsoft.UI.Xaml.Data.BindingMode Mode { get; set; }
                 public string Text { get; set; } = "";
+                public ushort Code { get; set; }
+                private string SecretText { get; } = "";
+                private char Letter { get; } = 'A';
                 public Microsoft.UI.Xaml.CornerRadius CornerRadius { get; set; }
                 public Microsoft.UI.Xaml.Thickness Margin { get; set; }
                 public Microsoft.UI.Xaml.Media.Brush Foreground { get; set; } = new Microsoft.UI.Xaml.Media.Brush();
                 public Windows.UI.Color Color { get; set; }
                 public Microsoft.UI.Xaml.ResourceDictionary Resources { get; } = new();
                 public Child Child { get; } = new Child();
+                public System.Collections.ObjectModel.ObservableCollection<Child> Children { get; } = new();
+                public System.Collections.Generic.List<System.Collections.Generic.List<Child>> NestedChildren { get; } = new();
                 public Formatter Formatter { get; } = new Formatter();
+                public BasePage OtherBase { get; } = new BasePage();
                 public string Format(string value) => value;
+                private string PrivateFormat(string value) => value;
                 public string Choose(string value) => value;
                 public string Choose(string first, string second) => first;
                 public string Optional(string value = "") => value;
@@ -41,15 +57,42 @@ public class XamlValidatorTests
                 public string Pair(string first, Child second) => first;
                 public new string Hidden(string value) => value;
                 public event Handler Clicked;
+                public event ValueHandler ValueChanged;
                 private void OnClick() { }
+                private string BadClick() => "";
+                private void OnValueChanged(object sender, string value) { }
+                private void BadValueChanged(string value) { }
+                private string WrongReturn(object sender, string value) => value;
             }
 
             public delegate void Handler();
+            public delegate void ValueHandler(object sender, string value);
 
             public class Child
             {
                 public string Name { get; } = "";
                 public string Text { get; set; } = "";
+                internal string InternalText { get; } = "";
+                internal string InternalFormat(string value) => value;
+                private string Secret { get; } = "";
+                public string PrivateGetter { private get; set; } = "";
+            }
+
+            public static class BindStatics
+            {
+                public static bool Flag { get; } = true;
+                internal static bool InternalFlag { get; } = true;
+                public static Child Child { get; } = new();
+                public static System.Collections.Generic.List<Child> Children { get; } = new();
+                public static Formatter Formatter { get; } = new();
+                public static string Format(string value) => value;
+                public static string Format(string first, string second) => first;
+                public static string PrivateGetter { private get; set; } = "";
+            }
+
+            public readonly struct ConvertibleWidth
+            {
+                public static implicit operator double(ConvertibleWidth value) => 0;
             }
 
             public class Formatter
@@ -83,6 +126,11 @@ public class XamlValidatorTests
             }
             public class RowSample { }
             public class StyledControl { public string Text { get; set; } = ""; }
+            public class ItemsHost
+            {
+                public object ItemsSource { get; set; }
+                public Microsoft.UI.Xaml.DataTemplate ItemTemplate { get; set; }
+            }
             public class BaseControl { }
             public class GoodRoot : BaseControl { }
             public class WrongRoot { }
@@ -108,6 +156,7 @@ public class XamlValidatorTests
             public struct Thickness { }
             public class FrameworkTemplate { }
             public class FrameworkElement { public string Name { get; set; } = ""; }
+            public enum Visibility { Visible, Collapsed }
             public class ResourceDictionary
             {
                 public System.Collections.Generic.IDictionary<object, object> ThemeDictionaries { get; }
@@ -130,12 +179,28 @@ public class XamlValidatorTests
         namespace Microsoft.UI.Xaml.Data
         {
             public enum BindingMode { OneTime, OneWay, TwoWay }
-            public class Binding { }
+            public enum RelativeSourceMode { Self, TemplatedParent }
+            public class RelativeSource
+            {
+                public RelativeSourceMode Mode { get; set; }
+            }
+            public class Binding
+            {
+                public string Path { get; set; } = "";
+                public BindingMode Mode { get; set; }
+                public string ElementName { get; set; } = "";
+                public RelativeSource RelativeSource { get; set; }
+                public object Converter { get; set; }
+            }
         }
 
         namespace Microsoft.UI.Xaml.Controls
         {
             public class ColumnDefinitionCollection : System.Collections.Generic.List<TestApp.ColumnDefinition> { }
+            public class ControlTemplate : Microsoft.UI.Xaml.FrameworkTemplate
+            {
+                public System.Type TargetType { get; set; }
+            }
         }
 
         namespace Microsoft.UI.Xaml.Media
@@ -231,11 +296,35 @@ public class XamlValidatorTests
     [InlineData("Literal('a,b')")]
     [InlineData("Formatter.Format(Child)")]
     [InlineData("Pair(')', Child)")]
+    [InlineData("PrivateFormat(SecretText)")]
+    [InlineData("Child.InternalFormat(Text)")]
+    [InlineData("Format(Child.InternalText)")]
     public void BindFunction_AcceptsValidOverloadsAndFlexibleParameters(string path)
     {
         var diagnostics = Validate(Page($$"""Text="{x:Bind {{path}}}" """));
 
         Assert.DoesNotContain(diagnostics, d => d.Code == XamlValidator.InvalidBindFunctionCode);
+        Assert.DoesNotContain(diagnostics, d => d.Code == XamlValidator.UnknownBindMemberCode);
+    }
+
+    [Fact]
+    public void BindPath_AcceptsRepeatedIndexers()
+    {
+        var diagnostics = Validate(
+            Page("""Text="{x:Bind NestedChildren[0][0].Name}" """));
+
+        Assert.DoesNotContain(
+            diagnostics,
+            d => d.Code is XamlValidator.UnknownBindMemberCode or
+                XamlValidator.InvalidBindAssignmentCode);
+    }
+
+    [Fact]
+    public void CastPath_RejectsPrivateMembersOnTheCastType()
+    {
+        Assert.Single(
+            Validate(Page("""Text="{x:Bind (local:Child)Secret}" """)),
+            d => d.Code == XamlValidator.InaccessibleBindMemberCode);
     }
 
     [Fact]
@@ -355,6 +444,18 @@ public class XamlValidatorTests
     }
 
     [Fact]
+    public void InvalidEnumAttributeValue_CarriesAuthoritativeMemberSuggestions()
+    {
+        var diagnostic = Assert.Single(
+            Validate(Page("""Mode="OneWya" """)),
+            d => d.Code == XamlValidator.InvalidAttributeValueCode);
+
+        var data = Assert.IsType<DiagnosticData>(diagnostic.Data);
+        Assert.Equal("OneWya", data.Bad);
+        Assert.Contains("OneWay", data.Suggestions);
+    }
+
+    [Fact]
     public void MisspelledKnownThemeResource_IsReportedWithSuggestion()
     {
         var diagnostics = Validate(
@@ -407,7 +508,7 @@ public class XamlValidatorTests
     }
 
     [Fact]
-    public void StaticResourceRejectsForwardReferenceButThemeResourceAllowsIt()
+    public void ResourceReferencesAllowForwardDeclarationsInSameDictionary()
     {
         const string staticReference = """
             <ResourceDictionary
@@ -423,7 +524,7 @@ public class XamlValidatorTests
             "{ThemeResource Later}",
             StringComparison.Ordinal);
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             Validate(staticReference),
             item => item.Code == XamlValidator.UnknownResourceKeyCode);
         Assert.DoesNotContain(
@@ -505,7 +606,7 @@ public class XamlValidatorTests
     }
 
     [Fact]
-    public void AncestorResourcesIgnoreTextualOrderWhileSameDictionaryDoesNot()
+    public void ResourceLookupIgnoresTextualOrder()
     {
         const string xaml = """
             <Page xmlns="using:TestApp"
@@ -534,13 +635,13 @@ public class XamlValidatorTests
               </Page.Resources>
             </Page>
             """;
-        Assert.Contains(
+        Assert.DoesNotContain(
             Validate(sameDictionary),
             item => item.Code == XamlValidator.UnknownResourceKeyCode);
     }
 
     [Fact]
-    public void IncompleteExternalResourceCatalogOnlyReportsHighConfidenceTypos()
+    public void IncompleteExternalResourceCatalogReportsMissingKeysAsWarnings()
     {
         var arbitrary = ValidateWithAuthority(
             Page("""Text="{ui:StaticResource RuntimeLibraryKey}" """),
@@ -551,12 +652,10 @@ public class XamlValidatorTests
             resourceCatalogIsAuthoritative: false,
             "KnownProjectKey");
 
-        Assert.DoesNotContain(
-            arbitrary,
-            item => item.Code == XamlValidator.UnknownResourceKeyCode);
-        Assert.Contains(
-            typo,
-            item => item.Code == XamlValidator.UnknownResourceKeyCode);
+        Assert.Contains(arbitrary, item =>
+            item.Code == XamlValidator.UnknownResourceKeyCode && item.Severity == 2);
+        Assert.Contains(typo, item =>
+            item.Code == XamlValidator.UnknownResourceKeyCode && item.Severity == 2);
     }
 
     [Fact]
@@ -582,7 +681,7 @@ public class XamlValidatorTests
     }
 
     [Fact]
-    public void IncompleteExternalResourceCatalogStillReportsLocalForwardReference()
+    public void IncompleteExternalResourceCatalogAllowsLocalForwardReference()
     {
         const string xaml = """
             <Page xmlns="using:TestApp"
@@ -596,7 +695,7 @@ public class XamlValidatorTests
             </Page>
             """;
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             ValidateWithAuthority(xaml, resourceCatalogIsAuthoritative: false),
             item => item.Code == XamlValidator.UnknownResourceKeyCode);
     }
@@ -630,7 +729,7 @@ public class XamlValidatorTests
                   x:Class="TestApp.Page">
             """;
 
-        Assert.DoesNotContain(
+        Assert.Contains(
             ValidateWithAuthority(
                 prefix + content + "</Page>",
                 resourceCatalogIsAuthoritative: false),
@@ -996,6 +1095,84 @@ public class XamlValidatorTests
         Assert.DoesNotContain(Validate(typed), d => d.Code == XamlValidator.DataTemplateDataTypeRequiredCode);
     }
 
+    [Theory]
+    [InlineData("Secret")]
+    [InlineData("PrivateGetter")]
+    public void DataTemplate_RejectsInaccessibleDataTypeMembers(string path)
+    {
+        const string template = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  xmlns:local="using:TestApp"
+                  x:Class="TestApp.Page">
+              <ui:DataTemplate x:DataType="local:Child">
+                <Child Text="{x:Bind PATH}" />
+              </ui:DataTemplate>
+            </Page>
+            """;
+
+        Assert.Contains(
+            Validate(template.Replace("PATH", path)),
+            diagnostic => diagnostic.Code == XamlValidator.InaccessibleBindMemberCode);
+    }
+
+    [Fact]
+    public void BindPath_RejectsProtectedMemberThroughBaseTypedReceiver()
+    {
+        Assert.Contains(
+            Validate(Page("""Text="{x:Bind OtherBase.ProtectedText}" """)),
+            diagnostic => diagnostic.Code == XamlValidator.InaccessibleBindMemberCode);
+    }
+
+    [Fact]
+    public void DataTemplateMissingDataType_CarriesProvenItemsSourceItemType()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="using:Microsoft.UI.Xaml"
+                  x:Class="TestApp.Page">
+              <ItemsHost ItemsSource="{x:Bind Children}">
+                <ItemsHost.ItemTemplate>
+                  <ui:DataTemplate>
+                    <Child Text="{x:Bind Name}" />
+                  </ui:DataTemplate>
+                </ItemsHost.ItemTemplate>
+              </ItemsHost>
+            </Page>
+            """;
+
+        var diagnostic = Assert.Single(
+            Validate(xaml), d => d.Code == XamlValidator.DataTemplateDataTypeRequiredCode);
+        var data = Assert.IsType<DiagnosticData>(diagnostic.Data);
+        Assert.Equal("using:TestApp", data.Bad);
+        Assert.Equal(["Child"], data.Suggestions);
+    }
+
+    [Fact]
+    public void DataTemplateMissingDataType_DoesNotGuessFromClassicBinding()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="using:Microsoft.UI.Xaml"
+                  x:Class="TestApp.Page">
+              <ItemsHost ItemsSource="{ui:Binding Path=Children}">
+                <ItemsHost.ItemTemplate>
+                  <ui:DataTemplate>
+                    <Child Text="{x:Bind Name}" />
+                  </ui:DataTemplate>
+                </ItemsHost.ItemTemplate>
+              </ItemsHost>
+            </Page>
+            """;
+
+        var diagnostic = Assert.Single(
+            Validate(xaml), d => d.Code == XamlValidator.DataTemplateDataTypeRequiredCode);
+        Assert.Null(diagnostic.Data);
+    }
+
     [Fact]
     public void DuplicateAttributes_ReportSecondExpandedName()
     {
@@ -1252,6 +1429,291 @@ public class XamlValidatorTests
             Validate(invalid),
             diagnostic => diagnostic.Code == XamlValidator.UnknownBindMemberCode &&
                 diagnostic.Message.Contains("'Missing'"));
+    }
+
+    [Fact]
+    public void ClassicBinding_ValidatesNamedArgumentsAndEnumValues()
+    {
+        var unknown = Validate(Page("""Text="{ui:Binding Pathh=Name}" """));
+        var invalidMode = Validate(Page("""Text="{ui:Binding Path=Name, Mode=Sideways}" """));
+        var invalidRelativeSource = Validate(Page(
+            """Text="{ui:Binding Path=Name, RelativeSource={ui:RelativeSource Mode=Elsewhere}}" """));
+
+        Assert.Single(unknown, d => d.Code == XamlValidator.UnknownBindingArgumentCode);
+        Assert.Single(invalidMode, d => d.Code == XamlValidator.InvalidBindingValueCode);
+        Assert.Single(invalidRelativeSource, d => d.Code == XamlValidator.InvalidRelativeSourceCode);
+    }
+
+    [Fact]
+    public void BindingElementName_UsesApplicableNameScope()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:ui="using:Microsoft.UI.Xaml"
+                  x:Class="TestApp.Page">
+              <Child x:Name="Outside" />
+              <ui:DataTemplate x:DataType="Child">
+                <Child Text="{ui:Binding ElementName=Outside, Path=Text}" />
+              </ui:DataTemplate>
+            </Page>
+            """;
+
+        Assert.Single(Validate(xaml),
+            d => d.Code == XamlValidator.UnknownBindingElementNameCode);
+    }
+
+    [Fact]
+    public void TemplateBinding_ValidatesAgainstTemplateTargetType()
+    {
+        const string xaml = """
+            <controls:ControlTemplate xmlns="using:TestApp"
+                                xmlns:ui="using:Microsoft.UI.Xaml"
+                                xmlns:controls="using:Microsoft.UI.Xaml.Controls"
+                                TargetType="StyledControl">
+              <Child Text="{ui:TemplateBinding Missing}" />
+            </controls:ControlTemplate>
+            """;
+
+        Assert.Single(Validate(xaml), d => d.Code == XamlValidator.InvalidTemplateBindingCode);
+    }
+
+    [Fact]
+    public void MissingKnownDataType_IsReportedOnce()
+    {
+        const string xaml = """
+            <ui:DataTemplate xmlns="using:TestApp"
+                             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                             xmlns:ui="using:Microsoft.UI.Xaml"
+                             x:DataType="MissingChild">
+              <Child Text="{x:Bind Name}" />
+            </ui:DataTemplate>
+            """;
+
+        Assert.Single(Validate(xaml), d => d.Code == XamlValidator.UnknownDataTypeCode);
+    }
+
+    [Fact]
+    public void XBind_ValidatesResultAssignmentAccessibilityAndStaticPaths()
+    {
+        Assert.DoesNotContain(
+            Validate(Page("""Visibility="{x:Bind IsEnabled}" """)),
+            d => d.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind Text}" """)),
+            d => d.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind SecretText}" """)),
+            d => d.Code is XamlValidator.UnknownBindMemberCode or
+                XamlValidator.InaccessibleBindMemberCode);
+        foreach (var inheritedPath in new[]
+                 {
+                     "ProtectedText",
+                     "InternalText",
+                     "PrivateProtectedText",
+                 })
+        {
+            Assert.DoesNotContain(
+                Validate(Page($$"""Text="{x:Bind {{inheritedPath}}}" """)),
+                d => d.Code is XamlValidator.UnknownBindMemberCode or
+                    XamlValidator.InaccessibleBindMemberCode);
+        }
+        Assert.DoesNotContain(
+            Validate(Page("""Code="{x:Bind Letter}" """)),
+            d => d.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind Code}" """)),
+            d => d.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.Single(
+            Validate(Page("""Width="{x:Bind Child}" """)),
+            d => d.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Width="{x:Bind Child, Converter={StaticResource Converter}}" """)),
+            d => d.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.Single(
+            Validate(Page("""Text="{x:Bind Child.Secret}" """)),
+            d => d.Code == XamlValidator.InaccessibleBindMemberCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind Child.InternalText}" """)),
+            d => d.Code is XamlValidator.UnknownBindMemberCode or
+                XamlValidator.InaccessibleBindMemberCode);
+        Assert.Single(
+            Validate(Page("""Width="{x:Bind local:BindStatics.Flag}" """)),
+            d => d.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Visibility="{x:Bind local:BindStatics.InternalFlag}" """)),
+            d => d.Code is XamlValidator.UnknownBindMemberCode or
+                XamlValidator.InaccessibleBindMemberCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind local:BindStatics.Child.InternalText}" """)),
+            d => d.Code is XamlValidator.UnknownBindMemberCode or
+                XamlValidator.InaccessibleBindMemberCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind local:BindStatics.Children[0].Name}" """)),
+            d => d.Code is XamlValidator.UnknownBindMemberCode or
+                XamlValidator.InaccessibleBindMemberCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind local:BindStatics.Format(Text)}" """)),
+            d => d.Code is XamlValidator.UnknownBindMemberCode or
+                XamlValidator.InvalidBindFunctionCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind local:BindStatics.Format(Text, Text)}" """)),
+            d => d.Code is XamlValidator.UnknownBindMemberCode or
+                XamlValidator.InvalidBindFunctionCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind local:BindStatics.Formatter.Format(Child)}" """)),
+            d => d.Code is XamlValidator.UnknownBindMemberCode or
+                XamlValidator.InvalidBindFunctionCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind local:BindStatics.Children[0].Name.ToString()}" """)),
+            d => d.Code is XamlValidator.UnknownBindMemberCode or
+                XamlValidator.InvalidBindFunctionCode);
+        Assert.Contains(
+            Validate(Page("""Text="{x:Bind local:BindStatics.Format()}" """)),
+            d => d.Code == XamlValidator.InvalidBindFunctionCode);
+        Assert.Contains(
+            Validate(Page("""Text="{x:Bind local:BindStatics.PrivateGetter}" """)),
+            d => d.Code == XamlValidator.UnknownBindMemberCode);
+        var missingNegated = Validate(Page("""Text="{x:Bind !DefinitelyMissingNegated}" """));
+        Assert.Single(
+            missingNegated,
+            d => d.Code == XamlValidator.UnknownBindMemberCode);
+        Assert.DoesNotContain(
+            missingNegated,
+            d => d.Code == XamlValidator.InvalidBindAssignmentCode);
+    }
+
+    [Fact]
+    public void BindAssignment_UsesNullableAndUserDefinedConversions()
+    {
+        Assert.Contains(
+            Validate(Page("""Width="{x:Bind OptionalWidth}" """)),
+            diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.DoesNotContain(
+            Validate(Page("""OptionalWidthTarget="{x:Bind Width}" """)),
+            diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Width="{x:Bind ConvertibleWidth}" """)),
+            diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+    }
+
+    [Fact]
+    public void EventHandler_RequiresCompatibleDelegateSignature()
+    {
+        Assert.DoesNotContain(
+            Validate(Page("""ValueChanged="OnValueChanged" """)),
+            d => d.Code is XamlValidator.MissingEventHandlerCode or
+                XamlValidator.IncompatibleEventHandlerCode);
+        Assert.Single(
+            Validate(Page("""ValueChanged="BadValueChanged" """)),
+            d => d.Code == XamlValidator.IncompatibleEventHandlerCode);
+        Assert.Single(
+            Validate(Page("""ValueChanged="WrongReturn" """)),
+            d => d.Code == XamlValidator.IncompatibleEventHandlerCode);
+        Assert.Single(
+            Validate(Page("""Clicked="PrivateBaseClick" """)),
+            d => d.Code == XamlValidator.MissingEventHandlerCode);
+    }
+
+    [Fact]
+    public void UnknownLocalNamespace_IsNotRejectedWithoutTypeEvidence()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:empty="using:TestApp.Empty"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  x:Class="TestApp.Page">
+              <Child />
+            </Page>
+            """;
+
+        Assert.DoesNotContain(
+            Validate(xaml),
+            diagnostic => diagnostic.Code == XamlValidator.UnknownNamespaceDeclarationCode);
+    }
+
+    [Theory]
+    [InlineData("using:")]
+    [InlineData("clr-namespace:")]
+    [InlineData("clr-namespace: ;assembly=External")]
+    public void EmptyNamespaceDeclaration_IsWarned(string namespaceUri)
+    {
+        var xaml = $$"""
+            <Page xmlns="using:TestApp"
+                  xmlns:empty="{{namespaceUri}}"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  x:Class="TestApp.Page">
+              <Child />
+            </Page>
+            """;
+
+        Assert.Single(
+            Validate(xaml),
+            diagnostic => diagnostic.Code == XamlValidator.UnknownNamespaceDeclarationCode);
+    }
+
+    [Fact]
+    public void NamespaceAbsentFromLoadedCompilation_IsNotGuessedInvalid()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:external="using:Package.NotLoaded"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  x:Class="TestApp.Page">
+              <Child />
+            </Page>
+            """;
+
+        Assert.DoesNotContain(
+            Validate(xaml),
+            diagnostic => diagnostic.Code == XamlValidator.UnknownNamespaceDeclarationCode);
+    }
+
+    [Fact]
+    public void UndeclaredElementPrefix_SuggestsUniqueAuthoritativeUsingUri()
+    {
+        var diagnostic = Assert.Single(
+            Validate("""<missing:Child />"""),
+            d => d.Code == XamlValidator.UndeclaredPrefixCode);
+
+        var data = Assert.IsType<DiagnosticData>(diagnostic.Data);
+        Assert.Equal("missing", data.Bad);
+        Assert.Equal(["using:TestApp"], data.Suggestions);
+    }
+
+    [Fact]
+    public void UndeclaredElementPrefix_DoesNotSuggestAmbiguousTypes()
+    {
+        const string ambiguousTypes = Types + """
+
+            namespace Other
+            {
+                public class Child { }
+            }
+            """;
+
+        var ambiguous = Assert.Single(
+            ValidateWithSource("""<missing:Child />""", ambiguousTypes),
+            d => d.Code == XamlValidator.UndeclaredPrefixCode);
+        Assert.Null(ambiguous.Data);
+    }
+
+    [Theory]
+    [InlineData("x", "Class", "http://schemas.microsoft.com/winfx/2006/xaml")]
+    [InlineData("d", "DesignInstance", "http://schemas.microsoft.com/expression/blend/2008")]
+    [InlineData("mc", "Ignorable", "http://schemas.openxmlformats.org/markup-compatibility/2006")]
+    public void UndeclaredStandardPrefix_SuggestsCanonicalNamespace(
+        string prefix,
+        string localName,
+        string namespaceUri)
+    {
+        var diagnostic = Assert.Single(
+            Validate($$"""<Page {{prefix}}:{{localName}}="Value" />"""),
+            d => d.Code == XamlValidator.UndeclaredPrefixCode);
+        var data = Assert.IsType<DiagnosticData>(diagnostic.Data);
+
+        Assert.Equal(prefix, data.Bad);
+        Assert.Equal([namespaceUri], data.Suggestions);
     }
 
     [Fact]

@@ -562,8 +562,9 @@ export async function runEditorScenarios(ctx) {
   const caXmlnsDiag = caXmlnsDiags.find((x) => x.code === "WXAML0001");
   if (!caXmlnsDiag) fail(`code actions: expected a WXAML0001 for the undeclared 'd' prefix (got ${JSON.stringify(caXmlnsDiags.map((x) => x.code))})`);
   const caXmlnsActions = await codeActionWith(392, caXmlnsDiag, "add-xmlns-d");
-  const caXmlnsFix = caXmlnsActions.find((a) => a.title === "Add xmlns:d declaration");
-  if (!caXmlnsFix) fail(`code actions: expected an "Add xmlns:d declaration" quick fix (got ${JSON.stringify(caXmlnsActions.map((a) => a.title))})`);
+  const caXmlnsTitle = 'Add xmlns:d="http://schemas.microsoft.com/expression/blend/2008"';
+  const caXmlnsFix = caXmlnsActions.find((a) => a.title === caXmlnsTitle);
+  if (!caXmlnsFix) fail(`code actions: expected an "${caXmlnsTitle}" quick fix (got ${JSON.stringify(caXmlnsActions.map((a) => a.title))})`);
   if (caXmlnsFix.kind !== "quickfix") fail(`code actions: xmlns fix kind should be 'quickfix', got ${caXmlnsFix.kind}`);
   if (caXmlnsFix.isPreferred !== true) fail(`code actions: the xmlns fix should be isPreferred`);
   const caXmlnsEdit = caXmlnsFix.edit && caXmlnsFix.edit.changes && caXmlnsFix.edit.changes[xamlUri] && caXmlnsFix.edit.changes[xamlUri][0];
@@ -578,7 +579,7 @@ export async function runEditorScenarios(ctx) {
   if (caXmlnsEdit.range.start.line !== 0) {
     fail(`code actions: xmlns fix must insert on the root open-tag line 0 (got line ${caXmlnsEdit.range.start.line})`);
   }
-  console.log(`[ok] code actions: <d:Foo /> undeclared prefix -> "Add xmlns:d declaration" (zero-width insertion of the standard blend namespace)`);
+  console.log(`[ok] code actions: <d:Foo /> undeclared prefix -> canonical Blend xmlns quick fix`);
 
   // 21e) code action for an undeclared CUSTOM prefix (WXAML0001) whose element names one of the project's OWN source types -> "Add xmlns:local=\"using:<namespace>\"". <local:SmokePage> references the fixture's own SmokeFixture.SmokePage, so the fix INFERS the using: namespace from the type system (grouped after the root's xmlns declarations, before x:Class) as a single zero-width edit.
   const caUsing = `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <Grid>\n    <local:SmokePage />\n  </Grid>\n</Page>`;

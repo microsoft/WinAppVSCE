@@ -248,7 +248,19 @@ function flattenSymbols(nodes, out = []) {
 // Wait for matching diagnostics; without a predicate, allow stale diagnostics to settle.
 async function diagnosticsFor(text, predicate, timeoutMs = 15000) {
   const { clean } = splitCaret(text.includes("|") ? text : text + "|");
-  await setBuffer(clean);
+  let diagnosticsChanged;
+  const changed = new Promise((resolve) => { diagnosticsChanged = resolve; });
+  const subscription = vscode.languages.onDidChangeDiagnostics((event) => {
+    if (event.uris.some((uri) => uri.toString() === doc.uri.toString())) {
+      diagnosticsChanged();
+    }
+  });
+  try {
+    await setBuffer(clean);
+    await Promise.race([changed, delay(350)]);
+  } finally {
+    subscription.dispose();
+  }
   const started = Date.now();
   let last = vscode.languages.getDiagnostics(doc.uri);
   while (Date.now() - started < timeoutMs) {
@@ -619,12 +631,7 @@ async function codeActionsAt(buffer, matchCode, matchText) {
   );
   const actions = (raw || [])
     .filter((a) => a && a.title)
-    .map((a) => ({
-      title: a.title,
-      kind: a.kind && a.kind.value ? a.kind.value : undefined,
-      isPreferred: a.isPreferred === true,
-      edits: decodeWorkspaceEdit(a.edit),
-    }));
+    .map(normalizeCodeAction);
 
   return {
     diagnostic: { code: codeString(diag.code), message: diag.message, range: rangeShape(diag.range) },
@@ -643,12 +650,23 @@ async function codeActionsAtCaret(text) {
   );
   return (raw || [])
     .filter((a) => a && a.title)
-    .map((a) => ({
-      title: a.title,
-      kind: a.kind && a.kind.value ? a.kind.value : undefined,
-      isPreferred: a.isPreferred === true,
-      edits: decodeWorkspaceEdit(a.edit),
-    }));
+    .map(normalizeCodeAction);
+}
+
+function normalizeCodeAction(action) {
+  const wrapped = action.command?.command === "winui-xaml.applyGeneratedEventHandler";
+  const command = wrapped ? action.command.arguments?.[2] : action.command;
+  const edit = wrapped ? action.command.arguments?.[1] : action.edit;
+  return {
+    title: action.title,
+    kind: action.kind && action.kind.value ? action.kind.value : undefined,
+    isPreferred: action.isPreferred === true,
+    edits: decodeWorkspaceEdit(edit),
+    command: command
+      ? { command: command.command, arguments: command.arguments || [] }
+      : undefined,
+    transportCommand: action.command?.command,
+  };
 }
 
 module.exports = {

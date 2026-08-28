@@ -500,7 +500,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         var edit = BuildHandlerInsertionEdit(uri, classSymbol, handlerName, BuildParameterList(invoke));
-        if (edit == null)
+        if (edit == null || edit.Changes.Keys.SingleOrDefault() is not { } codeBehindUri)
         {
             return null;
         }
@@ -511,6 +511,12 @@ internal sealed partial class XamlLanguageServer
             Kind = "quickfix",
             IsPreferred = true,
             Edit = edit,
+            Command = new Command
+            {
+                Title = "Save generated event handler",
+                Name = "winui-xaml.saveGeneratedEventHandler",
+                Arguments = new object[] { codeBehindUri },
+            },
         };
     }
 

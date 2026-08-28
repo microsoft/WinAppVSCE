@@ -15,7 +15,7 @@ internal sealed partial class XamlLanguageServer
             return new CompletionList();
         }
 
-        if (!TryGetAcceptedContext(doc, out var context))
+        if (!TryGetAcceptedContext(doc, out var context, allowStale: true))
         {
             WarmUp(doc.Uri);
             return new CompletionList { IsIncomplete = true };
@@ -226,21 +226,45 @@ internal sealed partial class XamlLanguageServer
         return false;
     }
 
-    private bool TryGetReadyProjectContext(string uri, out XamlProjectContext context)
+    private bool TryGetReadyProjectContext(
+        string uri,
+        out XamlProjectContext context,
+        bool allowStale = false)
     {
         if (TryGetReadyContext(uri, out context!))
         {
             return true;
         }
 
-        return _contexts.TryGetLatest(uri, out context!);
+        if (_contexts.TryGetLatest(uri, out var latest) &&
+            latest.Stage == XamlProjectStage.Full)
+        {
+            context = latest;
+            return true;
+        }
+
+        if (allowStale && _contexts.TryGetStale(uri, out var stale))
+        {
+            context = stale;
+            return true;
+        }
+
+        if (latest is not null)
+        {
+            context = latest;
+            return true;
+        }
+
+        context = null!;
+        return false;
     }
 
     private bool TryGetAcceptedContext(
         TextDocument document,
-        out XamlProjectContext context)
+        out XamlProjectContext context,
+        bool allowStale = false)
     {
-        if (!TryGetReadyProjectContext(document.Uri, out var accepted))
+        if (!TryGetReadyProjectContext(document.Uri, out var accepted, allowStale))
         {
             context = null!;
             return false;

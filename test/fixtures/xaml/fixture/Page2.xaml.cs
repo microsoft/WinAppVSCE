@@ -23,7 +23,7 @@ public sealed partial class Page2 : Page
         Frame.Content = App.Services.GetRequiredService<DiPage>();
     }
 
-    private void OnBack_Click(object sender, RoutedEventArgs e)
+    public void OnBack_Click(object sender, RoutedEventArgs e)
     {
         if (Frame.CanGoBack)
         {

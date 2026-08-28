@@ -115,6 +115,81 @@ public class XamlFormatterTests
     }
 
     [Fact]
+    public void ProductionStyleExcerptIsByteStableAfterFirstPass()
+    {
+        var input = string.Join("\r\n",
+            "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+            "<ResourceDictionary",
+            "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+            "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
+            "  <ResourceDictionary.MergedDictionaries>",
+            "      <XamlControlsResources xmlns=\"using:Microsoft.UI.Xaml.Controls\" />",
+            "      <!--  Other merged dictionaries here  -->",
+            "  </ResourceDictionary.MergedDictionaries>",
+            "    <Style x:Key=\"SubtleComboBoxStyle\" TargetType=\"ComboBox\">",
+            "      <Setter Property=\"ItemsPanel\">",
+            "          <Setter.Value>",
+            "        <ItemsPanelTemplate>",
+            "              <CarouselPanel/>",
+            "        </ItemsPanelTemplate>",
+            "          </Setter.Value>",
+            "      </Setter>",
+            "      <Setter Property=\"Template\">",
+            "        <Setter.Value>",
+            "          <ControlTemplate",
+            "                       TargetType=\"ComboBox\">",
+            "                 <ContentPresenter",
+            "                       x:Name=\"ContentPresenter\"",
+            "                            Content=\"{TemplateBinding SelectionBoxItem}\"",
+            "                       Visibility=\"Visible\" />",
+            "          </ControlTemplate>",
+            "        </Setter.Value>",
+            "      </Setter>",
+            "    </Style>",
+            "</ResourceDictionary>");
+        var expected = string.Join("\r\n",
+            "<?xml version=\"1.0\" encoding=\"utf-8\" ?>",
+            "<ResourceDictionary",
+            "    xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"",
+            "    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">",
+            "  <ResourceDictionary.MergedDictionaries>",
+            "    <XamlControlsResources xmlns=\"using:Microsoft.UI.Xaml.Controls\" />",
+            "    <!--  Other merged dictionaries here  -->",
+            "  </ResourceDictionary.MergedDictionaries>",
+            "  <Style x:Key=\"SubtleComboBoxStyle\" TargetType=\"ComboBox\">",
+            "    <Setter Property=\"ItemsPanel\">",
+            "      <Setter.Value>",
+            "        <ItemsPanelTemplate>",
+            "          <CarouselPanel/>",
+            "        </ItemsPanelTemplate>",
+            "      </Setter.Value>",
+            "    </Setter>",
+            "    <Setter Property=\"Template\">",
+            "      <Setter.Value>",
+            "        <ControlTemplate",
+            "                       TargetType=\"ComboBox\">",
+            "          <ContentPresenter",
+            "                       x:Name=\"ContentPresenter\"",
+            "                            Content=\"{TemplateBinding SelectionBoxItem}\"",
+            "                       Visibility=\"Visible\" />",
+            "        </ControlTemplate>",
+            "      </Setter.Value>",
+            "    </Setter>",
+            "  </Style>",
+            "</ResourceDictionary>");
+
+        var once = Format(input);
+        var twice = Format(once);
+
+        Assert.Equal(expected, once);
+        Assert.Equal(once, twice);
+        Assert.Empty(GetEdits(once));
+        Assert.Equal(input.Count(c => c == '\n'), once.Count(c => c == '\n'));
+        Assert.Contains("<CarouselPanel/>", once);
+        Assert.Contains("Visibility=\"Visible\" />", once);
+    }
+
+    [Fact]
     public void ConventionallyFormattedShortElementsProduceNoEdits()
     {
         var input = Lines(

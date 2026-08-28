@@ -815,6 +815,22 @@ internal static partial class CompletionProvider
                     ctx.BindElementName!,
                     typeSystem))
             : ResolveElementType(ParseQualified(ctx.BindCastType!), scope, typeSystem);
+        var prefixPath = ctx.BindPrefixPath ?? string.Empty;
+        bool staticRoot = false;
+        if (!ctx.IsClassicBinding &&
+            string.IsNullOrEmpty(ctx.BindCastType) &&
+            string.IsNullOrEmpty(ctx.BindElementName))
+        {
+            int firstDot = prefixPath.IndexOf('.');
+            var possibleType = firstDot < 0 ? prefixPath : prefixPath[..firstDot];
+            if (possibleType.IndexOf(':') > 0 &&
+                ResolveElementType(ParseQualified(possibleType), scope, typeSystem) is { } resolvedType)
+            {
+                root = resolvedType;
+                prefixPath = firstDot < 0 ? string.Empty : prefixPath[(firstDot + 1)..];
+                staticRoot = true;
+            }
+        }
         if (!ctx.IsClassicBinding &&
             string.IsNullOrEmpty(ctx.BindPrefixPath) &&
             string.IsNullOrEmpty(ctx.BindCastType) &&
@@ -847,22 +863,36 @@ internal static partial class CompletionProvider
             return Finish(items);
         }
 
+        var accessWithin = ctx.IsClassicBinding ? null : pageClass;
+        bool allowRootNonPublic =
+            accessWithin is not null &&
+            SymbolEqualityComparer.Default.Equals(root, accessWithin) &&
+            string.IsNullOrEmpty(ctx.BindCastType) &&
+            string.IsNullOrEmpty(ctx.BindElementName);
+
         // Walk the segments already typed before the last dot.
         ITypeSymbol current = root;
         bool atRoot = true;
-        if (!string.IsNullOrEmpty(ctx.BindPrefixPath))
+        if (!string.IsNullOrEmpty(prefixPath))
         {
-            foreach (var segment in ctx.BindPrefixPath!.Split('.'))
+            foreach (var segment in prefixPath.Split('.'))
             {
                 if (segment.Length == 0)
                 {
                     return new CompletionList();
                 }
 
-                var resolved =
-                    atRoot &&
-                    !ctx.IsClassicBinding &&
-                    string.IsNullOrEmpty(ctx.BindCastType)
+                ITypeSymbol? resolved;
+                if (staticRoot && atRoot)
+                {
+                    resolved = ResolveStaticBindSegmentType(
+                        typeSystem, current, segment, accessWithin);
+                }
+                else
+                {
+                    resolved = atRoot &&
+                               !ctx.IsClassicBinding &&
+                               string.IsNullOrEmpty(ctx.BindCastType)
                         ? XamlSemanticFacts.ResolveNamedElementTypeInScope(
                             doc,
                             doc.Parsed.FindNode(Math.Max(0, offset - 1)),
@@ -872,12 +902,15 @@ internal static partial class CompletionProvider
                               typeSystem,
                               current,
                               segment,
-                              atRoot)
+                              atRoot && allowRootNonPublic,
+                              accessWithin)
                         : ResolveBindSegmentType(
                             typeSystem,
                             current,
                             segment,
-                            atRoot);
+                            atRoot && allowRootNonPublic,
+                            accessWithin);
+                }
                 if (resolved is null)
                 {
                     return new CompletionList();
@@ -888,7 +921,13 @@ internal static partial class CompletionProvider
             }
         }
 
-        foreach (var member in typeSystem.GetBindableMembers(current, includeRootNonPublic: atRoot))
+        var candidates = staticRoot && atRoot
+            ? typeSystem.GetBindableStaticMembers(current, accessWithin)
+            : typeSystem.GetBindableMembers(
+                current,
+                includeRootNonPublic: atRoot && allowRootNonPublic,
+                accessWithin);
+        foreach (var member in candidates)
         {
             if (!StartsWith(member.Name, ctx.Partial) ||
                 IsBindCompletionNoise(member) ||
@@ -969,7 +1008,11 @@ internal static partial class CompletionProvider
 
     /// <summary>Resolves one {x:Bind} path segment to the type it evaluates to, handling indexer suffixes: a segment like Items[0] resolves the Items member</summary>
     internal static ITypeSymbol? ResolveBindSegmentType(
-        XamlTypeSystem typeSystem, ITypeSymbol current, string segment, bool atRoot)
+        XamlTypeSystem typeSystem,
+        ITypeSymbol current,
+        string segment,
+        bool atRoot,
+        ISymbol? accessWithin = null)
     {
         int bracket = segment.IndexOf('[');
         string name = (bracket < 0 ? segment : segment.Substring(0, bracket)).Trim();
@@ -978,7 +1021,10 @@ internal static partial class CompletionProvider
             return null;
         }
 
-        var member = typeSystem.GetBindableMembers(current, includeRootNonPublic: atRoot)
+        var member = typeSystem.GetBindableMembers(
+                current,
+                includeRootNonPublic: atRoot,
+                accessWithin)
             .FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.Ordinal));
         var type = member is null ? null : XamlTypeSystem.GetMemberType(member);
         if (type is null)
@@ -1001,6 +1047,28 @@ internal static partial class CompletionProvider
         }
 
         return type;
+    }
+
+    internal static ITypeSymbol? ResolveStaticBindSegmentType(
+        XamlTypeSystem typeSystem,
+        ITypeSymbol current,
+        string segment,
+        ISymbol? accessWithin = null)
+    {
+        int bracket = segment.IndexOf('[');
+        string name = (bracket < 0 ? segment : segment[..bracket]).Trim();
+        var member = typeSystem.GetBindableStaticMembers(current, accessWithin)
+            .FirstOrDefault(candidate => candidate.Name == name);
+        var result = member is null ? null : XamlTypeSystem.GetMemberType(member);
+        for (int i = bracket; result is not null && bracket >= 0 && i < segment.Length; i++)
+        {
+            if (segment[i] == '[')
+            {
+                result = XamlTypeSystem.GetCollectionElementType(result);
+            }
+        }
+
+        return result;
     }
 
     /// <summary>True when a bindable member should be hidden from {x:Bind} completion because it is noise rather than a real authoring target</summary>

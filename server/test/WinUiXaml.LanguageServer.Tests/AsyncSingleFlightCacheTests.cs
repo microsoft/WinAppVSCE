@@ -252,10 +252,104 @@ public sealed class AsyncSingleFlightCacheTests
             "page",
             () => Task.FromResult<Value?>(new Value("first")));
 
+        cache.RestartAllPreservingLatest();
+        Assert.True(cache.TryGetStale("page", out _));
         cache.Invalidate("page", discardLatest: true);
 
         Assert.False(cache.TryGetReady("page", out _));
         Assert.False(cache.TryGetLatest("page", out _));
+        Assert.False(cache.TryGetStale("page", out _));
+    }
+
+    [Fact]
+    public async Task RestartPreservesStaleSnapshotWithoutShortCircuitingReplacement()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>();
+        await cache.GetOrStart(
+            "page",
+            () => Task.FromResult<Value?>(new Value("first")));
+
+        cache.RestartAllPreservingLatest();
+
+        Assert.False(cache.TryGetReady("page", out _));
+        Assert.False(cache.TryGetLatest("page", out _));
+        Assert.True(cache.TryGetStale("page", out var stale));
+        Assert.Equal("first", stale.Name);
+
+        var replacementRelease =
+            new TaskCompletionSource<Value?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var replacement = cache.GetOrStart("page", () => replacementRelease.Task);
+
+        Assert.True(cache.TryGetStale("page", out stale));
+        Assert.Equal("first", stale.Name);
+
+        replacementRelease.SetResult(new Value("second"));
+        Assert.Equal("second", (await replacement)?.Name);
+        Assert.False(cache.TryGetStale("page", out _));
+        Assert.True(cache.TryGetReady("page", out var ready));
+        Assert.Equal("second", ready.Name);
+    }
+
+    [Fact]
+    public async Task FailedReplacementRetiresStaleSnapshot()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>();
+        await cache.GetOrStart(
+            "page",
+            () => Task.FromResult<Value?>(new Value("first")));
+        cache.RestartAllPreservingLatest();
+
+        Assert.Null(await cache.GetOrStart(
+            "page",
+            () => Task.FromResult<Value?>(null)));
+
+        Assert.False(cache.TryGetStale("page", out _));
+    }
+
+    [Fact]
+    public async Task FaultedReplacementRetiresStaleSnapshot()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>();
+        await cache.GetOrStart(
+            "page",
+            () => Task.FromResult<Value?>(new Value("first")));
+        cache.RestartAllPreservingLatest();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            cache.GetOrStart(
+                "page",
+                () => Task.FromException<Value?>(
+                    new InvalidOperationException("load failed"))));
+
+        Assert.False(cache.TryGetStale("page", out _));
+    }
+
+    [Fact]
+    public async Task ConsecutiveRestartKeepsFullStaleSnapshotOverIntermediateLatest()
+    {
+        var cache = new AsyncSingleFlightCache<string, Value>();
+        await cache.GetOrStart(
+            "page",
+            () => Task.FromResult<Value?>(new Value("full")));
+        cache.RestartAllPreservingLatest();
+
+        var replacementRelease = new TaskCompletionSource<Value?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Func<Value, bool>? publish = null;
+        _ = cache.GetOrStart(
+            "page",
+            (_, publishIntermediate) =>
+            {
+                publish = publishIntermediate;
+                return replacementRelease.Task;
+            });
+        Assert.True(publish!(new Value("framework")));
+
+        cache.RestartAllPreservingLatest();
+
+        Assert.True(cache.TryGetStale("page", out var stale));
+        Assert.Equal("full", stale.Name);
+        replacementRelease.SetResult(null);
     }
 
     [Fact]
@@ -311,10 +405,13 @@ public sealed class AsyncSingleFlightCacheTests
             "app",
             () => Task.FromResult<Value?>(new Value("second")));
 
+        cache.RestartAllPreservingLatest();
         cache.InvalidateAll(discardLatest: true);
 
         Assert.False(cache.TryGetLatest("page", out _));
         Assert.False(cache.TryGetLatest("app", out _));
+        Assert.False(cache.TryGetStale("page", out _));
+        Assert.False(cache.TryGetStale("app", out _));
     }
 
     private sealed record Value(string Name);

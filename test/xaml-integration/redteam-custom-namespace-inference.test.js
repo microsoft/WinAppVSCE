@@ -98,7 +98,7 @@ function findUsingFix(r, prefix, namespaceName = "SmokeFixture") {
 }
 
 function findStandardFix(r, prefix) {
-  const title = `Add xmlns:${prefix} declaration`;
+  const title = `Add xmlns:${prefix}="${URI[prefix]}"`;
   const fix = r.actions.find((a) => a.title === title && a.kind === "quickfix");
   assert.ok(fix, `expected ${dump(title)} quickfix; diag=${dump(r.diagnostic)} actions=${dump(titles(r))}`);
   assert.strictEqual(fix.isPreferred, true, `${title} should be preferred`);

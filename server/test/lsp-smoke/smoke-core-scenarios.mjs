@@ -820,8 +820,8 @@ export async function runCoreScenarios(ctx) {
     "misspelled theme-resource key"
   );
   const misspelledThemeResourceHits = misspelledThemeResource.filter((x) => x.code === "WXAML0013");
-  if (misspelledThemeResourceHits.length !== 1 || misspelledThemeResourceHits[0].severity !== 1) {
-    fail(`misspelled ThemeResource key should produce one WXAML0013 error: ${JSON.stringify(misspelledThemeResource)}`);
+  if (misspelledThemeResourceHits.length !== 1 || misspelledThemeResourceHits[0].severity !== 2) {
+    fail(`misspelled ThemeResource key should produce one WXAML0013 warning when the resource catalog is non-authoritative: ${JSON.stringify(misspelledThemeResource)}`);
   }
 
   const validThemeResource = await validateDoc(
@@ -1178,7 +1178,7 @@ export async function runCoreScenarios(ctx) {
   if (shadowKeyText !== "ScopeKey28") fail(`scoped resource F12 range should select the x:Key value 'ScopeKey28', got ${JSON.stringify(shadowKeyText)}`);
   console.log(`[ok] definition(scoped resource): inner Grid.Resources shadows Page.Resources; range selects x:Key value`);
 
-  // 23a) The indexer first-segment base is validated: a bogus base is flagged while a valid Items[0] stays silent.
+  // 23a) The indexer first-segment base is validated independently from assignment compatibility.
   const idxDiag = await validateDoc(
     `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <StackPanel>\n` +
     `    <TextBlock Text="{x:Bind Items[0].Length}" />\n` +
@@ -1188,8 +1188,11 @@ export async function runCoreScenarios(ctx) {
   const idxBad = idxDiag.filter((x) => x.code === "WXAML0005");
   if (idxBad.length !== 1) fail(`expected exactly 1 WXAML0005 for the bogus indexer base, got ${idxBad.length}: ${JSON.stringify(idxDiag.map((x) => `${x.code}:${x.message}`))}`);
   if (!/Bogus/.test(idxBad[0].message)) fail(`indexer-base diagnostic should name the bogus base 'Bogus' (got ${JSON.stringify(idxBad[0].message)})`);
-  if (idxDiag.length !== 1) fail(`expected exactly 1 total diagnostic for the indexer buffer (Items[0] must stay silent), got ${idxDiag.length}`);
-  console.log(`[ok] validation(x:Bind indexer base): 'Bogus[0]' -> 1 WXAML0005, 'Items[0]' silent`);
+  if (idxDiag.some((x) => x.code === "WXAML0030")) {
+    fail(`Items[0].Length bound to Text should use WinUI's built-in string conversion: ${JSON.stringify(idxDiag)}`);
+  }
+  if (idxDiag.length !== 1) fail(`expected only the bogus indexer path diagnostic, got ${idxDiag.length}`);
+  console.log(`[ok] validation(x:Bind indexer base): 'Bogus[0]' -> WXAML0005; int Length -> string Text uses built-in conversion`);
 
   // 23c) Property-element member validation (WXAML0006): a mis-cased property element (<Grid.rowDefinitions>)
   // is flagged, while a correctly-cased instance property element (<Grid.RowDefinitions>) and an attached

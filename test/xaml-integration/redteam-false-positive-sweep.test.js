@@ -157,7 +157,7 @@ describe("WinUI XAML red-team 15 — broad false-positive sweep", function () {
       "      <VisualState x:Name=\"Wide\" />",
       "    </VisualStateGroup>",
       "  </VisualStateManager.VisualStateGroups>",
-      "  <TextBlock Text=\"{x:Bind !GreetingText, Mode=OneWay, FallbackValue=missing}\" />",
+      "  <TextBlock Text=\"{x:Bind !IsReady, Mode=OneWay, FallbackValue=missing}\" />",
       "  <ListView Grid.Row=\"1\" ItemsSource=\"{x:Bind Items, Mode=OneWay}\" ItemTemplate=\"{StaticResource Round15StringTemplate}\" ItemContainerStyle=\"{StaticResource Round15ListViewItemStyle}\" />",
       "  <ItemsRepeater ItemsSource=\"{x:Bind Items, Mode=OneWay}\">",
       "    <ItemsRepeater.ItemTemplate>",
@@ -180,9 +180,9 @@ describe("WinUI XAML red-team 15 — broad false-positive sweep", function () {
       "  <SolidColorBrush x:Key=\"Round15ConverterStandIn\" Color=\"Red\" />",
       "</Page.Resources>",
       "<StackPanel>",
-      "  <TextBlock Tag=\"{x:Bind !GreetingText, Mode=OneWay, Converter={StaticResource Round15ConverterStandIn}, ConverterParameter=flag, FallbackValue=false, TargetNullValue=false}\" />",
-      "  <TextBlock Tag=\"{x:Bind !!Items, Mode=OneWay, FallbackValue=false}\" />",
-      "  <TextBlock Tag=\"{x:Bind ! OnGo_Click(GreetingText, Items[0]), Mode=OneWay}\" />",
+      "  <TextBlock Tag=\"{x:Bind !IsReady, Mode=OneWay, Converter={StaticResource Round15ConverterStandIn}, ConverterParameter=flag, FallbackValue=false, TargetNullValue=false}\" />",
+      "  <TextBlock Tag=\"{x:Bind !!IsReady, Mode=OneWay, FallbackValue=false}\" />",
+      "  <TextBlock Tag=\"{x:Bind ! HasPair(GreetingText, Items[0]), Mode=OneWay}\" />",
       "</StackPanel>",
     ].join("\n  "));
     const diags = await h.diagnosticsFor(buffer, () => false, 3500);

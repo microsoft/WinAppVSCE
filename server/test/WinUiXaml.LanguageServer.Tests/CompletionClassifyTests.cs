@@ -115,6 +115,14 @@ public class CompletionClassifyTests
         Assert.Equal("BindPath:Items|Co", Classify("<TextBlock Text=\"{x:Bind Items.Co|}\" />"));
     }
 
+    [Fact]
+    public void BindStaticPath_CarriesQualifiedTypeAsPrefix()
+    {
+        Assert.Equal(
+            "BindPath:local:BindStatics|",
+            Classify("<TextBlock Text=\"{x:Bind local:BindStatics.|}\" />"));
+    }
+
     // --- Cast x:Bind path ((local:Type)Member) rebinds the completion root --------------------------
 
     [Fact]

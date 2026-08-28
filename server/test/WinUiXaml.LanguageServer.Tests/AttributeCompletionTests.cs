@@ -17,6 +17,7 @@ public sealed class AttributeCompletionTests
             public class Page : DependencyObject
             {
                 public Microsoft.UI.Xaml.ResourceDictionary Resources { get; } = new();
+                protected void InheritedHandler(object? sender, System.EventArgs e) { }
             }
             public class Button : DependencyObject
             {
@@ -54,6 +55,12 @@ public sealed class AttributeCompletionTests
             public class DoubleAnimation : DependencyObject { }
             public class HelperService { }
             public class ClickEventArgs : System.EventArgs { }
+            public class XamlPage : Page
+            {
+                private void ExistingHandler(object? sender, System.EventArgs e) { }
+                private void InheritedHandler(int sender, string e) { }
+                private void WrongHandler(int sender, string e) { }
+            }
 
             public static class AutomationProperties
             {
@@ -676,6 +683,36 @@ public sealed class AttributeCompletionTests
 
         Assert.DoesNotContain("Closed", labels);
         Assert.DoesNotContain("ActualHeight", labels);
+    }
+
+    [Fact]
+    public void EventValueCompletionOffersCompatibleAndConventionalHandlers()
+    {
+        const string marked = """
+            <Page xmlns="using:TestApp"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  x:Class="TestApp.XamlPage">
+              <Button x:Name="ActionButton" Click="|" />
+            </Page>
+            """;
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+        var typeSystem = CreateTypeSystem();
+        var pageClass = typeSystem.ResolveType("using:TestApp", "XamlPage");
+
+        var items = CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            typeSystem,
+            pageClass).Items;
+
+        Assert.Contains(items, item => item.Label == "ExistingHandler");
+        Assert.Contains(items, item => item.Label == "InheritedHandler");
+        Assert.Contains(
+            items,
+            item => item.Label == "ActionButton_Click" &&
+                item.Detail == "new event handler");
+        Assert.DoesNotContain(items, item => item.Label == "WrongHandler");
     }
 
     private static XamlTypeSystem CreateTypeSystem()

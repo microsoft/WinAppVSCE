@@ -795,6 +795,61 @@ internal static class XamlSemanticFacts
         return element is null ? null : ResolveElementType(element, typeSystem);
     }
 
+    internal static IEnumerable<IMethodSymbol> EnumerateEventHandlerMethods(
+        INamedTypeSymbol type,
+        string methodName,
+        XamlTypeSystem typeSystem) =>
+        EnumerateEventHandlerMethods(type, typeSystem, methodName);
+
+    internal static IEnumerable<IMethodSymbol> EnumerateEventHandlerMethods(
+        INamedTypeSymbol type,
+        XamlTypeSystem typeSystem,
+        string? methodName = null)
+    {
+        for (INamedTypeSymbol? current = type; current is not null; current = current.BaseType)
+        {
+            var members = methodName is null ? current.GetMembers() : current.GetMembers(methodName);
+            foreach (var method in members.OfType<IMethodSymbol>())
+            {
+                if (!method.IsImplicitlyDeclared &&
+                    method.AssociatedSymbol is null &&
+                    typeSystem.IsSymbolAccessibleWithin(method, type))
+                {
+                    yield return method;
+                }
+            }
+        }
+    }
+
+    internal static bool IsCompatibleEventHandler(
+        IMethodSymbol method,
+        IMethodSymbol delegateInvoke)
+    {
+        if (method.MethodKind != MethodKind.Ordinary ||
+            method.IsStatic ||
+            !method.ReturnsVoid ||
+            method.Parameters.Length != delegateInvoke.Parameters.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < method.Parameters.Length; i++)
+        {
+            if (method.Parameters[i].RefKind != delegateInvoke.Parameters[i].RefKind ||
+                !(SymbolEqualityComparer.Default.Equals(
+                      method.Parameters[i].Type,
+                      delegateInvoke.Parameters[i].Type) ||
+                  XamlTypeSystem.IsAssignableTo(
+                      delegateInvoke.Parameters[i].Type,
+                      method.Parameters[i].Type)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     internal static IReadOnlyList<IReadOnlyList<(string Name, XamlAttribute Attribute)>> GetNameScopes(
         XamlElement root,
         XamlTypeSystem typeSystem)

@@ -1027,8 +1027,14 @@ export async function runCompletionScenarios(ctx) {
     if (gen.title !== "Generate event handler 'Foo_Click'") fail(`gap #3: wrong title: ${gen.title}`);
     if (gen.kind !== "quickfix") fail(`gap #3: action must be a quickfix, got ${gen.kind}`);
     if (gen.isPreferred !== true) fail(`gap #3: action must be preferred`);
+    if (gen.command?.command !== "winui-xaml.saveGeneratedEventHandler") {
+      fail(`gap #3: action should request code-behind save recovery, got ${JSON.stringify(gen.command)}`);
+    }
     const changes = gen.edit?.changes || {};
     const target = Object.keys(changes)[0] || "";
+    if (gen.command?.arguments?.[0] !== target) {
+      fail(`gap #3: save recovery should target the edited code-behind URI, got ${JSON.stringify(gen.command)}`);
+    }
     if (!target.toLowerCase().endsWith("smokepage.xaml.cs")) fail(`gap #3: edit should target SmokePage.xaml.cs, got ${target}`);
     if (/\.g\.i?\.cs$/i.test(target)) fail(`gap #3: must not write to a generated partial: ${target}`);
     const newText = changes[target]?.[0]?.newText || "";

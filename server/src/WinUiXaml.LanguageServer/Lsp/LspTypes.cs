@@ -538,6 +538,9 @@ internal sealed class CodeAction
     [JsonPropertyName("diagnostics")] public List<Diagnostic>? Diagnostics { get; set; }
     [JsonPropertyName("isPreferred")] public bool? IsPreferred { get; set; }
     [JsonPropertyName("edit")] public WorkspaceEdit? Edit { get; set; }
+    [JsonPropertyName("command")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Command? Command { get; set; }
 }
 
 // --- Semantic tokens --------------------------------------------------------

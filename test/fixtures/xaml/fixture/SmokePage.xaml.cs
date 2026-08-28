@@ -28,6 +28,13 @@ public sealed partial class SmokePage : Page
     {
         Frame.Navigate(typeof(Page2));
     }
+
+    public bool IsReady { get; } = true;
+
+    public string FormatPair(string first, string second) => first + second;
+
+    public bool HasPair(string first, string second) =>
+        first.Length > 0 && second.Length > 0;
 }
 
 internal sealed class InternalCard : Control

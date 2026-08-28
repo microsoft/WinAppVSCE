@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using WinUiXaml.LanguageServer.Lsp;
 using WinUiXaml.Workspace;
 using WinUiXaml.Xaml;
@@ -1025,7 +1026,13 @@ internal static partial class CompletionProvider
             ResolveElementType(element.Name, scope, typeSystem) is { } eventOwner &&
             typeSystem.FindMember(eventOwner, ctx.AttributeName!) is { Kind: XamlMemberKind.Event } evt)
         {
-            return CompleteEventHandler(evt, pageClass, ctx.Partial, replaceRange);
+            return CompleteEventHandler(
+                evt,
+                element,
+                typeSystem,
+                pageClass,
+                ctx.Partial,
+                replaceRange);
         }
 
         var valueType = ResolveAttributeType(ctx.AttributeName!, element, scope, typeSystem);
@@ -1533,7 +1540,12 @@ internal static partial class CompletionProvider
 
     /// <summary>Completes the value of an event attribute (Click="|") with candidate handler methods on the page's x:Class code-behind</summary>
     private static CompletionList CompleteEventHandler(
-        XamlMemberInfo evt, INamedTypeSymbol? pageClass, string partial, Lsp.Range replaceRange)
+        XamlMemberInfo evt,
+        XamlElement element,
+        XamlTypeSystem typeSystem,
+        INamedTypeSymbol? pageClass,
+        string partial,
+        Lsp.Range replaceRange)
     {
         if (pageClass is null)
         {
@@ -1542,17 +1554,16 @@ internal static partial class CompletionProvider
 
         var invoke = (evt.Type as INamedTypeSymbol)?.DelegateInvokeMethod;
         var items = new List<CompletionItem>();
-        foreach (var method in pageClass.GetMembers().OfType<IMethodSymbol>())
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var existingNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var method in XamlSemanticFacts.EnumerateEventHandlerMethods(pageClass, typeSystem))
         {
-            if (method.MethodKind != MethodKind.Ordinary || method.IsStatic ||
-                method.IsImplicitlyDeclared || method.AssociatedSymbol is not null ||
-                !method.ReturnsVoid || !StartsWith(method.Name, partial))
-            {
-                continue;
-            }
-
-            // When the delegate signature is known, require the same arity so unrelated helper methods on the page class don't pollute the handler list.
-            if (invoke is not null && method.Parameters.Length != invoke.Parameters.Length)
+            existingNames.Add(method.Name);
+            if (!StartsWith(method.Name, partial) ||
+                (invoke is not null
+                    ? !XamlSemanticFacts.IsCompatibleEventHandler(method, invoke)
+                    : method.MethodKind != MethodKind.Ordinary || method.IsStatic || !method.ReturnsVoid) ||
+                !seen.Add(method.Name))
             {
                 continue;
             }
@@ -1565,8 +1576,29 @@ internal static partial class CompletionProvider
                 Detail = method.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
                 TextEdit = new TextEdit { Range = replaceRange, NewText = method.Name },
                 FilterText = method.Name,
-                SortText = method.Name,
+                SortText = "0" + method.Name,
             });
+        }
+
+        if (XamlSemanticFacts.GetNameAttribute(element, typeSystem)?.Value is
+                { IsMarkupExtension: false } nameValue)
+        {
+            string conventionalName = $"{nameValue.Text.Trim()}_{evt.Name}";
+            if (SyntaxFacts.IsValidIdentifier(conventionalName) &&
+                StartsWith(conventionalName, partial) &&
+                !existingNames.Contains(conventionalName) &&
+                seen.Add(conventionalName))
+            {
+                items.Add(new CompletionItem
+                {
+                    Label = conventionalName,
+                    Kind = CompletionItemKind.Method,
+                    Detail = "new event handler",
+                    TextEdit = new TextEdit { Range = replaceRange, NewText = conventionalName },
+                    FilterText = conventionalName,
+                    SortText = "1" + conventionalName,
+                });
+            }
         }
 
         return Finish(items);

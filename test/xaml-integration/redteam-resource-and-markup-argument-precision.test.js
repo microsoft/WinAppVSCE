@@ -143,12 +143,17 @@ describe("WinUI XAML red-team 28 — resource-key precision", function () {
     assert.match(targetLine(defs[0]), /Color="Red"/, `reference after Grid scope should land on Page.Resources, not the nested dictionary; buffer=${buffer}; got line: ${targetLine(defs[0])}`);
   });
 
-  it("unknown StaticResource key stays diagnostic-silent and returns no definition", async () => {
+  it("unknown StaticResource key reports a warning and returns no definition", async () => {
     const buffer = page('<Border Background="{StaticResource MissingResourceKey28|}" />');
     const defs = await h.definitionsAt(buffer);
     assert.strictEqual(defs.length, 0, `unknown StaticResource should not resolve; buffer=${buffer}; got ${JSON.stringify(defs)}`);
-    const diags = await h.diagnosticsFor(buffer, () => false, 3500);
-    assert.strictEqual(wxaml(diags).length, 0, `current unknown StaticResource behavior should be WXAML-silent; buffer=${buffer}; got ${summary(diags)}`);
+    const diags = await h.diagnosticsFor(
+      buffer,
+      (items) => items.some((item) => String(item.code) === "WXAML0013"),
+      3500);
+    const missing = wxaml(diags).filter((item) => String(item.code) === "WXAML0013");
+    assert.strictEqual(missing.length, 1, `unknown StaticResource should report once; buffer=${buffer}; got ${summary(diags)}`);
+    assert.strictEqual(missing[0].severity, vscode.DiagnosticSeverity.Warning);
   });
 });
 
@@ -213,23 +218,23 @@ describe("WinUI XAML red-team 28 — x:Bind function binding arguments", functio
   after(async () => { await h.revertProbe(); });
 
   it("F12 on a multi-argument x:Bind function name lands on the method", async () => {
-    const buffer = page('<TextBlock Text="{x:Bind OnGo_Cl|ick(GreetingText, Items[0])}" />');
+    const buffer = page('<TextBlock Text="{x:Bind Format|Pair(GreetingText, Items[0])}" />');
     const defs = await h.definitionsAt(buffer);
     assert.ok(defs.length > 0, `function name should resolve; buffer=${buffer}; got ${JSON.stringify(defs)}`);
     assert.strictEqual(path.basename(defs[0].fsPath), CS, `function name should land in ${CS}; buffer=${buffer}; got ${defs[0].fsPath}`);
-    assert.strictEqual(defs[0].line, 26, `function name should land on OnGo_Click line; buffer=${buffer}; got ${defs[0].line}`);
+    assert.strictEqual(defs[0].line, 33, `function name should land on FormatPair line; buffer=${buffer}; got ${defs[0].line}`);
   });
 
   it("F12 on the first function argument resolves that argument, not the function", async () => {
-    const buffer = page('<TextBlock Text="{x:Bind OnGo_Click(Greeting|Text, Items[0])}" />');
+    const buffer = page('<TextBlock Text="{x:Bind FormatPair(Greeting|Text, Items[0])}" />');
     const defs = await h.definitionsAt(buffer);
     assert.ok(defs.length > 0, `first function argument should resolve; buffer=${buffer}; got ${JSON.stringify(defs)}`);
     assert.strictEqual(path.basename(defs[0].fsPath), CS, `argument should land in ${CS}; buffer=${buffer}; got ${defs[0].fsPath}`);
-    assert.notStrictEqual(defs[0].line, 26, `argument caret must not land on OnGo_Click; buffer=${buffer}; got ${defs[0].line}`);
+    assert.notStrictEqual(defs[0].line, 33, `argument caret must not land on FormatPair; buffer=${buffer}; got ${defs[0].line}`);
   });
 
   it("hover on a dotted/indexed function argument resolves the terminal member", async () => {
-    const buffer = page('<TextBlock Text="{x:Bind OnGo_Click(GreetingText, Items[0].Len|gth)}" />');
+    const buffer = page('<TextBlock Text="{x:Bind FormatPair(GreetingText, Items[0].Len|gth)}" />');
     const md = await h.hoverAt(buffer);
     assert.match(md, /Length/, `terminal argument hover should identify Length; buffer=${buffer}; got: ${md}`);
     assert.match(md, /int|Int32|System\.Int32/, `terminal argument hover should include integer type; buffer=${buffer}; got: ${md}`);
@@ -237,15 +242,15 @@ describe("WinUI XAML red-team 28 — x:Bind function binding arguments", functio
   });
 
   it("F12 on a whitespace-padded later function argument still resolves independently", async () => {
-    const buffer = page('<TextBlock Text="{x:Bind OnGo_Click( GreetingText , Item|s[0] )}" />');
+    const buffer = page('<TextBlock Text="{x:Bind FormatPair( GreetingText , Item|s[0] )}" />');
     const defs = await h.definitionsAt(buffer);
     assert.ok(defs.length > 0, `later whitespace-padded argument should resolve; buffer=${buffer}; got ${JSON.stringify(defs)}`);
     assert.strictEqual(path.basename(defs[0].fsPath), CS, `later argument should land in ${CS}; buffer=${buffer}; got ${defs[0].fsPath}`);
-    assert.notStrictEqual(defs[0].line, 26, `later argument caret must not land on OnGo_Click; buffer=${buffer}; got ${defs[0].line}`);
+    assert.notStrictEqual(defs[0].line, 33, `later argument caret must not land on FormatPair; buffer=${buffer}; got ${defs[0].line}`);
   });
 
   it("bogus function argument member produces the same WXAML0005 as a bogus root x:Bind path", async () => {
-    const buffer = page('<TextBlock Text="{x:Bind OnGo_Click(GreetingText, DefinitelyMissingArg28)}" />');
+    const buffer = page('<TextBlock Text="{x:Bind FormatPair(GreetingText, DefinitelyMissingArg28)}" />');
     const diags = await h.diagnosticsFor(buffer, (d) =>
       d.some((x) => x.code === "WXAML0005" && /DefinitelyMissingArg28/.test(x.message)), 12000);
     const hit = diags.find((x) => x.code === "WXAML0005" && /DefinitelyMissingArg28/.test(x.message));
@@ -278,7 +283,7 @@ describe("WinUI XAML red-team 28 — markup-extension argument mechanics", funct
   });
 
   it("caret between x:Bind function arguments offers page members for the next argument", async () => {
-    const buffer = page('<TextBlock Text="{x:Bind OnGo_Click(GreetingText, |)}" />');
+    const buffer = page('<TextBlock Text="{x:Bind FormatPair(GreetingText, |)}" />');
     const items = await h.completionsAt(buffer);
     assert.ok(items.includes("GreetingText"), `function-argument gap should complete GreetingText; buffer=${buffer}; got ${items.slice(0, 120).join(", ")}`);
     assert.ok(items.includes("Items"), `function-argument gap should complete Items; buffer=${buffer}; got ${items.slice(0, 120).join(", ")}`);

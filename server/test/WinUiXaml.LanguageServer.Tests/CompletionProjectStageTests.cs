@@ -47,5 +47,34 @@ public sealed class CompletionProjectStageTests
         Assert.False(projectReady.IsIncomplete);
     }
 
+    [Fact]
+    public async Task CompletionCanUseFullStaleContextOnlyWhileReplacementLoads()
+    {
+        var cache = new AsyncSingleFlightCache<string, ProjectStage>();
+        await cache.GetOrStart(
+            "page",
+            () => Task.FromResult<ProjectStage?>(
+                new ProjectStage(XamlLanguageServer.XamlProjectStage.Full)));
+        cache.RestartAllPreservingLatest();
+
+        var releaseReplacement = new TaskCompletionSource<ProjectStage?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var replacement = cache.GetOrStart("page", () => releaseReplacement.Task);
+
+        Assert.True(cache.TryGetStale("page", out var stale));
+        var completion = XamlLanguageServer.ApplyProjectStageToCompletionList(
+            new CompletionList
+            {
+                Items = [new CompletionItem { Label = "ProjectMember" }],
+            },
+            stale.Stage);
+        Assert.False(completion.IsIncomplete);
+        Assert.Equal("ProjectMember", Assert.Single(completion.Items).Label);
+
+        releaseReplacement.SetResult(null);
+        Assert.Null(await replacement);
+        Assert.False(cache.TryGetStale("page", out _));
+    }
+
     private sealed record ProjectStage(XamlLanguageServer.XamlProjectStage Stage);
 }

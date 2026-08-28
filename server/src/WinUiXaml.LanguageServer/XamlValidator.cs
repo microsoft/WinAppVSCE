@@ -71,6 +71,26 @@ internal static class XamlValidator
     public const string InvalidBindModeCode = "WXAML0022";
     /// <summary>An x:Class directive names no type in the authoritative project compilation.</summary>
     public const string UnknownRootClassCode = "WXAML0023";
+    /// <summary>A named argument is not exposed by the resolved Binding type.</summary>
+    public const string UnknownBindingArgumentCode = "WXAML0024";
+    /// <summary>A classic Binding enum argument has an invalid value.</summary>
+    public const string InvalidBindingValueCode = "WXAML0025";
+    /// <summary>A RelativeSource argument or mode is invalid.</summary>
+    public const string InvalidRelativeSourceCode = "WXAML0026";
+    /// <summary>A Binding ElementName is absent from the applicable XAML namescope.</summary>
+    public const string UnknownBindingElementNameCode = "WXAML0027";
+    /// <summary>A TemplateBinding path is absent from the authoritative template target type.</summary>
+    public const string InvalidTemplateBindingCode = "WXAML0028";
+    /// <summary>An x:DataType names a missing type in a known namespace.</summary>
+    public const string UnknownDataTypeCode = "WXAML0029";
+    /// <summary>An x:Bind result is definitely not assignable to its target property.</summary>
+    public const string InvalidBindAssignmentCode = "WXAML0030";
+    /// <summary>An x:Bind path names an inaccessible member.</summary>
+    public const string InaccessibleBindMemberCode = "WXAML0031";
+    /// <summary>An event handler exists but no overload matches the event delegate.</summary>
+    public const string IncompatibleEventHandlerCode = "WXAML0032";
+    /// <summary>A using:/clr-namespace: declaration resolves to no usable compilation namespace.</summary>
+    public const string UnknownNamespaceDeclarationCode = "WXAML0033";
     /// <summary>Classic Binding in an untyped DataTemplate is not safe for Native AOT.</summary>
     public const string BindingDataTypeRecommendedCode = "WMC1510";
 
@@ -104,7 +124,7 @@ internal static class XamlValidator
             var pageClass = ResolvePageClass(root, typeSystem);
             ValidateRootClassExists(root, pageClass, doc, diagnostics);
             ValidateRootClass(root, pageClass, typeSystem, doc, diagnostics);
-            Walk(root, doc, typeSystem, diagnostics, pageClass, pageClass, resourceKeys, resourceIndex, resourceCatalogIsAuthoritative, styleTargetType: null, dataTemplateNeedsDataType: false);
+            Walk(root, doc, typeSystem, diagnostics, pageClass, pageClass, resourceKeys, resourceIndex, resourceCatalogIsAuthoritative, styleTargetType: null, dataTemplateNeedsDataType: false, dataTypeSuggestion: null);
 
             ValidateUniqueNames(root, doc, typeSystem, diagnostics);
             ValidateUniqueResourceKeys(root, doc, typeSystem, diagnostics);
@@ -124,19 +144,24 @@ internal static class XamlValidator
         XamlSemanticFacts.ResourceScopeIndex resourceIndex,
         bool resourceCatalogIsAuthoritative,
         INamedTypeSymbol? styleTargetType,
-        bool dataTemplateNeedsDataType)
+        bool dataTemplateNeedsDataType,
+        DiagnosticData? dataTypeSuggestion)
     {
         var elementType = ResolveElementType(element, typeSystem);
 
         // A template creates a new binding root. It must not inherit the page's x:Bind root.
         var effectiveRoot = bindRoot;
         var effectiveTemplateNeedsDataType = dataTemplateNeedsDataType;
+        var effectiveDataTypeSuggestion = dataTypeSuggestion;
         if (elementType is not null &&
             typeSystem.Capabilities.DataTemplate is { } dataTemplate &&
             XamlTypeSystem.IsAssignableTo(elementType, dataTemplate))
         {
             effectiveRoot = null;
             effectiveTemplateNeedsDataType = !TryGetDirectiveValue(element, "DataType", out _);
+            effectiveDataTypeSuggestion = effectiveTemplateNeedsDataType
+                ? InferDataTemplateType(element, bindRoot, typeSystem, doc)
+                : null;
         }
 
         // An unresolved x:DataType disables binding checks for its subtree.
@@ -144,17 +169,24 @@ internal static class XamlValidator
         {
             effectiveRoot = ResolveTypeName(dataTypeText, element.NamespaceScope, typeSystem);
             effectiveTemplateNeedsDataType = false;
+            effectiveDataTypeSuggestion = null;
+            if (effectiveRoot is null)
+            {
+                ValidateDataType(element, dataTypeText, typeSystem, doc, diagnostics);
+            }
         }
 
         var effectiveStyleTarget = styleTargetType;
         if (elementType is not null &&
-            typeSystem.Capabilities.Style is { } styleType &&
-            XamlTypeSystem.IsAssignableTo(elementType, styleType))
+            ((typeSystem.Capabilities.Style is { } styleType &&
+              XamlTypeSystem.IsAssignableTo(elementType, styleType)) ||
+             (typeSystem.Capabilities.ControlTemplate is { } controlTemplate &&
+              XamlTypeSystem.IsAssignableTo(elementType, controlTemplate))))
         {
             effectiveStyleTarget = TryResolveTypeAttribute(element, "TargetType", typeSystem);
         }
 
-        ValidateElement(element, doc, typeSystem, diagnostics, effectiveRoot, pageClass, effectiveStyleTarget, effectiveTemplateNeedsDataType);
+        ValidateElement(element, elementType, doc, typeSystem, diagnostics, effectiveRoot, pageClass, effectiveStyleTarget, effectiveTemplateNeedsDataType, effectiveDataTypeSuggestion);
         ValidateResourceReferences(
             element,
             doc,
@@ -167,7 +199,7 @@ internal static class XamlValidator
         {
             if (child is XamlElement childElement)
             {
-                Walk(childElement, doc, typeSystem, diagnostics, effectiveRoot, pageClass, resourceKeys, resourceIndex, resourceCatalogIsAuthoritative, effectiveStyleTarget, effectiveTemplateNeedsDataType);
+                Walk(childElement, doc, typeSystem, diagnostics, effectiveRoot, pageClass, resourceKeys, resourceIndex, resourceCatalogIsAuthoritative, effectiveStyleTarget, effectiveTemplateNeedsDataType, effectiveDataTypeSuggestion);
             }
         }
     }
@@ -207,8 +239,7 @@ internal static class XamlValidator
                     continue;
                 }
 
-                bool allowForwardReference =
-                    extension.Name?.LocalName is "ThemeResource" or "CustomResource";
+                const bool allowForwardReference = true;
                 if (resourceKeys.Contains(key) ||
                     resourceIndex.FindDeclaration(
                         element,
@@ -225,21 +256,10 @@ internal static class XamlValidator
                         element,
                         extension.Span.Start,
                         allowForwardReference)));
-                if (!resourceCatalogIsAuthoritative &&
-                    suggestion is null &&
-                    (allowForwardReference ||
-                     !resourceIndex.HasSameDictionaryForwardDeclaration(
-                         element,
-                         key,
-                         extension.Span.Start)))
-                {
-                    continue;
-                }
-
                 diagnostics.Add(Diag(
                     doc,
                     keySpan,
-                    SeverityError,
+                    resourceCatalogIsAuthoritative ? SeverityError : SeverityWarning,
                     UnknownResourceKeyCode,
                     $"The resource '{key}' was not found.",
                     suggestion));
@@ -248,9 +268,9 @@ internal static class XamlValidator
     }
 
     private static void ValidateElement(
-        XamlElement element, TextDocument doc, XamlTypeSystem typeSystem, List<Diagnostic> diagnostics,
+        XamlElement element, INamedTypeSymbol? elementType, TextDocument doc, XamlTypeSystem typeSystem, List<Diagnostic> diagnostics,
         INamedTypeSymbol? bindRoot, INamedTypeSymbol? pageClass, INamedTypeSymbol? styleTargetType,
-        bool dataTemplateNeedsDataType)
+        bool dataTemplateNeedsDataType, DiagnosticData? dataTypeSuggestion)
     {
         var scope = element.NamespaceScope;
         ValidateDuplicateAttributes(element, doc, diagnostics);
@@ -258,18 +278,22 @@ internal static class XamlValidator
         foreach (var attribute in element.Attributes)
         {
             ValidateBindMode(attribute, scope, typeSystem, doc, diagnostics);
+            ValidateClassicBinding(attribute, doc, typeSystem, diagnostics);
+            ValidateTemplateBinding(attribute, styleTargetType, doc, typeSystem, diagnostics);
             if (dataTemplateNeedsDataType)
             {
-                ValidateUntypedTemplateBinding(attribute, scope, typeSystem, doc, diagnostics);
+                ValidateUntypedTemplateBinding(
+                    attribute, scope, typeSystem, doc, diagnostics, dataTypeSuggestion);
             }
             if (dataTemplateNeedsDataType && XamlSemanticFacts.IsXBind(attribute, scope))
             {
                 diagnostics.Add(Diag(doc, attribute.Value!.InnerSpan, SeverityError, DataTemplateDataTypeRequiredCode,
-                    "x:Bind inside a DataTemplate requires x:DataType."));
+                    "x:Bind inside a DataTemplate requires x:DataType.", dataTypeSuggestion));
             }
             if (bindRoot is not null)
             {
-                ValidateBindPath(attribute, bindRoot, scope, typeSystem, doc, diagnostics);
+                ValidateBindPath(attribute, bindRoot, pageClass, scope, typeSystem, doc, diagnostics);
+                ValidateBindAssignment(attribute, elementType, bindRoot, pageClass, scope, typeSystem, doc, diagnostics);
             }
         }
 
@@ -283,6 +307,7 @@ internal static class XamlValidator
         }
 
         ValidateDirectives(element, scope, typeSystem, doc, diagnostics);
+        ValidateNamespaceDeclarations(element, typeSystem, doc, diagnostics);
 
         var name = element.Name;
         if (name is null)
@@ -295,7 +320,8 @@ internal static class XamlValidator
             !scope.TryResolvePrefix(name.Prefix, out _))
         {
             diagnostics.Add(Diag(doc, name.PrefixSpan ?? name.Span, SeverityError, UndeclaredPrefixCode,
-                $"The namespace prefix '{name.Prefix}' is not declared."));
+                $"The namespace prefix '{name.Prefix}' is not declared.",
+                GetUniqueNamespaceSuggestion(name.Prefix!, name.LocalName, typeSystem)));
             return;
         }
 
@@ -325,8 +351,8 @@ internal static class XamlValidator
             return;
         }
 
-        var elementType = typeSystem.ResolveType(uri, name.LocalName);
-        if (elementType is null)
+        var resolvedElementType = typeSystem.ResolveType(uri, name.LocalName);
+        if (resolvedElementType is null)
         {
             diagnostics.Add(Diag(doc, name.LocalNameSpan, SeverityError, UnknownTypeCode,
                 $"The type '{name.LocalName}' was not found in the XAML namespace '{uri}'.",
@@ -337,12 +363,12 @@ internal static class XamlValidator
         // The element type is known — verify its simple attributes name real members.
         foreach (var attribute in element.Attributes)
         {
-            ValidateAttributeMember(attribute, elementType, scope, typeSystem, doc, diagnostics, pageClass);
+            ValidateAttributeMember(attribute, resolvedElementType, scope, typeSystem, doc, diagnostics, pageClass);
         }
 
-        ValidateNameGrammar(element, elementType, scope, typeSystem, doc, diagnostics);
-        ValidateScalarContent(element, elementType, typeSystem, doc, diagnostics);
-        ValidateSetterProperty(element, elementType, styleTargetType, typeSystem, doc, diagnostics);
+        ValidateNameGrammar(element, resolvedElementType, scope, typeSystem, doc, diagnostics);
+        ValidateScalarContent(element, resolvedElementType, typeSystem, doc, diagnostics);
+        ValidateSetterProperty(element, resolvedElementType, styleTargetType, typeSystem, doc, diagnostics);
     }
 
     private static void ValidateAttributeMember(
@@ -390,11 +416,23 @@ internal static class XamlValidator
         else if (member.Kind == XamlMemberKind.Event &&
                  pageClass is not null &&
                  attribute.Value is { IsMarkupExtension: false } eventValue &&
-                 eventValue.Text.Trim() is { Length: > 0 } handler &&
-                 !HasMethod(pageClass, handler))
+                 eventValue.Text.Trim() is { Length: > 0 } handler)
         {
-            diagnostics.Add(Diag(doc, eventValue.InnerSpan, SeverityError, MissingEventHandlerCode,
-                $"The event handler '{handler}' was not found on '{pageClass.Name}' or its base types."));
+            var methods = XamlSemanticFacts
+                .EnumerateEventHandlerMethods(pageClass, handler, typeSystem)
+                .ToArray();
+            if (methods.Length == 0)
+            {
+                diagnostics.Add(Diag(doc, eventValue.InnerSpan, SeverityError, MissingEventHandlerCode,
+                   $"The event handler '{handler}' was not found on '{pageClass.Name}' or its base types."));
+            }
+            else if (member.Type is INamedTypeSymbol { DelegateInvokeMethod: { } invoke } &&
+                    !methods.Any(method =>
+                        XamlSemanticFacts.IsCompatibleEventHandler(method, invoke)))
+            {
+                diagnostics.Add(Diag(doc, eventValue.InnerSpan, SeverityError, IncompatibleEventHandlerCode,
+                   $"No overload of event handler '{handler}' is compatible with '{member.Type.Name}'."));
+            }
         }
     }
 
@@ -424,7 +462,14 @@ internal static class XamlValidator
             value.InnerSpan,
             SeverityError,
             InvalidAttributeValueCode,
-            $"'{value.Text}' is not a valid value for '{attribute.Name.FullName}' ({targetType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)})."));
+            $"'{value.Text}' is not a valid value for '{attribute.Name.FullName}' ({targetType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}).",
+            targetType.TypeKind == TypeKind.Enum
+                ? SuggestData(
+                    value.Text,
+                    targetType.GetMembers().OfType<IFieldSymbol>()
+                        .Where(field => field.HasConstantValue)
+                        .Select(field => field.Name))
+                : null));
     }
 
     /// <summary>Validates an Owner.Member attached-property attribute: resolves the owner type through the attribute's namespace and checks it actually exposes the member.</summary>
@@ -621,19 +666,6 @@ internal static class XamlValidator
         }
     }
 
-    private static bool HasMethod(INamedTypeSymbol type, string methodName)
-    {
-        for (INamedTypeSymbol? current = type; current is not null; current = current.BaseType)
-        {
-            if (current.GetMembers(methodName).OfType<IMethodSymbol>().Any())
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static void ValidateScalarContent(
         XamlElement element,
         INamedTypeSymbol elementType,
@@ -782,6 +814,278 @@ internal static class XamlValidator
         return text is null ? null : ResolveTypeName(text, element.NamespaceScope, typeSystem);
     }
 
+    private static void ValidateDataType(
+        XamlElement element, string text, XamlTypeSystem typeSystem,
+        TextDocument doc, List<Diagnostic> diagnostics)
+    {
+        var value = XamlSemanticFacts.GetDirectiveAttribute(element, "DataType")?.Value;
+        var trimmed = text.Trim();
+        int colon = trimmed.IndexOf(':');
+        var prefix = colon < 0 ? string.Empty : trimmed[..colon];
+        if (value is not null &&
+            element.NamespaceScope.TryResolvePrefix(prefix, out var uri) &&
+            typeSystem.IsKnownNamespace(uri))
+        {
+            diagnostics.Add(Diag(doc, value.InnerSpan, SeverityError, UnknownDataTypeCode,
+                $"The x:DataType '{trimmed}' was not found in the XAML namespace '{uri}'."));
+        }
+    }
+
+    private static DiagnosticData? InferDataTemplateType(
+        XamlElement dataTemplate,
+        INamedTypeSymbol? outerBindRoot,
+        XamlTypeSystem typeSystem,
+        TextDocument doc)
+    {
+        if (outerBindRoot is null ||
+            FindParentElement(dataTemplate) is not { Name: { IsDotted: true } } propertyElement ||
+            !propertyElement.Name.LocalName.EndsWith(
+                ".ItemTemplate", System.StringComparison.Ordinal) ||
+            FindParentElement(propertyElement) is not { } itemsOwner ||
+            itemsOwner.GetAttribute("ItemsSource") is not { } itemsSource ||
+            itemsSource.Value?.MarkupExtension is not { IsClosed: true } extension ||
+            !XamlSemanticFacts.IsXBind(extension, itemsOwner.NamespaceScope) ||
+            extension.Arguments.FirstOrDefault(argument =>
+                (!argument.IsNamed || argument.Name?.LocalName == "Path") &&
+                argument.Value is not null) is not { Value: { } path } ||
+            path.IndexOf('(') >= 0 ||
+            !TryResolveBindResultType(
+                path,
+                itemsSource,
+                outerBindRoot,
+                outerBindRoot,
+                itemsOwner.NamespaceScope,
+                typeSystem,
+                doc,
+                out var collectionType) ||
+            XamlTypeSystem.GetCollectionElementType(collectionType) is not
+                INamedTypeSymbol { Arity: 0, ContainingType: null } itemType ||
+            itemType.ContainingNamespace.IsGlobalNamespace)
+        {
+            return null;
+        }
+
+        var namespaceUri = $"using:{itemType.ContainingNamespace.ToDisplayString()}";
+        var prefixes = dataTemplate.NamespaceScope.Declarations
+            .Where(declaration =>
+                string.Equals(declaration.Value, namespaceUri, System.StringComparison.Ordinal))
+            .Select(declaration => declaration.Key)
+            .Distinct(System.StringComparer.Ordinal)
+            .ToArray();
+        if (prefixes.Length != 1)
+        {
+            return null;
+        }
+
+        var xamlTypeName = prefixes[0].Length == 0
+            ? itemType.Name
+            : $"{prefixes[0]}:{itemType.Name}";
+        return new DiagnosticData
+        {
+            Bad = namespaceUri,
+            Suggestions = [xamlTypeName],
+        };
+    }
+
+    private static void ValidateNamespaceDeclarations(
+        XamlElement element, XamlTypeSystem typeSystem,
+        TextDocument doc, List<Diagnostic> diagnostics)
+    {
+        foreach (var attribute in element.Attributes)
+        {
+            if (!attribute.IsNamespaceDeclaration ||
+                attribute.Value is not { } value ||
+                !(value.Text.StartsWith("using:", System.StringComparison.Ordinal) ||
+                  value.Text.StartsWith("clr-namespace:", System.StringComparison.Ordinal)) ||
+                XamlSemanticFacts.IsPresentationNamespace(value.Text) ||
+                !IsEmptyNamespaceUri(value.Text))
+            {
+                continue;
+            }
+
+            diagnostics.Add(Diag(doc, value.InnerSpan, SeverityWarning, UnknownNamespaceDeclarationCode,
+                $"The XAML namespace '{value.Text}' contains no usable types in the project compilation."));
+        }
+    }
+
+    private static bool IsEmptyNamespaceUri(string uri)
+    {
+        const string usingPrefix = "using:";
+        if (uri.StartsWith(usingPrefix, System.StringComparison.Ordinal))
+        {
+            return uri.Substring(usingPrefix.Length).Trim().Length == 0;
+        }
+
+        const string clrPrefix = "clr-namespace:";
+        if (!uri.StartsWith(clrPrefix, System.StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var body = uri.Substring(clrPrefix.Length);
+        int separator = body.IndexOf(';');
+        return (separator < 0 ? body : body.Substring(0, separator)).Trim().Length == 0;
+    }
+
+    private static void ValidateClassicBinding(
+        XamlAttribute attribute, TextDocument doc, XamlTypeSystem typeSystem,
+        List<Diagnostic> diagnostics)
+    {
+        var element = FindParentElement(attribute);
+        if (element is null ||
+            attribute.Value?.MarkupExtension is not { IsClosed: true } extension ||
+            !XamlSemanticFacts.IsBindingMarkupExtension(extension, element.NamespaceScope, typeSystem) ||
+            XamlSemanticFacts.ResolveMarkupExtensionType(
+                extension.Name?.FullName, element.NamespaceScope, typeSystem) is not { } bindingType)
+        {
+            return;
+        }
+
+        foreach (var argument in extension.Arguments.Where(argument => argument.IsNamed))
+        {
+            var name = argument.Name?.LocalName;
+            if (string.IsNullOrEmpty(name))
+            {
+                continue;
+            }
+
+            var member = typeSystem.FindMember(bindingType, name);
+            if (member is null)
+            {
+                diagnostics.Add(Diag(doc, argument.Name?.LocalNameSpan ?? extension.Span,
+                    SeverityError, UnknownBindingArgumentCode,
+                    $"'{name}' is not a named argument of '{bindingType.Name}'.",
+                    SuggestData(name, typeSystem.GetAttributeCandidateNames(bindingType))));
+                continue;
+            }
+
+            ValidateBindingEnumValue(argument, member.Type, $"Binding.{name}",
+                InvalidBindingValueCode, typeSystem, doc, diagnostics);
+
+            if (name == "ElementName" &&
+                argument.Value is { Length: > 0 } rawElementName &&
+                argument.ValueSpan is { } elementNameSpan &&
+                rawElementName.Trim() is { Length: > 0 } elementName &&
+                XamlSemanticFacts.FindNamedElementInScope(
+                    doc, attribute.Parent, elementName, typeSystem) is null)
+            {
+                diagnostics.Add(Diag(doc, elementNameSpan, SeverityError, UnknownBindingElementNameCode,
+                    $"No element named '{elementName}' is visible in this XAML namescope."));
+            }
+        }
+
+        foreach (var nested in extension.DescendantNodesAndSelf()
+                     .OfType<XamlMarkupExtension>()
+                     .Where(candidate => !ReferenceEquals(candidate, extension) &&
+                         candidate.Name?.LocalName == "RelativeSource"))
+        {
+            ValidateRelativeSource(nested, element.NamespaceScope, typeSystem, doc, diagnostics);
+        }
+    }
+
+    private static void ValidateBindingEnumValue(
+        XamlMarkupExtensionArgument argument, ITypeSymbol? type, string displayName, string code,
+        XamlTypeSystem typeSystem, TextDocument doc, List<Diagnostic> diagnostics)
+    {
+        if (type is not { TypeKind: TypeKind.Enum } enumType ||
+            argument.Value is not { } value ||
+            argument.ValueSpan is not { } span ||
+            !XamlValueConverter.TryValidate(value, enumType, typeSystem, out var valid) ||
+            valid)
+        {
+            return;
+        }
+
+        diagnostics.Add(Diag(doc, span, SeverityError, code,
+            $"'{value}' is not a valid value for {displayName}.",
+            SuggestData(value, enumType.GetMembers().OfType<IFieldSymbol>()
+                .Where(field => field.HasConstantValue).Select(field => field.Name))));
+    }
+
+    private static void ValidateRelativeSource(
+        XamlMarkupExtension extension, XamlNamespaceScope scope, XamlTypeSystem typeSystem,
+        TextDocument doc, List<Diagnostic> diagnostics)
+    {
+        var type = XamlSemanticFacts.ResolveMarkupExtensionType(
+            extension.Name?.FullName, scope, typeSystem);
+        if (type is null)
+        {
+            return;
+        }
+
+        foreach (var argument in extension.Arguments)
+        {
+            var name = argument.IsNamed ? argument.Name?.LocalName : "Mode";
+            if (string.IsNullOrEmpty(name))
+            {
+                continue;
+            }
+
+            var member = typeSystem.FindMember(type, name);
+            if (member is null)
+            {
+                diagnostics.Add(Diag(doc, argument.Name?.LocalNameSpan ??
+                    argument.ValueSpan ?? extension.Span, SeverityError,
+                    InvalidRelativeSourceCode,
+                    $"'{name}' is not an argument of '{type.Name}'."));
+                continue;
+            }
+
+            ValidateBindingEnumValue(argument, member.Type, $"RelativeSource.{name}",
+                InvalidRelativeSourceCode, typeSystem, doc, diagnostics);
+        }
+    }
+
+    private static XamlElement? FindParentElement(XamlNode? node)
+    {
+        for (var current = node?.Parent; current is not null; current = current.Parent)
+        {
+            if (current is XamlElement element)
+            {
+                return element;
+            }
+        }
+
+        return null;
+    }
+
+    private static void ValidateTemplateBinding(
+        XamlAttribute attribute, INamedTypeSymbol? templateTargetType,
+        TextDocument doc, XamlTypeSystem typeSystem, List<Diagnostic> diagnostics)
+    {
+        var element = FindParentElement(attribute);
+        if (templateTargetType is null ||
+            element is null ||
+            attribute.Value?.MarkupExtension is not
+                { IsClosed: true, Name.LocalName: "TemplateBinding" } extension)
+        {
+            return;
+        }
+
+        if (extension.Name!.HasPrefix &&
+            (!element.NamespaceScope.TryResolvePrefix(extension.Name.Prefix, out var uri) ||
+             !XamlSemanticFacts.IsPresentationNamespace(uri)))
+        {
+            return;
+        }
+
+        var pathArgument = extension.Arguments.FirstOrDefault(argument =>
+            (!argument.IsNamed || argument.Name?.LocalName == "Property") &&
+            argument.Value is not null);
+        if (pathArgument?.Value is not { } path || pathArgument.ValueSpan is not { } span)
+        {
+            return;
+        }
+
+        var memberName = path.Split('.')[0].Trim();
+        if (IsIdentifier(memberName) && typeSystem.FindMember(templateTargetType, memberName) is null)
+        {
+            diagnostics.Add(Diag(doc, span, SeverityError, InvalidTemplateBindingCode,
+                $"'{memberName}' is not a member of template target type '{templateTargetType.Name}'.",
+                SuggestData(memberName, typeSystem.GetAttributeCandidateNames(templateTargetType))));
+        }
+    }
+
     private static void ValidateBindMode(
         XamlAttribute attribute,
         XamlNamespaceScope scope,
@@ -813,12 +1117,213 @@ internal static class XamlValidator
         }
     }
 
+    private static void ValidateBindAssignment(
+        XamlAttribute attribute,
+        INamedTypeSymbol? elementType,
+        INamedTypeSymbol bindRoot,
+        INamedTypeSymbol? pageClass,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        if (elementType is null ||
+            attribute.Name.HasPrefix ||
+            attribute.Name.IsDotted ||
+            typeSystem.FindAttributeMember(elementType, attribute.Name.LocalName) is not
+                { Kind: XamlMemberKind.Property, Type: { } targetType } ||
+            attribute.Value?.MarkupExtension is not { IsClosed: true } extension ||
+            !XamlSemanticFacts.IsXBind(extension, scope) ||
+            extension.Arguments.Any(argument =>
+                argument.IsNamed &&
+                argument.Name?.LocalName is "Converter" or "ConverterParameter") ||
+            extension.Arguments.FirstOrDefault(argument =>
+                (!argument.IsNamed || argument.Name?.LocalName == "Path") &&
+                argument.Value is not null) is not { Value: { } path, ValueSpan: { } span } ||
+            path.IndexOf('(') >= 0 ||
+            !TryResolveBindResultType(
+                path, attribute, bindRoot, pageClass, scope, typeSystem, doc, out var resultType) ||
+            IsImplicitlyAssignable(resultType, targetType, typeSystem) ||
+            HasBuiltInBindingConversion(resultType, targetType))
+        {
+            return;
+        }
+
+        diagnostics.Add(Diag(doc, span, SeverityError, InvalidBindAssignmentCode,
+            $"The x:Bind result type '{resultType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' " +
+            $"is not assignable to '{targetType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'."));
+    }
+
+    private static bool TryResolveBindResultType(
+        string path,
+        XamlAttribute attribute,
+        INamedTypeSymbol bindRoot,
+        INamedTypeSymbol? pageClass,
+        XamlNamespaceScope scope,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        [NotNullWhen(true)] out ITypeSymbol? resultType)
+    {
+        resultType = null;
+        var text = path.Trim();
+        if (text.StartsWith("!", System.StringComparison.Ordinal))
+        {
+            if (!TryResolveBindResultType(
+                    text.Substring(1),
+                    attribute,
+                    bindRoot,
+                    pageClass,
+                    scope,
+                    typeSystem,
+                    doc,
+                    out _))
+            {
+                return false;
+            }
+
+            resultType = typeSystem.ResolveMetadataType("System.Boolean");
+            return resultType is not null;
+        }
+
+        ITypeSymbol current = bindRoot;
+        bool firstStatic = false;
+        bool allowFirstNonPublic =
+            pageClass is not null &&
+            SymbolEqualityComparer.Default.Equals(bindRoot, pageClass);
+        string chain = text;
+        if (TryGetCastPath(text, out var castName, out var castMembers, out _) &&
+            ResolveTypeName(castName, scope, typeSystem) is { } castType)
+        {
+            current = castType;
+            chain = castMembers.TrimStart('.');
+            allowFirstNonPublic = false;
+        }
+        else if (TryGetStaticBindRoot(
+                     text, scope, typeSystem, out var staticType, out var staticMembers, out _))
+        {
+            current = staticType;
+            chain = staticMembers;
+            firstStatic = true;
+            allowFirstNonPublic = false;
+        }
+        else
+        {
+            var firstName = chain.Split('.')[0];
+            if (XamlSemanticFacts.ResolveNamedElementTypeInScope(
+                    doc, attribute.Parent, firstName, typeSystem) is { } namedType)
+            {
+                current = namedType;
+                chain = chain.Length == firstName.Length
+                    ? string.Empty
+                    : chain[(firstName.Length + 1)..];
+                allowFirstNonPublic = false;
+            }
+        }
+
+        if (chain.Length == 0)
+        {
+            resultType = current;
+            return true;
+        }
+
+        bool first = true;
+        foreach (var rawSegment in chain.Split('.'))
+        {
+            var bracket = rawSegment.IndexOf('[');
+            var name = (bracket < 0 ? rawSegment : rawSegment[..bracket]).Trim();
+            if (!IsIdentifier(name))
+            {
+                return false;
+            }
+
+            ITypeSymbol? next;
+            if (first && firstStatic)
+            {
+                var symbol = typeSystem.GetBindableStaticMembers(current, pageClass)
+                    .FirstOrDefault(candidate =>
+                        candidate.Name == name &&
+                        candidate is IPropertySymbol or IFieldSymbol);
+                next = symbol is null ? null : GetSymbolType(symbol);
+                for (int i = bracket; next is not null && bracket >= 0 && i < rawSegment.Length; i++)
+                {
+                    if (rawSegment[i] == '[')
+                    {
+                        next = XamlTypeSystem.GetCollectionElementType(next);
+                    }
+                }
+            }
+            else
+            {
+                next = CompletionProvider.ResolveBindSegmentType(
+                    typeSystem,
+                    current,
+                    rawSegment,
+                    first && allowFirstNonPublic,
+                    pageClass);
+            }
+
+            if (next is null)
+            {
+                return false;
+            }
+
+            current = next;
+            first = false;
+        }
+
+        resultType = current;
+        return true;
+    }
+
+    private static bool IsImplicitlyAssignable(
+        ITypeSymbol source,
+        ITypeSymbol target,
+        XamlTypeSystem typeSystem)
+    {
+        bool sourceNullable = IsNullableType(source);
+        bool targetNullable = IsNullableType(target);
+        if (sourceNullable && !targetNullable)
+        {
+            return false;
+        }
+
+        source = XamlValueConverter.UnwrapNullable(source);
+        target = XamlValueConverter.UnwrapNullable(target);
+        if (SymbolEqualityComparer.Default.Equals(source, target) ||
+            XamlTypeSystem.IsAssignableTo(source, target))
+        {
+            return true;
+        }
+
+        return typeSystem.HasImplicitConversion(source, target);
+    }
+
+    private static bool HasBuiltInBindingConversion(ITypeSymbol source, ITypeSymbol target)
+    {
+        source = XamlValueConverter.UnwrapNullable(source);
+        target = XamlValueConverter.UnwrapNullable(target);
+        if (target.SpecialType == SpecialType.System_String)
+        {
+            return true;
+        }
+
+        return source.SpecialType == SpecialType.System_Boolean &&
+            target.Name == "Visibility" &&
+            target.ContainingNamespace?.ToDisplayString() is
+                "Microsoft.UI.Xaml" or "Windows.UI.Xaml";
+    }
+
+    private static bool IsNullableType(ITypeSymbol type) =>
+        type is INamedTypeSymbol named &&
+        named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
+
     private static void ValidateUntypedTemplateBinding(
         XamlAttribute attribute,
         XamlNamespaceScope scope,
         XamlTypeSystem typeSystem,
         TextDocument doc,
-        List<Diagnostic> diagnostics)
+        List<Diagnostic> diagnostics,
+        DiagnosticData? dataTypeSuggestion)
     {
         if (attribute.Value?.MarkupExtension is not { IsClosed: true } extension ||
             !XamlSemanticFacts.IsBindingMarkupExtension(extension, scope, typeSystem))
@@ -831,7 +1336,8 @@ internal static class XamlValidator
             extension.Name?.Span ?? extension.Span,
             SeverityWarning,
             BindingDataTypeRecommendedCode,
-            "Binding inside a DataTemplate without x:DataType is not safe for Native AOT."));
+            "Binding inside a DataTemplate without x:DataType is not safe for Native AOT.",
+            dataTypeSuggestion));
     }
 
     private static void ValidateRootClassExists(
@@ -886,8 +1392,45 @@ internal static class XamlValidator
             !scope.TryResolvePrefix(name.Prefix, out _))
         {
             diagnostics.Add(Diag(doc, name.PrefixSpan ?? name.Span, SeverityError, UndeclaredPrefixCode,
-                $"The namespace prefix '{name.Prefix}' is not declared."));
+                $"The namespace prefix '{name.Prefix}' is not declared.",
+                GetUniqueNamespaceSuggestion(name.Prefix!, string.Empty, typeSystem: null)));
         }
+    }
+
+    private static DiagnosticData? GetUniqueNamespaceSuggestion(
+        string prefix,
+        string localTypeName,
+        XamlTypeSystem? typeSystem)
+    {
+        var standardNamespace = prefix switch
+        {
+            "x" => XamlTypeSystem.XamlLanguageNamespace,
+            "d" => "http://schemas.microsoft.com/expression/blend/2008",
+            "mc" => "http://schemas.openxmlformats.org/markup-compatibility/2006",
+            _ => null,
+        };
+        if (standardNamespace is not null)
+        {
+            return new DiagnosticData
+            {
+                Bad = prefix,
+                Suggestions = [standardNamespace],
+            };
+        }
+
+        if (typeSystem is null)
+        {
+            return null;
+        }
+
+        var namespaces = typeSystem.FindNamespacesForTypeName(localTypeName);
+        return namespaces.Count == 1
+            ? new DiagnosticData
+            {
+                Bad = prefix,
+                Suggestions = [$"using:{namespaces[0]}"],
+            }
+            : null;
     }
 
     private static Diagnostic Diag(TextDocument doc, TextSpan span, int severity, string code, string message) =>
@@ -920,6 +1463,7 @@ internal static class XamlValidator
     private static void ValidateBindPath(
         XamlAttribute attribute,
         INamedTypeSymbol bindRoot,
+        INamedTypeSymbol? pageClass,
         XamlNamespaceScope scope,
         XamlTypeSystem typeSystem,
         TextDocument doc,
@@ -939,7 +1483,12 @@ internal static class XamlValidator
             return;
         }
 
-        if (ValidateLeadingAttachedBindPath(path, valueSpan, scope, typeSystem, doc, diagnostics))
+        bool allowRootNonPublic =
+            pageClass is not null &&
+            SymbolEqualityComparer.Default.Equals(bindRoot, pageClass);
+
+        if (ValidateLeadingAttachedBindPath(
+                path, valueSpan, pageClass, scope, typeSystem, doc, diagnostics))
         {
             return;
         }
@@ -951,10 +1500,41 @@ internal static class XamlValidator
             {
                 ValidateMemberChain(
                     castType, castMembers.Split('.'), castMemberOffset, valueSpan,
-                    skipFirst: false, typeSystem, doc, diagnostics);
+                    skipFirst: false, includeRootNonPublic: false, pageClass,
+                    typeSystem, doc, diagnostics);
             }
 
             return; // a cast path is fully handled here (reported or safely skipped) — never falls through.
+        }
+
+        if (TryGetStaticBindRoot(path, scope, typeSystem, out var staticType, out var staticMembers, out var staticOffset))
+        {
+            if (staticMembers.IndexOf('(') >= 0)
+            {
+                ValidateBindFunctionArgs(
+                    staticMembers,
+                    new TextSpan(valueSpan.Start + staticOffset, valueSpan.End),
+                    bindRoot,
+                    pageClass,
+                    allowRootNonPublic,
+                    typeSystem,
+                    doc,
+                    diagnostics,
+                    staticType);
+            }
+            else
+            {
+                ValidateStaticMemberChain(
+                    staticType,
+                    staticMembers,
+                    staticOffset,
+                    valueSpan,
+                    pageClass,
+                    typeSystem,
+                    doc,
+                    diagnostics);
+            }
+            return;
         }
 
         if (!TryFirstBindSegment(path, out var segment))
@@ -962,14 +1542,28 @@ internal static class XamlValidator
             return;
         }
 
-        if (typeSystem.GetBindableMembers(bindRoot, includeRootNonPublic: true)
+        if (typeSystem.GetBindableMembers(
+                bindRoot,
+                includeRootNonPublic: allowRootNonPublic,
+                accessWithin: pageClass)
             .Any(m => string.Equals(m.Name, segment, System.StringComparison.Ordinal)))
         {
             // The first segment is valid — validate any remaining dotted segments too, so a bad non-first member (GreetingText.Nope, Items[0].Nope) is caught rather than silently accepted.
-            ValidateBindPathTail(path, valueSpan, bindRoot, typeSystem, doc, diagnostics);
+            ValidateBindPathTail(
+                path, valueSpan, bindRoot, pageClass, allowRootNonPublic,
+                typeSystem, doc, diagnostics);
 
             // For a function binding (Method(arg, arg)) each argument is itself a path bound against the root, so a bogus argument member is flagged the same as a bogus root path.
-            ValidateBindFunctionArgs(path, valueSpan, bindRoot, typeSystem, doc, diagnostics);
+            ValidateBindFunctionArgs(
+                path, valueSpan, bindRoot, pageClass, allowRootNonPublic,
+                typeSystem, doc, diagnostics);
+            return;
+        }
+
+        if (FindInaccessibleMember(bindRoot, segment, pageClass, typeSystem) is not null)
+        {
+            diagnostics.Add(Diag(doc, valueSpan, SeverityError, InaccessibleBindMemberCode,
+                $"'{segment}' is not accessible to x:Bind."));
             return;
         }
 
@@ -983,6 +1577,7 @@ internal static class XamlValidator
                 path,
                 valueSpan,
                 namedElementType,
+                pageClass,
                 typeSystem,
                 doc,
                 diagnostics);
@@ -991,13 +1586,130 @@ internal static class XamlValidator
 
         diagnostics.Add(Diag(doc, valueSpan, SeverityWarning, UnknownBindMemberCode,
             $"'{segment}' is not a member of '{bindRoot.Name}' bound by x:Bind.",
-            SuggestData(segment, typeSystem.GetBindableMembers(bindRoot, includeRootNonPublic: true).Select(m => m.Name))));
+            SuggestData(
+                segment,
+                typeSystem.GetBindableMembers(
+                        bindRoot,
+                        includeRootNonPublic: allowRootNonPublic,
+                        accessWithin: pageClass)
+                    .Select(m => m.Name))));
     }
+
+    private static bool TryGetStaticBindRoot(
+        string path, XamlNamespaceScope scope, XamlTypeSystem typeSystem,
+        [NotNullWhen(true)] out INamedTypeSymbol? type,
+        out string memberChain, out int memberOffset)
+    {
+        type = null;
+        memberChain = string.Empty;
+        memberOffset = 0;
+        var trimmed = path.TrimStart();
+        int leading = path.Length - trimmed.Length;
+        int dot = trimmed.IndexOf('.');
+        if (dot <= 0 || trimmed[..dot].IndexOf(':') <= 0 ||
+            ResolveTypeName(trimmed[..dot], scope, typeSystem) is not { } resolved)
+        {
+            return false;
+        }
+
+        type = resolved;
+        memberChain = trimmed[(dot + 1)..];
+        memberOffset = leading + dot + 1;
+        return true;
+    }
+
+    private static void ValidateStaticMemberChain(
+        INamedTypeSymbol type, string chain, int chainOffset, TextSpan valueSpan,
+        INamedTypeSymbol? accessWithin,
+        XamlTypeSystem typeSystem,
+        TextDocument doc,
+        List<Diagnostic> diagnostics)
+    {
+        ITypeSymbol current = type;
+        int offset = chainOffset;
+        bool first = true;
+        foreach (var segment in chain.Split('.'))
+        {
+            var trimmed = segment.Trim();
+            int bracket = trimmed.IndexOf('[');
+            var name = bracket < 0 ? trimmed : trimmed[..bracket];
+            ITypeSymbol? next;
+            if (first)
+            {
+                var symbol = typeSystem.GetBindableStaticMembers(current, accessWithin)
+                    .FirstOrDefault(member =>
+                        member.Name == name &&
+                        member is IPropertySymbol or IFieldSymbol);
+                next = symbol is null ? null : GetSymbolType(symbol);
+                for (int i = bracket; next is not null && bracket >= 0 && i < trimmed.Length; i++)
+                {
+                    if (trimmed[i] == '[')
+                    {
+                        next = XamlTypeSystem.GetCollectionElementType(next);
+                    }
+                }
+            }
+            else
+            {
+                next = CompletionProvider.ResolveBindSegmentType(
+                    typeSystem, current, trimmed, false, accessWithin);
+            }
+
+            if (next is null)
+            {
+                diagnostics.Add(Diag(doc,
+                    new TextSpan(valueSpan.Start + offset, valueSpan.Start + offset + name.Length),
+                    SeverityWarning, UnknownBindMemberCode,
+                    $"'{name}' is not a bindable member of '{current.Name}'."));
+                return;
+            }
+
+            current = next;
+            offset += segment.Length + 1;
+            first = false;
+        }
+    }
+
+    private static ISymbol? FindInaccessibleMember(
+        ITypeSymbol type,
+        string name,
+        ISymbol? accessWithin,
+        XamlTypeSystem typeSystem)
+    {
+        for (var current = type as INamedTypeSymbol; current is not null; current = current.BaseType)
+        {
+            var member = current.GetMembers(name).FirstOrDefault(candidate =>
+            {
+                var accessibilitySymbol = candidate is IPropertySymbol { GetMethod: { } getter }
+                    ? getter
+                    : candidate;
+                return !candidate.IsStatic &&
+                       (accessWithin is null ||
+                        !typeSystem.IsSymbolAccessibleWithin(accessibilitySymbol, accessWithin, type)) &&
+                       candidate is IPropertySymbol or IFieldSymbol or IMethodSymbol;
+            });
+            if (member is not null)
+            {
+                return member;
+            }
+        }
+
+        return null;
+    }
+
+    private static ITypeSymbol? GetSymbolType(ISymbol symbol) => symbol switch
+    {
+        IPropertySymbol property => property.Type,
+        IFieldSymbol field => field.Type,
+        IMethodSymbol method => method.ReturnType,
+        _ => null,
+    };
 
     /// <summary>Validates a leading attached-property binding step.</summary>
     private static bool ValidateLeadingAttachedBindPath(
         string path,
         TextSpan valueSpan,
+        INamedTypeSymbol? accessWithin,
         XamlNamespaceScope scope,
         XamlTypeSystem typeSystem,
         TextDocument doc,
@@ -1083,6 +1795,8 @@ internal static class XamlValidator
                 tailStart,
                 valueSpan,
                 skipFirst: false,
+                includeRootNonPublic: false,
+                accessWithin,
                 typeSystem,
                 doc,
                 diagnostics);
@@ -1096,6 +1810,8 @@ internal static class XamlValidator
         string path,
         TextSpan valueSpan,
         INamedTypeSymbol bindRoot,
+        INamedTypeSymbol? accessWithin,
+        bool includeRootNonPublic,
         XamlTypeSystem typeSystem,
         TextDocument doc,
         List<Diagnostic> diagnostics)
@@ -1121,13 +1837,24 @@ internal static class XamlValidator
             return; // only one segment — already validated by the caller.
         }
 
-        ValidateMemberChain(bindRoot, segments, start, valueSpan, skipFirst: true, typeSystem, doc, diagnostics);
+        ValidateMemberChain(
+            bindRoot,
+            segments,
+            start,
+            valueSpan,
+            skipFirst: true,
+            includeRootNonPublic,
+            accessWithin,
+            typeSystem,
+            doc,
+            diagnostics);
     }
 
     private static void ValidateNamedElementBindPathTail(
         string path,
         TextSpan valueSpan,
         INamedTypeSymbol namedElementType,
+        INamedTypeSymbol? accessWithin,
         XamlTypeSystem typeSystem,
         TextDocument doc,
         List<Diagnostic> diagnostics)
@@ -1157,6 +1884,8 @@ internal static class XamlValidator
             tailStart,
             valueSpan,
             skipFirst: false,
+            includeRootNonPublic: false,
+            accessWithin,
             typeSystem,
             doc,
             diagnostics);
@@ -1169,6 +1898,8 @@ internal static class XamlValidator
         int chainStart,
         TextSpan valueSpan,
         bool skipFirst,
+        bool includeRootNonPublic,
+        ISymbol? accessWithin,
         XamlTypeSystem typeSystem,
         TextDocument doc,
         List<Diagnostic> diagnostics)
@@ -1190,7 +1921,10 @@ internal static class XamlValidator
                 return; // an empty or non-identifier segment (nested cast/call, malformed) — stay silent.
             }
 
-            var member = typeSystem.GetBindableMembers(current, includeRootNonPublic: atRoot)
+            var member = typeSystem.GetBindableMembers(
+                    current,
+                    includeRootNonPublic: atRoot && includeRootNonPublic,
+                    accessWithin)
                 .FirstOrDefault(m => string.Equals(m.Name, baseName, System.StringComparison.Ordinal));
 
             if (member is null)
@@ -1205,13 +1939,29 @@ internal static class XamlValidator
                 int badStart = valueSpan.Start + segStart + lead;
                 int badEnd = badStart + baseName.Length;
                 var badSpan = badEnd <= valueSpan.End ? new TextSpan(badStart, badEnd) : valueSpan;
-                diagnostics.Add(Diag(doc, badSpan, SeverityWarning, UnknownBindMemberCode,
-                    $"'{baseName}' is not a member of '{current.Name}' bound by x:Bind.",
-                    SuggestData(baseName, typeSystem.GetBindableMembers(current, includeRootNonPublic: atRoot).Select(m => m.Name))));
+                if (FindInaccessibleMember(
+                        current, baseName, accessWithin, typeSystem) is not null)
+                {
+                    diagnostics.Add(Diag(doc, badSpan, SeverityError, InaccessibleBindMemberCode,
+                        $"'{baseName}' is not accessible to x:Bind."));
+                }
+                else
+                {
+                    diagnostics.Add(Diag(doc, badSpan, SeverityWarning, UnknownBindMemberCode,
+                        $"'{baseName}' is not a member of '{current.Name}' bound by x:Bind.",
+                        SuggestData(
+                            baseName,
+                            typeSystem.GetBindableMembers(
+                                    current,
+                                    includeRootNonPublic: atRoot,
+                                    accessWithin)
+                                .Select(m => m.Name))));
+                }
                 return;
             }
 
-            var next = CompletionProvider.ResolveBindSegmentType(typeSystem, current, seg, atRoot);
+            var next = CompletionProvider.ResolveBindSegmentType(
+                typeSystem, current, seg, atRoot, accessWithin);
             if (next is null)
             {
                 return; // the chain leads to a type we cannot model further — stop without reporting.
@@ -1265,9 +2015,12 @@ internal static class XamlValidator
         string path,
         TextSpan valueSpan,
         INamedTypeSymbol bindRoot,
+        INamedTypeSymbol? accessWithin,
+        bool includeRootNonPublic,
         XamlTypeSystem typeSystem,
         TextDocument doc,
-        List<Diagnostic> diagnostics)
+        List<Diagnostic> diagnostics,
+        INamedTypeSymbol? staticReceiverType = null)
     {
         int start = 0;
         while (start < path.Length && (path[start] == '!' || char.IsWhiteSpace(path[start])))
@@ -1379,28 +2132,44 @@ internal static class XamlValidator
 
         var functionPath = path.Substring(start, open - start).Trim();
         var functionName = functionPath;
-        ITypeSymbol receiverType = bindRoot;
-        bool includeReceiverNonPublic = true;
+        ITypeSymbol receiverType = staticReceiverType ?? bindRoot;
+        bool includeReceiverNonPublic = staticReceiverType is null && includeRootNonPublic;
+        bool atStaticReceiverRoot = staticReceiverType is not null;
         int receiverSeparator = functionPath.LastIndexOf('.');
         if (receiverSeparator >= 0)
         {
             var receiverSegments = functionPath.Substring(0, receiverSeparator).Split('.');
-            ValidateMemberChain(
-                bindRoot,
-                receiverSegments,
-                start,
-                valueSpan,
-                skipFirst: false,
-                typeSystem,
-                doc,
-                diagnostics);
+            if (staticReceiverType is null)
+            {
+                ValidateMemberChain(
+                    bindRoot,
+                    receiverSegments,
+                    start,
+                    valueSpan,
+                    skipFirst: false,
+                    includeRootNonPublic,
+                    accessWithin,
+                    typeSystem,
+                    doc,
+                    diagnostics);
+            }
             foreach (var receiverSegment in receiverSegments)
             {
-                var next = CompletionProvider.ResolveBindSegmentType(
-                    typeSystem,
-                    receiverType,
-                    receiverSegment,
-                    includeReceiverNonPublic);
+                ITypeSymbol? next;
+                if (atStaticReceiverRoot)
+                {
+                    next = CompletionProvider.ResolveStaticBindSegmentType(
+                        typeSystem, receiverType, receiverSegment, accessWithin);
+                }
+                else
+                {
+                    next = CompletionProvider.ResolveBindSegmentType(
+                        typeSystem,
+                        receiverType,
+                        receiverSegment,
+                        includeReceiverNonPublic,
+                        accessWithin);
+                }
                 if (next is null)
                 {
                     return;
@@ -1408,12 +2177,20 @@ internal static class XamlValidator
 
                 receiverType = next;
                 includeReceiverNonPublic = false;
+                atStaticReceiverRoot = false;
             }
 
             functionName = functionPath.Substring(receiverSeparator + 1);
         }
 
-        var overloads = typeSystem.GetBindableMethods(receiverType, includeReceiverNonPublic)
+        bool callIsStatic = staticReceiverType is not null && receiverSeparator < 0;
+        var overloads = (!callIsStatic
+                ? typeSystem.GetBindableMethods(
+                    receiverType,
+                    includeReceiverNonPublic,
+                    accessWithin)
+                : typeSystem.GetBindableStaticMembers(receiverType, accessWithin)
+                    .OfType<IMethodSymbol>())
             .Where(m => string.Equals(m.Name, functionName, System.StringComparison.Ordinal))
             .ToList();
         if (overloads.Count == 0)
@@ -1432,7 +2209,8 @@ internal static class XamlValidator
         foreach (var (argumentStart, argumentEnd) in argumentRanges)
         {
             ValidateBindFunctionArg(
-                path, argumentStart, argumentEnd, valueSpan, bindRoot, typeSystem, doc, diagnostics);
+                path, argumentStart, argumentEnd, valueSpan, bindRoot,
+                accessWithin, includeRootNonPublic, typeSystem, doc, diagnostics);
         }
     }
 
@@ -1467,6 +2245,8 @@ internal static class XamlValidator
         int to,
         TextSpan valueSpan,
         INamedTypeSymbol bindRoot,
+        INamedTypeSymbol? accessWithin,
+        bool includeRootNonPublic,
         XamlTypeSystem typeSystem,
         TextDocument doc,
         List<Diagnostic> diagnostics)
@@ -1519,7 +2299,10 @@ internal static class XamlValidator
                 return; // cannot verify (an unexpected shape) — stay silent.
             }
 
-            var member = typeSystem.GetBindableMembers(current, includeRootNonPublic: atRoot)
+            var member = typeSystem.GetBindableMembers(
+                    current,
+                    includeRootNonPublic: atRoot && includeRootNonPublic,
+                    accessWithin)
                 .FirstOrDefault(m => string.Equals(m.Name, baseName, System.StringComparison.Ordinal));
             if (member is null)
             {
@@ -1528,11 +2311,18 @@ internal static class XamlValidator
                 var badSpan = badEnd <= valueSpan.End ? new TextSpan(badStart, badEnd) : valueSpan;
                 diagnostics.Add(Diag(doc, badSpan, SeverityWarning, UnknownBindMemberCode,
                     $"'{baseName}' is not a member of '{current.Name}' bound by x:Bind.",
-                    SuggestData(baseName, typeSystem.GetBindableMembers(current, includeRootNonPublic: atRoot).Select(m => m.Name))));
+                    SuggestData(
+                        baseName,
+                        typeSystem.GetBindableMembers(
+                                current,
+                                includeRootNonPublic: atRoot && includeRootNonPublic,
+                                accessWithin)
+                            .Select(m => m.Name))));
                 return;
             }
 
-            var next = CompletionProvider.ResolveBindSegmentType(typeSystem, current, seg, atRoot);
+            var next = CompletionProvider.ResolveBindSegmentType(
+                typeSystem, current, seg, atRoot && includeRootNonPublic, accessWithin);
             if (next is null)
             {
                 return;

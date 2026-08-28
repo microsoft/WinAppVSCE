@@ -22,14 +22,7 @@ internal static class XamlCodeActions
         XamlValidator.UnknownResourceKeyCode,
         XamlValidator.InvalidSetterPropertyCode,
         XamlValidator.InvalidBindModeCode,
-    };
-
-    // Well-known XAML prefixes whose namespace URI is unambiguous, so an undeclared-prefix diagnostic (WXAML0001) can be fixed by inserting the standard declaration on the root. Custom prefixes need an author-chosen using: target we never guess.
-    private static readonly Dictionary<string, string> WellKnownNamespaces = new(StringComparer.Ordinal)
-    {
-        ["x"] = XamlTypeSystem.XamlLanguageNamespace,
-        ["d"] = XamlNamespaces.DesignTime2008,
-        ["mc"] = XamlNamespaces.MarkupCompatibility,
+        XamlValidator.InvalidAttributeValueCode,
     };
 
     public static List<CodeAction> Compute(string uri, TextDocument? doc, CodeActionContext context, XamlTypeSystem? typeSystem = null)
@@ -50,10 +43,24 @@ internal static class XamlCodeActions
                     continue;
                 }
 
-                // Undeclared prefix (WXAML0001): offer to add the missing xmlns declaration on the root — the standard URI for a well-known prefix (x/d/mc), or an inferred using: for a custom prefix that names one of the project's own types.
+                // Undeclared prefix (WXAML0001): only consume an unambiguous namespace URI
+                // supplied by validation; code actions must not infer or guess an import.
                 if (string.Equals(diagnostic.Code, XamlValidator.UndeclaredPrefixCode, StringComparison.Ordinal))
                 {
-                    AddUndeclaredPrefixFixes(actions, uri, doc, diagnostic, typeSystem, seenXmlnsDeclarations);
+                    AddUndeclaredPrefixFix(actions, uri, doc, diagnostic, seenXmlnsDeclarations);
+                    continue;
+                }
+
+                if (string.Equals(diagnostic.Code, XamlDiagnosticIds.StrayEndTag, StringComparison.Ordinal))
+                {
+                    AddMismatchedEndTagFix(actions, uri, doc, diagnostic);
+                    continue;
+                }
+
+                if (string.Equals(diagnostic.Code, XamlValidator.DataTemplateDataTypeRequiredCode, StringComparison.Ordinal) ||
+                    string.Equals(diagnostic.Code, XamlValidator.BindingDataTypeRecommendedCode, StringComparison.Ordinal))
+                {
+                    AddDataTypeFix(actions, uri, doc, diagnostic, typeSystem);
                     continue;
                 }
 
@@ -84,6 +91,7 @@ internal static class XamlCodeActions
                 for (int i = 0; i < suggestions.Count; i++)
                 {
                     var suggestion = suggestions[i];
+                    var edits = BuildSpellingEdits(doc, diagnostic, bad, suggestion);
                     actions.Add(new CodeAction
                     {
                         Title = bad.Length == 0 ? $"Change to '{suggestion}'" : $"Change '{bad}' to '{suggestion}'",
@@ -94,7 +102,7 @@ internal static class XamlCodeActions
                         {
                             Changes = new Dictionary<string, List<TextEdit>>
                             {
-                                [uri] = new List<TextEdit> { new() { Range = EditRange(doc, diagnostic.Range, bad), NewText = suggestion } },
+                                [uri] = edits,
                             },
                         },
                     });
@@ -211,10 +219,180 @@ internal static class XamlCodeActions
         return new Lsp.Range(doc.PositionAt(start), doc.PositionAt(start + bad.Length));
     }
 
-    /// <summary>Builds the "Add xmlns:… declaration" quick fix(es) for an undeclared prefix (WXAML0001).</summary>
-    private static void AddUndeclaredPrefixFixes(
+    private static List<TextEdit> BuildSpellingEdits(
+        TextDocument? doc, Diagnostic diagnostic, string bad, string suggestion)
+    {
+        var edits = new List<TextEdit>
+        {
+            new() { Range = EditRange(doc, diagnostic.Range, bad), NewText = suggestion },
+        };
+
+        if (doc?.Parsed.Root is null ||
+            !string.Equals(diagnostic.Code, XamlValidator.UnknownTypeCode, StringComparison.Ordinal))
+        {
+            return edits;
+        }
+
+        int diagnosticStart = doc.OffsetAt(diagnostic.Range.Start);
+        var element = FindElementByOpenName(doc.Parsed.Root, diagnosticStart);
+        if (element?.Name is not { } openName ||
+            element.EndTagName is not { } endName ||
+            !string.Equals(openName.LocalName, bad, StringComparison.Ordinal) ||
+            !string.Equals(endName.FullName, openName.FullName, StringComparison.Ordinal))
+        {
+            return edits;
+        }
+
+        edits.Add(new TextEdit
+        {
+            Range = doc.RangeOf(endName.LocalNameSpan),
+            NewText = suggestion,
+        });
+        return edits;
+    }
+
+    private static XamlElement? FindElementByOpenName(XamlElement element, int offset)
+    {
+        if (element.Name?.Span.ContainsInclusive(offset) == true)
+        {
+            return element;
+        }
+
+        foreach (var child in element.Content)
+        {
+            if (child is XamlElement childElement &&
+                FindElementByOpenName(childElement, offset) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    private static void AddDataTypeFix(
+        List<CodeAction> actions,
+        string uri,
+        TextDocument? doc,
+        Diagnostic diagnostic,
+        XamlTypeSystem? typeSystem)
+    {
+        if (doc is null)
+        {
+            return;
+        }
+
+        var (namespaceUri, suggestions) = ReadSuggestions(diagnostic.Data);
+        if (suggestions.Count != 1 ||
+            !TryValidateInferredXamlType(suggestions[0], namespaceUri, out var inferredType))
+        {
+            return;
+        }
+
+        var dataTemplate = FindEnclosingDataTemplate(
+            doc.Parsed.FindNode(doc.OffsetAt(diagnostic.Range.Start)), typeSystem);
+        int typeColon = inferredType.IndexOf(':');
+        string typePrefix = typeColon < 0 ? string.Empty : inferredType.Substring(0, typeColon);
+        if (dataTemplate is null ||
+            !dataTemplate.NamespaceScope.TryResolvePrefix("x", out var xamlNamespace) ||
+            !string.Equals(xamlNamespace, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal) ||
+            !dataTemplate.NamespaceScope.TryResolvePrefix(typePrefix, out var resolvedTypeNamespace) ||
+            !string.Equals(resolvedTypeNamespace, namespaceUri, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        TextEdit edit;
+        var existing = XamlSemanticFacts.GetDirectiveAttribute(dataTemplate, "DataType");
+        if (existing is not null)
+        {
+            if (existing.Value is null ||
+                existing.Value.Text.Trim().Length != 0)
+            {
+                return;
+            }
+
+            edit = new TextEdit
+            {
+                Range = doc.RangeOf(existing.Value.InnerSpan),
+                NewText = inferredType,
+            };
+        }
+        else
+        {
+            int insertionOffset = dataTemplate.OpenTagSpan.End - 1;
+            if (insertionOffset < dataTemplate.OpenTagSpan.Start ||
+                insertionOffset >= doc.Text.Length)
+            {
+                return;
+            }
+
+            if (insertionOffset > dataTemplate.OpenTagSpan.Start &&
+                doc.Text[insertionOffset - 1] == '/')
+            {
+                insertionOffset--;
+            }
+
+            edit = new TextEdit
+            {
+                Range = doc.RangeOf(TextSpan.Empty(insertionOffset)),
+                NewText = $" x:DataType=\"{inferredType}\"",
+            };
+        }
+
+        actions.Add(new CodeAction
+        {
+            Title = $"Set x:DataType to '{inferredType}'",
+            Kind = "quickfix",
+            Diagnostics = new List<Diagnostic> { diagnostic },
+            IsPreferred = true,
+            Edit = new WorkspaceEdit
+            {
+                Changes = new Dictionary<string, List<TextEdit>>
+                {
+                    [uri] = new List<TextEdit> { edit },
+                },
+            },
+        });
+    }
+
+    private static bool TryValidateInferredXamlType(
+        string suggestion, string namespaceUri, out string inferredType)
+    {
+        inferredType = suggestion.Trim();
+        if (inferredType.Length == 0 ||
+            inferredType.Any(character =>
+                char.IsWhiteSpace(character) || character is '"' or '\'' or '<' or '>' or '{' or '}' or '='))
+        {
+            return false;
+        }
+
+        int colon = inferredType.IndexOf(':');
+        string prefix = colon < 0 ? string.Empty : inferredType.Substring(0, colon);
+        return namespaceUri.Length > 0 && (colon < 0 || colon < inferredType.Length - 1) &&
+            prefix.IndexOf(':') < 0;
+    }
+
+    private static XamlElement? FindEnclosingDataTemplate(
+        XamlNode? node, XamlTypeSystem? typeSystem)
+    {
+        for (; node is not null; node = node.Parent)
+        {
+            if (node is XamlElement element &&
+                (typeSystem is not null && XamlSemanticFacts.IsDataTemplate(element, typeSystem) ||
+                 string.Equals(element.Name?.LocalName, "DataTemplate", StringComparison.Ordinal)))
+            {
+                return element;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Adds xmlns only when the diagnostic itself supplies one unique namespace URI.</summary>
+    private static void AddUndeclaredPrefixFix(
         List<CodeAction> actions, string uri, TextDocument? doc, Diagnostic diagnostic,
-        XamlTypeSystem? typeSystem, HashSet<string> seen)
+        HashSet<string> seen)
     {
         if (doc is null)
         {
@@ -230,56 +408,136 @@ internal static class XamlCodeActions
             return;
         }
 
-        // A well-known prefix is unambiguous: one standard declaration, and never also a using: guess.
-        if (WellKnownNamespaces.TryGetValue(prefix, out var wellKnownUri))
+        var (bad, suggestions) = ReadSuggestions(diagnostic.Data);
+        if (!string.Equals(bad, prefix, StringComparison.Ordinal) ||
+            suggestions.Count != 1 ||
+            !IsNamespaceUri(suggestions[0]))
         {
-            if (seen.Add(prefix + "\0" + wellKnownUri))
+            return;
+        }
+
+        string namespaceUri = suggestions[0];
+        if (!seen.Add(prefix + "\0" + namespaceUri))
+        {
+            return;
+        }
+
+        var declarationEdit =
+            XamlNamespaceImport.BuildRootDeclarationEditForUri(doc, prefix, namespaceUri);
+        if (declarationEdit is null)
+        {
+            return;
+        }
+
+        actions.Add(BuildAddXmlnsAction(
+            uri, declarationEdit, $"Add xmlns:{prefix}=\"{namespaceUri}\"", isPreferred: true, diagnostic));
+    }
+
+    private static bool IsNamespaceUri(string value) =>
+        value.StartsWith("using:", StringComparison.Ordinal) && value.Length > "using:".Length ||
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase));
+
+    private static void AddMismatchedEndTagFix(
+        List<CodeAction> actions, string uri, TextDocument? doc, Diagnostic diagnostic)
+    {
+        if (doc?.Parsed.Root is null)
+        {
+            return;
+        }
+
+        int diagnosticStart = doc.OffsetAt(diagnostic.Range.Start);
+        int diagnosticEnd = doc.OffsetAt(diagnostic.Range.End);
+        var parserDiagnostic = doc.Parsed.Diagnostics.FirstOrDefault(item =>
+            item.Id == XamlDiagnosticIds.StrayEndTag &&
+            item.Span.Start == diagnosticStart &&
+            item.Span.End == diagnosticEnd);
+        if (parserDiagnostic is null ||
+            !TryReadEndTagName(doc.Text, parserDiagnostic.Span, out var closeName, out var closeNameSpan))
+        {
+            return;
+        }
+
+        var candidates = new List<XamlElement>();
+        CollectUnclosedElementsAt(doc.Parsed.Root, parserDiagnostic.Span.Start, candidates);
+        var target = candidates
+            .Where(element => element.Name is not null &&
+                doc.Parsed.Diagnostics.Any(item =>
+                    item.Id == XamlDiagnosticIds.MissingEndTag &&
+                    item.Span.Start == element.Name.Span.Start &&
+                    item.Span.End == element.Name.Span.End))
+            .OrderByDescending(element => element.Name!.Span.Start)
+            .FirstOrDefault();
+        if (target?.Name is not { } openName ||
+            string.Equals(openName.FullName, closeName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        actions.Add(new CodeAction
+        {
+            Title = $"Change closing tag '{closeName}' to '{openName.FullName}'",
+            Kind = "quickfix",
+            Diagnostics = new List<Diagnostic> { diagnostic },
+            IsPreferred = true,
+            Edit = new WorkspaceEdit
             {
-                var declarationEdit =
-                    XamlNamespaceImport.BuildRootDeclarationEditForUri(doc, prefix, wellKnownUri);
-                if (declarationEdit is null)
+                Changes = new Dictionary<string, List<TextEdit>>
                 {
-                    return;
-                }
+                    [uri] = new List<TextEdit>
+                    {
+                        new() { Range = doc.RangeOf(closeNameSpan), NewText = openName.FullName },
+                    },
+                },
+            },
+        });
+    }
 
-                actions.Add(BuildAddXmlnsAction(
-                    uri, declarationEdit, $"Add xmlns:{prefix} declaration", isPreferred: true, diagnostic));
-            }
-
-            return;
+    private static bool TryReadEndTagName(
+        string text, TextSpan span, out string name, out TextSpan nameSpan)
+    {
+        int start = span.Start;
+        int end = Math.Min(span.End, text.Length);
+        if (start + 2 > end || text[start] != '<' || text[start + 1] != '/')
+        {
+            name = string.Empty;
+            nameSpan = TextSpan.Empty(start);
+            return false;
         }
 
-        // Custom prefix: infer using: targets from the project's own types, but only when the prefix is on an ELEMENT (a type reference). Needs the type system; absent it, offer nothing (as before).
-        if (typeSystem is null)
+        int nameStart = start + 2;
+        while (nameStart < end && char.IsWhiteSpace(text[nameStart]))
         {
-            return;
+            nameStart++;
         }
 
-        var localName = FindElementTypeLocalNameForPrefix(doc, diagnostic.Range, prefix);
-        if (localName is null)
+        int nameEnd = nameStart;
+        while (nameEnd < end && !char.IsWhiteSpace(text[nameEnd]) &&
+               text[nameEnd] != '>' && text[nameEnd] != '/')
         {
-            return;
+            nameEnd++;
         }
 
-        var namespaces = typeSystem.FindNamespacesForTypeName(localName);
-        bool single = namespaces.Count == 1;
-        foreach (var ns in namespaces)
+        name = text.Substring(nameStart, nameEnd - nameStart);
+        nameSpan = TextSpan.FromBounds(nameStart, nameEnd);
+        return name.Length > 0;
+    }
+
+    private static void CollectUnclosedElementsAt(
+        XamlElement element, int offset, List<XamlElement> candidates)
+    {
+        if (!element.IsClosed && element.Span.Start <= offset && offset < element.Span.End)
         {
-            var usingUri = "using:" + ns;
-            if (!seen.Add(prefix + "\0" + usingUri))
+            candidates.Add(element);
+        }
+
+        foreach (var child in element.Content)
+        {
+            if (child is XamlElement childElement)
             {
-                continue;
+                CollectUnclosedElementsAt(childElement, offset, candidates);
             }
-
-            var declarationEdit =
-                XamlNamespaceImport.BuildRootDeclarationEditForUri(doc, prefix, usingUri);
-            if (declarationEdit is null)
-            {
-                continue;
-            }
-
-            actions.Add(BuildAddXmlnsAction(
-                uri, declarationEdit, $"Add xmlns:{prefix}=\"{usingUri}\"", isPreferred: single, diagnostic));
         }
     }
 
@@ -301,46 +559,6 @@ internal static class XamlCodeActions
                 },
             },
         };
-    }
-
-    /// <summary>The local (type) name of the ELEMENT whose undeclared prefix the diagnostic flags — the name to search for a using: target.</summary>
-    private static string? FindElementTypeLocalNameForPrefix(TextDocument doc, Lsp.Range range, string prefix)
-    {
-        var root = doc.Parsed.Root;
-        if (root is null)
-        {
-            return null;
-        }
-
-        int offset = doc.OffsetAt(range.Start);
-        return FindElementTypeLocalName(root, prefix, offset);
-    }
-
-    private static string? FindElementTypeLocalName(XamlElement element, string prefix, int offset)
-    {
-        var name = element.Name;
-        if (name is { HasPrefix: true } && string.Equals(name.Prefix, prefix, StringComparison.Ordinal))
-        {
-            var span = name.PrefixSpan ?? name.Span;
-            if (span.Start <= offset && offset < span.End)
-            {
-                return name.LocalName;
-            }
-        }
-
-        foreach (var child in element.Content)
-        {
-            if (child is XamlElement childElement)
-            {
-                var found = FindElementTypeLocalName(childElement, prefix, offset);
-                if (found is not null)
-                {
-                    return found;
-                }
-            }
-        }
-
-        return null;
     }
 
     private static bool AddUnprefixedTypeImportFixes(

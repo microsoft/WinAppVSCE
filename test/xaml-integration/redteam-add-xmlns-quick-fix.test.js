@@ -35,7 +35,7 @@ function changeActions(r) {
 }
 
 function findAddXmlnsFix(r, prefix) {
-  const title = `Add xmlns:${prefix} declaration`;
+  const title = `Add xmlns:${prefix}="${URI[prefix]}"`;
   const fix = r.actions.find((a) => a.title === title && a.kind === "quickfix");
   assert.ok(fix, `expected ${dump(title)} quickfix; diag=${dump(r.diagnostic)} actions=${dump(titles(r))}`);
   assert.strictEqual(fix.kind, "quickfix", `${title} kind`);
@@ -222,7 +222,8 @@ describe("WinUI XAML — red-team 48 (Add xmlns quick fix)", function () {
   it("dedupes repeated undeclared d uses to one Add xmlns:d action in a full-document request", async () => {
     const buffer = `<Page ${minimalWithX}>\n  <d:Foo />\n  <Grid d:IsHidden="True" />\n  <d:Bar />\n</Page>`;
     const actions = await fullDocumentActions(buffer, "WXAML0001", "d");
-    assert.deepStrictEqual(actions.filter((a) => a.title === "Add xmlns:d declaration").map((a) => a.title), ["Add xmlns:d declaration"], dump(actions));
+    const title = `Add xmlns:d="${URI.d}"`;
+    assert.deepStrictEqual(actions.filter((a) => a.title === title).map((a) => a.title), [title], dump(actions));
   });
 
   it("offers independent fixes for multiple different undeclared well-known prefixes", async () => {

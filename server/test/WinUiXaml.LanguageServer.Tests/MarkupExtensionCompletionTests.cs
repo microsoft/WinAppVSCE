@@ -101,6 +101,33 @@ public sealed class MarkupExtensionCompletionTests
     }
 
     [Fact]
+    public void XBindStaticPathOffersAccessibleStaticMembers()
+    {
+        var labels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:local="using:App"
+                  Tag="{x:Bind local:BindStatics.|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("Flag", labels);
+        Assert.Contains("Format", labels);
+        Assert.DoesNotContain("PrivateGetter", labels);
+
+        var indexedLabels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:local="using:App"
+                  Tag="{x:Bind local:BindStatics.Items[0].|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+        Assert.Contains("Greeting", indexedLabels);
+    }
+
+    [Fact]
     public void CustomBindingLookalikeDoesNotReceiveBindingPathCompletion()
     {
         var labels = Complete(
@@ -478,6 +505,13 @@ public sealed class MarkupExtensionCompletionTests
             namespace App
             {
                 public partial class ProbePage : Microsoft.UI.Xaml.Page { }
+                public static class BindStatics
+                {
+                    public static bool Flag { get; } = true;
+                    public static string Format(string value) => value;
+                    public static string PrivateGetter { private get; set; } = "";
+                    public static System.Collections.Generic.List<ViewModel> Items { get; } = new();
+                }
                 public sealed class ViewModel
                 {
                     public string Greeting { get; set; } = "";

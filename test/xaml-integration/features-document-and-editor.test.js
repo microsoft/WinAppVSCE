@@ -1005,15 +1005,16 @@ describe("WinUI XAML — code actions", function () {
     assert.ok(/xmlns:/.test(targetLine), `declaration should group onto an xmlns line; got line ${edit.line} = ${JSON.stringify(targetLine)}`);
   });
 
-  it("offers 'Add xmlns:d declaration' for an undeclared WELL-KNOWN prefix", async () => {
+  it("offers the canonical Blend xmlns fix for an undeclared well-known prefix", async () => {
     // h.NS declares d/mc, so use a minimal header (default + x only) to leave 'd' genuinely undeclared.
     const minimalNS =
       'xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" ' +
       'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"';
     const buffer = `<Page ${minimalNS}>\n  <d:Foo />\n</Page>`;
     const r = await h.codeActionsAt(buffer, "WXAML0001", "d");
-    const fix = r.actions.find((a) => a.title === "Add xmlns:d declaration");
-    assert.ok(fix, `expected an "Add xmlns:d declaration" quick fix; diag=${JSON.stringify(r.diagnostic)} actions=${titles(r)}`);
+    const title = 'Add xmlns:d="http://schemas.microsoft.com/expression/blend/2008"';
+    const fix = r.actions.find((a) => a.title === title);
+    assert.ok(fix, `expected an "${title}" quick fix; diag=${JSON.stringify(r.diagnostic)} actions=${titles(r)}`);
     assert.strictEqual(fix.kind, "quickfix", `fix kind should be quickfix; got ${fix.kind}`);
     assert.strictEqual(fix.isPreferred, true, "the add-xmlns fix should be preferred");
     const edit = fix.edits[0];

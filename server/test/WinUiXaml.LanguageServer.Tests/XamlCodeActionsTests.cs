@@ -64,6 +64,41 @@ public class XamlCodeActionsTests
     }
 
     [Fact]
+    public void UnknownType_PairedElement_UpdatesBothTagsAtomically()
+    {
+        var xaml = "<Page><Buton></Buton></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int openAt = xaml.IndexOf("Buton", System.StringComparison.Ordinal);
+        int closeAt = xaml.LastIndexOf("Buton", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode, R(0, openAt, openAt + 5), Data("Buton", "Button"));
+
+        var edits = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic)))
+            .Edit!.Changes[Uri];
+
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("Button", edit.NewText));
+        Assert.Contains(edits, edit => doc.OffsetAt(edit.Range.Start) == openAt);
+        Assert.Contains(edits, edit => doc.OffsetAt(edit.Range.Start) == closeAt);
+    }
+
+    [Fact]
+    public void UnknownType_SelfClosingElement_OnlyUpdatesOpeningTag()
+    {
+        var xaml = "<Page><Buton /></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("Buton", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.UnknownTypeCode, R(0, nameAt, nameAt + 5), Data("Buton", "Button"));
+
+        var edit = Assert.Single(Assert.Single(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic))).Edit!.Changes[Uri]);
+
+        Assert.Equal("Button", edit.NewText);
+        Assert.Equal(nameAt, doc.OffsetAt(edit.Range.Start));
+    }
+
+    [Fact]
     public void MultipleSuggestions_OnlyFirstIsPreferred_OrderPreserved()
     {
         var ctx = Context(Diag(XamlValidator.UnknownAttributeCode, R(2, 8, 15), Data("Contnt", "Content", "ContextFlyout")));
@@ -99,11 +134,155 @@ public class XamlCodeActionsTests
                      XamlValidator.UnknownResourceKeyCode,
                      XamlValidator.InvalidSetterPropertyCode,
                      XamlValidator.InvalidBindModeCode,
+                     XamlValidator.InvalidAttributeValueCode,
                  })
         {
             var ctx = Context(Diag(code, R(0, 1, 5), Data("Foo", "Bar")));
             Assert.Single(XamlCodeActions.Compute(Uri, null, ctx));
         }
+    }
+
+    [Fact]
+    public void InvalidEnumValue_UsesValidatorSuggestions()
+    {
+        var doc = new TextDocument(Uri, "<Button HorizontalAlignment=\"Strech\" />");
+        int valueAt = doc.Text.IndexOf("Strech", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.InvalidAttributeValueCode,
+            R(0, valueAt, valueAt + "Strech".Length),
+            Data("Strech", "Stretch"));
+
+        var action = Assert.Single(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix");
+
+        Assert.Equal("Change 'Strech' to 'Stretch'", action.Title);
+        Assert.Equal("Stretch", Assert.Single(action.Edit!.Changes[Uri]).NewText);
+    }
+
+    [Fact]
+    public void MismatchedClosingTag_UsesInnermostParserEvidence()
+    {
+        var xaml = "<Grid><Button></Buton></Grid>";
+        var doc = new TextDocument(Uri, xaml);
+        var parserDiagnostic = Assert.Single(
+            doc.Parsed.Diagnostics, item => item.Id == WinUiXaml.Xaml.XamlDiagnosticIds.StrayEndTag);
+        var diagnostic = Diag(
+            parserDiagnostic.Id, doc.RangeOf(parserDiagnostic.Span), data: null);
+
+        var action = Assert.Single(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix");
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+
+        Assert.Equal("Change closing tag 'Buton' to 'Button'", action.Title);
+        Assert.Equal("Button", edit.NewText);
+        Assert.Equal(xaml.IndexOf("Buton", System.StringComparison.Ordinal), doc.OffsetAt(edit.Range.Start));
+    }
+
+    [Fact]
+    public void DataTypeDiagnostic_WithoutAuthoritativeType_ProducesNoUnsafeFix()
+    {
+        var xaml = "<DataTemplate><TextBlock Text=\"{x:Bind Name}\" /></DataTemplate>";
+        var doc = new TextDocument(Uri, xaml);
+        int bindAt = xaml.IndexOf("x:Bind", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.DataTemplateDataTypeRequiredCode,
+            R(0, bindAt, bindAt + "x:Bind".Length),
+            data: null);
+
+        Assert.DoesNotContain(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix");
+    }
+
+    [Theory]
+    [InlineData(XamlValidator.DataTemplateDataTypeRequiredCode)]
+    [InlineData(XamlValidator.BindingDataTypeRecommendedCode)]
+    public void DataTypeDiagnostic_UniqueAuthoritativeType_InsertsOnEnclosingTemplate(string code)
+    {
+        var xaml =
+            "<Page xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:models=\"using:Sample.Models\"><DataTemplate><TextBlock Text=\"{x:Bind Name}\" />" +
+            "</DataTemplate></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int bindAt = xaml.IndexOf("x:Bind", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            code,
+            R(0, bindAt, bindAt + "x:Bind".Length),
+            Data("using:Sample.Models", "models:Person"));
+
+        var action = Assert.Single(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix");
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+        int templateClose = xaml.IndexOf(
+            '>', xaml.IndexOf("<DataTemplate", System.StringComparison.Ordinal));
+
+        Assert.Equal("Set x:DataType to 'models:Person'", action.Title);
+        Assert.Equal(" x:DataType=\"models:Person\"", edit.NewText);
+        Assert.Equal(templateClose, doc.OffsetAt(edit.Range.Start));
+        Assert.Equal(edit.Range.Start, edit.Range.End);
+    }
+
+    [Fact]
+    public void DataTypeDiagnostic_StaleActionDoesNotReplaceExistingValue()
+    {
+        var xaml =
+            "<DataTemplate xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:models=\"using:Sample.Models\" x:DataType=\"models:Old\">" +
+            "<TextBlock Text=\"{x:Bind Name}\" /></DataTemplate>";
+        var doc = new TextDocument(Uri, xaml);
+        int bindAt = xaml.IndexOf("x:Bind", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.DataTemplateDataTypeRequiredCode,
+            R(0, bindAt, bindAt + "x:Bind".Length),
+            Data("using:Sample.Models", "models:Person"));
+
+        Assert.DoesNotContain(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix");
+    }
+
+    [Fact]
+    public void DataTypeDiagnostic_ReplacesExistingEmptyValue()
+    {
+        var xaml =
+            "<DataTemplate xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:models=\"using:Sample.Models\" x:DataType=\"\">" +
+            "<TextBlock Text=\"{x:Bind Name}\" /></DataTemplate>";
+        var doc = new TextDocument(Uri, xaml);
+        int bindAt = xaml.IndexOf("x:Bind", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.DataTemplateDataTypeRequiredCode,
+            R(0, bindAt, bindAt + "x:Bind".Length),
+            Data("using:Sample.Models", "models:Person"));
+
+        var action = Assert.Single(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix");
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+
+        Assert.Equal("models:Person", edit.NewText);
+        Assert.Equal(edit.Range.Start, edit.Range.End);
+    }
+
+    [Fact]
+    public void DataTypeDiagnostic_AmbiguousTypes_ProducesNoAction()
+    {
+        var xaml =
+            "<DataTemplate xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:models=\"using:Sample.Models\"><TextBlock Text=\"{x:Bind Name}\" /></DataTemplate>";
+        var doc = new TextDocument(Uri, xaml);
+        int bindAt = xaml.IndexOf("x:Bind", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.DataTemplateDataTypeRequiredCode,
+            R(0, bindAt, bindAt + "x:Bind".Length),
+            Data("using:Sample.Models", "models:Person", "models:Account"));
+
+        Assert.DoesNotContain(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix");
     }
 
     [Fact]
@@ -246,10 +425,13 @@ public class XamlCodeActionsTests
         var xaml = $"<Page xmlns=\"P\"><{prefix}:Foo /></Page>";
         var doc = new TextDocument(Uri, xaml);
         int prefixAt = xaml.IndexOf($"<{prefix}:") + 1;
-        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + prefix.Length), data: null));
+        var ctx = Context(Diag(
+            XamlValidator.UndeclaredPrefixCode,
+            R(0, prefixAt, prefixAt + prefix.Length),
+            Data(prefix, uri)));
 
         var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx));
-        Assert.Equal($"Add xmlns:{prefix} declaration", action.Title);
+        Assert.Equal($"Add xmlns:{prefix}=\"{uri}\"", action.Title);
         Assert.Equal("quickfix", action.Kind);
         Assert.True(action.IsPreferred);
         var edit = Assert.Single(action.Edit!.Changes[Uri]);
@@ -265,7 +447,10 @@ public class XamlCodeActionsTests
         var xaml = "<Page><d:Foo /></Page>";
         var doc = new TextDocument(Uri, xaml);
         int prefixAt = xaml.IndexOf("<d:") + 1;
-        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 1), data: null));
+        var ctx = Context(Diag(
+            XamlValidator.UndeclaredPrefixCode,
+            R(0, prefixAt, prefixAt + 1),
+            Data("d", "http://schemas.microsoft.com/expression/blend/2008")));
 
         var edit = Assert.Single(Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx)).Edit!.Changes[Uri]);
         Assert.Equal(" xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\"", edit.NewText);
@@ -310,11 +495,15 @@ public class XamlCodeActionsTests
         int firstAt = xaml.IndexOf("<d:") + 1;
         int secondAt = xaml.IndexOf("<d:", firstAt) + 1;
         var ctx = Context(
-            Diag(XamlValidator.UndeclaredPrefixCode, R(0, firstAt, firstAt + 1), data: null),
-            Diag(XamlValidator.UndeclaredPrefixCode, R(0, secondAt, secondAt + 1), data: null));
+            Diag(XamlValidator.UndeclaredPrefixCode, R(0, firstAt, firstAt + 1),
+                Data("d", "http://schemas.microsoft.com/expression/blend/2008")),
+            Diag(XamlValidator.UndeclaredPrefixCode, R(0, secondAt, secondAt + 1),
+                Data("d", "http://schemas.microsoft.com/expression/blend/2008")));
 
         var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx));
-        Assert.Equal("Add xmlns:d declaration", action.Title);
+        Assert.Equal(
+            "Add xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\"",
+            action.Title);
     }
 
     // ── WXAML0001: custom-prefix using: inference (needs the type system) ────────────────────────────
@@ -372,14 +561,17 @@ public class XamlCodeActionsTests
     }
 
     [Fact]
-    public void UndeclaredCustomPrefix_WithTypeSystem_InfersUsingForSourceType()
+    public void UndeclaredCustomPrefix_UniqueDiagnosticSuggestion_AddsUsingNamespace()
     {
         // local:MyPanel names one of the project's own source types -> offer xmlns:local="using:<ns>".
         var ts = BuildTypeSystem("namespace SampleApp { public class MyPanel { } }");
         var xaml = "<Page xmlns=\"P\"><local:MyPanel /></Page>";
         var doc = new TextDocument(Uri, xaml);
         int prefixAt = xaml.IndexOf("<local:") + 1;
-        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 5), data: null));
+        var ctx = Context(Diag(
+            XamlValidator.UndeclaredPrefixCode,
+            R(0, prefixAt, prefixAt + 5),
+            Data("local", "using:SampleApp")));
 
         var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx, ts));
         Assert.Equal("Add xmlns:local=\"using:SampleApp\"", action.Title);
@@ -392,7 +584,7 @@ public class XamlCodeActionsTests
     }
 
     [Fact]
-    public void UndeclaredCustomPrefix_WithTypeSystem_TwoNamespaces_OffersEachNotPreferred()
+    public void UndeclaredCustomPrefix_AmbiguousDiagnosticSuggestions_ProducesNoAction()
     {
         // The same simple name is declared in two namespaces -> offer both, neither preferred (ambiguous).
         var ts = BuildTypeSystem(
@@ -400,16 +592,13 @@ public class XamlCodeActionsTests
         var xaml = "<Page xmlns=\"P\"><local:Widget /></Page>";
         var doc = new TextDocument(Uri, xaml);
         int prefixAt = xaml.IndexOf("<local:") + 1;
-        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 5), data: null));
+        var ctx = Context(Diag(
+            XamlValidator.UndeclaredPrefixCode,
+            R(0, prefixAt, prefixAt + 5),
+            Data("local", "using:Alpha", "using:Beta")));
 
         var actions = XamlCodeActions.Compute(Uri, doc, ctx, ts);
-        Assert.Equal(2, actions.Count);
-        var alpha = actions.Single(a => a.Title.Contains("Alpha"));
-        var beta = actions.Single(a => a.Title.Contains("Beta"));
-        Assert.Equal("Add xmlns:local=\"using:Alpha\"", alpha.Title);
-        Assert.Equal("Add xmlns:local=\"using:Beta\"", beta.Title);
-        Assert.Equal(" xmlns:local=\"using:Alpha\"", Assert.Single(alpha.Edit!.Changes[Uri]).NewText);
-        Assert.All(actions, a => Assert.NotEqual(true, a.IsPreferred));   // ambiguous -> none preferred
+        Assert.Empty(actions);
     }
 
     [Fact]
@@ -448,10 +637,15 @@ public class XamlCodeActionsTests
         var xaml = "<Page xmlns=\"P\"><d:Foo /></Page>";
         var doc = new TextDocument(Uri, xaml);
         int prefixAt = xaml.IndexOf("<d:") + 1;
-        var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 1), data: null));
+        var ctx = Context(Diag(
+            XamlValidator.UndeclaredPrefixCode,
+            R(0, prefixAt, prefixAt + 1),
+            Data("d", "http://schemas.microsoft.com/expression/blend/2008")));
 
         var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx, ts));
-        Assert.Equal("Add xmlns:d declaration", action.Title);
+        Assert.Equal(
+            "Add xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\"",
+            action.Title);
         Assert.Equal(
             " xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\"",
             Assert.Single(action.Edit!.Changes[Uri]).NewText);
