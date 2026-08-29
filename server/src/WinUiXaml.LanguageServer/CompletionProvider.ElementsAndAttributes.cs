@@ -1540,7 +1540,7 @@ internal static partial class CompletionProvider
                 Label = property.Name,
                 Kind = CompletionItemKind.Property,
                 Documentation = CompletionDoc(property),
-                Detail = property.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                Detail = DescribeBindMember(property),
                 TextEdit = new TextEdit { Range = replaceRange, NewText = property.Name },
                 FilterText = property.Name,
                 SortText = property.Name,

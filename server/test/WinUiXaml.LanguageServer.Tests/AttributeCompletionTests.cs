@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using WinUiXaml.LanguageServer.Lsp;
 using WinUiXaml.Workspace;
 using Xunit;
 
@@ -470,16 +471,22 @@ public sealed class AttributeCompletionTests
         Assert.Contains("Items", CompleteLabels(readable));
         Assert.Contains("app:Grid.Row", CompleteLabels(attached));
         Assert.DoesNotContain("app:NarrowGrid.Row", CompleteLabels(incompatibleAttached));
+
+        var readableItem = CompleteItems(readable).Single(item => item.Label == "Items");
+        Assert.Equal("property : IList<Button>", readableItem.Detail);
     }
 
     private static string[] CompleteLabels(string marked)
+        => CompleteItems(marked).Select(item => item.Label).ToArray();
+
+    private static CompletionItem[] CompleteItems(string marked)
     {
         var offset = marked.IndexOf('|');
         var text = marked.Remove(offset, 1);
         return CompletionProvider.Provide(
             new TextDocument("file:///C:/test/Page.xaml", text),
             offset,
-            CreateTypeSystem()).Items.Select(item => item.Label).ToArray();
+            CreateTypeSystem()).Items.ToArray();
     }
 
     [Theory]
