@@ -218,6 +218,9 @@ internal static class XamlSemanticFacts
     internal static XamlAttribute? GetKeyAttribute(XamlElement element) =>
         GetDirectiveAttribute(element, "Key");
 
+    internal static XamlAttribute? GetResourceKeyAttribute(XamlElement element) =>
+        GetKeyAttribute(element) ?? GetDirectiveAttribute(element, "Name");
+
     internal static XamlElement? FindResourceDeclarationInScope(
         XamlElement reference,
         string key,
@@ -306,7 +309,7 @@ internal static class XamlSemanticFacts
                 {
                     if (foundDictionary &&
                         (previousDictionary is null ||
-                         GetKeyAttribute(previousDictionary) is not null))
+                         GetResourceKeyAttribute(previousDictionary) is not null))
                     {
                         sameLogicalDictionary = false;
                     }
@@ -360,7 +363,7 @@ internal static class XamlSemanticFacts
                 {
                     if (foundDictionary &&
                         (previousDictionary is null ||
-                         GetKeyAttribute(previousDictionary) is not null))
+                         GetResourceKeyAttribute(previousDictionary) is not null))
                     {
                         return false;
                     }
@@ -493,7 +496,7 @@ internal static class XamlSemanticFacts
                     continue;
                 }
 
-                if (GetKeyAttribute(entry)?.Value is { IsMarkupExtension: false } value)
+                if (GetResourceKeyAttribute(entry)?.Value is { IsMarkupExtension: false } value)
                 {
                     result.TryAdd(value.Text.Trim(), entry);
                     continue;
@@ -538,7 +541,7 @@ internal static class XamlSemanticFacts
                     continue;
                 }
 
-                if (GetKeyAttribute(entry) is not null)
+                if (GetResourceKeyAttribute(entry) is not null)
                 {
                     continue;
                 }

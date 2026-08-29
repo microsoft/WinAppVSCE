@@ -141,7 +141,8 @@ public class XamlResourceGraphTests
                     <ResourceDictionary Source="Merged.xaml" />
                   </ResourceDictionary.MergedDictionaries>
                   <SolidColorBrush x:Key="RootVisible" />
-                  <ResourceDictionary x:Key="NestedDictionary">
+                  <SolidColorBrush x:Name="NamedVisible" />
+                  <ResourceDictionary x:Name="NestedDictionary">
                     <ResourceDictionary.MergedDictionaries>
                       <ResourceDictionary Source="NestedMerged.xaml" />
                     </ResourceDictionary.MergedDictionaries>
@@ -184,6 +185,7 @@ public class XamlResourceGraphTests
                     StringComparison.OrdinalIgnoreCase));
 
             Assert.Contains("RootVisible", appFile.Keys);
+            Assert.Contains("NamedVisible", appFile.Keys);
             Assert.Contains("NestedDictionary", appFile.Keys);
             Assert.Contains("ThemeVisible", appFile.Keys);
             Assert.DoesNotContain("NestedOnly", appFile.Keys);

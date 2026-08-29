@@ -91,6 +91,8 @@ internal static class XamlValidator
     public const string IncompatibleEventHandlerCode = "WXAML0032";
     /// <summary>A using:/clr-namespace: declaration resolves to no usable compilation namespace.</summary>
     public const string UnknownNamespaceDeclarationCode = "WXAML0033";
+    /// <summary>A local Style resource cannot be applied to the consuming element's resolved type.</summary>
+    public const string InvalidStyleTargetTypeCode = "WXAML0034";
     /// <summary>Classic Binding in an untyped DataTemplate is not safe for Native AOT.</summary>
     public const string BindingDataTypeRecommendedCode = "WMC1510";
 
@@ -189,7 +191,9 @@ internal static class XamlValidator
         ValidateElement(element, elementType, doc, typeSystem, diagnostics, effectiveRoot, pageClass, effectiveStyleTarget, effectiveTemplateNeedsDataType, effectiveDataTypeSuggestion);
         ValidateResourceReferences(
             element,
+            elementType,
             doc,
+            typeSystem,
             diagnostics,
             resourceKeys,
             resourceIndex,
@@ -206,7 +210,9 @@ internal static class XamlValidator
 
     private static void ValidateResourceReferences(
         XamlElement element,
+        INamedTypeSymbol? elementType,
         TextDocument doc,
+        XamlTypeSystem typeSystem,
         List<Diagnostic> diagnostics,
         IReadOnlySet<string> resourceKeys,
         XamlSemanticFacts.ResourceScopeIndex resourceIndex,
@@ -240,12 +246,27 @@ internal static class XamlValidator
                 }
 
                 const bool allowForwardReference = true;
-                if (resourceKeys.Contains(key) ||
-                    resourceIndex.FindDeclaration(
-                        element,
+                var declaration = resourceIndex.FindDeclaration(
+                    element,
+                    key,
+                    extension.Span.Start,
+                    allowForwardReference);
+                if (declaration is not null)
+                {
+                    ValidateStyleResourceApplication(
+                        elementType,
+                        attribute,
+                        extension,
                         key,
-                        extension.Span.Start,
-                        allowForwardReference) is not null)
+                        keySpan,
+                        declaration,
+                        doc,
+                        typeSystem,
+                        diagnostics);
+                    continue;
+                }
+
+                if (resourceKeys.Contains(key))
                 {
                     continue;
                 }
@@ -265,6 +286,47 @@ internal static class XamlValidator
                     suggestion));
             }
         }
+    }
+
+    private static void ValidateStyleResourceApplication(
+        INamedTypeSymbol? elementType,
+        XamlAttribute attribute,
+        XamlMarkupExtension extension,
+        string key,
+        TextSpan keySpan,
+        XamlElement declaration,
+        TextDocument doc,
+        XamlTypeSystem typeSystem,
+        List<Diagnostic> diagnostics)
+    {
+        if (elementType is null ||
+            typeSystem.Capabilities.Style is not { } styleType ||
+            typeSystem.FindMember(elementType, "Style") is not
+                { Kind: XamlMemberKind.Property, Type: { } stylePropertyType } ||
+            !XamlTypeSystem.IsAssignableTo(stylePropertyType, styleType) ||
+            attribute.Name.HasPrefix ||
+            !string.Equals(attribute.Name.LocalName, "Style", System.StringComparison.Ordinal) ||
+            extension.Name is not { LocalName: "StaticResource" or "ThemeResource" } ||
+            !XamlSemanticFacts.IsElement(
+                declaration,
+                styleType,
+                typeSystem,
+                allowDerived: true) ||
+            XamlSemanticFacts.ResolveStyleTargetType(
+                declaration,
+                declaration.NamespaceScope,
+                typeSystem) is not { } targetType ||
+            XamlTypeSystem.IsAssignableTo(elementType, targetType))
+        {
+            return;
+        }
+
+        diagnostics.Add(Diag(
+            doc,
+            keySpan,
+            SeverityError,
+            InvalidStyleTargetTypeCode,
+            $"The style '{key}' targets '{targetType.Name}' and cannot be applied to element type '{elementType.Name}'."));
     }
 
     private static void ValidateElement(
@@ -898,7 +960,7 @@ internal static class XamlValidator
                 !(value.Text.StartsWith("using:", System.StringComparison.Ordinal) ||
                   value.Text.StartsWith("clr-namespace:", System.StringComparison.Ordinal)) ||
                 XamlSemanticFacts.IsPresentationNamespace(value.Text) ||
-                !IsEmptyNamespaceUri(value.Text))
+                typeSystem.IsKnownNamespace(value.Text))
             {
                 continue;
             }
@@ -906,25 +968,6 @@ internal static class XamlValidator
             diagnostics.Add(Diag(doc, value.InnerSpan, SeverityWarning, UnknownNamespaceDeclarationCode,
                 $"The XAML namespace '{value.Text}' contains no usable types in the project compilation."));
         }
-    }
-
-    private static bool IsEmptyNamespaceUri(string uri)
-    {
-        const string usingPrefix = "using:";
-        if (uri.StartsWith(usingPrefix, System.StringComparison.Ordinal))
-        {
-            return uri.Substring(usingPrefix.Length).Trim().Length == 0;
-        }
-
-        const string clrPrefix = "clr-namespace:";
-        if (!uri.StartsWith(clrPrefix, System.StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var body = uri.Substring(clrPrefix.Length);
-        int separator = body.IndexOf(';');
-        return (separator < 0 ? body : body.Substring(0, separator)).Trim().Length == 0;
     }
 
     private static void ValidateClassicBinding(
@@ -1077,12 +1120,55 @@ internal static class XamlValidator
             return;
         }
 
-        var memberName = path.Split('.')[0].Trim();
-        if (IsIdentifier(memberName) && typeSystem.FindMember(templateTargetType, memberName) is null)
+        var memberName = path.Trim();
+        int dot = memberName.IndexOf('.');
+        if (dot > 0 && dot < memberName.Length - 1)
+        {
+            var ownerName = memberName[..dot];
+            var attachedMemberName = memberName[(dot + 1)..];
+            var owner = ResolveTypeName(ownerName, element.NamespaceScope, typeSystem);
+            var attached = owner is null
+                ? null
+                : typeSystem.GetAttachedProperties(owner)
+                    .FirstOrDefault(member =>
+                        string.Equals(member.Name, attachedMemberName, StringComparison.Ordinal));
+            if (attached is not null &&
+                XamlTypeSystem.IsAttachedPropertyApplicable(attached, templateTargetType))
+            {
+                return;
+            }
+
+            var message = owner is null
+                ? $"'{ownerName}' is not a known attached-property owner."
+                : attached is null
+                    ? $"'{attachedMemberName}' is not an attached property of '{owner.Name}'."
+                    : $"The attached property '{memberName}' cannot be read from template target type '{templateTargetType.Name}'.";
+            diagnostics.Add(Diag(
+                doc,
+                span,
+                SeverityError,
+                InvalidTemplateBindingCode,
+                message,
+                owner is null
+                    ? null
+                    : SuggestData(
+                        attachedMemberName,
+                        typeSystem.GetAttachedProperties(owner).Select(member => member.Name))));
+            return;
+        }
+
+        if (IsIdentifier(memberName) &&
+            !typeSystem.GetBindableMembers(templateTargetType)
+                .OfType<IPropertySymbol>()
+                .Any(property => string.Equals(property.Name, memberName, StringComparison.Ordinal)))
         {
             diagnostics.Add(Diag(doc, span, SeverityError, InvalidTemplateBindingCode,
                 $"'{memberName}' is not a member of template target type '{templateTargetType.Name}'.",
-                SuggestData(memberName, typeSystem.GetAttributeCandidateNames(templateTargetType))));
+                SuggestData(
+                    memberName,
+                    typeSystem.GetBindableMembers(templateTargetType)
+                        .OfType<IPropertySymbol>()
+                        .Select(property => property.Name))));
         }
     }
 
@@ -1303,6 +1389,16 @@ internal static class XamlValidator
         source = XamlValueConverter.UnwrapNullable(source);
         target = XamlValueConverter.UnwrapNullable(target);
         if (target.SpecialType == SpecialType.System_String)
+        {
+            return true;
+        }
+
+        if (source.SpecialType == SpecialType.System_String &&
+            (target.Name == "Uri" &&
+             target.ContainingNamespace?.ToDisplayString() == "System" ||
+             target.Name == "ImageSource" &&
+             target.ContainingNamespace?.ToDisplayString() is
+                 "Microsoft.UI.Xaml.Media" or "Windows.UI.Xaml.Media"))
         {
             return true;
         }
@@ -2665,7 +2761,7 @@ internal static class XamlValidator
         return XamlSemanticFacts.IsResourceDictionaryPropertyElement(element, typeSystem);
     }
 
-    /// <summary>Reads an entry's x:Key as a canonical, scope-comparable key.</summary>
+    /// <summary>Reads an entry's x:Key or resource x:Name as a canonical, scope-comparable key.</summary>
     private static bool TryGetResourceKey(
         XamlElement entry,
         XamlTypeSystem typeSystem,
@@ -2675,7 +2771,7 @@ internal static class XamlValidator
         canonicalKey = string.Empty;
         keySpan = default;
 
-        if (XamlSemanticFacts.GetKeyAttribute(entry)?.Value is not { } value)
+        if (XamlSemanticFacts.GetResourceKeyAttribute(entry)?.Value is not { } value)
         {
             return false;
         }

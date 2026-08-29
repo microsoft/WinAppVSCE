@@ -13,8 +13,11 @@
     .\get-build-number.ps1
 #>
 
+param(
+    [string]$ProjectRoot = ($PSScriptRoot | Split-Path -Parent)
+)
+
 $ErrorActionPreference = "Stop"
-$ProjectRoot = $PSScriptRoot | Split-Path -Parent
 $PackageJsonPath = Join-Path $ProjectRoot "package.json"
 
 # Ensure we're in a git repository
@@ -25,8 +28,9 @@ try {
         exit 1
     }
 
-    # Get the commit hash where package.json was last changed
-    $lastVersionCommit = git log -1 --format="%H" -- $PackageJsonPath 2>$null
+    # Find the last commit that changed the version line, not merely another
+    # package.json contribution or script entry.
+    $lastVersionCommit = git log -1 --format="%H" -G '^\s*"version"\s*:' -- $PackageJsonPath 2>$null
 
     if ([string]::IsNullOrEmpty($lastVersionCommit)) {
         $buildNumber = git rev-list --count HEAD 2>$null
@@ -40,6 +44,23 @@ try {
             $buildNumber = 0
         }
         $buildNumber = [int]$buildNumber + 1
+    }
+
+    # Local packaging can include uncommitted changes without advancing HEAD.
+    # Keep prerelease identities monotonic when an earlier VSIX already exists.
+    $baseVersion = (Get-Content $PackageJsonPath -Raw | ConvertFrom-Json).version
+    $artifactDirectory = Join-Path $ProjectRoot "artifacts"
+    if (Test-Path $artifactDirectory) {
+        $escapedVersion = [Regex]::Escape($baseVersion)
+        $existingBuilds = Get-ChildItem $artifactDirectory -Filter "winapp-$baseVersion-prerelease.*.vsix" |
+            ForEach-Object {
+                if ($_.Name -match "^winapp-$escapedVersion-prerelease\.(\d+)\.vsix$") {
+                    [int]$Matches[1]
+                }
+            }
+        if ($existingBuilds) {
+            $buildNumber = [Math]::Max([int]$buildNumber, ([int]($existingBuilds | Measure-Object -Maximum).Maximum) + 1)
+        }
     }
 
     Write-Output $buildNumber

@@ -30,6 +30,12 @@ public sealed class AttributeCompletionTests
                 public event System.EventHandler? Click;
             }
 
+            public class StyledControl : DependencyObject
+            {
+                public System.Collections.Generic.IList<Button> Items { get; } =
+                    new System.Collections.Generic.List<Button>();
+            }
+
             public class Window : DependencyObject
             {
                 public object SystemBackdrop { get; set; } = new object();
@@ -48,6 +54,11 @@ public sealed class AttributeCompletionTests
                 public Microsoft.UI.Xaml.Controls.ColumnDefinitionCollection ColumnDefinitions { get; } = new();
                 public static int GetRow(DependencyObject value) => 0;
                 public static void SetRow(DependencyObject value, int row) { }
+            }
+            public class NarrowGrid : DependencyObject
+            {
+                public static int GetRow(Window value) => 0;
+                public static void SetRow(Window value, int row) { }
             }
 
             public class RowDefinition : DependencyObject { }
@@ -85,6 +96,10 @@ public sealed class AttributeCompletionTests
             public struct Thickness { }
             public class FrameworkTemplate { }
             public class DataTemplate : FrameworkTemplate { }
+            public class ControlTemplate : FrameworkTemplate
+            {
+                public System.Type TargetType { get; set; } = typeof(object);
+            }
             public class Style : DependencyObject
             {
                 public System.Type TargetType { get; set; } = typeof(object);
@@ -99,6 +114,7 @@ public sealed class AttributeCompletionTests
         {
             public class RowDefinitionCollection : System.Collections.Generic.List<TestApp.RowDefinition> { }
             public class ColumnDefinitionCollection : System.Collections.Generic.List<TestApp.ColumnDefinition> { }
+            public class ControlTemplate : Microsoft.UI.Xaml.ControlTemplate { }
         }
 
         namespace Microsoft.UI.Xaml.Media.Animation
@@ -424,6 +440,36 @@ public sealed class AttributeCompletionTests
             """;
 
         Assert.DoesNotContain("x:Name", CompleteLabels(marked));
+    }
+
+    [Fact]
+    public void TemplateBindingCompletion_IncludesReadableAndAttachedProperties()
+    {
+        const string readable = """
+            <ControlTemplate xmlns="using:Microsoft.UI.Xaml.Controls"
+                             xmlns:app="using:TestApp"
+                             TargetType="app:StyledControl">
+              <app:Button Text="{TemplateBinding It|}" />
+            </ControlTemplate>
+            """;
+        const string attached = """
+            <ControlTemplate xmlns="using:Microsoft.UI.Xaml.Controls"
+                             xmlns:app="using:TestApp"
+                             TargetType="app:StyledControl">
+              <app:Button Text="{TemplateBinding app:Grid.R|}" />
+            </ControlTemplate>
+            """;
+        const string incompatibleAttached = """
+            <ControlTemplate xmlns="using:Microsoft.UI.Xaml.Controls"
+                             xmlns:app="using:TestApp"
+                             TargetType="app:StyledControl">
+              <app:Button Text="{TemplateBinding app:NarrowGrid.R|}" />
+            </ControlTemplate>
+            """;
+
+        Assert.Contains("Items", CompleteLabels(readable));
+        Assert.Contains("app:Grid.Row", CompleteLabels(attached));
+        Assert.DoesNotContain("app:NarrowGrid.Row", CompleteLabels(incompatibleAttached));
     }
 
     private static string[] CompleteLabels(string marked)

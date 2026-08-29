@@ -1505,7 +1505,7 @@ internal static partial class CompletionProvider
         return Finish(items);
     }
 
-    /// <summary> Completes <c>{TemplateBinding |}</c> with the settable properties of the enclosing <c>ControlTemplate</c>'s <c>TargetType</c>.</summary>
+    /// <summary> Completes <c>{TemplateBinding |}</c> with the readable properties of the enclosing <c>ControlTemplate</c>'s <c>TargetType</c>.</summary>
     private static CompletionList CompleteTemplateBinding(
         TextDocument doc, int offset, Context ctx, XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange)
     {
@@ -1515,23 +1515,35 @@ internal static partial class CompletionProvider
             return new CompletionList();
         }
 
-        var items = new List<CompletionItem>();
-        foreach (var member in typeSystem.GetMembers(targetType))
+        int dot = ctx.Partial.LastIndexOf('.');
+        if (dot >= 0)
         {
-            if (member.Kind != XamlMemberKind.Property || !StartsWith(member.Name, ctx.Partial))
+            return CompleteAttachedProperty(
+                ctx.Partial.Substring(0, dot),
+                ctx.Partial.Substring(dot + 1),
+                scope,
+                typeSystem,
+                replaceRange,
+                elementType: targetType);
+        }
+
+        var items = new List<CompletionItem>();
+        foreach (var property in typeSystem.GetBindableMembers(targetType).OfType<IPropertySymbol>())
+        {
+            if (!StartsWith(property.Name, ctx.Partial))
             {
                 continue;
             }
 
             items.Add(new CompletionItem
             {
-                Label = member.Name,
+                Label = property.Name,
                 Kind = CompletionItemKind.Property,
-                Documentation = CompletionDoc(member.Symbol),
-                Detail = DescribeMember(member),
-                TextEdit = new TextEdit { Range = replaceRange, NewText = member.Name },
-                FilterText = member.Name,
-                SortText = member.Name,
+                Documentation = CompletionDoc(property),
+                Detail = property.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                TextEdit = new TextEdit { Range = replaceRange, NewText = property.Name },
+                FilterText = property.Name,
+                SortText = property.Name,
             });
         }
 
