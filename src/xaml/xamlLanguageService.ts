@@ -564,7 +564,12 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     transport: TransportKind.stdio,
     options: {
       cwd: path.dirname(serverPath),
-      env: { ...process.env, DOTNET_HOST_PATH: dotnet },
+      // findCompatibleDotnet can return the bare "dotnet" PATH fallback, but
+      // DOTNET_HOST_PATH must be an absolute path to the host executable, so only
+      // override the inherited value when we resolved a real path.
+      env: path.isAbsolute(dotnet)
+        ? { ...process.env, DOTNET_HOST_PATH: dotnet }
+        : { ...process.env },
     },
   };
 
