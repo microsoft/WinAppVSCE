@@ -3,12 +3,43 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import {
+  createDotnetChildEnvironment,
   findCompatibleDotnet,
   getDotnetCandidates,
   hasRequiredDotnetRuntime,
   listDotnetRuntimes,
   RuntimeProbeProcess,
 } from "../xaml/dotnetRuntime";
+
+test("sets DOTNET_HOST_PATH when the resolved host is an absolute path", () => {
+  const env = createDotnetChildEnvironment("C:\\dotnet10\\dotnet.exe", {
+    PATH: "C:\\dotnet10",
+    DOTNET_HOST_PATH: "C:\\dotnet8\\dotnet.exe",
+  });
+
+  assert.equal(env.DOTNET_HOST_PATH, "C:\\dotnet10\\dotnet.exe");
+  assert.equal(env.PATH, "C:\\dotnet10");
+});
+
+test("drops an inherited DOTNET_HOST_PATH when the host resolved through PATH", () => {
+  // "dotnet" is the last candidate, so reaching it means the inherited
+  // DOTNET_HOST_PATH was absent or failed the runtime probe. Forwarding a
+  // rejected host would let MSBuild and Roslyn's build host use it.
+  const env = createDotnetChildEnvironment("dotnet", {
+    PATH: "C:\\dotnet10",
+    DOTNET_HOST_PATH: "C:\\dotnet8\\dotnet.exe",
+  });
+
+  assert.ok(!("DOTNET_HOST_PATH" in env));
+  assert.equal(env.PATH, "C:\\dotnet10");
+});
+
+test("does not mutate the source environment", () => {
+  const source = { DOTNET_HOST_PATH: "C:\\dotnet8\\dotnet.exe" };
+  createDotnetChildEnvironment("dotnet", source);
+
+  assert.equal(source.DOTNET_HOST_PATH, "C:\\dotnet8\\dotnet.exe");
+});
 
 test("detects only the required Microsoft.NETCore.App major", () => {
   assert.equal(

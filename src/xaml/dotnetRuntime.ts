@@ -38,6 +38,32 @@ export function getDotnetCandidates(
   });
 }
 
+/**
+ * Builds the environment for a spawned dotnet child process.
+ *
+ * DOTNET_HOST_PATH is contractually an absolute path to the host executable —
+ * MSBuild targets and Roslyn's build host resolve and exec it directly. Only
+ * the first four candidates are absolute; findCompatibleDotnet can also return
+ * the bare "dotnet" PATH fallback, which must never be written to the variable.
+ *
+ * Reaching that fallback also means any inherited DOTNET_HOST_PATH was absent
+ * or failed the runtime probe, since it is the first candidate tried. Passing a
+ * host we already rejected down to the child would let MSBuild use it, so the
+ * variable is dropped rather than forwarded.
+ */
+export function createDotnetChildEnvironment(
+  dotnetPath: string,
+  env: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  const childEnv = { ...env };
+  if (path.isAbsolute(dotnetPath)) {
+    childEnv.DOTNET_HOST_PATH = dotnetPath;
+  } else {
+    delete childEnv.DOTNET_HOST_PATH;
+  }
+  return childEnv;
+}
+
 export async function findCompatibleDotnet(
   candidates = getDotnetCandidates(),
   probe: (command: string) => Promise<string | undefined> = listDotnetRuntimes
