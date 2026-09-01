@@ -61,6 +61,20 @@ public class XamlValidatorTests
                 public string Zero() => "";
                 public string Literal(string value) => value;
                 public string Pair(string first, Child second) => first;
+                public bool NegateReady() => false;
+                public bool NegateArg(bool value) => !value;
+                public Microsoft.UI.Xaml.Visibility ReadyVisibility() => Microsoft.UI.Xaml.Visibility.Visible;
+                public int CalculateCount() => 0;
+                public bool Select(string value) => true;
+                public Microsoft.UI.Xaml.Visibility Select(Child value) => Microsoft.UI.Xaml.Visibility.Visible;
+                public bool SelectLiteral(string value) => true;
+                public Microsoft.UI.Xaml.Visibility SelectLiteral(bool value) => Microsoft.UI.Xaml.Visibility.Visible;
+                public bool SelectNumber(int value) => true;
+                public Microsoft.UI.Xaml.Visibility SelectNumber(double value) => Microsoft.UI.Xaml.Visibility.Visible;
+                public bool Rank(string value) => true;
+                public Microsoft.UI.Xaml.Visibility Rank(string value, string suffix = "") => Microsoft.UI.Xaml.Visibility.Visible;
+                public bool Spread(string value) => true;
+                public Microsoft.UI.Xaml.Visibility Spread(params string[] values) => Microsoft.UI.Xaml.Visibility.Visible;
                 public new string Hidden(string value) => value;
                 public event Handler Clicked;
                 public event ValueHandler ValueChanged;
@@ -78,6 +92,10 @@ public class XamlValidatorTests
             {
                 public string Name { get; } = "";
                 public string Text { get; set; } = "";
+                public Microsoft.UI.Xaml.Visibility Visibility { get; set; }
+                public Formatter Formatter { get; } = new Formatter();
+                public bool IsReady() => true;
+                public int CalculateCount() => 0;
                 internal string InternalText { get; } = "";
                 internal string InternalFormat(string value) => value;
                 private string Secret { get; } = "";
@@ -93,6 +111,8 @@ public class XamlValidatorTests
                 public static Formatter Formatter { get; } = new();
                 public static string Format(string value) => value;
                 public static string Format(string first, string second) => first;
+                public static bool Negate(bool value) => !value;
+                public static Microsoft.UI.Xaml.Visibility ToVisibility(bool value) => Microsoft.UI.Xaml.Visibility.Visible;
                 public static string PrivateGetter { private get; set; } = "";
             }
 
@@ -104,6 +124,8 @@ public class XamlValidatorTests
             public class Formatter
             {
                 public string Format(Child value) => value.Name;
+                public bool IsReady(Child value) => true;
+                public Microsoft.UI.Xaml.Visibility ToVisibility(Child value) => Microsoft.UI.Xaml.Visibility.Visible;
             }
 
             public class RenamedTemplate : Microsoft.UI.Xaml.FrameworkTemplate { }
@@ -327,11 +349,11 @@ public class XamlValidatorTests
     }
 
     [Theory]
-    [InlineData("Choose(Child)")]
-    [InlineData("Choose(Child, Child)")]
+    [InlineData("Choose(Text)")]
+    [InlineData("Choose(Text, Text)")]
     [InlineData("Optional()")]
     [InlineData("Variadic()")]
-    [InlineData("Variadic(Child, Child)")]
+    [InlineData("Variadic(Text, Text)")]
     [InlineData("Zero( )")]
     [InlineData("Literal('a,b')")]
     [InlineData("Formatter.Format(Child)")]
@@ -1621,6 +1643,21 @@ public class XamlValidatorTests
         Assert.Single(invalidRelativeSource, d => d.Code == XamlValidator.InvalidRelativeSourceCode);
     }
 
+    [Theory]
+    [InlineData("""Text="{x:Bind Mode=OneTime}" """)]
+    [InlineData("""Text="{x:Bind Mode = OneTime}" """)]
+    [InlineData("""Text="{ui:Binding Mode=OneTime}" """)]
+    [InlineData("""Text="{ui:Binding Mode = OneTime}" """)]
+    public void BindingNamedArgumentsAllowWhitespace(string attribute)
+    {
+        Assert.DoesNotContain(
+            Validate(Page(attribute)),
+            diagnostic => diagnostic.Code is
+                XamlValidator.InvalidBindModeCode or
+                XamlValidator.InvalidBindingValueCode or
+                XamlValidator.UnknownBindingArgumentCode);
+    }
+
     [Fact]
     public void BindingElementName_UsesApplicableNameScope()
     {
@@ -1835,7 +1872,7 @@ public class XamlValidatorTests
             d => d.Code is XamlValidator.UnknownBindMemberCode or
                 XamlValidator.InvalidBindFunctionCode);
         Assert.DoesNotContain(
-            Validate(Page("""Text="{x:Bind local:BindStatics.Format((Child))}" """)),
+            Validate(Page("""Text="{x:Bind local:BindStatics.Format((Text))}" """)),
             d => d.Code is XamlValidator.UnknownBindMemberCode or
                 XamlValidator.InvalidBindFunctionCode);
         Assert.DoesNotContain(
@@ -1852,7 +1889,7 @@ public class XamlValidatorTests
         Assert.Contains(
             Validate(Page("""Text="{x:Bind local:BindStatics.PrivateGetter}" """)),
             d => d.Code == XamlValidator.UnknownBindMemberCode);
-        var missingNegated = Validate(Page("""Text="{x:Bind !DefinitelyMissingNegated}" """));
+        var missingNegated = Validate(Page("""Text="{x:Bind DefinitelyMissingNegated}" """));
         Assert.Single(
             missingNegated,
             d => d.Code == XamlValidator.UnknownBindMemberCode);
@@ -1891,6 +1928,190 @@ public class XamlValidatorTests
     }
 
     [Fact]
+    public void BindAssignment_AcceptsDocumentedToStringAndBooleanToVisibilityConversions()
+    {
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind Code}" """)),
+            diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.DoesNotContain(
+            Validate(Page("""Visibility="{x:Bind IsEnabled}" """)),
+            diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+    }
+
+    [Fact]
+    public void BindAssignment_RestrictsBooleanToVisibilityConversionToPropertyPaths()
+    {
+       var invalidFunction = Assert.Single(
+           Validate(Page("""Visibility="{x:Bind NegateReady()}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+       Assert.Contains(
+           "The built-in Boolean-to-Visibility conversion applies only to property-path x:Bind expressions.",
+           invalidFunction.Message);
+       Assert.DoesNotContain(
+           Validate(Page("""Visibility="{x:Bind ReadyVisibility()}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+       Assert.DoesNotContain(
+           Validate(Page("""Text="{x:Bind CalculateCount()}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+    }
+
+    [Fact]
+    public void BindAssignment_ValidatesStaticDottedAndArgumentTakingFunctions()
+    {
+       foreach (var path in new[]
+                {
+                    "NegateArg(IsEnabled)",
+                    "Formatter.IsReady(Child)",
+                    "local:BindStatics.Negate(IsEnabled)",
+                })
+       {
+           Assert.Single(
+               Validate(Page($$"""Visibility="{x:Bind {{path}}}" """)),
+               diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+       }
+
+       foreach (var path in new[]
+                {
+                    "Formatter.ToVisibility(Child)",
+                    "local:BindStatics.ToVisibility(IsEnabled)",
+                })
+       {
+           Assert.DoesNotContain(
+               Validate(Page($$"""Visibility="{x:Bind {{path}}}" """)),
+               diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+       }
+    }
+
+    [Fact]
+    public void BindAssignment_UsesArgumentTypesToSelectFunctionOverloads()
+    {
+       Assert.Single(
+           Validate(Page("""Visibility="{x:Bind Select(Text)}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+       Assert.DoesNotContain(
+           Validate(Page("""Visibility="{x:Bind Select(Child)}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+    }
+
+    [Fact]
+    public void BindAssignment_UsesLiteralTypesToSelectFunctionOverloads()
+    {
+        Assert.Single(
+           Validate(Page("""Visibility="{x:Bind SelectLiteral('ready')}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.DoesNotContain(
+           Validate(Page("""Visibility="{x:Bind SelectLiteral(true)}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.Single(
+           Validate(Page("""Visibility="{x:Bind SelectNumber(1)}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.DoesNotContain(
+           Validate(Page("""Visibility="{x:Bind SelectNumber(1.5)}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+    }
+
+    [Fact]
+    public void BindAssignment_PrefersNormalAndNonOptionalOverloads()
+    {
+        Assert.Single(
+           Validate(Page("""Visibility="{x:Bind Rank(Text)}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.Single(
+           Validate(Page("""Visibility="{x:Bind Spread(Text)}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+    }
+
+    [Fact]
+    public void BindAssignment_DoesNotMisclassifyCastPathsAsFunctions()
+    {
+        Assert.Single(
+           Validate(Page("""Width="{x:Bind (local:Child)Name}" """)),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+    }
+
+    [Fact]
+    public void BindAssignment_ValidatesNamedElementFunctionReceivers()
+    {
+        const string xaml = """
+           <Page xmlns="using:TestApp"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 x:Class="TestApp.Page">
+             <Child x:Name="Target" />
+             <Child Visibility="{x:Bind Target.IsReady()}" />
+           </Page>
+           """;
+
+        Assert.Single(
+           Validate(xaml),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+    }
+
+    [Fact]
+    public void BindAssignment_ValidatesNestedNamedElementFunctionReceiversAndArguments()
+    {
+        const string xaml = """
+           <Page xmlns="using:TestApp"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 x:Class="TestApp.Page">
+             <Child x:Name="Target" />
+             <Child Visibility="{x:Bind Target.Formatter.IsReady(Child)}"
+                    Text="{x:Bind Format(Target.Text)}" />
+           </Page>
+           """;
+
+        Assert.Single(
+           Validate(xaml),
+           diagnostic => diagnostic.Code == XamlValidator.InvalidBindAssignmentCode);
+        Assert.DoesNotContain(
+           Validate(xaml),
+           diagnostic => diagnostic.Code == XamlValidator.UnknownBindMemberCode);
+    }
+
+    [Theory]
+    [InlineData("!IsEnabled")]
+    [InlineData("!NegateReady()")]
+    [InlineData("!NegateArg(IsEnabled)")]
+    [InlineData("!Child.IsReady()")]
+    [InlineData("!local:BindStatics.Negate(IsEnabled)")]
+    public void BindExpression_RejectsUnsupportedNegation(string path)
+    {
+        var diagnostic = Assert.Single(
+           Validate(Page($$"""Text="{x:Bind {{path}}}" """)),
+           candidate => candidate.Code == XamlValidator.InvalidBindSyntaxCode);
+
+        Assert.Contains("not supported", diagnostic.Message);
+    }
+
+    [Fact]
+    public void BindExpression_AllowsExclamationMarkInsideStringLiteral()
+    {
+        Assert.DoesNotContain(
+           Validate(Page("""Text="{x:Bind Literal('Hello!')}" """)),
+           candidate => candidate.Code == XamlValidator.InvalidBindSyntaxCode);
+    }
+
+    [Fact]
+    public void BindFunction_ReportsWhenArgumentTypesMatchNoOverload()
+    {
+        var diagnostic = Assert.Single(
+           Validate(Page("""Text="{x:Bind SelectNumber(Child)}" """)),
+           candidate => candidate.Code == XamlValidator.InvalidBindFunctionCode);
+
+        Assert.Contains("'Child'", diagnostic.Message);
+        Assert.Contains("argument type", diagnostic.Message);
+    }
+
+    [Fact]
+    public void BindPath_AcceptsPrivateMembersOnTheGeneratedPagePartialClass()
+    {
+        Assert.DoesNotContain(
+            Validate(Page("""Text="{x:Bind SecretText}" """)),
+            diagnostic => diagnostic.Code is
+                XamlValidator.UnknownBindMemberCode or
+                XamlValidator.InaccessibleBindMemberCode);
+    }
+
+    [Fact]
     public void EventHandler_RequiresCompatibleDelegateSignature()
     {
         Assert.DoesNotContain(
@@ -1913,16 +2134,85 @@ public class XamlValidatorTests
     {
         const string xaml = """
             <Page xmlns="using:TestApp"
-                  xmlns:empty="using:TestApp.Empty"
+                  xmlns:empty="using:TestApp.Open_Source_Models.Image_Models.SINet"
                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                   x:Class="TestApp.Page">
               <Child />
             </Page>
             """;
 
-        Assert.Single(
-            Validate(xaml),
+        var diagnostic = Assert.Single(
+            ValidateWithSource(
+                xaml,
+                Types + """
+
+                    namespace TestApp.OpenSourceModels.SINet
+                    {
+                        public class Sample { }
+                    }
+                    """),
             diagnostic => diagnostic.Code == XamlValidator.UnknownNamespaceDeclarationCode);
+        var data = Assert.IsType<DiagnosticData>(diagnostic.Data);
+        Assert.Equal("using:TestApp.Open_Source_Models.Image_Models.SINet", data.Bad);
+        Assert.Contains("using:TestApp.OpenSourceModels.SINet", data.Suggestions);
+    }
+
+    [Fact]
+    public void UnknownLocalNamespace_WithAmbiguousStructuralMatches_DoesNotGuess()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:local="using:TestApp.Open_Source_Models.Image_Models.SINet"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  x:Class="TestApp.Page">
+              <Child />
+            </Page>
+            """;
+
+        var diagnostic = Assert.Single(
+            ValidateWithSource(
+                xaml,
+                Types + """
+
+                    namespace TestApp.OpenSourceModels.AAAAAAAAAAAAAAAAAAAA.SINet
+                    {
+                        public class First { }
+                    }
+                    namespace TestApp.OpenSourceModels.BBBBBBBBBBBBBBBBBBBB.SINet
+                    {
+                        public class Second { }
+                    }
+                    """),
+            candidate => candidate.Code == XamlValidator.UnknownNamespaceDeclarationCode);
+
+        Assert.Null(diagnostic.Data);
+    }
+
+    [Fact]
+    public void UnknownLocalNamespace_WithDifferentSemanticBranch_DoesNotGuess()
+    {
+        const string xaml = """
+            <Page xmlns="using:TestApp"
+                  xmlns:local="using:Company.Product.FeatureAlpha.Models"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  x:Class="TestApp.Page">
+              <Child />
+            </Page>
+            """;
+
+        var diagnostic = Assert.Single(
+            ValidateWithSource(
+                xaml,
+                Types + """
+
+                    namespace Company.Product.FeatureBeta.Models
+                    {
+                        public class Candidate { }
+                    }
+                    """),
+            candidate => candidate.Code == XamlValidator.UnknownNamespaceDeclarationCode);
+
+        Assert.Null(diagnostic.Data);
     }
 
     [Theory]

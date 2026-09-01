@@ -137,7 +137,7 @@ internal static class XamlRename
 
         if (kind == XamlRenameKind.Name)
         {
-            if (!NamePattern.IsMatch(newName))
+            if (!IsValidName(newName))
             {
                 throw new RenameValidationException(
                     $"'{newName}' is not a valid x:Name. A name must start with a letter or underscore and " +
@@ -154,6 +154,23 @@ internal static class XamlRename
                 throw new RenameValidationException($"A resource key cannot contain the character '{forbidden}'.");
             }
         }
+    }
+
+    internal static bool IsValidName(string value) => NamePattern.IsMatch(value);
+
+    internal static string SanitizeName(string value)
+    {
+        var characters = value.Select(character =>
+            character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'
+                ? character
+                : '_').ToArray();
+        string result = new(characters);
+        if (result.Length == 0)
+        {
+            return "Element";
+        }
+
+        return char.IsLetter(result[0]) || result[0] == '_' ? result : "_" + result;
     }
 
     /// <summary>True when offset falls within range (inclusive on both ends, matching the caret-containment used elsewhere), so a caret at either boundary of the token resolves to that occurrence.</summary>

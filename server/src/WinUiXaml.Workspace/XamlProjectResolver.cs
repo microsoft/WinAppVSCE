@@ -209,18 +209,33 @@ namespace WinUiXaml.Workspace
             }
 
             var key = Path.GetFullPath(projectPath);
-            Task<RoslynProjectWorkspace>? removed = null;
+            var removed = new List<Task<RoslynProjectWorkspace>>();
             lock (_gate)
             {
-                if (_projects.TryGetValue(key, out var task))
+                var affectedRoots = _projects
+                    .Where(pair =>
+                        string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase) ||
+                        // An in-flight load may still turn out to reference the changed project, so evict it
+                        // conservatively rather than leaving a stale graph cached once it completes.
+                        !pair.Value.IsCompleted ||
+                        (pair.Value.Status == TaskStatus.RanToCompletion &&
+                         pair.Value.Result.ContainsProject(key)))
+                    .Select(pair => pair.Key)
+                    .ToArray();
+                foreach (var affectedRoot in affectedRoots)
                 {
-                    _projects.Remove(key);
-                    removed = task;
+                    removed.Add(_projects[affectedRoot]);
+                    _projects.Remove(affectedRoot);
+                    _frameworkProjects.Remove(affectedRoot);
                 }
+
                 _frameworkProjects.Remove(key);
             }
 
-            DisposeWhenComplete(removed);
+            foreach (var task in removed)
+            {
+                DisposeWhenComplete(task);
+            }
         }
 
         /// <summary>Drops every cached workspace after a shared imported MSBuild file changes.</summary>

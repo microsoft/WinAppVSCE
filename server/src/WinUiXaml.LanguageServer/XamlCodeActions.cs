@@ -8,9 +8,43 @@ using WinUiXaml.Xaml;
 
 namespace WinUiXaml.LanguageServer;
 
+internal sealed class PromptedTextEditCommandArguments
+{
+    public string DocumentUri { get; init; } = string.Empty;
+    public Lsp.Range Range { get; init; } = new();
+    public string Prompt { get; init; } = string.Empty;
+    public string PlaceHolder { get; init; } = string.Empty;
+    public string InitialValue { get; init; } = string.Empty;
+    public string Prefix { get; init; } = string.Empty;
+    public string Suffix { get; init; } = string.Empty;
+    public int? ExpectedVersion { get; init; }
+    public string ExpectedText { get; init; } = string.Empty;
+    public string[] Choices { get; init; } = Array.Empty<string>();
+    public string CustomChoiceLabel { get; init; } = string.Empty;
+    public string ValidationPattern { get; init; } = string.Empty;
+    public string ValidationMessage { get; init; } = string.Empty;
+}
+
+internal sealed class GuardedTextEditCommandArguments
+{
+    public string DocumentUri { get; init; } = string.Empty;
+    public int? ExpectedVersion { get; init; }
+    public GuardedTextEdit[] Edits { get; init; } = Array.Empty<GuardedTextEdit>();
+}
+
+internal sealed class GuardedTextEdit
+{
+    public Lsp.Range Range { get; init; }
+    public string ExpectedText { get; init; } = string.Empty;
+    public string NewText { get; init; } = string.Empty;
+}
+
 /// <summary>Builds textDocument/codeAction quick fixes from the diagnostics the client hands back.</summary>
 internal static class XamlCodeActions
 {
+    internal const string PromptTextEditCommand = "winui-xaml.promptTextEdit";
+    internal const string ApplyGuardedTextEditsCommand = "winui-xaml.applyGuardedTextEdits";
+
     // The unknown-name diagnostics whose data carries spelling suggestions.
     private static readonly HashSet<string> SuggestibleCodes = new(StringComparer.Ordinal)
     {
@@ -23,6 +57,7 @@ internal static class XamlCodeActions
         XamlValidator.InvalidSetterPropertyCode,
         XamlValidator.InvalidBindModeCode,
         XamlValidator.InvalidAttributeValueCode,
+        XamlValidator.UnknownNamespaceDeclarationCode,
     };
 
     public static List<CodeAction> Compute(string uri, TextDocument? doc, CodeActionContext context, XamlTypeSystem? typeSystem = null)
@@ -64,6 +99,11 @@ internal static class XamlCodeActions
                     continue;
                 }
 
+                if (AddMechanicalFix(actions, uri, doc, diagnostic, typeSystem))
+                {
+                    continue;
+                }
+
                 bool preferredImportAdded = false;
                 if (string.Equals(diagnostic.Code, XamlValidator.UnknownTypeCode, StringComparison.Ordinal))
                 {
@@ -79,6 +119,7 @@ internal static class XamlCodeActions
                 var (bad, suggestions) = ReadSuggestions(diagnostic.Data);
                 if (suggestions.Count == 0)
                 {
+                    AddPromptedReplacementFix(actions, uri, doc, diagnostic, bad);
                     continue;
                 }
 
@@ -91,13 +132,29 @@ internal static class XamlCodeActions
                 for (int i = 0; i < suggestions.Count; i++)
                 {
                     var suggestion = suggestions[i];
+                    var editRange = EditRange(doc, diagnostic.Range, bad);
+                    if (doc is not null &&
+                        bad.Length > 0 &&
+                        !string.Equals(RangeText(doc, editRange), bad, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
                     var edits = BuildSpellingEdits(doc, diagnostic, bad, suggestion);
+                    bool uniqueNamespaceSuggestion =
+                        !string.Equals(
+                            diagnostic.Code,
+                            XamlValidator.UnknownNamespaceDeclarationCode,
+                            StringComparison.Ordinal) ||
+                        suggestions.Count == 1;
                     actions.Add(new CodeAction
                     {
                         Title = bad.Length == 0 ? $"Change to '{suggestion}'" : $"Change '{bad}' to '{suggestion}'",
                         Kind = "quickfix",
                         Diagnostics = new List<Diagnostic> { diagnostic },
-                        IsPreferred = i == 0 && !preferredImportAdded ? true : null,
+                        IsPreferred =
+                            i == 0 && !preferredImportAdded && uniqueNamespaceSuggestion
+                                ? true
+                                : null,
                         Edit = new WorkspaceEdit
                         {
                             Changes = new Dictionary<string, List<TextEdit>>
@@ -283,24 +340,51 @@ internal static class XamlCodeActions
         }
 
         var (namespaceUri, suggestions) = ReadSuggestions(diagnostic.Data);
-        if (suggestions.Count != 1 ||
-            !TryValidateInferredXamlType(suggestions[0], namespaceUri, out var inferredType))
+        var dataTemplate = FindEnclosingDataTemplate(
+            doc.Parsed.FindNode(doc.OffsetAt(diagnostic.Range.Start)), typeSystem);
+        if (dataTemplate is null)
         {
             return;
         }
 
-        var dataTemplate = FindEnclosingDataTemplate(
-            doc.Parsed.FindNode(doc.OffsetAt(diagnostic.Range.Start)), typeSystem);
-        int typeColon = inferredType.IndexOf(':');
-        string typePrefix = typeColon < 0 ? string.Empty : inferredType.Substring(0, typeColon);
-        if (dataTemplate is null ||
-            !dataTemplate.NamespaceScope.TryResolvePrefix("x", out var xamlNamespace) ||
-            !string.Equals(xamlNamespace, XamlTypeSystem.XamlLanguageNamespace, StringComparison.Ordinal) ||
-            !dataTemplate.NamespaceScope.TryResolvePrefix(typePrefix, out var resolvedTypeNamespace) ||
-            !string.Equals(resolvedTypeNamespace, namespaceUri, StringComparison.Ordinal))
+        string? xamlPrefix = dataTemplate.NamespaceScope.Declarations
+            .Where(declaration =>
+                declaration.Key.Length > 0 &&
+                string.Equals(
+                    declaration.Value,
+                    XamlTypeSystem.XamlLanguageNamespace,
+                    StringComparison.Ordinal))
+            .Select(declaration => declaration.Key)
+            .FirstOrDefault();
+        if (xamlPrefix is null)
         {
             return;
         }
+
+        var validSuggestedTypes = suggestions
+            .Select(suggestion =>
+                TryValidateInferredXamlType(suggestion, namespaceUri, out var inferred)
+                    ? inferred
+                    : string.Empty)
+            .Where(inferred =>
+            {
+                int typeColon = inferred.IndexOf(':');
+                string typePrefix =
+                    typeColon < 0 ? string.Empty : inferred.Substring(0, typeColon);
+                return inferred.Length > 0 &&
+                    dataTemplate.NamespaceScope.TryResolvePrefix(
+                        typePrefix,
+                        out var resolvedTypeNamespace) &&
+                    string.Equals(
+                        resolvedTypeNamespace,
+                        namespaceUri,
+                        StringComparison.Ordinal);
+            })
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        bool hasInferredType = validSuggestedTypes.Count == 1;
+        string inferredType = hasInferredType ? validSuggestedTypes[0] : string.Empty;
+        string directiveName = xamlPrefix + ":DataType";
 
         TextEdit edit;
         var existing = XamlSemanticFacts.GetDirectiveAttribute(dataTemplate, "DataType");
@@ -315,7 +399,7 @@ internal static class XamlCodeActions
             edit = new TextEdit
             {
                 Range = doc.RangeOf(existing.Value.InnerSpan),
-                NewText = inferredType,
+                NewText = hasInferredType ? inferredType : string.Empty,
             };
         }
         else
@@ -336,13 +420,34 @@ internal static class XamlCodeActions
             edit = new TextEdit
             {
                 Range = doc.RangeOf(TextSpan.Empty(insertionOffset)),
-                NewText = $" x:DataType=\"{inferredType}\"",
+                NewText = hasInferredType
+                    ? $" {directiveName}=\"{inferredType}\""
+                    : string.Empty,
             };
+        }
+
+        if (!hasInferredType)
+        {
+            AddPromptTextEditAction(
+                actions,
+                diagnostic,
+                $"Set {directiveName}...",
+                doc,
+                edit.Range,
+                "Enter the XAML type for this template",
+                "models:Item",
+                string.Empty,
+                existing is null ? $" {directiveName}=\"" : string.Empty,
+                existing is null ? "\"" : string.Empty,
+                "xamlType",
+                validSuggestedTypes,
+                "Enter another type...");
+            return;
         }
 
         actions.Add(new CodeAction
         {
-            Title = $"Set x:DataType to '{inferredType}'",
+            Title = $"Set {directiveName} to '{inferredType}'",
             Kind = "quickfix",
             Diagnostics = new List<Diagnostic> { diagnostic },
             IsPreferred = true,
@@ -403,7 +508,10 @@ internal static class XamlCodeActions
         string raw = RangeText(doc, diagnostic.Range);
         int colon = raw.IndexOf(':');
         string prefix = (colon >= 0 ? raw.Substring(0, colon) : raw).Trim();
-        if (prefix.Length == 0)
+        var diagnosticNode = doc.Parsed.FindNode(doc.OffsetAt(diagnostic.Range.Start));
+        var activeElement = FindAncestor<XamlElement>(diagnosticNode);
+        if (prefix.Length == 0 ||
+            activeElement?.NamespaceScope.TryResolvePrefix(prefix, out _) == true)
         {
             return;
         }
@@ -413,6 +521,25 @@ internal static class XamlCodeActions
             suggestions.Count != 1 ||
             !IsNamespaceUri(suggestions[0]))
         {
+            var insertion = XamlNamespaceImport.BuildRootDeclarationEditForUri(
+                doc, prefix, "using:Placeholder");
+            if (insertion is not null)
+            {
+                AddPromptTextEditAction(
+                    actions,
+                    diagnostic,
+                    $"Add xmlns:{prefix}...",
+                    doc,
+                    insertion.Range,
+                    $"Enter the namespace URI for '{prefix}'",
+                    "using:MyApp.Controls",
+                    string.Empty,
+                    $" xmlns:{prefix}=\"",
+                    "\"",
+                    "namespaceUri",
+                    suggestions.Where(IsNamespaceUri).Distinct(StringComparer.Ordinal).ToArray(),
+                    "Enter another namespace URI...");
+            }
             return;
         }
 
@@ -438,6 +565,476 @@ internal static class XamlCodeActions
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
         (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
          string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase));
+
+    private static bool AddMechanicalFix(
+        List<CodeAction> actions,
+        string uri,
+        TextDocument? doc,
+        Diagnostic diagnostic,
+        XamlTypeSystem? typeSystem)
+    {
+        if (doc is null)
+        {
+            return false;
+        }
+
+        int offset = doc.OffsetAt(diagnostic.Range.Start);
+        switch (diagnostic.Code)
+        {
+            case XamlValidator.DuplicateNameCode:
+            case XamlValidator.InvalidNameCode:
+            {
+                var attribute = FindAncestor<XamlAttribute>(doc.Parsed.FindNode(offset));
+                if (attribute?.Value is null ||
+                    typeSystem is null ||
+                    attribute.Parent is not XamlElement nameOwner ||
+                    XamlSemanticFacts.ResolveElementType(nameOwner, typeSystem) is not { } nameOwnerType ||
+                    !XamlSemanticFacts.IsNameAttribute(
+                        attribute,
+                        nameOwnerType,
+                        nameOwner.NamespaceScope,
+                        typeSystem) ||
+                    !DiagnosticTargetsSpan(doc, diagnostic.Range, attribute.Value.InnerSpan) ||
+                    diagnostic.Code == XamlValidator.InvalidNameCode &&
+                    XamlRename.IsValidName(attribute.Value.Text) ||
+                    diagnostic.Code == XamlValidator.DuplicateNameCode &&
+                    !IsDuplicateName(doc, attribute, typeSystem))
+                {
+                    return false;
+                }
+
+                string replacement = MakeUniqueXamlName(
+                    doc,
+                    attribute,
+                    diagnostic.Code == XamlValidator.InvalidNameCode
+                        ? XamlRename.SanitizeName(attribute.Value.Text)
+                        : attribute.Value.Text,
+                    typeSystem!);
+                var renameOccurrences = diagnostic.Code == XamlValidator.InvalidNameCode
+                    ? XamlLanguageServer.ResolveNameOccurrences(
+                        doc,
+                        nameOwner,
+                        attribute.Value.Text,
+                        typeSystem)
+                    : new List<(Lsp.Range Range, bool IsDeclaration)>();
+                var targetRange = doc.RangeOf(attribute.Value.InnerSpan);
+                var renameEdits = renameOccurrences.Count(occurrence => occurrence.IsDeclaration) == 1 &&
+                    renameOccurrences.Any(occurrence =>
+                        occurrence.IsDeclaration && occurrence.Range.Equals(targetRange))
+                    ? renameOccurrences.Select(occurrence => new TextEdit
+                        {
+                            Range = occurrence.Range,
+                            NewText = replacement,
+                        }).ToList()
+                    : null;
+                AddGuardedEditAction(
+                    actions,
+                    doc,
+                    diagnostic,
+                    $"Rename to '{replacement}'",
+                    renameEdits ?? new List<TextEdit>
+                    {
+                        new() { Range = targetRange, NewText = replacement },
+                    });
+                return true;
+            }
+
+            case XamlValidator.DuplicateAttributeCode:
+            {
+                var attribute = FindAncestor<XamlAttribute>(doc.Parsed.FindNode(offset));
+                if (attribute is null ||
+                    !DiagnosticTargetsSpan(doc, diagnostic.Range, attribute.Name.Span) ||
+                    attribute.Parent is not XamlElement parent ||
+                    parent.Attributes.Count(candidate =>
+                        string.Equals(
+                            XamlSemanticFacts.GetExpandedAttributeName(parent, candidate),
+                            XamlSemanticFacts.GetExpandedAttributeName(parent, attribute),
+                            StringComparison.Ordinal)) < 2)
+                {
+                    return false;
+                }
+
+                AddEditAction(
+                    actions,
+                    doc,
+                    diagnostic,
+                    $"Remove duplicate '{attribute.Name.FullName}' attribute",
+                    doc.RangeOf(XamlNamespaceActions.ExpandRemovalSpan(doc.Text, attribute.Span)),
+                    string.Empty);
+                return true;
+            }
+
+            case XamlValidator.MultipleScalarChildrenCode:
+            {
+                var element = FindAncestor<XamlElement>(doc.Parsed.FindNode(offset));
+                if (element is null ||
+                    !DiagnosticTargetsSpan(
+                        doc,
+                        diagnostic.Range,
+                        element.Name?.Span ?? element.Span) ||
+                    typeSystem is null ||
+                    element.Parent is not XamlElement parent ||
+                    !HasScalarElementContent(parent, typeSystem) ||
+                    parent.Content.OfType<XamlElement>()
+                        .Where(child => !child.IsPropertyElement)
+                        .Take(2)
+                        .Count() < 2 ||
+                    ReferenceEquals(
+                        parent.Content.OfType<XamlElement>()
+                            .First(child => !child.IsPropertyElement),
+                        element))
+                {
+                    return false;
+                }
+
+                AddEditAction(
+                    actions,
+                    doc,
+                    diagnostic,
+                    $"Remove extra '{element.Name?.FullName ?? "child"}'",
+                    doc.RangeOf(XamlNamespaceActions.ExpandRemovalSpan(doc.Text, element.Span)),
+                    string.Empty);
+                return true;
+            }
+
+            case XamlValidator.InvalidAttributeValueCode:
+            {
+                var attribute = FindAncestor<XamlAttribute>(doc.Parsed.FindNode(offset));
+                var element = attribute?.Parent as XamlElement;
+                var elementType = element is null || typeSystem is null
+                    ? null
+                    : XamlSemanticFacts.ResolveElementType(element, typeSystem);
+                var memberType = elementType is null || attribute is null
+                    ? null
+                    : typeSystem!.FindAttributeMember(elementType, attribute.Name.LocalName)?.Type;
+                string? replacement = memberType is null
+                    ? null
+                    : XamlValueConverter.GetDefaultLiteral(memberType);
+                if (attribute?.Value is null ||
+                    replacement is null ||
+                    !DiagnosticTargetsSpan(doc, diagnostic.Range, attribute.Value.InnerSpan) ||
+                    memberType is not null &&
+                    XamlValueConverter.TryValidate(
+                        attribute.Value.Text,
+                        memberType,
+                        typeSystem!,
+                        out bool isValid) &&
+                    isValid)
+                {
+                    return false;
+                }
+
+                AddEditAction(
+                    actions,
+                    doc,
+                    diagnostic,
+                    $"Replace with '{replacement}'",
+                    doc.RangeOf(attribute.Value.InnerSpan),
+                    replacement);
+                return true;
+            }
+
+            default:
+                return false;
+        }
+    }
+
+    private static void AddPromptedReplacementFix(
+        List<CodeAction> actions,
+        string uri,
+        TextDocument? doc,
+        Diagnostic diagnostic,
+        string bad)
+    {
+        if (doc is null)
+        {
+            return;
+        }
+
+        string title;
+        string prompt;
+        string placeholder;
+        string validationKind;
+        switch (diagnostic.Code)
+        {
+            case XamlValidator.UnknownBindMemberCode:
+                title = "Replace x:Bind member...";
+                prompt = "Enter a bindable member name";
+                placeholder = bad.Length == 0 ? "PropertyName" : bad;
+                validationKind = "xamlName";
+                break;
+            case XamlValidator.InvalidSetterPropertyCode:
+                title = "Replace Setter property...";
+                prompt = "Enter a property on the style target type";
+                placeholder = bad.Length == 0 ? "PropertyName" : bad;
+                validationKind = "xamlMember";
+                break;
+            default:
+                return;
+        }
+
+        var range = EditRange(doc, diagnostic.Range, bad);
+        if (bad.Length > 0 &&
+            !string.Equals(RangeText(doc, range), bad, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        AddPromptTextEditAction(
+            actions,
+            diagnostic,
+            title,
+            doc,
+            range,
+            prompt,
+            placeholder,
+            bad,
+            string.Empty,
+            string.Empty,
+            validationKind);
+    }
+
+    private static void AddPromptTextEditAction(
+        List<CodeAction> actions,
+        Diagnostic diagnostic,
+        string title,
+        TextDocument doc,
+        Lsp.Range range,
+        string prompt,
+        string placeholder,
+        string initialValue,
+        string prefix,
+        string suffix,
+        string validationKind,
+        IReadOnlyList<string>? choices = null,
+        string customChoiceLabel = "Enter another value...")
+    {
+        actions.Add(new CodeAction
+        {
+            Title = title,
+            Kind = "quickfix",
+            Diagnostics = new List<Diagnostic> { diagnostic },
+            Command = new Command
+            {
+                Title = title,
+                Name = PromptTextEditCommand,
+                Arguments = new object[]
+                {
+                    new PromptedTextEditCommandArguments
+                    {
+                        DocumentUri = doc.Uri,
+                        Range = range,
+                        Prompt = prompt,
+                        PlaceHolder = placeholder,
+                        InitialValue = initialValue,
+                        Prefix = prefix,
+                        Suffix = suffix,
+                        ExpectedVersion = doc.Version,
+                        ExpectedText = RangeText(doc, range),
+                        Choices = choices?.ToArray() ?? Array.Empty<string>(),
+                        CustomChoiceLabel = customChoiceLabel,
+                        ValidationPattern = PromptValidationPattern(validationKind),
+                        ValidationMessage = PromptValidationMessage(validationKind),
+                    },
+                },
+            },
+        });
+    }
+
+    private static void AddEditAction(
+        List<CodeAction> actions,
+        TextDocument doc,
+        Diagnostic diagnostic,
+        string title,
+        Lsp.Range range,
+        string newText)
+    {
+        actions.Add(new CodeAction
+        {
+            Title = title,
+            Kind = "quickfix",
+            Diagnostics = new List<Diagnostic> { diagnostic },
+            IsPreferred = true,
+            Edit = new WorkspaceEdit
+            {
+                Changes = new Dictionary<string, List<TextEdit>>(StringComparer.Ordinal)
+                {
+                    [doc.Uri] = new List<TextEdit>
+                    {
+                        new() { Range = range, NewText = newText },
+                    },
+                },
+            },
+            Command = GuardedEditCommand(doc, title, new List<TextEdit>
+            {
+                new() { Range = range, NewText = newText },
+            }),
+        });
+    }
+
+    private static void AddGuardedEditAction(
+        List<CodeAction> actions,
+        TextDocument doc,
+        Diagnostic diagnostic,
+        string title,
+        List<TextEdit> edits)
+    {
+        actions.Add(new CodeAction
+        {
+            Title = title,
+            Kind = "quickfix",
+            Diagnostics = new List<Diagnostic> { diagnostic },
+            IsPreferred = true,
+            Edit = new WorkspaceEdit
+            {
+                Changes = new Dictionary<string, List<TextEdit>>(StringComparer.Ordinal)
+                {
+                    [doc.Uri] = edits,
+                },
+            },
+            Command = GuardedEditCommand(doc, title, edits),
+        });
+    }
+
+    private static Command GuardedEditCommand(
+        TextDocument doc,
+        string title,
+        List<TextEdit> edits) =>
+        new()
+        {
+            Title = title,
+            Name = ApplyGuardedTextEditsCommand,
+            Arguments = new object[]
+            {
+                new GuardedTextEditCommandArguments
+                {
+                    DocumentUri = doc.Uri,
+                    ExpectedVersion = doc.Version,
+                    Edits = edits.Select(edit => new GuardedTextEdit
+                    {
+                        Range = edit.Range,
+                        ExpectedText = RangeText(doc, edit.Range),
+                        NewText = edit.NewText,
+                    }).ToArray(),
+                },
+            },
+        };
+
+    private static T? FindAncestor<T>(XamlNode? node) where T : XamlNode
+    {
+        for (; node is not null; node = node.Parent)
+        {
+            if (node is T result)
+            {
+                return result;
+            }
+        }
+
+        return null;
+    }
+
+    private static string MakeUniqueXamlName(
+        TextDocument doc,
+        XamlAttribute target,
+        string basis,
+        XamlTypeSystem typeSystem)
+    {
+        var owner = target.Parent as XamlElement;
+        var names = owner is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : XamlSemanticFacts.EnumerateNamedElementsInScope(doc, owner, typeSystem)
+                .Select(entry => entry.Name)
+                .ToHashSet(StringComparer.Ordinal);
+
+        string candidate = basis.Length == 0 ? "Element" : basis;
+        for (int suffix = 2; names.Contains(candidate); suffix++)
+        {
+            candidate = basis + suffix;
+        }
+
+        return candidate;
+    }
+
+    private static bool IsDuplicateName(
+        TextDocument doc,
+        XamlAttribute target,
+        XamlTypeSystem? typeSystem)
+    {
+        if (target.Value is null)
+        {
+            return false;
+        }
+
+        if (target.Parent is XamlElement owner && typeSystem is not null)
+        {
+            return XamlSemanticFacts.EnumerateNamedElementsInScope(doc, owner, typeSystem)
+                .Count(entry =>
+                    string.Equals(
+                        entry.Name,
+                        target.Value.Text.Trim(),
+                        StringComparison.Ordinal)) > 1;
+        }
+
+        return false;
+    }
+
+    private static bool DiagnosticTargetsSpan(
+        TextDocument doc,
+        Lsp.Range range,
+        TextSpan span)
+    {
+        int start = doc.OffsetAt(range.Start);
+        int end = doc.OffsetAt(range.End);
+        return start == span.Start && end == span.End;
+    }
+
+
+    private static bool HasScalarElementContent(
+        XamlElement parent,
+        XamlTypeSystem typeSystem)
+    {
+        Microsoft.CodeAnalysis.ITypeSymbol? contentType;
+        if (parent.IsPropertyElement)
+        {
+            contentType =
+                XamlSemanticFacts.ResolvePropertyElementMember(parent, typeSystem)?.PropertyType;
+        }
+        else
+        {
+            var parentType = XamlSemanticFacts.ResolveElementType(parent, typeSystem);
+            contentType = parentType is null
+                ? null
+                : typeSystem.GetContentPropertyDeclaredType(parentType);
+        }
+
+        return contentType is not null &&
+            XamlTypeSystem.GetCollectionElementType(contentType) is null;
+    }
+
+    private static string PromptValidationPattern(string validationKind)
+    {
+        const string identifier = @"[\p{L}_][\p{L}\p{N}_]*";
+        const string namespacePrefix = @"[\p{L}_][\p{L}\p{N}_.-]*";
+        return validationKind switch
+        {
+            "namespaceUri" =>
+                $@"(?:using:{identifier}(?:\.{identifier})*|https?://[^\s""'&<>]+)",
+            "xamlType" => $@"(?:{namespacePrefix}:)?{identifier}",
+            "xamlMember" =>
+                $@"(?:(?:{namespacePrefix}:)?{identifier}\.)?{identifier}",
+            _ => identifier,
+        };
+    }
+
+    private static string PromptValidationMessage(string validationKind) =>
+        validationKind switch
+        {
+            "namespaceUri" =>
+                "Enter a using: namespace or an http(s) namespace URI without whitespace or XML metacharacters.",
+            "xamlType" => "Enter a XAML type name such as models:Item.",
+            "xamlMember" => "Enter a property name such as Width or Grid.Row.",
+            _ => "Enter a valid XAML identifier.",
+        };
 
     private static void AddMismatchedEndTagFix(
         List<CodeAction> actions, string uri, TextDocument? doc, Diagnostic diagnostic)

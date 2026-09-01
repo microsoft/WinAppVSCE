@@ -91,6 +91,13 @@ public sealed class AttributeCompletionTests
             public class FontFamily { }
         }
 
+        namespace TestApp.Controls
+        {
+            internal sealed class MyCustomControl : Microsoft.UI.Xaml.DependencyObject { }
+            internal abstract class AbstractControl : Microsoft.UI.Xaml.DependencyObject { }
+            internal sealed class GenericControl<T> : Microsoft.UI.Xaml.DependencyObject { }
+        }
+
         namespace Microsoft.UI.Xaml
         {
             public class DependencyObject { }
@@ -736,6 +743,56 @@ public sealed class AttributeCompletionTests
 
         Assert.DoesNotContain("Closed", labels);
         Assert.DoesNotContain("ActualHeight", labels);
+    }
+
+    [Fact]
+    public void UnprefixedElementCompletion_ReusesDeclaredPrefixForSourceControl()
+    {
+        const string marked = """
+            <Page xmlns="using:TestApp"
+                  xmlns:local="using:TestApp.Controls">
+              <|
+            </Page>
+            """;
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+
+        var item = Assert.Single(
+            CompletionProvider.Provide(
+                new TextDocument("file:///C:/test/Page.xaml", text),
+                offset,
+                CreateTypeSystem()).Items,
+            candidate => candidate.Label == "MyCustomControl");
+
+        Assert.Equal("local:MyCustomControl", item.TextEdit!.NewText);
+        Assert.Null(item.AdditionalTextEdits);
+    }
+
+    [Fact]
+    public void UnprefixedElementCompletion_AddsPrefixForSourceControl()
+    {
+        const string marked = """
+            <Page xmlns="using:TestApp">
+              <|
+            </Page>
+            """;
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+
+        var items = CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            CreateTypeSystem()).Items;
+        var item = Assert.Single(
+            items,
+            candidate => candidate.Label == "MyCustomControl");
+
+        Assert.Equal("controls:MyCustomControl", item.TextEdit!.NewText);
+        Assert.Equal(
+            " xmlns:controls=\"using:TestApp.Controls\"",
+            Assert.Single(item.AdditionalTextEdits!).NewText);
+        Assert.DoesNotContain(items, candidate => candidate.Label == "AbstractControl");
+        Assert.DoesNotContain(items, candidate => candidate.Label == "GenericControl");
     }
 
     [Fact]

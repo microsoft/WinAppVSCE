@@ -91,6 +91,30 @@ internal sealed partial class XamlLanguageServer
         return DedupeAndSort(occurrences);
     }
 
+    internal static List<(Lsp.Range Range, bool IsDeclaration)> ResolveNameOccurrences(
+        TextDocument doc,
+        XamlNode context,
+        string name,
+        XamlTypeSystem typeSystem)
+    {
+        var occurrences = new List<(Lsp.Range Range, bool IsDeclaration)>();
+        foreach (var element in XamlSemanticFacts.EnumerateElementsInNameScope(
+            doc,
+            context,
+            typeSystem))
+        {
+            CollectNameOccurrences(
+                element,
+                name,
+                doc,
+                typeSystem,
+                occurrences,
+                recurse: false);
+        }
+
+        return DedupeAndSort(occurrences);
+    }
+
     /// <summary>Classifies the renameable/referenceable symbol the caret sits on: an x:Name/Name (whether the caret is on the declaration or a usage) or an x:Key resource key.</summary>
     internal static (XamlRenameKind Kind, string Name)? DetectSymbolAt(
         TextDocument doc,

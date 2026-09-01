@@ -50,6 +50,82 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public async Task UnbuiltProjectReferenceControlsAreLoadedFromSourceAndRefreshAfterInvalidation()
+    {
+        var controlsDirectory = Path.Combine(_root, "Controls");
+        var appDirectory = Path.Combine(_root, "App");
+        Directory.CreateDirectory(controlsDirectory);
+        Directory.CreateDirectory(appDirectory);
+        var controlsProject = Path.Combine(controlsDirectory, "Controls.csproj");
+        var appProject = Path.Combine(appDirectory, "App.csproj");
+        var xamlPath = Path.Combine(appDirectory, "Page.xaml");
+        var controlsSource = Path.Combine(controlsDirectory, "Controls.cs");
+
+        await File.WriteAllTextAsync(
+            controlsProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(
+            appProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                <ProjectReference Include="..\Controls\Controls.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(
+            controlsSource,
+            """
+            namespace Microsoft.UI.Xaml { public class DependencyObject { } }
+            namespace Controls
+            {
+                public sealed class ProjectControl : Microsoft.UI.Xaml.DependencyObject { }
+            }
+            """);
+        await File.WriteAllTextAsync(xamlPath, "<Page />");
+
+        Assert.False(File.Exists(Path.Combine(
+            controlsDirectory, "bin", "Debug", "net10.0", "Controls.dll")));
+
+        using var resolver = new XamlProjectResolver();
+        var first = await resolver.ResolveAsync(xamlPath, _root);
+        Assert.NotNull(first);
+        Assert.Contains(
+            first!.ReferencedAssemblies,
+            assembly => assembly.GetTypeByMetadataName("Controls.ProjectControl") is not null);
+        Assert.Contains(
+            XamlTypeSystem.FromResolution(first).GetReferencedElementTypes(),
+            type => type.ToDisplayString() == "Controls.ProjectControl");
+
+        await File.WriteAllTextAsync(
+            controlsSource,
+            """
+            namespace Microsoft.UI.Xaml { public class DependencyObject { } }
+            namespace Controls
+            {
+                public sealed class ProjectControl : Microsoft.UI.Xaml.DependencyObject { }
+                public sealed class AddedControl : Microsoft.UI.Xaml.DependencyObject { }
+            }
+            """);
+        resolver.Invalidate(controlsProject);
+
+        var refreshed = await resolver.ResolveAsync(xamlPath, _root);
+        Assert.NotNull(refreshed);
+        Assert.Contains(
+            XamlTypeSystem.FromResolution(refreshed!).GetReferencedElementTypes(),
+            type => type.ToDisplayString() == "Controls.AddedControl");
+    }
+
+    [Fact]
     public async Task LightweightFrameworkProjectMatchesWorkspaceReferences()
     {
         var projectPath = GetWinUiFixturePath("SmokeFixture.csproj");

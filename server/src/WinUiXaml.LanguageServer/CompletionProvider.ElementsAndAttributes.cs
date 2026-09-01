@@ -94,10 +94,10 @@ internal static partial class CompletionProvider
             }
         }
 
-        // Unprefixed referenced controls require an injected xmlns declaration.
+        // Unprefixed custom controls reuse or add an xmlns declaration.
         if (prefix.Length == 0)
         {
-            AddReferencedElementTypes(doc, items, seen, local, scope, typeSystem, replaceRange, contentType);
+            AddProjectElementTypes(doc, items, seen, local, uri, scope, typeSystem, replaceRange, contentType);
         }
 
         return Finish(items);
@@ -189,28 +189,20 @@ internal static partial class CompletionProvider
         return null;
     }
 
-    /// <summary>Adds third-party (referenced-assembly) element types to an UNPREFIXED element-name completion list</summary>
-    private static void AddReferencedElementTypes(
+    /// <summary>Adds app-source and referenced element types to an unprefixed element-name completion list.</summary>
+    private static void AddProjectElementTypes(
         TextDocument doc, List<CompletionItem> items, HashSet<string> seen, string local,
-        XamlNamespaceScope scope, XamlTypeSystem typeSystem, Lsp.Range replaceRange, ITypeSymbol? contentType)
+        string activeUri, XamlNamespaceScope scope, XamlTypeSystem typeSystem,
+        Lsp.Range replaceRange, ITypeSymbol? contentType)
     {
-        var candidates = typeSystem.GetReferencedElementTypes();
-        if (candidates.Count == 0)
-        {
-            return;
-        }
-
-        // Namespaces reachable through the DEFAULT xmlns (WinUI's own types) — offered unprefixed already, so excluded here. A candidate in one of these is a framework type, not a third-party control.
+        // Types already reachable through the active default xmlns are offered above.
         var defaultReachable = new HashSet<string>(StringComparer.Ordinal);
-        if (scope.TryResolvePrefix(string.Empty, out var defaultUri))
+        foreach (var clrNs in typeSystem.ClrNamespacesForUri(activeUri))
         {
-            foreach (var clrNs in typeSystem.ClrNamespacesForUri(defaultUri))
-            {
-                defaultReachable.Add(clrNs);
-            }
+            defaultReachable.Add(clrNs);
         }
 
-        foreach (var type in candidates)
+        foreach (var type in typeSystem.GetSourceElementTypes().Concat(typeSystem.GetReferencedElementTypes()))
         {
             if (!StartsWith(type.Name, local) || seen.Contains(type.Name))
             {

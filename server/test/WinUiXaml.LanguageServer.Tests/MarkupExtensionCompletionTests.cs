@@ -54,6 +54,24 @@ public sealed class MarkupExtensionCompletionTests
         Assert.Contains("RelativeSource", labels);
     }
 
+    [Theory]
+    [InlineData("{x:Bind Mode=OneTime,|}")]
+    [InlineData("{x:Bind Mode=OneTime, |}")]
+    [InlineData("{Binding Mode=OneTime,|}")]
+    [InlineData("{Binding Mode=OneTime, |}")]
+    public void BindingArgumentNamesCompleteWithOrWithoutWhitespaceAfterComma(string value)
+    {
+        var labels = Complete(
+            $$"""
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  Tag="{{value}}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("Converter", labels);
+    }
+
     [Fact]
     public void MarkupName_OffersSdkBindingCapability()
     {

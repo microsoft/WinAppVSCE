@@ -299,6 +299,36 @@ try
     $CreatedVsix = Get-ChildItem -Path $OutputPath -Filter "winapp-*.vsix" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
     if ($CreatedVsix) {
+        $VsixArchive = [System.IO.Compression.ZipFile]::OpenRead($CreatedVsix.FullName)
+        try {
+            $ManifestEntry = $VsixArchive.Entries |
+                Where-Object { $_.FullName -eq "extension.vsixmanifest" } |
+                Select-Object -First 1
+            if (-not $ManifestEntry) {
+                Write-Error "Packaged VSIX is missing extension.vsixmanifest."
+                exit 1
+            }
+
+            $ManifestReader = [System.IO.StreamReader]::new($ManifestEntry.Open())
+            try {
+                $ManifestContent = $ManifestReader.ReadToEnd()
+            } finally {
+                $ManifestReader.Dispose()
+            }
+
+            if ($ManifestContent -notmatch '<Identity\b[^>]*\bVersion="([^"]+)"') {
+                Write-Error "Packaged VSIX manifest does not contain an extension version."
+                exit 1
+            }
+            if ($Matches[1] -ne $Version) {
+                Write-Error "Packaged VSIX version '$($Matches[1])' does not match requested version '$Version'."
+                exit 1
+            }
+            Write-Host "[VALIDATE] Embedded extension version: $($Matches[1])" -ForegroundColor Green
+        } finally {
+            $VsixArchive.Dispose()
+        }
+
         $VsixSize = [math]::Round($CreatedVsix.Length / 1MB, 2)
         Write-Host ""
         Write-Host "[SUCCESS] VS Code extension packaged successfully!" -ForegroundColor Green

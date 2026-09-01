@@ -537,7 +537,14 @@ internal sealed class CodeAction
     [JsonPropertyName("kind")] public string? Kind { get; set; }
     [JsonPropertyName("diagnostics")] public List<Diagnostic>? Diagnostics { get; set; }
     [JsonPropertyName("isPreferred")] public bool? IsPreferred { get; set; }
-    [JsonPropertyName("edit")] public WorkspaceEdit? Edit { get; set; }
+    [JsonIgnore] public WorkspaceEdit? Edit { get; set; }
+    [JsonPropertyName("edit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public WorkspaceEdit? SerializedEdit
+    {
+        get => Command?.Name == "winui-xaml.applyGuardedTextEdits" ? null : Edit;
+        set => Edit = value;
+    }
     [JsonPropertyName("command")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Command? Command { get; set; }

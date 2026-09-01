@@ -177,6 +177,9 @@ async function main() {
   if (caps.definitionProvider !== true) fail("server did not advertise definitionProvider");
   if (caps.hoverProvider !== true) fail("server did not advertise hoverProvider");
   if (!caps.completionProvider) fail("server did not advertise completionProvider");
+  if (!caps.completionProvider.triggerCharacters?.includes(",")) {
+    fail("server did not advertise comma as a completion trigger");
+  }
   if (caps.documentSymbolProvider !== true) fail("server did not advertise documentSymbolProvider");
   if (caps.textDocumentSync?.openClose !== true) fail("server did not advertise openClose sync");
   console.log("[ok] initialize: definition + hover + completion + documentSymbol + openClose advertised");
@@ -939,6 +942,105 @@ async function main() {
   await runCoreScenarios(scenarioContext);
   await runEditorScenarios(scenarioContext);
   await runCompletionScenarios(scenarioContext);
+
+  // Saving a generated event handler must invalidate the C# compilation and republish the open
+  // XAML document so the stale missing-handler diagnostic disappears without another XAML edit.
+  const generatedHandlerName = "GeneratedRefresh_Click";
+  const generatedHandlerText = xamlText.replace("OnGo_Click", generatedHandlerName);
+  const generatedHandlerVersion = nextVersion();
+  const missingHandlerDiagnostic = waitFor(
+    (message) =>
+      message.method === "textDocument/publishDiagnostics" &&
+      message.params.uri === xamlUri &&
+      message.params.version === generatedHandlerVersion &&
+      message.params.diagnostics.some((diagnostic) => diagnostic.code === "WXAML0015"),
+    30000,
+    "missing generated event-handler diagnostic"
+  );
+  send({
+    method: "textDocument/didChange",
+    params: {
+      textDocument: { uri: xamlUri, version: generatedHandlerVersion },
+      contentChanges: [{ text: generatedHandlerText }],
+    },
+  });
+  await missingHandlerDiagnostic;
+
+  const codeBehindPath = join(dirname(XAML), "SmokePage.xaml.cs");
+  const originalCodeBehind = readFileSync(codeBehindPath, "utf8");
+  const followingTypeIndex = originalCodeBehind.indexOf("internal sealed class InternalCard");
+  const classCloseIndex = originalCodeBehind.lastIndexOf("}", followingTypeIndex);
+  if (followingTypeIndex < 0 || classCloseIndex < 0) {
+    fail("could not insert generated event handler into smoke fixture");
+  }
+  const generatedMethod =
+    `    private void ${generatedHandlerName}(object sender, RoutedEventArgs e)\r\n` +
+    "    {\r\n" +
+    "    }\r\n\r\n";
+  const generatedCodeBehind =
+    originalCodeBehind.slice(0, classCloseIndex) +
+    generatedMethod +
+    originalCodeBehind.slice(classCloseIndex);
+  const restoreCodeBehind = () => writeFileSync(codeBehindPath, originalCodeBehind, "utf8");
+  process.once("exit", restoreCodeBehind);
+  writeFileSync(codeBehindPath, generatedCodeBehind, "utf8");
+
+  const clearedGeneratedHandlerDiagnostic = waitFor(
+    (message) =>
+      message.method === "textDocument/publishDiagnostics" &&
+      message.params.uri === xamlUri &&
+      message.params.version === generatedHandlerVersion &&
+      !message.params.diagnostics.some((diagnostic) => diagnostic.code === "WXAML0015"),
+    30000,
+    "generated event-handler diagnostic clear"
+  );
+  const generatedHandlerReady = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectContextStatus" &&
+      message.params?.uri === xamlUri &&
+      message.params?.state === "ready",
+    90000,
+    "project context ready after generated event-handler save"
+  );
+  send({
+    method: "workspace/didChangeWatchedFiles",
+    params: {
+      changes: [{ uri: pathToFileURL(codeBehindPath).href, type: 2 }],
+    },
+  });
+  await clearedGeneratedHandlerDiagnostic;
+  await generatedHandlerReady;
+
+  const generatedDefinitionId = 9998;
+  send({
+    id: generatedDefinitionId,
+    method: "textDocument/definition",
+    params: {
+      textDocument: { uri: xamlUri },
+      position: offsetToPosition(
+        generatedHandlerText,
+        generatedHandlerText.indexOf(generatedHandlerName) + 3
+      ),
+    },
+  });
+  const generatedDefinition = await waitFor(
+    responseFor(generatedDefinitionId),
+    30000,
+    "generated event-handler definition"
+  );
+  if (!generatedDefinition.result?.uri?.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) {
+    fail(`generated event handler was not loaded from code-behind: ${JSON.stringify(generatedDefinition.result)}`);
+  }
+  console.log("[ok] generated event-handler save clears stale XAML diagnostics");
+
+  restoreCodeBehind();
+  process.removeListener("exit", restoreCodeBehind);
+  send({
+    method: "workspace/didChangeWatchedFiles",
+    params: {
+      changes: [{ uri: pathToFileURL(codeBehindPath).href, type: 2 }],
+    },
+  });
 
   // Closing cancels pending semantic validation and clears diagnostics before the URI is reopened.
   publishedDiagnostics.length = 0;

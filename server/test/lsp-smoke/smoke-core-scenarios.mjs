@@ -1044,7 +1044,8 @@ export async function runCoreScenarios(ctx) {
   if (!argF12b?.uri || !argF12b.uri.endsWith("SmokePage.xaml.cs")) fail(`x:Bind later function-arg F12 should resolve to SmokePage.xaml.cs (got ${argF12b?.uri ?? "null"})`);
   console.log(`[ok] definition(x:Bind later function arg): OnGo_Click(_, GreetingText) -> SmokePage.xaml.cs`);
 
-  // 23b) Boolean negation ({x:Bind !Member}) still validates/completes/hovers the member after the '!'.
+  // 23b) The editor may still identify the member while the validator rejects WinUI's unsupported
+  // unary-negation syntax.
   const negComp = await completeWith(256, pageCls('<TextBlock Text="{x:Bind !Greet|}" />'), "xbind-negation-completion");
   if (!negComp.includes("GreetingText")) fail(`negated x:Bind '!Greet' should complete GreetingText (got ${negComp.slice(0, 40).join(", ")})`);
   console.log(`[ok] completion(x:Bind negation): '!Greet' -> GreetingText (${negComp.length} items)`);
@@ -1055,13 +1056,13 @@ export async function runCoreScenarios(ctx) {
 
   const negDiag = await validateDoc(
     `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <TextBlock Text="{x:Bind !DefinitelyMissingNegated}" />\n</Page>`,
-    (d) => d.some((x) => x.code === "WXAML0005"),
+    (d) => d.some((x) => x.code === "WXAML0035"),
     "xbind-negation-diagnostic");
-  const negBad = negDiag.filter((x) => x.code === "WXAML0005");
-  if (negBad.length !== 1) fail(`negated unknown member should raise exactly 1 WXAML0005, got ${negBad.length}: ${JSON.stringify(negDiag.map((x) => `${x.code}:${x.message}`))}`);
-  if (!/DefinitelyMissingNegated/.test(negBad[0].message)) fail(`negation diagnostic should name the missing member (got ${JSON.stringify(negBad[0].message)})`);
+  const negBad = negDiag.filter((x) => x.code === "WXAML0035");
+  if (negBad.length !== 1) fail(`negated x:Bind should raise exactly 1 WXAML0035, got ${negBad.length}: ${JSON.stringify(negDiag.map((x) => `${x.code}:${x.message}`))}`);
+  if (!/not supported/.test(negBad[0].message)) fail(`negation diagnostic should explain the unsupported syntax (got ${JSON.stringify(negBad[0].message)})`);
   if (negDiag.length !== 1) fail(`expected exactly 1 total diagnostic for the negated-member buffer, got ${negDiag.length}`);
-  console.log(`[ok] validation(x:Bind negation): '!DefinitelyMissingNegated' -> exactly 1 WXAML0005`);
+  console.log(`[ok] validation(x:Bind negation): unsupported '!' -> exactly 1 WXAML0035`);
 
   // 26) Cast x:Bind path ((local:Type)Member): the member after the cast resolves against the cast
   // target type for F12/hover/completion. A cast to the page's own type navigates to source.

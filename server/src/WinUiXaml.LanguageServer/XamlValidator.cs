@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using WinUiXaml.LanguageServer.Lsp;
@@ -42,7 +43,7 @@ internal static class XamlValidator
     /// <summary>An <c>mc:Ignorable</c> entry does not name a declared namespace prefix.</summary>
     public const string UnknownIgnorablePrefixCode = "WXAML0010";
 
-    /// <summary>An <c>x:Bind</c> function has no overload accepting the supplied argument count.</summary>
+    /// <summary>An <c>x:Bind</c> function has no overload accepting the supplied arguments.</summary>
     public const string InvalidBindFunctionCode = "WXAML0011";
 
     /// <summary>A literal attribute value cannot be converted to the property's primitive or enum type.</summary>
@@ -93,6 +94,8 @@ internal static class XamlValidator
     public const string UnknownNamespaceDeclarationCode = "WXAML0033";
     /// <summary>A local Style resource cannot be applied to the consuming element's resolved type.</summary>
     public const string InvalidStyleTargetTypeCode = "WXAML0034";
+    /// <summary>An <c>x:Bind</c> expression uses syntax unsupported by the WinUI XAML compiler.</summary>
+    public const string InvalidBindSyntaxCode = "WXAML0035";
     /// <summary>Classic Binding in an untyped DataTemplate is not safe for Native AOT.</summary>
     public const string BindingDataTypeRecommendedCode = "WMC1510";
 
@@ -681,21 +684,7 @@ internal static class XamlValidator
         var seen = new HashSet<string>(System.StringComparer.Ordinal);
         foreach (var attribute in element.Attributes)
         {
-            string key;
-            if (attribute.IsNamespaceDeclaration)
-            {
-                key = "xmlns:" + (attribute.DeclaredPrefix ?? string.Empty);
-            }
-            else if (attribute.Name.HasPrefix &&
-                     element.NamespaceScope.TryResolvePrefix(attribute.Name.Prefix, out var uri))
-            {
-                key = "{" + uri + "}" + attribute.Name.LocalName;
-            }
-            else
-            {
-                key = attribute.Name.FullName;
-            }
-
+            string key = XamlSemanticFacts.GetExpandedAttributeName(element, attribute);
             if (!seen.Add(key))
             {
                 diagnostics.Add(Diag(doc, attribute.Name.Span, SeverityError, DuplicateAttributeCode,
@@ -965,8 +954,13 @@ internal static class XamlValidator
                 continue;
             }
 
-            diagnostics.Add(Diag(doc, value.InnerSpan, SeverityWarning, UnknownNamespaceDeclarationCode,
-                $"The XAML namespace '{value.Text}' contains no usable types in the project compilation."));
+            diagnostics.Add(Diag(
+                doc,
+                value.InnerSpan,
+                SeverityWarning,
+                UnknownNamespaceDeclarationCode,
+                $"The XAML namespace '{value.Text}' contains no usable types in the project compilation.",
+                SuggestNamespaceData(value.Text, typeSystem.GetUsingNamespaces())));
         }
     }
 
@@ -1225,19 +1219,194 @@ internal static class XamlValidator
                 argument.Name?.LocalName is "Converter" or "ConverterParameter") ||
             extension.Arguments.FirstOrDefault(argument =>
                 (!argument.IsNamed || argument.Name?.LocalName == "Path") &&
-                argument.Value is not null) is not { Value: { } path, ValueSpan: { } span } ||
-            path.IndexOf('(') >= 0 ||
-            !TryResolveBindResultType(
-                path, attribute, bindRoot, pageClass, scope, typeSystem, doc, out var resultType) ||
-            IsImplicitlyAssignable(resultType, targetType, typeSystem) ||
-            HasBuiltInBindingConversion(resultType, targetType))
+                argument.Value is not null) is not { Value: { } path, ValueSpan: { } span })
         {
             return;
         }
 
-        diagnostics.Add(Diag(doc, span, SeverityError, InvalidBindAssignmentCode,
+        if (FindUnquotedCharacter(path, '!') >= 0)
+        {
+            return;
+        }
+
+       ITypeSymbol? resultType;
+       bool isFunctionBinding = TryParseBindFunctionCall(path, out _);
+       bool resolved = isFunctionBinding
+           ? TryResolveBindFunctionResultType(
+               path, attribute, bindRoot, pageClass, scope, typeSystem, doc, out resultType)
+           : TryResolveBindResultType(
+               path, attribute, bindRoot, pageClass, scope, typeSystem, doc, out resultType);
+       if (!resolved || resultType is null ||
+           IsImplicitlyAssignable(resultType, targetType, typeSystem) ||
+           HasBuiltInBindingConversion(resultType, targetType, isFunctionBinding))
+       {
+           return;
+       }
+
+        string message =
             $"The x:Bind result type '{resultType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' " +
-            $"is not assignable to '{targetType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'."));
+            $"is not assignable to '{targetType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'.";
+        if (isFunctionBinding && IsBooleanToVisibilityConversion(resultType, targetType))
+        {
+            message += " The built-in Boolean-to-Visibility conversion applies only to property-path x:Bind expressions.";
+        }
+
+        diagnostics.Add(Diag(doc, span, SeverityError, InvalidBindAssignmentCode, message));
+    }
+
+    private static bool TryResolveBindFunctionResultType(
+       string path,
+       XamlAttribute attribute,
+       INamedTypeSymbol bindRoot,
+       INamedTypeSymbol? pageClass,
+       XamlNamespaceScope scope,
+       XamlTypeSystem typeSystem,
+       TextDocument doc,
+       [NotNullWhen(true)] out ITypeSymbol? resultType)
+    {
+       resultType = null;
+       string call = path.Trim();
+       bool negated = false;
+       while (call.StartsWith("!", StringComparison.Ordinal))
+       {
+           negated = true;
+           call = call.Substring(1).TrimStart();
+       }
+
+       INamedTypeSymbol? staticReceiverType = null;
+       if (TryGetStaticBindRoot(call, scope, typeSystem, out var staticType, out var staticMembers, out _))
+       {
+           staticReceiverType = staticType;
+           call = staticMembers;
+       }
+
+       if (!TryParseBindFunctionCall(call, out var parsed))
+       {
+           return false;
+       }
+
+       string functionPath = parsed.FunctionPath;
+       INamedTypeSymbol functionReceiverRoot = bindRoot;
+       int namedReceiverSeparator = functionPath.IndexOf('.');
+       if (staticReceiverType is null &&
+           namedReceiverSeparator > 0 &&
+           XamlSemanticFacts.ResolveNamedElementTypeInScope(
+               doc,
+               attribute.Parent,
+               functionPath.Substring(0, namedReceiverSeparator),
+               typeSystem) is { } namedReceiverType)
+       {
+           functionReceiverRoot = namedReceiverType;
+           functionPath = functionPath.Substring(namedReceiverSeparator + 1);
+       }
+
+       if (
+           !TryResolveBindFunctionReceiver(
+               functionPath,
+               staticReceiverType,
+               functionReceiverRoot,
+               pageClass,
+               typeSystem,
+               out var receiverType,
+               out var functionName,
+               out var includeReceiverNonPublic,
+               out var callIsStatic))
+       {
+           return false;
+       }
+
+       var argumentTypes = parsed.ArgumentRanges
+           .Select(range => TryResolveBindFunctionArgumentType(
+               call,
+               range,
+               attribute,
+               bindRoot,
+               pageClass,
+               scope,
+               typeSystem,
+               doc,
+               out var argumentType)
+                   ? argumentType
+                   : null)
+           .ToArray();
+       var applicableMethods = SelectBestApplicableBindFunctions(
+           GetBindFunctionOverloads(
+               receiverType,
+               functionName,
+               callIsStatic,
+               includeReceiverNonPublic,
+               pageClass,
+               typeSystem),
+           argumentTypes,
+           typeSystem);
+       var returnTypes = applicableMethods
+           .Select(method => method.ReturnType)
+           .Distinct<ITypeSymbol>(SymbolEqualityComparer.Default)
+           .ToArray();
+       if (returnTypes.Length != 1)
+       {
+           return false;
+       }
+
+       if (negated && !IsBooleanType(returnTypes[0]))
+       {
+           return false;
+       }
+
+       resultType = negated
+           ? typeSystem.ResolveMetadataType("System.Boolean")
+           : returnTypes[0];
+       return resultType is not null;
+    }
+
+    private static bool TryResolveBindFunctionArgumentType(
+       string path,
+       (int Start, int End) range,
+       XamlAttribute attribute,
+       INamedTypeSymbol bindRoot,
+       INamedTypeSymbol? pageClass,
+       XamlNamespaceScope scope,
+       XamlTypeSystem typeSystem,
+       TextDocument doc,
+       [NotNullWhen(true)] out ITypeSymbol? resultType)
+    {
+       resultType = null;
+       string argument = path.Substring(range.Start, range.End - range.Start).Trim();
+       if (argument.Length >= 2 &&
+           argument[0] is '\'' or '"' &&
+           argument[^1] == argument[0])
+       {
+           resultType = typeSystem.ResolveMetadataType("System.String");
+           return resultType is not null;
+       }
+
+       if (bool.TryParse(argument, out _))
+       {
+           resultType = typeSystem.ResolveMetadataType("System.Boolean");
+           return resultType is not null;
+       }
+
+       if (int.TryParse(argument, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+       {
+           resultType = typeSystem.ResolveMetadataType("System.Int32");
+           return resultType is not null;
+       }
+
+       if (double.TryParse(argument, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+       {
+           resultType = typeSystem.ResolveMetadataType("System.Double");
+           return resultType is not null;
+       }
+
+       return TryResolveBindResultType(
+           argument,
+           attribute,
+           bindRoot,
+           pageClass,
+           scope,
+           typeSystem,
+           doc,
+           out resultType);
     }
 
     private static bool TryResolveBindResultType(
@@ -1384,7 +1553,10 @@ internal static class XamlValidator
         return typeSystem.HasImplicitConversion(source, target);
     }
 
-    private static bool HasBuiltInBindingConversion(ITypeSymbol source, ITypeSymbol target)
+    private static bool HasBuiltInBindingConversion(
+        ITypeSymbol source,
+        ITypeSymbol target,
+        bool isFunctionBinding)
     {
         source = XamlValueConverter.UnwrapNullable(source);
         target = XamlValueConverter.UnwrapNullable(target);
@@ -1403,6 +1575,13 @@ internal static class XamlValidator
             return true;
         }
 
+        return !isFunctionBinding && IsBooleanToVisibilityConversion(source, target);
+    }
+
+    private static bool IsBooleanToVisibilityConversion(ITypeSymbol source, ITypeSymbol target)
+    {
+        source = XamlValueConverter.UnwrapNullable(source);
+        target = XamlValueConverter.UnwrapNullable(target);
         return source.SpecialType == SpecialType.System_Boolean &&
             target.Name == "Visibility" &&
             target.ContainingNamespace?.ToDisplayString() is
@@ -1555,6 +1734,68 @@ internal static class XamlValidator
         return nearest.Count == 0 ? null : new DiagnosticData { Bad = bad, Suggestions = nearest.ToArray() };
     }
 
+    private static DiagnosticData? SuggestNamespaceData(
+        string bad,
+        IEnumerable<string> usingNamespaces)
+    {
+        var candidates = usingNamespaces.Select(ns => $"using:{ns}").ToArray();
+        if (SuggestData(bad, candidates) is { } nearest)
+        {
+            return nearest;
+        }
+
+        var badSegments = NormalizeNamespace(bad);
+        if (badSegments.Length < 3)
+        {
+            return null;
+        }
+
+        var structuralMatches = candidates.Where(candidate =>
+        {
+            var candidateSegments = NormalizeNamespace(candidate);
+            if (candidateSegments.Length < 3 ||
+                !string.Equals(badSegments[^1], candidateSegments[^1], StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return IsNamespaceSubsequence(badSegments, candidateSegments) ||
+                IsNamespaceSubsequence(candidateSegments, badSegments);
+        }).ToArray();
+
+        return structuralMatches.Length == 1
+            ? new DiagnosticData { Bad = bad, Suggestions = structuralMatches }
+            : null;
+    }
+
+    private static bool IsNamespaceSubsequence(string[] larger, string[] smaller)
+    {
+        if (larger.Length < smaller.Length)
+        {
+            return false;
+        }
+
+        int next = 0;
+        foreach (var segment in larger)
+        {
+            if (next < smaller.Length &&
+                string.Equals(segment, smaller[next], StringComparison.OrdinalIgnoreCase))
+            {
+                next++;
+            }
+        }
+
+        return next == smaller.Length;
+    }
+
+    private static string[] NormalizeNamespace(string value) =>
+        value.StartsWith("using:", StringComparison.Ordinal)
+            ? value.Substring("using:".Length)
+                .Split('.', StringSplitOptions.RemoveEmptyEntries)
+                .Select(segment => segment.Replace("_", string.Empty, StringComparison.Ordinal))
+                .ToArray()
+            : Array.Empty<string>();
+
     /// <summary>Reports an {x:Bind} path segment that is not a member of the type produced by the segment before it (the first segment is checked against bindRoot</summary>
     private static void ValidateBindPath(
         XamlAttribute attribute,
@@ -1576,6 +1817,20 @@ internal static class XamlValidator
                  (a.IsNamed && a.Name?.LocalName == "Path" && a.Value is not null));
         if (pathArg?.Value is not { } path || pathArg.ValueSpan is not { } valueSpan)
         {
+            return;
+        }
+
+        int unsupportedNegation = FindUnquotedCharacter(path, '!');
+        if (unsupportedNegation >= 0)
+        {
+            diagnostics.Add(Diag(
+                doc,
+                new TextSpan(
+                    valueSpan.Start + unsupportedNegation,
+                    valueSpan.Start + unsupportedNegation + 1),
+                SeverityError,
+                InvalidBindSyntaxCode,
+                "The '!' operator is not supported in x:Bind expressions. Use an inverted property or a Boolean helper function."));
             return;
         }
 
@@ -1603,13 +1858,36 @@ internal static class XamlValidator
             return; // a cast path is fully handled here (reported or safely skipped) — never falls through.
         }
 
-        if (TryGetStaticBindRoot(path, scope, typeSystem, out var staticType, out var staticMembers, out var staticOffset))
+        int staticBodyOffset = 0;
+        int negationCount = 0;
+        while (staticBodyOffset < path.Length &&
+               (path[staticBodyOffset] == '!' || char.IsWhiteSpace(path[staticBodyOffset])))
+        {
+            if (path[staticBodyOffset] == '!')
+            {
+                negationCount++;
+            }
+            staticBodyOffset++;
+        }
+        string staticCandidate = path.Substring(staticBodyOffset);
+        if (TryGetStaticBindRoot(
+                staticCandidate,
+                scope,
+                typeSystem,
+                out var staticType,
+                out var staticMembers,
+                out var staticOffset))
         {
             if (staticMembers.IndexOf('(') >= 0)
             {
+                string functionPath = new string('!', negationCount) + staticMembers;
                 ValidateBindFunctionArgs(
-                    staticMembers,
-                    new TextSpan(valueSpan.Start + staticOffset, valueSpan.End),
+                    functionPath,
+                    new TextSpan(
+                        valueSpan.Start + staticBodyOffset + staticOffset - negationCount,
+                        valueSpan.End),
+                    attribute,
+                    scope,
                     bindRoot,
                     pageClass,
                     allowRootNonPublic,
@@ -1651,7 +1929,7 @@ internal static class XamlValidator
 
             // For a function binding (Method(arg, arg)) each argument is itself a path bound against the root, so a bogus argument member is flagged the same as a bogus root path.
             ValidateBindFunctionArgs(
-                path, valueSpan, bindRoot, pageClass, allowRootNonPublic,
+                path, valueSpan, attribute, scope, bindRoot, pageClass, allowRootNonPublic,
                 typeSystem, doc, diagnostics);
             return;
         }
@@ -1669,14 +1947,38 @@ internal static class XamlValidator
                 segment,
                 typeSystem) is { } namedElementType)
         {
-            ValidateNamedElementBindPathTail(
-                path,
-                valueSpan,
-                namedElementType,
-                pageClass,
-                typeSystem,
-                doc,
-                diagnostics);
+            int separator = path.IndexOf('.');
+            if (separator >= 0 && path.IndexOf('(', separator + 1) >= 0)
+            {
+                int receiverStart = path.IndexOf(segment, StringComparison.Ordinal);
+                string prefix = receiverStart > 0 ? path.Substring(0, receiverStart) : string.Empty;
+                string functionPath = prefix + path.Substring(separator + 1);
+                ValidateBindFunctionArgs(
+                    functionPath,
+                    new TextSpan(
+                        valueSpan.Start + separator + 1 - prefix.Length,
+                        valueSpan.End),
+                    attribute,
+                    scope,
+                    bindRoot,
+                    pageClass,
+                    allowRootNonPublic,
+                    typeSystem,
+                    doc,
+                    diagnostics,
+                    functionReceiverRoot: namedElementType);
+            }
+            else
+            {
+                ValidateNamedElementBindPathTail(
+                    path,
+                    valueSpan,
+                    namedElementType,
+                    pageClass,
+                    typeSystem,
+                    doc,
+                    diagnostics);
+            }
             return;
         }
 
@@ -2110,127 +2412,24 @@ internal static class XamlValidator
     private static void ValidateBindFunctionArgs(
         string path,
         TextSpan valueSpan,
+        XamlAttribute attribute,
+        XamlNamespaceScope scope,
         INamedTypeSymbol bindRoot,
         INamedTypeSymbol? accessWithin,
         bool includeRootNonPublic,
         XamlTypeSystem typeSystem,
         TextDocument doc,
         List<Diagnostic> diagnostics,
-        INamedTypeSymbol? staticReceiverType = null)
+        INamedTypeSymbol? staticReceiverType = null,
+        INamedTypeSymbol? functionReceiverRoot = null)
     {
-        int start = 0;
-        while (start < path.Length && (path[start] == '!' || char.IsWhiteSpace(path[start])))
-        {
-            start++;
-        }
-
-        int open = path.IndexOf('(', start);
-        if (open <= start)
+        if (!TryParseBindFunctionCall(path, out var parsed))
         {
             return; // no method name before '(' — a cast or non-function path, not our concern here.
         }
 
-        // Find the matching close paren for the argument list.
-        int depth = 0;
-        int close = -1;
-        char closeScanQuote = '\0';
-        for (int j = open; j < path.Length; j++)
-        {
-            char c = path[j];
-            if (closeScanQuote != '\0')
-            {
-                if (c == '\\')
-                {
-                    j++;
-                }
-                else if (c == closeScanQuote)
-                {
-                    closeScanQuote = '\0';
-                }
-
-                continue;
-            }
-
-            if (c is '\'' or '"')
-            {
-                closeScanQuote = c;
-            }
-            else if (c == '(')
-            {
-                depth++;
-            }
-            else if (c == ')')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    close = j;
-                    break;
-                }
-            }
-        }
-
-        if (close < 0)
-        {
-            return; // unbalanced parentheses — stay silent.
-        }
-
-        // Split the argument list on top-level commas (nested parens/indexers do not split).
-        var argumentRanges = new List<(int Start, int End)>();
-        int argStart = open + 1;
-        int d = 0;
-        char quote = '\0';
-        for (int j = open + 1; j < close; j++)
-        {
-            char c = path[j];
-            if (quote != '\0')
-            {
-                if (c == '\\')
-                {
-                    j++;
-                }
-                else if (c == quote)
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (c is '\'' or '"')
-            {
-                quote = c;
-                continue;
-            }
-
-            if (c is '(' or '[')
-            {
-                d++;
-            }
-            else if (c is ')' or ']')
-            {
-                if (d > 0)
-                {
-                    d--;
-                }
-            }
-            else if (c == ',' && d == 0)
-            {
-                argumentRanges.Add((argStart, j));
-                argStart = j + 1;
-            }
-        }
-
-        if (ContainsNonWhitespace(path, argStart, close) || argumentRanges.Count > 0)
-        {
-            argumentRanges.Add((argStart, close));
-        }
-
-        var functionPath = path.Substring(start, open - start).Trim();
+        var functionPath = parsed.FunctionPath;
         var functionName = functionPath;
-        ITypeSymbol receiverType = staticReceiverType ?? bindRoot;
-        bool includeReceiverNonPublic = staticReceiverType is null && includeRootNonPublic;
-        bool atStaticReceiverRoot = staticReceiverType is not null;
         int receiverSeparator = functionPath.LastIndexOf('.');
         if (receiverSeparator >= 0)
         {
@@ -2238,9 +2437,9 @@ internal static class XamlValidator
             if (staticReceiverType is null)
             {
                 ValidateMemberChain(
-                    bindRoot,
+                    functionReceiverRoot ?? bindRoot,
                     receiverSegments,
-                    start,
+                    parsed.Start,
                     valueSpan,
                     skipFirst: false,
                     includeRootNonPublic,
@@ -2249,26 +2448,274 @@ internal static class XamlValidator
                     doc,
                     diagnostics);
             }
-            foreach (var receiverSegment in receiverSegments)
+        }
+
+        if (!TryResolveBindFunctionReceiver(
+                functionPath,
+                staticReceiverType,
+                functionReceiverRoot ?? bindRoot,
+                accessWithin,
+                typeSystem,
+                out var receiverType,
+                out functionName,
+                out var includeReceiverNonPublic,
+                out var callIsStatic))
+        {
+            return;
+        }
+
+        var overloads = GetBindFunctionOverloads(
+                receiverType,
+                functionName,
+                callIsStatic,
+                includeReceiverNonPublic,
+                accessWithin,
+                typeSystem)
+            .ToList();
+        if (overloads.Count == 0)
+        {
+            var functionSpan = new TextSpan(
+                valueSpan.Start + parsed.Start,
+                valueSpan.Start + parsed.Open);
+            diagnostics.Add(Diag(doc, functionSpan, SeverityWarning, InvalidBindFunctionCode,
+                $"'{functionName}' is not a callable method on '{receiverType.Name}'."));
+        }
+        else if (!overloads.Any(m => AcceptsArgumentCount(m, parsed.ArgumentRanges.Count)))
+        {
+            var functionSpan = new TextSpan(
+                valueSpan.Start + parsed.Start,
+                valueSpan.Start + parsed.Open);
+            diagnostics.Add(Diag(doc, functionSpan, SeverityWarning, InvalidBindFunctionCode,
+                $"No overload of '{functionName}' accepts {parsed.ArgumentRanges.Count} argument(s)."));
+        }
+        else
+        {
+            var argumentTypes = parsed.ArgumentRanges
+                .Select(range => TryResolveBindFunctionArgumentType(
+                    path,
+                    range,
+                    attribute,
+                    bindRoot,
+                    accessWithin,
+                    scope,
+                    typeSystem,
+                    doc,
+                    out var argumentType)
+                        ? argumentType
+                        : null)
+                .ToArray();
+            var applicable = SelectBestApplicableBindFunctions(
+                overloads,
+                argumentTypes,
+                typeSystem);
+            if (argumentTypes.All(type => type is not null) && applicable.Length == 0)
             {
-                ITypeSymbol? next;
-                if (atStaticReceiverRoot)
+                var functionSpan = new TextSpan(
+                    valueSpan.Start + parsed.Start,
+                    valueSpan.Start + parsed.Close + 1);
+                var typeNames = string.Join(
+                    ", ",
+                    argumentTypes.Select(type =>
+                        $"'{type!.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'"));
+                diagnostics.Add(Diag(
+                    doc,
+                    functionSpan,
+                    SeverityError,
+                    InvalidBindFunctionCode,
+                    $"No overload of '{functionName}' accepts argument type(s) {typeNames}."));
+            }
+            else if (parsed.IsNegated &&
+                     applicable.Length > 0 &&
+                     applicable.All(method => !IsBooleanType(method.ReturnType)))
+            {
+                var functionSpan = new TextSpan(
+                    valueSpan.Start + parsed.Start,
+                    valueSpan.Start + parsed.Close + 1);
+                diagnostics.Add(Diag(
+                    doc,
+                    functionSpan,
+                    SeverityError,
+                    InvalidBindFunctionCode,
+                    $"The result of '{functionName}' cannot be negated because it is not Boolean."));
+            }
+        }
+
+        foreach (var (argumentStart, argumentEnd) in parsed.ArgumentRanges)
+        {
+            ValidateBindFunctionArg(
+                path, argumentStart, argumentEnd, valueSpan, bindRoot,
+                attribute, accessWithin, includeRootNonPublic, typeSystem, doc, diagnostics);
+        }
+    }
+
+    private static int FindUnquotedCharacter(string text, char target)
+    {
+        char quote = '\0';
+        for (int index = 0; index < text.Length; index++)
+        {
+            char current = text[index];
+            if (quote != '\0')
+            {
+                if (current is '\\' or '^')
                 {
-                    next = CompletionProvider.ResolveStaticBindSegmentType(
-                        typeSystem, receiverType, receiverSegment, accessWithin);
+                    index++;
                 }
-                else
+                else if (current == quote)
                 {
-                    next = CompletionProvider.ResolveBindSegmentType(
+                    quote = '\0';
+                }
+                continue;
+            }
+
+            if (current is '\'' or '"')
+            {
+                quote = current;
+            }
+            else if (current == target)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private sealed record ParsedBindFunctionCall(
+        int Start,
+        int Open,
+        int Close,
+        bool IsNegated,
+        string FunctionPath,
+        IReadOnlyList<(int Start, int End)> ArgumentRanges);
+
+    private static bool TryParseBindFunctionCall(
+        string path,
+        [NotNullWhen(true)] out ParsedBindFunctionCall? parsed)
+    {
+        parsed = null;
+        int start = 0;
+        bool isNegated = false;
+        while (start < path.Length && (path[start] == '!' || char.IsWhiteSpace(path[start])))
+        {
+            isNegated |= path[start] == '!';
+            start++;
+        }
+
+        int open = path.IndexOf('(', start);
+        if (open <= start)
+        {
+            return false;
+        }
+
+        var argumentRanges = new List<(int Start, int End)>();
+        int argumentStart = open + 1;
+        int parenthesisDepth = 1;
+        int bracketDepth = 0;
+        char quote = '\0';
+        for (int index = open + 1; index < path.Length; index++)
+        {
+            char current = path[index];
+            if (quote != '\0')
+            {
+                if (current == '\\')
+                {
+                    index++;
+                }
+                else if (current == quote)
+                {
+                    quote = '\0';
+                }
+                continue;
+            }
+
+            if (current is '\'' or '"')
+            {
+                quote = current;
+            }
+            else if (current == '[')
+            {
+                bracketDepth++;
+            }
+            else if (current == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+            }
+            else if (current == '(')
+            {
+                parenthesisDepth++;
+            }
+            else if (current == ')')
+            {
+                parenthesisDepth--;
+                if (parenthesisDepth == 0)
+                {
+                    if (path.AsSpan(index + 1).Trim().Length != 0)
+                    {
+                        return false;
+                    }
+
+                    if (ContainsNonWhitespace(path, argumentStart, index) ||
+                        argumentRanges.Count > 0)
+                    {
+                        argumentRanges.Add((argumentStart, index));
+                    }
+
+                    parsed = new ParsedBindFunctionCall(
+                        start,
+                        open,
+                        index,
+                        isNegated,
+                        path.Substring(start, open - start).Trim(),
+                        argumentRanges);
+                    return true;
+                }
+            }
+            else if (current == ',' && parenthesisDepth == 1 && bracketDepth == 0)
+            {
+                argumentRanges.Add((argumentStart, index));
+                argumentStart = index + 1;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryResolveBindFunctionReceiver(
+        string functionPath,
+        INamedTypeSymbol? staticReceiverType,
+        INamedTypeSymbol bindRoot,
+        ISymbol? accessWithin,
+        XamlTypeSystem typeSystem,
+        [NotNullWhen(true)] out ITypeSymbol? receiverType,
+        out string functionName,
+        out bool includeReceiverNonPublic,
+        out bool callIsStatic)
+    {
+        receiverType = staticReceiverType ?? bindRoot;
+        functionName = functionPath;
+        includeReceiverNonPublic =
+            staticReceiverType is null &&
+            accessWithin is not null &&
+            SymbolEqualityComparer.Default.Equals(bindRoot, accessWithin);
+        bool atStaticReceiverRoot = staticReceiverType is not null;
+        int receiverSeparator = functionPath.LastIndexOf('.');
+        if (receiverSeparator >= 0)
+        {
+            foreach (var receiverSegment in functionPath.Substring(0, receiverSeparator).Split('.'))
+            {
+                var next = atStaticReceiverRoot
+                    ? CompletionProvider.ResolveStaticBindSegmentType(
+                        typeSystem, receiverType, receiverSegment, accessWithin)
+                    : CompletionProvider.ResolveBindSegmentType(
                         typeSystem,
                         receiverType,
                         receiverSegment,
                         includeReceiverNonPublic,
                         accessWithin);
-                }
                 if (next is null)
                 {
-                    return;
+                    callIsStatic = false;
+                    return false;
                 }
 
                 receiverType = next;
@@ -2279,36 +2726,127 @@ internal static class XamlValidator
             functionName = functionPath.Substring(receiverSeparator + 1);
         }
 
-        bool callIsStatic = staticReceiverType is not null && receiverSeparator < 0;
-        var overloads = (!callIsStatic
-                ? typeSystem.GetBindableMethods(
-                    receiverType,
-                    includeReceiverNonPublic,
-                    accessWithin)
-                : typeSystem.GetBindableStaticMembers(receiverType, accessWithin)
-                    .OfType<IMethodSymbol>())
-            .Where(m => string.Equals(m.Name, functionName, System.StringComparison.Ordinal))
-            .ToList();
-        if (overloads.Count == 0)
+        callIsStatic = staticReceiverType is not null && receiverSeparator < 0;
+        return true;
+    }
+
+    private static IEnumerable<IMethodSymbol> GetBindFunctionOverloads(
+        ITypeSymbol receiverType,
+        string functionName,
+        bool callIsStatic,
+        bool includeReceiverNonPublic,
+        ISymbol? accessWithin,
+        XamlTypeSystem typeSystem) =>
+        (!callIsStatic
+            ? typeSystem.GetBindableMethods(
+                receiverType,
+                includeReceiverNonPublic,
+                accessWithin)
+            : typeSystem.GetBindableStaticMembers(receiverType, accessWithin)
+                .OfType<IMethodSymbol>())
+        .Where(method => string.Equals(method.Name, functionName, StringComparison.Ordinal));
+
+    private static bool IsApplicableBindFunction(
+        IMethodSymbol method,
+        IReadOnlyList<ITypeSymbol?> argumentTypes,
+        XamlTypeSystem typeSystem)
+    {
+        if (!AcceptsArgumentCount(method, argumentTypes.Count))
         {
-            var functionSpan = new TextSpan(valueSpan.Start + start, valueSpan.Start + open);
-            diagnostics.Add(Diag(doc, functionSpan, SeverityWarning, InvalidBindFunctionCode,
-                $"'{functionName}' is not a callable method on '{receiverType.Name}'."));
-        }
-        else if (!overloads.Any(m => AcceptsArgumentCount(m, argumentRanges.Count)))
-        {
-            var functionSpan = new TextSpan(valueSpan.Start + start, valueSpan.Start + open);
-            diagnostics.Add(Diag(doc, functionSpan, SeverityWarning, InvalidBindFunctionCode,
-                $"No overload of '{functionName}' accepts {argumentRanges.Count} argument(s)."));
+            return false;
         }
 
-        foreach (var (argumentStart, argumentEnd) in argumentRanges)
+        for (int index = 0; index < argumentTypes.Count; index++)
         {
-            ValidateBindFunctionArg(
-                path, argumentStart, argumentEnd, valueSpan, bindRoot,
-                accessWithin, includeRootNonPublic, typeSystem, doc, diagnostics);
+            if (argumentTypes[index] is not { } argumentType)
+            {
+                continue;
+            }
+
+            ITypeSymbol parameterType = GetBindFunctionParameterType(method, index);
+            if (!IsImplicitlyAssignable(argumentType, parameterType, typeSystem))
+            {
+                return false;
+            }
         }
+
+        return true;
     }
+
+    private static IMethodSymbol[] SelectBestApplicableBindFunctions(
+        IEnumerable<IMethodSymbol> methods,
+        IReadOnlyList<ITypeSymbol?> argumentTypes,
+        XamlTypeSystem typeSystem)
+    {
+        var scored = methods
+            .Where(method => IsApplicableBindFunction(method, argumentTypes, typeSystem))
+            .Select(method => (
+                Method: method,
+                Score: argumentTypes.Select((argumentType, index) =>
+                    argumentType is null
+                        ? 0
+                        : SymbolEqualityComparer.Default.Equals(
+                            XamlValueConverter.UnwrapNullable(argumentType),
+                            XamlValueConverter.UnwrapNullable(
+                                GetBindFunctionParameterType(method, index)))
+                            ? 2
+                            : 1).Sum(),
+                UsesExpandedParams: UsesExpandedParams(method, argumentTypes, typeSystem),
+                OmittedOptionalCount: method.Parameters
+                    .Skip(argumentTypes.Count)
+                    .Count(parameter => parameter.IsOptional)))
+            .ToArray();
+        if (scored.Length == 0)
+        {
+            return Array.Empty<IMethodSymbol>();
+        }
+
+        int bestScore = scored.Max(candidate => candidate.Score);
+        var best = scored.Where(candidate => candidate.Score == bestScore).ToArray();
+        bool hasNormalForm = best.Any(candidate => !candidate.UsesExpandedParams);
+        if (hasNormalForm)
+        {
+            best = best.Where(candidate => !candidate.UsesExpandedParams).ToArray();
+        }
+
+        int fewestOmitted = best.Min(candidate => candidate.OmittedOptionalCount);
+        return best
+            .Where(candidate => candidate.OmittedOptionalCount == fewestOmitted)
+            .Select(candidate => candidate.Method)
+            .ToArray();
+    }
+
+    private static bool UsesExpandedParams(
+        IMethodSymbol method,
+        IReadOnlyList<ITypeSymbol?> argumentTypes,
+        XamlTypeSystem typeSystem)
+    {
+        if (method.Parameters.LastOrDefault() is not { IsParams: true } parameter)
+        {
+            return false;
+        }
+
+        if (argumentTypes.Count != method.Parameters.Length ||
+            argumentTypes[^1] is not { } lastArgument)
+        {
+            return true;
+        }
+
+        return !IsImplicitlyAssignable(lastArgument, parameter.Type, typeSystem);
+    }
+
+    private static ITypeSymbol GetBindFunctionParameterType(IMethodSymbol method, int index)
+    {
+        var parameter = index < method.Parameters.Length
+            ? method.Parameters[index]
+            : method.Parameters[^1];
+        return parameter.IsParams && parameter.Type is IArrayTypeSymbol array
+            ? array.ElementType
+            : parameter.Type;
+    }
+
+    private static bool IsBooleanType(ITypeSymbol type) =>
+        XamlValueConverter.UnwrapNullable(type).SpecialType == SpecialType.System_Boolean;
 
     private static bool AcceptsArgumentCount(IMethodSymbol method, int argumentCount)
     {
@@ -2341,6 +2879,7 @@ internal static class XamlValidator
         int to,
         TextSpan valueSpan,
         INamedTypeSymbol bindRoot,
+        XamlAttribute attribute,
         INamedTypeSymbol? accessWithin,
         bool includeRootNonPublic,
         XamlTypeSystem typeSystem,
@@ -2385,7 +2924,20 @@ internal static class XamlValidator
         bool atRoot = true;
         int segStart = 0;
         var segments = arg.Split('.');
-        for (int i = 0; i < segments.Length; i++)
+        int firstSegment = 0;
+        if (XamlSemanticFacts.ResolveNamedElementTypeInScope(
+                doc,
+                attribute.Parent,
+                segments[0],
+                typeSystem) is { } namedElementType)
+        {
+            current = namedElementType;
+            atRoot = false;
+            firstSegment = 1;
+            segStart = segments[0].Length + 1;
+        }
+
+        for (int i = firstSegment; i < segments.Length; i++)
         {
             var seg = segments[i];
             int bracket = seg.IndexOf('[');

@@ -78,7 +78,9 @@ namespace WinUiXaml.Workspace
             }
 
             var workspace = MSBuildWorkspace.Create(properties);
-            workspace.LoadMetadataForReferencedProjects = true;
+            // Keep project references in the workspace graph so IntelliSense can discover controls
+            // directly from referenced source projects even when their output DLLs do not exist yet.
+            workspace.LoadMetadataForReferencedProjects = false;
             try
             {
                 var project = await workspace
@@ -274,6 +276,17 @@ namespace WinUiXaml.Workspace
         /// <summary>Gets the C# compilation for the loaded project.</summary>
         public Task<Compilation?> GetCompilationAsync(CancellationToken cancellationToken = default) =>
             Project.GetCompilationAsync(cancellationToken);
+
+        internal bool ContainsProject(string projectPath)
+        {
+            var target = Path.GetFullPath(projectPath);
+            return Project.Solution.Projects.Any(project =>
+                project.FilePath is { } filePath &&
+                string.Equals(
+                    Path.GetFullPath(filePath),
+                    target,
+                    StringComparison.OrdinalIgnoreCase));
+        }
 
         /// <summary>
         /// Creates a source-free compilation over the exact references selected by MSBuild.

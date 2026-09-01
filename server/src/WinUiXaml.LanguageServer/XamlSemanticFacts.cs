@@ -204,6 +204,21 @@ internal static class XamlSemanticFacts
             string.Equals(attribute.Name.LocalName, "Name", StringComparison.Ordinal));
     }
 
+    internal static string GetExpandedAttributeName(
+        XamlElement element,
+        XamlAttribute attribute)
+    {
+        if (attribute.IsNamespaceDeclaration)
+        {
+            return "xmlns:" + (attribute.DeclaredPrefix ?? string.Empty);
+        }
+
+        return attribute.Name.HasPrefix &&
+            element.NamespaceScope.TryResolvePrefix(attribute.Name.Prefix, out var uri)
+                ? "{" + uri + "}" + attribute.Name.LocalName
+                : attribute.Name.FullName;
+    }
+
     internal static bool IsNameAttribute(
         XamlAttribute attribute,
         INamedTypeSymbol elementType,

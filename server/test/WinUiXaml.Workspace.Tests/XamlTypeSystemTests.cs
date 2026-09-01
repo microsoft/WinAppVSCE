@@ -769,6 +769,8 @@ public sealed class XamlTypeSystemTests
                 public class ContosoService { }                                     // non-DO -> excluded
                 public enum ContosoSizing { Small, Large }                          // enum -> excluded
                 internal class ContosoHidden : Microsoft.UI.Xaml.DependencyObject { } // non-public -> excluded
+                public abstract class ContosoAbstract : Microsoft.UI.Xaml.DependencyObject { }
+                public class ContosoGeneric<T> : Microsoft.UI.Xaml.DependencyObject { }
             }
             """;
         var (compilation, referenced) = CompileLibraryAndConsumer(source);
@@ -781,6 +783,8 @@ public sealed class XamlTypeSystemTests
         Assert.DoesNotContain("ContosoService", names); // not a DependencyObject
         Assert.DoesNotContain("ContosoSizing", names);  // enum, not a class
         Assert.DoesNotContain("ContosoHidden", names);  // non-public
+        Assert.DoesNotContain("ContosoAbstract", names); // abstract
+        Assert.DoesNotContain("ContosoGeneric", names);  // open generic
 
         // The base-walk is O(depth) per type, so the result is cached once per instance.
         Assert.Same(ts.GetReferencedElementTypes(), ts.GetReferencedElementTypes());
@@ -789,9 +793,8 @@ public sealed class XamlTypeSystemTests
     [Fact]
     public void GetReferencedElementTypes_ExcludesSourceTypes_ReferencedOnly()
     {
-        // The user's OWN project types are not "third-party" — element completion offers them via the
-        // default/local prefix, not the referenced-assembly path. So source types are excluded even when
-        // they derive from DependencyObject.
+        // Source and referenced controls are exposed through separate catalogs so completion can apply
+        // the same prefix planning without conflating cross-assembly accessibility.
         const string librarySource = """
             namespace Microsoft.UI.Xaml { public class DependencyObject { } }
             namespace Contoso.Controls { public class ContosoCard : Microsoft.UI.Xaml.DependencyObject { } }
@@ -806,6 +809,7 @@ public sealed class XamlTypeSystemTests
 
         Assert.Contains("ContosoCard", names);    // referenced assembly
         Assert.DoesNotContain("AppCard", names);  // consumer source, not referenced
+        Assert.Contains("AppCard", ts.GetSourceElementTypes().Select(t => t.Name));
     }
 
     [Fact]
@@ -1063,7 +1067,7 @@ public sealed class XamlTypeSystemTests
 
             var first = ts.GetThemeResources();
 
-            Assert.Collection(first,
+            Assert.Collection(first.Where(resource => resource.Key.StartsWith("Sdk", StringComparison.Ordinal)),
                 resource =>
                 {
                     Assert.Equal("SdkBrush", resource.Key);
@@ -1076,7 +1080,9 @@ public sealed class XamlTypeSystemTests
             Assert.Same(first, ts.GetThemeResources());
 
             var (updatedTypeSystem, _) = CreateFileBackedWinUiTypeSystem(root);
-            Assert.Equal("NewSdkRadius", Assert.Single(updatedTypeSystem.GetThemeResources()).Key);
+            Assert.Equal(
+                "NewSdkRadius",
+                Assert.Single(updatedTypeSystem.GetThemeResources(), resource => resource.Key == "NewSdkRadius").Key);
         }
         finally
         {
@@ -1095,11 +1101,47 @@ public sealed class XamlTypeSystemTests
             WriteGenericXaml(managedXaml, """<Style x:Key="ManagedKey" />""");
             WriteGenericXaml(nativeXaml, """<Style x:Key="NativeKey" />""");
 
-            Assert.Equal("ManagedKey", Assert.Single(ts.GetThemeResources()).Key);
+            Assert.Equal(
+                "ManagedKey",
+                Assert.Single(ts.GetThemeResources(), resource => resource.Key == "ManagedKey").Key);
 
             File.Delete(managedXaml);
             var (fallbackTypeSystem, _) = CreateFileBackedWinUiTypeSystem(root);
-            Assert.Equal("NativeKey", Assert.Single(fallbackTypeSystem.GetThemeResources()).Key);
+            Assert.Equal(
+                "NativeKey",
+                Assert.Single(fallbackTypeSystem.GetThemeResources(), resource => resource.Key == "NativeKey").Key);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GetThemeResourcesIncludesWindowsSdkSystemColors()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var (typeSystem, genericXaml) = CreateFileBackedWinUiTypeSystem(root);
+            WriteGenericXaml(genericXaml, """<Style x:Key="FrameworkStyle" />""");
+
+            var resources = typeSystem.GetThemeResources().ToDictionary(resource => resource.Key);
+            foreach (var key in new[]
+                     {
+                         "SystemColorButtonFaceColor",
+                         "SystemColorButtonTextColor",
+                         "SystemColorGrayTextColor",
+                         "SystemColorHighlightColor",
+                         "SystemColorHighlightTextColor",
+                         "SystemColorHotlightColor",
+                         "SystemColorWindowColor",
+                         "SystemColorWindowTextColor",
+                     })
+            {
+                Assert.Equal("Color", resources[key].LocalTypeName);
+                Assert.Equal(Presentation, resources[key].TypeNamespace);
+            }
         }
         finally
         {

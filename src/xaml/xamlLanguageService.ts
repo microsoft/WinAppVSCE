@@ -56,11 +56,20 @@ import {
   XamlStatusAction,
 } from "./xamlConfiguration";
 import { hasOpenXamlDocument } from "./xamlDemand";
+import {
+  GuardedTextEditRequest,
+  PromptedTextEditDocument,
+  PromptedTextEditRequest,
+  runGuardedTextEditCommand,
+  runPromptedTextEdit,
+} from "./promptedTextEdit";
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
 let projectStatusItem: vscode.StatusBarItem | undefined;
 const APPLY_GENERATED_EVENT_HANDLER_COMMAND = "winui-xaml.applyGeneratedEventHandler";
+const PROMPT_TEXT_EDIT_COMMAND = "winui-xaml.promptTextEdit";
+const APPLY_GUARDED_TEXT_EDITS_COMMAND = "winui-xaml.applyGuardedTextEdits";
 
 function findOpenDocument(documentUri: string): vscode.TextDocument | undefined {
   const target = vscode.Uri.parse(documentUri);
@@ -123,6 +132,99 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
     vscode.commands.registerCommand("winui-xaml.showInfo", () => showXamlInfo()),
     vscode.commands.registerCommand("winui-xaml.showOutput", () => output?.show(true)),
     vscode.commands.registerCommand("winui-xaml.restartServer", () => restartClient(context, true)),
+    vscode.commands.registerCommand(
+      PROMPT_TEXT_EDIT_COMMAND,
+      async (request: PromptedTextEditRequest) => {
+        await runPromptedTextEdit(
+          request,
+          {
+            showInput: async options => vscode.window.showInputBox({
+              ...options,
+              ignoreFocusOut: true,
+            }),
+            showChoice: async options => {
+              const custom = `$(edit) ${request.customChoiceLabel}`;
+              const selected = await vscode.window.showQuickPick(
+                [...options.choices, custom],
+                { placeHolder: options.placeHolder, ignoreFocusOut: true },
+              );
+              return selected === custom ? null : selected;
+            },
+            openDocument: async targetUri => {
+              const uri = vscode.Uri.parse(targetUri);
+              const document = findOpenDocument(targetUri) ??
+                await vscode.workspace.openTextDocument(uri);
+              return {
+                version: document.version,
+                source: document,
+                getText: targetRange => {
+                  const requestedRange = new vscode.Range(
+                    targetRange.start.line,
+                    targetRange.start.character,
+                    targetRange.end.line,
+                    targetRange.end.character,
+                  );
+                  if (!document.validateRange(requestedRange).isEqual(requestedRange)) {
+                    throw new Error("The XAML quick fix contains an invalid edit range.");
+                  }
+                  return document.getText(requestedRange);
+                },
+              };
+            },
+            applyEdit: async (targetDocument, targetRange, newText) => {
+              const document = targetDocument.source as vscode.TextDocument;
+              const requestedRange = new vscode.Range(
+                targetRange.start.line,
+                targetRange.start.character,
+                targetRange.end.line,
+                targetRange.end.character,
+              );
+              if (!document.validateRange(requestedRange).isEqual(requestedRange)) {
+                throw new Error("The XAML quick fix contains an invalid edit range.");
+              }
+              if (request.expectedVersion !== null &&
+                  document.version !== request.expectedVersion ||
+                  document.getText(requestedRange) !== request.expectedText) {
+                throw new Error(
+                  "The XAML document changed before the quick fix was applied. Run the quick fix again.",
+                );
+              }
+
+              const edit = new vscode.WorkspaceEdit();
+              edit.replace(document.uri, requestedRange, newText);
+              return vscode.workspace.applyEdit(edit);
+            },
+          },
+        );
+      },
+    ),
+    vscode.commands.registerCommand(
+      APPLY_GUARDED_TEXT_EDITS_COMMAND,
+      async (request: GuardedTextEditRequest) => {
+        await runGuardedTextEditCommand(request, {
+          openDocument: async targetUri => {
+            const uri = vscode.Uri.parse(targetUri);
+            return findOpenDocument(targetUri) ??
+              vscode.workspace.openTextDocument(uri);
+          },
+          getDocumentVersion: document => document.version,
+          createRange: range => new vscode.Range(
+            range.start.line,
+            range.start.character,
+            range.end.line,
+            range.end.character,
+          ),
+          isValidRange: (document, range) =>
+            document.validateRange(range).isEqual(range),
+          getText: (document, range) => document.getText(range),
+          createWorkspaceEdit: () => new vscode.WorkspaceEdit(),
+          replace: (edit, document, range, newText) => {
+            edit.replace(document.uri, range, newText);
+          },
+          applyEdit: edit => vscode.workspace.applyEdit(edit),
+        });
+      },
+    ),
     vscode.commands.registerCommand(
       "winui-xaml.saveGeneratedEventHandler",
       async (documentUri: string) => {
@@ -621,12 +723,20 @@ async function restoreProject(projectPath: string): Promise<void> {
   log(`Restoring project packages: ${projectPath}`);
 
   try {
+    const dotnet = await findCompatibleDotnet();
+    if (!dotnet) {
+      throw new Error(
+        "A compatible Microsoft.NETCore.App 10.x runtime was not found. " +
+          "Install the .NET 10 runtime, then run restore again."
+      );
+    }
+
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title: "Restoring WinUI project packages",
       },
-      () => runDotnetRestore(projectPath)
+      () => runDotnetRestore(projectPath, dotnet)
     );
     log("Project package restore completed. IntelliSense metadata is reloading.");
     void vscode.window.showInformationMessage(
@@ -646,11 +756,12 @@ async function restoreProject(projectPath: string): Promise<void> {
   }
 }
 
-function runDotnetRestore(projectPath: string): Promise<void> {
+function runDotnetRestore(projectPath: string, dotnetPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn("dotnet", ["restore", projectPath, "--nologo"], {
+    const child = spawn(dotnetPath, ["restore", projectPath, "--nologo"], {
       cwd: path.dirname(projectPath),
       windowsHide: true,
+      env: { ...process.env, DOTNET_HOST_PATH: dotnetPath },
     });
 
     child.stdout.on("data", (data: Buffer) => output?.append(data.toString()));

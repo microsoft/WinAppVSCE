@@ -162,8 +162,8 @@ internal sealed partial class XamlLanguageServer
             },
             CompletionProvider = new CompletionOptions
             {
-                // Re-trigger on start-tag, the attribute gap, the attached-property dot, the prefix colon, and the opening quote of an attribute value (enum/bool value completion).
-                TriggerCharacters = new[] { "<", " ", ".", ":", "\"", "'", "{", "=", "/" },
+                // Re-trigger on XAML structural delimiters and markup-extension argument separators.
+                TriggerCharacters = new[] { "<", " ", ".", ":", "\"", "'", "{", "=", "/", "," },
                 ResolveProvider = false,
             },
         },
@@ -492,11 +492,11 @@ internal sealed partial class XamlLanguageServer
     }
 
     /// <summary>Drops stale project data when source, build inputs, or NuGet assets change.</summary>
-    private Task DidChangeWatchedFilesAsync(DidChangeWatchedFilesParams p)
+    private async Task DidChangeWatchedFilesAsync(DidChangeWatchedFilesParams p)
     {
         if (p.Changes is null || p.Changes.Count == 0)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         var projectsToInvalidate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -565,7 +565,7 @@ internal sealed partial class XamlLanguageServer
         if (invalidateAllProjects)
         {
             _resolver.InvalidateAll();
-            ResetContextsAndWarmDocuments();
+            await ResetContextsAndRefreshDocumentsAsync().ConfigureAwait(false);
         }
         else
         {
@@ -575,7 +575,7 @@ internal sealed partial class XamlLanguageServer
             }
             if (projectsToInvalidate.Count > 0)
             {
-                ResetContextsAndWarmDocuments();
+                await ResetContextsAndRefreshDocumentsAsync().ConfigureAwait(false);
             }
         }
 
@@ -585,7 +585,6 @@ internal sealed partial class XamlLanguageServer
             _resourceGraph.Clear();
         }
 
-        return Task.CompletedTask;
     }
 
     internal static bool IsGeneratedBuildPath(string path, string root)
@@ -614,14 +613,16 @@ internal sealed partial class XamlLanguageServer
             System.IO.Path.GetFileName(directory).Equals("obj", StringComparison.OrdinalIgnoreCase);
     }
 
-    private void ResetContextsAndWarmDocuments()
+    private async Task ResetContextsAndRefreshDocumentsAsync()
     {
         _contexts.RestartAllPreservingLatest();
 
-        // Rebuild invalidated contexts only for documents the user has opened.
-        foreach (var uri in _documents.Keys)
+        // Discard semantic diagnostics produced from the old compilation immediately, then rebuild
+        // and republish them against the new project context for every open document.
+        foreach (var document in _documents.Values)
         {
-            WarmUp(uri);
+            await PublishDiagnosticsAsync(document).ConfigureAwait(false);
+            WarmUp(document.Uri);
         }
     }
 

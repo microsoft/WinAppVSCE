@@ -114,7 +114,7 @@ internal static class XamlNamespaceActions
         }
     }
 
-    private static TextSpan ExpandRemovalSpan(string text, TextSpan span)
+    internal static TextSpan ExpandRemovalSpan(string text, TextSpan span)
     {
         int lineStart = span.Start;
         while (lineStart > 0 && text[lineStart - 1] is not '\r' and not '\n')

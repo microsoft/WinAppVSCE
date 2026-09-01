@@ -39,7 +39,8 @@ namespace WinUiXaml.Workspace
         private IReadOnlyList<ThemeResourceInfo>? _themeResources;
         private bool _themeResourceCatalogDiscovered;
 
-        // Cache referenced controls because walking the reference closure is expensive.
+        // Cache project and referenced controls because walking assembly namespaces is expensive.
+        private IReadOnlyList<INamedTypeSymbol>? _sourceElementTypes;
         private IReadOnlyList<INamedTypeSymbol>? _referencedElementTypes;
         private readonly ConcurrentDictionary<string, IReadOnlyList<INamedTypeSymbol>> _markupExtensionTypes =
             new(StringComparer.Ordinal);
@@ -315,7 +316,30 @@ namespace WinUiXaml.Workspace
             return _referencedUsingNamespaces = all.ToList();
         }
 
-        /// <summary>The third-party element types available for completion — public classes assignable to Microsoft.UI.Xaml.DependencyObject from REFERENCED assemblies (NuGet packages</summary>
+        /// <summary>The app's source-defined element types available for unprefixed completion.</summary>
+        public IReadOnlyList<INamedTypeSymbol> GetSourceElementTypes()
+        {
+            if (_sourceElementTypes is not null)
+            {
+                return _sourceElementTypes;
+            }
+
+            var dependencyObject = _compilation.GetTypeByMetadataName("Microsoft.UI.Xaml.DependencyObject");
+            if (dependencyObject is null)
+            {
+                return _sourceElementTypes = System.Array.Empty<INamedTypeSymbol>();
+            }
+
+            var result = new List<INamedTypeSymbol>();
+            CollectElementTypes(
+                _compilation.Assembly.GlobalNamespace,
+                dependencyObject,
+                allowInternal: true,
+                result);
+            return _sourceElementTypes = result;
+        }
+
+        /// <summary>The referenced element types available for completion — public concrete classes assignable to Microsoft.UI.Xaml.DependencyObject.</summary>
         public IReadOnlyList<INamedTypeSymbol> GetReferencedElementTypes()
         {
             if (_referencedElementTypes is not null)
@@ -330,28 +354,46 @@ namespace WinUiXaml.Workspace
             }
 
             var result = new List<INamedTypeSymbol>();
-            var seen = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-            foreach (var namespaceName in GetReferencedUsingNamespaces())
+            foreach (var assembly in _assemblies)
             {
-                var ns = ResolveNamespace(_compilation.GlobalNamespace, namespaceName);
-                if (ns is null)
+                if (SymbolEqualityComparer.Default.Equals(assembly, _compilation.Assembly))
                 {
                     continue;
                 }
 
-                foreach (var type in ns.GetTypeMembers())
-                {
-                    if (IsPublicClass(type) &&
-                        !SymbolEqualityComparer.Default.Equals(type.ContainingAssembly, _compilation.Assembly) &&
-                        IsAssignableTo(type, dependencyObject) &&
-                        seen.Add(type))
-                    {
-                        result.Add(type);
-                    }
-                }
+                CollectElementTypes(
+                    assembly.GlobalNamespace,
+                    dependencyObject,
+                    allowInternal: false,
+                    result);
             }
 
             return _referencedElementTypes = result;
+        }
+
+        private static void CollectElementTypes(
+            INamespaceSymbol root,
+            INamedTypeSymbol dependencyObject,
+            bool allowInternal,
+            List<INamedTypeSymbol> result)
+        {
+            foreach (var type in root.GetTypeMembers())
+            {
+                if (IsAccessibleTopLevelType(type, allowInternal) &&
+                    type.TypeKind == TypeKind.Class &&
+                    !type.IsStatic &&
+                    !type.IsAbstract &&
+                    type.Arity == 0 &&
+                    IsAssignableTo(type, dependencyObject))
+                {
+                    result.Add(type);
+                }
+            }
+
+            foreach (var child in root.GetNamespaceMembers())
+            {
+                CollectElementTypes(child, dependencyObject, allowInternal, result);
+            }
         }
 
         /// <summary>Finds public, concrete WinUI element types with the given simple name in the project and its references.</summary>
@@ -557,6 +599,25 @@ namespace WinUiXaml.Workspace
                 {
                     resources.Add(key, new ThemeResourceInfo(key, reader.NamespaceURI, reader.LocalName));
                 }
+            }
+
+            // These platform-provided Color resources are consumed by WinUI's generic.xaml but
+            // are not declared in it, so supplement the package catalog with the Windows SDK set.
+            foreach (var key in resources.Count == 0
+                         ? System.Array.Empty<string>()
+                         : new[]
+                           {
+                               "SystemColorButtonFaceColor",
+                               "SystemColorButtonTextColor",
+                               "SystemColorGrayTextColor",
+                               "SystemColorHighlightColor",
+                               "SystemColorHighlightTextColor",
+                               "SystemColorHotlightColor",
+                               "SystemColorWindowColor",
+                               "SystemColorWindowTextColor",
+                           })
+            {
+                resources.TryAdd(key, new ThemeResourceInfo(key, PresentationNamespace, "Color"));
             }
 
             return resources.Values.OrderBy(resource => resource.Key, StringComparer.Ordinal).ToList();

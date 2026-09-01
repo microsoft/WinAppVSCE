@@ -67,7 +67,7 @@ public class XamlCodeActionsTests
     public void UnknownType_PairedElement_UpdatesBothTagsAtomically()
     {
         var xaml = "<Page><Buton></Buton></Page>";
-        var doc = new TextDocument(Uri, xaml);
+        var doc = new TextDocument(Uri, xaml, version: 4);
         int openAt = xaml.IndexOf("Buton", System.StringComparison.Ordinal);
         int closeAt = xaml.LastIndexOf("Buton", System.StringComparison.Ordinal);
         var diagnostic = Diag(
@@ -268,21 +268,72 @@ public class XamlCodeActionsTests
     }
 
     [Fact]
-    public void DataTypeDiagnostic_AmbiguousTypes_ProducesNoAction()
+    public void DataTypeDiagnostic_AmbiguousTypes_OffersPromptedAction()
     {
         var xaml =
             "<DataTemplate xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
             "xmlns:models=\"using:Sample.Models\"><TextBlock Text=\"{x:Bind Name}\" /></DataTemplate>";
-        var doc = new TextDocument(Uri, xaml);
+        var doc = new TextDocument(Uri, xaml, version: 4);
         int bindAt = xaml.IndexOf("x:Bind", System.StringComparison.Ordinal);
         var diagnostic = Diag(
             XamlValidator.DataTemplateDataTypeRequiredCode,
             R(0, bindAt, bindAt + "x:Bind".Length),
             Data("using:Sample.Models", "models:Person", "models:Account"));
 
-        Assert.DoesNotContain(
+        var action = Assert.Single(
             XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
             item => item.Kind == "quickfix");
+        Assert.Equal("Set x:DataType...", action.Title);
+        Assert.Equal(XamlCodeActions.PromptTextEditCommand, action.Command!.Name);
+        Assert.Null(action.Edit);
+        var arguments = PromptArguments(action);
+        Assert.Equal(Uri, arguments.DocumentUri);
+        var range = arguments.Range;
+        Assert.Equal(xaml.IndexOf('>', xaml.IndexOf("<DataTemplate", System.StringComparison.Ordinal)),
+            doc.OffsetAt(range.Start));
+        Assert.Equal(range.Start, range.End);
+        Assert.Equal("Enter the XAML type for this template", arguments.Prompt);
+        Assert.Equal("models:Item", arguments.PlaceHolder);
+        Assert.Equal(string.Empty, arguments.InitialValue);
+        Assert.Equal(" x:DataType=\"", arguments.Prefix);
+        Assert.Equal("\"", arguments.Suffix);
+        Assert.Equal(4, arguments.ExpectedVersion);
+        Assert.Equal(string.Empty, arguments.ExpectedText);
+        Assert.Equal(new[] { "models:Person", "models:Account" }, arguments.Choices);
+        Assert.Equal("Enter another type...", arguments.CustomChoiceLabel);
+        Assert.Equal(@"(?:[\p{L}_][\p{L}\p{N}_.-]*:)?[\p{L}_][\p{L}\p{N}_]*", arguments.ValidationPattern);
+        Assert.Equal("Enter a XAML type name such as models:Item.", arguments.ValidationMessage);
+        using var payload = JsonDocument.Parse(JsonSerializer.Serialize(action.Command, LspJson.Options));
+        var request = Assert.Single(payload.RootElement.GetProperty("arguments").EnumerateArray());
+        Assert.Equal(Uri, request.GetProperty("documentUri").GetString());
+        Assert.Equal("models:Item", request.GetProperty("placeHolder").GetString());
+        Assert.Equal(13, request.EnumerateObject().Count());
+    }
+
+    [Fact]
+    public void DataTypeDiagnostic_AmbiguousTypes_ReplacesExistingEmptyValue()
+    {
+        var xaml =
+            "<DataTemplate xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:models=\"using:Sample.Models\" x:DataType=\"\">" +
+            "<TextBlock Text=\"{x:Bind Name}\" /></DataTemplate>";
+        var doc = new TextDocument(Uri, xaml, version: 6);
+        int bindAt = xaml.IndexOf("x:Bind", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.DataTemplateDataTypeRequiredCode,
+            R(0, bindAt, bindAt + "x:Bind".Length),
+            Data("using:Sample.Models", "models:Person", "models:Account"));
+
+        var arguments = PromptArguments(Assert.Single(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix"));
+
+        Assert.Equal(string.Empty, arguments.Prefix);
+        Assert.Equal(string.Empty, arguments.Suffix);
+        Assert.Equal(string.Empty, arguments.ExpectedText);
+        Assert.Equal(
+            xaml.IndexOf("x:DataType=\"", System.StringComparison.Ordinal) + "x:DataType=\"".Length,
+            doc.OffsetAt(arguments.Range.Start));
     }
 
     [Fact]
@@ -423,7 +474,7 @@ public class XamlCodeActionsTests
         // Root already declares the default xmlns -> the new declaration groups right after it (just
         // before the root's '>'), as a single zero-width insertion.
         var xaml = $"<Page xmlns=\"P\"><{prefix}:Foo /></Page>";
-        var doc = new TextDocument(Uri, xaml);
+        var doc = new TextDocument(Uri, xaml, version: 5);
         int prefixAt = xaml.IndexOf($"<{prefix}:") + 1;
         var ctx = Context(Diag(
             XamlValidator.UndeclaredPrefixCode,
@@ -458,15 +509,36 @@ public class XamlCodeActionsTests
     }
 
     [Fact]
-    public void UndeclaredCustomPrefix_ProducesNoAction()
+    public void UndeclaredCustomPrefix_OffersPromptedAction()
     {
-        // A custom prefix (local) has no unambiguous namespace to add -> no fix, no guess.
+        // A custom prefix has no namespace to infer, so ask instead of guessing.
         var xaml = "<Page xmlns=\"P\"><local:Foo /></Page>";
-        var doc = new TextDocument(Uri, xaml);
+        var doc = new TextDocument(Uri, xaml, version: 5);
         int prefixAt = xaml.IndexOf("<local:") + 1;
         var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 5), data: null));
 
-        Assert.Empty(XamlCodeActions.Compute(Uri, doc, ctx));
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx));
+        Assert.Equal("Add xmlns:local...", action.Title);
+        Assert.Equal(XamlCodeActions.PromptTextEditCommand, action.Command!.Name);
+        var arguments = PromptArguments(action);
+        var range = arguments.Range;
+        Assert.Equal(xaml.IndexOf('>'), doc.OffsetAt(range.Start));
+        Assert.Equal(range.Start, range.End);
+        Assert.Equal("Enter the namespace URI for 'local'", arguments.Prompt);
+        Assert.Equal("using:MyApp.Controls", arguments.PlaceHolder);
+        Assert.Equal(string.Empty, arguments.InitialValue);
+        Assert.Equal(" xmlns:local=\"", arguments.Prefix);
+        Assert.Equal("\"", arguments.Suffix);
+        Assert.Equal(5, arguments.ExpectedVersion);
+        Assert.Equal(string.Empty, arguments.ExpectedText);
+        Assert.Empty(arguments.Choices);
+        Assert.Equal("Enter another namespace URI...", arguments.CustomChoiceLabel);
+        Assert.Equal(
+            @"(?:using:[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)*|https?://[^\s""'&<>]+)",
+            arguments.ValidationPattern);
+        Assert.Equal(
+            "Enter a using: namespace or an http(s) namespace URI without whitespace or XML metacharacters.",
+            arguments.ValidationMessage);
     }
 
     [Fact]
@@ -532,6 +604,49 @@ public class XamlCodeActionsTests
         return BuildTypeSystem(source);
     }
 
+    private static XamlTypeSystem BuildNameTypeSystem() =>
+        BuildTypeSystem("""
+            namespace Microsoft.UI.Xaml
+            {
+                public class FrameworkElement
+                {
+                    public string Name { get; set; } = "";
+                    public object? Tag { get; set; }
+                }
+                public class FrameworkTemplate { }
+                public class ControlTemplate : FrameworkTemplate { }
+                public class Page : FrameworkElement { }
+                public class Button : FrameworkElement { }
+            }
+            namespace Microsoft.UI.Xaml.Markup
+            {
+                public abstract class MarkupExtension { }
+            }
+            namespace Microsoft.UI.Xaml.Data
+            {
+                public class Binding : Microsoft.UI.Xaml.Markup.MarkupExtension { }
+            }
+            """);
+
+    private static XamlTypeSystem BuildScalarContentTypeSystem() =>
+        BuildTypeSystem("""
+            namespace Microsoft.UI.Xaml.Markup
+            {
+                [System.AttributeUsage(System.AttributeTargets.Class)]
+                public sealed class ContentPropertyAttribute : System.Attribute
+                {
+                    public ContentPropertyAttribute(string name) { }
+                }
+            }
+            namespace Microsoft.UI.Xaml
+            {
+                [Microsoft.UI.Xaml.Markup.ContentProperty("Child")]
+                public class Border { public object Child { get; set; } = new object(); }
+                public class TextBlock { }
+                public class Button { }
+            }
+            """);
+
     private static XamlTypeSystem BuildReferencedWinUiTypeSystem(string controls)
     {
         var frameworkReference = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
@@ -584,7 +699,7 @@ public class XamlCodeActionsTests
     }
 
     [Fact]
-    public void UndeclaredCustomPrefix_AmbiguousDiagnosticSuggestions_ProducesNoAction()
+    public void UndeclaredCustomPrefix_AmbiguousDiagnosticSuggestions_OffersPromptedAction()
     {
         // The same simple name is declared in two namespaces -> offer both, neither preferred (ambiguous).
         var ts = BuildTypeSystem(
@@ -597,35 +712,41 @@ public class XamlCodeActionsTests
             R(0, prefixAt, prefixAt + 5),
             Data("local", "using:Alpha", "using:Beta")));
 
-        var actions = XamlCodeActions.Compute(Uri, doc, ctx, ts);
-        Assert.Empty(actions);
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx, ts));
+        Assert.Equal(XamlCodeActions.PromptTextEditCommand, action.Command!.Name);
+        var arguments = PromptArguments(action);
+        Assert.Equal(
+            new[] { "using:Alpha", "using:Beta" },
+            arguments.Choices);
+        Assert.Equal("Enter another namespace URI...", arguments.CustomChoiceLabel);
     }
 
     [Fact]
-    public void UndeclaredCustomPrefix_WithTypeSystem_UnknownType_ProducesNoAction()
+    public void UndeclaredCustomPrefix_WithTypeSystem_UnknownType_OffersPromptedAction()
     {
-        // The prefixed element names no source type -> nothing to infer, no action (never guesses a namespace).
+        // The prefixed element names no source type -> prompt for the namespace (never guess one).
         var ts = BuildTypeSystem("namespace SampleApp { public class MyPanel { } }");
         var xaml = "<Page xmlns=\"P\"><local:Nope /></Page>";
         var doc = new TextDocument(Uri, xaml);
         int prefixAt = xaml.IndexOf("<local:") + 1;
         var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 5), data: null));
 
-        Assert.Empty(XamlCodeActions.Compute(Uri, doc, ctx, ts));
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx, ts));
+        Assert.Equal(XamlCodeActions.PromptTextEditCommand, action.Command!.Name);
     }
 
     [Fact]
-    public void UndeclaredCustomPrefix_OnAttribute_WithTypeSystem_ProducesNoAction()
+    public void UndeclaredCustomPrefix_OnAttribute_WithTypeSystem_OffersPromptedAction()
     {
-        // A custom prefix on an ATTRIBUTE names a member, not a type -> no using: inference even when a
-        // source type of that name exists (the fix is offered only for element/type usages).
+        // A custom prefix on an attribute cannot be inferred from a type name, so prompt for the URI.
         var ts = BuildTypeSystem("namespace SampleApp { public class Tag { } }");
         var xaml = "<Page xmlns=\"P\" local:Tag=\"x\"></Page>";
         var doc = new TextDocument(Uri, xaml);
         int prefixAt = xaml.IndexOf("local:");
         var ctx = Context(Diag(XamlValidator.UndeclaredPrefixCode, R(0, prefixAt, prefixAt + 5), data: null));
 
-        Assert.Empty(XamlCodeActions.Compute(Uri, doc, ctx, ts));
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, ctx, ts));
+        Assert.Equal(XamlCodeActions.PromptTextEditCommand, action.Command!.Name);
     }
 
     [Fact]
@@ -889,5 +1010,696 @@ public class XamlCodeActionsTests
 
         Assert.True(import.IsPreferred);
         Assert.NotEqual(true, spelling.IsPreferred);
+    }
+
+    [Theory]
+    [InlineData(XamlValidator.UnknownBindMemberCode, "Replace x:Bind member...")]
+    [InlineData(XamlValidator.InvalidSetterPropertyCode, "Replace Setter property...")]
+    public void UnknownMemberWithoutSuggestion_OffersPromptedReplacement(string code, string title)
+    {
+        var doc = new TextDocument(Uri, "NoSuchMember", version: 7);
+        var diagnostic = Diag(code, R(0, 0, 12), Data("NoSuchMember"));
+
+        var action = Assert.Single(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix");
+
+        Assert.Equal(title, action.Title);
+        Assert.Equal(XamlCodeActions.PromptTextEditCommand, action.Command!.Name);
+        Assert.Null(action.Edit);
+        var arguments = PromptArguments(action);
+        Assert.Equal(Uri, arguments.DocumentUri);
+        Assert.Equal(R(0, 0, 12), arguments.Range);
+        Assert.Equal(
+            code == XamlValidator.InvalidSetterPropertyCode
+                ? "Enter a property on the style target type"
+                : "Enter a bindable member name",
+            arguments.Prompt);
+        Assert.Equal("NoSuchMember", arguments.PlaceHolder);
+        Assert.Equal("NoSuchMember", arguments.InitialValue);
+        Assert.Equal(string.Empty, arguments.Prefix);
+        Assert.Equal(string.Empty, arguments.Suffix);
+        Assert.Equal(7, arguments.ExpectedVersion);
+        Assert.Equal("NoSuchMember", arguments.ExpectedText);
+        Assert.Empty(arguments.Choices);
+        Assert.Equal("Enter another value...", arguments.CustomChoiceLabel);
+        Assert.Equal(
+            code == XamlValidator.InvalidSetterPropertyCode
+                ? @"(?:(?:[\p{L}_][\p{L}\p{N}_.-]*:)?[\p{L}_][\p{L}\p{N}_]*\.)?[\p{L}_][\p{L}\p{N}_]*"
+                : @"[\p{L}_][\p{L}\p{N}_]*",
+            arguments.ValidationPattern);
+        Assert.Equal(
+            code == XamlValidator.InvalidSetterPropertyCode
+                ? "Enter a property name such as Width or Grid.Row."
+                : "Enter a valid XAML identifier.",
+            arguments.ValidationMessage);
+    }
+
+    [Fact]
+    public void DataTypeDiagnostic_AlternateXamlPrefix_UsesMappedDirectiveName()
+    {
+        var xaml =
+            "<DataTemplate xmlns:q=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:models=\"using:Sample.Models\"><TextBlock Text=\"{q:Bind Name}\" /></DataTemplate>";
+        var doc = new TextDocument(Uri, xaml);
+        int bindAt = xaml.IndexOf("q:Bind", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.DataTemplateDataTypeRequiredCode,
+            R(0, bindAt, bindAt + "q:Bind".Length),
+            Data("using:Sample.Models", "models:Person"));
+
+        var action = Assert.Single(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix");
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+
+        Assert.Equal("Set q:DataType to 'models:Person'", action.Title);
+        Assert.Equal(" q:DataType=\"models:Person\"", edit.NewText);
+    }
+
+    [Fact]
+    public void DataTypeDiagnostic_AmbiguousTypesWithAlternatePrefix_UsesMappedDirectiveName()
+    {
+        var xaml =
+            "<DataTemplate xmlns:q=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:models=\"using:Sample.Models\"><TextBlock Text=\"{q:Bind Name}\" /></DataTemplate>";
+        var doc = new TextDocument(Uri, xaml, version: 8);
+        int bindAt = xaml.IndexOf("q:Bind", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.DataTemplateDataTypeRequiredCode,
+            R(0, bindAt, bindAt + "q:Bind".Length),
+            Data("using:Sample.Models", "models:Person", "models:Account"));
+
+        var action = Assert.Single(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix");
+        var arguments = PromptArguments(action);
+
+        Assert.Equal("Set q:DataType...", action.Title);
+        Assert.Equal(" q:DataType=\"", arguments.Prefix);
+        Assert.Equal("\"", arguments.Suffix);
+        Assert.Equal(new[] { "models:Person", "models:Account" }, arguments.Choices);
+        Assert.Equal(8, arguments.ExpectedVersion);
+    }
+
+    [Fact]
+    public void DuplicateName_RenamesLaterDeclarationUniquely()
+    {
+        var typeSystem = BuildNameTypeSystem();
+        var xaml = "<Page xmlns=\"using:Microsoft.UI.Xaml\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"><Button x:Name=\"Same\"/><Button x:Name=\"Same\"/></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int valueAt = xaml.LastIndexOf("Same", System.StringComparison.Ordinal);
+        var diagnostic = Diag(XamlValidator.DuplicateNameCode, R(0, valueAt, valueAt + 4), null);
+
+        var edit = Assert.Single(GuardedEdits(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem)),
+            doc));
+
+        Assert.Equal("Same2", edit.NewText);
+        Assert.Equal(valueAt, doc.OffsetAt(edit.Range.Start));
+        Assert.Equal(
+            "<Page xmlns=\"using:Microsoft.UI.Xaml\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"><Button x:Name=\"Same\"/><Button x:Name=\"Same2\"/></Page>",
+            ApplyEdit(doc, edit));
+    }
+
+    [Fact]
+    public void DuplicateName_UsesMappedDirectivePrefixAndApplicableNameScope()
+    {
+        var typeSystem = BuildTypeSystem("""
+            namespace Microsoft.UI.Xaml
+            {
+                public class FrameworkElement { public string Name { get; set; } = ""; }
+                public class FrameworkTemplate { }
+                public class ControlTemplate : FrameworkTemplate { }
+                public class Page : FrameworkElement { }
+                public class Button : FrameworkElement { }
+            }
+            """);
+        var xaml =
+            "<Page xmlns=\"using:Microsoft.UI.Xaml\" xmlns:q=\"http://schemas.microsoft.com/winfx/2006/xaml\">" +
+            "<Button q:Name=\"Same\"/><Button q:Name=\"Same2\"/>" +
+            "<ControlTemplate><Button q:Name=\"Same\"/><Button q:Name=\"Same\"/></ControlTemplate></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int valueAt = xaml.LastIndexOf("Same", System.StringComparison.Ordinal);
+        var diagnostic = Diag(XamlValidator.DuplicateNameCode, R(0, valueAt, valueAt + 4), null);
+
+        var edit = Assert.Single(GuardedEdits(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem)),
+            doc));
+
+        Assert.Equal("Same2", edit.NewText);
+    }
+
+    [Fact]
+    public void InvalidName_SanitizesDeclaration()
+    {
+        var typeSystem = BuildNameTypeSystem();
+        var xaml = "<Page xmlns=\"using:Microsoft.UI.Xaml\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"2 bad-name\"/>";
+        var doc = new TextDocument(Uri, xaml);
+        int valueAt = xaml.IndexOf("2 bad-name", System.StringComparison.Ordinal);
+        var diagnostic = Diag(XamlValidator.InvalidNameCode, R(0, valueAt, valueAt + 10), null);
+
+        var edit = Assert.Single(GuardedEdits(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem)),
+            doc));
+
+        Assert.Equal("_2_bad_name", edit.NewText);
+        Assert.Equal(
+            "<Page xmlns=\"using:Microsoft.UI.Xaml\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"_2_bad_name\"/>",
+            ApplyEdit(doc, edit));
+    }
+
+    [Fact]
+    public void InvalidName_RenamesReferencesInTheSameNamescope()
+    {
+        var typeSystem = BuildNameTypeSystem();
+        var xaml =
+            "<Page xmlns=\"using:Microsoft.UI.Xaml\" " +
+            "xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:data=\"using:Microsoft.UI.Xaml.Data\">" +
+            "<Button x:Name=\"bad-name\"/><Button Tag=\"{data:Binding ElementName=bad-name}\"/></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int declarationAt = xaml.IndexOf("bad-name", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.InvalidNameCode,
+            R(0, declarationAt, declarationAt + "bad-name".Length),
+            null);
+
+        var edits = Assert.Single(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem))
+                .Edit!.Changes);
+
+        Assert.Equal(2, edits.Value.Count);
+        Assert.All(edits.Value, edit => Assert.Equal("bad_name", edit.NewText));
+    }
+
+    [Fact]
+    public void InvalidName_RenamesOnlyReferencesInTheOwningNestedNamescope()
+    {
+        var typeSystem = BuildNameTypeSystem();
+        var xaml =
+            "<Page xmlns=\"using:Microsoft.UI.Xaml\" " +
+            "xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:data=\"using:Microsoft.UI.Xaml.Data\">" +
+            "<Button x:Name=\"bad-name\"/><Button Tag=\"{data:Binding ElementName=bad-name}\"/>" +
+            "<ControlTemplate><Button x:Name=\"bad-name\"/>" +
+            "<Button Tag=\"{data:Binding ElementName=bad-name}\"/></ControlTemplate></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int innerDeclarationAt = xaml.LastIndexOf(
+            "x:Name=\"bad-name\"",
+            System.StringComparison.Ordinal) + "x:Name=\"".Length;
+        int innerReferenceAt = xaml.LastIndexOf(
+            "ElementName=bad-name",
+            System.StringComparison.Ordinal) + "ElementName=".Length;
+        int outerDeclarationAt = xaml.IndexOf(
+            "x:Name=\"bad-name\"",
+            System.StringComparison.Ordinal) + "x:Name=\"".Length;
+        int outerReferenceAt = xaml.IndexOf(
+            "ElementName=bad-name",
+            System.StringComparison.Ordinal) + "ElementName=".Length;
+        var diagnostic = Diag(
+            XamlValidator.InvalidNameCode,
+            R(0, innerDeclarationAt, innerDeclarationAt + "bad-name".Length),
+            null);
+
+        var edits = GuardedEdits(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem)),
+            doc);
+
+        Assert.Equal(
+            new[] { innerDeclarationAt, innerReferenceAt },
+            edits.Select(edit => doc.OffsetAt(edit.Range.Start)).OrderBy(offset => offset));
+        Assert.DoesNotContain(edits, edit =>
+            doc.OffsetAt(edit.Range.Start) is var offset &&
+            (offset == outerDeclarationAt || offset == outerReferenceAt));
+        Assert.All(edits, edit => Assert.Equal("bad_name", edit.NewText));
+    }
+
+    [Fact]
+    public void InvalidDuplicateNames_RepairsOnlyTheTargetDeclaration()
+    {
+        var typeSystem = BuildNameTypeSystem();
+        var xaml =
+            "<Page xmlns=\"using:Microsoft.UI.Xaml\" " +
+            "xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">" +
+            "<Button x:Name=\"bad-name\"/><Button x:Name=\"bad-name\"/></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int targetAt = xaml.LastIndexOf("bad-name", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.InvalidNameCode,
+            R(0, targetAt, targetAt + "bad-name".Length),
+            null);
+
+        var edits = GuardedEdits(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem)),
+            doc);
+
+        var edit = Assert.Single(edits);
+        Assert.Equal(targetAt, doc.OffsetAt(edit.Range.Start));
+        Assert.Equal("bad_name", edit.NewText);
+    }
+
+    [Fact]
+    public void InvalidName_SanitizesUnicodeUsingRenameGrammar()
+    {
+        var typeSystem = BuildNameTypeSystem();
+        var xaml = "<Page xmlns=\"using:Microsoft.UI.Xaml\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"Náme\"/>";
+        var doc = new TextDocument(Uri, xaml);
+        int valueAt = xaml.IndexOf("Náme", System.StringComparison.Ordinal);
+        var diagnostic = Diag(XamlValidator.InvalidNameCode, R(0, valueAt, valueAt + 4), null);
+
+        var edit = Assert.Single(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem))
+                .Edit!.Changes[Uri]);
+
+        Assert.Equal("N_me", edit.NewText);
+        Assert.True(XamlRename.IsValidName(edit.NewText));
+    }
+
+    [Fact]
+    public void DuplicateAttribute_RemovesLaterAttribute()
+    {
+        var xaml = "<Page Width=\"1\" Width=\"2\"/>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.LastIndexOf("Width", System.StringComparison.Ordinal);
+        var diagnostic = Diag(XamlValidator.DuplicateAttributeCode, R(0, nameAt, nameAt + 5), null);
+
+        var edit = Assert.Single(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic))).Edit!.Changes[Uri]);
+
+        Assert.Equal(string.Empty, edit.NewText);
+        Assert.Equal(" Width=\"2\"", RangeText(doc, edit.Range));
+        Assert.Equal("<Page Width=\"1\"/>", ApplyEdit(doc, edit));
+    }
+
+    [Fact]
+    public void MechanicalFix_SerializesOnlyGuardedCommandWithVersionAndExpectedText()
+    {
+        var xaml = "<Page Width=\"1\" Width=\"2\"/>";
+        var doc = new TextDocument(Uri, xaml, version: 12);
+        int secondAt = xaml.LastIndexOf("Width", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.DuplicateAttributeCode,
+            R(0, secondAt, secondAt + "Width".Length),
+            null);
+        var action = Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic)));
+
+        using var payload = JsonDocument.Parse(JsonSerializer.Serialize(action, LspJson.Options));
+        Assert.False(payload.RootElement.TryGetProperty("edit", out _));
+        Assert.Equal(
+            XamlCodeActions.ApplyGuardedTextEditsCommand,
+            payload.RootElement.GetProperty("command").GetProperty("command").GetString());
+        var arguments = Assert.Single(
+            payload.RootElement.GetProperty("command").GetProperty("arguments").EnumerateArray());
+        Assert.Equal(Uri, arguments.GetProperty("documentUri").GetString());
+        Assert.Equal(12, arguments.GetProperty("expectedVersion").GetInt32());
+        var edit = Assert.Single(arguments.GetProperty("edits").EnumerateArray());
+        Assert.Equal(" Width=\"2\"", edit.GetProperty("expectedText").GetString());
+        Assert.Equal(string.Empty, edit.GetProperty("newText").GetString());
+    }
+
+    [Fact]
+    public void DuplicateAttribute_EquivalentExpandedNames_RemovesLaterAttribute()
+    {
+        var xaml =
+            "<Page xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:y=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"First\" y:Name=\"Second\"/>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("y:Name", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.DuplicateAttributeCode,
+            R(0, nameAt, nameAt + "y:Name".Length),
+            null);
+
+        var edit = Assert.Single(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic)))
+                .Edit!.Changes[Uri]);
+
+        Assert.Equal(" y:Name=\"Second\"", RangeText(doc, edit.Range));
+        Assert.Equal(
+            "<Page xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:y=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"First\"/>",
+            ApplyEdit(doc, edit));
+    }
+
+    [Fact]
+    public void MultipleScalarChildren_RemovesExtraChild()
+    {
+        var typeSystem = BuildScalarContentTypeSystem();
+        var xaml = "<Border xmlns=\"using:Microsoft.UI.Xaml\"><TextBlock/><Button/></Border>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("Button", System.StringComparison.Ordinal);
+        var diagnostic = Diag(XamlValidator.MultipleScalarChildrenCode, R(0, nameAt, nameAt + 6), null);
+
+        var action = Assert.Single(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem),
+            item => item.Kind == "quickfix");
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+
+        Assert.Equal("Remove extra 'Button'", action.Title);
+        Assert.Equal("<Button/>", RangeText(doc, edit.Range));
+        Assert.Equal(
+            "<Border xmlns=\"using:Microsoft.UI.Xaml\"><TextBlock/></Border>",
+            ApplyEdit(doc, edit));
+    }
+
+    [Fact]
+    public void MultipleScalarChildren_InPropertyElement_RemovesExtraChild()
+    {
+        var typeSystem = BuildScalarContentTypeSystem();
+        var xaml =
+            "<Border xmlns=\"using:Microsoft.UI.Xaml\"><Border.Child>" +
+            "<TextBlock/><Button/></Border.Child></Border>";
+        var doc = new TextDocument(Uri, xaml);
+        int nameAt = xaml.IndexOf("Button", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.MultipleScalarChildrenCode,
+            R(0, nameAt, nameAt + "Button".Length),
+            null);
+
+        var edit = Assert.Single(GuardedEdits(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem)),
+            doc));
+
+        Assert.Equal("<Button/>", RangeText(doc, edit.Range));
+        Assert.Equal(
+            "<Border xmlns=\"using:Microsoft.UI.Xaml\"><Border.Child>" +
+            "<TextBlock/></Border.Child></Border>",
+            ApplyEdit(doc, edit));
+    }
+
+    [Fact]
+    public void InvalidNumericLiteral_ReplacesWithZero()
+    {
+        var typeSystem = BuildWinUiTypeSystem("""
+            namespace TestApp
+            {
+                public class Page : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public double Width { get; set; }
+                }
+            }
+            """);
+        var xaml = "<Page xmlns=\"using:TestApp\" Width=\"NaNn\"/>";
+        var doc = new TextDocument(Uri, xaml);
+        int valueAt = xaml.IndexOf("NaNn", System.StringComparison.Ordinal);
+        var diagnostic = Diag(XamlValidator.InvalidAttributeValueCode, R(0, valueAt, valueAt + 4), null);
+
+        var edit = Assert.Single(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem))
+                .Edit!.Changes[Uri]);
+
+        Assert.Equal("0", edit.NewText);
+        Assert.Equal("<Page xmlns=\"using:TestApp\" Width=\"0\"/>", ApplyEdit(doc, edit));
+    }
+
+    [Fact]
+    public void InvalidBooleanLiteral_ReplacesWithFalse()
+    {
+        var typeSystem = BuildWinUiTypeSystem("""
+            namespace TestApp
+            {
+                public class Page : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public bool IsEnabled { get; set; }
+                }
+            }
+            """);
+        var xaml = "<Page xmlns=\"using:TestApp\" IsEnabled=\"maybe\"/>";
+        var doc = new TextDocument(Uri, xaml);
+        int valueAt = xaml.IndexOf("maybe", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.InvalidAttributeValueCode,
+            R(0, valueAt, valueAt + "maybe".Length),
+            null);
+
+        var edit = Assert.Single(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem))
+                .Edit!.Changes[Uri]);
+
+        Assert.Equal("False", edit.NewText);
+        Assert.Equal(valueAt, doc.OffsetAt(edit.Range.Start));
+        Assert.Equal("<Page xmlns=\"using:TestApp\" IsEnabled=\"False\"/>", ApplyEdit(doc, edit));
+    }
+
+    [Theory]
+    [InlineData("byte", "0")]
+    [InlineData("sbyte", "0")]
+    [InlineData("short", "0")]
+    [InlineData("ushort", "0")]
+    [InlineData("int", "0")]
+    [InlineData("uint", "0")]
+    [InlineData("long", "0")]
+    [InlineData("ulong", "0")]
+    [InlineData("float", "0")]
+    [InlineData("double?", "0")]
+    [InlineData("decimal?", "0")]
+    [InlineData("bool?", "False")]
+    public void InvalidPrimitiveLiteral_UsesTypeDefault(string propertyType, string expected)
+    {
+        var typeSystem = BuildWinUiTypeSystem($$"""
+            namespace TestApp
+            {
+                public class Page : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public {{propertyType}} Value { get; set; }
+                }
+            }
+            """);
+        var xaml = "<Page xmlns=\"using:TestApp\" Value=\"invalid\"/>";
+        var doc = new TextDocument(Uri, xaml);
+        int valueAt = xaml.IndexOf("invalid", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.InvalidAttributeValueCode,
+            R(0, valueAt, valueAt + "invalid".Length),
+            null);
+
+        var edit = Assert.Single(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem))
+                .Edit!.Changes[Uri]);
+
+        Assert.Equal(expected, edit.NewText);
+    }
+
+    [Fact]
+    public void InvalidNonPrimitiveLiteral_HasNoMechanicalDefault()
+    {
+        var typeSystem = BuildWinUiTypeSystem("""
+            namespace TestApp
+            {
+                public class Page : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public System.DateTime Value { get; set; }
+                }
+            }
+            """);
+        var xaml = "<Page xmlns=\"using:TestApp\" Value=\"invalid\"/>";
+        var doc = new TextDocument(Uri, xaml);
+        int valueAt = xaml.IndexOf("invalid", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.InvalidAttributeValueCode,
+            R(0, valueAt, valueAt + "invalid".Length),
+            null);
+
+        Assert.Empty(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem));
+    }
+
+    [Fact]
+    public void AmbiguousNamespaceSuggestions_AreNotPreferred()
+    {
+        var xaml = "<Page xmlns:local=\"using:Sample.Modles\"/>";
+        var doc = new TextDocument(Uri, xaml);
+        int valueAt = xaml.IndexOf("using:", System.StringComparison.Ordinal);
+        var diagnostic = Diag(
+            XamlValidator.UnknownNamespaceDeclarationCode,
+            R(0, valueAt, valueAt + "using:Sample.Modles".Length),
+            Data("using:Sample.Modles", "using:Sample.Models", "using:Sample.Modules"));
+
+        var actions = XamlCodeActions.Compute(Uri, doc, Context(diagnostic))
+            .Where(action => action.Kind == "quickfix")
+            .ToArray();
+
+        Assert.Equal(2, actions.Length);
+        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
+    }
+
+    [Fact]
+    public void UnknownNamespaceDeclaration_WithCloseKnownNamespace_ReplacesUri()
+    {
+        var xaml = "<Page xmlns:local=\"using:Sample.Open_Source.Models\"/>";
+        var doc = new TextDocument(Uri, xaml);
+        int valueAt = xaml.IndexOf("using:", System.StringComparison.Ordinal);
+        const string replacement = "using:Sample.OpenSource.Models";
+        var diagnostic = Diag(
+            XamlValidator.UnknownNamespaceDeclarationCode,
+            R(0, valueAt, valueAt + "using:Sample.Open_Source.Models".Length),
+            Data("using:Sample.Open_Source.Models", replacement));
+
+        var action = Assert.Single(
+            XamlCodeActions.Compute(Uri, doc, Context(diagnostic)),
+            item => item.Kind == "quickfix");
+        var edit = Assert.Single(action.Edit!.Changes[Uri]);
+
+        Assert.Equal(replacement, edit.NewText);
+        Assert.True(action.IsPreferred);
+        Assert.Equal("<Page xmlns:local=\"using:Sample.OpenSource.Models\"/>", ApplyEdit(doc, edit));
+    }
+
+    [Fact]
+    public void StaleDiagnostics_DoNotOfferMechanicalOrPromptedFixes()
+    {
+        var validName = new TextDocument(
+            Uri,
+            "<Page xmlns=\"using:Microsoft.UI.Xaml\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"Valid\"/>");
+        var nameTypeSystem = BuildNameTypeSystem();
+        int validAt = validName.Text.IndexOf("Valid", System.StringComparison.Ordinal);
+        Assert.Empty(XamlCodeActions.Compute(
+            Uri,
+            validName,
+            Context(Diag(XamlValidator.InvalidNameCode, R(0, validAt, validAt + 5), null)),
+            nameTypeSystem));
+
+        var uniqueName = new TextDocument(
+            Uri,
+            "<Page xmlns=\"using:Microsoft.UI.Xaml\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"><Button x:Name=\"Only\"/></Page>");
+        int uniqueAt = uniqueName.Text.IndexOf("Only", System.StringComparison.Ordinal);
+        Assert.Empty(XamlCodeActions.Compute(
+            Uri,
+            uniqueName,
+            Context(Diag(XamlValidator.DuplicateNameCode, R(0, uniqueAt, uniqueAt + 4), null)),
+            nameTypeSystem));
+
+        var currentMember = new TextDocument(Uri, "CurrentMember");
+        Assert.Empty(XamlCodeActions.Compute(
+            Uri,
+            currentMember,
+            Context(Diag(
+                XamlValidator.UnknownBindMemberCode,
+                R(0, 0, "CurrentMember".Length),
+                Data("OldMember")))));
+
+        var currentNamespace = new TextDocument(
+            Uri,
+            "<Page xmlns:local=\"using:Sample.Current\"/>");
+        int namespaceAt = currentNamespace.Text.IndexOf("using:", System.StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            XamlCodeActions.Compute(
+                Uri,
+                currentNamespace,
+                Context(Diag(
+                    XamlValidator.UnknownNamespaceDeclarationCode,
+                    R(0, namespaceAt, namespaceAt + "using:Sample.Current".Length),
+                    Data("using:Sample.Old", "using:Sample.New")))),
+            action => action.Kind == "quickfix");
+
+        var singleAttribute = new TextDocument(Uri, "<Page Width=\"1\"/>");
+        int widthAt = singleAttribute.Text.IndexOf("Width", System.StringComparison.Ordinal);
+        Assert.Empty(XamlCodeActions.Compute(
+            Uri,
+            singleAttribute,
+            Context(Diag(
+                XamlValidator.DuplicateAttributeCode,
+                R(0, widthAt, widthAt + 5),
+                null))));
+
+        var singleChild = new TextDocument(
+            Uri,
+            "<Border xmlns=\"using:Microsoft.UI.Xaml\"><TextBlock/></Border>");
+        int childAt = singleChild.Text.IndexOf("TextBlock", System.StringComparison.Ordinal);
+        Assert.Empty(XamlCodeActions.Compute(
+            Uri,
+            singleChild,
+            Context(Diag(
+                XamlValidator.MultipleScalarChildrenCode,
+                R(0, childAt, childAt + "TextBlock".Length),
+                null)),
+            BuildScalarContentTypeSystem()));
+
+        var validLiteralTypeSystem = BuildWinUiTypeSystem("""
+            namespace TestApp
+            {
+                public class Page : Microsoft.UI.Xaml.DependencyObject
+                {
+                    public double Width { get; set; }
+                }
+            }
+            """);
+        var validLiteral = new TextDocument(Uri, "<Page xmlns=\"using:TestApp\" Width=\"1\"/>");
+        int literalAt = validLiteral.Text.IndexOf("\"1\"", System.StringComparison.Ordinal) + 1;
+        Assert.Empty(XamlCodeActions.Compute(
+            Uri,
+            validLiteral,
+            Context(Diag(
+                XamlValidator.InvalidAttributeValueCode,
+                R(0, literalAt, literalAt + 1),
+                null)),
+            validLiteralTypeSystem));
+
+        var declaredPrefix = new TextDocument(
+            Uri,
+            "<Page xmlns:local=\"using:Sample.Controls\"><local:Widget/></Page>");
+        int localAt = declaredPrefix.Text.IndexOf("local:Widget", System.StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            XamlCodeActions.Compute(
+                Uri,
+                declaredPrefix,
+                Context(Diag(
+                    XamlValidator.UndeclaredPrefixCode,
+                    R(0, localAt, localAt + "local".Length),
+                    Data("local", "using:Sample.Controls")))),
+            action => action.Kind == "quickfix");
+    }
+
+    [Fact]
+    public void EmptyInvalidName_UsesNamesFromOwningScope()
+    {
+        var typeSystem = BuildNameTypeSystem();
+        var xaml =
+            "<Page xmlns=\"using:Microsoft.UI.Xaml\" " +
+            "xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">" +
+            "<Button x:Name=\"Element\"/><Button x:Name=\"\"/></Page>";
+        var doc = new TextDocument(Uri, xaml);
+        int valueAt = xaml.LastIndexOf("\"\"", System.StringComparison.Ordinal) + 1;
+        var diagnostic = Diag(XamlValidator.InvalidNameCode, R(0, valueAt, valueAt), null);
+
+        var edit = Assert.Single(
+            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem))
+                .Edit!.Changes[Uri]);
+
+        Assert.Equal("Element2", edit.NewText);
+    }
+
+    private static string RangeText(TextDocument document, Range range)
+    {
+        int start = document.OffsetAt(range.Start);
+        int end = document.OffsetAt(range.End);
+        return document.Text.Substring(start, end - start);
+    }
+
+    private static PromptedTextEditCommandArguments PromptArguments(CodeAction action)
+    {
+        var arguments = action.Command!.Arguments!;
+        return Assert.IsType<PromptedTextEditCommandArguments>(Assert.Single(arguments));
+    }
+
+    private static List<TextEdit> GuardedEdits(CodeAction action, TextDocument document)
+    {
+        Assert.Equal(XamlCodeActions.ApplyGuardedTextEditsCommand, action.Command!.Name);
+        var arguments = Assert.IsType<GuardedTextEditCommandArguments>(
+            Assert.Single(action.Command.Arguments!));
+        Assert.Equal(document.Uri, arguments.DocumentUri);
+        Assert.Equal(document.Version, arguments.ExpectedVersion);
+        return arguments.Edits.Select(edit =>
+        {
+            Assert.Equal(RangeText(document, edit.Range), edit.ExpectedText);
+            return new TextEdit { Range = edit.Range, NewText = edit.NewText };
+        }).ToList();
+    }
+
+    private static string ApplyEdit(TextDocument document, TextEdit edit)
+    {
+        int start = document.OffsetAt(edit.Range.Start);
+        int end = document.OffsetAt(edit.Range.End);
+        return document.Text.Substring(0, start) + edit.NewText + document.Text.Substring(end);
     }
 }

@@ -1,4 +1,5 @@
 .vscode/**
+.drive-extensions/**
 .vscode-test/**
 .github/**
 .pipelines/**

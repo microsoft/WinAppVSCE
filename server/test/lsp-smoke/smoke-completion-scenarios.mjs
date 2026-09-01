@@ -1015,6 +1015,26 @@ export async function runCompletionScenarios(ctx) {
   }
   console.log(`[ok] third-party control completion (#4): toolkit controls offered with auto xmlns injection, prefix reuse, partial filter, and DI exclusion (round 84)`);
 
+  // 554-555) App-source controls participate in the same unprefixed completion flow.
+  {
+    const items = await completeItemsWith(554, pageCls("<Grid><|</Grid>"), "source-control-offer");
+    const card = byNewText(items, "smokefixture:InternalCard");
+    if (!card) fail(`typing '<' should offer the app-source InternalCard: ${JSON.stringify(items.map((i) => i.textEdit?.newText).filter(Boolean).slice(-30))}`);
+    if (card.additionalTextEdits?.[0]?.newText !== ' xmlns:smokefixture="using:SmokeFixture"') {
+      fail(`InternalCard should inject its source namespace: ${JSON.stringify(card.additionalTextEdits)}`);
+    }
+  }
+  {
+    const sourcePage = `<Page ${NS} xmlns:local="using:SmokeFixture" x:Class="SmokeFixture.SmokePage">\n  <Grid><|</Grid>\n</Page>`;
+    const items = await completeItemsWith(555, sourcePage, "source-control-reuse");
+    const card = byNewText(items, "local:InternalCard");
+    if (!card) fail(`typing '<' should reuse xmlns:local for InternalCard: ${JSON.stringify(items.map((i) => i.textEdit?.newText).filter(Boolean).slice(-30))}`);
+    if (card.additionalTextEdits && card.additionalTextEdits.length > 0) {
+      fail(`a declared source namespace needs no additional edit: ${JSON.stringify(card.additionalTextEdits)}`);
+    }
+  }
+  console.log(`[ok] app-source control completion: typing '<' offers source controls with xmlns insertion or prefix reuse`);
+
   // 551-553) GAP #3 (ux-generate-handler): the caret on an event attribute whose handler is ABSENT from the
   //          code-behind offers a "Generate event handler 'X'" quick fix whose cross-file WorkspaceEdit stubs
   //          the method into the USER .xaml.cs partial (never a generated .g.cs) with the delegate signature.
