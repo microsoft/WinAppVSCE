@@ -215,9 +215,6 @@ namespace WinUiXaml.Workspace
                 var affectedRoots = _projects
                     .Where(pair =>
                         string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase) ||
-                        // An in-flight load may still turn out to reference the changed project, so evict it
-                        // conservatively rather than leaving a stale graph cached once it completes.
-                        !pair.Value.IsCompleted ||
                         (pair.Value.Status == TaskStatus.RanToCompletion &&
                          pair.Value.Result.ContainsProject(key)))
                     .Select(pair => pair.Key)

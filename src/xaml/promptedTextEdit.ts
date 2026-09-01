@@ -155,8 +155,9 @@ export async function runPromptedTextEdit(
   }
 
   const newText = `${request.prefix}${value.trim()}${request.suffix}`;
-  // Re-check immediately before applying: the document can change while the
-  // prompt above is awaited, and applying a stale edit would corrupt the file.
+  // The prompt and document read above have already completed, so this mirrors the
+  // guard at the top of the apply step; the live re-read that actually protects the
+  // file happens inside the applyEdit dependency.
   if (request.expectedVersion !== null &&
       document.version !== request.expectedVersion ||
       document.getText(request.range) !== request.expectedText) {

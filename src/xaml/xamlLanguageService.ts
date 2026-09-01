@@ -761,7 +761,12 @@ function runDotnetRestore(projectPath: string, dotnetPath: string): Promise<void
     const child = spawn(dotnetPath, ["restore", projectPath, "--nologo"], {
       cwd: path.dirname(projectPath),
       windowsHide: true,
-      env: { ...process.env, DOTNET_HOST_PATH: dotnetPath },
+      // findCompatibleDotnet can return the bare "dotnet" PATH fallback, but
+      // DOTNET_HOST_PATH must be an absolute path to the host executable, so only
+      // override the inherited value when we resolved a real path.
+      env: path.isAbsolute(dotnetPath)
+        ? { ...process.env, DOTNET_HOST_PATH: dotnetPath }
+        : { ...process.env },
     });
 
     child.stdout.on("data", (data: Buffer) => output?.append(data.toString()));
