@@ -10,19 +10,24 @@ async function readActivationEvents(): Promise<string[]> {
   return packageJson.activationEvents ?? [];
 }
 
-test("activates without preloading when a workspace contains XAML", async () => {
-  // The extension must activate for workspaces that contain XAML so that the
-  // C# Dev Kit recommendation can fire on a .xaml.cs opened without its .xaml.
-  // Activation registers providers only; the server still waits for demand.
-  assert.ok((await readActivationEvents()).includes("workspaceContains:**/*.xaml"));
+test("activates for XAML code-behind so the Dev Kit recommendation can fire", async () => {
+  // VS Code cannot activate on an individual file open, only onLanguage or
+  // workspaceContains. This glob is the narrowest event that still registers
+  // recommendCsharpDevKit before the user opens a .xaml.cs.
+  assert.ok((await readActivationEvents()).includes("workspaceContains:**/*.xaml.cs"));
 });
 
-test("does not activate on plain C# documents", async () => {
-  // Any workspace holding a .xaml.cs also holds the .xaml it is code-behind
-  // for, so the workspaceContains glob above already covers every workspace
-  // where the Dev Kit recommendation can pass its .xaml.cs gate.
-  // onLanguage:csharp would only add activation where the gate always fails.
-  assert.ok(!(await readActivationEvents()).includes("onLanguage:csharp"));
+test("does not activate on plain C# or on XAML that has no code-behind", async () => {
+  const events = await readActivationEvents();
+  // onLanguage:csharp activated in every C# workspace to serve a recommendation
+  // gated to .xaml.cs. The broader **/*.xaml glob additionally caught C++/WinRT
+  // and XAML-only workspaces; onLanguage:xaml already covers opening XAML there.
+  assert.ok(!events.includes("onLanguage:csharp"));
+  assert.ok(!events.includes("workspaceContains:**/*.xaml"));
+});
+
+test("still activates when a XAML document is opened", async () => {
+  assert.ok((await readActivationEvents()).includes("onLanguage:xaml"));
 });
 
 test("does not demand the language server until a XAML document is open", () => {
