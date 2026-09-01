@@ -38,7 +38,6 @@
     "onCommand:winapp.unregister",
     "onCommand:winapp.certInfo",
     "onCommand:winapp.openManifestEditor",
-    "onLanguage:csharp",
     "onLanguage:xaml"
   ],
   "main": "./dist/extension.js",
