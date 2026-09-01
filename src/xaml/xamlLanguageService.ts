@@ -133,7 +133,8 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
   dotnetHostResolver = new DotnetHostResolver(
     createInstallToolHost(),
     context.extension.id,
-    process.arch
+    process.arch,
+    process.env.WINUI_XAML_DOTNET_PATH
   );
   projectStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   projectStatusItem.name = "WinApp XAML IntelliSense";

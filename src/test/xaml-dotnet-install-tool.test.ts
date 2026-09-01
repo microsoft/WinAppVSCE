@@ -195,3 +195,34 @@ test("does not cache a failure", async () => {
   found = true;
   assert.equal((await resolver.resolve()).status, "resolved");
 });
+
+test("an explicit host override bypasses the Install Tool entirely", async () => {
+  // Dev/test hook: the integration harness launches VS Code with
+  // --disable-extensions, so the Install Tool cannot be installed or queried.
+  const host = createFakeHost({ installed: false });
+  const resolver = new DotnetHostResolver(
+    host,
+    "ms-windows-ap.winapp",
+    "x64",
+    "C:\\test-dotnet\\dotnet.exe"
+  );
+
+  const resolution = await resolver.resolve();
+
+  assert.deepEqual(resolution, {
+    status: "resolved",
+    dotnetPath: "C:\\test-dotnet\\dotnet.exe",
+  });
+  assert.equal(host.installCalls, 0);
+  assert.equal(host.findPathCalls.length, 0);
+});
+
+test("an empty host override is ignored", async () => {
+  const host = createFakeHost();
+  const resolver = new DotnetHostResolver(host, "ms-windows-ap.winapp", "x64", "");
+
+  const resolution = await resolver.resolve();
+
+  assert.equal(resolution.status, "resolved");
+  assert.equal(host.findPathCalls.length, 1);
+});

@@ -81,10 +81,17 @@ export class DotnetHostResolver {
   private cachedPath: string | undefined;
   private installAttempted = false;
 
+  /**
+   * @param hostOverride Absolute path to a .NET host, bypassing the Install Tool.
+   * A dev/test hook only, matching `WINUI_XAML_SERVER_PATH`: the integration
+   * harness launches VS Code with `--disable-extensions`, so the Install Tool
+   * cannot be installed or queried there. It is not a user-facing discovery path.
+   */
   constructor(
     private readonly host: InstallToolHost,
     private readonly requestingExtensionId: string,
-    private readonly architecture: string
+    private readonly architecture: string,
+    private readonly hostOverride?: string
   ) {}
 
   /** Drops the cached host so the next resolve re-runs discovery. */
@@ -93,6 +100,10 @@ export class DotnetHostResolver {
   }
 
   async resolve(): Promise<DotnetResolution> {
+    if (this.hostOverride) {
+      return { status: "resolved", dotnetPath: this.hostOverride };
+    }
+
     if (this.cachedPath) {
       return { status: "resolved", dotnetPath: this.cachedPath };
     }
