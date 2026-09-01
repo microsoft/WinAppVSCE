@@ -42,6 +42,31 @@ describe('buildDegradedNotification', () => {
 		assert.equal(showOutput.url, undefined);
 	});
 
+	it('installTool cause: offers a retry instead of telling the user to install .NET', () => {
+		const { message, actions } = buildDegradedNotification('installTool');
+
+		// The runtime may well be installed; only the tool that locates it is missing,
+		// so "Install .NET" would be wrong advice here.
+		assert.match(message, /Install Tool/i);
+		assert.doesNotMatch(message, /requires the \.NET 10 runtime/i);
+		assert.ok(!actions.some((a) => a.url));
+		assert.ok(!actions.some((a) => a.dismissDotnetRequirement));
+
+		assert.deepEqual(
+			actions.map((a) => a.label),
+			['Retry', 'Install Manually', 'Show Output']
+		);
+
+		const retry = actions.find((a) => a.label === 'Retry');
+		assert.ok(retry);
+		assert.equal(retry.command, 'winui-xaml.restartServer');
+
+		const manual = actions.find((a) => a.label === 'Install Manually');
+		assert.ok(manual);
+		assert.equal(manual.command, 'workbench.extensions.search');
+		assert.equal(manual.commandArg, 'ms-dotnettools.vscode-dotnet-runtime');
+	});
+
 	it('shows the first warning, suppresses duplicates and dismissal, and honors explicit retries', () => {
 		assert.equal(shouldShowDegradedNotification('dotnet', undefined, false, false), true);
 		assert.equal(shouldShowDegradedNotification('dotnet', 'dotnet', false, false), false);

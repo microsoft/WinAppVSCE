@@ -27,7 +27,13 @@ import {
   CSHARP_DEV_KIT_RECOMMENDATION,
   CsharpDevKitNotificationGate,
 } from "./csharpDevKitNotification";
-import { createDotnetChildEnvironment, findCompatibleDotnet } from "./dotnetRuntime";
+import { createDotnetChildEnvironment } from "./dotnetRuntime";
+import {
+  DOTNET_INSTALL_TOOL_ID,
+  DotnetFindPathRequest,
+  DotnetHostResolver,
+  InstallToolHost,
+} from "./dotnetInstallTool";
 import { ServerLifecycle } from "./serverLifecycle";
 import {
   shouldTriggerAutomaticXamlSuggestions,
@@ -95,6 +101,9 @@ const lifecycle = new ServerLifecycle();
 
 // Track each degraded cause once until the next successful start.
 let lastDegradedCause: DegradedCause | undefined;
+
+/** Resolves the .NET host through the Install Tool; created during activation. */
+let dotnetHostResolver: DotnetHostResolver | undefined;
 const csharpDevKitNotificationGate = new CsharpDevKitNotificationGate();
 const projectRestoreNotificationGate = new ProjectRestoreNotificationGate();
 const diagnosticsLevelInteraction = new DiagnosticsLevelInteraction({
@@ -121,6 +130,11 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
   // Allow reactivation in the same host process.
   lifecycle.reset();
   output = vscode.window.createOutputChannel("WinUI XAML");
+  dotnetHostResolver = new DotnetHostResolver(
+    createInstallToolHost(),
+    context.extension.id,
+    process.arch
+  );
   projectStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   projectStatusItem.name = "WinApp XAML IntelliSense";
   projectStatusItem.command = "winui-xaml.showOutput";
@@ -459,6 +473,71 @@ export async function deactivateXaml(): Promise<void> {
   await stopClient();
 }
 
+/** Bridges the Install Tool resolver to the VS Code extension host. */
+function createInstallToolHost(): InstallToolHost {
+  return {
+    isInstalled: () => vscode.extensions.getExtension(DOTNET_INSTALL_TOOL_ID) !== undefined,
+    install: async () => {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Setting up .NET tooling for XAML IntelliSense",
+        },
+        async () => {
+          await vscode.commands.executeCommand(
+            "workbench.extensions.installExtension",
+            DOTNET_INSTALL_TOOL_ID
+          );
+          await waitForExtensionRegistration(DOTNET_INSTALL_TOOL_ID);
+        }
+      );
+    },
+    activate: async () => {
+      // The Install Tool activates on startup finished, which has already passed
+      // for a mid-session install, so activate it explicitly before its commands
+      // are needed.
+      const extension = vscode.extensions.getExtension(DOTNET_INSTALL_TOOL_ID);
+      if (extension && !extension.isActive) {
+        await extension.activate();
+      }
+    },
+    findPath: async (request: DotnetFindPathRequest) =>
+      vscode.commands.executeCommand<{ dotnetPath: string } | undefined>(
+        "dotnet.findPath",
+        request
+      ),
+    log,
+    now: () => Date.now(),
+  };
+}
+
+/** Waits for a freshly installed extension to appear in the registry. */
+function waitForExtensionRegistration(id: string, timeoutMs = 15000): Promise<void> {
+  if (vscode.extensions.getExtension(id)) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      subscription.dispose();
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    const subscription = vscode.extensions.onDidChange(() => {
+      if (vscode.extensions.getExtension(id)) {
+        finish();
+      }
+    });
+  });
+}
+
+function requireDotnetHostResolver(): DotnetHostResolver {
+  if (!dotnetHostResolver) {
+    throw new Error("The XAML .NET host resolver was used before activation completed.");
+  }
+  return dotnetHostResolver;
+}
+
 /** Starts the server without interleaving with a stop. */
 async function startClient(context: vscode.ExtensionContext): Promise<void> {
   return lifecycle.runExclusive(() => doStart(context));
@@ -472,6 +551,9 @@ async function restartClient(
   return lifecycle.runExclusive(async () => {
     await doStop();
     if (!lifecycle.isDisposing) {
+      // An explicit restart is the user's retry, so re-run host discovery
+      // instead of returning the cached answer that may have failed.
+      dotnetHostResolver?.invalidate();
       await doStart(context, showRestartNotification);
     }
   });
@@ -543,18 +625,24 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     return;
   }
 
-  const dotnet = process.env.WINUI_XAML_FORCE_NO_DOTNET === "1"
-    ? undefined
-    : await findCompatibleDotnet();
-  if (!dotnet) {
+  const resolution =
+    process.env.WINUI_XAML_FORCE_NO_DOTNET === "1"
+      ? ({ status: "failed", reason: "runtime-not-found" } as const)
+      : await requireDotnetHostResolver().resolve();
+  if (resolution.status === "failed") {
+    const installToolUnavailable = resolution.reason === "install-tool-unavailable";
     notifyDegraded(
-      "A compatible installed Microsoft.NETCore.App 10.x runtime was not found.",
-      "dotnet",
+      installToolUnavailable
+        ? `The .NET Install Tool (${DOTNET_INSTALL_TOOL_ID}) could not be installed or queried, ` +
+            "so the .NET 10 runtime could not be located."
+        : "A compatible installed Microsoft.NETCore.App 10.x runtime was not found.",
+      installToolUnavailable ? "installTool" : "dotnet",
       userInitiated,
       context
     );
     return;
   }
+  const dotnet = resolution.dotnetPath;
 
   log(`Starting language server: ${dotnet} ${serverPath}`);
 
@@ -564,7 +652,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     transport: TransportKind.stdio,
     options: {
       cwd: path.dirname(serverPath),
-      env: createDotnetChildEnvironment(dotnet),
+      env: createDotnetChildEnvironment(dotnet, process.env, log),
     },
   };
 
@@ -723,13 +811,17 @@ async function restoreProject(projectPath: string): Promise<void> {
   log(`Restoring project packages: ${projectPath}`);
 
   try {
-    const dotnet = await findCompatibleDotnet();
-    if (!dotnet) {
+    const resolution = await requireDotnetHostResolver().resolve();
+    if (resolution.status === "failed") {
       throw new Error(
-        "A compatible Microsoft.NETCore.App 10.x runtime was not found. " +
-          "Install the .NET 10 runtime, then run restore again."
+        resolution.reason === "install-tool-unavailable"
+          ? `The .NET Install Tool (${DOTNET_INSTALL_TOOL_ID}) could not be installed or queried, ` +
+              "so the .NET 10 runtime could not be located. See the WinUI XAML output for details."
+          : "A compatible Microsoft.NETCore.App 10.x runtime was not found. " +
+              "Install the .NET 10 runtime, then run restore again."
       );
     }
+    const dotnet = resolution.dotnetPath;
 
     await vscode.window.withProgress(
       {
@@ -761,7 +853,7 @@ function runDotnetRestore(projectPath: string, dotnetPath: string): Promise<void
     const child = spawn(dotnetPath, ["restore", projectPath, "--nologo"], {
       cwd: path.dirname(projectPath),
       windowsHide: true,
-      env: createDotnetChildEnvironment(dotnetPath),
+      env: createDotnetChildEnvironment(dotnetPath, process.env, log),
     });
 
     child.stdout.on("data", (data: Buffer) => output?.append(data.toString()));

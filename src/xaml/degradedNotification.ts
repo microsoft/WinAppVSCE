@@ -1,7 +1,9 @@
 // Kept independent of the VS Code API for unit testing.
 
+import { DOTNET_INSTALL_TOOL_ID } from "./dotnetInstallTool";
+
 /** Why the language server is not running. */
-export type DegradedCause = "untrusted" | "dotnet" | "server";
+export type DegradedCause = "untrusted" | "dotnet" | "installTool" | "server";
 
 /** Settings query for the degraded-state action. */
 export const SERVER_SETTINGS_QUERY = "winapp.xaml";
@@ -61,6 +63,28 @@ export function buildDegradedNotification(
       actions: [
         { label: "Install .NET", url: DOTNET_DOWNLOAD_URL },
         { label: "Don't Show Again", dismissDotnetRequirement: true },
+      ],
+    };
+  }
+
+  // Distinct from "dotnet": the runtime may well be installed. We could not set
+  // up the tool that locates it, so telling the user to install .NET would be
+  // wrong advice. The remedy is a retry, or making the marketplace reachable.
+  if (cause === "installTool") {
+    return {
+      message:
+        "WinUI XAML IntelliSense uses the .NET Install Tool " +
+        `(${DOTNET_INSTALL_TOOL_ID}) to locate the .NET 10 runtime, and it could not be ` +
+        "installed or queried. This usually means the Marketplace is unavailable or blocked " +
+        "by policy. XAML syntax highlighting remains available.",
+      actions: [
+        { label: "Retry", command: "winui-xaml.restartServer" },
+        {
+          label: "Install Manually",
+          command: "workbench.extensions.search",
+          commandArg: DOTNET_INSTALL_TOOL_ID,
+        },
+        { label: "Show Output", showOutput: true },
       ],
     };
   }

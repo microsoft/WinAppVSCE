@@ -1,122 +1,32 @@
-import { spawn } from "child_process";
 import * as path from "path";
-import { Readable } from "stream";
-
-export const REQUIRED_DOTNET_MAJOR = 10;
-
-export function hasRequiredDotnetRuntime(
-  listRuntimesOutput: string,
-  requiredMajor = REQUIRED_DOTNET_MAJOR
-): boolean {
-  return listRuntimesOutput
-    .split(/\r?\n/)
-    .some((line) => new RegExp(`^Microsoft\\.NETCore\\.App ${requiredMajor}\\.`).test(line.trim()));
-}
-
-export function getDotnetCandidates(
-  env: NodeJS.ProcessEnv = process.env,
-  architecture = process.arch
-): string[] {
-  const architectureRoot =
-    env[`DOTNET_ROOT_${architecture === "ia32" ? "X86" : architecture.toUpperCase()}`];
-  const candidates = [
-    env.DOTNET_HOST_PATH,
-    architectureRoot ? path.join(architectureRoot, "dotnet.exe") : undefined,
-    env.DOTNET_ROOT ? path.join(env.DOTNET_ROOT, "dotnet.exe") : undefined,
-    env.ProgramFiles ? path.join(env.ProgramFiles, "dotnet", "dotnet.exe") : undefined,
-    "dotnet",
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  const seen = new Set<string>();
-  return candidates.filter((candidate) => {
-    const key = candidate.toLowerCase();
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
 
 /**
  * Builds the environment for a spawned dotnet child process.
  *
- * DOTNET_HOST_PATH is contractually an absolute path to the host executable —
- * MSBuild targets and Roslyn's build host resolve and exec it directly. Only
- * the first four candidates are absolute; findCompatibleDotnet can also return
- * the bare "dotnet" PATH fallback, which must never be written to the variable.
+ * DOTNET_ROOT points the host at the .NET installation we resolved, matching
+ * what the C# extension sets for its language server. DOTNET_HOST_PATH is set
+ * alongside it because MSBuild targets and Roslyn's build host resolve and exec
+ * it directly; it is contractually an absolute path to the host executable.
  *
- * Reaching that fallback also means any inherited DOTNET_HOST_PATH was absent
- * or failed the runtime probe, since it is the first candidate tried. Passing a
- * host we already rejected down to the child would let MSBuild use it, so the
- * variable is dropped rather than forwarded.
+ * Paths come from the Install Tool's `dotnet.findPath`, which always returns an
+ * absolute path, so the non-absolute branch is defensive only. It logs rather
+ * than writing a value that would send MSBuild somewhere unintended, and drops
+ * any inherited DOTNET_HOST_PATH rather than forwarding a host we did not
+ * choose.
  */
 export function createDotnetChildEnvironment(
   dotnetPath: string,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  log?: (message: string) => void
 ): NodeJS.ProcessEnv {
   const childEnv = { ...env };
   if (path.isAbsolute(dotnetPath)) {
     childEnv.DOTNET_HOST_PATH = dotnetPath;
+    childEnv.DOTNET_ROOT = path.dirname(dotnetPath);
   } else {
+    log?.(`Resolved .NET host '${dotnetPath}' is not an absolute path; leaving DOTNET_ROOT unset.`);
     delete childEnv.DOTNET_HOST_PATH;
+    delete childEnv.DOTNET_ROOT;
   }
   return childEnv;
-}
-
-export async function findCompatibleDotnet(
-  candidates = getDotnetCandidates(),
-  probe: (command: string) => Promise<string | undefined> = listDotnetRuntimes
-): Promise<string | undefined> {
-  for (const candidate of candidates) {
-    const runtimes = await probe(candidate);
-    if (runtimes && hasRequiredDotnetRuntime(runtimes)) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
-export interface RuntimeProbeProcess {
-  readonly stdout: Readable;
-  on(event: "error", listener: () => void): this;
-  on(event: "close", listener: (code: number | null) => void): this;
-  kill(): boolean;
-}
-
-export type RuntimeProbeSpawner = (command: string) => RuntimeProbeProcess;
-
-const spawnRuntimeProbe: RuntimeProbeSpawner = (command) =>
-  spawn(command, ["--list-runtimes"], {
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-
-export function listDotnetRuntimes(
-  command: string,
-  timeoutMs = 5000,
-  spawnProbe: RuntimeProbeSpawner = spawnRuntimeProbe
-): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    let settled = false;
-    let stdout = "";
-    const child = spawnProbe(command);
-    const finish = (value: string | undefined) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-        resolve(value);
-      }
-    };
-    const timeout = setTimeout(() => {
-      child.kill();
-      finish(undefined);
-    }, timeoutMs);
-
-    child.stdout.on("data", (data: Buffer) => {
-      stdout += data.toString();
-    });
-    child.on("error", () => finish(undefined));
-    child.on("close", (code) => finish(code === 0 ? stdout : undefined));
-  });
 }
