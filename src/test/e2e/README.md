@@ -37,6 +37,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 | Fixture | Used by |
 |---------|---------|
 | `winui-gallery.appxmanifest` | Default – used by the 7 core tab specs and the parse-error spec |
+| `mrt-assets.appxmanifest` | `mrt-asset-resolution.spec.ts` |
 | `push-notifications-sample.appxmanifest` | `push-notifications-fixture.spec.ts` |
 | `background-task-sample.appxmanifest` | `background-task-fixture.spec.ts` |
 | `widgets-sample.appxmanifest` | Unit tests for nested Capabilities and package-level Extensions |
@@ -46,7 +47,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (130 tests)
+## Test inventory (137 tests)
 
 ### `sign-quickpick.spec.ts` — 6 tests
 
@@ -212,6 +213,20 @@ Validates all four capability categories, checkbox toggling, hover descriptions,
 | 14 | typing in input clears validation error | Typing clears the custom capability error |
 | 15 | adding valid custom capability succeeds | Valid custom capability is accepted and written to XML |
 | 16 | custom capability appears in the custom capabilities list | New custom capability appears in the list |
+
+### `mrt-asset-resolution.spec.ts` — 7 tests
+
+Validates MRT-aware resolution of visual asset paths (issue #191). Uses the `mrt-assets.appxmanifest` fixture together with qualifier-suffixed asset files written into the workspace.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | unqualified logo backed only by MRT variants is not reported as missing | `Assets\MrtLogo.png` resolves through `MrtLogo.scale-200.png`, so no not-found warning is shown |
+| 2 | logo preview falls back to the resolved MRT variant | Store logo thumbnail loads the resolved qualified variant |
+| 3 | application visual assets resolve through MRT variants | Visual asset fields on the Applications tab use the same MRT resolution |
+| 4 | application logo preview falls back to the resolved MRT variant | Applications tab thumbnail loads the resolved qualified variant |
+| 5 | an unqualified file that exists is used as-is | A literal file on disk resolves exactly, with no message |
+| 6 | a non-variant sibling does not satisfy the reference | `OnlyBackup.backup.png` is not treated as a variant of `OnlyBackup.png` |
+| 7 | a genuinely missing asset still warns | A reference with neither literal file nor variants still warns |
 
 ### `parse-error.spec.ts` — 1 test
 
