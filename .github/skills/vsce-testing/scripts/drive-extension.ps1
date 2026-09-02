@@ -69,12 +69,10 @@ if (-not $code) { throw "VS Code 'code' CLI not found on PATH." }
 
 # Fresh user-data-dir so this process inherits WINAPP_UX_SCRIPT (a reused VS Code main process would not).
 $udd = Join-Path $Harness (".udd-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
-$extensionsDir = Join-Path $Harness ".drive-extensions"
-New-Item -ItemType Directory -Force -Path $extensionsDir | Out-Null
 $env:WINAPP_UX_SCRIPT = $ScriptJson
 
 Write-Host "==> [drive:$label] launching VS Code with driver extension" -ForegroundColor Cyan
-& $code "--extensions-dir=$extensionsDir" --user-data-dir=$udd --disable-workspace-trust --extensionDevelopmentPath=$Driver $Project | Out-Null
+& $code --user-data-dir=$udd --disable-workspace-trust --extensionDevelopmentPath=$Driver $Project | Out-Null
 
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $done = $false
