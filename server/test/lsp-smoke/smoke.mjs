@@ -425,6 +425,27 @@ async function main() {
     fail(`post-invalidation hover should be suppressed while reloading: ${JSON.stringify(fallbackResponse.result)}`);
   }
 
+  // The load-bearing regression check for non-blocking F12 (issue #220). Unlike the cold check at
+  // startup -- where an intermediate framework context may already have been published, letting even
+  // the old blocking code answer quickly -- the cache is provably empty here (the hover above was
+  // suppressed) and the reload takes seconds. So the old blocking implementation would stall for
+  // seconds before answering, and only the non-blocking one can come back inside the budget.
+  const reloadDefinitionStarted = performance.now();
+  send({
+    id: 701,
+    method: "textDocument/definition",
+    params: { textDocument: { uri: xamlUri }, position: caret },
+  });
+  const reloadDefinition = await waitFor(responseFor(701), 90000, "definition during reload");
+  const reloadDefinitionMs = performance.now() - reloadDefinitionStarted;
+  if (reloadDefinition.result !== null) {
+    fail(`definition should be suppressed while the project reloads: ${JSON.stringify(reloadDefinition.result)}`);
+  }
+  if (reloadDefinitionMs >= 1000) {
+    fail(`definition during reload took ${reloadDefinitionMs.toFixed(0)} ms (contract: <1000 ms — it must not block on the reload)`);
+  }
+  console.log(`[ok] definition(reloading): suppressed, did not block on the reload (${reloadDefinitionMs.toFixed(0)} ms)`);
+
   await reloadReadyPromise;
 
   // SmokePage.xaml.cs is no longer part of the compilation, so F12 on the handler must not resolve.
