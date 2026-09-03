@@ -202,7 +202,7 @@ The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, 
 |---------|--------------|
 | **Completion / IntelliSense** | Element names, properties, events, attached properties, enum/bool values, markup extensions, and resource keys — resolved against your app source and referenced projects or assemblies. Unprefixed custom-control completion reuses an existing XML namespace prefix or adds the required `xmlns` declaration. |
 | **Hover** | Type and member information for elements, properties, and resource references. |
-| **Go to Definition (F12)** | Jump from an event handler or member name to its C# declaration on the page's `x:Class` type, and from resource references to their declaration. |
+| **Go to Definition (F12)** | Jump from an event handler or member name to its C# declaration on the page's `x:Class` type, from an `x:Name` reference to its declaration, and from resource references to their declaration. |
 | **Diagnostics** | Syntactic diagnostics as you type, plus semantic validation against the resolved type system. |
 | **Find All References** | Locate references to names and resource keys. |
 | **Rename** | Rename symbols with a prepare-rename validity check. |
@@ -227,6 +227,29 @@ XAML tooling supports these settings:
 |---------|---------|-------------|
 | `winapp.xaml.intelliSense.enable` | `true` | Starts the XAML language server when XAML files are opened. Disabling it keeps syntax highlighting active. |
 | `winapp.xaml.diagnostics.level` | `all` | Controls XAML diagnostics: `all`, `errorsOnly`, or `off`. Existing `warning` and `error` values remain supported as aliases for `all` and `errorsOnly`. Changes apply immediately to open XAML documents. |
+
+#### What works at each loading stage
+
+Editing stays responsive while the project loads, because features light up in stages rather than waiting for the whole project. The columns below correspond to the status bar messages above: **Loading** is *XAML IntelliSense loading*, **Framework&#8209;ready** is *XAML project loading*, and **Ready** is *XAML IntelliSense ready*.
+
+| Feature | Loading | Framework&#8209;ready | Ready |
+|---------|:-------:|:---------------------:|:-----:|
+| Formatting, folding, selection ranges, linked editing, document symbols, document links | ✅ | ✅ | ✅ |
+| Semantic tokens (type-aware colorization) | ✅ | ✅ | ✅ |
+| Syntactic diagnostics (malformed XAML) | ✅ | ✅ | ✅ |
+| Hover on `x:` directives such as `x:Class` and `x:Name` | ✅ | ✅ | ✅ |
+| Completion and hover for WinUI SDK and NuGet package types | — | ✅ | ✅ |
+| Resource keys: completion, hover, **F12**, Find All References | — | ✅ | ✅ |
+| `x:Name` references: **F12**, Find All References, rename, highlights | — | ✅ | ✅ |
+| Color swatches and code actions | — | ✅ | ✅ |
+| Completion and hover for types declared in **your own app source** | — | — | ✅ |
+| **F12 into C#** — event handlers, `x:Bind` members, your own controls | — | — | ✅ |
+| Semantic diagnostics (unknown types, members, and values) | — | — | ✅ |
+
+Two details worth knowing:
+
+- **Your own types arrive last.** The framework-ready stage resolves referenced assemblies from compiled metadata, which is why SDK and package types appear quickly. Types you declare in your own C# require the full load, which parses your source. Completion results served before then are marked incomplete, so VS Code re-queries automatically — you do not need to retype to pick up a control you just wrote.
+- **F12 navigates to source you can open.** It works at the framework-ready stage for resource keys and `x:Name`, and at the ready stage for C# declarations. It deliberately does not navigate into SDK or NuGet package types such as `Button`, because those are read from compiled metadata rather than source; use hover for information about them. Quick fixes that respond to semantic diagnostics likewise appear only once those diagnostics do.
 
 #### C# code-behind IntelliSense
 
