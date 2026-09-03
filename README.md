@@ -253,7 +253,7 @@ Two details worth knowing:
 
 #### Where Go to Definition works
 
-F12 opens source you own. Anything that comes from compiled metadata — the WinUI SDK or a NuGet package — has no source for the editor to open, so F12 intentionally does nothing on those. Use **hover** to inspect them instead.
+F12 opens source you own. Anything that comes from compiled metadata — the WinUI SDK or a NuGet package — has no source for the editor to open, so F12 intentionally does nothing on those. Use **hover** to inspect them instead, which shows the type or member signature along with its documentation summary. This matches Visual Studio, where F12 in XAML markup likewise does not navigate into SDK types; navigation into compiled metadata is offered from C# files rather than from markup.
 
 | You press F12 on | It goes to | Works from |
 |------------------|-----------|-----------|
