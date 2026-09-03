@@ -202,7 +202,7 @@ The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, 
 |---------|--------------|
 | **Completion / IntelliSense** | Element names, properties, events, attached properties, enum/bool values, markup extensions, and resource keys — resolved against your app source and referenced projects or assemblies. Unprefixed custom-control completion reuses an existing XML namespace prefix or adds the required `xmlns` declaration. |
 | **Hover** | Type and member information for elements, properties, and resource references. |
-| **Go to Definition (F12)** | Jump from an event handler or member name to its C# declaration on the page's `x:Class` type, from an `x:Name` reference to its declaration, and from resource references to their declaration. |
+| **Go to Definition (F12)** | Jump from an event handler or member name to its C# declaration on the page's `x:Class` type, from an `x:Name` reference to its declaration, and from resource references to their declaration. Navigation targets source you own; SDK and NuGet package types are metadata-only — see [Where Go to Definition works](#where-go-to-definition-works). |
 | **Diagnostics** | Syntactic diagnostics as you type, plus semantic validation against the resolved type system. |
 | **Find All References** | Locate references to names and resource keys. |
 | **Rename** | Rename symbols with a prepare-rename validity check. |
@@ -249,7 +249,23 @@ Editing stays responsive while the project loads, because features light up in s
 Two details worth knowing:
 
 - **Your own types arrive last.** The framework-ready stage resolves referenced assemblies from compiled metadata, which is why SDK and package types appear quickly. Types you declare in your own C# require the full load, which parses your source. Completion results served before then are marked incomplete, so VS Code re-queries automatically — you do not need to retype to pick up a control you just wrote.
-- **F12 navigates to source you can open.** It works at the framework-ready stage for resource keys and `x:Name`, and at the ready stage for C# declarations. It deliberately does not navigate into SDK or NuGet package types such as `Button`, because those are read from compiled metadata rather than source; use hover for information about them. Quick fixes that respond to semantic diagnostics likewise appear only once those diagnostics do.
+- **F12 opens source, not metadata.** It works at the framework-ready stage for resource keys and `x:Name`, and at the ready stage for C# declarations. See [Where Go to Definition works](#where-go-to-definition-works) for the full breakdown. Quick fixes that respond to semantic diagnostics likewise appear only once those diagnostics do.
+
+#### Where Go to Definition works
+
+F12 opens source you own. Anything that comes from compiled metadata — the WinUI SDK or a NuGet package — has no source for the editor to open, so F12 intentionally does nothing on those. Use **hover** to inspect them instead.
+
+| You press F12 on | It goes to | Works from |
+|------------------|-----------|-----------|
+| An event handler name — `Click="OnGo_Click"` | The method in your `.xaml.cs` | Ready |
+| An `{x:Bind}` member, method, function argument, or cast target | The member in your `.xaml.cs` | Ready |
+| **Your own** control or page type — as an element, or in `TargetType`, `x:DataType`, or `{x:Type}` | The C# class declaration | Ready |
+| An `x:Name` reference — `ElementName`, `Storyboard.TargetName`, `RelativePanel.RightOf`, `Setter.Target` | The `x:Name` declaration in the XAML | Framework&#8209;ready |
+| A resource key — `{StaticResource Key}`, `{ThemeResource Key}` | The `x:Key` declaration, including one in `App.xaml` | Framework&#8209;ready |
+| A **WinUI SDK or NuGet** control — `Button`, `Grid`, toolkit controls | Nothing — no source to open | Never |
+| An **SDK property** — `{TemplateBinding Background}`, `Setter.Target="Chrome.Opacity"`, `Storyboard.TargetProperty="(UIElement.Opacity)"` | Nothing — no source to open | Never |
+
+When F12 has no answer — because the target is metadata, or because the project has not finished loading — VS Code shows its standard **"No definition found for …"** message. While the project is still loading that message is expected rather than a failure: F12 never blocks on the project load, so press it again once the status bar reports **WinApp: XAML IntelliSense ready**.
 
 #### C# code-behind IntelliSense
 
