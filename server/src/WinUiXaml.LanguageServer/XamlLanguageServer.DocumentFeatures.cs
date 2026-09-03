@@ -69,7 +69,14 @@ internal sealed partial class XamlLanguageServer
 
     // --- Semantic navigation (definition + hover) ---------------------------
 
-    private async Task<object?> GoToDefinitionAsync(TextDocumentPositionParams p)
+    private Task<object?> GoToDefinitionAsync(TextDocumentPositionParams p) =>
+        // F12 never queues behind a cold MSBuild design-time build, matching hover. A user who pressed
+        // F12, saw no result, and moved on must not have the editor jump somewhere seconds later when
+        // the build finally lands. Targets that need source (event handlers, x:Bind members, app-source
+        // types) therefore stay unresolved until the full context is ready.
+        WithoutBlockingOnProjectLoadAsync(() => ResolveDefinitionAsync(p));
+
+    private async Task<object?> ResolveDefinitionAsync(TextDocumentPositionParams p)
     {
         // A {StaticResource Key} value is not a type/member name, so try the resource-key pipeline first; it is cheap (no project load) when the caret is not on such a reference.
         var resource = await ResolveResourceKeyDefinitionAsync(p).ConfigureAwait(false);

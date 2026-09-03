@@ -187,8 +187,32 @@ internal sealed partial class XamlLanguageServer
             return accepted;
         }
 
+        // A non-blocking request takes whatever is already loaded. Starting the shared warm-up keeps
+        // the project load progressing so a later request succeeds, but this one returns immediately
+        // rather than stalling the editor behind a design-time build.
+        if (_nonBlockingProjectAccess.Value)
+        {
+            WarmUp(uri);
+            return null;
+        }
+
         var task = GetOrStartContext(uri);
         return await task.WaitAsync(_requestCancellation.Value).ConfigureAwait(false);
+    }
+
+    /// <summary>Runs an operation with project access restricted to already-available contexts, so it can never block on a project load.</summary>
+    private async Task<T> WithoutBlockingOnProjectLoadAsync<T>(Func<Task<T>> operation)
+    {
+        var previous = _nonBlockingProjectAccess.Value;
+        _nonBlockingProjectAccess.Value = true;
+        try
+        {
+            return await operation().ConfigureAwait(false);
+        }
+        finally
+        {
+            _nonBlockingProjectAccess.Value = previous;
+        }
     }
 
     private async Task<XamlProjectContext?> GetFullContextAsync(

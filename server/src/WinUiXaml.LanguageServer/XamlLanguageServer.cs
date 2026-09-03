@@ -24,6 +24,10 @@ internal sealed partial class XamlLanguageServer
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, XamlTypeSystem> _typeSystems = new();
     private readonly XamlResourceGraph _resourceGraph = new();
     private readonly AsyncLocal<CancellationToken> _requestCancellation = new();
+
+    // Set for requests that must never queue behind a cold MSBuild design-time build. Defaults to
+    // false, so only the handlers that opt in are non-blocking.
+    private readonly AsyncLocal<bool> _nonBlockingProjectAccess = new();
     private readonly object _semanticDiagnosticsGate = new();
     private readonly SemaphoreSlim _diagnosticsPublicationGate = new(1, 1);
     private readonly ConcurrentDictionary<string, AsyncCancellationLifetime> _semanticDiagnosticCancellations =

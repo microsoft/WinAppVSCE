@@ -287,16 +287,38 @@ async function main() {
     console.log(`[ok] hover(cold ${label}): (${elapsedMs.toFixed(0)} ms)`);
   }
 
-  // 3) definition (F12) on OnGo_Click -> C# code-behind (first call pays the design-time build cost)
-  console.log(`[..] definition at ${caret.line}:${caret.character} (loading project, ~several s)`);
+  // 3) definition (F12) must NEVER queue behind the design-time build. A user who pressed F12, saw
+  // nothing, and moved on must not have the editor jump somewhere seconds later when the build lands.
   const coldDefinitionStarted = performance.now();
+  send({
+    id: 103,
+    method: "textDocument/definition",
+    params: { textDocument: { uri: xamlUri }, position: caret },
+  });
+  const coldDefinition = await waitFor(responseFor(103), 5000, "cold definition");
+  const coldDefinitionMs = performance.now() - coldDefinitionStarted;
+  if (coldDefinition.result !== null) {
+    fail(`cold definition should be suppressed while project IntelliSense loads: ${JSON.stringify(coldDefinition.result)}`);
+  }
+  if (coldDefinitionMs >= 1000) {
+    fail(`cold definition took ${coldDefinitionMs.toFixed(0)} ms (contract: <1000 ms — it must not block on the project load)`);
+  }
+  console.log(`[ok] definition(cold): suppressed while loading, did not block (${coldDefinitionMs.toFixed(0)} ms)`);
+
+  await frameworkReadyStatusPromise;
+  await readyStatusPromise;
+  console.log("[ok] project context status: loading -> framework-ready -> ready");
+
+  // 4) the same F12, once the project is ready, resolves OnGo_Click to the C# code-behind.
+  console.log(`[..] definition at ${caret.line}:${caret.character}`);
+  const definitionStarted = performance.now();
   send({
     id: 2,
     method: "textDocument/definition",
     params: { textDocument: { uri: xamlUri }, position: caret },
   });
   const def = await waitFor(responseFor(2), 90000, "definition");
-  const coldDefinitionMs = performance.now() - coldDefinitionStarted;
+  const definitionMs = performance.now() - definitionStarted;
   if (def.error) fail(`definition errored: ${JSON.stringify(def.error)}`);
   const loc = def.result;
   if (!loc || !loc.uri) fail(`definition returned no location: ${JSON.stringify(loc)}`);
@@ -306,10 +328,7 @@ async function main() {
   if (loc.range?.start?.line !== EXPECTED_HANDLER_LINE) {
     fail(`definition landed on line ${loc.range?.start?.line}, expected ${EXPECTED_HANDLER_LINE}`);
   }
-  console.log(`[ok] definition: OnGo_Click -> ${loc.uri} @ line ${loc.range.start.line} (${coldDefinitionMs.toFixed(0)} ms cold)`);
-  await frameworkReadyStatusPromise;
-  await readyStatusPromise;
-  console.log("[ok] project context status: loading -> framework-ready -> ready");
+  console.log(`[ok] definition: OnGo_Click -> ${loc.uri} @ line ${loc.range.start.line} (${definitionMs.toFixed(0)} ms ready)`);
 
   const warmHoverStarted = performance.now();
   send({
@@ -377,6 +396,17 @@ async function main() {
     '<Project><ItemGroup><Compile Remove="SmokePage.xaml.cs" /></ItemGroup></Project>',
     "utf8"
   );
+  // The blocking F12 below used to double as this section's reload barrier. Definition is now
+  // non-blocking (issue #220), so synchronize on the same status notification the real client uses.
+  // Registered before the change is sent so the reload's notification cannot be missed.
+  const reloadReadyPromise = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectContextStatus" &&
+      message.params?.uri === xamlUri &&
+      message.params?.state === "ready",
+    90000,
+    "project context ready status after invalidation"
+  );
   send({
     method: "workspace/didChangeWatchedFiles",
     params: { changes: [{ uri: importedBuildUri, type: 2 }] },
@@ -395,12 +425,17 @@ async function main() {
     fail(`post-invalidation hover should be suppressed while reloading: ${JSON.stringify(fallbackResponse.result)}`);
   }
 
+  await reloadReadyPromise;
+
+  // SmokePage.xaml.cs is no longer part of the compilation, so F12 on the handler must not resolve.
+  // Asserted after the reload has completed, which proves the context actually changed rather than
+  // merely that the request arrived while the project was still loading.
   send({
     id: 700,
     method: "textDocument/definition",
     params: { textDocument: { uri: xamlUri }, position: caret },
   });
-  const removedDefinition = await waitFor(responseFor(700), 90000, "definition after imported props change");
+  const removedDefinition = await waitFor(responseFor(700), 30000, "definition after imported props change");
   if (removedDefinition.result != null) {
     fail(`imported props change did not alter project context: ${JSON.stringify(removedDefinition.result)}`);
   }
