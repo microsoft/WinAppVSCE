@@ -7,6 +7,7 @@ Thanks for your interest in contributing to the WinApp VS Code Extension.
 - Node.js 24
 - Visual Studio Code
 - PowerShell 7 or Windows PowerShell for the build scripts
+- The [.NET 10 SDK](https://dotnet.microsoft.com/download) — required to build, test, and locally publish the WinUI XAML language server (`server/`). Packaged extension users need an installed .NET 10 runtime to launch the framework-dependent server. The extension never installs or bundles that runtime. The unit tests (`npm run test:unit`) do not need the SDK, but the server tests, the XAML integration/smoke suites, and local packaging do.
 - [WinApp CLI](https://github.com/microsoft/WinAppCli) (for syncing manifest schemas)
 
 ## Setup
@@ -43,6 +44,20 @@ npm run test:unit
 npm run test:e2e
 ```
 
+`npm run test:unit` and `npm run test:e2e` do not require the .NET SDK.
+
+The WinUI XAML language service has its own suites, which **require the .NET 10 SDK** (see [Prerequisites](#prerequisites)):
+
+```powershell
+npm run test:server      # .NET xUnit tests for the language server
+npm run test:xaml-smoke  # stdio LSP smoke test
+npm run bundle:server
+npm run test:xaml-framework-dependent # smoke the published server through installed dotnet
+npm test                 # VS Code integration tests (drives the real extension + server)
+```
+
+`npm test` runs a `pretest` step that compiles, lints, builds the language server, and restores the test fixture — so it needs the .NET SDK. `test:xaml-framework-dependent` runs the already-published server through the installed .NET 10 runtime. On a machine without the SDK, run `npm run test:unit` instead; build-dependent suites fail fast with a clear "dotnet not found" error rather than silently skipping.
+
 ## Package
 
 To produce a VSIX package locally:
@@ -51,12 +66,16 @@ To produce a VSIX package locally:
 .\scripts\build-vsce.ps1 -Package
 ```
 
+Local packaging publishes one architecture-neutral, framework-dependent server from source. The
+official release pipeline instead downloads the separately built and ESRP-signed server artifact.
+
 ## Install locally
 
 After packaging, install the VSIX into VS Code:
 
 ```powershell
-code --install-extension artifacts\winapp-*.vsix
+$vsix = Get-ChildItem artifacts\winapp-*.vsix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+code --install-extension $vsix.FullName
 ```
 
 ## Pull requests

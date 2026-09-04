@@ -25,6 +25,11 @@ jobs:
       with:
         node-version: '24'
 
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
     - name: Install dependencies
       run: npm ci
 
@@ -44,6 +49,28 @@ jobs:
 
     - name: Run unit tests
       run: npm run test:unit
+
+    - name: Build XAML language server
+      run: npm run build:server:debug
+
+    - name: Run XAML language server tests
+      run: npm run test:server
+
+    - name: Publish framework-dependent XAML language server
+      run: npm run bundle:server
+
+    - name: Run XAML LSP smoke test
+      run: npm run test:xaml-smoke
+
+    - name: Run packaged framework-dependent XAML LSP smoke test
+      env:
+        WINUI_XAML_SERVER_PATH: ${{ github.workspace }}\dist\server\WinUiXaml.LanguageServer.dll
+      run: npm run test:xaml-framework-dependent
+
+    - name: Run XAML integration tests
+      env:
+        WINUI_XAML_TEST_BUNDLED: "1"
+      run: npm test
 
     - name: Download VS Code
       shell: pwsh
@@ -76,11 +103,14 @@ jobs:
           test-results
         if-no-files-found: ignore
         retention-days: 7
-
     - name: Package VSIX
+      run: pwsh -NoProfile -File scripts/package-vsc.ps1 -SkipServerBuild -CliBinariesPath bin
+
+    - name: Validate bundled server in VSIX
       run: |
-        New-Item -ItemType Directory -Path artifacts -Force | Out-Null
-        npx vsce package --no-dependencies -o artifacts/winapp-dev.vsix
+        $vsix = Get-ChildItem artifacts\*.vsix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $vsix) { throw "Package script did not produce a VSIX." }
+        pwsh -NoProfile -File scripts/validate-vsix-server.ps1 -VsixPath $vsix.FullName
 
     # --- VSIX size metrics ---
     # Measure the packaged VSIX so PRs can report the download size delta vs.
@@ -88,13 +118,15 @@ jobs:
     # post-vsix-comment workflow renders.
     - name: Measure VSIX size
       run: |
-        $bytes = (Get-Item artifacts/winapp-dev.vsix).Length
+        $vsix = Get-ChildItem artifacts\*.vsix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $vsix) { throw "Package script did not produce a VSIX." }
+        $bytes = $vsix.Length
         $sizes = [ordered]@{ vsix = $bytes }
         $sizes | ConvertTo-Json | Set-Content artifacts/vsix-sizes.json
         Write-Host "VSIX size: $([math]::Round($bytes / 1MB, 2)) MB ($bytes bytes)"
 
     - name: Upload VSIX artifact
-      if: ${{ !cancelled() }}
+      if: ${{ success() }}
       uses: actions/upload-artifact@v7
       with:
         name: vscode-extension
@@ -182,3 +214,26 @@ jobs:
         path: metrics-data
         if-no-files-found: error
         retention-days: 7
+
+  test-arm64-server:
+    runs-on: windows-11-arm
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Publish framework-dependent language server on ARM64
+      run: |
+        dotnet publish server\src\WinUiXaml.LanguageServer\WinUiXaml.LanguageServer.csproj -c Release --self-contained false -p:UseAppHost=false -o dist\server
+
+    - name: Restore smoke fixture
+      run: dotnet restore test\fixtures\xaml\fixture\SmokeFixture.csproj
+
+    - name: Run framework-dependent smoke on ARM64
+      env:
+        WINUI_XAML_SERVER_PATH: ${{ github.workspace }}\dist\server\WinUiXaml.LanguageServer.dll
+      run: node server\test\lsp-smoke\smoke.mjs

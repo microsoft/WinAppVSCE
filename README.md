@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="images/hero.png" alt="WinApp — Run, debug, and package Windows applications right inside Visual Studio Code" width="100%" />
+  <img src="images/hero.png" alt="WinApp: Run, debug, and package Windows applications right inside Visual Studio Code" width="100%" />
 </p>
 
-# WinApp — VS Code Extension
+# WinApp: VS Code Extension
 
 The **WinApp** extension brings the [Windows App Development CLI (WinApp CLI)](https://github.com/microsoft/WinAppCli) into Visual Studio Code so you can initialize, debug, package, and sign Windows applications without leaving the editor.
 
-> **Status: Public Preview** — The WinApp CLI and this extension are experimental and in active development. We'd love your feedback! [File an issue](https://github.com/microsoft/WinAppVSCE/issues).
+> **Status: Public Preview**. The WinApp CLI and this extension are experimental and in active development. We'd love your feedback! [File an issue](https://github.com/microsoft/WinAppVSCE/issues).
 
 ## Get Started
 
@@ -18,14 +18,15 @@ Try the WinApp extension today: [**VS Code Markplace**](https://marketplace.visu
 
 ### Command Palette
 
-All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **WinApp** to see the full list.
+All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **WinApp** to find CLI,
+packaging, and language-service commands.
 
 | Command | Description |
 |---------|-------------|
 | **WinApp: Initialize Project** | Set up a new project with the Windows SDK and/or Windows App SDK. Prompts for SDK channel (stable, preview, experimental, or none). |
 | **WinApp: Restore Packages** | Restore project packages and dependencies. |
 | **WinApp: Update Packages** | Update packages and dependencies to the latest versions. |
-| **WinApp: Run Application** | Run your app as a loose-layout packaged application with full package identity — great for testing APIs that require identity. |
+| **WinApp: Run Application** | Run your app as a loose-layout packaged application with full package identity, great for testing APIs that require identity. |
 | **WinApp: Create Debug Identity** | Add sparse package identity to an existing executable so you can launch and debug it directly from VS Code with identity. |
 | **WinApp: Unregister Package** | Unregister a sideloaded development package (e.g., one registered via Run or Create Debug Identity). |
 | **WinApp: Create MSIX Package** | Package your application into an MSIX, with options to generate a certificate and bundle the runtime self-contained. If self-contained packaging appears to target a different architecture than your machine, WinApp shows a warning before continuing. On completion, a notification names the built package and offers **Reveal in Explorer**, **Sign**, and **Install** actions. |
@@ -39,20 +40,22 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Sign File** | Sign an MSIX/APPX package, executable, or library with a certificate. |
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
+| **WinApp: Show Info** | Show whether the WinUI XAML language server is running, the editor is in syntax-only mode, or IntelliSense is disabled in Settings. |
+| **WinApp: Restart Language Server** | Restart the WinUI XAML language server (e.g. after changing server settings). |
 
 #### Workspace & Multi-Project Support
 
-The extension supports workspaces where the app project is **not** at the root — such as monorepos, multi-app repositories, or nested project structures.
+The extension supports workspaces where the app project is **not** at the root, such as monorepos, multi-app repositories, or nested project structures.
 
 **How it works:**
 
-When you run a project-context WinApp command — such as **Initialize Project**, **Restore/Update Packages**, **Generate Manifest**, **Update Manifest Assets**, **Add Manifest Execution Alias**, **Generate Certificate**, **Unregister Package**, or **Get WinApp Path** — the extension resolves the target project directory using this priority:
+When you run a project-context WinApp command (such as **Initialize Project**, **Restore/Update Packages**, **Generate Manifest**, **Update Manifest Assets**, **Add Manifest Execution Alias**, **Generate Certificate**, **Unregister Package**, or **Get WinApp Path**), the extension resolves the target project directory using this priority:
 
-1. **`winapp.appDirectories` setting** — If specified in `.vscode/settings.json`, the extension uses these paths directly (no scanning). With one entry, it auto-selects; with multiple, it shows a QuickPick.
-2. **Project at workspace root** — If a recognized project exists at the root, commands run there immediately.
-3. **Automatic scan** — Searches the workspace for compatible projects and prompts if multiple are found.
+1. **`winapp.appDirectories` setting**: If specified in `.vscode/settings.json`, the extension uses these paths directly (no scanning). With one entry, it auto-selects; with multiple, it shows a QuickPick.
+2. **Project at workspace root**: If a recognized project exists at the root, commands run there immediately.
+3. **Automatic scan**: Searches the workspace for compatible projects and prompts if multiple are found.
 
-Commands that already take an explicit target — such as **Run Application**, **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
+Some commands already take an explicit target: **Run Application**, **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers). They operate on the file or folder you select and do not run project detection.
 
 **Configuration (optional):**
 
@@ -78,7 +81,7 @@ To skip automatic scanning, add the `winapp.appDirectories` setting to your work
 
 | Scenario | Behavior |
 |----------|----------|
-| Project at workspace root | Command runs directly — no prompt |
+| Project at workspace root | Command runs directly (no prompt) |
 | No project at root, 1 project found elsewhere | Auto-selects that project |
 | No project at root, multiple projects found | Shows a QuickPick list to choose which project to target |
 | No projects found anywhere | Falls back to workspace root (the CLI will report an error if initialization is required) |
@@ -91,7 +94,7 @@ The **WinApp: Initialize Project** command has additional behavior: when no proj
 
 ### Integrated Debugging
 
-The extension provides a **custom `winapp` debug type** that launches your app with package identity and automatically attaches the appropriate debugger — all from a single **F5** press.
+The extension provides a **custom `winapp` debug type** that launches your app with package identity and automatically attaches the appropriate debugger, all from a single **F5** press.
 
 **How it works:**
 
@@ -101,7 +104,7 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 4. It launches your app via `winapp run` to give it package identity.
 5. A child debug session attaches to the running process using the debugger you specified.
 
-> The `winapp` debug type assumes your project has already been built and that a build output folder containing an `.exe` exists in your project. It **does not** build your project automatically — so after making code changes, you must rebuild your project before launching to see those changes reflected in the running app.
+> The `winapp` debug type assumes your project has already been built and that a build output folder containing an `.exe` exists in your project. It **does not** build your project automatically, so after making code changes, you must rebuild your project before launching to see those changes reflected in the running app.
 
 > You can automate the build step by adding a `preLaunchTask` to your `launch.json` configuration. This tells VS Code to run a build task before every debug session, so your changes are always compiled before launch.
 >
@@ -138,7 +141,7 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 | `cppvsdbg` | C / C++ | [C/C++](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools) |
 | `node` | Node.js / Electron | Built-in |
 
-> On your first debug session, if the extension for the selected `debuggerType` isn't installed, WinApp offers to install it and continues the session automatically — no manual reload needed in most cases. If no `debuggerType` is set and none is installed yet, WinApp lets you pick the debugger that matches your project (C#, C/C++, or built-in Node.js/Electron).
+> On your first debug session, if the extension for the selected `debuggerType` isn't installed, WinApp offers to install it and continues the session automatically, no manual reload needed in most cases. If no `debuggerType` is set and none is installed yet, WinApp lets you pick the debugger that matches your project (C#, C/C++, or built-in Node.js/Electron).
 
 **Example `launch.json`:**
 
@@ -181,15 +184,102 @@ The extension includes a **visual editor** for `AppxManifest.xml` and `.appxmani
 
 **Key features:**
 
-- **Real-time validation** — inline errors for required fields, format rules (publisher DN, version, GUIDs, BCP-47, hex colors), and extension field requirements
-- **Asset generation** — "Regenerate Assets" button invokes the CLI to auto-generate all icon sizes from a single source image
-- **Extension management** — add/remove typed extensions (Protocol Activation, COM Server, Background Tasks, File Type Association, App Execution Alias, Startup Task, Share Target, App Service, Toast Notification Activation, MCP Server) with pre-filled templates
-- **Reorderable lists** — drag dependencies and resources up/down to control XML element order
-- **Format-preserving edits** — changes are applied surgically to the XML text, preserving your whitespace, comments, and attribute ordering
+- **Real-time validation**: inline errors for required fields, format rules (publisher DN, version, GUIDs, BCP-47, hex colors), and extension field requirements
+- **Asset generation**: "Regenerate Assets" button invokes the CLI to auto-generate all icon sizes from a single source image
+- **Extension management**: add/remove typed extensions (Protocol Activation, COM Server, Background Tasks, File Type Association, App Execution Alias, Startup Task, Share Target, App Service, Toast Notification Activation, MCP Server) with pre-filled templates
+- **Reorderable lists**: drag dependencies and resources up/down to control XML element order
+- **Format-preserving edits**: changes are applied surgically to the XML text, preserving your whitespace, comments, and attribute ordering
 
 **How to open:**
 
 When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer the visual editor as an option alongside the default text editor. You can switch between them at any time by right clicking on the file and selecting the **Open With…** command.
+
+### WinUI XAML Language Service
+
+The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, powered by a packaged framework-dependent .NET language server. Beyond syntax highlighting, it provides project-aware editing that understands your app's types, `x:Class`, `x:Bind` targets, and `App.xaml` resources:
+
+| Feature | What it does |
+|---------|--------------|
+| **Completion / IntelliSense** | Element names, properties, events, attached properties, enum/bool values, markup extensions, and resource keys, resolved against your app source and referenced projects or assemblies. Unprefixed custom-control completion reuses an existing XML namespace prefix or adds the required `xmlns` declaration. |
+| **Hover** | Type and member information for elements, properties, and resource references. |
+| **Go to Definition (F12)** | Jump from an event handler or member name to its C# declaration on the page's `x:Class` type, from an `x:Name` reference to its declaration, and from resource references to their declaration. Navigation targets source you own; SDK and NuGet package types are metadata-only. See [Where Go to Definition works](#where-go-to-definition-works). |
+| **Diagnostics** | Syntactic diagnostics as you type, plus semantic validation against the resolved type system. |
+| **Find All References** | Locate references to names and resource keys. |
+| **Rename** | Rename symbols with a prepare-rename validity check. |
+| **Formatting** | Whole-document and range formatting. |
+| **Semantic tokens** | Richer, type-aware colorization layered on top of the TextMate grammar. |
+| **Code actions** | Press **Ctrl+.** to import and qualify unresolved types, add or correct namespace declarations, insert `x:DataType`, repair names, attributes, values, bindings, and Setter properties, remove invalid extra content, or generate event handlers. Prompted fixes are applied only when the document still matches the diagnostic. If the code-behind has pending edits, save it first when prompted, then retry handler generation so edits use current source positions. |
+
+The framework-dependent language server starts automatically when you open a `.xaml` file and requires an installed .NET 10 runtime. If a compatible runtime is not found, WinApp offers to open the official .NET download page or dismiss the prompt; it never installs a runtime automatically. Project-aware features use the MSBuild toolset from your WinUI build environment (Visual Studio, Visual Studio Build Tools, or a compatible SDK) and derive their type and resource capabilities from that project's WinUI SDK metadata rather than substituting a bundled framework catalog. Use **WinApp: Show Info** to check the server status and **WinApp: Restart Language Server** to restart it.
+
+The status bar reports project-loading progress for the active XAML document:
+
+| Status | Meaning |
+|--------|---------|
+| **WinApp: XAML IntelliSense loading** | Authoritative project metadata is loading; project-aware results are not ready yet. |
+| **WinApp: XAML project loading** | Framework IntelliSense is available while project symbols and diagnostics continue loading. |
+| **WinApp: XAML IntelliSense ready** | Project-aware XAML IntelliSense is ready. This confirmation hides after a few seconds. |
+| **WinApp: XAML IntelliSense unavailable** | Project IntelliSense failed to load. Select the status to open the **WinUI XAML** output for details. **WinApp: Show Info** offers restart and output actions; when packages are missing, the separate notification offers **Restore Packages**. Runtime and workspace-trust failures provide their own recovery actions in **Show Info**. |
+
+XAML tooling supports these settings:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `winapp.xaml.intelliSense.enable` | `true` | Starts the XAML language server when XAML files are opened. Disabling it keeps syntax highlighting active. |
+| `winapp.xaml.diagnostics.level` | `all` | Controls XAML diagnostics: `all`, `errorsOnly`, or `off`. Existing `warning` and `error` values remain supported as aliases for `all` and `errorsOnly`. Changes apply immediately to open XAML documents. |
+
+#### What works at each loading stage
+
+Editing stays responsive while the project loads, because features light up in stages rather than waiting for the whole project. The columns below correspond to the status bar messages above: **Loading** is *XAML IntelliSense loading*, **Framework&#8209;ready** is *XAML project loading*, and **Ready** is *XAML IntelliSense ready*.
+
+| Feature | Loading | Framework&#8209;ready | Ready |
+|---------|:-------:|:---------------------:|:-----:|
+| Formatting, folding, selection ranges, linked editing, document symbols, document links | ✅ | ✅ | ✅ |
+| Semantic tokens (type-aware colorization) | ✅ | ✅ | ✅ |
+| Syntactic diagnostics (malformed XAML) | ✅ | ✅ | ✅ |
+| Hover on `x:` directives such as `x:Class` and `x:Name` | ✅ | ✅ | ✅ |
+| Completion and hover for WinUI SDK and NuGet package types | - | ✅ | ✅ |
+| Resource keys: completion, hover, **F12**, Find All References | - | ✅ | ✅ |
+| `x:Name` references: **F12**, Find All References, rename, highlights | - | ✅ | ✅ |
+| Color swatches and code actions | - | ✅ | ✅ |
+| Completion and hover for types declared in **your own app source** | - | - | ✅ |
+| **F12 into C#**: event handlers, `x:Bind` members, your own controls | - | - | ✅ |
+| Semantic diagnostics (unknown types, members, and values) | - | - | ✅ |
+
+Two details worth knowing:
+
+- **Your own types arrive last.** The framework-ready stage resolves referenced assemblies from compiled metadata, which is why SDK and package types appear quickly. Types you declare in your own C# require the full load, which parses your source. Completion results served before then are marked incomplete, so VS Code re-queries automatically: you do not need to retype to pick up a control you just wrote.
+- **F12 opens source, not metadata.** It works at the framework-ready stage for resource keys and `x:Name`, and at the ready stage for C# declarations. See [Where Go to Definition works](#where-go-to-definition-works). Quick fixes that respond to semantic diagnostics likewise appear only once those diagnostics do.
+
+#### Where Go to Definition works
+
+F12 opens source you own: event handlers, `x:Bind` members, your own control and page types, `x:Name` declarations, and resource keys. Types from the WinUI SDK or a NuGet package are compiled metadata with no source to open, so F12 does nothing on those; use **hover** to inspect them instead. This matches Visual Studio, which also does not navigate into SDK types from XAML markup.
+
+F12 never blocks on the project load. If VS Code reports **"No definition found"** while the project is still loading, press it again once the status bar reports **WinApp: XAML IntelliSense ready**.
+
+#### C# code-behind IntelliSense
+
+For IntelliSense in `.xaml.cs` code-behind files, install the [C# Dev Kit](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csdevkit). Unlike the packaged XAML language server, C# Dev Kit requires the .NET SDK used by your project.
+
+1. Open the folder containing the WinUI `.csproj`, rather than opening a code-behind file by itself.
+2. Install the .NET SDK version targeted by the project.
+3. Restore and build the project for the appropriate platform:
+
+   ```powershell
+   dotnet restore path\to\App.csproj
+   dotnet build path\to\App.csproj -p:Platform=x64
+   ```
+
+   Use `ARM64` instead of `x64` on an ARM64 project.
+4. Reload VS Code after the first successful build.
+
+C# Dev Kit provides IntelliSense for normal C# source and referenced WinUI APIs, including types such as `Window`, `Page`, and `Button`, their properties and methods, and your handwritten classes and event handlers.
+
+There is currently a [known C# Dev Kit limitation for WinUI XAML-generated code](https://github.com/dotnet/vscode-csharp/issues/9172). The C# language-service workspace does not include the partial-class files generated by the WinUI XAML compiler, even when those files exist under `obj` and the project builds successfully. As a result, code-behind files may show false `CS0103` diagnostics for:
+
+- `InitializeComponent()`
+- fields generated from XAML `x:Name` declarations
+- other members that exist only in generated `.g.cs` or `.g.i.cs` files
 
 ### AppxManifest IntelliSense
 
@@ -197,12 +287,12 @@ When you edit an `AppxManifest.xml` or `.appxmanifest` file in the text editor, 
 
 **What you get:**
 
-- **Element completions** — context-aware child element suggestions for the current XML location
-- **Attribute completions** — valid attributes for the current element
-- **Attribute value completions** — allowed enum values from XSD restrictions
-- **Hover documentation** — element and attribute descriptions from XSD annotations
-- **Diagnostics** — errors for missing required attributes/elements, invalid values, and pattern violations; warnings for undeclared attributes
-- **Go to Definition** — **F12** / **Ctrl+Click** jumps to the relevant schema definition
+- **Element completions**: context-aware child element suggestions for the current XML location
+- **Attribute completions**: valid attributes for the current element
+- **Attribute value completions**: allowed enum values from XSD restrictions
+- **Hover documentation**: element and attribute descriptions from XSD annotations
+- **Diagnostics**: errors for missing required attributes/elements, invalid values, and pattern violations; warnings for undeclared attributes
+- **Go to Definition**: **F12** / **Ctrl+Click** jumps to the relevant schema definition
 
 **Supported files:**
 
@@ -246,13 +336,13 @@ You can also disable just the diagnostic underlines while keeping completions an
 
 Run **WinApp: Initialize Project** to configure your project with the Windows SDK and/or Windows App SDK. The command:
 
-1. **Detects your project** — If there's a recognized app project at the workspace root, it proceeds immediately. Otherwise, it searches the workspace and presents a list of discovered projects for you to choose from.
-2. **Asks for SDK channel** — Select stable, preview, experimental, or none (for projects like Rust/Tauri that bring their own SDK bindings).
-3. **Runs `winapp init`** — Sets up the manifest, SDK packages, and configuration for the selected project.
+1. **Detects your project**: If there's a recognized app project at the workspace root, it proceeds immediately. Otherwise, it searches the workspace and presents a list of discovered projects for you to choose from.
+2. **Asks for SDK channel**: Select stable, preview, experimental, or none (for projects like Rust/Tauri that bring their own SDK bindings).
+3. **Runs `winapp init`**: Sets up the manifest, SDK packages, and configuration for the selected project.
 
 ### Debug with package identity
 
-Many Windows APIs — notifications, background tasks, on-device AI, share targets — require your app to have **package identity**. The WinApp debug type gives your app identity automatically when you press F5, so you can test these APIs during development without building a full MSIX installer.
+Many Windows APIs (notifications, background tasks, on-device AI, share targets) require your app to have **package identity**. The WinApp debug type gives your app identity automatically when you press F5, so you can test these APIs during development without building a full MSIX installer.
 
 For scenarios where you need to debug startup code from the very first instruction, use **WinApp: Create Debug Identity** to register a sparse package for your executable, then launch it normally with your preferred debugger.
 
@@ -268,14 +358,14 @@ Use **WinApp: Create MSIX Package** to package your application. If you choose *
 
 ### Access Windows SDK tools
 
-**WinApp: Run SDK Tool** gives you direct access to `makeappx`, `signtool`, `mt`, and `makepri` — no need to find SDK installation paths or open a separate Developer Command Prompt. Arguments are passed directly to the selected tool without shell interpretation; double-quote values that contain spaces.
+**WinApp: Run SDK Tool** gives you direct access to `makeappx`, `signtool`, `mt`, and `makepri`: no need to find SDK installation paths or open a separate Developer Command Prompt. Arguments are passed directly to the selected tool without shell interpretation; double-quote values that contain spaces.
 
 ## Supported Frameworks
 
 The winapp CLI (and this extension) works with any Windows app framework:
 
-- **.NET** — WPF, WinForms, Console, WinUI 3
-- **C / C++** — Win32, CMake, MSBuild
+- **.NET**: WPF, WinForms, Console, WinUI 3
+- **C / C++**: Win32, CMake, MSBuild
 - **Electron** / **Node.js**
 - **Rust**
 - **Tauri**
@@ -285,8 +375,9 @@ The winapp CLI (and this extension) works with any Windows app framework:
 
 - Windows 10 or later
 - Visual Studio Code 1.109.0 or later
+- The WinUI XAML language server is framework-dependent and requires an installed .NET 10 runtime. The extension does not install or bundle .NET. Project-aware features also require the MSBuild toolset already used to build the WinUI project.
 
-The winapp CLI is bundled with the extension — no separate installation required.
+The winapp CLI is bundled with the extension: no separate installation required.
 
 For debugging, install the debugger extension that matches your app's language (see [Supported debuggers](#integrated-debugging) above).
 
@@ -296,7 +387,7 @@ For debugging, install the debugger extension that matches your app's language (
 |---------|-------|----------|
 | **Invalid `inputFolder` notification when pressing F5** | The configured build output path is missing, is not a directory, or contains no `.exe`. | Select **Open debug configuration** in the notification to open the relevant debug or launch configuration, then correct `inputFolder`. |
 | **"No folders containing .exe files found in the workspace..."** or **"No build output folder selected..."** when pressing F5 | The project hasn't been built yet, or the build output is in an unexpected location. | Build your project first (e.g., `dotnet build`), or set `inputFolder` in `launch.json` to point to the folder containing your `.exe`. |
-| **Debugger doesn't attach** | The required debugger extension isn't installed. | Install the matching extension for your language — see [Supported debuggers](#integrated-debugging). |
+| **Debugger doesn't attach** | The required debugger extension isn't installed. | Install the matching extension for your language. See [Supported debuggers](#integrated-debugging). |
 | **App launches but changes aren't visible** | The `winapp` debug type does not build the project automatically. | Rebuild your project before pressing F5, or add a `preLaunchTask` to automate it (see the tip in [Integrated Debugging](#integrated-debugging)). |
 | **Certificate trust error when running** | The development certificate isn't installed or has expired. | Run **WinApp: Generate Certificate** and choose to also install it, or run **WinApp: Install Certificate** with your existing `.pfx` file. Both prompt for admin (UAC) when VS Code isn't elevated. |
 | **"Access denied" or permission errors** | Some operations (package registration) require elevation. Certificate install now prompts for admin automatically. | Approve the UAC prompt when it appears, or run VS Code as Administrator. |
