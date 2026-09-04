@@ -36,6 +36,14 @@ export const EXTERNAL_COMMANDS = {
 export const DOTNET_DOWNLOAD_URL =
   "https://dotnet.microsoft.com/download/dotnet/10.0";
 
+/**
+ * Prefix for the status summary. The error case gets its own prefix so the
+ * reason reads as the sentence after the colon instead of a second clause.
+ */
+export const XAML_STATUS_PREFIX = "WinUI XAML Tools:";
+export const XAML_INTELLISENSE_UNAVAILABLE_PREFIX =
+  "WinUI XAML IntelliSense Unavailable:";
+
 /** Buttons offered by the `winui-xaml.showInfo` status summary. */
 export const XAML_STATUS_ACTIONS = {
   openSettings: "Open Settings",

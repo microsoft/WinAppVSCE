@@ -15,6 +15,10 @@ import {
   PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
   PROJECT_CONTEXT_LOADING_MESSAGE,
 } from "../xaml/projectContextStatus";
+import {
+  XAML_INTELLISENSE_UNAVAILABLE_PREFIX,
+  XAML_STATUS_PREFIX,
+} from "../xaml/xamlConstants";
 
 test("defines the persistent missing-runtime status and recovery command", () => {
   assert.deepEqual(DOTNET_REQUIRED_STATUS, {
@@ -25,15 +29,23 @@ test("defines the persistent missing-runtime status and recovery command", () =>
   });
 });
 
+test("pins the status message prefixes", () => {
+  assert.equal(XAML_STATUS_PREFIX, "WinUI XAML Tools:");
+  assert.equal(
+    XAML_INTELLISENSE_UNAVAILABLE_PREFIX,
+    "WinUI XAML IntelliSense Unavailable:"
+  );
+});
+
 test("reports disabled, running, and degraded XAML status actions", () => {
   assert.deepEqual(getXamlStatus(false, false, true, false), {
     message:
-      "WinUI XAML Tools: IntelliSense is disabled in Settings; syntax highlighting remains active.",
+      `${XAML_STATUS_PREFIX} IntelliSense is disabled in Settings; syntax highlighting remains active.`,
     actions: ["Open Settings"],
   });
 
   assert.deepEqual(getXamlStatus(true, true, true, true), {
-    message: "WinUI XAML Tools: language server running (Host B).",
+    message: `${XAML_STATUS_PREFIX} language server running (Host B).`,
     actions: [],
   });
   assert.deepEqual(
@@ -41,7 +53,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
       state: "loading",
     }),
     {
-      message: `WinUI XAML Tools: ${PROJECT_CONTEXT_LOADING_MESSAGE}`,
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_LOADING_MESSAGE}`,
       actions: ["Show Output"],
     }
   );
@@ -50,7 +62,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
       state: "framework-ready",
     }),
     {
-      message: `WinUI XAML Tools: ${PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE}`,
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE}`,
       actions: ["Show Output"],
     }
   );
@@ -60,14 +72,14 @@ test("reports disabled, running, and degraded XAML status actions", () => {
       message: "Restore required.",
     }),
     {
-      message: "WinUI XAML Tools: Restore required.",
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} Restore required.`,
       actions: ["Restart Language Server", "Show Output"],
     }
   );
   assert.deepEqual(
     getXamlStatus(true, true, true, true, false, { state: "error" }),
     {
-      message: `WinUI XAML Tools: ${PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE}`,
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE}`,
       actions: ["Restart Language Server", "Show Output"],
     }
   );
@@ -76,7 +88,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     "Show Output",
   ]);
   assert.deepEqual(getXamlStatus(true, false, true, true, true), {
-    message: "WinUI XAML Tools: .NET 10 is required; XAML syntax highlighting remains active.",
+    message: `${XAML_STATUS_PREFIX} .NET 10 is required; XAML syntax highlighting remains active.`,
     actions: ["Install .NET", "Restart Language Server", "Show Output"],
   });
   assert.deepEqual(getXamlStatus(true, false, false, true).actions, [
@@ -85,7 +97,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
   ]);
   assert.deepEqual(getXamlStatus(true, false, true, false), {
     message:
-      "WinUI XAML Tools: ready; the language server starts when a XAML file is opened.",
+      `${XAML_STATUS_PREFIX} ready; the language server starts when a XAML file is opened.`,
     actions: [],
   });
 });
