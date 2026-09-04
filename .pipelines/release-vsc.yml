@@ -168,42 +168,12 @@ extends:
             displayName: Download public CLI release for VS Code extension
             env:
               GH_TOKEN: $(GITHUB_TOKEN)
+              WINAPP_CLI_RELEASE_TAG: ${{ parameters.CliReleaseTag }}
             inputs:
               pwsh: true
               errorActionPreference: 'stop'
-              targetType: 'inline'
-              script: |
-                $cliReleaseTag = "${{ parameters.CliReleaseTag }}"
-                $repo = "microsoft/winappcli"
-
-                if ([string]::IsNullOrWhiteSpace($cliReleaseTag)) {
-                    Write-Host "No CLI release tag specified, finding latest stable release..."
-                    $releases = gh release list --repo $repo --limit 10 --json tagName,isPrerelease,isDraft | ConvertFrom-Json
-                    $stableRelease = $releases | Where-Object { -not $_.isPrerelease -and -not $_.isDraft } | Select-Object -First 1
-                    if (-not $stableRelease) {
-                        Write-Error "No stable release found for $repo"
-                        exit 1
-                    }
-                    $cliReleaseTag = $stableRelease.tagName
-                    Write-Host "Found latest stable release: $cliReleaseTag"
-                } else {
-                    Write-Host "Using specified CLI release tag: $cliReleaseTag"
-                }
-
-                $cliDir = "$(System.DefaultWorkingDirectory)/artifacts/public-cli"
-                New-Item -ItemType Directory -Path "$cliDir/win-x64" -Force | Out-Null
-                New-Item -ItemType Directory -Path "$cliDir/win-arm64" -Force | Out-Null
-
-                gh release download $cliReleaseTag --repo $repo --pattern "winappcli-x64.zip" --dir $cliDir
-                if ($LASTEXITCODE -ne 0) { Write-Error "Failed to download winappcli-x64.zip"; exit 1 }
-                gh release download $cliReleaseTag --repo $repo --pattern "winappcli-arm64.zip" --dir $cliDir
-                if ($LASTEXITCODE -ne 0) { Write-Error "Failed to download winappcli-arm64.zip"; exit 1 }
-
-                Expand-Archive -Path "$cliDir/winappcli-x64.zip" -DestinationPath "$cliDir/win-x64" -Force
-                Expand-Archive -Path "$cliDir/winappcli-arm64.zip" -DestinationPath "$cliDir/win-arm64" -Force
-
-                if (-not (Test-Path "$cliDir/win-x64/winapp.exe")) { Write-Error "x64 winapp.exe not found"; exit 1 }
-                if (-not (Test-Path "$cliDir/win-arm64/winapp.exe")) { Write-Error "arm64 winapp.exe not found"; exit 1 }
+              filePath: $(System.DefaultWorkingDirectory)\scripts\download-cli.ps1
+              arguments: "-DestinationPath '$(System.DefaultWorkingDirectory)/artifacts/public-cli'"
           - task: PowerShell@2
             displayName: Install signed WinUI XAML server artifact
             inputs:
