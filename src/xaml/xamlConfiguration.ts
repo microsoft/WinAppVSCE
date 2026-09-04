@@ -60,7 +60,7 @@ export function getXamlStatus(
   if (!enabled) {
     return {
       message:
-        "WinUI XAML Tools — IntelliSense is disabled in Settings; syntax highlighting remains active.",
+        "WinUI XAML Tools: IntelliSense is disabled in Settings; syntax highlighting remains active.",
       actions: ["Open Settings"],
     };
   }
@@ -68,7 +68,7 @@ export function getXamlStatus(
   if (running) {
     if (projectContext?.state === "error") {
       return {
-        message: `WinUI XAML Tools — project IntelliSense unavailable: ${
+        message: `WinUI XAML Tools: project IntelliSense unavailable: ${
           projectContext.message ?? "project metadata failed to load."
         }`,
         actions: ["Restart Language Server", "Show Output"],
@@ -77,19 +77,19 @@ export function getXamlStatus(
     if (projectContext?.state === "loading") {
       return {
         message:
-          "WinUI XAML Tools — loading authoritative project metadata.",
+          "WinUI XAML Tools: loading authoritative project metadata.",
         actions: ["Show Output"],
       };
     }
     if (projectContext?.state === "framework-ready") {
       return {
         message:
-          "WinUI XAML Tools — framework IntelliSense is available; project symbols and diagnostics are still loading.",
+          "WinUI XAML Tools: framework IntelliSense is available; project symbols and diagnostics are still loading.",
         actions: ["Show Output"],
       };
     }
     return {
-      message: "WinUI XAML Tools — language server running (Host B).",
+      message: "WinUI XAML Tools: language server running (Host B).",
       actions: [],
     };
   }
@@ -97,7 +97,7 @@ export function getXamlStatus(
   if (!hasOpenXamlDocument) {
     return {
       message:
-        "WinUI XAML Tools — ready; the language server starts when a XAML file is opened.",
+        "WinUI XAML Tools: ready; the language server starts when a XAML file is opened.",
       actions: [],
     };
   }
@@ -105,13 +105,13 @@ export function getXamlStatus(
   if (requiresDotnet) {
     return {
       message:
-        "WinUI XAML Tools — .NET 10 is required; XAML syntax highlighting remains active.",
+        "WinUI XAML Tools: .NET 10 is required; XAML syntax highlighting remains active.",
       actions: ["Install .NET", "Restart Language Server", "Show Output"],
     };
   }
 
   return {
-    message: "WinUI XAML Tools — syntax only; language server not started.",
+    message: "WinUI XAML Tools: syntax only; language server not started.",
     actions: [
       trusted ? "Restart Language Server" : "Manage Workspace Trust",
       "Show Output",

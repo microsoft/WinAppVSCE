@@ -23,12 +23,12 @@ test("defines the persistent missing-runtime status and recovery command", () =>
 test("reports disabled, running, and degraded XAML status actions", () => {
   assert.deepEqual(getXamlStatus(false, false, true, false), {
     message:
-      "WinUI XAML Tools — IntelliSense is disabled in Settings; syntax highlighting remains active.",
+      "WinUI XAML Tools: IntelliSense is disabled in Settings; syntax highlighting remains active.",
     actions: ["Open Settings"],
   });
 
   assert.deepEqual(getXamlStatus(true, true, true, true), {
-    message: "WinUI XAML Tools — language server running (Host B).",
+    message: "WinUI XAML Tools: language server running (Host B).",
     actions: [],
   });
   assert.deepEqual(
@@ -36,7 +36,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
       state: "loading",
     }),
     {
-      message: "WinUI XAML Tools — loading authoritative project metadata.",
+      message: "WinUI XAML Tools: loading authoritative project metadata.",
       actions: ["Show Output"],
     }
   );
@@ -46,7 +46,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     }),
     {
       message:
-        "WinUI XAML Tools — framework IntelliSense is available; project symbols and diagnostics are still loading.",
+        "WinUI XAML Tools: framework IntelliSense is available; project symbols and diagnostics are still loading.",
       actions: ["Show Output"],
     }
   );
@@ -57,7 +57,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     }),
     {
       message:
-        "WinUI XAML Tools — project IntelliSense unavailable: Restore required.",
+        "WinUI XAML Tools: project IntelliSense unavailable: Restore required.",
       actions: ["Restart Language Server", "Show Output"],
     }
   );
@@ -66,7 +66,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     "Show Output",
   ]);
   assert.deepEqual(getXamlStatus(true, false, true, true, true), {
-    message: "WinUI XAML Tools — .NET 10 is required; XAML syntax highlighting remains active.",
+    message: "WinUI XAML Tools: .NET 10 is required; XAML syntax highlighting remains active.",
     actions: ["Install .NET", "Restart Language Server", "Show Output"],
   });
   assert.deepEqual(getXamlStatus(true, false, false, true).actions, [
@@ -75,7 +75,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
   ]);
   assert.deepEqual(getXamlStatus(true, false, true, false), {
     message:
-      "WinUI XAML Tools — ready; the language server starts when a XAML file is opened.",
+      "WinUI XAML Tools: ready; the language server starts when a XAML file is opened.",
     actions: [],
   });
 });
