@@ -44,11 +44,16 @@ describe("WinUI XAML red-team 13 — x:Bind negation and path edges", function (
     assert.strictEqual(path.basename(defs[0].fsPath), CS, `expected ${CS}; buffer=${buffer}; got ${defs[0].fsPath}`);
   });
 
-  it("stays silent for a valid negated x:Bind path combined with Mode=OneWay", async () => {
+  it("flags the unsupported '!' operator even when combined with Mode=OneWay", async () => {
     const buffer = page('<TextBlock Text="{x:Bind !IsReady, Mode=OneWay}" />');
-    const diags = await h.diagnosticsFor(buffer, () => false, 3500);
-    const bad = diags.find((x) => /^WXAML/.test(String(x.code || "")));
-    assert.ok(!bad, `valid negated x:Bind with Mode should stay silent; buffer=${buffer}; got ${diagSummary(diags)}`);
+    const diags = await h.diagnosticsFor(
+      buffer,
+      (d) => d.some((x) => x.code === "WXAML0035"),
+      12000
+    );
+    const all = diags.filter((x) => /^WXAML/.test(String(x.code || "")));
+    assert.strictEqual(all.length, 1, `negated x:Bind with Mode should raise exactly one WXAML diagnostic; buffer=${buffer}; got ${diagSummary(diags)}`);
+    assert.strictEqual(all[0].code, "WXAML0035", `negation should be reported as unsupported syntax; buffer=${buffer}; got ${diagSummary(diags)}`);
   });
 
   it("F12 resolves an x:Bind function argument when the function is negated", async () => {

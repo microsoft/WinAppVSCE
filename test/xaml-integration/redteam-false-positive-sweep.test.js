@@ -157,7 +157,7 @@ describe("WinUI XAML red-team 15 — broad false-positive sweep", function () {
       "      <VisualState x:Name=\"Wide\" />",
       "    </VisualStateGroup>",
       "  </VisualStateManager.VisualStateGroups>",
-      "  <TextBlock Text=\"{x:Bind !IsReady, Mode=OneWay, FallbackValue=missing}\" />",
+      "  <TextBlock Text=\"{x:Bind IsReady, Mode=OneWay, FallbackValue=missing}\" />",
       "  <ListView Grid.Row=\"1\" ItemsSource=\"{x:Bind Items, Mode=OneWay}\" ItemTemplate=\"{StaticResource Round15StringTemplate}\" ItemContainerStyle=\"{StaticResource Round15ListViewItemStyle}\" />",
       "  <ItemsRepeater ItemsSource=\"{x:Bind Items, Mode=OneWay}\">",
       "    <ItemsRepeater.ItemTemplate>",
@@ -174,7 +174,9 @@ describe("WinUI XAML red-team 15 — broad false-positive sweep", function () {
     assert.deepStrictEqual(wxaml(diags), [], `real-world dense page should stay free of WXAML diagnostics; buffer=${buffer}; got ${diagSummary(diags)}`);
   });
 
-  it("stays silent for valid boolean-negated x:Bind members with named args", async () => {
+  // '!' is not part of the {x:Bind} grammar, so each negated binding is reported
+  // regardless of how many named arguments follow it.
+  it("flags the unsupported '!' operator on negated x:Bind members with named args", async () => {
     const buffer = page([
       "<Page.Resources>",
       "  <SolidColorBrush x:Key=\"Round15ConverterStandIn\" Color=\"Red\" />",
@@ -185,8 +187,15 @@ describe("WinUI XAML red-team 15 — broad false-positive sweep", function () {
       "  <TextBlock Tag=\"{x:Bind ! HasPair(GreetingText, Items[0]), Mode=OneWay}\" />",
       "</StackPanel>",
     ].join("\n  "));
-    const diags = await h.diagnosticsFor(buffer, () => false, 3500);
-    assert.deepStrictEqual(wxaml(diags), [], `valid negated x:Bind combos should stay silent; buffer=${buffer}; got ${diagSummary(diags)}`);
+    const diags = await h.diagnosticsFor(
+      buffer,
+      (d) => d.filter((x) => x.code === "WXAML0035").length === 3,
+      12000
+    );
+    const all = wxaml(diags);
+    const negation = all.filter((x) => x.code === "WXAML0035");
+    assert.strictEqual(negation.length, 3, `each negated x:Bind should raise WXAML0035; buffer=${buffer}; got ${diagSummary(diags)}`);
+    assert.strictEqual(all.length, negation.length, `the unsupported '!' should be the only complaint; buffer=${buffer}; got ${diagSummary(diags)}`);
   });
 
   it("reports exactly one bad property element when mixed with a valid sibling", async () => {

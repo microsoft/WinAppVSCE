@@ -197,9 +197,19 @@ describe("WinUI XAML red-team 33 — cast-path x:Bind typo diagnostics", functio
     await assertOneWxaml0005OnToken(buffer, "NopePath33", "explicit Path= cast typo should be validated");
   });
 
-  it("flags negation plus a cast typo", async () => {
+  // The '!' is rejected before the cast path is walked, so the unsupported-syntax
+  // error is the single diagnostic — the member typo behind it is not reached.
+  it("flags negation ahead of a cast typo", async () => {
     const buffer = page("<TextBlock Tag=\"{x:Bind !(local:SmokePage)BogusNegated33, Mode=OneWay}\" />");
-    await assertOneWxaml0005OnToken(buffer, "BogusNegated33", "leading ! before cast should still validate the cast target member");
+    const diags = await h.diagnosticsFor(
+      buffer,
+      (d) => d.some((x) => x.code === "WXAML0035"),
+      12000
+    );
+    const all = wxaml(diags);
+    assert.strictEqual(all.length, 1, `leading ! should raise exactly one WXAML diagnostic; buffer=${buffer}; got ${summary(diags)}`);
+    assert.strictEqual(all[0].code, "WXAML0035", `leading ! should be reported as unsupported syntax; buffer=${buffer}; got ${summary(diags)}`);
+    assert.strictEqual(diagText(all[0]), "!", `range should underline only the '!'; buffer=${buffer}; got ${JSON.stringify(diagText(all[0]))}`);
   });
 
   it("flags a cast typo inside a conflicting x:DataType template against the cast target", async () => {
