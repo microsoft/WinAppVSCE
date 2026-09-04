@@ -33,7 +33,17 @@ import {
   DotnetFindPathRequest,
   DotnetHostResolver,
   InstallToolHost,
+  describeDotnetResolutionFailure,
 } from "./dotnetInstallTool";
+import {
+  DIAGNOSTICS_LEVEL_KEY,
+  DIAGNOSTICS_LEVEL_SETTING,
+  EXTERNAL_COMMANDS,
+  INTELLISENSE_ENABLE_KEY,
+  INTELLISENSE_ENABLE_SETTING,
+  XAML_COMMANDS,
+  XAML_SETTINGS_SECTION,
+} from "./xamlConstants";
 import { ServerLifecycle } from "./serverLifecycle";
 import {
   shouldTriggerAutomaticXamlSuggestions,
@@ -115,8 +125,8 @@ const diagnosticsLevelInteraction = new DiagnosticsLevelInteraction({
     vscode.window.showWarningMessage(message, action),
   openSettings: () =>
     vscode.commands.executeCommand(
-      "workbench.action.openSettings",
-      "winapp.xaml.diagnostics.level"
+      EXTERNAL_COMMANDS.openSettings,
+      DIAGNOSTICS_LEVEL_SETTING
     ),
 });
 
@@ -141,15 +151,15 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
   );
   projectStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   projectStatusItem.name = "WinApp XAML IntelliSense";
-  projectStatusItem.command = "winui-xaml.showOutput";
+  projectStatusItem.command = XAML_COMMANDS.showOutput;
   context.subscriptions.push(output);
   context.subscriptions.push(projectStatusItem);
   log("WinUI XAML Tools activating…");
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("winui-xaml.showInfo", () => showXamlInfo()),
-    vscode.commands.registerCommand("winui-xaml.showOutput", () => output?.show(true)),
-    vscode.commands.registerCommand("winui-xaml.restartServer", () => restartClient(context, true)),
+    vscode.commands.registerCommand(XAML_COMMANDS.showInfo, () => showXamlInfo()),
+    vscode.commands.registerCommand(XAML_COMMANDS.showOutput, () => output?.show(true)),
+    vscode.commands.registerCommand(XAML_COMMANDS.restartServer, () => restartClient(context, true)),
     vscode.commands.registerCommand(
       PROMPT_TEXT_EDIT_COMMAND,
       async (request: PromptedTextEditRequest) => {
@@ -242,7 +252,7 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
       },
     ),
     vscode.commands.registerCommand(
-      "winui-xaml.saveGeneratedEventHandler",
+      XAML_COMMANDS.saveGeneratedEventHandler,
       async (documentUri: string) => {
         const uri = vscode.Uri.parse(documentUri);
         const document =
@@ -294,7 +304,7 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
     ),
     vscode.window.onDidChangeActiveTextEditor(() => renderProjectContextStatus()),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration("winapp.xaml.intelliSense.enable")) {
+      if (event.affectsConfiguration(INTELLISENSE_ENABLE_SETTING)) {
         if (!shouldRestartXamlLanguageServer(
           client !== undefined,
           hasXamlDemand()
@@ -306,10 +316,10 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
         return restartClient(context);
       }
 
-      if (event.affectsConfiguration("winapp.xaml.diagnostics.level")) {
+      if (event.affectsConfiguration(DIAGNOSTICS_LEVEL_SETTING)) {
         const configuredLevel = vscode.workspace
-          .getConfiguration("winapp.xaml")
-          .get<unknown>("diagnostics.level", "all");
+          .getConfiguration(XAML_SETTINGS_SECTION)
+          .get<unknown>(DIAGNOSTICS_LEVEL_KEY, "all");
         if (!client?.isRunning()) {
           diagnosticsLevelInteraction.resolve(configuredLevel);
           log("XAML diagnostics level changed — it will apply when the language server is running.");
@@ -353,8 +363,8 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
 
       const change = event.contentChanges[0];
       const enabled = vscode.workspace
-        .getConfiguration("winapp.xaml")
-        .get("intelliSense.enable", true);
+        .getConfiguration(XAML_SETTINGS_SECTION)
+        .get(INTELLISENSE_ENABLE_KEY, true);
       if (
         !enabled ||
         (change.text !== "<" && !/^\r?\n[ \t]*$/.test(change.text))
@@ -400,7 +410,7 @@ function hasXamlDemand(): boolean {
 
 function showXamlInfo(): void {
   const configuration = readXamlLanguageServerConfiguration((section, defaultValue) =>
-    vscode.workspace.getConfiguration("winapp.xaml").get(section, defaultValue)
+    vscode.workspace.getConfiguration(XAML_SETTINGS_SECTION).get(section, defaultValue)
   );
   const activeEditor = vscode.window.activeTextEditor;
   const activeDocumentUri = activeEditor
@@ -505,7 +515,7 @@ function createInstallToolHost(): InstallToolHost {
     },
     findPath: async (request: DotnetFindPathRequest) =>
       vscode.commands.executeCommand<{ dotnetPath: string } | undefined>(
-        "dotnet.findPath",
+        EXTERNAL_COMMANDS.dotnetFindPath,
         request
       ),
     log,
@@ -571,9 +581,9 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     return;
   }
 
-  const xamlConfiguration = vscode.workspace.getConfiguration("winapp.xaml");
+  const xamlConfiguration = vscode.workspace.getConfiguration(XAML_SETTINGS_SECTION);
   const configuredDiagnosticsLevel = xamlConfiguration.get<unknown>(
-    "diagnostics.level",
+    DIAGNOSTICS_LEVEL_KEY,
     "all"
   );
   diagnosticsLevelInteraction.resolve(configuredDiagnosticsLevel);
@@ -592,8 +602,8 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
         .then((selection) => {
           if (selection === "Open Settings") {
             return vscode.commands.executeCommand(
-              "workbench.action.openSettings",
-              "winapp.xaml.intelliSense.enable"
+              EXTERNAL_COMMANDS.openSettings,
+              INTELLISENSE_ENABLE_SETTING
             );
           }
           return undefined;
@@ -634,10 +644,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
   if (resolution.status === "failed") {
     const installToolUnavailable = resolution.reason === "install-tool-unavailable";
     notifyDegraded(
-      installToolUnavailable
-        ? `The .NET Install Tool (${DOTNET_INSTALL_TOOL_ID}) could not be installed or queried, ` +
-            "so the .NET 10 runtime could not be located."
-        : "A compatible installed Microsoft.NETCore.App 10.x runtime was not found.",
+      describeDotnetResolutionFailure(resolution.reason),
       installToolUnavailable ? "installTool" : "dotnet",
       userInitiated,
       context
@@ -684,7 +691,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
         return actions?.map((action) => {
           if (!(action instanceof vscode.CodeAction) ||
               action.edit === undefined ||
-              action.command?.command !== "winui-xaml.saveGeneratedEventHandler" ||
+              action.command?.command !== XAML_COMMANDS.saveGeneratedEventHandler ||
               typeof action.command.arguments?.[0] !== "string") {
             return action;
           }
@@ -736,8 +743,8 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     client = candidate;
     const latestDiagnosticsLevel = normalizeDiagnosticsLevel(
       vscode.workspace
-        .getConfiguration("winapp.xaml")
-        .get("diagnostics.level", "all")
+        .getConfiguration(XAML_SETTINGS_SECTION)
+        .get(DIAGNOSTICS_LEVEL_KEY, "all")
     );
     await candidate.sendNotification("workspace/didChangeConfiguration", {
       settings: { diagnosticsLevel: latestDiagnosticsLevel },
@@ -816,11 +823,11 @@ async function restoreProject(projectPath: string): Promise<void> {
     const resolution = await requireDotnetHostResolver().resolve();
     if (resolution.status === "failed") {
       throw new Error(
-        resolution.reason === "install-tool-unavailable"
-          ? `The .NET Install Tool (${DOTNET_INSTALL_TOOL_ID}) could not be installed or queried, ` +
-              "so the .NET 10 runtime could not be located. See the WinUI XAML output for details."
-          : "A compatible Microsoft.NETCore.App 10.x runtime was not found. " +
-              "Install the .NET 10 runtime, then run restore again."
+        `${describeDotnetResolutionFailure(resolution.reason)} ${
+          resolution.reason === "install-tool-unavailable"
+            ? "See the WinUI XAML output for details."
+            : "Install the .NET 10 runtime, then run restore again."
+        }`
       );
     }
     const dotnet = resolution.dotnetPath;
@@ -926,7 +933,7 @@ function renderProjectContextStatus(): void {
 
   projectStatusItem.text = presentation.text;
   projectStatusItem.tooltip = presentation.tooltip;
-  projectStatusItem.command = "winui-xaml.showOutput";
+  projectStatusItem.command = XAML_COMMANDS.showOutput;
   projectStatusItem.show();
   if (presentation.transient) {
     readyStatusTimer = setTimeout(() => {

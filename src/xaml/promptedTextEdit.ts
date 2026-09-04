@@ -107,6 +107,11 @@ export function documentChangedMessage(documentUri: string): string {
   return `The XAML document '${documentUri}' changed before the quick fix was applied. Run the quick fix again.`;
 }
 
+/** Reported when the workspace edit is rejected, usually a read-only file. */
+export function couldNotEditMessage(documentUri: string): string {
+  return `Could not edit '${documentUri}'. Verify that the file is writable, then run the quick fix again.`;
+}
+
 export async function runPromptedTextEdit(
   request: PromptedTextEditRequest,
   dependencies: PromptedTextEditDependencies,
@@ -174,7 +179,7 @@ export async function runPromptedTextEdit(
 
   if (!(await dependencies.applyEdit(document, request.range, newText))) {
     throw new Error(
-      `Could not edit '${request.documentUri}'. Verify that the file is writable, then run the quick fix again.`,
+      couldNotEditMessage(request.documentUri),
     );
   }
 }
@@ -211,7 +216,7 @@ export async function runGuardedTextEditCommand<TDocument, TRange, TWorkspaceEdi
 
   if (!(await dependencies.applyEdit(workspaceEdit))) {
     throw new Error(
-      `Could not edit '${request.documentUri}'. Verify that the file is writable, then run the quick fix again.`,
+      couldNotEditMessage(request.documentUri),
     );
   }
 }

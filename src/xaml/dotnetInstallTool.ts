@@ -54,6 +54,19 @@ export type DotnetResolution =
   | { readonly status: "resolved"; readonly dotnetPath: string }
   | { readonly status: "failed"; readonly reason: DotnetResolutionFailure };
 
+/**
+ * The user-facing reason a host could not be resolved. Callers append their own
+ * remedy (restart, restore, install) so the diagnosis itself stays in one place.
+ */
+export function describeDotnetResolutionFailure(
+  reason: DotnetResolutionFailure
+): string {
+  return reason === "install-tool-unavailable"
+    ? `The .NET Install Tool (${DOTNET_INSTALL_TOOL_ID}) could not be installed or queried, ` +
+        "so the .NET 10 runtime could not be located."
+    : "A compatible Microsoft.NETCore.App 10.x runtime was not found.";
+}
+
 /** Host operations the resolver needs, injected so the resolver stays testable. */
 export interface InstallToolHost {
   /** Whether the Install Tool extension is present in this VS Code instance. */

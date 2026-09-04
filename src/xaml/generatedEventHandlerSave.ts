@@ -1,3 +1,5 @@
+import { XAML_COMMANDS } from "./xamlConstants";
+
 export interface SaveableGeneratedHandlerDocument {
   readonly isDirty: boolean;
   save(): Thenable<boolean>;
@@ -12,7 +14,7 @@ export function targetsDirtyGeneratedHandlerDocument(
   command: GeneratedHandlerCommand | undefined,
   isDirty: (documentUri: string) => boolean,
 ): boolean {
-  if (command?.command !== "winui-xaml.saveGeneratedEventHandler") {
+  if (command?.command !== XAML_COMMANDS.saveGeneratedEventHandler) {
     return false;
   }
 

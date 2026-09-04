@@ -1,19 +1,27 @@
 // Kept independent of the VS Code API for unit testing.
 
 import { DOTNET_INSTALL_TOOL_ID } from "./dotnetInstallTool";
+import {
+  DISMISS_ACTION_LABEL,
+  DOTNET_DOWNLOAD_URL,
+  DegradedActionLabel,
+  EXTERNAL_COMMANDS,
+  XAML_COMMANDS,
+  XAML_SETTINGS_SECTION,
+} from "./xamlConstants";
 
 /** Why the language server is not running. */
 export type DegradedCause = "untrusted" | "dotnet" | "installTool" | "server";
 
 /** Settings query for the degraded-state action. */
-export const SERVER_SETTINGS_QUERY = "winapp.xaml";
+export const SERVER_SETTINGS_QUERY = XAML_SETTINGS_SECTION;
 export const DOTNET_RUNTIME_DISMISSED_KEY = "winui-xaml.dotnetRuntimeRequirementDismissed";
-export const DOTNET_DOWNLOAD_URL = "https://dotnet.microsoft.com/download/dotnet/10.0";
+export { DOTNET_DOWNLOAD_URL };
 
 /** An action displayed in the degraded-state warning. */
 export interface DegradedAction {
   /** Button label. */
-  readonly label: string;
+  readonly label: DegradedActionLabel;
   /** VS Code command id to execute. */
   readonly command?: string;
   /** Command id tried if {@link command} fails (VS Code renamed it across versions). */
@@ -47,8 +55,8 @@ export function buildDegradedNotification(
       actions: [
         {
           label: "Manage Workspace Trust",
-          command: "workbench.trust.manage",
-          fallbackCommand: "workbench.action.manageTrust",
+          command: EXTERNAL_COMMANDS.manageTrust,
+          fallbackCommand: EXTERNAL_COMMANDS.manageTrustLegacy,
         },
       ],
     };
@@ -62,7 +70,7 @@ export function buildDegradedNotification(
         "WinApp: Restart Language Server.",
       actions: [
         { label: "Install .NET", url: DOTNET_DOWNLOAD_URL },
-        { label: "Don't Show Again", dismissDotnetRequirement: true },
+        { label: DISMISS_ACTION_LABEL, dismissDotnetRequirement: true },
       ],
     };
   }
@@ -78,10 +86,10 @@ export function buildDegradedNotification(
         "installed or queried. This usually means the Marketplace is unavailable or blocked " +
         "by policy. XAML syntax highlighting remains available.",
       actions: [
-        { label: "Retry", command: "winui-xaml.restartServer" },
+        { label: "Retry", command: XAML_COMMANDS.restartServer },
         {
           label: "Install Manually",
-          command: "workbench.extensions.search",
+          command: EXTERNAL_COMMANDS.searchExtensions,
           commandArg: DOTNET_INSTALL_TOOL_ID,
         },
         { label: "Show Output", showOutput: true },
@@ -95,8 +103,8 @@ export function buildDegradedNotification(
       "IntelliSense, diagnostics, and navigation are unavailable." +
       (detail ? ` ${detail}` : ""),
     actions: [
-      { label: "Restart Language Server", command: "winui-xaml.restartServer" },
-      { label: "Open Settings", command: "workbench.action.openSettings", commandArg: SERVER_SETTINGS_QUERY },
+      { label: "Restart Language Server", command: XAML_COMMANDS.restartServer },
+      { label: "Open Settings", command: EXTERNAL_COMMANDS.openSettings, commandArg: SERVER_SETTINGS_QUERY },
       { label: "Show Output", showOutput: true },
     ],
   };

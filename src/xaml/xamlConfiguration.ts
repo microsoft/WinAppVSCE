@@ -1,10 +1,21 @@
-import { DOTNET_DOWNLOAD_URL } from "./degradedNotification";
+import {
+  DIAGNOSTICS_LEVEL_KEY,
+  DIAGNOSTICS_LEVEL_SETTING,
+  DOTNET_DOWNLOAD_URL,
+  EXTERNAL_COMMANDS,
+  INTELLISENSE_ENABLE_KEY,
+  INTELLISENSE_ENABLE_SETTING,
+  XAML_COMMANDS,
+  XamlStatusAction,
+} from "./xamlConstants";
 import {
   PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
   PROJECT_CONTEXT_LOADING_MESSAGE,
   ProjectContextState,
 } from "./projectContextStatus";
+
+export type { XamlStatusAction };
 
 export type XamlDiagnosticsLevel = "off" | "all" | "errorsOnly";
 export type XamlDiagnosticsLevelSetting =
@@ -28,13 +39,6 @@ export interface XamlLanguageServerConfiguration {
   };
 }
 
-export type XamlStatusAction =
-  | "Open Settings"
-  | "Restart Language Server"
-  | "Manage Workspace Trust"
-  | "Show Output"
-  | "Install .NET";
-
 export interface XamlStatus {
   message: string;
   actions: XamlStatusAction[];
@@ -49,7 +53,7 @@ export const DOTNET_REQUIRED_STATUS = {
   text: "$(warning) XAML: .NET 10 required",
   tooltip:
     "WinUI XAML IntelliSense requires .NET 10. Select for install and restart options.",
-  command: "winui-xaml.showInfo",
+  command: XAML_COMMANDS.showInfo,
 } as const;
 
 export type XamlStatusEffect =
@@ -131,13 +135,13 @@ export function getXamlStatusEffect(
   switch (action) {
     case "Open Settings":
       return {
-        command: "workbench.action.openSettings",
-        args: ["winapp.xaml.intelliSense.enable"],
+        command: EXTERNAL_COMMANDS.openSettings,
+        args: [INTELLISENSE_ENABLE_SETTING],
       };
     case "Restart Language Server":
-      return { command: "winui-xaml.restartServer" };
+      return { command: XAML_COMMANDS.restartServer };
     case "Manage Workspace Trust":
-      return { command: "workbench.trust.manage" };
+      return { command: EXTERNAL_COMMANDS.manageTrust };
     case "Show Output":
       return { showOutput: true };
     case "Install .NET":
@@ -170,7 +174,7 @@ export function getDiagnosticsLevelValidationMessage(
     return undefined;
   }
 
-  return `Invalid winapp.xaml.diagnostics.level value '${String(
+  return `Invalid ${DIAGNOSTICS_LEVEL_SETTING} value '${String(
     value
   )}'. Using 'all'; choose all, errorsOnly, or off.`;
 }
@@ -216,10 +220,10 @@ export function readXamlLanguageServerConfiguration(
   get: <T>(section: string, defaultValue: T) => T
 ): XamlLanguageServerConfiguration {
   return {
-    enabled: get("intelliSense.enable", true),
+    enabled: get(INTELLISENSE_ENABLE_KEY, true),
     initializationOptions: {
       diagnosticsLevel: normalizeDiagnosticsLevel(
-        get("diagnostics.level", "all")
+        get(DIAGNOSTICS_LEVEL_KEY, "all")
       ),
     },
   };
