@@ -41,7 +41,7 @@ export function buildDegradedNotification(
   if (cause === "untrusted") {
     return {
       message:
-        "WinUI XAML: workspace is not trusted — the language server is disabled and XAML is " +
+        "WinUI XAML: workspace is not trusted. The language server is disabled and XAML is " +
         "syntax-only. IntelliSense, diagnostics, and navigation are unavailable until you trust " +
         "this workspace.",
       actions: [
@@ -91,7 +91,7 @@ export function buildDegradedNotification(
 
   return {
     message:
-      "WinUI XAML: language server not started — XAML is syntax-only. " +
+      "WinUI XAML: language server not started. XAML is syntax-only. " +
       "IntelliSense, diagnostics, and navigation are unavailable." +
       (detail ? ` ${detail}` : ""),
     actions: [
