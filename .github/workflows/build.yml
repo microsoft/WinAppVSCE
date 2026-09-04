@@ -231,7 +231,7 @@ jobs:
         dotnet publish server\src\WinUiXaml.LanguageServer\WinUiXaml.LanguageServer.csproj -c Release --self-contained false -p:UseAppHost=false -o dist\server
 
     - name: Restore smoke fixture
-      run: dotnet restore test\fixtures\xaml\fixture\SmokeFixture.csproj --configfile server\nuget.config
+      run: dotnet restore test\fixtures\xaml\fixture\SmokeFixture.csproj
 
     - name: Run framework-dependent smoke on ARM64
       env:

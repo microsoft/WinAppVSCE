@@ -331,7 +331,7 @@
     "build:server:debug": "dotnet build server/src/WinUiXaml.LanguageServer/WinUiXaml.LanguageServer.csproj -c Debug --nologo",
     "test:server": "npm run restore:fixture && dotnet test server/test/WinUiXaml.Xaml.Tests/WinUiXaml.Xaml.Tests.csproj -c Debug --nologo && dotnet test server/test/WinUiXaml.Workspace.Tests/WinUiXaml.Workspace.Tests.csproj -c Debug --nologo && dotnet test server/test/WinUiXaml.LanguageServer.Tests/WinUiXaml.LanguageServer.Tests.csproj -c Debug --nologo",
     "bundle:server": "node scripts/ensure-server-bundle.mjs",
-    "restore:fixture": "dotnet restore test/fixtures/xaml/fixture/SmokeFixture.csproj --configfile server/nuget.config",
+    "restore:fixture": "dotnet restore test/fixtures/xaml/fixture/SmokeFixture.csproj",
     "test:xaml-smoke": "npm run build:server:debug && npm run restore:fixture && node server/test/lsp-smoke/smoke.mjs",
     "test:xaml-framework-dependent": "node scripts/test-framework-dependent-server.mjs",
     "clean": "node -e \"require('fs').rmSync('bin', {recursive: true, force: true}); require('fs').rmSync('out', {recursive: true, force: true}); require('fs').rmSync('dist', {recursive: true, force: true});\"",
