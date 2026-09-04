@@ -97,12 +97,22 @@ function isValidRange(range: PromptedTextEditRange): boolean {
       range.start.character <= range.end.character);
 }
 
+export const INVALID_EDIT_RANGE_MESSAGE =
+  "The XAML quick fix contains an invalid edit range.";
+export const DOCUMENT_CHANGED_MESSAGE =
+  "The XAML document changed before the quick fix was applied. Run the quick fix again.";
+
+/** The {@link DOCUMENT_CHANGED_MESSAGE} wording, naming the document. */
+export function documentChangedMessage(documentUri: string): string {
+  return `The XAML document '${documentUri}' changed before the quick fix was applied. Run the quick fix again.`;
+}
+
 export async function runPromptedTextEdit(
   request: PromptedTextEditRequest,
   dependencies: PromptedTextEditDependencies,
 ): Promise<void> {
   if (!isValidRange(request.range)) {
-    throw new Error("The XAML quick fix contains an invalid edit range.");
+    throw new Error(INVALID_EDIT_RANGE_MESSAGE);
   }
 
   let value: string | undefined;
@@ -149,9 +159,7 @@ export async function runPromptedTextEdit(
   if (request.expectedVersion !== null &&
       document.version !== request.expectedVersion ||
       document.getText(request.range) !== request.expectedText) {
-    throw new Error(
-      "The XAML document changed before the quick fix was applied. Run the quick fix again.",
-    );
+    throw new Error(DOCUMENT_CHANGED_MESSAGE);
   }
 
   const newText = `${request.prefix}${value.trim()}${request.suffix}`;
@@ -161,9 +169,7 @@ export async function runPromptedTextEdit(
   if (request.expectedVersion !== null &&
       document.version !== request.expectedVersion ||
       document.getText(request.range) !== request.expectedText) {
-    throw new Error(
-      "The XAML document changed before the quick fix was applied. Run the quick fix again.",
-    );
+    throw new Error(DOCUMENT_CHANGED_MESSAGE);
   }
 
   if (!(await dependencies.applyEdit(document, request.range, newText))) {
@@ -178,14 +184,14 @@ export async function runGuardedTextEditCommand<TDocument, TRange, TWorkspaceEdi
   dependencies: GuardedTextEditCommandDependencies<TDocument, TRange, TWorkspaceEdit>,
 ): Promise<void> {
   if (request.edits.some(edit => !isValidRange(edit.range))) {
-    throw new Error("The XAML quick fix contains an invalid edit range.");
+    throw new Error(INVALID_EDIT_RANGE_MESSAGE);
   }
 
   const document = await dependencies.openDocument(request.documentUri);
   if (request.expectedVersion !== null &&
       dependencies.getDocumentVersion(document) !== request.expectedVersion) {
     throw new Error(
-      `The XAML document '${request.documentUri}' changed before the quick fix was applied. Run the quick fix again.`,
+      documentChangedMessage(request.documentUri),
     );
   }
 
@@ -193,11 +199,11 @@ export async function runGuardedTextEditCommand<TDocument, TRange, TWorkspaceEdi
   for (const edit of request.edits) {
     const range = dependencies.createRange(edit.range);
     if (!dependencies.isValidRange(document, range)) {
-      throw new Error("The XAML quick fix contains an invalid edit range.");
+      throw new Error(INVALID_EDIT_RANGE_MESSAGE);
     }
     if (dependencies.getText(document, range) !== edit.expectedText) {
       throw new Error(
-        `The XAML document '${request.documentUri}' changed before the quick fix was applied. Run the quick fix again.`,
+        documentChangedMessage(request.documentUri),
       );
     }
     dependencies.replace(workspaceEdit, document, range, edit.newText);

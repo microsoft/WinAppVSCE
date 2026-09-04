@@ -1,3 +1,11 @@
+import { DOTNET_DOWNLOAD_URL } from "./degradedNotification";
+import {
+  PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE,
+  PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
+  PROJECT_CONTEXT_LOADING_MESSAGE,
+  ProjectContextState,
+} from "./projectContextStatus";
+
 export type XamlDiagnosticsLevel = "off" | "all" | "errorsOnly";
 export type XamlDiagnosticsLevelSetting =
   | XamlDiagnosticsLevel
@@ -33,7 +41,7 @@ export interface XamlStatus {
 }
 
 export interface XamlProjectContextSummary {
-  state: "loading" | "framework-ready" | "ready" | "error" | "idle";
+  state: ProjectContextState;
   message?: string;
 }
 
@@ -68,23 +76,21 @@ export function getXamlStatus(
   if (running) {
     if (projectContext?.state === "error") {
       return {
-        message: `WinUI XAML Tools: project IntelliSense unavailable: ${
-          projectContext.message ?? "project metadata failed to load."
+        message: `WinUI XAML Tools: ${
+          projectContext.message ?? PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE
         }`,
         actions: ["Restart Language Server", "Show Output"],
       };
     }
     if (projectContext?.state === "loading") {
       return {
-        message:
-          "WinUI XAML Tools: loading authoritative project metadata.",
+        message: `WinUI XAML Tools: ${PROJECT_CONTEXT_LOADING_MESSAGE}`,
         actions: ["Show Output"],
       };
     }
     if (projectContext?.state === "framework-ready") {
       return {
-        message:
-          "WinUI XAML Tools: framework IntelliSense is available; project symbols and diagnostics are still loading.",
+        message: `WinUI XAML Tools: ${PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE}`,
         actions: ["Show Output"],
       };
     }
@@ -135,7 +141,7 @@ export function getXamlStatusEffect(
     case "Show Output":
       return { showOutput: true };
     case "Install .NET":
-      return { url: "https://dotnet.microsoft.com/download/dotnet/10.0" };
+      return { url: DOTNET_DOWNLOAD_URL };
     default:
       return undefined;
   }

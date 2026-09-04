@@ -10,6 +10,11 @@ import {
   readXamlLanguageServerConfiguration,
   shouldRestartXamlLanguageServer,
 } from "../xaml/xamlConfiguration";
+import {
+  PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE,
+  PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
+  PROJECT_CONTEXT_LOADING_MESSAGE,
+} from "../xaml/projectContextStatus";
 
 test("defines the persistent missing-runtime status and recovery command", () => {
   assert.deepEqual(DOTNET_REQUIRED_STATUS, {
@@ -36,7 +41,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
       state: "loading",
     }),
     {
-      message: "WinUI XAML Tools: loading authoritative project metadata.",
+      message: `WinUI XAML Tools: ${PROJECT_CONTEXT_LOADING_MESSAGE}`,
       actions: ["Show Output"],
     }
   );
@@ -45,8 +50,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
       state: "framework-ready",
     }),
     {
-      message:
-        "WinUI XAML Tools: framework IntelliSense is available; project symbols and diagnostics are still loading.",
+      message: `WinUI XAML Tools: ${PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE}`,
       actions: ["Show Output"],
     }
   );
@@ -56,8 +60,14 @@ test("reports disabled, running, and degraded XAML status actions", () => {
       message: "Restore required.",
     }),
     {
-      message:
-        "WinUI XAML Tools: project IntelliSense unavailable: Restore required.",
+      message: "WinUI XAML Tools: Restore required.",
+      actions: ["Restart Language Server", "Show Output"],
+    }
+  );
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, false, { state: "error" }),
+    {
+      message: `WinUI XAML Tools: ${PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE}`,
       actions: ["Restart Language Server", "Show Output"],
     }
   );

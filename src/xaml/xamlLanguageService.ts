@@ -49,6 +49,7 @@ import {
   ProjectContextStatus,
   getRelevantProjectContextStatuses,
   getProjectContextStatusPresentation,
+  isProjectContextState,
   selectProjectContextStatus,
 } from "./projectContextStatus";
 import {
@@ -63,6 +64,8 @@ import {
 } from "./xamlConfiguration";
 import { hasOpenXamlDocument } from "./xamlDemand";
 import {
+  DOCUMENT_CHANGED_MESSAGE,
+  INVALID_EDIT_RANGE_MESSAGE,
   GuardedTextEditRequest,
   PromptedTextEditDocument,
   PromptedTextEditRequest,
@@ -180,7 +183,7 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
                     targetRange.end.character,
                   );
                   if (!document.validateRange(requestedRange).isEqual(requestedRange)) {
-                    throw new Error("The XAML quick fix contains an invalid edit range.");
+                    throw new Error(INVALID_EDIT_RANGE_MESSAGE);
                   }
                   return document.getText(requestedRange);
                 },
@@ -195,14 +198,12 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
                 targetRange.end.character,
               );
               if (!document.validateRange(requestedRange).isEqual(requestedRange)) {
-                throw new Error("The XAML quick fix contains an invalid edit range.");
+                throw new Error(INVALID_EDIT_RANGE_MESSAGE);
               }
               if (request.expectedVersion !== null &&
                   document.version !== request.expectedVersion ||
                   document.getText(requestedRange) !== request.expectedText) {
-                throw new Error(
-                  "The XAML document changed before the quick fix was applied. Run the quick fix again.",
-                );
+                throw new Error(DOCUMENT_CHANGED_MESSAGE);
               }
 
               const edit = new vscode.WorkspaceEdit();
@@ -879,10 +880,7 @@ function disposeFileWatcher(): void {
 }
 
 function updateProjectContextStatus(status: ProjectContextStatus): void {
-  if (
-    !status.uri ||
-    !["loading", "framework-ready", "ready", "error", "idle"].includes(status.state)
-  ) {
+  if (!status.uri || !isProjectContextState(status.state)) {
     return;
   }
 
