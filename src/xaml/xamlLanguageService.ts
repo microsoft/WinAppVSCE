@@ -46,6 +46,7 @@ import {
 } from "./xamlConstants";
 import { ServerLifecycle } from "./serverLifecycle";
 import {
+  isEnterEdit,
   shouldTriggerAutomaticXamlSuggestions,
 } from "./attributeSuggestionTrigger";
 import {
@@ -365,10 +366,7 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
       const enabled = vscode.workspace
         .getConfiguration(XAML_SETTINGS_SECTION)
         .get(INTELLISENSE_ENABLE_KEY, true);
-      if (
-        !enabled ||
-        (change.text !== "<" && !/^\r?\n[ \t]*$/.test(change.text))
-      ) {
+      if (!enabled || (change.text !== "<" && !isEnterEdit(change.text))) {
         return;
       }
 
