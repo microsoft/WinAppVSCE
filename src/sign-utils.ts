@@ -10,18 +10,18 @@ export const CERTIFICATE_GLOBS = ['**/*.pfx'];
 export const EXECUTABLE_GLOBS = ['**/*.exe', '**/*.dll'];
 
 /**
- * Package extensions the QuickPick surfaces first — what `winapp pack` produces.
- * Everything else in {@link ARTIFACT_EXTENSIONS} falls into the tier below, so
- * adding a new artifact type there is still discoverable without edits here.
+ * Package extensions the QuickPick surfaces first. Everything else in
+ * {@link ARTIFACT_EXTENSIONS} falls into the tier below, so a new artifact
+ * type stays discoverable without edits here.
  */
 const PRIMARY_PACKAGE_EXTENSIONS: ReadonlySet<string> = new Set(['msix', 'msixbundle']);
 
 const toGlobs = (extensions: readonly string[]): string[] => extensions.map((ext) => `**/*.${ext}`);
 
 /**
- * Signable file globs in QuickPick priority order: MSIX packages first, then
- * remaining package types, then loose executables and libraries. Lower tiers are
- * only searched when higher tiers leave slots unfilled.
+ * Signable globs in QuickPick priority order: MSIX packages, other package
+ * types, then loose executables. Lower tiers are searched only when higher
+ * ones leave slots unfilled.
  */
 export const SIGNABLE_ARTIFACT_TIERS: string[][] = [
 	toGlobs(ARTIFACT_EXTENSIONS.filter((ext) => PRIMARY_PACKAGE_EXTENSIONS.has(ext))),
@@ -35,11 +35,9 @@ const SIGNABLE_ARTIFACT_IGNORES = new Set(['node_modules', '.git']);
 export const MAX_QUICKPICK_RESULTS = 10;
 
 /**
- * How many candidates to collect per remaining slot.
- *
- * Discovery is deliberately conservative: a "Browse…" entry always backs the
- * QuickPick, so a small overshoot is enough to keep newest-first ordering
- * meaningful without paying for a full workspace walk.
+ * Candidates to collect per remaining slot. A "Browse…" entry always backs the
+ * QuickPick, so a small overshoot keeps newest-first ordering meaningful
+ * without paying for a full workspace walk.
  */
 const CANDIDATE_POOL_MULTIPLIER = 4;
 
@@ -56,9 +54,8 @@ export type WorkspaceFileFinder = (
 
 /**
  * The subset of `vscode.workspace.findFiles` that artifact discovery uses.
- *
- * `exclude` is typed as `null` rather than `vscode.GlobPattern | null` on
- * purpose — see {@link createWorkspaceFileFinder}.
+ * `exclude` is typed `null` rather than `GlobPattern | null` on purpose — see
+ * {@link createWorkspaceFileFinder}.
  */
 export type FindFilesApi<TPattern, TUri> = (
 	include: TPattern,
@@ -67,14 +64,9 @@ export type FindFilesApi<TPattern, TUri> = (
 ) => Thenable<TUri[]>;
 
 /**
- * Adapt a `vscode.workspace.findFiles`-shaped API into a {@link WorkspaceFileFinder}.
- *
- * The `exclude` argument is pinned to `null`, and typed as `null` so a glob
- * cannot be substituted without a compile error. Passing any pattern makes VS
- * Code *additionally* apply the user's `files.exclude` setting, which silently
- * empties the sign picker for anyone who hides their package output folder
- * (e.g. `"files.exclude": { "**\/AppPackages": true }`). Ignored directories are
- * filtered after the search instead — see {@link findWorkspaceArtifacts}.
+ * Adapt a `findFiles`-shaped API into a {@link WorkspaceFileFinder}. `exclude`
+ * is pinned to `null`: any pattern makes VS Code *also* apply `files.exclude`,
+ * emptying the picker for anyone hiding their package output folder.
  */
 export function createWorkspaceFileFinder<TPattern, TUri>(
 	toPattern: (includePattern: string) => TPattern,
@@ -98,21 +90,9 @@ export function buildSignCommand(filePath: string, certPath: string): string {
 }
 
 /**
- * Find files matching the given glob patterns within a workspace root.
- *
- * Discovery is bounded: at most `limit * CANDIDATE_POOL_MULTIPLIER` matches are
- * collected, and only `limit` are returned. Results are sorted by modification
- * time (newest first) so the most recently packaged artifact appears at the top
- * of the QuickPick; callers offer a "Browse…" entry for anything beyond the cap.
- *
- * `node_modules` / `.git` matches are filtered out after the search rather than
- * excluded during it, because the only way to stop VS Code from also applying
- * the user's `files.exclude` setting is to pass no exclude at all — and users
- * commonly hide their package output folder (e.g. `AppPackages`) from the
- * explorer while still wanting to sign what is inside it. Verified against
- * `vscode.workspace.findFiles`: passing any exclude glob empties the picker for
- * such a workspace. The search stays bounded regardless of what it turns up;
- * "Browse…" covers anything the pool does not reach.
+ * Find files matching `patterns`, bounded to `limit * CANDIDATE_POOL_MULTIPLIER`
+ * matches and returning at most `limit`, newest first. `node_modules`/`.git` are
+ * filtered after the search — passing an exclude glob would apply `files.exclude`.
  */
 export async function findWorkspaceArtifacts(
 	workspacePath: string,
@@ -148,8 +128,7 @@ export async function findWorkspaceArtifacts(
 	withStats.sort((a, b) => b.mtime - a.mtime);
 	return withStats.map((s) => s.path).slice(0, limit);
 
-	// `maxResults` is required, so discovery can never fall back to an unbounded
-	// workspace walk.
+	// `maxResults` is required, so discovery can never fall back to an unbounded walk.
 	async function search(include: string, maxResults: number): Promise<string[]> {
 		if (signal?.aborted) {
 			return [];
@@ -166,11 +145,9 @@ export async function findWorkspaceArtifacts(
 }
 
 /**
- * Search `tiers` in priority order, stopping as soon as `limit` files are found.
- *
- * Each tier is sorted newest-first independently, so higher-priority file types
- * always rank above lower-priority ones regardless of mtime. A workspace with
- * enough MSIX packages never pays to search for executables at all.
+ * Search `tiers` in priority order, stopping once `limit` files are found. Each
+ * tier sorts newest-first independently, so higher-priority types always rank
+ * above lower-priority ones regardless of mtime.
  */
 export async function findWorkspaceArtifactsByTier(
 	workspacePath: string,
