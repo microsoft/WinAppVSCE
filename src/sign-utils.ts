@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { escapePowerShellArg } from './winapp-cli-utils';
-import { ARTIFACT_GLOBS, PRIMARY_ARTIFACT_GLOBS, SECONDARY_ARTIFACT_GLOBS } from './artifact-types';
+import { ARTIFACT_EXTENSIONS, ARTIFACT_GLOBS } from './artifact-types';
 
 /** Glob patterns for PFX certificate files within a workspace. */
 export const CERTIFICATE_GLOBS = ['**/*.pfx'];
@@ -10,13 +10,22 @@ export const CERTIFICATE_GLOBS = ['**/*.pfx'];
 export const EXECUTABLE_GLOBS = ['**/*.exe', '**/*.dll'];
 
 /**
+ * Package extensions the QuickPick surfaces first — what `winapp pack` produces.
+ * Everything else in {@link ARTIFACT_EXTENSIONS} falls into the tier below, so
+ * adding a new artifact type there is still discoverable without edits here.
+ */
+const PRIMARY_PACKAGE_EXTENSIONS: ReadonlySet<string> = new Set(['msix', 'msixbundle']);
+
+const toGlobs = (extensions: readonly string[]): string[] => extensions.map((ext) => `**/*.${ext}`);
+
+/**
  * Signable file globs in QuickPick priority order: MSIX packages first, then
- * legacy APPX packages, then loose executables and libraries. Lower tiers are
+ * remaining package types, then loose executables and libraries. Lower tiers are
  * only searched when higher tiers leave slots unfilled.
  */
 export const SIGNABLE_ARTIFACT_TIERS: string[][] = [
-	PRIMARY_ARTIFACT_GLOBS,
-	SECONDARY_ARTIFACT_GLOBS,
+	toGlobs(ARTIFACT_EXTENSIONS.filter((ext) => PRIMARY_PACKAGE_EXTENSIONS.has(ext))),
+	toGlobs(ARTIFACT_EXTENSIONS.filter((ext) => !PRIMARY_PACKAGE_EXTENSIONS.has(ext))),
 	EXECUTABLE_GLOBS
 ];
 
@@ -44,6 +53,39 @@ export type WorkspaceFileFinder = (
 	includePattern: string,
 	search: WorkspaceFileSearch
 ) => Promise<string[]>;
+
+/**
+ * The subset of `vscode.workspace.findFiles` that artifact discovery uses.
+ *
+ * `exclude` is typed as `null` rather than `vscode.GlobPattern | null` on
+ * purpose — see {@link createWorkspaceFileFinder}.
+ */
+export type FindFilesApi<TPattern, TUri> = (
+	include: TPattern,
+	exclude: null,
+	maxResults: number | undefined
+) => Thenable<TUri[]>;
+
+/**
+ * Adapt a `vscode.workspace.findFiles`-shaped API into a {@link WorkspaceFileFinder}.
+ *
+ * The `exclude` argument is pinned to `null`, and typed as `null` so a glob
+ * cannot be substituted without a compile error. Passing any pattern makes VS
+ * Code *additionally* apply the user's `files.exclude` setting, which silently
+ * empties the sign picker for anyone who hides their package output folder
+ * (e.g. `"files.exclude": { "**\/AppPackages": true }`). Ignored directories are
+ * filtered after the search instead — see {@link findWorkspaceArtifacts}.
+ */
+export function createWorkspaceFileFinder<TPattern, TUri>(
+	toPattern: (includePattern: string) => TPattern,
+	findFiles: FindFilesApi<TPattern, TUri>,
+	toPath: (uri: TUri) => string
+): WorkspaceFileFinder {
+	return async (includePattern, search) => {
+		const matches = await findFiles(toPattern(includePattern), null, search.maxResults);
+		return matches.map(toPath);
+	};
+}
 
 /**
  * Build the CLI argument string for `winapp sign`.
@@ -78,19 +120,19 @@ export async function findWorkspaceArtifacts(
 	signal?: AbortSignal,
 	limit: number = MAX_QUICKPICK_RESULTS
 ): Promise<string[]> {
-	if (signal?.aborted) {
+	if (signal?.aborted || limit <= 0) {
 		return [];
 	}
 
 	const includePattern = patterns.length === 1 ? patterns[0] : `{${patterns.join(',')}}`;
-	const poolSize = limit > 0 ? limit * CANDIDATE_POOL_MULTIPLIER : undefined;
+	const poolSize = limit * CANDIDATE_POOL_MULTIPLIER;
 
 	let results = await search(includePattern, poolSize);
 	let candidates = results.filter((filePath) => !isIgnoredWorkspacePath(workspacePath, filePath));
 
 	// A pool filled entirely to its cap may have hidden real artifacts behind
 	// ignored ones; fall back to an unbounded search only in that rare case.
-	if (poolSize !== undefined && results.length >= poolSize && candidates.length < limit) {
+	if (results.length >= poolSize && candidates.length < limit) {
 		results = await search(includePattern, undefined);
 		candidates = results.filter((filePath) => !isIgnoredWorkspacePath(workspacePath, filePath));
 	}
@@ -110,8 +152,7 @@ export async function findWorkspaceArtifacts(
 	}
 
 	withStats.sort((a, b) => b.mtime - a.mtime);
-	const sorted = withStats.map((s) => s.path);
-	return limit > 0 ? sorted.slice(0, limit) : sorted;
+	return withStats.map((s) => s.path).slice(0, limit);
 
 	async function search(include: string, maxResults: number | undefined): Promise<string[]> {
 		if (signal?.aborted) {

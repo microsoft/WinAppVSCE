@@ -27,8 +27,8 @@ import {
 import {
 	findWorkspaceArtifactsByTier,
 	buildSignCommand,
+	createWorkspaceFileFinder,
 	CERTIFICATE_GLOBS,
-	MAX_QUICKPICK_RESULTS,
 	SIGNABLE_ARTIFACT_TIERS,
 	executeSignFlow,
 	type SignFlowAdapter
@@ -58,17 +58,15 @@ import {
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
-const MAX_SIGNABLE_FILES = MAX_QUICKPICK_RESULTS;
 const FILE_PICKER_DETAIL = 'Open a file picker';
 
 /**
- * Build the trailing "Browse…" QuickPick entry. Discovery is capped, so when the
- * list is full the entry advertises itself as the way to reach older artifacts.
+ * Build the trailing "Browse…" QuickPick entry, which reaches anything the
+ * capped discovery list omits.
  */
-function createBrowseItem(truncated: boolean): vscode.QuickPickItem {
+function createBrowseItem(): vscode.QuickPickItem {
 	return {
 		label: '$(folder-opened) Browse…',
-		description: truncated ? `Showing the ${MAX_SIGNABLE_FILES} most recent` : undefined,
 		detail: FILE_PICKER_DETAIL
 	};
 }
@@ -383,8 +381,8 @@ async function runWinappCapture(
  * Search the workspace for signable packages, executables, and libraries and
  * let the user pick one via
  * a QuickPick. Discovery is tiered and capped: MSIX packages are searched
- * first, then legacy APPX packages, then executables and libraries, stopping as
- * soon as {@link MAX_SIGNABLE_FILES} files are found. When no artifacts are
+ * first, then remaining package types, then executables and libraries, stopping
+ * as soon as the QuickPick result cap is reached. When no artifacts are
  * found the function falls back directly to a native file dialog; a "Browse…"
  * entry is always appended so the user can reach anything the capped list omits.
  *
@@ -417,7 +415,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		};
 	});
 
-	items.push(createBrowseItem(artifactPaths.length >= MAX_SIGNABLE_FILES));
+	items.push(createBrowseItem());
 
 	const picked = await vscode.window.showQuickPick(items, {
 		placeHolder: 'Select a file to sign'
@@ -440,8 +438,8 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 
 /**
  * Search the workspace for PFX certificate files and let the user pick one
- * via a QuickPick. Discovery is capped to the {@link MAX_SIGNABLE_FILES} newest
- * certificates. Falls back to a native file dialog when none are found;
+ * via a QuickPick. Discovery is capped to the newest certificates. Falls back
+ * to a native file dialog when none are found;
  * a "Browse…" entry is always appended.
  *
  * @returns The selected certificate path, or `undefined` if cancelled.
@@ -471,7 +469,7 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 		};
 	});
 
-	items.push(createBrowseItem(certPaths.length >= MAX_SIGNABLE_FILES));
+	items.push(createBrowseItem());
 
 	const picked = await vscode.window.showQuickPick(items, {
 		placeHolder: 'Select a signing certificate'
@@ -504,17 +502,11 @@ async function findWorkspaceArtifactsWithCancellation(
 	try {
 		const paths = await findWorkspaceArtifactsByTier(
 			workspacePath,
-			async (includePattern, search) => {
-				const matches = await vscode.workspace.findFiles(
-					new vscode.RelativePattern(workspacePath, includePattern),
-					// `null` (not a pattern) so the user's `files.exclude` setting
-					// cannot hide their own package output from the picker.
-					null,
-					search.maxResults,
-					token
-				);
-				return matches.map(uri => uri.fsPath);
-			},
+			createWorkspaceFileFinder(
+				includePattern => new vscode.RelativePattern(workspacePath, includePattern),
+				(include, exclude, maxResults) => vscode.workspace.findFiles(include, exclude, maxResults, token),
+				uri => uri.fsPath
+			),
 			tiers,
 			abortController.signal
 		);

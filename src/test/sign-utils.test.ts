@@ -8,6 +8,7 @@ import {
 	findWorkspaceArtifacts as findWorkspaceArtifactsCore,
 	findWorkspaceArtifactsByTier,
 	buildSignCommand,
+	createWorkspaceFileFinder,
 	CERTIFICATE_GLOBS,
 	EXECUTABLE_GLOBS,
 	MAX_QUICKPICK_RESULTS,
@@ -205,6 +206,31 @@ describe('findWorkspaceArtifacts', () => {
 		assert.ok(received.maxResults <= MAX_QUICKPICK_RESULTS * 4);
 	});
 
+	it('returns nothing for a zero or negative limit', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		createFile(path.join(tempDir, 'pkg.msix'));
+		let calls = 0;
+		const countingFinder = async () => {
+			calls++;
+			return [path.join(tempDir, 'pkg.msix')];
+		};
+
+		for (const limit of [0, -1]) {
+			const results = await findWorkspaceArtifactsCore(
+				tempDir,
+				countingFinder,
+				ARTIFACT_GLOBS,
+				undefined,
+				limit
+			);
+			// A non-positive cap must mean "nothing", never an unbounded walk.
+			assert.deepEqual(results, []);
+		}
+
+		assert.equal(calls, 0);
+	});
+
 	it('retries unbounded when ignored paths saturate the candidate pool', async () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
@@ -231,6 +257,34 @@ describe('findWorkspaceArtifacts', () => {
 
 		assert.deepEqual(requestedLimits, [8, undefined]);
 		assert.deepEqual(results, [real]);
+	});
+
+	it('does not run the unbounded retry after cancellation', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const ignored = Array.from({ length: 8 }, (_, index) =>
+			path.join(tempDir, 'node_modules', 'pkg', `dep${index}.msix`));
+		for (const filePath of ignored) {
+			createFile(filePath);
+		}
+		const controller = new AbortController();
+		const requestedLimits: Array<number | undefined> = [];
+
+		const results = await findWorkspaceArtifactsCore(
+			tempDir,
+			async (_includePattern, search) => {
+				requestedLimits.push(search.maxResults);
+				// Saturate the pool with ignored paths, then cancel before the retry.
+				controller.abort();
+				return ignored;
+			},
+			ARTIFACT_GLOBS,
+			controller.signal,
+			2
+		);
+
+		assert.deepEqual(requestedLimits, [8]);
+		assert.deepEqual(results, []);
 	});
 
 	it('does not retry when the candidate pool was not saturated', async () => {
@@ -367,6 +421,44 @@ describe('findWorkspaceArtifacts', () => {
 			),
 			/search failed/
 		);
+	});
+});
+
+describe('createWorkspaceFileFinder', () => {
+	it('never passes an exclude pattern to the underlying finder', async () => {
+		const excludes: unknown[] = [];
+		const finder = createWorkspaceFileFinder(
+			includePattern => includePattern,
+			async (_include, exclude, _maxResults) => {
+				excludes.push(exclude);
+				return ['C:\\ws\\AppPackages\\App.msix'];
+			},
+			uri => uri
+		);
+
+		await finder('**/*.msix', { maxResults: 40 });
+		await finder('**/*.exe', { maxResults: undefined });
+
+		// A glob here would make VS Code also apply the user's `files.exclude`,
+		// which hides their own package output and empties the sign picker.
+		assert.deepEqual(excludes, [null, null]);
+	});
+
+	it('forwards the include pattern and result cap, and maps matches to paths', async () => {
+		const calls: Array<{ include: string; maxResults: number | undefined }> = [];
+		const finder = createWorkspaceFileFinder(
+			includePattern => `rel:${includePattern}`,
+			async (include, _exclude, maxResults) => {
+				calls.push({ include, maxResults });
+				return [{ fsPath: 'C:\\ws\\App.msix' }];
+			},
+			uri => uri.fsPath
+		);
+
+		const results = await finder('**/*.msix', { maxResults: 40 });
+
+		assert.deepEqual(calls, [{ include: 'rel:**/*.msix', maxResults: 40 }]);
+		assert.deepEqual(results, ['C:\\ws\\App.msix']);
 	});
 });
 

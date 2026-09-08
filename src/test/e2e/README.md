@@ -46,7 +46,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (130 tests)
+## Test inventory (132 tests)
 
 ### `sign-quickpick.spec.ts` — 8 tests
 
@@ -56,7 +56,7 @@ Validates that `winapp.sign` discovers signable files and certificates in worksp
 |---|------|-----------|
 | 1 | shows QuickPick with .msix file and Browse option when artifacts exist | QuickPick appears with artifact rows and Browse… fallback |
 | 2 | shows packages before executables and limits discovered files to 10 | Package-first ordering and the discovery cap |
-| 3 | ranks MSIX packages above newer APPX packages and executables | Tier order beats mtime, and Browse omits the truncation note when nothing was cut |
+| 3 | ranks MSIX packages above newer APPX packages and executables | Tier order beats mtime, and Browse appears after the ranked results |
 | 4 | ignores files.exclude without showing dependency artifacts | `files.exclude` cannot hide signable output, while `node_modules` stays filtered |
 | 5 | shows certificate QuickPick with .pfx file after selecting a package | Certificate QuickPick appears after package selection with .pfx rows and Browse… fallback |
 | 6 | cancelling the artifact QuickPick aborts the sign flow | Cancelling before file selection stops signing |

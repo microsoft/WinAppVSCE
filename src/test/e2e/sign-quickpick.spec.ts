@@ -199,7 +199,15 @@ test.describe('winapp.sign command — artifact discovery', () => {
 
             const itemText = await items.allTextContents();
             expect(itemText.slice(0, 2).every(text => /\.(msix|msixbundle)/i.test(text))).toBe(true);
-            expect(itemText.slice(2).every(text => /\.(exe|dll)/i.test(text))).toBe(true);
+            expect(itemText.slice(2, 10).every(text => /\.(exe|dll)/i.test(text))).toBe(true);
+
+            // The Browse row is virtualized out of view while the list is capped.
+            // ArrowUp from the first item wraps to the last, scrolling it in.
+            // Even when capped, Browse stays plain — no count or truncation note.
+            await page.keyboard.press('ArrowUp');
+            const browseRow = items.last();
+            await expect(browseRow).toContainText('Browse');
+            await expect(browseRow).not.toContainText(/most recent|showing/i);
 
             await page.keyboard.press('Escape');
         } finally {
@@ -235,8 +243,6 @@ test.describe('winapp.sign command — artifact discovery', () => {
             expect(itemText[1]).toContain('Legacy.appx');
             expect(itemText[2]).toContain('App.exe');
             expect(itemText[3]).toContain('Browse');
-            // The list is not capped, so Browse should not advertise truncation.
-            expect(itemText[3]).not.toContain('most recent');
 
             await page.keyboard.press('Escape');
         } finally {
