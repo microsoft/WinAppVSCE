@@ -41,7 +41,8 @@ function assertSaneColorRanges(name, buffer, colors) {
     assert.ok(c.range.start.line >= 0 && c.range.start.line < lines.length, `${name}: start line outside document; colors=${dump(colors)}`);
     assert.ok(c.range.end.line >= 0 && c.range.end.line < lines.length, `${name}: end line outside document; colors=${dump(colors)}`);
     assert.ok(c.range.start.line < c.range.end.line || c.range.start.character < c.range.end.character, `${name}: inverted/empty range; colors=${dump(colors)}`);
-    assert.ok(c.text === undefined || /^#[0-9a-fA-F]+$/.test(c.text), `${name}: swatch text should be a hex token; colors=${dump(colors)}`);
+    // A swatch now covers either a hex literal or a WinUI color name (Red, CornflowerBlue, …).
+    assert.ok(c.text === undefined || /^(#[0-9a-fA-F]+|[A-Za-z]+)$/.test(c.text), `${name}: swatch text should be a hex token or a color name; colors=${dump(colors)}`);
   }
 }
 
@@ -243,6 +244,59 @@ describe("WinUI XAML red-team 38 — color provider", function () {
       const edited = applyEdit(buffer, p.editRange, p.newText);
       assert.ok(edited.includes('Background="#010203"'), `edit must not alter adjacent Background value; edited=${edited}`);
     }
+  });
+
+  // ---- named colors (issue #209), against the real WindowsAppSDK Microsoft.UI.Colors ----
+
+  it("emits swatches for WinUI named colors with the exact ARGB the XAML parser resolves", async () => {
+    const cases = [
+      { literal: "Red", expected: { alpha: 0xff, red: 0xff, green: 0x00, blue: 0x00 } },
+      { literal: "CornflowerBlue", expected: { alpha: 0xff, red: 0x64, green: 0x95, blue: 0xed } },
+      { literal: "DarkSlateGray", expected: { alpha: 0xff, red: 0x2f, green: 0x4f, blue: 0x4f } },
+      // the one named color that is not opaque
+      { literal: "Transparent", expected: { alpha: 0x00, red: 0xff, green: 0xff, blue: 0xff } },
+    ];
+    for (const { literal, expected } of cases) {
+      const buffer = `<Rectangle Fill="${literal}" />`;
+      const colors = await colorsFor(`named color ${literal}`, buffer);
+      assert.strictEqual(colors.length, 1, `named color ${literal}: expected one swatch; colors=${dump(colors)}`);
+      assert.strictEqual(colors[0].text, literal, `named color ${literal}: swatch must cover exactly the name; colors=${dump(colors)}`);
+      assertColor(colors[0], expected, `named color ${literal}`, colors);
+    }
+  });
+
+  it("matches named colors case-insensitively, as the XAML parser does", async () => {
+    for (const literal of ["red", "RED", "ReD", "cornflowerblue"]) {
+      const colors = await colorsFor(`cased ${literal}`, `<Rectangle Fill="${literal}" />`);
+      assert.strictEqual(colors.length, 1, `cased ${literal}: expected one swatch; colors=${dump(colors)}`);
+    }
+  });
+
+  // System.Drawing.Color.FromName resolves these with IsKnownColor === true, but WinUI has no such
+  // colors and throws XamlParseException at runtime. A swatch here would be a swatch on broken markup.
+  it("emits no swatch for .NET system color names that WinUI does not have", async () => {
+    for (const literal of ["Control", "Desktop", "ActiveBorder", "Highlight", "NotAColorAtAll"]) {
+      const buffer = `<Rectangle Fill="${literal}" />`;
+      assertNoColors(`non-WinUI name ${literal}`, buffer, await colorsFor(`non-WinUI name ${literal}`, buffer));
+    }
+  });
+
+  it("offers the color name first when replacing a named literal, so accepting the default keeps the name", async () => {
+    const buffer = '<Rectangle Fill="Red" />';
+    const colors = await colorsFor("present over name", buffer);
+    assert.strictEqual(colors.length, 1, `present over name: expected one swatch; colors=${dump(colors)}`);
+    const presentations = await h.colorPresentationsAt(buffer, colors[0].color, colors[0].range);
+    assert.ok(presentations.length > 0, `expected presentations; got=${dump(presentations)}`);
+    assert.strictEqual(presentations[0].label, "Red", `named literal should round-trip to its name; presentations=${dump(presentations)}`);
+    assert.ok(presentations.some((p) => /^#FF0000$/i.test(p.label)), `hex must still be offered; presentations=${dump(presentations)}`);
+  });
+
+  it("keeps hex first when replacing a hex literal, offering the name only as an alternative", async () => {
+    const buffer = '<Rectangle Fill="#FF0000" />';
+    const colors = await colorsFor("present over hex", buffer);
+    const presentations = await h.colorPresentationsAt(buffer, colors[0].color, colors[0].range);
+    assert.ok(/^#/.test(presentations[0].label), `hex literal should stay hex by default; presentations=${dump(presentations)}`);
+    assert.ok(presentations.some((p) => p.label === "Red"), `name should be offered; presentations=${dump(presentations)}`);
   });
 
   it("does not disturb diagnostics on a valid page with color attributes", async () => {

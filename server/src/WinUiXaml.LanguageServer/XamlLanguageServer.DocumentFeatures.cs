@@ -363,8 +363,29 @@ internal sealed partial class XamlLanguageServer
             : XamlColor.Collect(doc, typeSystem);
     }
 
-    private Task<object?> ColorPresentationAsync(ColorPresentationParams p) =>
-        Task.FromResult<object?>(XamlColor.Present(p.Color, p.Range));
+    private async Task<object?> ColorPresentationAsync(ColorPresentationParams p)
+    {
+        // The type system supplies the WinUI color names, and the literal under the range tells us
+        // whether the user wrote a name; without both, a pick over `Red` would write back raw hex.
+        if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc))
+        {
+            return new List<ColorPresentation>();
+        }
+
+        var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        if (typeSystem is null)
+        {
+            return new List<ColorPresentation>();
+        }
+
+        int start = doc.OffsetAt(p.Range.Start);
+        int end = doc.OffsetAt(p.Range.End);
+        string? existingText = start >= 0 && end >= start && end <= doc.Text.Length
+            ? doc.Text[start..end]
+            : null;
+
+        return XamlColor.Present(p.Color, p.Range, typeSystem, existingText);
+    }
 
     private Task<object?> SelectionRangeAsync(SelectionRangeParams p)
     {

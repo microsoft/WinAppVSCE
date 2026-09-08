@@ -248,6 +248,22 @@ public class XamlColorTests
                     public static void SetLabel(object value, string label) { }
                 }
             }
+            namespace Microsoft.UI
+            {
+                // Mirrors the shape of the real Microsoft.UI.Colors: static public properties whose
+                // names GetNamedColors() discovers. Deliberately omits the .NET *system* colors
+                // (Control, Desktop, ActiveBorder, Highlight) that System.Drawing also resolves, so
+                // tests can prove those never produce a swatch.
+                public static class Colors
+                {
+                    public static Windows.UI.Color Red { get; }
+                    public static Windows.UI.Color CornflowerBlue { get; }
+                    public static Windows.UI.Color DarkSlateGray { get; }
+                    public static Windows.UI.Color Transparent { get; }
+                    public static Windows.UI.Color Aqua { get; }
+                    public static Windows.UI.Color Cyan { get; }
+                }
+            }
             """;
         var compilation = CSharpCompilation.Create(
             "TestApp",
@@ -264,7 +280,7 @@ public class XamlColorTests
     public void Present_Opaque_OffersRrggbbFirstThenAarrggbb()
     {
         var range = RangeOn(6, 13);
-        var presentations = XamlColor.Present(Rgba(0x3B / 255.0, 0x82 / 255.0, 0xF6 / 255.0, 1.0), range);
+        var presentations = XamlColor.Present(Rgba(0x3B / 255.0, 0x82 / 255.0, 0xF6 / 255.0, 1.0), range, TypeSystem, null);
         Assert.Equal("#3B82F6", presentations[0].Label);
         Assert.Equal("#FF3B82F6", presentations[1].Label);
         // every write-back targets exactly the original literal's range
@@ -280,7 +296,7 @@ public class XamlColorTests
     [Fact]
     public void Present_Translucent_OffersAarrggbbFirst()
     {
-        var presentations = XamlColor.Present(Rgba(1.0, 0.0, 0.0, 0x80 / 255.0), RangeOn(0, 9));
+        var presentations = XamlColor.Present(Rgba(1.0, 0.0, 0.0, 0x80 / 255.0), RangeOn(0, 9), TypeSystem, null);
         Assert.Equal("#80FF0000", presentations[0].Label);
         Assert.StartsWith("#", presentations[1].Label);
         Assert.Equal(7, presentations[1].Label.Length); // #RRGGBB opt-in
@@ -291,7 +307,7 @@ public class XamlColorTests
     {
         Assert.True(XamlColor.TryParseHex("#8ABCDE12", out var a, out var r, out var g, out var b));
         var color = Rgba(r / 255.0, g / 255.0, b / 255.0, a / 255.0);
-        var presentations = XamlColor.Present(color, RangeOn(0, 9));
+        var presentations = XamlColor.Present(color, RangeOn(0, 9), TypeSystem, null);
         // translucent -> AARRGGBB primary, must reproduce the exact bytes
         Assert.Equal("#8ABCDE12", presentations[0].Label);
     }
@@ -299,7 +315,139 @@ public class XamlColorTests
     [Fact]
     public void Present_UppercasesHex()
     {
-        var presentations = XamlColor.Present(Rgba(0xab / 255.0, 0xcd / 255.0, 0xef / 255.0, 1.0), RangeOn(0, 7));
+        var presentations = XamlColor.Present(Rgba(0xab / 255.0, 0xcd / 255.0, 0xef / 255.0, 1.0), RangeOn(0, 7), TypeSystem, null);
         Assert.Equal("#ABCDEF", presentations[0].Label);
+    }
+
+    // ---- named colors ------------------------------------------------------
+
+    [Theory]
+    [InlineData("Red", 255, 0xFF, 0x00, 0x00)]
+    [InlineData("CornflowerBlue", 255, 0x64, 0x95, 0xED)]
+    [InlineData("DarkSlateGray", 255, 0x2F, 0x4F, 0x4F)]
+    public void TryParseNamedColor_ResolvesWinUiNameToExactArgb(string name, int a, int r, int g, int b)
+    {
+        Assert.True(XamlColor.TryParseNamedColor(name, TypeSystem, out var pa, out var pr, out var pg, out var pb));
+        Assert.Equal(a, pa);
+        Assert.Equal(r, pr);
+        Assert.Equal(g, pg);
+        Assert.Equal(b, pb);
+    }
+
+    /// <summary>Transparent is the one named color with a non-opaque alpha; a naive table would force 0xFF.</summary>
+    [Fact]
+    public void TryParseNamedColor_TransparentKeepsZeroAlpha()
+    {
+        Assert.True(XamlColor.TryParseNamedColor("Transparent", TypeSystem, out var a, out var r, out var g, out var b));
+        Assert.Equal(0x00, a);
+        Assert.Equal(0xFF, r);
+        Assert.Equal(0xFF, g);
+        Assert.Equal(0xFF, b);
+    }
+
+    /// <summary>The WinUI XAML parser accepts red/RED as readily as Red, so matching must ignore case.</summary>
+    [Theory]
+    [InlineData("red")]
+    [InlineData("RED")]
+    [InlineData("ReD")]
+    public void TryParseNamedColor_IsCaseInsensitive(string name)
+    {
+        Assert.True(XamlColor.TryParseNamedColor(name, TypeSystem, out var a, out var r, out var g, out var b));
+        Assert.Equal(255, a);
+        Assert.Equal(0xFF, r);
+        Assert.Equal(0x00, g);
+        Assert.Equal(0x00, b);
+    }
+
+    /// <summary>
+    /// The load-bearing guard. System.Drawing.Color.FromName resolves these .NET *system* colors with
+    /// IsKnownColor == true, but WinUI has no such colors and throws XamlParseException at runtime. If
+    /// FromName were allowed to decide validity we would paint a swatch on markup that crashes the app.
+    /// Validity must come from GetNamedColors(), which does not contain them.
+    /// </summary>
+    [Theory]
+    [InlineData("Control")]
+    [InlineData("Desktop")]
+    [InlineData("ActiveBorder")]
+    [InlineData("Highlight")]
+    public void TryParseNamedColor_RejectsDotNetSystemColorsAbsentFromWinUi(string name)
+    {
+        Assert.True(System.Drawing.Color.FromName(name).IsKnownColor, $"{name} must be known to System.Drawing for this test to mean anything");
+        Assert.False(XamlColor.TryParseNamedColor(name, TypeSystem, out _, out _, out _, out _));
+        Assert.Empty(Collect($"<Border{Ns} Background=\"{name}\" />"));
+    }
+
+    [Theory]
+    [InlineData("NotAColorAtAll")]
+    [InlineData("")]
+    [InlineData("Red ish")]
+    public void TryParseNamedColor_RejectsUnknownNames(string name)
+    {
+        Assert.False(XamlColor.TryParseNamedColor(name, TypeSystem, out _, out _, out _, out _));
+    }
+
+    [Fact]
+    public void Collect_NamedColor_EmitsSwatchOverExactlyTheNameToken()
+    {
+        const string src = "<Border" + Ns + " Background=\"CornflowerBlue\" />";
+        var colors = Collect(src);
+        var info = Assert.Single(colors);
+        Assert.Equal("CornflowerBlue", TextAt(src, info.Range));
+        Assert.Equal(0x64 / 255.0, info.Color.Red, 3);
+        Assert.Equal(0x95 / 255.0, info.Color.Green, 3);
+        Assert.Equal(0xED / 255.0, info.Color.Blue, 3);
+        Assert.Equal(1.0, info.Color.Alpha, 3);
+    }
+
+    /// <summary>Inner whitespace is not part of the literal, mirroring the hex path.</summary>
+    [Fact]
+    public void Collect_NamedColor_TrimsSurroundingWhitespaceFromTheSwatchRange()
+    {
+        const string src = "<Border" + Ns + " Background=\"  Red  \" />";
+        var info = Assert.Single(Collect(src));
+        Assert.Equal("Red", TextAt(src, info.Range));
+    }
+
+    [Fact]
+    public void Collect_NamedColor_IgnoredOnNonColorAttributes()
+    {
+        Assert.Empty(Collect($"<TextBlock{Ns} Text=\"Red\" />"));
+    }
+
+    /// <summary>A pick over a name must offer the name first, or accepting the default destroys `Red`.</summary>
+    [Fact]
+    public void Present_OverANamedLiteral_OffersTheNameFirst()
+    {
+        var presentations = XamlColor.Present(Rgba(1.0, 0.0, 0.0, 1.0), RangeOn(0, 3), TypeSystem, "Red");
+        Assert.Equal("Red", presentations[0].Label);
+        Assert.Equal("Red", presentations[0].TextEdit!.NewText);
+        Assert.Contains(presentations, p => p.Label == "#FF0000");
+    }
+
+    /// <summary>Over a hex literal the user chose hex, so hex stays the default and the name is only an option.</summary>
+    [Fact]
+    public void Present_OverAHexLiteral_KeepsHexFirstAndAppendsTheName()
+    {
+        var presentations = XamlColor.Present(Rgba(1.0, 0.0, 0.0, 1.0), RangeOn(0, 7), TypeSystem, "#FF0000");
+        Assert.Equal("#FF0000", presentations[0].Label);
+        Assert.Equal("Red", presentations[^1].Label);
+    }
+
+    /// <summary>Picking a genuinely different color over a name must not keep the old name.</summary>
+    [Fact]
+    public void Present_OverANamedLiteral_DoesNotKeepAStaleNameWhenTheColorChanged()
+    {
+        var presentations = XamlColor.Present(Rgba(0x12 / 255.0, 0x34 / 255.0, 0x56 / 255.0, 1.0), RangeOn(0, 3), TypeSystem, "Red");
+        Assert.DoesNotContain(presentations, p => p.Label == "Red");
+        Assert.Equal("#123456", presentations[0].Label);
+    }
+
+    /// <summary>Aqua and Cyan share an ARGB; the spelling the user already wrote wins the tie.</summary>
+    [Fact]
+    public void Present_AliasedName_PrefersTheUsersExistingSpelling()
+    {
+        var cyan = Rgba(0.0, 1.0, 1.0, 1.0);
+        Assert.Equal("Cyan", XamlColor.Present(cyan, RangeOn(0, 4), TypeSystem, "Cyan")[0].Label);
+        Assert.Equal("Aqua", XamlColor.Present(cyan, RangeOn(0, 4), TypeSystem, "Aqua")[0].Label);
     }
 }
