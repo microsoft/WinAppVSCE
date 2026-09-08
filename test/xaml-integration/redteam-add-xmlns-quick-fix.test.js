@@ -26,8 +26,11 @@ function titles(r) {
   return r.actions.map((a) => a.title);
 }
 
+// Matches only fixes that supply a namespace URI. The manual-entry prompt ("Add xmlns:zzz...")
+// is deliberately excluded: it asks the user for the URI rather than inferring one, so it is
+// not the guessing behaviour these assertions guard against.
 function addXmlnsActions(r) {
-  return r.actions.filter((a) => /^Add xmlns:/.test(a.title));
+  return r.actions.filter((a) => /^Add xmlns:[^ ]+=/.test(a.title));
 }
 
 function changeActions(r) {

@@ -29,8 +29,12 @@ function titles(r) {
   return r.actions.map((a) => a.title);
 }
 
+// The server offers a manual-entry prompt ("Add xmlns:zzz...") for any undeclared prefix whose
+// namespace it cannot resolve. That action supplies no URI of its own — it asks the user — so it
+// is not inference. These assertions guard against the server *guessing* a namespace, so only
+// concrete `Add xmlns:prefix="uri"` actions are forbidden.
 function addXmlnsActions(r) {
-  return r.actions.filter((a) => /^Add xmlns/.test(a.title));
+  return r.actions.filter((a) => /^Add xmlns:[^ ]+=/.test(a.title));
 }
 
 function usingActions(r) {
@@ -181,6 +185,19 @@ describe("WinUI XAML — red-team 49 (custom using: inference)", function () {
       assert.deepStrictEqual(changeActions(r), [], `${typeName}: Change actions ${dump(titles(r))}`);
     });
   }
+
+  // Counterpart to assertNoAddXmlns: an undeclared prefix is still an error the user must be
+  // able to fix, so the server offers a manual-entry prompt. It must ask rather than guess.
+  it("offers a manual namespace prompt, carrying no inferred URI, for a non-project custom type", async () => {
+    const r = await h.codeActionsAt(page("<zzz:Widget />"), "WXAML0001", "zzz");
+    const prompt = r.actions.find((a) => a.title === "Add xmlns:zzz...");
+    assert.ok(prompt, `expected a manual namespace prompt; got ${dump(titles(r))}`);
+    assert.deepStrictEqual(prompt.edits, [], "the prompt must not apply an edit on its own");
+    assert.ok(prompt.command, `the prompt must defer to a command; got ${dump(prompt)}`);
+    const args = prompt.command.arguments[0];
+    assert.strictEqual(args.prompt, "Enter the namespace URI for 'zzz'", dump(args));
+    assert.deepStrictEqual(args.choices, [], `no namespace may be inferred as a choice; got ${dump(args.choices)}`);
+  });
 
   for (const typeName of ["Button", "Grid", "TextBlock"]) {
     it(`does not infer using: for framework metadata type ${typeName}`, async () => {

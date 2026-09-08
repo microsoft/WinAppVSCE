@@ -982,8 +982,8 @@ describe("WinUI XAML — code actions", function () {
       `an undeclared-prefix error must not carry a "Change …" quick fix; got ${titles(r)}`
     );
     assert.ok(
-      !r.actions.some((a) => /^Add xmlns/.test(a.title)),
-      `a custom prefix naming a non-project type must not get an "Add xmlns" fix; got ${titles(r)}`
+      !r.actions.some((a) => /^Add xmlns:[^ ]+=/.test(a.title)),
+      `a custom prefix naming a non-project type must not get an inferred "Add xmlns" fix; got ${titles(r)}`
     );
   });
 

@@ -121,12 +121,15 @@ describe("WinUI XAML red-team 12 — x:Bind parser edge cases", function () {
     assert.ok(/IReadOnlyList|IEnumerable|String|string/.test(md), `terminal indexer hover should include collection/string type info; buffer=${buffer}; got: ${md}`);
   });
 
-  it("flags an unknown first segment when x:Bind is prefixed by boolean negation", async () => {
+  // '!' is not in the x:Bind grammar (the XAML compiler fails with "token recognition error
+  // at: '!'"), so the whole expression is unsupported syntax and the member behind it is never
+  // resolved. Reporting an unknown-member error too would be noise on an already-broken path.
+  it("reports unsupported syntax, not an unknown member, for a negated x:Bind path", async () => {
     const buffer = page('<TextBlock Text="{x:Bind !DefinitelyMissingNegatedMember}" />');
-    const diags = await h.diagnosticsFor(buffer, (d) => d.some((x) => x.code === "WXAML0005"), 12000);
-    const bad = diags.filter((x) => x.code === "WXAML0005");
-    assert.strictEqual(bad.length, 1, `negated unknown member should raise exactly 1 WXAML0005; buffer=${buffer}; got ${diagSummary(diags)}`);
-    assert.ok(/DefinitelyMissingNegatedMember/.test(bad[0].message), `diagnostic should name the unknown negated member; got ${bad[0].message}`);
+    const diags = await h.diagnosticsFor(buffer, (d) => d.some((x) => x.code === "WXAML0035"), 12000);
+    const wxaml = diags.filter((x) => /^WXAML/.test(String(x.code || "")));
+    assert.strictEqual(wxaml.length, 1, `negated unknown member should raise exactly 1 WXAML diagnostic; buffer=${buffer}; got ${diagSummary(diags)}`);
+    assert.strictEqual(wxaml[0].code, "WXAML0035", `negation should be reported as unsupported syntax; buffer=${buffer}; got ${diagSummary(diags)}`);
   });
 
   it("nested DataTemplates re-root x:Bind completion to the innermost x:DataType", async () => {

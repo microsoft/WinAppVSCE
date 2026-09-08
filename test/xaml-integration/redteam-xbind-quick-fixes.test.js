@@ -141,20 +141,23 @@ describe("WinUI XAML — red-team 45 (x:Bind path quick fixes)", function () {
     assert.ok(fixed.includes("{x:Bind GreetingText.Length}"), fixed);
   });
 
-  it("leading negation preserves the bang for a single-segment path", async () => {
+  // The WinUI XAML compiler rejects '!' outright ("token recognition error at: '!'"), so a
+  // negated path is unsupported syntax rather than a misspelled member. The bang has to go
+  // before a member rename is meaningful, so no Change fix is offered on these paths.
+  it("leading negation reports unsupported syntax instead of a member fix", async () => {
     const buffer = page('<TextBlock Text="{x:Bind !GreetingTexx}" />');
-    const r = await h.codeActionsAt(buffer, "WXAML0005", "!GreetingTexx");
-    const fix = findFix(r, "Change 'GreetingTexx' to 'GreetingText'");
-    assertNarrowedFirstSegmentEdit(r, fix, "GreetingTexx", "GreetingText");
-    assert.ok(applySingleEdit(buffer, fix.edits[0]).includes("{x:Bind !GreetingText}"));
+    const r = await h.codeActionsAt(buffer, "WXAML0035", "!");
+    assert.strictEqual(r.diagnostic && r.diagnostic.code, "WXAML0035", `negation should be unsupported syntax; got ${JSON.stringify(r.diagnostic)}`);
+    assert.deepStrictEqual(changeActions(r), [], `negated path should offer no member rename; got ${titles(r)}`);
+    await assertNoWxaml0005(buffer, "GreetingTexx");
   });
 
-  it("leading negation preserves both bang and dotted tail", async () => {
+  it("leading negation with a dotted tail also reports unsupported syntax only", async () => {
     const buffer = page('<TextBlock Text="{x:Bind !GreetingTexx.Length}" />');
-    const r = await h.codeActionsAt(buffer, "WXAML0005", "!GreetingTexx.Length");
-    const fix = findFix(r, "Change 'GreetingTexx' to 'GreetingText'");
-    assertNarrowedFirstSegmentEdit(r, fix, "GreetingTexx", "GreetingText");
-    assert.ok(applySingleEdit(buffer, fix.edits[0]).includes("{x:Bind !GreetingText.Length}"));
+    const r = await h.codeActionsAt(buffer, "WXAML0035", "!");
+    assert.strictEqual(r.diagnostic && r.diagnostic.code, "WXAML0035", `negation should be unsupported syntax; got ${JSON.stringify(r.diagnostic)}`);
+    assert.deepStrictEqual(changeActions(r), [], `negated path should offer no member rename; got ${titles(r)}`);
+    await assertNoWxaml0005(buffer, "GreetingTexx");
   });
 
   it("whitespace after negation either stays unsupported or fixes only the member token", async () => {
