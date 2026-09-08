@@ -101,6 +101,14 @@ function createSignTestWorkspace(options?: { includePfx?: boolean; additionalFil
     return tmpDir;
 }
 
+/** Create a file with a specific modification time, for ordering assertions. */
+function createFileWithMtime(filePath: string, mtimeMs: number): void {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, Buffer.alloc(1024));
+    const time = new Date(mtimeMs);
+    fs.utimesSync(filePath, time, time);
+}
+
 function configureFilesExclude(workspacePath: string): void {
     const settingsPath = path.join(workspacePath, '.vscode', 'settings.json');
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
@@ -192,6 +200,43 @@ test.describe('winapp.sign command — artifact discovery', () => {
             const itemText = await items.allTextContents();
             expect(itemText.slice(0, 2).every(text => /\.(msix|msixbundle)/i.test(text))).toBe(true);
             expect(itemText.slice(2).every(text => /\.(exe|dll)/i.test(text))).toBe(true);
+
+            await page.keyboard.press('Escape');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    test('ranks MSIX packages above newer APPX packages and executables', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-e2e-tier-'));
+        const now = Date.now();
+        // The MSIX is the oldest file, so tier order (not mtime) must decide.
+        createFileWithMtime(path.join(tmpDir, 'AppPackages', 'Packaged.msix'), now - 600_000);
+        createFileWithMtime(path.join(tmpDir, 'AppPackages', 'Legacy.appx'), now);
+        createFileWithMtime(path.join(tmpDir, 'bin', 'App.exe'), now);
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Sign File');
+
+            const items = page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
+            await expect(items.first()).toBeVisible({ timeout: 20_000 });
+            await expect(items.first()).toHaveAttribute('aria-setsize', '4');
+
+            const itemText = await items.allTextContents();
+            expect(itemText[0]).toContain('Packaged.msix');
+            expect(itemText[1]).toContain('Legacy.appx');
+            expect(itemText[2]).toContain('App.exe');
+            expect(itemText[3]).toContain('Browse');
+            // The list is not capped, so Browse should not advertise truncation.
+            expect(itemText[3]).not.toContain('most recent');
 
             await page.keyboard.press('Escape');
         } finally {
