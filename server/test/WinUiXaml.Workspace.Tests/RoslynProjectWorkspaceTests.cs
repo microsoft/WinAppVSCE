@@ -126,6 +126,95 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public async Task InvalidationDuringPendingLoadEvictsTheCompletedGraph()
+    {
+        var controlsDirectory = Path.Combine(_root, "Controls");
+        var appDirectory = Path.Combine(_root, "App");
+        Directory.CreateDirectory(controlsDirectory);
+        Directory.CreateDirectory(appDirectory);
+        var controlsProject = Path.Combine(controlsDirectory, "Controls.csproj");
+        var appProject = Path.Combine(appDirectory, "App.csproj");
+        var xamlPath = Path.Combine(appDirectory, "Page.xaml");
+
+        await File.WriteAllTextAsync(
+            controlsProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(
+            appProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                <ProjectReference Include="..\Controls\Controls.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(
+            Path.Combine(controlsDirectory, "Controls.cs"),
+            """
+            namespace Microsoft.UI.Xaml { public class DependencyObject { } }
+            namespace Controls
+            {
+                public sealed class ProjectControl : Microsoft.UI.Xaml.DependencyObject { }
+            }
+            """);
+        await File.WriteAllTextAsync(xamlPath, "<Page />");
+
+        using var resolver = new XamlProjectResolver();
+
+        // Invalidate the referenced project while the App load is still in flight. At this point the
+        // project graph does not exist, so ContainsProject cannot be consulted; the invalidation has to
+        // be replayed when the load completes or the cache keeps a pre-invalidation graph forever.
+        var pending = resolver.ResolveAsync(xamlPath, _root);
+        Assert.False(pending.IsCompleted, "the load completed too quickly to exercise the pending path");
+        resolver.Invalidate(controlsProject);
+
+        // The in-flight resolve must still finish cleanly: eviction may not dispose a workspace that an
+        // active resolve is reading.
+        var resolved = await pending;
+        Assert.NotNull(resolved);
+
+        Assert.False(
+            resolver.IsCached(appProject),
+            "the pending load was cached with a pre-invalidation graph");
+    }
+
+    [Fact]
+    public async Task InvalidateAllDuringPendingLoadEvictsTheCompletedGraph()
+    {
+        Directory.CreateDirectory(_root);
+        var projectPath = Path.Combine(_root, "Fixture.csproj");
+        var xamlPath = Path.Combine(_root, "Page.xaml");
+        await File.WriteAllTextAsync(
+            projectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(xamlPath, "<Page />");
+
+        using var resolver = new XamlProjectResolver();
+        var pending = resolver.ResolveAsync(xamlPath, _root);
+        Assert.False(pending.IsCompleted, "the load completed too quickly to exercise the pending path");
+        resolver.InvalidateAll();
+
+        var resolved = await pending;
+        Assert.NotNull(resolved);
+        Assert.False(resolver.IsCached(projectPath));
+    }
+
+    [Fact]
     public async Task LightweightFrameworkProjectMatchesWorkspaceReferences()
     {
         var projectPath = GetWinUiFixturePath("SmokeFixture.csproj");
