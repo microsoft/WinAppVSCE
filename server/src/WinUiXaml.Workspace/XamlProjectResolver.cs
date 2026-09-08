@@ -39,9 +39,8 @@ namespace WinUiXaml.Workspace
 
         /// <summary>
         /// One cached project load. Tracks the invalidations that arrived while the load was still in
-        /// flight (its graph does not exist until it completes, so it cannot be tested with
-        /// <c>ContainsProject</c> at invalidate time) and the number of resolves currently using the
-        /// workspace, so an evicted workspace is only disposed once no caller is still reading it.
+        /// flight, because its project graph does not exist until it completes and so cannot be tested
+        /// with <c>ContainsProject</c> at invalidate time.
         /// </summary>
         private sealed class CacheEntry
         {
@@ -54,12 +53,6 @@ namespace WinUiXaml.Workspace
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             public bool InvalidatedAllWhilePending { get; set; }
-
-            public bool Evicted { get; set; }
-
-            public bool Disposed { get; set; }
-
-            public int Leases { get; set; }
         }
 
         /// <summary>Test hook: whether a cached workspace is currently held for the given project root.</summary>
@@ -137,30 +130,27 @@ namespace WinUiXaml.Workspace
                 ? TryReadClassName(normalizedXaml)
                 : XamlIntrospection.GetClass(xamlText);
 
-            var workspaceResult = await UseWorkspaceAsync(
-                projectPath,
-                cancellationToken,
-                async workspace =>
-                {
-                    var compilation = await workspace.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
-                    if (compilation == null)
-                    {
-                        return null;
-                    }
+            var workspace = await GetOrLoadAsync(projectPath)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
 
-                    var classSymbol = className != null ? compilation.GetTypeByMetadataName(className) : null;
-                    var referencedAssemblies = compilation.SourceModule.ReferencedAssemblySymbols;
-                    return new XamlResolution(
-                        normalizedXaml,
-                        Path.GetFullPath(projectPath),
-                        className,
-                        classSymbol,
-                        compilation,
-                        referencedAssemblies,
-                        workspace.XamlFiles,
-                        workspace.ApplicationDefinitionPath);
-                }).ConfigureAwait(false);
-            return workspaceResult;
+            var compilation = await workspace.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+            if (compilation == null)
+            {
+                return null;
+            }
+
+            var classSymbol = className != null ? compilation.GetTypeByMetadataName(className) : null;
+            var referencedAssemblies = compilation.SourceModule.ReferencedAssemblySymbols;
+            return new XamlResolution(
+                normalizedXaml,
+                Path.GetFullPath(projectPath),
+                className,
+                classSymbol,
+                compilation,
+                referencedAssemblies,
+                workspace.XamlFiles,
+                workspace.ApplicationDefinitionPath);
         }
 
         /// <summary>
@@ -206,23 +196,20 @@ namespace WinUiXaml.Workspace
             }
 
             // Unsupported custom project systems retain the existing authoritative path.
-            return await UseWorkspaceAsync(
-                projectPath,
-                cancellationToken,
-                workspace =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var fallbackCompilation = workspace.GetFrameworkCompilation();
-                    return Task.FromResult<XamlResolution?>(new XamlResolution(
-                        normalizedXaml,
-                        Path.GetFullPath(projectPath),
-                        className,
-                        classSymbol: null,
-                        fallbackCompilation,
-                        fallbackCompilation.SourceModule.ReferencedAssemblySymbols,
-                        workspace.XamlFiles,
-                        workspace.ApplicationDefinitionPath));
-                }).ConfigureAwait(false);
+            var workspace = await GetOrLoadAsync(projectPath)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var fallbackCompilation = workspace.GetFrameworkCompilation();
+            return new XamlResolution(
+                normalizedXaml,
+                Path.GetFullPath(projectPath),
+                className,
+                classSymbol: null,
+                fallbackCompilation,
+                fallbackCompilation.SourceModule.ReferencedAssemblySymbols,
+                workspace.XamlFiles,
+                workspace.ApplicationDefinitionPath);
         }
 
         private static bool IsWithin(string path, string root)
@@ -286,15 +273,11 @@ namespace WinUiXaml.Workspace
                 }
 
                 _frameworkProjects.Remove(key);
-                foreach (var entry in evicted)
-                {
-                    entry.Evicted = true;
-                }
             }
 
             foreach (var entry in evicted)
             {
-                ReleaseWhenUnused(entry);
+                DisposeWhenComplete(entry.Task);
             }
         }
 
@@ -309,39 +292,25 @@ namespace WinUiXaml.Workspace
                 _frameworkProjects.Clear();
                 foreach (var entry in evicted)
                 {
-                    entry.Evicted = true;
                     entry.InvalidatedAllWhilePending = true;
                 }
             }
 
             foreach (var entry in evicted)
             {
-                ReleaseWhenUnused(entry);
+                DisposeWhenComplete(entry.Task);
             }
         }
 
         /// <summary>
-        /// Runs <paramref name="body"/> against the cached workspace while holding a lease, so an
-        /// invalidation that evicts the entry mid-read defers disposal until this caller is done.
+        /// Returns the cached load for a project, starting one if needed.
         /// </summary>
-        private async Task<XamlResolution?> UseWorkspaceAsync(
-            string projectPath,
-            CancellationToken cancellationToken,
-            Func<RoslynProjectWorkspace, Task<XamlResolution?>> body)
-        {
-            var entry = GetOrLoadEntry(projectPath);
-            try
-            {
-                var workspace = await entry.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-                return await body(workspace).ConfigureAwait(false);
-            }
-            finally
-            {
-                ReleaseLease(entry);
-            }
-        }
-
-        private CacheEntry GetOrLoadEntry(string projectPath)
+        /// <remarks>
+        /// The returned workspace stays readable after <see cref="RoslynProjectWorkspace.Dispose"/>,
+        /// because every read goes through the immutable Roslyn <c>Project</c> snapshot captured at
+        /// load time. An eviction therefore cannot break a resolve that is already in flight.
+        /// </remarks>
+        private Task<RoslynProjectWorkspace> GetOrLoadAsync(string projectPath)
         {
             var key = Path.GetFullPath(projectPath);
             lock (_gate)
@@ -353,13 +322,12 @@ namespace WinUiXaml.Workspace
 
                 if (_projects.TryGetValue(key, out var existing))
                 {
-                    existing.Leases++;
-                    return existing;
+                    return existing.Task;
                 }
 
                 // Load with an independent token so one caller's cancellation can't poison the shared cache entry for other callers.
                 var task = RoslynProjectWorkspace.LoadProjectAsync(key, _globalProperties.ToDictionary(p => p.Key, p => p.Value), CancellationToken.None);
-                var entry = new CacheEntry(task) { Leases = 1 };
+                var entry = new CacheEntry(task);
                 _projects[key] = entry;
 
                 // If the load fails, evict so a later resolve can retry instead of replaying the error.
@@ -371,7 +339,7 @@ namespace WinUiXaml.Workspace
                     TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
 
-                return entry;
+                return task;
             }
         }
 
@@ -394,9 +362,9 @@ namespace WinUiXaml.Workspace
                     evict = entry.PendingInvalidations.Any(pending => graph.ContainsProject(pending));
                 }
 
+                entry.PendingInvalidations.Clear();
                 if (!evict)
                 {
-                    entry.PendingInvalidations.Clear();
                     return;
                 }
 
@@ -405,40 +373,6 @@ namespace WinUiXaml.Workspace
                     _projects.Remove(key);
                     _frameworkProjects.Remove(key);
                 }
-
-                entry.Evicted = true;
-            }
-
-            ReleaseWhenUnused(entry);
-        }
-
-        private void ReleaseLease(CacheEntry entry)
-        {
-            lock (_gate)
-            {
-                entry.Leases--;
-                if (entry.Leases > 0 || !entry.Evicted || entry.Disposed)
-                {
-                    return;
-                }
-
-                entry.Disposed = true;
-            }
-
-            DisposeWhenComplete(entry.Task);
-        }
-
-        /// <summary>Disposes an evicted entry once no resolve is still reading it.</summary>
-        private void ReleaseWhenUnused(CacheEntry entry)
-        {
-            lock (_gate)
-            {
-                if (entry.Leases > 0 || entry.Disposed)
-                {
-                    return;
-                }
-
-                entry.Disposed = true;
             }
 
             DisposeWhenComplete(entry.Task);
@@ -545,26 +479,11 @@ namespace WinUiXaml.Workspace
                 entries = _projects.Values.ToList();
                 _projects.Clear();
                 _frameworkProjects.Clear();
-                foreach (var entry in entries)
-                {
-                    entry.Evicted = true;
-                }
             }
 
-            // Shutdown forces disposal even if a resolve is still in flight; the process is going away.
             foreach (var entry in entries)
             {
-                bool alreadyDisposed;
-                lock (_gate)
-                {
-                    alreadyDisposed = entry.Disposed;
-                    entry.Disposed = true;
-                }
-
-                if (!alreadyDisposed)
-                {
-                    DisposeWhenComplete(entry.Task);
-                }
+                DisposeWhenComplete(entry.Task);
             }
         }
     }

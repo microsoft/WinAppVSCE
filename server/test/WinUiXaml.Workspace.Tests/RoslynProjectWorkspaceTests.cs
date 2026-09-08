@@ -126,6 +126,33 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public async Task DisposedWorkspaceStillServesCompilationReads()
+    {
+        Directory.CreateDirectory(_root);
+        var projectPath = Path.Combine(_root, "Fixture.csproj");
+        await File.WriteAllTextAsync(
+            projectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(
+            Path.Combine(_root, "Source.cs"),
+            "namespace Fixture; public sealed class Probe { }");
+
+        var workspace = await RoslynProjectWorkspace.LoadProjectAsync(projectPath);
+        workspace.Dispose();
+
+        // Documents the premise behind the lease in XamlProjectResolver: if this throws, an eviction
+        // that disposes mid-resolve breaks the in-flight caller.
+        var compilation = await workspace.GetCompilationAsync();
+        Assert.NotNull(compilation?.GetTypeByMetadataName("Fixture.Probe"));
+    }
+
+    [Fact]
     public async Task InvalidationDuringPendingLoadEvictsTheCompletedGraph()
     {
         var controlsDirectory = Path.Combine(_root, "Controls");
