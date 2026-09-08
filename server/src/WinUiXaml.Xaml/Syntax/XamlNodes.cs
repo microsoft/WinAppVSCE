@@ -2,6 +2,21 @@ using System.Collections.Generic;
 
 namespace WinUiXaml.Xaml
 {
+    /// <summary>Discriminates the node types below, so callers can switch without type tests.</summary>
+    public enum XamlNodeKind
+    {
+        Document,
+        Element,
+        Attribute,
+        AttributeValue,
+        MarkupExtension,
+        MarkupExtensionArgument,
+        Text,
+        Comment,
+        ProcessingInstruction,
+        CData
+    }
+
     /// <summary>Base class for every node in the tolerant XAML syntax tree.</summary>
     public abstract class XamlNode
     {
