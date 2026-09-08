@@ -12,7 +12,6 @@ import {
 	EXECUTABLE_GLOBS,
 	MAX_QUICKPICK_RESULTS,
 	SIGNABLE_ARTIFACT_TIERS,
-	WORKSPACE_SEARCH_EXCLUDE_GLOB,
 	type WorkspaceFileSearch
 } from '../sign-utils';
 import { ARTIFACT_GLOBS } from '../artifact-types';
@@ -44,12 +43,7 @@ function findWorkspaceArtifacts(
 ): Promise<string[]> {
 	return findWorkspaceArtifactsCore(
 		workspacePath,
-		(includePattern, search) => glob(includePattern, {
-			cwd: workspacePath,
-			absolute: true,
-			nodir: true,
-			ignore: search.excludePattern
-		}),
+		includePattern => glob(includePattern, { cwd: workspacePath, absolute: true, nodir: true }),
 		patterns,
 		signal,
 		limit
@@ -187,7 +181,7 @@ describe('findWorkspaceArtifacts', () => {
 		assert.equal(receivedPattern, `{${ARTIFACT_GLOBS.join(',')}}`);
 	});
 
-	it('bounds discovery and excludes ignored directories at the finder', async () => {
+	it('bounds discovery without asking the finder to apply excludes', async () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
 		let received: WorkspaceFileSearch | undefined;
@@ -203,10 +197,62 @@ describe('findWorkspaceArtifacts', () => {
 			MAX_QUICKPICK_RESULTS
 		);
 
-		assert.equal(received?.excludePattern, WORKSPACE_SEARCH_EXCLUDE_GLOB);
+		// Excludes are applied after the search: passing one to the VS Code
+		// finder would also re-enable the user's `files.exclude` setting.
+		assert.deepEqual(Object.keys(received ?? {}).sort(), ['maxResults', 'signal']);
 		assert.ok(received?.maxResults !== undefined);
 		assert.ok(received.maxResults > MAX_QUICKPICK_RESULTS);
 		assert.ok(received.maxResults <= MAX_QUICKPICK_RESULTS * 4);
+	});
+
+	it('retries unbounded when ignored paths saturate the candidate pool', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const real = path.join(tempDir, 'real.msix');
+		createFile(real);
+		const ignored = Array.from({ length: 8 }, (_, index) =>
+			path.join(tempDir, 'node_modules', 'pkg', `dep${index}.msix`));
+		for (const filePath of ignored) {
+			createFile(filePath);
+		}
+		const requestedLimits: Array<number | undefined> = [];
+
+		const results = await findWorkspaceArtifactsCore(
+			tempDir,
+			async (_includePattern, search) => {
+				requestedLimits.push(search.maxResults);
+				// A capped search returns only ignored matches; unbounded finds the real one.
+				return search.maxResults === undefined ? [...ignored, real] : ignored.slice(0, search.maxResults);
+			},
+			ARTIFACT_GLOBS,
+			undefined,
+			2
+		);
+
+		assert.deepEqual(requestedLimits, [8, undefined]);
+		assert.deepEqual(results, [real]);
+	});
+
+	it('does not retry when the candidate pool was not saturated', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const real = path.join(tempDir, 'real.msix');
+		createFile(real);
+		let calls = 0;
+
+		const results = await findWorkspaceArtifactsCore(
+			tempDir,
+			async () => {
+				calls++;
+				return [real];
+			},
+			ARTIFACT_GLOBS,
+			undefined,
+			2
+		);
+
+		assert.equal(calls, 1);
+		assert.deepEqual(results, [real]);
 	});
 
 	it('returns only the newest results up to the limit', async () => {
@@ -333,12 +379,7 @@ describe('findWorkspaceArtifactsByTier', () => {
 	): Promise<string[]> {
 		return findWorkspaceArtifactsByTier(
 			workspacePath,
-			(includePattern, search) => glob(includePattern, {
-				cwd: workspacePath,
-				absolute: true,
-				nodir: true,
-				ignore: search.excludePattern
-			}),
+			includePattern => glob(includePattern, { cwd: workspacePath, absolute: true, nodir: true }),
 			tiers,
 			signal,
 			limit

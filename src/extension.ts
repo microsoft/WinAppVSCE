@@ -507,7 +507,9 @@ async function findWorkspaceArtifactsWithCancellation(
 			async (includePattern, search) => {
 				const matches = await vscode.workspace.findFiles(
 					new vscode.RelativePattern(workspacePath, includePattern),
-					new vscode.RelativePattern(workspacePath, search.excludePattern),
+					// `null` (not a pattern) so the user's `files.exclude` setting
+					// cannot hide their own package output from the picker.
+					null,
 					search.maxResults,
 					token
 				);

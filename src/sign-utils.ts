@@ -22,9 +22,6 @@ export const SIGNABLE_ARTIFACT_TIERS: string[][] = [
 
 const SIGNABLE_ARTIFACT_IGNORES = new Set(['node_modules', '.git']);
 
-/** Glob matching directories that never contain user-authored signable output. */
-export const WORKSPACE_SEARCH_EXCLUDE_GLOB = '**/{node_modules,.git}/**';
-
 /** Maximum number of discovered files offered in a QuickPick before "Browse…". */
 export const MAX_QUICKPICK_RESULTS = 10;
 
@@ -35,11 +32,9 @@ export const MAX_QUICKPICK_RESULTS = 10;
  * QuickPick, so a small overshoot is enough to keep newest-first ordering
  * meaningful without paying for a full workspace walk.
  */
-const CANDIDATE_POOL_MULTIPLIER = 2;
+const CANDIDATE_POOL_MULTIPLIER = 4;
 
 export interface WorkspaceFileSearch {
-	/** Directories the finder should skip while walking the workspace. */
-	excludePattern: string;
 	/** Upper bound on matches to collect, or `undefined` for no bound. */
 	maxResults?: number;
 	signal?: AbortSignal;
@@ -67,7 +62,16 @@ export function buildSignCommand(filePath: string, certPath: string): string {
  * collected, and only `limit` are returned. Results are sorted by modification
  * time (newest first) so the most recently packaged artifact appears at the top
  * of the QuickPick; callers offer a "Browse…" entry for anything beyond the cap.
- */export async function findWorkspaceArtifacts(
+ *
+ * `node_modules` / `.git` matches are filtered out after the search rather than
+ * excluded during it, because the only way to stop VS Code from also applying
+ * the user's `files.exclude` setting is to pass no exclude at all — and users
+ * commonly hide their package output folder (e.g. `AppPackages`) from the
+ * explorer while still wanting to sign what is inside it. When ignored paths
+ * consume a saturated candidate pool, the search is retried unbounded so those
+ * artifacts are still found.
+ */
+export async function findWorkspaceArtifacts(
 	workspacePath: string,
 	findFiles: WorkspaceFileFinder,
 	patterns: string[] = ARTIFACT_GLOBS,
@@ -79,28 +83,23 @@ export function buildSignCommand(filePath: string, certPath: string): string {
 	}
 
 	const includePattern = patterns.length === 1 ? patterns[0] : `{${patterns.join(',')}}`;
-	let results: string[];
-	try {
-		results = await findFiles(includePattern, {
-			excludePattern: WORKSPACE_SEARCH_EXCLUDE_GLOB,
-			maxResults: limit > 0 ? limit * CANDIDATE_POOL_MULTIPLIER : undefined,
-			signal
-		});
-	} catch (error) {
-		if (signal?.aborted && isCancellationError(error)) {
-			return [];
-		}
-		throw error;
+	const poolSize = limit > 0 ? limit * CANDIDATE_POOL_MULTIPLIER : undefined;
+
+	let results = await search(includePattern, poolSize);
+	let candidates = results.filter((filePath) => !isIgnoredWorkspacePath(workspacePath, filePath));
+
+	// A pool filled entirely to its cap may have hidden real artifacts behind
+	// ignored ones; fall back to an unbounded search only in that rare case.
+	if (poolSize !== undefined && results.length >= poolSize && candidates.length < limit) {
+		results = await search(includePattern, undefined);
+		candidates = results.filter((filePath) => !isIgnoredWorkspacePath(workspacePath, filePath));
 	}
 
 	// Sort by mtime descending (newest first); if stat fails, push to end.
 	const withStats: Array<{ path: string; mtime: number }> = [];
-	for (const filePath of results) {
+	for (const filePath of candidates) {
 		if (signal?.aborted) {
 			return [];
-		}
-		if (isIgnoredWorkspacePath(workspacePath, filePath)) {
-			continue;
 		}
 		try {
 			const stat = await fs.promises.stat(filePath);
@@ -113,6 +112,20 @@ export function buildSignCommand(filePath: string, certPath: string): string {
 	withStats.sort((a, b) => b.mtime - a.mtime);
 	const sorted = withStats.map((s) => s.path);
 	return limit > 0 ? sorted.slice(0, limit) : sorted;
+
+	async function search(include: string, maxResults: number | undefined): Promise<string[]> {
+		if (signal?.aborted) {
+			return [];
+		}
+		try {
+			return await findFiles(include, { maxResults, signal });
+		} catch (error) {
+			if (signal?.aborted && isCancellationError(error)) {
+				return [];
+			}
+			throw error;
+		}
+	}
 }
 
 /**
