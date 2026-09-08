@@ -11,9 +11,32 @@ export const EXECUTABLE_GLOBS = ['**/*.exe', '**/*.dll'];
 
 const SIGNABLE_ARTIFACT_IGNORES = new Set(['node_modules', '.git']);
 
+/** Glob matching directories that never contain user-authored signable output. */
+export const WORKSPACE_SEARCH_EXCLUDE_GLOB = '**/{node_modules,.git}/**';
+
+/** Maximum number of discovered files offered in a QuickPick before "Browse…". */
+export const MAX_QUICKPICK_RESULTS = 10;
+
+/**
+ * How many candidates to collect per displayed result.
+ *
+ * Discovery is capped so a huge workspace does not pay for a full recursive
+ * walk, but the cap is kept well above the display limit so the newest-first
+ * ordering the QuickPick shows stays deterministic for realistic workspaces.
+ */
+const CANDIDATE_POOL_MULTIPLIER = 10;
+
+export interface WorkspaceFileSearch {
+	/** Directories the finder should skip while walking the workspace. */
+	excludePattern: string;
+	/** Upper bound on matches to collect, or `undefined` for no bound. */
+	maxResults?: number;
+	signal?: AbortSignal;
+}
+
 export type WorkspaceFileFinder = (
 	includePattern: string,
-	signal?: AbortSignal
+	search: WorkspaceFileSearch
 ) => Promise<string[]>;
 
 /**
@@ -29,14 +52,17 @@ export function buildSignCommand(filePath: string, certPath: string): string {
 /**
  * Find files matching the given glob patterns within a workspace root.
  *
- * Results are sorted by modification time (newest first) so the most recently
- * packaged artifact appears at the top of the QuickPick.
+ * Discovery is bounded: at most `limit * CANDIDATE_POOL_MULTIPLIER` matches are
+ * collected, and only `limit` are returned. Results are sorted by modification
+ * time (newest first) so the most recently packaged artifact appears at the top
+ * of the QuickPick; callers offer a "Browse…" entry for anything beyond the cap.
  */
 export async function findWorkspaceArtifacts(
 	workspacePath: string,
 	findFiles: WorkspaceFileFinder,
 	patterns: string[] = ARTIFACT_GLOBS,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	limit: number = MAX_QUICKPICK_RESULTS
 ): Promise<string[]> {
 	if (signal?.aborted) {
 		return [];
@@ -45,7 +71,11 @@ export async function findWorkspaceArtifacts(
 	const includePattern = patterns.length === 1 ? patterns[0] : `{${patterns.join(',')}}`;
 	let results: string[];
 	try {
-		results = await findFiles(includePattern, signal);
+		results = await findFiles(includePattern, {
+			excludePattern: WORKSPACE_SEARCH_EXCLUDE_GLOB,
+			maxResults: limit > 0 ? limit * CANDIDATE_POOL_MULTIPLIER : undefined,
+			signal
+		});
 	} catch (error) {
 		if (signal?.aborted && isCancellationError(error)) {
 			return [];
@@ -71,7 +101,8 @@ export async function findWorkspaceArtifacts(
 	}
 
 	withStats.sort((a, b) => b.mtime - a.mtime);
-	return withStats.map((s) => s.path);
+	const sorted = withStats.map((s) => s.path);
+	return limit > 0 ? sorted.slice(0, limit) : sorted;
 }
 
 function isIgnoredWorkspacePath(workspacePath: string, filePath: string): boolean {

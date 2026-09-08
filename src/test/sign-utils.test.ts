@@ -8,7 +8,10 @@ import {
 	findWorkspaceArtifacts as findWorkspaceArtifactsCore,
 	buildSignCommand,
 	CERTIFICATE_GLOBS,
-	EXECUTABLE_GLOBS
+	EXECUTABLE_GLOBS,
+	MAX_QUICKPICK_RESULTS,
+	WORKSPACE_SEARCH_EXCLUDE_GLOB,
+	type WorkspaceFileSearch
 } from '../sign-utils';
 import { ARTIFACT_GLOBS } from '../artifact-types';
 
@@ -34,13 +37,20 @@ const tempDirs: string[] = [];
 function findWorkspaceArtifacts(
 	workspacePath: string,
 	patterns: string[] = ARTIFACT_GLOBS,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	limit?: number
 ): Promise<string[]> {
 	return findWorkspaceArtifactsCore(
 		workspacePath,
-		includePattern => glob(includePattern, { cwd: workspacePath, absolute: true, nodir: true }),
+		(includePattern, search) => glob(includePattern, {
+			cwd: workspacePath,
+			absolute: true,
+			nodir: true,
+			ignore: search.excludePattern
+		}),
 		patterns,
-		signal
+		signal,
+		limit
 	);
 }
 
@@ -175,6 +185,55 @@ describe('findWorkspaceArtifacts', () => {
 		assert.equal(receivedPattern, `{${ARTIFACT_GLOBS.join(',')}}`);
 	});
 
+	it('bounds discovery and excludes ignored directories at the finder', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		let received: WorkspaceFileSearch | undefined;
+
+		await findWorkspaceArtifactsCore(
+			tempDir,
+			async (_includePattern, search) => {
+				received = search;
+				return [];
+			},
+			ARTIFACT_GLOBS,
+			undefined,
+			MAX_QUICKPICK_RESULTS
+		);
+
+		assert.equal(received?.excludePattern, WORKSPACE_SEARCH_EXCLUDE_GLOB);
+		assert.ok(received?.maxResults !== undefined);
+		assert.ok(received.maxResults > MAX_QUICKPICK_RESULTS);
+	});
+
+	it('returns only the newest results up to the limit', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const base = Date.now();
+		for (let i = 0; i < 5; i++) {
+			createFile(path.join(tempDir, `pkg${i}.msix`), base + i * 1000);
+		}
+
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS, undefined, 3);
+
+		assert.deepEqual(
+			results.map(filePath => path.basename(filePath)),
+			['pkg4.msix', 'pkg3.msix', 'pkg2.msix']
+		);
+	});
+
+	it('defaults to the QuickPick result limit', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		for (let i = 0; i < MAX_QUICKPICK_RESULTS + 4; i++) {
+			createFile(path.join(tempDir, `pkg${i}.msix`), Date.now() + i * 1000);
+		}
+
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
+
+		assert.equal(results.length, MAX_QUICKPICK_RESULTS);
+	});
+
 	it('does not start discovery when already aborted', async () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
@@ -202,8 +261,8 @@ describe('findWorkspaceArtifacts', () => {
 		const controller = new AbortController();
 		const search = findWorkspaceArtifactsCore(
 			tempDir,
-			(_includePattern, signal) => new Promise((_resolve, reject) => {
-				signal?.addEventListener('abort', () => {
+			(_includePattern, search) => new Promise((_resolve, reject) => {
+				search.signal?.addEventListener('abort', () => {
 					reject(Object.assign(new Error('Cancelled'), { name: 'Canceled' }));
 				}, { once: true });
 			}),

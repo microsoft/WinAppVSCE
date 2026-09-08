@@ -29,6 +29,7 @@ import {
 	buildSignCommand,
 	CERTIFICATE_GLOBS,
 	EXECUTABLE_GLOBS,
+	MAX_QUICKPICK_RESULTS,
 	executeSignFlow,
 	type SignFlowAdapter
 } from './sign-utils';
@@ -57,7 +58,20 @@ import {
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
-const MAX_SIGNABLE_FILES = 10;
+const MAX_SIGNABLE_FILES = MAX_QUICKPICK_RESULTS;
+const FILE_PICKER_DETAIL = 'Open a file picker';
+
+/**
+ * Build the trailing "Browse…" QuickPick entry. Discovery is capped, so when the
+ * list is full the entry advertises itself as the way to reach older artifacts.
+ */
+function createBrowseItem(truncated: boolean): vscode.QuickPickItem {
+	return {
+		label: '$(folder-opened) Browse…',
+		description: truncated ? `Showing the ${MAX_SIGNABLE_FILES} most recent` : undefined,
+		detail: FILE_PICKER_DETAIL
+	};
+}
 
 /**
  * Output channel for debugger-related activity (e.g. auto-installed extensions),
@@ -368,9 +382,11 @@ async function runWinappCapture(
 /**
  * Search the workspace for signable packages, executables, and libraries and
  * let the user pick one via
- * a QuickPick. When no artifacts are found the function falls back directly to
- * a native file dialog; a "Browse…" entry is always appended so the user can
- * opt into the dialog even when artifacts *are* discovered.
+ * a QuickPick. Discovery is capped so large workspaces are not fully scanned;
+ * at most {@link MAX_SIGNABLE_FILES} newest artifacts are listed. When no
+ * artifacts are found the function falls back directly to a native file dialog;
+ * a "Browse…" entry is always appended so the user can reach anything the
+ * capped list omits.
  *
  * @returns The selected file path, or `undefined` if cancelled.
  */
@@ -411,7 +427,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		};
 	});
 
-	items.push({ label: '$(folder-opened) Browse…', detail: 'Open a file picker' });
+	items.push(createBrowseItem(artifactPaths.length >= MAX_SIGNABLE_FILES));
 
 	const picked = await vscode.window.showQuickPick(items, {
 		placeHolder: 'Select a file to sign'
@@ -421,7 +437,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		return undefined;
 	}
 
-	if (picked.detail === 'Open a file picker') {
+	if (picked.detail === FILE_PICKER_DETAIL) {
 		return selectFile('Select file to sign', {
 			...ARTIFACT_DIALOG_FILTER,
 			'Executables': ['exe', 'dll'],
@@ -434,7 +450,8 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 
 /**
  * Search the workspace for PFX certificate files and let the user pick one
- * via a QuickPick. Falls back to a native file dialog when none are found;
+ * via a QuickPick. Discovery is capped to the {@link MAX_SIGNABLE_FILES} newest
+ * certificates. Falls back to a native file dialog when none are found;
  * a "Browse…" entry is always appended.
  *
  * @returns The selected certificate path, or `undefined` if cancelled.
@@ -464,7 +481,7 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 		};
 	});
 
-	items.push({ label: '$(folder-opened) Browse…', detail: 'Open a file picker' });
+	items.push(createBrowseItem(certPaths.length >= MAX_SIGNABLE_FILES));
 
 	const picked = await vscode.window.showQuickPick(items, {
 		placeHolder: 'Select a signing certificate'
@@ -474,7 +491,7 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 		return undefined;
 	}
 
-	if (picked.detail === 'Open a file picker') {
+	if (picked.detail === FILE_PICKER_DETAIL) {
 		return selectFile('Select signing certificate', {
 			'Certificates': ['pfx']
 		});
@@ -497,11 +514,11 @@ async function findWorkspaceArtifactsWithCancellation(
 	try {
 		const paths = await findWorkspaceArtifacts(
 			workspacePath,
-			async includePattern => {
+			async (includePattern, search) => {
 				const matches = await vscode.workspace.findFiles(
 					new vscode.RelativePattern(workspacePath, includePattern),
-					null,
-					undefined,
+					new vscode.RelativePattern(workspacePath, search.excludePattern),
+					search.maxResults,
 					token
 				);
 				return matches.map(uri => uri.fsPath);
