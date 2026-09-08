@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Standalone console harness that drives the real Surface.exe using the SAME SurfaceClient
+       code that ships in the VSIX. Targets net472 to prove the protocol port compiles and runs
+       on the .NET Framework runtime that hosts the in-proc VS extension. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>SurfaceClient.Smoke</AssemblyName>
+    <RootNamespace>WinUIXamlPreview.Smoke</RootNamespace>
+    <UseWindowsForms>false</UseWindowsForms>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\surface\Shared\HostPayload.cs" Link="Shared\HostPayload.cs" />
+    <!-- Compile the production protocol/client sources in place — no duplication. -->
+    <Compile Include="..\WinUIXamlPreview\Protocol\Messages.cs" Link="Protocol\Messages.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Protocol\LineDecoder.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceClient.cs" Link="Protocol\SurfaceClient.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceResolver.cs" Link="Protocol\SurfaceResolver.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\ProjectDllLocator.cs" Link="Protocol\ProjectDllLocator.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="10.0.9" />
+  </ItemGroup>
+
+</Project>

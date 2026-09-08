@@ -1,0 +1,19 @@
+<UserControl
+    x:Class="TestUserApp.SettleDemoControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!--
+        P3 render-settle demo (coverage hardening). The code-behind starts a private DispatcherTimer on Loaded
+        that would otherwise churn the UI thread forever — mirroring the gallery's auto-advance carousel (idx18
+        HeaderCarousel). The host's render-settle sweep must find this code-behind timer in the mounted tree
+        and Stop() it (logged as "SETTLE: stopped 1 timer(s)") so the page settles to a frame instead of timing
+        out. Proven host-independently by the smoke suite before the gallery re-measure.
+    -->
+    <StackPanel Padding="24" Spacing="8">
+        <TextBlock x:Name="TickText" Text="0 ticks" />
+    </StackPanel>
+</UserControl>

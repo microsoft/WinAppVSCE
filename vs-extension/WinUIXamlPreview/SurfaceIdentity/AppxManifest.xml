@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sparse (external-location) package manifest for the headless render surface.
+
+  The extension registers this at runtime (external location = the bundled Surface\ folder) the first
+  time it must host a PACKAGED (MSIX-built) user project. Giving the surface package identity satisfies
+  the Windows App SDK DeploymentManager module initializer compiled into packaged user assemblies (it
+  calls DeploymentManager.Initialize(), which throws "The process has no package identity" in an
+  unpackaged host) so the app's generated XamlTypeInfo provider — and therefore its custom controls —
+  resolve. Unpackaged projects don't need this; the same Surface.exe launches unpackaged when this
+  package isn't registered (dual-mode; see app.manifest / the embedded <msix> element). See plan §38.
+
+  Identity must stay in sync with SurfaceIdentity.cs and the <msix> element embedded into Surface.exe
+  (Surface.identity.manifest): Name=WinUIXamlPreviewSurface, Publisher=CN=WinUIXamlPreview, App Id=Surface.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap10 desktop6 rescap">
+
+  <Identity Name="WinUIXamlPreviewSurface" Publisher="CN=WinUIXamlPreview" Version="1.0.0.0" ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>WinUI XAML Preview Surface</DisplayName>
+    <PublisherDisplayName>WinUIXamlPreview</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+    <desktop6:RegistryWriteVirtualization>disabled</desktop6:RegistryWriteVirtualization>
+    <uap10:PackageIntegrity>
+      <uap10:Content Enforcement="on" />
+    </uap10:PackageIntegrity>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.18362.0" MaxVersionTested="10.0.26200.0" />
+    <!--
+      With the bootstrapper no-op'd under identity (Surface.csproj: OnPackageIdentity_NoOp), the Windows
+      App SDK native runtime must come from the package graph, so declare the framework dependency. Kept
+      in sync with the WinAppSDK version the surface targets (2.2.0 -> Microsoft.WindowsAppRuntime.2 2.2.0.0).
+    -->
+    <PackageDependency Name="Microsoft.WindowsAppRuntime.2" MinVersion="2.2.0.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="Surface" Executable="Surface.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="packagedClassicApp">
+      <uap:VisualElements
+        AppListEntry="none"
+        DisplayName="WinUI XAML Preview Surface"
+        Description="Headless WinUI XAML render surface"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\MedTile.png"
+        Square44x44Logo="Assets\AppList.png" />
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+</Package>

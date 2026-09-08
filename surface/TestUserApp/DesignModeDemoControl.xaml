@@ -1,0 +1,31 @@
+<UserControl
+    x:Class="TestUserApp.DesignModeDemoControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!--
+        M2 design-mode-contract demo (§51). Binds via {x:Bind} to properties the code-behind populates only
+        under the design-mode contract. The three TextBlocks are read back deterministically by the smoke
+        suite (paths 0.0.0 / 0.0.1 / 0.0.2) to prove the construction gate + data gap dissolve and the
+        forced "Loaded" visual state applies.
+    -->
+    <StackPanel Padding="24" Spacing="8">
+        <TextBlock Text="{x:Bind Title}" />
+        <TextBlock Text="{x:Bind ItemsSummary}" />
+        <TextBlock x:Name="StatusText" Text="Loading…" />
+
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="LoadStates">
+                <VisualState x:Name="Empty" />
+                <VisualState x:Name="Populated">
+                    <VisualState.Setters>
+                        <Setter Target="StatusText.Text" Value="Populated" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+    </StackPanel>
+</UserControl>

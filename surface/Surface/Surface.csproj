@@ -1,0 +1,103 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Surface</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x86;x64;ARM64</Platforms>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <StartupObject>Surface.Program</StartupObject>
+    <!-- S5 Part 2: the WGC capture probe uses source-generated COM interop (void* marshalling). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- ===== UNPACKAGED CONFIGURATION ===== -->
+    <!-- Run as a plain Win32 .exe with no MSIX package identity. -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <!-- Disable single-project MSIX tooling so Package.appxmanifest is not consumed. -->
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <!-- Framework-dependent: rely on the installed Windows App Runtime 2.x.
+         The SDK auto-adds the bootstrap auto-initializer because
+         WindowsPackageType==None + OutputType==WinExe (see BootstrapCommon.targets). -->
+    <!-- Dual-mode runtime acquisition: when the surface runs WITHOUT package identity
+         (normal unpackaged dev/host case) the bootstrapper initializes the Windows App
+         Runtime as usual. When the surface is launched WITH a sparse debug identity
+         (so it can host packaged/MSIX-built user assemblies whose module initializer
+         calls DeploymentManager.Initialize() and demands package identity), the
+         bootstrapper would otherwise fail 0x80070032 (ERROR_NOT_SUPPORTED) before Main.
+         OnPackageIdentity_NoOp makes the auto-initializer no-op when identity is present
+         (the Windows App Runtime is then supplied via the sparse manifest's
+         <PackageDependency Name="Microsoft.WindowsAppRuntime.2" ...> in the package graph). -->
+    <WindowsAppSDKBootstrapAutoInitializeOptions_OnPackageIdentity_NoOp>true</WindowsAppSDKBootstrapAutoInitializeOptions_OnPackageIdentity_NoOp>
+  </PropertyGroup>
+
+  <!-- ===== Per-version host parameterization (nov-pvh-productize) =====
+       The certified engine references Windows App SDK 2.2.0 by default. The SurfaceProvisioner
+       (surface\SurfaceProvisioner) can rebuild this SAME certified source SELF-CONTAINED at a
+       target project's resolved WASDK version to produce a TRUE matched host (managed+native both at the
+       target version) — the Path A per-version host. The version is a build-time MSBuild property ONLY:
+       a plain build (no property) resolves to 2.2.0, so the shipped default engine is byte-identical
+       (modulo MVID) to the certified pin. The provisioner passes -p:WinUISurfaceWasdkVersion=<ver>
+       -p:WindowsAppSDKSelfContained=true (NOT publish). No behavior change on the default path. -->
+  <PropertyGroup>
+    <WinUISurfaceWasdkVersion Condition="'$(WinUISurfaceWasdkVersion)' == ''">2.2.0</WinUISurfaceWasdkVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(WinUISurfaceWasdkVersion)" />
+  </ItemGroup>
+
+  <!-- ===== T4: WASDK version-shadow de-collision =====
+       The transitive Microsoft.WindowsAppSDK.AI / .ML component packages copy their MANAGED WinRT
+       projection assemblies (Microsoft.Windows.AI.*.Projection.dll, incl. .MachineLearning, plus
+       Microsoft.Graphics.Imaging.Projection.dll) — and the managed ONNX Runtime wrapper
+       Microsoft.ML.OnnxRuntime.dll — into the app-local output. The surface itself NEVER calls these
+       AI / Imaging / ONNX APIs (verified: no Microsoft.Windows.AI / Microsoft.Graphics.Imaging /
+       OnnxRuntime usage in source, and Surface.deps.json has no managed dependency edge to them — they
+       are loose component-copied files), yet their mere presence version-SHADOWS a hosted user app that
+       ships NEWER copies of the same assemblies: the CLR binds the surface's OLDER copy first and throws
+       FileLoadException 0x80131040 while loading the user app's closure — BEFORE the version-agnostic
+       resolver in App.cs (RegisterVersionAgnosticAssemblyResolver) gets a chance to redirect to the user
+       app's copy. Pruning the surface's app-local copies turns that hard bind failure into "assembly not
+       found", so the existing resolver wins by loading the user app's newer copy on demand. This is the
+       permanent, shipped-bin form of the manual "de-collide" experiment (moving these DLLs aside) that
+       lifted the AI Dev Gallery parse-path render count ~11 -> ~53/103.
+
+       Framework-dependent build: the NATIVE implementations ship via the Windows App Runtime FRAMEWORK
+       package (the AI package's runtimes-framework\ payload) and are NOT app-local, so they are
+       unaffected — only these unused MANAGED stubs/wrappers are removed. Matching is scoped to the exact
+       colliding families (empirically: the 8 AI/Imaging projections dev 2.2.2/2.1.70 vs gallery
+       2.2.5/2.1.75, plus Microsoft.ML.OnnxRuntime dev 0.0.0.0 vs gallery 1.23.2.0); every OTHER
+       WinAppSDK projection (Storage, System, AppLifecycle, Resources, … all v2.0) is left untouched.
+
+       DELIBERATELY RETAINED: System.Numerics.Tensors (surface bin 9.0.x, gallery 10.0.x) is a shared
+       framework library and is NOT pruned. It has no source reference and no deps.json edge, so it does
+       not load at surface startup, and no parse-path page needs it (0 FileLoadException across the 103
+       gallery pages), so removing it yields no render benefit while risking surface startup if a future
+       dependency binds 9.0.x first. Its 9->10 shadow can only bite a LIVE-mode ML page that actually
+       invokes Tensors inference — out of the parse-path preview scope. Revisit if/when live ML pages are
+       targeted (per-assembly pre-load would be the surgical option there).
+
+       Post-build removal is used because these assemblies are injected by custom WinAppSDK targets
+       (Reference HintPaths + component copy), not the standard copy-local item groups, so a
+       filename-targeted prune of the final output is the robust, mechanism-agnostic form. -->
+  <Target Name="RemoveCollidingAiProjections" AfterTargets="Build;Publish">
+    <ItemGroup>
+      <_CollidingAiProjection Include="$(TargetDir)Microsoft.Windows.AI.*.dll" />
+      <_CollidingAiProjection Include="$(TargetDir)Microsoft.Graphics.Imaging.Projection.dll" />
+      <_CollidingAiProjection Include="$(TargetDir)Microsoft.ML.OnnxRuntime.dll" />
+      <_CollidingAiProjection Include="$(PublishDir)Microsoft.Windows.AI.*.dll" Condition="'$(PublishDir)' != ''" />
+      <_CollidingAiProjection Include="$(PublishDir)Microsoft.Graphics.Imaging.Projection.dll" Condition="'$(PublishDir)' != ''" />
+      <_CollidingAiProjection Include="$(PublishDir)Microsoft.ML.OnnxRuntime.dll" Condition="'$(PublishDir)' != ''" />
+    </ItemGroup>
+    <Delete Files="@(_CollidingAiProjection)" TreatErrorsAsWarnings="true" />
+    <Message Importance="high"
+             Condition="'@(_CollidingAiProjection)' != ''"
+             Text="[T4 de-collision] Pruned colliding projection stub: %(_CollidingAiProjection.Filename)%(_CollidingAiProjection.Extension)" />
+  </Target>
+</Project>

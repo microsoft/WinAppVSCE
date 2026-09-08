@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- No NuGet dependencies or feeds: the installed SDK supplies the framework. -->
+    <RestoreSources>$(MSBuildThisFileDirectory)</RestoreSources>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\HostPayload.cs" Link="Production\HostPayload.cs" />
+    <Compile Include="Compatibility.cs" />
+    <Compile Include="ServerDoubles.cs" />
+    <Compile Include="..\Surface\FrameServer.cs" Link="Production\FrameServer.cs" />
+    <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\Messages.cs" Link="Production\Messages.cs" />
+    <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\SurfaceClient.cs" Link="Production\SurfaceClient.cs" />
+    <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Production\LineDecoder.cs" />
+  </ItemGroup>
+</Project>

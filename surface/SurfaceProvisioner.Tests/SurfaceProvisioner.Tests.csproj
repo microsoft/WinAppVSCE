@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\SurfaceProvisioner\HostBuilder.cs" Link="Production\HostBuilder.cs" />
+    <Compile Include="..\SurfaceProvisioner\BuildStorage.cs" Link="Production\BuildStorage.cs" />
+    <Compile Include="..\SurfaceProvisioner\Provisioner.cs" Link="Production\Provisioner.cs" />
+    <Compile Include="..\SurfaceProvisioner\ProvisionerCommand.cs" Link="Production\ProvisionerCommand.cs" />
+    <Compile Include="..\Shared\HostPayload.cs" Link="Production\HostPayload.cs" />
+  </ItemGroup>
+</Project>

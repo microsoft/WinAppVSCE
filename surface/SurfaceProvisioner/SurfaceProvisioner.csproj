@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Standalone "version-matching" provisioner for the WinUI design surface (SPIKE-NOV -> productized).
+
+    A self-contained Surface base host ships one WASDK native version (the version it was built
+    against). When the user's project targets a DIFFERENT WASDK, its exp9-class fidelity reclaim does
+    not transfer. This tool closes that gap the ReproStudio way: it (1) discovers the target project's
+    RESOLVED WASDK version, (2) resolves the WinUI component sub-version from the metapackage nuspec,
+    (3) LOCATES that component's native DLLs (project self-contained bin -> nuget cache -> optional
+    download), and (4) overlays ONLY the native files onto a COPY of the base host, verifying each by
+    SHA256 + size (never FileVersion — it is cached by path and unreliable for an in-place overlay).
+
+    Native-only output keeps Microsoft.WinUI.dll at the base version and is explicitly DEGRADED:
+    it can boot, but managed/native compatibility for arbitrary user controls is not guaranteed.
+    HostBuilder is the true matched managed/native path. Both are IDE-neutral behind this net8 CLI;
+    no WPF/VSSDK/VS Code or language-service runtime dependencies are introduced.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>SurfaceProvisioner</AssemblyName>
+    <RootNamespace>SurfaceProvisioner</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\HostPayload.cs" Link="Shared\HostPayload.cs" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,182 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    In-proc VSIX for VS 2026 (devenv hosts classic in-proc extensions on .NET Framework).
+    Build with DESKTOP MSBuild, not `dotnet build` — the legacy VSSDK packaging targets
+    (CreatePkgDef, CreateVsixContainer) only run when MSBuildRuntimeType != Core. Use
+    Build-Vsix.ps1, which locates desktop MSBuild via vswhere.
+
+    This is the image-streaming proof: a tool window that reuses the existing headless Surface.exe
+    and paints its PNG frames. A single "WinUI XAML Preview" command (VSCommandTable.vsct) is
+    registered under View -> Other Windows to (re)open the pane; the tool window also auto-shows on
+    shell init via [ProvideToolWindow] + deferred ShowToolWindowAsync.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>WinUIXamlPreview</RootNamespace>
+    <AssemblyName>WinUIXamlPreview</AssemblyName>
+    <GeneratePkgDefFile>false</GeneratePkgDefFile>
+    <CreateVsixContainer>true</CreateVsixContainer>
+    <DeployExtension>false</DeployExtension>
+    <IsAotCompatible>false</IsAotCompatible>
+    <NoWarn>$(NoWarn);VSTHRD002;VSTHRD010;VSTHRD012;VSTHRD109</NoWarn>
+
+    <NuGetPackageRoot Condition="'$(NuGetPackageRoot)' == ''">$(UserProfile)\.nuget\packages\</NuGetPackageRoot>
+
+    <!-- Locate the desktop VSSDK targets shipped by Microsoft.VSSDK.BuildTools. -->
+    <VSSDKTargetsPath Condition="'$(VSSDKTargetsPath)' == '' and '$(MSBuildRuntimeType)' != 'Core' and Exists('$(NuGetPackageRoot)microsoft.vssdk.buildtools\18.6.38345\tools\vssdk\Microsoft.VsSDK.targets')">$(NuGetPackageRoot)microsoft.vssdk.buildtools\18.6.38345\tools\vssdk</VSSDKTargetsPath>
+
+    <!-- true under `dotnet build` (skips the legacy VSIX targets), false under desktop MSBuild. -->
+    <DotnetVsixBuild Condition="'$(DotnetVsixBuild)' == '' and '$(MSBuildRuntimeType)' != 'Core' and Exists('$(VSSDKTargetsPath)\Microsoft.VsSDK.targets')">false</DotnetVsixBuild>
+    <DotnetVsixBuild Condition="'$(DotnetVsixBuild)' == ''">true</DotnetVsixBuild>
+    <AppendTargetFrameworkToOutputPath Condition="'$(DotnetVsixBuild)' != 'true'">false</AppendTargetFrameworkToOutputPath>
+
+    <!--
+      Force a FLAT obj path under desktop MSBuild. The SDK-style default of
+      obj\$(Configuration)\$(TargetFramework)\ causes the legacy CreatePkgDef/CreateVsixContainer
+      tasks to read/write a different intermediate than the assembly embeds, which silently ships
+      a broken pkgdef. Proven config from the reference extension.
+    -->
+    <BaseIntermediateOutputPath Condition="'$(DotnetVsixBuild)' != 'true'">obj\</BaseIntermediateOutputPath>
+    <IntermediateOutputPath Condition="'$(DotnetVsixBuild)' != 'true'">obj\$(Configuration)\</IntermediateOutputPath>
+    <TargetName Condition="'$(TargetName)' == ''">$(AssemblyName)</TargetName>
+    <TargetVsixContainerName Condition="'$(DotnetVsixBuild)' != 'true' and '$(TargetVsixContainerName)' == ''">$(AssemblyName).vsix</TargetVsixContainerName>
+    <TargetVsixContainer Condition="'$(DotnetVsixBuild)' != 'true' and '$(TargetVsixContainer)' == ''">$(MSBuildProjectDirectory)\bin\$(Configuration)\$(AssemblyName).vsix</TargetVsixContainer>
+    <FileManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(FileManifest)' == ''">$(MSBuildProjectDirectory)\obj\$(Configuration)\files.json</FileManifest>
+    <TemplateFileManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(TemplateFileManifest)' == ''">$(MSBuildProjectDirectory)\obj\$(Configuration)\templateFiles.json</TemplateFileManifest>
+    <ResourceManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(ResourceManifest)' == ''">$(MSBuildProjectDirectory)\obj\$(Configuration)\resources.json</ResourceManifest>
+    <CreatePkgDefAssemblyToProcess Condition="'$(DotnetVsixBuild)' != 'true' and '$(CreatePkgDefAssemblyToProcess)' == ''">$(MSBuildProjectDirectory)\bin\$(Configuration)\$(AssemblyName).dll</CreatePkgDefAssemblyToProcess>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\surface\Shared\HostPayload.cs" Link="Shared\HostPayload.cs" />
+    <Content Include="..\LICENSE.winui-vsc.txt">
+      <Link>LICENSE.winui-vsc.txt</Link>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.6.38345" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" Version="18.7.23" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.SDK.Analyzers" Version="17.7.113" PrivateAssets="all" />
+    <PackageReference Include="System.Text.Json" Version="10.0.9" />
+    <!-- Pin transitive MessagePack (SDK -> StreamJsonRpc) to the LZ4 security fix (>= 2.5.301). -->
+    <PackageReference Include="MessagePack" Version="2.5.301" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- XamlSourceMap uses LINQ-to-XML for source<->element path mapping; SDK-style net472 doesn't
+         auto-reference this framework assembly. -->
+    <Reference Include="System.Xml.Linq" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Hand-rolled pkgdef with CodeBase=$PackageFolder$\WinUIXamlPreview.dll. On VS 2026 the CLR
+      loader can't find the extension DLL by simple name (it lives under
+      %LocalAppData%\...\Extensions\<random>\, not the GAC), so the generated Assembly= pkgdef
+      fails to load the package. CodeBase= fixes it.
+    -->
+    <Content Include="WinUIXamlPreview.handcrafted.pkgdef" CopyToOutputDirectory="PreserveNewest">
+      <Link>WinUIXamlPreview.pkgdef</Link>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+
+    <!--
+      Command table for the View -> Other Windows entry that shows the preview pane on demand.
+      VSCTCompile compiles the .vsct to a .cto and embeds it as the native "Menus.ctmenu" resource
+      in WinUIXamlPreview.dll, which [ProvideMenuResource("Menus.ctmenu", 1)] on the package loads.
+      The hand-rolled pkgdef carries the matching [$RootKey$\Menus] entry.
+    -->
+    <VSCTCompile Include="VSCommandTable.vsct">
+      <ResourceName>Menus.ctmenu</ResourceName>
+    </VSCTCompile>
+  </ItemGroup>
+
+  <!--
+    VSSDK's GetVsixSourceItems excludes System.Text.Json / System.IO.Pipelines /
+    Microsoft.Bcl.AsyncInterfaces / System.Text.Encodings.Web from the VSIX payload because VS
+    "provides" them — but VS 2026 ships OLDER versions (<= 10.0.0.4) than we compile against
+    (10.0.0.9), and net472 has no binding redirect that satisfies 10.0.0.9, so the package throws
+    FileNotFoundException at first render. Force these copy-local runtime assemblies into the
+    payload so a clean install lands them in the extension folder, where VS's extension assembly
+    resolver finds them. (Proven by manual drop-in; this makes it automatic.)
+  -->
+  <Target Name="AddRuntimeDllsToVsix" AfterTargets="GetVsixSourceItems" Condition="'$(DotnetVsixBuild)' != 'true'">
+    <ItemGroup>
+      <VSIXSourceItem Remove="@(VSIXSourceItem)"
+                      Condition="'%(Filename)%(Extension)' == 'System.Text.Json.dll'
+                              or '%(Filename)%(Extension)' == 'System.IO.Pipelines.dll'
+                              or '%(Filename)%(Extension)' == 'Microsoft.Bcl.AsyncInterfaces.dll'
+                              or '%(Filename)%(Extension)' == 'System.Text.Encodings.Web.dll'" />
+      <VSIXSourceItem Include="$(OutDir)System.Text.Json.dll" />
+      <VSIXSourceItem Include="$(OutDir)System.IO.Pipelines.dll" />
+      <VSIXSourceItem Include="$(OutDir)Microsoft.Bcl.AsyncInterfaces.dll" />
+      <VSIXSourceItem Include="$(OutDir)System.Text.Encodings.Web.dll" />
+    </ItemGroup>
+    <Message Importance="high" Text="WinUIXamlPreview: bundled runtime DLLs into VSIX payload (System.Text.Json + deps)." />
+  </Target>
+
+  <!--
+    Bundle the headless Surface.exe closure into the VSIX under `Surface\`, so an INSTALLED
+    extension is self-contained and `SurfaceResolver.BundledSurface()` finds it next to
+    WinUIXamlPreview.dll (no repo/dev path needed). SurfaceOutDir defaults to the VS-owned
+    identity copy. Missing payloads fail packaging; use Build-Vsix.ps1 -NoDeploy.
+  -->
+  <PropertyGroup>
+    <SurfaceOutDir Condition="'$(SurfaceOutDir)' == ''">$(MSBuildProjectDirectory)\obj\IdentityPayload</SurfaceOutDir>
+  </PropertyGroup>
+  <Target Name="AddSurfaceToVsix" AfterTargets="GetVsixSourceItems" Condition="'$(DotnetVsixBuild)' != 'true'">
+    <ItemGroup Condition="Exists('$(SurfaceOutDir)\Surface.exe')">
+      <_SurfacePayload Include="$(SurfaceOutDir)\**\*" />
+      <VSIXSourceItem Include="@(_SurfacePayload)">
+        <VSIXSubPath>Surface\%(RecursiveDir)</VSIXSubPath>
+      </VSIXSourceItem>
+    </ItemGroup>
+    <Message Importance="high" Condition="Exists('$(SurfaceOutDir)\Surface.exe')"
+             Text="WinUIXamlPreview: bundled Surface.exe closure into VSIX (Surface\) from $(SurfaceOutDir)." />
+    <Error Condition="!Exists('$(SurfaceOutDir)\Surface.exe')"
+             Text="WinUIXamlPreview: Surface.exe not found at '$(SurfaceOutDir)'. Run Build-Vsix.ps1 -NoDeploy to build and stage the complete payload." />
+  </Target>
+
+  <!--
+    Bundle the build-on-demand HostSDK payload into the VSIX under `HostSDK\`. This carries OUR source
+    (the certified Surface engine + the DesignHost merged-pri project) plus the pre-built framework-dependent
+    net8 SurfaceProvisioner and an engine.stamp, so an installed extension on a machine WITH the .NET SDK can
+    build a version-matched self-contained host on demand (progressive full-fidelity preview). The staging dir
+    is assembled by surface\Build-Payload.ps1 (source/assets sans bin/obj, compiled
+    framework-dependent provisioner, full engine/template fingerprint). Missing inputs fail packaging.
+  -->
+  <PropertyGroup>
+    <HostSdkStageDir Condition="'$(HostSdkStageDir)' == ''">$(MSBuildProjectDirectory)\..\..\surface\obj\HostSDK</HostSdkStageDir>
+  </PropertyGroup>
+  <Target Name="AddHostSdkToVsix" AfterTargets="GetVsixSourceItems" Condition="'$(DotnetVsixBuild)' != 'true'">
+    <ItemGroup Condition="Exists('$(HostSdkStageDir)')">
+      <_HostSdkPayload Include="$(HostSdkStageDir)\**\*" />
+      <VSIXSourceItem Include="@(_HostSdkPayload)">
+        <VSIXSubPath>HostSDK\%(RecursiveDir)</VSIXSubPath>
+      </VSIXSourceItem>
+    </ItemGroup>
+    <Message Importance="high" Condition="Exists('$(HostSdkStageDir)')"
+             Text="WinUIXamlPreview: bundled HostSDK build-on-demand payload into VSIX (HostSDK\) from $(HostSdkStageDir)." />
+    <Error Condition="!Exists('$(HostSdkStageDir)')"
+             Text="WinUIXamlPreview: HostSDK stage dir '$(HostSdkStageDir)' not found. Run Build-Vsix.ps1 -NoDeploy to stage it." />
+  </Target>
+
+  <Target Name="ValidateDesignerPayload" BeforeTargets="GetVsixSourceItems" Condition="'$(DotnetVsixBuild)' != 'true'">
+    <ItemGroup>
+      <_RequiredDesignerFile Include="$(SurfaceOutDir)\Surface.wasdk.version;$(HostSdkStageDir)\LICENSE.winui-vsc.txt;$(MSBuildProjectDirectory)\..\LICENSE.winui-vsc.txt" />
+      <_RequiredDesignerFile Include="$(SurfaceOutDir)\Surface.exe;$(SurfaceOutDir)\Surface.dll;$(SurfaceOutDir)\Surface.pri;$(SurfaceOutDir)\Surface.deps.json;$(SurfaceOutDir)\Surface.runtimeconfig.json;$(SurfaceOutDir)\Microsoft.WinUI.dll;$(SurfaceOutDir)\AppxManifest.xml;$(SurfaceOutDir)\Assets\StoreLogo.png;$(SurfaceOutDir)\Assets\MedTile.png;$(SurfaceOutDir)\Assets\AppList.png" />
+      <_RequiredDesignerFile Include="$(HostSdkStageDir)\engine.stamp;$(HostSdkStageDir)\surface\Surface\Surface.csproj;$(HostSdkStageDir)\surface\Surface\App.cs;$(HostSdkStageDir)\DesignHost\DesignHost.csproj;$(HostSdkStageDir)\DesignHost\Package.appxmanifest;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.exe;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.dll;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.runtimeconfig.json;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.deps.json" />
+    </ItemGroup>
+    <Error Condition="!Exists('%(_RequiredDesignerFile.Identity)')" Text="Required designer payload missing: %(_RequiredDesignerFile.Identity). Run Build-Vsix.ps1 -NoDeploy." />
+  </Target>
+
+  <Import Project="$(VSSDKTargetsPath)\Microsoft.VsSDK.targets" Condition="'$(DotnetVsixBuild)' != 'true' and Exists('$(VSSDKTargetsPath)\Microsoft.VsSDK.targets')" />
+
+  <Target Name="CreateDesktopVsixContainerAfterBuild" AfterTargets="Build" DependsOnTargets="GeneratePkgDef;CopyPkgDef;CreateVsixContainer" Condition="'$(DotnetVsixBuild)' != 'true' and '$(CreateVsixContainer)' == 'true'" />
+
+</Project>

@@ -1,0 +1,24 @@
+<UserControl
+    x:Class="TestUserApp.ReflectionSkipDemoControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:TestUserApp"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!--
+        M3 hardening SKIP demo (defect dtd-reflect-overreach). Like the ReflectionFallbackDemoControl this is
+        ZERO-CONFIG (the code-behind seeds nothing), BUT its x:Bind collection's element type
+        (NonConstructibleItem) declares a `required` member, so it is NOT cleanly constructible. The hardened
+        injector's lever (a) finds this empty ItemsControl in the live tree, lever (b) recognises the element
+        type as non-constructible, and it SKIPS the collection entirely — no fabricate, no null-fill, no
+        Bindings.Update, no VisualState force, no throw. The count TextBlock therefore stays "0 items" even
+        with the fallback opted in (SURFACE_DTD_REFLECT=1), and the host logs DTD-SKIP (not DTD-INJECT). The
+        smoke reads back path 0.0.0 to assert the clean skip.
+    -->
+    <StackPanel Padding="24" Spacing="8">
+        <TextBlock Text="{x:Bind ItemCountText}" />
+        <ItemsControl ItemsSource="{x:Bind Items}" />
+    </StackPanel>
+</UserControl>

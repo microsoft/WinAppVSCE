@@ -1,0 +1,121 @@
+<UserControl x:Class="WinUIXamlPreview.UI.PreviewControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             mc:Ignorable="d"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             d:DesignHeight="450" d:DesignWidth="600">
+    <Grid>
+        <!-- Image path: streamed PNG frame, scrollable + centered. -->
+        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      Background="#3C3C3C">
+            <Grid Margin="16">
+                <Image x:Name="FrameImage"
+                       Stretch="Uniform"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       RenderOptions.BitmapScalingMode="HighQuality"
+                       SnapsToDevicePixels="True"
+                       UseLayoutRounding="True" />
+            </Grid>
+        </ScrollViewer>
+
+        <!-- Native path: the reparented live WinUI window is inserted here as Child. It FILLS the tool
+             window and clips to it. A native HWND ignores WPF ScrollViewer/visual clips (airspace), so it
+             must be sized to the pane, not the design canvas — otherwise it paints over neighboring VS
+             panes. The surface hosts a FIXED-size design canvas anchored top-left, so filling the pane
+             yields a 1:1 viewport onto that canvas, clipped to the pane (no reflow, no overlap). -->
+        <Border x:Name="NativeHostHolder"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Stretch"
+                Background="#3C3C3C"
+                ClipToBounds="True"
+                SnapsToDevicePixels="True"
+                UseLayoutRounding="True"
+                Visibility="Collapsed" />
+
+        <!-- Status / loading overlay. -->
+        <Border x:Name="StatusOverlay"
+                Background="#CC1E1E1E"
+                Padding="24,18"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                CornerRadius="6">
+            <StackPanel Orientation="Vertical" MinWidth="220" MaxWidth="380">
+                <!-- P1: shown only for the "not a designable page" state (ResourceDictionary / Window /
+                     project-template roots) so it reads as calm information, not a red error. Info glyph. -->
+                <TextBlock x:Name="StatusIcon"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="30"
+                           Foreground="#FFB0B0B0"
+                           HorizontalAlignment="Center"
+                           Margin="0,0,0,12"
+                           Text="&#xE946;"
+                           Visibility="Collapsed" />
+                <ProgressBar x:Name="Spinner"
+                             IsIndeterminate="True"
+                             Height="4"
+                             Margin="0,0,0,12" />
+                <TextBlock x:Name="StatusText"
+                           Foreground="#FFF0F0F0"
+                           FontSize="13"
+                           TextWrapping="Wrap"
+                           TextAlignment="Center"
+                           Text="Starting preview…" />
+                <TextBlock x:Name="StatusDetail"
+                           Foreground="#FFB0B0B0"
+                           FontSize="11"
+                           Margin="0,6,0,0"
+                           TextWrapping="Wrap"
+                           TextAlignment="Center"
+                           Visibility="Collapsed" />
+            </StackPanel>
+        </Border>
+
+        <!-- Fidelity-upgrade banner (nov-vsix-wire): a subtle, bottom-docked, non-blocking strip shown while a
+             version-matched host is produced in the background, so the instant bundled preview stays fully
+             visible. Collapsed by default; a small indeterminate bar + message while building, a check + auto-
+             hide when the matched host swaps in, and a Cancel to stop the (once-per-version) build. -->
+        <Border x:Name="FidelityBanner"
+                Background="#E6252526"
+                BorderBrush="#3F3F46"
+                BorderThickness="1"
+                Padding="12,8"
+                Margin="0,0,0,14"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                CornerRadius="4"
+                Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal" MaxWidth="560">
+                <ProgressBar x:Name="FidelityProgress"
+                             IsIndeterminate="True"
+                             Width="90"
+                             Height="4"
+                             VerticalAlignment="Center"
+                             Margin="0,0,10,0" />
+                <TextBlock x:Name="FidelityIcon"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="13"
+                           Foreground="#FF6DBE45"
+                           VerticalAlignment="Center"
+                           Margin="0,0,8,0"
+                           Text="&#xE73E;"
+                           Visibility="Collapsed" />
+                <TextBlock x:Name="FidelityText"
+                           Foreground="#FFE6E6E6"
+                           FontSize="12"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"
+                           Text="Building full-fidelity preview…" />
+                <Button x:Name="FidelityCancel"
+                        Content="Cancel"
+                        Margin="12,0,0,0"
+                        Padding="8,2"
+                        FontSize="11"
+                        VerticalAlignment="Center"
+                        Click="OnFidelityCancelClick" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

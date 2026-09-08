@@ -1,0 +1,120 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    DesignHost — merged core+toolkit PRI source for the per-version Surface host (nov-pvh-productize).
+
+    WHY THIS EXISTS:
+    The self-contained per-version Surface host ships its own ~2 MB Surface.pri, which is the MRT PRIMARY
+    index anchoring the app-local Windows App SDK resource maps (Microsoft.UI.Xaml.Controls.pri etc.).
+    A third-party CommunityToolkit control (e.g. GridSplitter) LOADS as a real type under a version-matched
+    host but has NO visual template unless its Themes/Generic.xbf is resolvable — and those ship ONLY inside
+    each component's .pri, never as loose .xbf. The App.cs user-pri stage File.Copy-overwrites the host's own
+    Surface.pri, so staging a toolkit-ONLY .pri drops the core maps and the host fast-fails (0xC000027B) before
+    it can listen.
+
+    THE FIX (proven by SPIKE-PVH): build THIS standard WinUI single-project app SELF-CONTAINED at the SAME
+    WASDK version as the host so its resources.pri is a CORE(WASDK)+TOOLKIT MERGED index. Staging that merged
+    .pri keeps the core maps AND adds the toolkit templates -> the host boots and renders the toolkit control
+    with REAL chrome. The standard MSIX-tooling PRI pipeline (EnableMsixTooling=true + Package.appxmanifest
+    Resource Language="x-generate") is REQUIRED: a minimal WindowsPackageType=None project produces a
+    structurally different index that MRT rejects when swapped into the host's Surface.pri slot.
+
+    The SurfaceProvisioner builds this with:
+        dotnet build -p:WinUISurfaceWasdkVersion=<targetVer> -p:WindowsAppSDKSelfContained=true
+    (NOT publish — publish breaks the self-contained loose layout). The version is a build-time MSBuild
+    property with a 2.2.0 default, mirroring the certified Surface engine's parameterization, so the host and
+    this PRI are always built at the identical version. This project is never launched; only its generated
+    resources.pri is consumed (copied next to the host as Surface.designtime.pri and staged via user-pri).
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>DesignHost</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x86;x64;ARM64</Platforms>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
+    <PublishProfile Condition="Exists('Properties\PublishProfiles\win-$(Platform).pubxml')">win-$(Platform).pubxml</PublishProfile>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- Version parameterization mirrors surface\Surface\Surface.csproj: default 2.2.0, overridden by the
+       provisioner to the target project's resolved WASDK version so core+toolkit merge at the SAME version. -->
+  <PropertyGroup>
+    <WinUISurfaceWasdkVersion Condition="'$(WinUISurfaceWasdkVersion)' == ''">2.2.0</WinUISurfaceWasdkVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\SplashScreen.scale-200.png" />
+    <Content Include="Assets\LockScreenLogo.scale-200.png" />
+    <Content Include="Assets\Square150x150Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
+    <Content Include="Assets\Square44x44Logo.targetsize-48_altform-lightunplated.png" />
+    <Content Include="Assets\StoreLogo.png" />
+    <Content Include="Assets\AppIcon.ico" />
+    <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <!--
+    Defining the "Msix" ProjectCapability here allows the Single-project MSIX Packaging
+    Tools extension to be activated for this project even if the Windows App SDK Nuget
+    package has not yet been restored.
+  -->
+  <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
+    <ProjectCapability Include="Msix" />
+  </ItemGroup>
+
+  <!--
+    Microsoft.Windows.SDK.BuildTools.WinApp adds first-class support for
+    `dotnet run` on packaged WinUI apps: it hooks the .NET CLI Run target to
+    register a debug identity via the winapp CLI and launch the app with
+    package identity (AUMID).
+    Set <EnableWinAppRunSupport>false</EnableWinAppRunSupport> in a
+    <PropertyGroup> above to opt out.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(WinUISurfaceWasdkVersion)" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="0.4.0" />
+  </ItemGroup>
+
+  <!-- T6: gallery toolkit closure @ 8.2.250402 - harvest their Themes/Generic.xbf into the merged pri -->
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.WinUI.Behaviors" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.CameraPreview" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.Primitives" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.Segmented" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Converters" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Helpers" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Media" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Animations" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Extensions" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.2.250402" />
+  </ItemGroup>
+
+  <!--
+    Defining the "HasPackageAndPublishMenuAddedByProject" property here allows the Solution
+    Explorer "Package and Publish" context menu entry to be enabled for this project even if
+    the Windows App SDK Nuget package has not yet been restored.
+  -->
+  <PropertyGroup Condition="'$(DisableHasPackageAndPublishMenuAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
+    <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
+  </PropertyGroup>
+
+  <!-- Publish Properties -->
+  <PropertyGroup>
+    <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
+    <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
+    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
+    <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">True</PublishTrimmed>
+  </PropertyGroup>
+</Project>
