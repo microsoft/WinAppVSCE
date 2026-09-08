@@ -419,6 +419,7 @@ async function queryDiagnosticsStep(step, result) {
       message: d.message,
       severity: d.severity,
       source: d.source,
+      code: typeof d.code === 'object' ? d.code.value : d.code,
       start: { line: d.range.start.line, character: d.range.start.character },
       end: { line: d.range.end.line, character: d.range.end.character }
     }))
