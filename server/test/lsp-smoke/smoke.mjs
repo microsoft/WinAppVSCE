@@ -399,11 +399,31 @@ async function main() {
   // The blocking F12 below used to double as this section's reload barrier. Definition is now
   // non-blocking (issue #220), so synchronize on the same status notification the real client uses.
   // Registered before the change is sent so the reload's notification cannot be missed.
+  //
+  // Matching a bare `state === "ready"` is not enough. The obj/bin watched-file check just above can
+  // still emit a trailing `ready` for the context that is already loaded, and dispatch resolves the
+  // first matching waiter, so that stale notification satisfies the barrier instantly and the
+  // authoritative assertions below then race a reload that has not started yet. Gate on the reload's
+  // own `loading` transition (LoadContextAsync publishes it before every load) so only a `ready`
+  // that follows it can release the barrier. The flag is set inside the matcher rather than in a
+  // `.then`, because `loading` and `ready` can arrive in the same stdout chunk and be dispatched
+  // synchronously, before any microtask would run.
+  const statusIs = (state) => (message) =>
+    message.method === "winui-xaml/projectContextStatus" &&
+    message.params?.uri === xamlUri &&
+    message.params?.state === state;
+  let sawReloadLoading = false;
+  const reloadLoadingPromise = waitFor(
+    (message) => {
+      if (!statusIs("loading")(message)) return false;
+      sawReloadLoading = true;
+      return true;
+    },
+    90000,
+    "project context loading status after invalidation"
+  );
   const reloadReadyPromise = waitFor(
-    (message) =>
-      message.method === "winui-xaml/projectContextStatus" &&
-      message.params?.uri === xamlUri &&
-      message.params?.state === "ready",
+    (message) => sawReloadLoading && statusIs("ready")(message),
     90000,
     "project context ready status after invalidation"
   );
@@ -446,6 +466,7 @@ async function main() {
   }
   console.log(`[ok] definition(reloading): suppressed, did not block on the reload (${reloadDefinitionMs.toFixed(0)} ms)`);
 
+  await reloadLoadingPromise;
   await reloadReadyPromise;
 
   // SmokePage.xaml.cs is no longer part of the compilation, so F12 on the handler must not resolve.
