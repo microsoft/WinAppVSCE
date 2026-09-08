@@ -28,6 +28,7 @@ import {
   CSHARP_DEV_KIT_RECOMMENDATION,
   CsharpDevKitNotificationGate,
 } from "./csharpDevKitNotification";
+import { notificationDismissal } from "./notificationDismissal";
 import { createDotnetChildEnvironment } from "./dotnetRuntime";
 import {
   DOTNET_INSTALL_TOOL_ID,
@@ -449,9 +450,15 @@ function recommendCsharpDevKit(
     return;
   }
 
-  const dismissed = context.globalState.get<boolean>(CSHARP_DEV_KIT_DISMISSED_KEY, false);
+  const dismissal = notificationDismissal(CSHARP_DEV_KIT_DISMISSED_KEY, context.globalState);
   const installed = vscode.extensions.getExtension(CSHARP_DEV_KIT_EXTENSION_ID) !== undefined;
-  if (!csharpDevKitNotificationGate.shouldShow(document.uri.fsPath, installed, dismissed)) {
+  if (
+    !csharpDevKitNotificationGate.shouldShow(
+      document.uri.fsPath,
+      installed,
+      dismissal.isDismissed
+    )
+  ) {
     return;
   }
 
@@ -466,7 +473,7 @@ function recommendCsharpDevKit(
       if (choice === recommendation.installAction) {
         await vscode.env.openExternal(vscode.Uri.parse(CSHARP_DEV_KIT_MARKETPLACE_URI));
       } else if (choice === recommendation.dismissAction) {
-        await context.globalState.update(CSHARP_DEV_KIT_DISMISSED_KEY, true);
+        await dismissal.dismiss();
       }
     });
 }
@@ -974,7 +981,7 @@ function notifyDegraded(
   const shouldShow = shouldShowDegradedNotification(
     cause,
     lastDegradedCause,
-    context?.globalState.get(DOTNET_RUNTIME_DISMISSED_KEY, false) ?? false,
+    notificationDismissal(DOTNET_RUNTIME_DISMISSED_KEY, context?.globalState).isDismissed,
     forceNotification
   );
   lastDegradedCause = cause;
@@ -1000,8 +1007,7 @@ function runDegradedAction(
 ): Thenable<unknown> | void {
   return executeDegradedAction(action, {
     dismissDotnetRequirement: () =>
-      context?.globalState.update(DOTNET_RUNTIME_DISMISSED_KEY, true) ??
-      Promise.resolve(),
+      notificationDismissal(DOTNET_RUNTIME_DISMISSED_KEY, context?.globalState).dismiss(),
     showOutput: () => output?.show(true),
     openUrl: (url) => vscode.env.openExternal(vscode.Uri.parse(url)),
     executeCommand: (command, commandArg) =>
