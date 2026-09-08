@@ -1,6 +1,6 @@
 // Artifact mode must never fall back to an unsigned local build.
 
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -100,6 +100,12 @@ const csproj = path.join(
 );
 rmSync(outDir, { recursive: true, force: true });
 
+// Stamp the extension version onto the server assembly so the LSP `serverInfo.version` a user
+// reports from the output channel identifies the exact build that shipped.
+const { version: extensionVersion } = JSON.parse(
+  readFileSync(path.join(root, "package.json"), "utf8")
+);
+
 const result = spawnSync(
   "dotnet",
   [
@@ -110,6 +116,7 @@ const result = spawnSync(
     "--self-contained",
     "false",
     "-p:UseAppHost=false",
+    `-p:Version=${extensionVersion}`,
     "-o",
     outDir,
   ],

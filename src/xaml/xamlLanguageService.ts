@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import {
+  applyGeneratedEventHandlerEdit,
   saveGeneratedEventHandlerDocument,
 } from "./generatedEventHandlerSave";
 import { spawn } from "child_process";
@@ -51,9 +52,9 @@ import {
 } from "./attributeSuggestionTrigger";
 import {
   PROJECT_RESTORE_ACTIONS,
-  PROJECT_RESTORE_MESSAGE,
   PROJECT_RESTORE_NOTIFICATION,
   ProjectRestoreNotificationGate,
+  notifyProjectRestoreRequired as runProjectRestoreNotification,
 } from "./projectRestoreNotification";
 import {
   PROJECT_CONTEXT_STATUS_NOTIFICATION,
@@ -278,30 +279,23 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
         originalCommand: vscode.Command,
         wasDirty: boolean,
         originalVersion: number | undefined,
-      ) => {
-        const openDocument = findOpenDocument(documentUri);
-        if (wasDirty || openDocument?.isDirty) {
-          if (openDocument?.isDirty) {
-            await vscode.commands.executeCommand(originalCommand.command, documentUri);
-          }
-          if (!openDocument?.isDirty) {
-            void vscode.window.showInformationMessage(
-              "Code-behind changes were saved. Retry Generate Event Handler.",
-            );
-          }
-          return;
-        }
-        if (openDocument && originalVersion !== undefined && openDocument.version !== originalVersion) {
-          void vscode.window.showInformationMessage(
-            "The code-behind changed. Retry Generate Event Handler.",
-          );
-          return;
-        }
-        if (!(await vscode.workspace.applyEdit(edit))) {
-          throw new Error("Could not apply the generated event handler edit.");
-        }
-        await vscode.commands.executeCommand(originalCommand.command, documentUri);
-      },
+      ) =>
+        applyGeneratedEventHandlerEdit(
+          documentUri,
+          edit,
+          originalCommand,
+          wasDirty,
+          originalVersion,
+          {
+            getTarget: (uri) => findOpenDocument(uri),
+            applyEdit: (workspaceEdit) => vscode.workspace.applyEdit(workspaceEdit),
+            runCommand: (command, uri) =>
+              vscode.commands.executeCommand(command, uri),
+            showInformationMessage: (message) => {
+              void vscode.window.showInformationMessage(message);
+            },
+          },
+        ),
     ),
     vscode.window.onDidChangeActiveTextEditor(() => renderProjectContextStatus()),
     vscode.workspace.onDidChangeConfiguration((event) => {
@@ -777,27 +771,14 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
 }
 
 function notifyProjectRestoreRequired(projectPath: string | undefined): void {
-  if (
-    !projectPath ||
-    !isTrustedWorkspaceProject(projectPath) ||
-    !projectRestoreNotificationGate.shouldShow(projectPath)
-  ) {
-    return;
-  }
-
-  void vscode.window
-    .showInformationMessage(
-      PROJECT_RESTORE_MESSAGE,
-      PROJECT_RESTORE_ACTIONS.restore,
-      PROJECT_RESTORE_ACTIONS.showOutput
-    )
-    .then(async (choice) => {
-      if (choice === PROJECT_RESTORE_ACTIONS.showOutput) {
-        output?.show(true);
-      } else if (choice === PROJECT_RESTORE_ACTIONS.restore) {
-        await restoreProject(projectPath);
-      }
-    });
+  void runProjectRestoreNotification(projectPath, {
+    isTrustedWorkspaceProject,
+    shouldShow: (path) => projectRestoreNotificationGate.shouldShow(path),
+    showInformationMessage: (message, ...actions) =>
+      vscode.window.showInformationMessage(message, ...actions),
+    showOutput: () => output?.show(true),
+    restoreProject,
+  });
 }
 
 function isTrustedWorkspaceProject(projectPath: string): boolean {

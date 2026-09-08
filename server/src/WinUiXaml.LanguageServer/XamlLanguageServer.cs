@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -171,8 +172,26 @@ internal sealed partial class XamlLanguageServer
                 ResolveProvider = false,
             },
         },
-        ServerInfo = new ServerInfo { Version = "0.1.0" },
+        ServerInfo = new ServerInfo { Version = ServerVersion },
         };
+    }
+
+    /// <summary>The shipped server version, stamped into the assembly at publish time.</summary>
+    private static string ServerVersion { get; } = ResolveServerVersion();
+
+    private static string ResolveServerVersion()
+    {
+        var informational = typeof(XamlLanguageServer).Assembly
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+        if (string.IsNullOrWhiteSpace(informational))
+        {
+            return typeof(XamlLanguageServer).Assembly.GetName().Version?.ToString() ?? "0.0.0";
+        }
+
+        // Strip the source-revision suffix the SDK appends ("1.2.3+<sha>").
+        int plus = informational.IndexOf('+');
+        return plus >= 0 ? informational.Substring(0, plus) : informational;
     }
 
     internal static string NormalizeDiagnosticsLevel(string? value) =>

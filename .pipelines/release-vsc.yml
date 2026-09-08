@@ -183,6 +183,9 @@ extends:
               arguments: "-ArtifactPath '$(Pipeline.Workspace)/winui-xaml-server'"
           - task: PowerShell@2
             displayName: Smoke signed framework-dependent WinUI XAML server
+            env:
+              # Smoke the SIGNED artifact installed above; never republish over it.
+              WINUI_XAML_SERVER_BUNDLE_MODE: artifact
             inputs:
               targetType: inline
               pwsh: true

@@ -226,7 +226,11 @@ XAML tooling supports these settings:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `winapp.xaml.intelliSense.enable` | `true` | Starts the XAML language server when XAML files are opened. Disabling it keeps syntax highlighting active. |
-| `winapp.xaml.diagnostics.level` | `all` | Controls XAML diagnostics: `all`, `errorsOnly`, or `off`. Existing `warning` and `error` values remain supported as aliases for `all` and `errorsOnly`. Changes apply immediately to open XAML documents. |
+| `winapp.xaml.diagnostics.level` | `all` | Controls XAML diagnostics: `all`, `errorsOnly`, or `off`. Changes apply immediately to open XAML documents. |
+
+#### When the language server cannot start
+
+XAML editing degrades to **syntax highlighting only** rather than failing outright. Everything else in the extension keeps working. This happens when the workspace is not trusted, no .NET 10 runtime is available, the .NET Install Tool cannot supply one, or the server itself fails to start. WinApp shows a one-time notification naming the cause with the relevant recovery action, and **WinApp: Show Info** repeats it on demand.
 
 #### What works at each loading stage
 

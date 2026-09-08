@@ -220,8 +220,11 @@ internal static class XamlFormatter
         return true;
     }
 
+    // LSP ranges are end-exclusive: an end position at character 0 does not include that line,
+    // which is exactly what a full-line selection produces.
     private static bool IntersectsRange(int line, Lsp.Range range) =>
-        line >= range.Start.Line && line <= range.End.Line;
+        line >= range.Start.Line &&
+        (line < range.End.Line || (line == range.End.Line && range.End.Character > 0));
 
     private static string Repeat(string unit, int count)
     {

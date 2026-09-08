@@ -542,13 +542,39 @@ internal sealed partial class XamlLanguageServer
         return string.Join(", ", parts);
     }
 
+    /// <summary>Namespace-qualified, no global:: prefix and no type arguments, so it can be compared against a name built from syntax.</summary>
+    private static readonly SymbolDisplayFormat QualifiedNameFormat = new(
+        globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
+        typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces);
+
+    /// <summary>Builds "Namespace.Outer.Inner" for a class declaration from its syntactic ancestors.</summary>
+    private static string GetDeclaredQualifiedName(Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax declaration)
+    {
+        var parts = new List<string>();
+        for (SyntaxNode? node = declaration; node != null; node = node.Parent)
+        {
+            switch (node)
+            {
+                case Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax type:
+                    parts.Add(type.Identifier.Text);
+                    break;
+                case Microsoft.CodeAnalysis.CSharp.Syntax.BaseNamespaceDeclarationSyntax ns:
+                    parts.Add(ns.Name.ToString());
+                    break;
+            }
+        }
+
+        parts.Reverse();
+        return string.Join(".", parts);
+    }
+
     /// <summary>Builds the cross-file WorkspaceEdit that inserts a handler stub into the user code-behind, or null when no user partial can be found / read.</summary>
     private WorkspaceEdit? BuildHandlerInsertionEdit(
         string xamlUri, INamedTypeSymbol classSymbol, string handlerName, string parameters)
     {
         var xamlPath = UriToPath(xamlUri);
         string? preferred = xamlPath != null ? xamlPath + ".cs" : null;
-        string? codeBehindPath = null;
+        SyntaxReference? selected = null;
         foreach (var reference in classSymbol.DeclaringSyntaxReferences)
         {
             var file = reference.SyntaxTree.FilePath;
@@ -559,17 +585,19 @@ internal sealed partial class XamlLanguageServer
 
             if (preferred != null && string.Equals(file, preferred, StringComparison.OrdinalIgnoreCase))
             {
-                codeBehindPath = file;
+                selected = reference;
                 break;
             }
 
-            codeBehindPath ??= file;
+            selected ??= reference;
         }
 
-        if (codeBehindPath == null)
+        if (selected == null)
         {
             return null;
         }
+
+        var codeBehindPath = selected.SyntaxTree.FilePath;
 
         string source;
         try
@@ -581,11 +609,15 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
+        // Re-parse the file on disk so offsets match the text the edit will be applied to, then
+        // pick the declaration by its full nesting/namespace path. Matching on the simple name
+        // alone lands in the wrong type when a file declares two classes that share one.
         var tree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(source);
         var classDecl = tree.GetRoot()
             .DescendantNodes()
             .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>()
-            .FirstOrDefault(c => string.Equals(c.Identifier.Text, classSymbol.Name, StringComparison.Ordinal));
+            .FirstOrDefault(c => string.Equals(
+                GetDeclaredQualifiedName(c), classSymbol.ToDisplayString(QualifiedNameFormat), StringComparison.Ordinal));
         if (classDecl == null)
         {
             return null;

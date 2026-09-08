@@ -45,7 +45,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
   });
 
   assert.deepEqual(getXamlStatus(true, true, true, true), {
-    message: `${XAML_STATUS_PREFIX} language server running (Host B).`,
+    message: `${XAML_STATUS_PREFIX} language server running.`,
     actions: [],
   });
   assert.deepEqual(
@@ -124,29 +124,32 @@ test("normalizes supported XAML diagnostic levels", () => {
   assert.equal(normalizeDiagnosticsLevel("off"), "off");
   assert.equal(normalizeDiagnosticsLevel("all"), "all");
   assert.equal(normalizeDiagnosticsLevel("errorsOnly"), "errorsOnly");
-  assert.equal(normalizeDiagnosticsLevel("warning"), "all");
-  assert.equal(normalizeDiagnosticsLevel("error"), "errorsOnly");
 });
 
 test("defaults unknown XAML diagnostic levels to all", () => {
   assert.equal(normalizeDiagnosticsLevel("unexpected"), "all");
   assert.equal(normalizeDiagnosticsLevel(""), "all");
+  // The pre-release aliases are gone: they must fall back like any other unknown value.
+  assert.equal(normalizeDiagnosticsLevel("warning"), "all");
+  assert.equal(normalizeDiagnosticsLevel("error"), "all");
 });
 
-test("validates diagnostic aliases and explains invalid values", () => {
-  for (const value of ["all", "errorsOnly", "off", "warning", "error"]) {
+test("validates diagnostic levels and explains invalid values", () => {
+  for (const value of ["all", "errorsOnly", "off"]) {
     assert.equal(getDiagnosticsLevelValidationMessage(value), undefined);
   }
-  assert.match(
-    getDiagnosticsLevelValidationMessage("syntax") ?? "",
-    /Invalid winapp\.xaml\.diagnostics\.level value 'syntax'.*all, errorsOnly, or off/
-  );
+  for (const value of ["syntax", "warning", "error"]) {
+    assert.match(
+      getDiagnosticsLevelValidationMessage(value) ?? "",
+      /Invalid winapp\.xaml\.diagnostics\.level value.*all, errorsOnly, or off/
+    );
+  }
 });
 
 test("reads startup enablement and diagnostics initialization options together", () => {
   const values = new Map<string, unknown>([
     ["intelliSense.enable", false],
-    ["diagnostics.level", "error"],
+    ["diagnostics.level", "errorsOnly"],
   ]);
   const configuration = readXamlLanguageServerConfiguration(
     <T>(section: string, defaultValue: T) =>
@@ -167,10 +170,10 @@ test("transmits canonical diagnostic levels through mocked extension interaction
     openSettings: async () => {},
   });
 
-  await interaction.transmit("warning", async (level) => sent.push(level));
-  await interaction.transmit("error", async (level) => sent.push(level));
+  await interaction.transmit("off", async (level) => sent.push(level));
+  await interaction.transmit("errorsOnly", async (level) => sent.push(level));
 
-  assert.deepEqual(sent, ["all", "errorsOnly"]);
+  assert.deepEqual(sent, ["off", "errorsOnly"]);
 });
 
 test("warns once for an invalid value, falls back, and opens settings", async () => {

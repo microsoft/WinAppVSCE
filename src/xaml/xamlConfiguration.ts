@@ -7,6 +7,7 @@ import {
   INTELLISENSE_ENABLE_SETTING,
   XAML_COMMANDS,
   XAML_INTELLISENSE_UNAVAILABLE_PREFIX,
+  XAML_STATUS_ACTIONS,
   XAML_STATUS_PREFIX,
   XamlStatusAction,
 } from "./xamlConstants";
@@ -20,16 +21,12 @@ import {
 export type { XamlStatusAction };
 
 export type XamlDiagnosticsLevel = "off" | "all" | "errorsOnly";
-export type XamlDiagnosticsLevelSetting =
-  | XamlDiagnosticsLevel
-  | "warning"
-  | "error";
 
 export interface DiagnosticsLevelInteractionHost {
   log(message: string): void;
   showWarningMessage(
     message: string,
-    action: "Open Settings"
+    action: typeof XAML_STATUS_ACTIONS.openSettings
   ): PromiseLike<string | undefined>;
   openSettings(): PromiseLike<unknown>;
 }
@@ -75,7 +72,7 @@ export function getXamlStatus(
     return {
       message:
         `${XAML_STATUS_PREFIX} IntelliSense is disabled in Settings; syntax highlighting remains active.`,
-      actions: ["Open Settings"],
+      actions: [XAML_STATUS_ACTIONS.openSettings],
     };
   }
 
@@ -85,23 +82,26 @@ export function getXamlStatus(
         message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${
           projectContext.message ?? PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE
         }`,
-        actions: ["Restart Language Server", "Show Output"],
+        actions: [
+          XAML_STATUS_ACTIONS.restartServer,
+          XAML_STATUS_ACTIONS.showOutput,
+        ],
       };
     }
     if (projectContext?.state === "loading") {
       return {
         message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_LOADING_MESSAGE}`,
-        actions: ["Show Output"],
+        actions: [XAML_STATUS_ACTIONS.showOutput],
       };
     }
     if (projectContext?.state === "framework-ready") {
       return {
         message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE}`,
-        actions: ["Show Output"],
+        actions: [XAML_STATUS_ACTIONS.showOutput],
       };
     }
     return {
-      message: `${XAML_STATUS_PREFIX} language server running (Host B).`,
+      message: `${XAML_STATUS_PREFIX} language server running.`,
       actions: [],
     };
   }
@@ -118,15 +118,21 @@ export function getXamlStatus(
     return {
       message:
         `${XAML_STATUS_PREFIX} .NET 10 is required; XAML syntax highlighting remains active.`,
-      actions: ["Install .NET", "Restart Language Server", "Show Output"],
+      actions: [
+        XAML_STATUS_ACTIONS.installDotnet,
+        XAML_STATUS_ACTIONS.restartServer,
+        XAML_STATUS_ACTIONS.showOutput,
+      ],
     };
   }
 
   return {
     message: `${XAML_STATUS_PREFIX} syntax only; language server not started.`,
     actions: [
-      trusted ? "Restart Language Server" : "Manage Workspace Trust",
-      "Show Output",
+      trusted
+        ? XAML_STATUS_ACTIONS.restartServer
+        : XAML_STATUS_ACTIONS.manageTrust,
+      XAML_STATUS_ACTIONS.showOutput,
     ],
   };
 }
@@ -135,18 +141,18 @@ export function getXamlStatusEffect(
   action: XamlStatusAction | undefined
 ): XamlStatusEffect | undefined {
   switch (action) {
-    case "Open Settings":
+    case XAML_STATUS_ACTIONS.openSettings:
       return {
         command: EXTERNAL_COMMANDS.openSettings,
         args: [INTELLISENSE_ENABLE_SETTING],
       };
-    case "Restart Language Server":
+    case XAML_STATUS_ACTIONS.restartServer:
       return { command: XAML_COMMANDS.restartServer };
-    case "Manage Workspace Trust":
+    case XAML_STATUS_ACTIONS.manageTrust:
       return { command: EXTERNAL_COMMANDS.manageTrust };
-    case "Show Output":
+    case XAML_STATUS_ACTIONS.showOutput:
       return { showOutput: true };
-    case "Install .NET":
+    case XAML_STATUS_ACTIONS.installDotnet:
       return { url: DOTNET_DOWNLOAD_URL };
     default:
       return undefined;
@@ -157,7 +163,7 @@ export function normalizeDiagnosticsLevel(value: unknown): XamlDiagnosticsLevel 
   if (value === "off") {
     return "off";
   }
-  if (value === "error" || value === "errorsOnly") {
+  if (value === "errorsOnly") {
     return "errorsOnly";
   }
   return "all";
@@ -166,13 +172,7 @@ export function normalizeDiagnosticsLevel(value: unknown): XamlDiagnosticsLevel 
 export function getDiagnosticsLevelValidationMessage(
   value: unknown
 ): string | undefined {
-  if (
-    value === "all" ||
-    value === "errorsOnly" ||
-    value === "off" ||
-    value === "warning" ||
-    value === "error"
-  ) {
+  if (value === "all" || value === "errorsOnly" || value === "off") {
     return undefined;
   }
 
@@ -198,9 +198,9 @@ export class DiagnosticsLevelInteraction {
     if (this.lastInvalidValue !== key) {
       this.lastInvalidValue = key;
       void Promise.resolve(
-        this.host.showWarningMessage(message, "Open Settings")
+        this.host.showWarningMessage(message, XAML_STATUS_ACTIONS.openSettings)
       ).then((choice) => {
-        if (choice === "Open Settings") {
+        if (choice === XAML_STATUS_ACTIONS.openSettings) {
           return this.host.openSettings();
         }
         return undefined;
