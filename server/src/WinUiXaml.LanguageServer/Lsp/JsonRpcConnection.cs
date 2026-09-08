@@ -22,6 +22,16 @@ internal sealed class JsonRpcConnection
 {
     private const string ContentLengthHeader = "Content-Length:";
 
+    /// <summary>
+    /// Framing limits. The only writer on this pipe is the extension host, so these do not defend
+    /// against a hostile peer. They turn a malformed frame into an immediate, logged protocol error
+    /// instead of an unbounded allocation or a read loop that never terminates, which is what a
+    /// truncated or half-written frame from a crashing client would otherwise produce.
+    /// </summary>
+    private const int MaxContentLength = 32 * 1024 * 1024;
+    private const int MaxHeaderLineLength = 8 * 1024;
+    private const int MaxHeaderBlockLength = 64 * 1024;
+
     private readonly Stream _input;
     private readonly Stream _output;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -196,13 +206,14 @@ internal sealed class JsonRpcConnection
     private async Task<byte[]?> ReadMessageAsync(CancellationToken cancellationToken)
     {
         int contentLength = -1;
+        int headerBlockLength = 0;
 
         while (true)
         {
             var line = await ReadHeaderLineAsync(cancellationToken).ConfigureAwait(false);
             if (line == null)
             {
-                return null; // stream closed
+                return null; // stream closed, or the header line exceeded its limit
             }
 
             if (line.Length == 0)
@@ -210,10 +221,29 @@ internal sealed class JsonRpcConnection
                 break; // blank line ends the header block
             }
 
+            headerBlockLength += line.Length;
+            if (headerBlockLength > MaxHeaderBlockLength)
+            {
+                Log($"header block exceeds the {MaxHeaderBlockLength} byte maximum");
+                return null;
+            }
+
             if (line.StartsWith(ContentLengthHeader, StringComparison.OrdinalIgnoreCase))
             {
                 var value = line.Substring(ContentLengthHeader.Length).Trim();
-                int.TryParse(value, out contentLength);
+                if (!int.TryParse(value, out contentLength) || contentLength < 0)
+                {
+                    // Falling through here would leave contentLength at 0 and frame an empty body,
+                    // desynchronizing the stream against the body bytes that were never consumed.
+                    Log($"invalid Content-Length header: '{value}'");
+                    return null;
+                }
+
+                if (contentLength > MaxContentLength)
+                {
+                    Log($"Content-Length {contentLength} exceeds the {MaxContentLength} byte maximum");
+                    return null;
+                }
             }
         }
 
@@ -268,6 +298,11 @@ internal sealed class JsonRpcConnection
 
             bytes.Write(one.AsSpan(0, 1));
             prev = b;
+            if (bytes.WrittenCount > MaxHeaderLineLength)
+            {
+                Log($"header line exceeds the {MaxHeaderLineLength} byte maximum");
+                return null;
+            }
         }
     }
 

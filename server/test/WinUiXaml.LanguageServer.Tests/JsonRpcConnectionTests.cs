@@ -134,6 +134,115 @@ public class JsonRpcConnectionTests
         Assert.Contains("Expected capability failure", response);
     }
 
+    [Fact]
+    public async Task OversizedContentLengthIsRejectedWithoutAllocating()
+    {
+        // Without the bound this reaches `new byte[int.MaxValue]` and dies with OutOfMemoryException.
+        var frame = Encoding.ASCII.GetBytes($"Content-Length: {int.MaxValue}\r\n\r\n");
+        await using var input = new MemoryStream(frame);
+        await using var output = new MemoryStream();
+        var handled = false;
+        var connection = new JsonRpcConnection(input, output)
+        {
+            OnRequest = (_, _, _) => { handled = true; return Task.FromResult<object?>(null); },
+        };
+
+        await connection.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(handled, "An oversized frame should never reach a handler.");
+    }
+
+    [Fact]
+    public async Task UnparsableContentLengthEndsTheConnectionInsteadOfFramingAnEmptyBody()
+    {
+        // A silent fall-through leaves Content-Length at 0, frames an empty body, and leaves the
+        // real body bytes in the stream to be misread as the next frame's headers.
+        var malformed = Encoding.ASCII.GetBytes("Content-Length: not-a-number\r\n\r\n");
+        var valid = Frame("""{"jsonrpc":"2.0","id":1,"method":"ping"}""");
+        await using var input = new MemoryStream(malformed.Concat(valid).ToArray());
+        await using var output = new MemoryStream();
+        var methods = new List<string>();
+        var connection = new JsonRpcConnection(input, output)
+        {
+            OnRequest = (method, _, _) => { methods.Add(method); return Task.FromResult<object?>(null); },
+        };
+
+        await connection.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Empty(methods);
+    }
+
+    [Fact]
+    public async Task NegativeContentLengthIsRejected()
+    {
+        await using var input = new MemoryStream(Encoding.ASCII.GetBytes("Content-Length: -5\r\n\r\n"));
+        await using var output = new MemoryStream();
+        var connection = new JsonRpcConnection(input, output);
+
+        await connection.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Empty(output.ToArray());
+    }
+
+    [Fact]
+    public async Task OverlongHeaderLineEndsTheConnection()
+    {
+        // Exceeds the per-line limit while staying under the header-block limit, so this pins the
+        // line cap specifically. Without it the oversized line is simply ignored and the following
+        // frame dispatches normally.
+        var overlong = Encoding.ASCII.GetBytes(new string('x', 16 * 1024) + "\r\n");
+        var valid = Frame("""{"jsonrpc":"2.0","id":1,"method":"ping"}""");
+        await using var input = new MemoryStream(overlong.Concat(valid).ToArray());
+        await using var output = new MemoryStream();
+        var handled = false;
+        var connection = new JsonRpcConnection(input, output)
+        {
+            OnRequest = (_, _, _) => { handled = true; return Task.FromResult<object?>(null); },
+        };
+
+        await connection.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(handled, "A frame behind an oversized header line should never reach a handler.");
+    }
+
+    [Fact]
+    public async Task OversizedHeaderBlockEndsTheConnection()
+    {
+        // Every line is short, so only the accumulated block size can reject this.
+        var filler = Encoding.ASCII.GetBytes(
+            string.Concat(Enumerable.Repeat("X-Pad: 0123456789\r\n", 8 * 1024)));
+        var valid = Frame("""{"jsonrpc":"2.0","id":1,"method":"ping"}""");
+        await using var input = new MemoryStream(filler.Concat(valid).ToArray());
+        await using var output = new MemoryStream();
+        var handled = false;
+        var connection = new JsonRpcConnection(input, output)
+        {
+            OnRequest = (_, _, _) => { handled = true; return Task.FromResult<object?>(null); },
+        };
+
+        await connection.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(handled, "A frame behind an oversized header block should never reach a handler.");
+    }
+
+    [Fact]
+    public async Task HeadersWithinTheLimitsStillDispatch()
+    {
+        var frame = Encoding.ASCII.GetBytes("X-Pad: 0123456789\r\n")
+            .Concat(Frame("""{"jsonrpc":"2.0","id":1,"method":"ping"}"""))
+            .ToArray();
+        await using var input = new MemoryStream(frame);
+        await using var output = new MemoryStream();
+        var connection = new JsonRpcConnection(input, output)
+        {
+            OnRequest = (method, _, _) => Task.FromResult<object?>(method),
+        };
+
+        await connection.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("\"result\":\"ping\"", Encoding.UTF8.GetString(output.ToArray()));
+    }
+
     private static byte[] Frame(string json)
     {
         var body = Encoding.UTF8.GetBytes(json);
