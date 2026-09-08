@@ -23,7 +23,7 @@
  *   Escape on the certificate QuickPick. Verifies the sign flow aborts (no terminal).
  */
 
-import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -75,6 +75,25 @@ async function runCommandPalette(page: Page, commandLabel: string): Promise<void
     await page.keyboard.type(commandLabel, { delay: 30 });
     await page.waitForTimeout(1_500);
     await page.keyboard.press('Enter');
+}
+
+/**
+ * Wait for a command's own QuickPick to replace the Command Palette.
+ *
+ * Pressing Enter does not close the palette synchronously: it stays on screen,
+ * rows and all, until the command opens its QuickPick. Waiting on "any list row
+ * is visible" is therefore satisfied immediately by *palette* rows, and any
+ * one-shot read that follows races the transition — returning palette content.
+ *
+ * The placeholder is unique per picker, so poll on that instead and only then
+ * touch the rows.
+ */
+async function waitForQuickPick(page: Page, placeholder: RegExp): Promise<Locator> {
+    const quickInput = page.locator('.quick-input-widget');
+    await expect(
+        quickInput.locator('.quick-input-filter input[type="text"]')
+    ).toHaveAttribute('placeholder', placeholder, { timeout: 20_000 });
+    return quickInput;
 }
 
 /**
@@ -136,20 +155,8 @@ test.describe('winapp.sign command — artifact discovery', () => {
             // Run "WinApp: Sign File"
             await runCommandPalette(page, 'WinApp: Sign File');
 
-            // The QuickPick should appear. Wait for the quick-input widget to
-            // become visible. VS Code keeps the widget in the DOM with
-            // style="display:none" when inactive, so we must also exclude that.
-            const quickInput = page.locator('.quick-input-widget');
-            // Wait for either the quick-input list rows or the placeholder to
-            // appear — this accounts for VS Code toggling visibility classes.
-            await expect(
-                quickInput.locator('.quick-input-list .monaco-list-row').first()
-            ).toBeVisible({ timeout: 20_000 });
-
-            // The placeholder text should mention signing
-            const inputBox = quickInput.locator('.quick-input-filter input[type="text"]');
-            const placeholder = await inputBox.getAttribute('placeholder');
-            expect(placeholder).toContain('file to sign');
+            // Wait for the sign picker to take over from the palette.
+            const quickInput = await waitForQuickPick(page, /file to sign/i);
 
             // There should be at least 2 items: the .msix file + Browse…
             const items = quickInput.locator('.quick-input-list .monaco-list-row');
@@ -193,7 +200,8 @@ test.describe('winapp.sign command — artifact discovery', () => {
 
             await runCommandPalette(page, 'WinApp: Sign File');
 
-            const items = page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
+            const quickInput = await waitForQuickPick(page, /file to sign/i);
+            const items = quickInput.locator('.quick-input-list .monaco-list-row');
             await expect(items.first()).toBeVisible({ timeout: 20_000 });
             await expect(items.first()).toHaveAttribute('aria-setsize', '11');
 
@@ -234,7 +242,8 @@ test.describe('winapp.sign command — artifact discovery', () => {
 
             await runCommandPalette(page, 'WinApp: Sign File');
 
-            const items = page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
+            const quickInput = await waitForQuickPick(page, /file to sign/i);
+            const items = quickInput.locator('.quick-input-list .monaco-list-row');
             await expect(items.first()).toBeVisible({ timeout: 20_000 });
             await expect(items.first()).toHaveAttribute('aria-setsize', '4');
 
@@ -268,9 +277,7 @@ test.describe('winapp.sign command — artifact discovery', () => {
 
             await runCommandPalette(page, 'WinApp: Sign File');
 
-            const quickInput = page.locator('.quick-input-widget');
-            const inputBox = quickInput.locator('.quick-input-filter input[type="text"]');
-            await expect(inputBox).toHaveAttribute('placeholder', /file to sign/, { timeout: 20_000 });
+            const quickInput = await waitForQuickPick(page, /file to sign/i);
             const itemText = await quickInput.locator('.quick-input-list .monaco-list-row').allTextContents();
             expect(itemText.join(' ')).toContain('MyApp_1.0.0.0_x64.msix');
             expect(itemText.join(' ')).not.toContain('Ignored.msix');
@@ -296,29 +303,14 @@ test.describe('winapp.sign command — artifact discovery', () => {
             // Run "WinApp: Sign File"
             await runCommandPalette(page, 'WinApp: Sign File');
 
-            // Wait for the artifact QuickPick to appear
-            const quickInput = page.locator('.quick-input-widget');
-            await expect(
-                quickInput.locator('.quick-input-list .monaco-list-row').first()
-            ).toBeVisible({ timeout: 20_000 });
-
-            // Verify it's the package picker
-            const packageInput = quickInput.locator('.quick-input-filter input[type="text"]');
-            const packagePlaceholder = await packageInput.getAttribute('placeholder');
-            expect(packagePlaceholder).toContain('file to sign');
+            // Wait for the artifact QuickPick to take over from the palette
+            const quickInput = await waitForQuickPick(page, /file to sign/i);
 
             // Select the .msix artifact (first item) to advance to cert picker
             await quickInput.locator('.quick-input-list .monaco-list-row').first().click();
 
-            // Wait for the certificate QuickPick to appear (second picker)
-            await expect(
-                quickInput.locator('.quick-input-list .monaco-list-row').first()
-            ).toBeVisible({ timeout: 20_000 });
-
-            // The placeholder should now mention certificate
-            const certInput = quickInput.locator('.quick-input-filter input[type="text"]');
-            const certPlaceholder = await certInput.getAttribute('placeholder');
-            expect(certPlaceholder).toContain('signing certificate');
+            // Wait for the certificate QuickPick to replace it
+            await waitForQuickPick(page, /signing certificate/i);
 
             // There should be 2 items: the .pfx file + Browse…
             const certItems = quickInput.locator('.quick-input-list .monaco-list-row');
@@ -360,26 +352,18 @@ test.describe('winapp.sign command — artifact discovery', () => {
             // Run "WinApp: Sign File"
             await runCommandPalette(page, 'WinApp: Sign File');
 
-            // Wait for the artifact QuickPick to appear
-            const quickInput = page.locator('.quick-input-widget');
-            await expect(
-                quickInput.locator('.quick-input-list .monaco-list-row').first()
-            ).toBeVisible({ timeout: 20_000 });
-
-            // Verify it's the package picker
-            const inputBox = quickInput.locator('.quick-input-filter input[type="text"]');
-            const placeholder = await inputBox.getAttribute('placeholder');
-            expect(placeholder).toContain('file to sign');
+            // Wait for the artifact QuickPick to take over from the palette
+            const quickInput = await waitForQuickPick(page, /file to sign/i);
 
             // Press Escape to cancel the QuickPick
             await page.keyboard.press('Escape');
             await page.waitForTimeout(2_000);
 
-            // Verify the QuickPick is dismissed — the list rows should no longer
-            // be visible. We check that no quick-input list rows are shown, which
-            // means no second picker (certificate) appeared.
-            const visibleRows = quickInput.locator('.quick-input-list .monaco-list-row');
-            await expect(visibleRows).toHaveCount(0, { timeout: 5_000 });
+            // Verify the QuickPick is dismissed. VS Code keeps the rendered rows
+            // in the DOM after hiding the widget, so assert on widget visibility
+            // rather than row count. A hidden widget also proves no second picker
+            // (certificate) appeared.
+            await expect(quickInput).toBeHidden({ timeout: 5_000 });
 
             // Verify no WinApp terminal was created (sign was not executed)
             const terminalTabs = page.locator('.terminal-tab');
@@ -411,11 +395,9 @@ test.describe('winapp.sign command — artifact discovery', () => {
             // Run "WinApp: Sign File"
             await runCommandPalette(page, 'WinApp: Sign File');
 
-            // Wait for the artifact QuickPick to appear
-            const quickInput = page.locator('.quick-input-widget');
-            await expect(
-                quickInput.locator('.quick-input-list .monaco-list-row').first()
-            ).toBeVisible({ timeout: 20_000 });
+            // Wait for the artifact QuickPick to take over from the palette —
+            // without this, the row clicked below could be a palette command.
+            const quickInput = await waitForQuickPick(page, /file to sign/i);
 
             // Click "Browse…" (second item, the last row)
             const items = quickInput.locator('.quick-input-list .monaco-list-row');
@@ -431,9 +413,9 @@ test.describe('winapp.sign command — artifact discovery', () => {
             // VS Code-side handoff happens without an immediate error.
             await page.waitForTimeout(2_000);
 
-            // The QuickPick list should no longer be visible (replaced by native dialog)
-            const visibleRows = quickInput.locator('.quick-input-list .monaco-list-row');
-            await expect(visibleRows).toHaveCount(0, { timeout: 5_000 });
+            // The QuickPick should be dismissed (replaced by the native dialog).
+            // Rows stay in the DOM after hiding, so assert widget visibility.
+            await expect(quickInput).toBeHidden({ timeout: 5_000 });
 
             // No error notification should be visible
             const errorNotification = page.locator('.notification-toast .codicon-error');
@@ -469,32 +451,22 @@ test.describe('winapp.sign command — artifact discovery', () => {
             // Run "WinApp: Sign File"
             await runCommandPalette(page, 'WinApp: Sign File');
 
-            // Wait for the artifact QuickPick to appear
-            const quickInput = page.locator('.quick-input-widget');
-            await expect(
-                quickInput.locator('.quick-input-list .monaco-list-row').first()
-            ).toBeVisible({ timeout: 20_000 });
+            // Wait for the artifact QuickPick to take over from the palette
+            const quickInput = await waitForQuickPick(page, /file to sign/i);
 
             // Select the .msix artifact (first item) to advance to cert picker
             await quickInput.locator('.quick-input-list .monaco-list-row').first().click();
 
-            // Wait for the certificate QuickPick to appear
-            await expect(
-                quickInput.locator('.quick-input-list .monaco-list-row').first()
-            ).toBeVisible({ timeout: 20_000 });
-
-            // Verify it's the certificate picker
-            const certInput = quickInput.locator('.quick-input-filter input[type="text"]');
-            const certPlaceholder = await certInput.getAttribute('placeholder');
-            expect(certPlaceholder).toContain('signing certificate');
+            // Wait for the certificate QuickPick to replace it
+            await waitForQuickPick(page, /signing certificate/i);
 
             // Press Escape to cancel the certificate QuickPick
             await page.keyboard.press('Escape');
             await page.waitForTimeout(2_000);
 
-            // Verify the QuickPick is dismissed
-            const visibleRows = quickInput.locator('.quick-input-list .monaco-list-row');
-            await expect(visibleRows).toHaveCount(0, { timeout: 5_000 });
+            // Verify the QuickPick is dismissed. Rows remain in the DOM after
+            // hiding, so assert on widget visibility.
+            await expect(quickInput).toBeHidden({ timeout: 5_000 });
 
             // Verify no WinApp terminal was created (sign was not executed)
             const terminalTabs = page.locator('.terminal-tab');
