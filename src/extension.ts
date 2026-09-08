@@ -61,10 +61,12 @@ const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemR
 const FILE_PICKER_DETAIL = 'Open a file picker';
 
 /**
- * A discovered file offered in a sign QuickPick. The path travels in
- * `filePath` rather than `detail` so rows stay single-line and the trailing
- * "Browse…" entry is visible without scrolling — matching the folder and
- * manifest pickers elsewhere in this file.
+ * A discovered file offered in a sign QuickPick.
+ *
+ * The rendered fields (`label`, `description`, `detail`) are unchanged — the
+ * path is still shown in full. `filePath` carries the same value as a payload
+ * so the caller can identify the "Browse…" entry by its absence, rather than
+ * string-matching against `detail`.
  */
 type SignableFileItem = vscode.QuickPickItem & { filePath?: string };
 
@@ -420,6 +422,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		return {
 			label: path.basename(p),
 			description: relDir === '.' ? '' : relDir,
+			detail: p,
 			filePath: p
 		};
 	});
@@ -474,6 +477,7 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 		return {
 			label: path.basename(p),
 			description: relDir === '.' ? '' : relDir,
+			detail: p,
 			filePath: p
 		};
 	});
