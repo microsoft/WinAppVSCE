@@ -1,13 +1,24 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { escapePowerShellArg } from './winapp-cli-utils';
-import { ARTIFACT_GLOBS } from './artifact-types';
+import { ARTIFACT_GLOBS, PRIMARY_ARTIFACT_GLOBS, SECONDARY_ARTIFACT_GLOBS } from './artifact-types';
 
 /** Glob patterns for PFX certificate files within a workspace. */
 export const CERTIFICATE_GLOBS = ['**/*.pfx'];
 
 /** Glob patterns for executable files that can be signed. */
 export const EXECUTABLE_GLOBS = ['**/*.exe', '**/*.dll'];
+
+/**
+ * Signable file globs in QuickPick priority order: MSIX packages first, then
+ * legacy APPX packages, then loose executables and libraries. Lower tiers are
+ * only searched when higher tiers leave slots unfilled.
+ */
+export const SIGNABLE_ARTIFACT_TIERS: string[][] = [
+	PRIMARY_ARTIFACT_GLOBS,
+	SECONDARY_ARTIFACT_GLOBS,
+	EXECUTABLE_GLOBS
+];
 
 const SIGNABLE_ARTIFACT_IGNORES = new Set(['node_modules', '.git']);
 
@@ -18,13 +29,13 @@ export const WORKSPACE_SEARCH_EXCLUDE_GLOB = '**/{node_modules,.git}/**';
 export const MAX_QUICKPICK_RESULTS = 10;
 
 /**
- * How many candidates to collect per displayed result.
+ * How many candidates to collect per remaining slot.
  *
- * Discovery is capped so a huge workspace does not pay for a full recursive
- * walk, but the cap is kept well above the display limit so the newest-first
- * ordering the QuickPick shows stays deterministic for realistic workspaces.
+ * Discovery is deliberately conservative: a "Browse…" entry always backs the
+ * QuickPick, so a small overshoot is enough to keep newest-first ordering
+ * meaningful without paying for a full workspace walk.
  */
-const CANDIDATE_POOL_MULTIPLIER = 10;
+const CANDIDATE_POOL_MULTIPLIER = 2;
 
 export interface WorkspaceFileSearch {
 	/** Directories the finder should skip while walking the workspace. */
@@ -56,8 +67,7 @@ export function buildSignCommand(filePath: string, certPath: string): string {
  * collected, and only `limit` are returned. Results are sorted by modification
  * time (newest first) so the most recently packaged artifact appears at the top
  * of the QuickPick; callers offer a "Browse…" entry for anything beyond the cap.
- */
-export async function findWorkspaceArtifacts(
+ */export async function findWorkspaceArtifacts(
 	workspacePath: string,
 	findFiles: WorkspaceFileFinder,
 	patterns: string[] = ARTIFACT_GLOBS,
@@ -103,6 +113,49 @@ export async function findWorkspaceArtifacts(
 	withStats.sort((a, b) => b.mtime - a.mtime);
 	const sorted = withStats.map((s) => s.path);
 	return limit > 0 ? sorted.slice(0, limit) : sorted;
+}
+
+/**
+ * Search `tiers` in priority order, stopping as soon as `limit` files are found.
+ *
+ * Each tier is sorted newest-first independently, so higher-priority file types
+ * always rank above lower-priority ones regardless of mtime. A workspace with
+ * enough MSIX packages never pays to search for executables at all.
+ */
+export async function findWorkspaceArtifactsByTier(
+	workspacePath: string,
+	findFiles: WorkspaceFileFinder,
+	tiers: string[][],
+	signal?: AbortSignal,
+	limit: number = MAX_QUICKPICK_RESULTS
+): Promise<string[]> {
+	const collected: string[] = [];
+	const seen = new Set<string>();
+
+	for (const patterns of tiers) {
+		if (signal?.aborted || collected.length >= limit) {
+			break;
+		}
+
+		const tierResults = await findWorkspaceArtifacts(
+			workspacePath,
+			findFiles,
+			patterns,
+			signal,
+			limit - collected.length
+		);
+
+		for (const filePath of tierResults) {
+			const key = process.platform === 'win32' ? filePath.toLowerCase() : filePath;
+			if (seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+			collected.push(filePath);
+		}
+	}
+
+	return signal?.aborted ? [] : collected.slice(0, limit);
 }
 
 function isIgnoredWorkspacePath(workspacePath: string, filePath: string): boolean {

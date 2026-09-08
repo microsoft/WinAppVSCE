@@ -25,15 +25,15 @@ import {
 	planPackCompletion
 } from './pack-result';
 import {
-	findWorkspaceArtifacts,
+	findWorkspaceArtifactsByTier,
 	buildSignCommand,
 	CERTIFICATE_GLOBS,
-	EXECUTABLE_GLOBS,
 	MAX_QUICKPICK_RESULTS,
+	SIGNABLE_ARTIFACT_TIERS,
 	executeSignFlow,
 	type SignFlowAdapter
 } from './sign-utils';
-import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
+import { ARTIFACT_DIALOG_FILTER } from './artifact-types';
 import {
 	detectArchFromPath,
 	getMachineArch,
@@ -382,28 +382,18 @@ async function runWinappCapture(
 /**
  * Search the workspace for signable packages, executables, and libraries and
  * let the user pick one via
- * a QuickPick. Discovery is capped so large workspaces are not fully scanned;
- * at most {@link MAX_SIGNABLE_FILES} newest artifacts are listed. When no
- * artifacts are found the function falls back directly to a native file dialog;
- * a "Browse…" entry is always appended so the user can reach anything the
- * capped list omits.
+ * a QuickPick. Discovery is tiered and capped: MSIX packages are searched
+ * first, then legacy APPX packages, then executables and libraries, stopping as
+ * soon as {@link MAX_SIGNABLE_FILES} files are found. When no artifacts are
+ * found the function falls back directly to a native file dialog; a "Browse…"
+ * entry is always appended so the user can reach anything the capped list omits.
  *
  * @returns The selected file path, or `undefined` if cancelled.
  */
 async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
 	const artifactPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
-		async (_progress, token) => {
-			const packagePaths = await findWorkspaceArtifactsWithCancellation(workspacePath, ARTIFACT_GLOBS, token);
-			if (!packagePaths) {
-				return undefined;
-			}
-			const executablePaths = await findWorkspaceArtifactsWithCancellation(workspacePath, EXECUTABLE_GLOBS, token);
-			if (!executablePaths) {
-				return undefined;
-			}
-			return [...packagePaths, ...executablePaths].slice(0, MAX_SIGNABLE_FILES);
-		}
+		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, SIGNABLE_ARTIFACT_TIERS, token)
 	);
 
 	if (!artifactPaths) {
@@ -459,7 +449,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 async function pickCertificateFile(workspacePath: string): Promise<string | undefined> {
 	const certPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for certificates...', cancellable: true },
-		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, CERTIFICATE_GLOBS, token)
+		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, [CERTIFICATE_GLOBS], token)
 	);
 
 	if (!certPaths) {
@@ -502,7 +492,7 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 
 async function findWorkspaceArtifactsWithCancellation(
 	workspacePath: string,
-	patterns: string[],
+	tiers: string[][],
 	token: vscode.CancellationToken
 ): Promise<string[] | undefined> {
 	const abortController = new AbortController();
@@ -512,7 +502,7 @@ async function findWorkspaceArtifactsWithCancellation(
 	}
 
 	try {
-		const paths = await findWorkspaceArtifacts(
+		const paths = await findWorkspaceArtifactsByTier(
 			workspacePath,
 			async (includePattern, search) => {
 				const matches = await vscode.workspace.findFiles(
@@ -523,7 +513,7 @@ async function findWorkspaceArtifactsWithCancellation(
 				);
 				return matches.map(uri => uri.fsPath);
 			},
-			patterns,
+			tiers,
 			abortController.signal
 		);
 		return token.isCancellationRequested ? undefined : paths;

@@ -6,14 +6,29 @@
  * when a new artifact type (e.g. `.appinstaller`) is added.
  */
 
+/** Highest-priority artifact extensions — the packages `winapp pack` produces. */
+export const PRIMARY_ARTIFACT_EXTENSIONS = ['msix', 'msixbundle'] as const;
+
+/** Legacy package extensions, surfaced after the primary ones. */
+export const SECONDARY_ARTIFACT_EXTENSIONS = ['appx', 'appxbundle'] as const;
+
 /** Supported artifact file extensions (without leading dot). */
-export const ARTIFACT_EXTENSIONS = ['msix', 'msixbundle', 'appx', 'appxbundle'] as const;
+export const ARTIFACT_EXTENSIONS = [
+	...PRIMARY_ARTIFACT_EXTENSIONS,
+	...SECONDARY_ARTIFACT_EXTENSIONS
+] as const;
 
 /** Extensions with leading dot (internal — used by helpers below). */
 const DOTTED_EXTENSIONS = ARTIFACT_EXTENSIONS.map((ext) => `.${ext}`);
 
 /** Glob patterns that match packaged artifacts anywhere in a directory tree. */
 export const ARTIFACT_GLOBS: string[] = ARTIFACT_EXTENSIONS.map((ext) => `**/*.${ext}`);
+
+/** Glob patterns matching only the highest-priority package extensions. */
+export const PRIMARY_ARTIFACT_GLOBS: string[] = PRIMARY_ARTIFACT_EXTENSIONS.map((ext) => `**/*.${ext}`);
+
+/** Glob patterns matching only the legacy package extensions. */
+export const SECONDARY_ARTIFACT_GLOBS: string[] = SECONDARY_ARTIFACT_EXTENSIONS.map((ext) => `**/*.${ext}`);
 
 /** File-dialog filter for MSIX/APPX packages (VS Code `showOpenDialog` format). */
 export const ARTIFACT_DIALOG_FILTER: Record<string, string[]> = {
