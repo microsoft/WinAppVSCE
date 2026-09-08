@@ -231,11 +231,9 @@ describe('findWorkspaceArtifacts', () => {
 		assert.equal(calls, 0);
 	});
 
-	it('retries unbounded when ignored paths saturate the candidate pool', async () => {
+	it('never issues an unbounded search, even when ignored paths saturate the pool', async () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
-		const real = path.join(tempDir, 'real.msix');
-		createFile(real);
 		const ignored = Array.from({ length: 8 }, (_, index) =>
 			path.join(tempDir, 'node_modules', 'pkg', `dep${index}.msix`));
 		for (const filePath of ignored) {
@@ -243,51 +241,26 @@ describe('findWorkspaceArtifacts', () => {
 		}
 		const requestedLimits: Array<number | undefined> = [];
 
+		// Every match is ignored, so the pool is saturated and yields nothing.
+		// Discovery must accept that and stop rather than widen the search:
+		// "Browse…" is the escape hatch, not a full workspace walk.
 		const results = await findWorkspaceArtifactsCore(
 			tempDir,
 			async (_includePattern, search) => {
 				requestedLimits.push(search.maxResults);
-				// A capped search returns only ignored matches; unbounded finds the real one.
-				return search.maxResults === undefined ? [...ignored, real] : ignored.slice(0, search.maxResults);
+				return ignored.slice(0, search.maxResults);
 			},
 			ARTIFACT_GLOBS,
 			undefined,
 			2
 		);
 
-		assert.deepEqual(requestedLimits, [8, undefined]);
-		assert.deepEqual(results, [real]);
-	});
-
-	it('does not run the unbounded retry after cancellation', async () => {
-		const tempDir = createTempDir();
-		tempDirs.push(tempDir);
-		const ignored = Array.from({ length: 8 }, (_, index) =>
-			path.join(tempDir, 'node_modules', 'pkg', `dep${index}.msix`));
-		for (const filePath of ignored) {
-			createFile(filePath);
-		}
-		const controller = new AbortController();
-		const requestedLimits: Array<number | undefined> = [];
-
-		const results = await findWorkspaceArtifactsCore(
-			tempDir,
-			async (_includePattern, search) => {
-				requestedLimits.push(search.maxResults);
-				// Saturate the pool with ignored paths, then cancel before the retry.
-				controller.abort();
-				return ignored;
-			},
-			ARTIFACT_GLOBS,
-			controller.signal,
-			2
-		);
-
 		assert.deepEqual(requestedLimits, [8]);
+		assert.ok(requestedLimits.every((cap) => typeof cap === 'number'));
 		assert.deepEqual(results, []);
 	});
 
-	it('does not retry when the candidate pool was not saturated', async () => {
+	it('searches once per call', async () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
 		const real = path.join(tempDir, 'real.msix');
@@ -437,7 +410,7 @@ describe('createWorkspaceFileFinder', () => {
 		);
 
 		await finder('**/*.msix', { maxResults: 40 });
-		await finder('**/*.exe', { maxResults: undefined });
+		await finder('**/*.exe', { maxResults: 12 });
 
 		// A glob here would make VS Code also apply the user's `files.exclude`,
 		// which hides their own package output and empties the sign picker.

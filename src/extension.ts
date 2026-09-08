@@ -61,10 +61,19 @@ const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemR
 const FILE_PICKER_DETAIL = 'Open a file picker';
 
 /**
- * Build the trailing "Browse…" QuickPick entry, which reaches anything the
- * capped discovery list omits.
+ * A discovered file offered in a sign QuickPick. The path travels in
+ * `filePath` rather than `detail` so rows stay single-line and the trailing
+ * "Browse…" entry is visible without scrolling — matching the folder and
+ * manifest pickers elsewhere in this file.
  */
-function createBrowseItem(): vscode.QuickPickItem {
+type SignableFileItem = vscode.QuickPickItem & { filePath?: string };
+
+/**
+ * Build the trailing "Browse…" QuickPick entry, which reaches anything the
+ * capped discovery list omits. It carries no `filePath`, which is how the
+ * caller distinguishes it from a discovered file.
+ */
+function createBrowseItem(): SignableFileItem {
 	return {
 		label: '$(folder-opened) Browse…',
 		detail: FILE_PICKER_DETAIL
@@ -406,12 +415,12 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		});
 	}
 
-	const items: vscode.QuickPickItem[] = artifactPaths.map((p) => {
+	const items: SignableFileItem[] = artifactPaths.map((p) => {
 		const relDir = path.dirname(path.relative(workspacePath, p));
 		return {
 			label: path.basename(p),
 			description: relDir === '.' ? '' : relDir,
-			detail: p
+			filePath: p
 		};
 	});
 
@@ -425,7 +434,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		return undefined;
 	}
 
-	if (picked.detail === FILE_PICKER_DETAIL) {
+	if (!picked.filePath) {
 		return selectFile('Select file to sign', {
 			...ARTIFACT_DIALOG_FILTER,
 			'Executables': ['exe', 'dll'],
@@ -433,7 +442,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		});
 	}
 
-	return picked.detail;
+	return picked.filePath;
 }
 
 /**
@@ -460,12 +469,12 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 		});
 	}
 
-	const items: vscode.QuickPickItem[] = certPaths.map((p) => {
+	const items: SignableFileItem[] = certPaths.map((p) => {
 		const relDir = path.dirname(path.relative(workspacePath, p));
 		return {
 			label: path.basename(p),
 			description: relDir === '.' ? '' : relDir,
-			detail: p
+			filePath: p
 		};
 	});
 
@@ -479,13 +488,13 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 		return undefined;
 	}
 
-	if (picked.detail === FILE_PICKER_DETAIL) {
+	if (!picked.filePath) {
 		return selectFile('Select signing certificate', {
 			'Certificates': ['pfx']
 		});
 	}
 
-	return picked.detail;
+	return picked.filePath;
 }
 
 async function findWorkspaceArtifactsWithCancellation(

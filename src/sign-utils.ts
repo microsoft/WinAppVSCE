@@ -44,8 +44,8 @@ export const MAX_QUICKPICK_RESULTS = 10;
 const CANDIDATE_POOL_MULTIPLIER = 4;
 
 export interface WorkspaceFileSearch {
-	/** Upper bound on matches to collect, or `undefined` for no bound. */
-	maxResults?: number;
+	/** Upper bound on matches to collect. Always set — discovery stays bounded. */
+	maxResults: number;
 	signal?: AbortSignal;
 }
 
@@ -63,7 +63,7 @@ export type WorkspaceFileFinder = (
 export type FindFilesApi<TPattern, TUri> = (
 	include: TPattern,
 	exclude: null,
-	maxResults: number | undefined
+	maxResults: number
 ) => Thenable<TUri[]>;
 
 /**
@@ -109,9 +109,10 @@ export function buildSignCommand(filePath: string, certPath: string): string {
  * excluded during it, because the only way to stop VS Code from also applying
  * the user's `files.exclude` setting is to pass no exclude at all — and users
  * commonly hide their package output folder (e.g. `AppPackages`) from the
- * explorer while still wanting to sign what is inside it. When ignored paths
- * consume a saturated candidate pool, the search is retried unbounded so those
- * artifacts are still found.
+ * explorer while still wanting to sign what is inside it. Verified against
+ * `vscode.workspace.findFiles`: passing any exclude glob empties the picker for
+ * such a workspace. The search stays bounded regardless of what it turns up;
+ * "Browse…" covers anything the pool does not reach.
  */
 export async function findWorkspaceArtifacts(
 	workspacePath: string,
@@ -127,15 +128,8 @@ export async function findWorkspaceArtifacts(
 	const includePattern = patterns.length === 1 ? patterns[0] : `{${patterns.join(',')}}`;
 	const poolSize = limit * CANDIDATE_POOL_MULTIPLIER;
 
-	let results = await search(includePattern, poolSize);
-	let candidates = results.filter((filePath) => !isIgnoredWorkspacePath(workspacePath, filePath));
-
-	// A pool filled entirely to its cap may have hidden real artifacts behind
-	// ignored ones; fall back to an unbounded search only in that rare case.
-	if (results.length >= poolSize && candidates.length < limit) {
-		results = await search(includePattern, undefined);
-		candidates = results.filter((filePath) => !isIgnoredWorkspacePath(workspacePath, filePath));
-	}
+	const results = await search(includePattern, poolSize);
+	const candidates = results.filter((filePath) => !isIgnoredWorkspacePath(workspacePath, filePath));
 
 	// Sort by mtime descending (newest first); if stat fails, push to end.
 	const withStats: Array<{ path: string; mtime: number }> = [];
@@ -154,7 +148,9 @@ export async function findWorkspaceArtifacts(
 	withStats.sort((a, b) => b.mtime - a.mtime);
 	return withStats.map((s) => s.path).slice(0, limit);
 
-	async function search(include: string, maxResults: number | undefined): Promise<string[]> {
+	// `maxResults` is required, so discovery can never fall back to an unbounded
+	// workspace walk.
+	async function search(include: string, maxResults: number): Promise<string[]> {
 		if (signal?.aborted) {
 			return [];
 		}
