@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -231,10 +232,13 @@ internal sealed class JsonRpcConnection
             if (line.StartsWith(ContentLengthHeader, StringComparison.OrdinalIgnoreCase))
             {
                 var value = line.Substring(ContentLengthHeader.Length).Trim();
-                if (!int.TryParse(value, out contentLength) || contentLength < 0)
+
+                // LSP specifies digits only. NumberStyles.None rejects a sign, so a negative
+                // length cannot parse and the result is always non-negative here. Falling through
+                // on failure would instead leave contentLength at 0 and frame an empty body,
+                // desynchronizing the stream against body bytes that were never consumed.
+                if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out contentLength))
                 {
-                    // Falling through here would leave contentLength at 0 and frame an empty body,
-                    // desynchronizing the stream against the body bytes that were never consumed.
                     Log($"invalid Content-Length header: '{value}'");
                     return null;
                 }

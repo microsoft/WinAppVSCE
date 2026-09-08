@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using WinUiXaml.LanguageServer.Lsp;
 
@@ -241,6 +242,54 @@ public class JsonRpcConnectionTests
         await connection.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Contains("\"result\":\"ping\"", Encoding.UTF8.GetString(output.ToArray()));
+    }
+
+    [Fact]
+    public async Task ContentLengthIsParsedInvariantlyRegardlessOfCulture()
+    {
+        var original = CultureInfo.CurrentCulture;
+        // A culture whose negative sign and digit shaping differ from the invariant form.
+        CultureInfo.CurrentCulture = new CultureInfo("sv-SE");
+        try
+        {
+            await using var input = new MemoryStream(
+                Frame("""{"jsonrpc":"2.0","id":1,"method":"ping"}"""));
+            await using var output = new MemoryStream();
+            var connection = new JsonRpcConnection(input, output)
+            {
+                OnRequest = (method, _, _) => Task.FromResult<object?>(method),
+            };
+
+            await connection.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Contains("\"result\":\"ping\"", Encoding.UTF8.GetString(output.ToArray()));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
+    }
+
+    [Fact]
+    public async Task ContentLengthWithASignIsRejected()
+    {
+        // LSP specifies digits only. A signed value is accepted by a default int.TryParse, which
+        // would frame and dispatch this body; NumberStyles.None rejects it before the body read.
+        var body = Encoding.UTF8.GetBytes("""{"jsonrpc":"2.0","id":1,"method":"ping"}""");
+        var frame = Encoding.ASCII.GetBytes($"Content-Length: +{body.Length}\r\n\r\n")
+            .Concat(body)
+            .ToArray();
+        await using var input = new MemoryStream(frame);
+        await using var output = new MemoryStream();
+        var handled = false;
+        var connection = new JsonRpcConnection(input, output)
+        {
+            OnRequest = (_, _, _) => { handled = true; return Task.FromResult<object?>(null); },
+        };
+
+        await connection.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(handled, "A signed Content-Length should be rejected as malformed framing.");
     }
 
     private static byte[] Frame(string json)
