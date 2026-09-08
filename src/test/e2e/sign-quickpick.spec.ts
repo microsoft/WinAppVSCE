@@ -37,6 +37,13 @@ const VSCODE_EXE =
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
 
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
+
+/**
+ * Height of a QuickPick row carrying only `label` + `description`, which is the
+ * standard across our pickers (see `ProjectQuickPickItem` in project-resolver).
+ * Adding a `detail` line doubles this to 44px.
+ */
+const STANDARD_ROW_HEIGHT_PX = 22;
 const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
     ? []
     : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
@@ -209,11 +216,27 @@ test.describe('winapp.sign command — artifact discovery', () => {
             expect(itemText.slice(0, 2).every(text => /\.(msix|msixbundle)/i.test(text))).toBe(true);
             expect(itemText.slice(2, 10).every(text => /\.(exe|dll)/i.test(text))).toBe(true);
 
-            // The Browse row is virtualized out of view while the list is capped
-            // (rows are three lines tall, so ~7 fit). ArrowUp from the first item
-            // wraps to the last, scrolling it in.
+            // Rows must stay at the standard single-line height (as in the init
+            // project picker). A `detail` line doubles a row to 44px, at which
+            // point only 7 of 11 entries fit and "Browse…" falls off screen.
+            const layout = await quickInput.locator('.quick-input-list').evaluate((listEl) => {
+                const listBox = listEl.getBoundingClientRect();
+                const rows = Array.from(listEl.querySelectorAll('.monaco-list-row')) as (typeof listEl)[];
+                return {
+                    rowHeights: Array.from(new Set(rows.map(r => Math.round(r.getBoundingClientRect().height)))),
+                    rendered: rows.length,
+                    fullyVisible: rows.filter((r) => {
+                        const b = r.getBoundingClientRect();
+                        return b.top >= listBox.top - 1 && b.bottom <= listBox.bottom + 1;
+                    }).length,
+                };
+            });
+            expect(layout.rowHeights).toEqual([STANDARD_ROW_HEIGHT_PX]);
+            // All 11 entries render and fit, so Browse needs no scrolling.
+            expect(layout.rendered).toBe(11);
+            expect(layout.fullyVisible).toBe(11);
+
             // Even when capped, Browse stays plain — no count or truncation note.
-            await page.keyboard.press('ArrowUp');
             const browseRow = items.last();
             await expect(browseRow).toContainText('Browse');
             await expect(browseRow).not.toContainText(/most recent|showing/i);

@@ -63,10 +63,18 @@ const FILE_PICKER_DETAIL = 'Open a file picker';
 /**
  * A discovered file offered in a sign QuickPick.
  *
- * The rendered fields (`label`, `description`, `detail`) are unchanged — the
- * path is still shown in full. `filePath` carries the same value as a payload
- * so the caller can identify the "Browse…" entry by its absence, rather than
- * string-matching against `detail`.
+ * Rows carry `label` (filename) + `description` (directory relative to the
+ * workspace) and no `detail`, matching the project picker in
+ * `project-resolver.ts`. This keeps rows at the standard single-line height:
+ * a `detail` line doubles a row from 22px to 44px, which previously let only
+ * 7 of 11 entries fit and pushed "Browse…" off screen.
+ *
+ * Dropping `detail` loses nothing — it held the absolute path, which is just
+ * the workspace root (identical on every row) joined to `description` and
+ * `label`.
+ *
+ * `filePath` carries the path as a non-rendered payload so the caller can
+ * identify the "Browse…" entry by its absence.
  */
 type SignableFileItem = vscode.QuickPickItem & { filePath?: string };
 
@@ -78,7 +86,7 @@ type SignableFileItem = vscode.QuickPickItem & { filePath?: string };
 function createBrowseItem(): SignableFileItem {
 	return {
 		label: '$(folder-opened) Browse…',
-		detail: FILE_PICKER_DETAIL
+		description: FILE_PICKER_DETAIL
 	};
 }
 
@@ -422,7 +430,6 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		return {
 			label: path.basename(p),
 			description: relDir === '.' ? '' : relDir,
-			detail: p,
 			filePath: p
 		};
 	});
@@ -477,7 +484,6 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 		return {
 			label: path.basename(p),
 			description: relDir === '.' ? '' : relDir,
-			detail: p,
 			filePath: p
 		};
 	});
