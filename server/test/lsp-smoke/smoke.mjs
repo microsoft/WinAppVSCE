@@ -1184,9 +1184,25 @@ async function main() {
   // 22) shutdown
   send({ id: 11, method: "shutdown", params: null });
   await waitFor(responseFor(11), 10000, "shutdown");
-  send({ method: "exit", params: null });
 
-  console.log("\nPASS: language server spine works (initialize + diagnostics + F12 + x:Bind F12 + hover incl. element/attribute names + completion incl. enum/bool values + markup-extension names + Mode= + resource keys + x:Bind member paths + close-tag completion + using: namespace completion + document outline + semantic validation + formatting + folding + document color + selection ranges + linked editing + document links + rename + semantic tokens + code actions + completion documentation + method hover enrichment + GridLength value completion + named-color value completion + FontWeight value completion + third-party control completion + generate event handler).");
+  // Assert the process actually terminates rather than sending `exit` and walking away. A server
+  // that answers `shutdown` but never exits leaves an orphaned dotnet process behind every time the
+  // editor closes, which the old fixed 200 ms timeout would have reported as a pass.
+  const exited = new Promise((resolveExit) => server.once("exit", (code) => resolveExit(code)));
+  send({ method: "exit", params: null });
+  const exitCode = await Promise.race([
+    exited,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("server did not exit within 10s of the exit notification")), 10000)
+    ),
+  ]);
+  // LSP: exit after a shutdown request must terminate with code 0.
+  if (exitCode !== 0) fail(`server exited with code ${exitCode} after shutdown; expected 0`);
+  console.log("[ok] shutdown/exit: server terminated cleanly (code 0)");
+
+  console.log("\nPASS: language server spine works (initialize + diagnostics + F12 + x:Bind F12 + hover incl. element/attribute names + completion incl. enum/bool values + markup-extension names + Mode= + resource keys + x:Bind member paths + close-tag completion + using: namespace completion + document outline + semantic validation + formatting + folding + document color + selection ranges + linked editing + document links + rename + semantic tokens + code actions + completion documentation + method hover enrichment + GridLength value completion + named-color value completion + FontWeight value completion + third-party control completion + generate event handler + clean shutdown).");
+  // The 200 ms delay is retained purely to let buffered stdout flush before exiting; the server's
+  // own termination is now awaited explicitly above rather than assumed to happen within it.
   setTimeout(() => process.exit(0), 200);
 }
 
