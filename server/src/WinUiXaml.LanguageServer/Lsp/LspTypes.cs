@@ -6,12 +6,30 @@ namespace WinUiXaml.LanguageServer.Lsp;
 /// <summary>Shared JSON options for the LSP wire format (camelCase, omit nulls).</summary>
 internal static class LspJson
 {
+    // Resolving through the source-generated context (rather than the reflection default)
+    // keeps every serialization path in the process trim- and AOT-safe. A type that is not
+    // declared on LspJsonContext will throw instead of silently falling back to reflection.
     public static readonly JsonSerializerOptions Options = new()
     {
+        TypeInfoResolver = LspJsonContext.Default,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         PropertyNameCaseInsensitive = true,
     };
+}
+
+// --- Server-to-client notifications (winui-xaml/*) --------------------------
+
+internal sealed class ProjectContextStatusParams
+{
+    [JsonPropertyName("uri")] public string? Uri { get; set; }
+    [JsonPropertyName("state")] public string? State { get; set; }
+    [JsonPropertyName("message")] public string? Message { get; set; }
+}
+
+internal sealed class ProjectRestoreRequiredParams
+{
+    [JsonPropertyName("projectPath")] public string? ProjectPath { get; set; }
 }
 
 // --- Base protocol envelope -------------------------------------------------

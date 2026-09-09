@@ -484,7 +484,7 @@ internal sealed partial class XamlLanguageServer
             _contexts.Invalidate(p.TextDocument.Uri, discardLatest: true);
             await _connection.SendNotificationAsync(
                 "winui-xaml/projectContextStatus",
-                new { uri = p.TextDocument.Uri, state = "idle" })
+                new ProjectContextStatusParams { Uri = p.TextDocument.Uri, State = "idle" })
                 .ConfigureAwait(false);
             await _connection.SendNotificationAsync(
                 "textDocument/publishDiagnostics",

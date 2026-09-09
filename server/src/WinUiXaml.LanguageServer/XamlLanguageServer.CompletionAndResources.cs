@@ -434,7 +434,7 @@ internal sealed partial class XamlLanguageServer
         string? message = null) =>
         _connection.SendNotificationAsync(
             "winui-xaml/projectContextStatus",
-            new { uri, state, message });
+            new ProjectContextStatusParams { Uri = uri, State = state, Message = message });
 
     /// <summary>Shared pipeline for definition/hover: map the caret to a member name on the page's x:Class type (either an event-handler attribute value or an x:Bind path segment) and resolve it</summary>
     private async Task<(ISymbol? Symbol, MemberTarget? Target)> ResolveSymbolAtAsync(TextDocumentPositionParams p)
@@ -516,7 +516,7 @@ internal sealed partial class XamlLanguageServer
         return _restoreRequiredProjects.TryAdd(exception.ProjectPath, 0)
             ? _connection.SendNotificationAsync(
                 "winui-xaml/projectRestoreRequired",
-                new { projectPath = exception.ProjectPath })
+                new ProjectRestoreRequiredParams { ProjectPath = exception.ProjectPath })
             : Task.CompletedTask;
     }
 
@@ -1000,6 +1000,8 @@ internal sealed partial class XamlLanguageServer
             return new T();
         }
 
-        return e.Deserialize<T>(LspJson.Options) ?? new T();
+        // Resolve T through the source-generated context rather than reflection, so this
+        // stays trim- and AOT-safe. Every T used here is declared on LspJsonContext.
+        return (T?)e.Deserialize(typeof(T), LspJsonContext.Default) ?? new T();
     }
 }

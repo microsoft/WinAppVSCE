@@ -75,23 +75,20 @@ internal sealed class JsonRpcConnection
         }
     }
 
-    public Task SendNotificationAsync(string method, object @params)
-    {
-        var payload = new Dictionary<string, object?>
+    public Task SendNotificationAsync(string method, object @params) =>
+        WriteMessageAsync(writer =>
         {
-            ["jsonrpc"] = "2.0",
-            ["method"] = method,
-            ["params"] = @params,
-        };
-        return WriteMessageAsync(payload);
-    }
+            writer.WriteString("method", method);
+            writer.WritePropertyName("params");
+            WriteValue(writer, @params);
+        });
 
     private async Task DispatchAsync(byte[] body, CancellationToken connectionToken)
     {
         IncomingMessage? message;
         try
         {
-            message = JsonSerializer.Deserialize<IncomingMessage>(body, LspJson.Options);
+            message = JsonSerializer.Deserialize(body, LspJsonContext.Default.IncomingMessage);
         }
         catch (JsonException ex)
         {
@@ -173,21 +170,23 @@ internal sealed class JsonRpcConnection
             _requestCancellations.TryRemove(requestKey, out _);
         }
 
-        var payload = new Dictionary<string, object?>
+        var capturedResult = result;
+        var capturedError = error;
+        await WriteMessageAsync(writer =>
         {
-            ["jsonrpc"] = "2.0",
-            ["id"] = id,
-        };
-        if (error != null)
-        {
-            payload["error"] = error;
-        }
-        else
-        {
-            payload["result"] = result;
-        }
-
-        await WriteMessageAsync(payload).ConfigureAwait(false);
+            writer.WritePropertyName("id");
+            id.WriteTo(writer);
+            if (capturedError != null)
+            {
+                writer.WritePropertyName("error");
+                WriteValue(writer, capturedError);
+            }
+            else
+            {
+                writer.WritePropertyName("result");
+                WriteValue(writer, capturedResult);
+            }
+        }).ConfigureAwait(false);
     }
 
     private void CancelRequest(JsonElement? @params)
@@ -310,9 +309,23 @@ internal sealed class JsonRpcConnection
         }
     }
 
-    private async Task WriteMessageAsync(object payload)
+    /// <summary>
+    /// Writes a JSON-RPC frame. The envelope is written directly so the only serialized values
+    /// are the payloads themselves, each resolved by runtime type through the source-generated
+    /// <see cref="LspJsonContext"/> rather than System.Text.Json's reflection fallback.
+    /// </summary>
+    private async Task WriteMessageAsync(Action<Utf8JsonWriter> writeBody)
     {
-        var json = JsonSerializer.SerializeToUtf8Bytes(payload, LspJson.Options);
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc", "2.0");
+            writeBody(writer);
+            writer.WriteEndObject();
+        }
+
+        var json = buffer.WrittenMemory;
         var header = Encoding.ASCII.GetBytes($"Content-Length: {json.Length}\r\n\r\n");
 
         await _writeLock.WaitAsync().ConfigureAwait(false);
@@ -326,6 +339,18 @@ internal sealed class JsonRpcConnection
         {
             _writeLock.Release();
         }
+    }
+
+    /// <summary>Serializes an LSP payload by its runtime type through the source-generated context.</summary>
+    private static void WriteValue(Utf8JsonWriter writer, object? value)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        JsonSerializer.Serialize(writer, value, value.GetType(), LspJsonContext.Default);
     }
 
     private static void Log(string message) => Console.Error.WriteLine($"[winui-xaml-ls] {message}");
