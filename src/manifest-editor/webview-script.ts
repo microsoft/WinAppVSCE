@@ -21,12 +21,49 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         const extensionTemplates = ${JSON.stringify(EXTENSION_TEMPLATES)};
         const optionalVisualAssets = ${JSON.stringify(OPTIONAL_VISUAL_ASSETS)};
         const showNameOnTilesOptions = ${JSON.stringify(SHOW_NAME_ON_TILES_OPTIONS)};
-        const activeAppSubTabs = {};
+
+        // ─── Persisted UI state ─────────────────────────────
+        // Kept in vscode.setState so the view survives a webview reload (tab switch away and back,
+        // window reload, or a full editor rebuild).
+        const persistedState = vscode.getState() || {};
+        const activeAppSubTabs = persistedState.activeAppSubTabs || {};
         // Track optional fields the user has explicitly opened (to prevent re-parse from hiding them)
-        const userOpenedOptionalFields = new Set();
+        const userOpenedOptionalFields = new Set(persistedState.userOpenedOptionalFields || []);
+        const scrollPositions = persistedState.scrollPositions || {};
+        let activeTabId = persistedState.activeTab || 'identity';
+        let uiStateRestored = false;
+
+        function saveUiState() {
+            vscode.setState({
+                activeTab: activeTabId,
+                activeAppSubTabs: activeAppSubTabs,
+                userOpenedOptionalFields: Array.from(userOpenedOptionalFields),
+                scrollPositions: scrollPositions,
+            });
+        }
+
+        function currentScrollPositions() {
+            const snapshot = {};
+            document.querySelectorAll('.tab-content').forEach(c => { snapshot[c.id] = c.scrollTop; });
+            return snapshot;
+        }
+
+        function applyScrollPositions(snapshot) {
+            document.querySelectorAll('.tab-content').forEach(c => {
+                const top = snapshot[c.id];
+                if (typeof top === 'number' && top > 0) { c.scrollTop = top; }
+            });
+        }
+
+        document.querySelectorAll('.tab-content').forEach(c => {
+            c.addEventListener('scroll', () => {
+                scrollPositions[c.id] = c.scrollTop;
+                saveUiState();
+            }, { passive: true });
+        });
 
         // ─── Tab switching ──────────────────────────────────
-        function activateTab(btn) {
+        function activateTab(btn, moveFocus) {
             document.querySelectorAll('.tab-btn').forEach(b => {
                 b.classList.remove('active');
                 b.setAttribute('aria-selected', 'false');
@@ -43,13 +80,16 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             const panel = document.getElementById('tab-' + tab);
             panel.classList.add('active');
             panel.setAttribute('aria-hidden', 'false');
+            activeTabId = tab;
+            saveUiState();
+            if (moveFocus === false) { return; }
             // Move focus into the tab panel's first focusable element
             const focusable = panel.querySelector('input, select, button, textarea, [tabindex="0"]');
             if (focusable) { focusable.focus(); } else { btn.focus(); }
         }
 
         document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.addEventListener('click', () => activateTab(btn));
+            btn.addEventListener('click', () => activateTab(btn, true));
         });
 
         // WAI-ARIA Tabs: ArrowLeft/ArrowRight to cycle visible tabs
@@ -61,7 +101,7 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             let idx = tabs.indexOf(current);
             if (e.key === 'ArrowRight') { idx = (idx + 1) % tabs.length; }
             else { idx = idx <= 0 ? tabs.length - 1 : idx - 1; }
-            activateTab(tabs[idx]);
+            activateTab(tabs[idx], true);
             e.preventDefault();
         });
 
@@ -75,6 +115,9 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             vscode.postMessage({ type: 'openAsText' });
         });
         document.getElementById('open-xml-link').addEventListener('click', () => {
+            vscode.postMessage({ type: 'openAsText' });
+        });
+        document.getElementById('parse-error-open-text').addEventListener('click', () => {
             vscode.postMessage({ type: 'openAsText' });
         });
 
@@ -107,34 +150,55 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         // Debounce helper for text inputs
         let debounceTimers = {};
         let pendingElements = {};
-        function debouncedFieldChange(el) {
-            const field = el.getAttribute('data-field-name') || '';
-            const idx = el.getAttribute('data-index') || '';
-            const key = el.id || (field + ':' + idx);
+
+        /**
+         * Queues a debounced edit. describe() returns the descriptor used when a save flushes the
+         * queue; send() posts the edit when the debounce elapses. All debounced edits must use this.
+         */
+        function queueDebouncedChange(key, describe, send) {
             clearTimeout(debounceTimers[key]);
-            pendingElements[key] = el;
+            pendingElements[key] = describe;
             debounceTimers[key] = setTimeout(() => {
-                onFieldChange(el);
+                send();
                 delete pendingElements[key];
                 delete debounceTimers[key];
             }, 300);
         }
 
+        function debouncedFieldChange(el) {
+            const field = el.getAttribute('data-field-name') || '';
+            const idx = el.getAttribute('data-index') || '';
+            const key = el.id || (field + ':' + idx);
+            queueDebouncedChange(key, () => ({
+                kind: 'field',
+                section: el.getAttribute('data-section'),
+                field: el.getAttribute('data-field-name'),
+                value: el.value,
+                index: parseInt(el.getAttribute('data-index') || '0', 10),
+            }), () => onFieldChange(el));
+        }
+
         function flushPendingChanges() {
             const changes = [];
             for (const key in pendingElements) {
-                const el = pendingElements[key];
                 clearTimeout(debounceTimers[key]);
-                changes.push({
-                    section: el.getAttribute('data-section'),
-                    field: el.getAttribute('data-field-name'),
-                    value: el.value,
-                    index: parseInt(el.getAttribute('data-index') || '0', 10),
-                });
+                changes.push(pendingElements[key]());
             }
             debounceTimers = {};
             pendingElements = {};
             return changes;
+        }
+
+        /**
+         * Drops input still in the 300 ms debounce without sending it. Used when the document stops
+         * parsing, since the extension can't safely rewrite unparseable XML.
+         */
+        function discardPendingChanges() {
+            for (const key in debounceTimers) {
+                clearTimeout(debounceTimers[key]);
+            }
+            debounceTimers = {};
+            pendingElements = {};
         }
 
         // ─── Shared custom-select wiring helper ────────────────
@@ -279,7 +343,16 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         function populateForm(data, forceAll) {
             currentData = data;
 
-            // Save focused element info before DOM rebuild
+            // Preserve scroll offsets across the list re-renders below: clearing a list collapses
+            // the scroll container's height and the browser clamps scrollTop to 0.
+            const scrollSnapshot = currentScrollPositions();
+
+            // A background re-render must not close a dropdown the user just opened, and
+            // renderApplications rebuilds the menus wholesale.
+            const openMenus = openDropdownKeys();
+
+            // Save focused element info before DOM rebuild. Skipped for forceAll (external edits)
+            // so a re-render never pulls focus away from the text editor.
             const focused = forceAll ? null : document.activeElement;
             let focusInfo = null;
             if (focused && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA' || focused.tagName === 'SELECT' || focused.classList.contains('custom-select-trigger'))) {
@@ -384,41 +457,43 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             const isNonAppPackage = data.properties.framework === 'true' || data.properties.resourcePackage === 'true' || data.properties.modificationPackage === 'true';
             const isResourcePackage = data.properties.resourcePackage === 'true';
 
-            // Applications — hide for all non-application packages
-            const appsTab = document.querySelector('.tab-btn[data-tab="applications"]');
-            const appsContent = document.getElementById('tab-applications');
-            if (appsTab) {
-                if (isNonAppPackage) { appsTab.classList.add('hidden-tab'); } else { appsTab.classList.remove('hidden-tab'); }
-            }
-            if (appsContent && isNonAppPackage) {
-                appsContent.classList.remove('active');
-            }
-
-            // Capabilities — hide for framework, resource, and modification packages
-            const capsTab = document.querySelector('.tab-btn[data-tab="capabilities"]');
-            const capsContent = document.getElementById('tab-capabilities');
-            if (capsTab) {
-                if (isNonAppPackage) { capsTab.classList.add('hidden-tab'); } else { capsTab.classList.remove('hidden-tab'); }
-            }
-            if (capsContent && isNonAppPackage) {
-                capsContent.classList.remove('active');
+            // Keep the tab button and its panel in sync: hiding a tab must clear the button's
+            // selected state, otherwise two tabs can look selected at once.
+            function setTabHidden(name, shouldHide) {
+                const btn = document.querySelector('.tab-btn[data-tab="' + name + '"]');
+                const content = document.getElementById('tab-' + name);
+                if (btn) { btn.classList.toggle('hidden-tab', shouldHide); }
+                if (!shouldHide) { return; }
+                if (content) {
+                    content.classList.remove('active');
+                    content.setAttribute('aria-hidden', 'true');
+                }
+                if (btn) {
+                    btn.classList.remove('active');
+                    btn.setAttribute('aria-selected', 'false');
+                    btn.setAttribute('tabindex', '-1');
+                }
             }
 
-            // Dependencies — hide for resource packages
-            const depsTab = document.querySelector('.tab-btn[data-tab="dependencies"]');
-            const depsContent = document.getElementById('tab-dependencies');
-            if (depsTab) {
-                if (isResourcePackage) { depsTab.classList.add('hidden-tab'); } else { depsTab.classList.remove('hidden-tab'); }
-            }
-            if (depsContent && isResourcePackage) {
-                depsContent.classList.remove('active');
-            }
+            // Applications and Capabilities — hidden for all non-application packages
+            setTabHidden('applications', isNonAppPackage);
+            setTabHidden('capabilities', isNonAppPackage);
+            // Dependencies — hidden for resource packages
+            setTabHidden('dependencies', isResourcePackage);
 
             // If the active tab was hidden, switch to Identity
             if (!document.querySelector('.tab-content.active')) {
-                document.getElementById('tab-identity').classList.add('active');
+                const identityContent = document.getElementById('tab-identity');
+                identityContent.classList.add('active');
+                identityContent.setAttribute('aria-hidden', 'false');
                 const identityTabBtn = document.querySelector('.tab-btn[data-tab="identity"]');
-                if (identityTabBtn) identityTabBtn.setAttribute('aria-selected', 'true');
+                if (identityTabBtn) {
+                    identityTabBtn.classList.add('active');
+                    identityTabBtn.setAttribute('aria-selected', 'true');
+                    identityTabBtn.setAttribute('tabindex', '0');
+                }
+                activeTabId = 'identity';
+                saveUiState();
             }
             renderApplications(data.applications);
 
@@ -432,6 +507,34 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             if (focusInfo) {
                 restoreFocus(focusInfo);
             }
+
+            applyScrollPositions(scrollSnapshot);
+            reopenDropdowns(openMenus);
+        }
+
+        /** Identifies a dropdown menu stably enough to survive its card being re-rendered. */
+        function dropdownKeyFor(menu) {
+            if (menu.id) { return menu.id; }
+            const owner = menu.closest('[data-app-index], [data-app-idx]');
+            const appIdx = owner
+                ? (owner.getAttribute('data-app-index') || owner.getAttribute('data-app-idx'))
+                : '';
+            return menu.className.replace('open', '').trim() + '#' + appIdx;
+        }
+
+        function openDropdownKeys() {
+            const keys = [];
+            document.querySelectorAll('.custom-dropdown-menu.open').forEach(m => {
+                keys.push(dropdownKeyFor(m));
+            });
+            return keys;
+        }
+
+        function reopenDropdowns(keys) {
+            if (!keys || !keys.length) { return; }
+            document.querySelectorAll('.custom-dropdown-menu').forEach(m => {
+                if (keys.indexOf(dropdownKeyFor(m)) !== -1) { m.classList.add('open'); }
+            });
         }
 
         function setValueIfNotFocused(elementId, value, focusedEl) {
@@ -566,13 +669,109 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             });
         }
 
+        // ─── Parse-error overlay ────────────────────────────
+        // Covers the form while the XML is unparseable. Inerts the content behind it so keyboard
+        // and screen-reader users cannot tab into paused fields. It never moves focus itself:
+        // the XML usually breaks while the user types in the text editor.
+        function setEditorContentInert(isInert) {
+            const overlay = document.getElementById('parse-error-overlay');
+            Array.from(document.body.children).forEach(el => {
+                if (el === overlay || el.tagName === 'SCRIPT') { return; }
+                if (isInert) {
+                    el.setAttribute('inert', '');
+                    // Snapshot any aria-hidden owned by another system (activateTab manages it
+                    // on .tab-content panels) so un-inerting restores it instead of erasing it.
+                    if (!el.hasAttribute('data-prior-aria-hidden')) {
+                        const prior = el.getAttribute('aria-hidden');
+                        el.setAttribute('data-prior-aria-hidden', prior === null ? '' : prior);
+                    }
+                    el.setAttribute('aria-hidden', 'true');
+                } else {
+                    el.removeAttribute('inert');
+                    const prior = el.getAttribute('data-prior-aria-hidden');
+                    if (prior) {
+                        el.setAttribute('aria-hidden', prior);
+                    } else {
+                        el.removeAttribute('aria-hidden');
+                    }
+                    el.removeAttribute('data-prior-aria-hidden');
+                }
+            });
+        }
+
+        function setParseError(message) {
+            const overlay = document.getElementById('parse-error-overlay');
+            if (!overlay) { return; }
+            const detail = document.getElementById('parse-error-detail');
+            const wasShowing = !overlay.hidden;
+            if (message) {
+                if (detail) { detail.textContent = message; }
+                overlay.hidden = false;
+                if (!wasShowing) {
+                    // Editing is paused, so anything still in the input debounce must not be
+                    // sent: the extension would be asked to rewrite XML it cannot parse.
+                    discardPendingChanges();
+                    setEditorContentInert(true);
+                }
+            } else {
+                overlay.hidden = true;
+                if (wasShowing) {
+                    setEditorContentInert(false);
+                }
+            }
+        }
+
+        // The inert attribute keeps the form behind the dialog unreachable, but Tab from the last
+        // control inside the dialog would still escape into the host chrome, so cycle it manually.
+        document.addEventListener('keydown', e => {
+            if (e.key !== 'Tab') { return; }
+            const overlay = document.getElementById('parse-error-overlay');
+            if (!overlay || overlay.hidden) { return; }
+            const box = document.getElementById('parse-error-box');
+            if (!box) { return; }
+            const stops = [box].concat(Array.from(box.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')));
+            const current = stops.indexOf(document.activeElement);
+            const next = e.shiftKey
+                ? (current <= 0 ? stops.length - 1 : current - 1)
+                : (current === -1 || current === stops.length - 1 ? 0 : current + 1);
+            e.preventDefault();
+            stops[next].focus();
+        });
+
+        // ─── Restore persisted UI state ─────────────────────
+        // Returns false when the saved tab exists but is still hidden (e.g. Applications
+        // before the first update that carries applications), so the caller can retry.
+        function restoreUiState() {
+            const btn = document.querySelector('.tab-btn[data-tab="' + activeTabId + '"]');
+            if (!btn || btn.classList.contains('hidden-tab')) {
+                applyScrollPositions(scrollPositions);
+                return false;
+            }
+            if (!btn.classList.contains('active')) { activateTab(btn, false); }
+            // Must run after the tab is active: a hidden panel can't take a scroll offset.
+            applyScrollPositions(scrollPositions);
+            return true;
+        }
+
         // ─── Message handler ────────────────────────────────
         window.addEventListener('message', event => {
             const msg = event.data;
             switch (msg.type) {
                 case 'update':
+                    setParseError(null);
                     populateForm(msg.data, msg.forceAll);
                     showValidationErrors(msg.errors || []);
+                    if (!uiStateRestored) {
+                        uiStateRestored = restoreUiState();
+                    }
+                    break;
+                case 'parseError':
+                    setParseError(msg.message || 'The manifest XML could not be parsed.');
+                    break;
+                case 'externalChange':
+                    // The document changed underneath us. Anything still queued was typed against
+                    // the previous text, so sending it would clobber the incoming edit.
+                    discardPendingChanges();
                     break;
                 case 'validationErrors':
                     showValidationErrors(msg.errors || []);

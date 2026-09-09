@@ -5,7 +5,7 @@
 
 import * as vscode from 'vscode';
 import { KNOWN_CAPABILITIES, ARCHITECTURE_OPTIONS, DEVICE_FAMILY_OPTIONS } from './manifest-types';
-import { getEditorStyles, getErrorPageStyles } from './webview-styles';
+import { getEditorStyles } from './webview-styles';
 import { getEditorScript } from './webview-script';
 
 function buildCapabilityCheckboxList(
@@ -28,43 +28,6 @@ function buildSelectOptions(options: Array<{ value: string; label: string; selec
     ).join('\n                    ');
 }
 
-/** Generates an error view shown when the manifest XML cannot be parsed. */
-export function getParseErrorContent(webview: vscode.Webview, nonce: string, errorMessage: string): string {
-    return /*html*/`<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AppxManifest Editor</title>
-${getErrorPageStyles(nonce)}
-</head>
-<body>
-    <div class="error-container">
-        <div class="error-icon">⚠</div>
-        <div class="error-title">Unable to Open Manifest Editor</div>
-        <div class="error-message">
-            The appxmanifest file contains XML syntax errors that prevent the AppxManifest Editor from loading.
-            Please open the file in the text editor to fix the errors, then reopen this editor.
-        </div>
-        <div class="error-detail">${errorMessage.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
-        <button class="btn" id="open-as-text">Open in Text Editor</button>
-    </div>
-    <script nonce="${nonce}">
-        const vscode = acquireVsCodeApi();
-        document.getElementById('open-as-text').addEventListener('click', () => {
-            vscode.postMessage({ type: 'openAsText' });
-        });
-        // Listen for retry signal when document is fixed externally
-        window.addEventListener('message', event => {
-            if (event.data.type === 'retryParse') {
-                vscode.postMessage({ type: 'ready' });
-            }
-        });
-    </script>
-</body>
-</html>`;
-}
 export function getWebviewContent(webview: vscode.Webview, nonce: string, manifestDirUri: string): string {
     const archOptionItems = buildSelectOptions(ARCHITECTURE_OPTIONS.map(a => ({ value: a, label: a })));
 
@@ -82,6 +45,19 @@ export function getWebviewContent(webview: vscode.Webview, nonce: string, manife
 ${getEditorStyles(nonce)}
 </head>
 <body>
+    <div class="parse-error-overlay" id="parse-error-overlay" hidden>
+        <div class="parse-error-box" role="alertdialog" aria-modal="true" aria-labelledby="parse-error-title" aria-describedby="parse-error-message parse-error-detail" tabindex="-1" id="parse-error-box">
+            <div class="parse-error-title" id="parse-error-title">⚠ Unable to read the manifest</div>
+            <div class="parse-error-message" id="parse-error-message">
+                The manifest XML can't be parsed, so editing is paused. Fix the XML in the text
+                editor and this editor resumes automatically with your current view intact.
+            </div>
+            <div class="parse-error-detail" id="parse-error-detail"></div>
+            <div class="parse-error-actions">
+                <button class="btn" id="parse-error-open-text">Open in Text Editor</button>
+            </div>
+        </div>
+    </div>
     <div class="tab-bar" role="tablist">
         <button class="tab-btn active" role="tab" data-tab="identity" aria-selected="true" tabindex="0">Identity</button>
         <button class="tab-btn" role="tab" data-tab="properties" aria-selected="false" tabindex="-1">Properties</button>
