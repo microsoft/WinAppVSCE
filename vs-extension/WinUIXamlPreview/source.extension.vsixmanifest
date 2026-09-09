@@ -50,7 +50,8 @@
     <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" Version="[4.7.2,)" />
   </Dependencies>
   <Assets>
-    <Asset Type="Microsoft.VisualStudio.VsPackage" Path="WinUIXamlPreview.dll" />
+    <Asset Type="Microsoft.VisualStudio.VsPackage" Path="WinUIXamlPreview.handcrafted.pkgdef" />
+    <Asset Type="Microsoft.VisualStudio.VsPackage" Path="WinUIXamlPreview.Properties.pkgdef" />
     <Asset Type="Microsoft.VisualStudio.MefComponent" Path="WinUIXamlPreview.dll" />
   </Assets>
 </PackageManifest>

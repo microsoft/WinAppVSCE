@@ -25,6 +25,9 @@ From the repository root:
 .\surface\Build-Payload.ps1 -Configuration Debug
 # Or build/package the VS adapter as well, NEVER deploy:
 .\vs-extension\WinUIXamlPreview\Build-Vsix.ps1 -Configuration Debug -NoDeploy
+# Explicit isolated VS demo identity (shipping identity remains the default):
+.\vs-extension\WinUIXamlPreview\Build-Vsix.ps1 -Configuration Debug -NoDeploy `
+  -SurfaceIdentity Migration24e47e37
 ```
 
 Both accept `-WinUISurfaceWasdkVersion`; default **2.2.0**. Renderer and template
@@ -54,6 +57,13 @@ The provisioner does not build or clean these sources in place. Installed SDK
 directories can be read-only. `vs-extension/obj/IdentityPayload` is the VS-owned
 shipping copy; only that copy gets the PE sparse identity, AppxManifest and logos.
 No build script discovers prototype/cache output or deploys/registers anything.
+The opt-in experimental adapter has separate `bin/Debug/Migration24e47e37` and
+`obj/IdentityPayload-Migration24e47e37` outputs. Its archived PE/Appx identity and
+compiled registration configuration are validated together; registration refuses
+an existing different location and never unregisters it. AppX registration is
+current-user, **not** isolated by a VS suffix. See the migration record for the
+approved dedicated-hive deployment, actual IDE evidence, retained registration,
+and the existing designer-property source-writeback/undo limitation.
 
 ## Provisioner CLI contract (v1)
 

@@ -25,7 +25,13 @@ namespace WinUIXamlPreview.Protocol
     /// </summary>
     internal static class SurfaceIdentity
     {
+#if MIGRATION_IDENTITY
+        public const string PackageName = "WinUIXamlPreviewSurface.Migration24e47e37";
+        public const bool IsExperimental = true;
+#else
         public const string PackageName = "WinUIXamlPreviewSurface";
+        public const bool IsExperimental = false;
+#endif
         public const string Publisher = "CN=WinUIXamlPreview";
         public const string AppId = "Surface";
 
@@ -33,7 +39,7 @@ namespace WinUIXamlPreview.Protocol
         /// Deterministic package family name (<c>PackageName_{hash(Publisher)}</c>); stable across machines
         /// because it derives only from the fixed publisher. For reference / diagnostics.
         /// </summary>
-        public const string FamilyName = "WinUIXamlPreviewSurface_p47s87298xgjw";
+        public const string FamilyName = PackageName + "_p47s87298xgjw";
 
         public const string ManifestFileName = "AppxManifest.xml";
 
@@ -81,7 +87,7 @@ namespace WinUIXamlPreview.Protocol
 
             lock (Gate)
             {
-                if (string.Equals(_registeredForDir, surfaceDir, StringComparison.OrdinalIgnoreCase))
+                if (!IsExperimental && string.Equals(_registeredForDir, surfaceDir, StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
                 }
@@ -109,6 +115,15 @@ namespace WinUIXamlPreview.Protocol
 
         private static bool RunRegister(string surfaceDir, string manifest, Action<string> log)
         {
+#if MIGRATION_IDENTITY
+            // The experimental binary does not contain or execute the shipping replacement script.
+            // Revalidate registration on every call: AppX state is user-scoped, not hive-scoped.
+            string script;
+            using (var stream = typeof(SurfaceIdentity).Assembly.GetManifestResourceStream("WinUIXamlPreview.RegisterExperimental"))
+            using (var reader = new StreamReader(stream ?? throw new InvalidOperationException("Experimental registration resource missing.")))
+                script = reader.ReadToEnd();
+            script += "\ntry { Invoke-ExperimentalSurfaceRegistration -SurfaceDir $env:WXP_EXTLOC -Manifest $env:WXP_MANIFEST; exit 0 } catch { Write-Output ('WXP:ERROR ' + $_.Exception.Message); exit 1 }\n";
+#else
             // Idempotent check-then-register in one Windows PowerShell invocation, printing a status token we
             // parse. Re-registers when the recorded external location differs from the current one (e.g. after
             // a VSIX update relocated the extension folder). Paths are passed via environment variables to
@@ -125,6 +140,7 @@ namespace WinUIXamlPreview.Protocol
                 "  Add-AppxPackage -Register $man -ExternalLocation $loc -ErrorAction Stop;" +
                 "  Write-Output 'WXP:REGISTERED'; exit 0" +
                 "}catch{ Write-Output ('WXP:ERROR ' + $_.Exception.Message); exit 1 }";
+#endif
 
             try
             {
@@ -154,8 +170,8 @@ namespace WinUIXamlPreview.Protocol
 
                     // Output is a single tiny status token, so reading stdout to EOF (which completes when the
                     // child exits) before draining stderr cannot deadlock here.
-                    var stdout = proc.StandardOutput.ReadToEnd();
-                    var stderr = proc.StandardError.ReadToEnd();
+                    var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+                    var stderrTask = proc.StandardError.ReadToEndAsync();
 
                     if (!proc.WaitForExit(60000))
                     {
@@ -164,14 +180,16 @@ namespace WinUIXamlPreview.Protocol
                         return false;
                     }
 
+                    var stdout = stdoutTask.GetAwaiter().GetResult();
+                    var stderr = stderrTask.GetAwaiter().GetResult();
                     var outText = (stdout ?? string.Empty).Trim();
-                    if (outText.IndexOf("WXP:ALREADY", StringComparison.Ordinal) >= 0)
+                    if (proc.ExitCode == 0 && outText == "WXP:ALREADY")
                     {
                         log($"Identity: sparse package already registered for {surfaceDir}.");
                         return true;
                     }
 
-                    if (outText.IndexOf("WXP:REGISTERED", StringComparison.Ordinal) >= 0)
+                    if (proc.ExitCode == 0 && outText == "WXP:REGISTERED")
                     {
                         log($"Identity: registered sparse package '{PackageName}' (external location {surfaceDir}).");
                         return true;

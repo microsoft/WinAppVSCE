@@ -19,6 +19,10 @@
     <Nullable>enable</Nullable>
     <RootNamespace>WinUIXamlPreview</RootNamespace>
     <AssemblyName>WinUIXamlPreview</AssemblyName>
+    <WinUISurfaceIdentity Condition="'$(WinUISurfaceIdentity)' == ''">Shipping</WinUISurfaceIdentity>
+    <IdentityOutputSuffix Condition="'$(WinUISurfaceIdentity)' == 'Migration24e47e37'">Migration24e47e37\</IdentityOutputSuffix>
+    <DefineConstants Condition="'$(WinUISurfaceIdentity)' == 'Migration24e47e37'">$(DefineConstants);MIGRATION_IDENTITY</DefineConstants>
+    <OutputPath Condition="'$(WinUISurfaceIdentity)' == 'Migration24e47e37'">bin\$(Configuration)\$(IdentityOutputSuffix)</OutputPath>
     <GeneratePkgDefFile>false</GeneratePkgDefFile>
     <CreateVsixContainer>true</CreateVsixContainer>
     <DeployExtension>false</DeployExtension>
@@ -42,15 +46,23 @@
       a broken pkgdef. Proven config from the reference extension.
     -->
     <BaseIntermediateOutputPath Condition="'$(DotnetVsixBuild)' != 'true'">obj\</BaseIntermediateOutputPath>
-    <IntermediateOutputPath Condition="'$(DotnetVsixBuild)' != 'true'">obj\$(Configuration)\</IntermediateOutputPath>
+    <IntermediateOutputPath Condition="'$(DotnetVsixBuild)' != 'true'">obj\$(Configuration)\$(IdentityOutputSuffix)</IntermediateOutputPath>
     <TargetName Condition="'$(TargetName)' == ''">$(AssemblyName)</TargetName>
     <TargetVsixContainerName Condition="'$(DotnetVsixBuild)' != 'true' and '$(TargetVsixContainerName)' == ''">$(AssemblyName).vsix</TargetVsixContainerName>
-    <TargetVsixContainer Condition="'$(DotnetVsixBuild)' != 'true' and '$(TargetVsixContainer)' == ''">$(MSBuildProjectDirectory)\bin\$(Configuration)\$(AssemblyName).vsix</TargetVsixContainer>
-    <FileManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(FileManifest)' == ''">$(MSBuildProjectDirectory)\obj\$(Configuration)\files.json</FileManifest>
-    <TemplateFileManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(TemplateFileManifest)' == ''">$(MSBuildProjectDirectory)\obj\$(Configuration)\templateFiles.json</TemplateFileManifest>
-    <ResourceManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(ResourceManifest)' == ''">$(MSBuildProjectDirectory)\obj\$(Configuration)\resources.json</ResourceManifest>
-    <CreatePkgDefAssemblyToProcess Condition="'$(DotnetVsixBuild)' != 'true' and '$(CreatePkgDefAssemblyToProcess)' == ''">$(MSBuildProjectDirectory)\bin\$(Configuration)\$(AssemblyName).dll</CreatePkgDefAssemblyToProcess>
+    <TargetVsixContainer Condition="'$(DotnetVsixBuild)' != 'true' and '$(TargetVsixContainer)' == ''">$(MSBuildProjectDirectory)\bin\$(Configuration)\$(IdentityOutputSuffix)$(AssemblyName).vsix</TargetVsixContainer>
+    <FileManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(FileManifest)' == ''">$(MSBuildProjectDirectory)\$(IntermediateOutputPath)files.json</FileManifest>
+    <TemplateFileManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(TemplateFileManifest)' == ''">$(MSBuildProjectDirectory)\$(IntermediateOutputPath)templateFiles.json</TemplateFileManifest>
+    <ResourceManifest Condition="'$(DotnetVsixBuild)' != 'true' and '$(ResourceManifest)' == ''">$(MSBuildProjectDirectory)\$(IntermediateOutputPath)resources.json</ResourceManifest>
+    <CreatePkgDefAssemblyToProcess Condition="'$(DotnetVsixBuild)' != 'true' and '$(CreatePkgDefAssemblyToProcess)' == ''">$(MSBuildProjectDirectory)\bin\$(Configuration)\$(IdentityOutputSuffix)$(AssemblyName).dll</CreatePkgDefAssemblyToProcess>
   </PropertyGroup>
+
+  <Target Name="ValidateSurfaceIdentityConfiguration" BeforeTargets="PrepareForBuild;ValidateDesignerPayload">
+    <Error Condition="'$(WinUISurfaceIdentity)' != 'Shipping' and '$(WinUISurfaceIdentity)' != 'Migration24e47e37'"
+           Text="Unsupported WinUISurfaceIdentity. Use Shipping or explicit Migration24e47e37." />
+  </Target>
+  <ItemGroup Condition="'$(WinUISurfaceIdentity)' == 'Migration24e47e37'">
+    <EmbeddedResource Include="SurfaceIdentity\Register-Experimental.ps1" LogicalName="WinUIXamlPreview.RegisterExperimental" />
+  </ItemGroup>
 
   <ItemGroup>
     <Compile Include="..\..\surface\Shared\HostPayload.cs" Link="Shared\HostPayload.cs" />
@@ -82,6 +94,10 @@
     -->
     <Content Include="WinUIXamlPreview.handcrafted.pkgdef" CopyToOutputDirectory="PreserveNewest">
       <Link>WinUIXamlPreview.pkgdef</Link>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <!-- GeneratePkgDefFile is intentionally false; keep the second tool window registered too. -->
+    <Content Include="WinUIXamlPreview.Properties.pkgdef">
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
 
@@ -127,6 +143,7 @@
     identity copy. Missing payloads fail packaging; use Build-Vsix.ps1 -NoDeploy.
   -->
   <PropertyGroup>
+    <SurfaceOutDir Condition="'$(SurfaceOutDir)' == '' and '$(WinUISurfaceIdentity)' == 'Migration24e47e37'">$(MSBuildProjectDirectory)\obj\IdentityPayload-Migration24e47e37</SurfaceOutDir>
     <SurfaceOutDir Condition="'$(SurfaceOutDir)' == ''">$(MSBuildProjectDirectory)\obj\IdentityPayload</SurfaceOutDir>
   </PropertyGroup>
   <Target Name="AddSurfaceToVsix" AfterTargets="GetVsixSourceItems" Condition="'$(DotnetVsixBuild)' != 'true'">

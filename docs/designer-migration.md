@@ -1,6 +1,77 @@
 # Visual Studio designer migration
 
-## Current boundary: shared foundation (approved milestone 2)
+## Collaborator handoff
+
+The migration and isolated Visual Studio demo are ready for continued development,
+**not release-ready**. The branch is `nmetulev-migrate-winui-designer` in
+`microsoft/WinAppVSCE`. Checkpoint `24e47e37e32a5b0b5414374abfec2722bbc8ba7e`
+contains the source migration/shared foundation; the follow-up contains explicit
+experimental identity isolation and the package/Properties registration fixes.
+
+Source provenance: the selected full tree at
+`nmetulev/winui-vsc@727dd22d02d95097525e0f0fc0cf5dfd533dd153`, imported onto
+`microsoft/WinAppVSCE@b023f007d85064fdc62bf99ad9c28d2f076680e4`. Original MIT
+notices are retained. Renderer/provisioner ownership is under `surface`; the
+net472 WPF/VSSDK adapter is under `vs-extension`. No LSP migration or VS Code
+designer UI is required or included.
+
+### Build from a checkout without installing into VS
+
+Use Windows x64, desktop VS2026 MSBuild discoverable by `vswhere`, the .NET
+Framework 4.7.2 targeting pack, .NET SDK 10, .NET 8 runtime, Windows SDK x64
+`mt.exe`/XAML/PRI tooling, and NuGet access. Runtime smoke additionally requires
+compatible .NET 10 and Windows App Runtime 2 installations. Do not install or
+change these prerequisites silently. The existing repository Node dependencies
+are needed only for TypeScript protocol checks.
+
+```powershell
+.\vs-extension\WinUIXamlPreview\Build-Vsix.ps1 -Configuration Debug -NoDeploy
+# Optional separate experimental artifact; still DOES NOT deploy/register:
+.\vs-extension\WinUIXamlPreview\Build-Vsix.ps1 -Configuration Debug -NoDeploy `
+  -SurfaceIdentity Migration24e47e37
+.\vs-extension\Test-ExperimentalIdentity.ps1
+.\vs-extension\Test-ExperimentalPackaging.ps1
+.\vs-extension\Test-BuildGuards.ps1
+.\vs-extension\Test-Migration.ps1 -IncludeRenderer
+.\surface\Test-Foundation.ps1 -IncludeBuild -IncludeRenderer
+```
+
+Default output is `vs-extension\WinUIXamlPreview\bin\Debug\WinUIXamlPreview.vsix`;
+the opt-in artifact is under `bin\Debug\Migration24e47e37`. Both use desktop
+MSBuild, not `dotnet build` alone. Build them serially. Generated binaries,
+captures and machine-local evidence are excluded from Git; the recorded local
+artifact hashes below identify historical builds, not downloadable releases.
+
+The experimental AppX identity is **current-user scoped**, not VS-hive scoped.
+Never install the default package to test side-by-side with an existing normal
+designer. Experimental registration refuses an existing different location.
+Deployment is a separate explicit action: inspect the selected VS installation,
+existing suffix and registration first; do not copy another machine's instance
+ID, extension location or cleanup paths from the evidence below.
+
+### Continuation priorities
+
+1. Implement Properties-to-XAML writeback with document-version checks and VS undo
+   transactions. Current Properties edits affect only the running preview.
+2. Cover reverse source navigation, Properties refresh, narrow-toolbar layout and
+   IDE lifecycle regressions. Actual Gallery bundled/matched native rendering,
+   cancellation and cache reopen were observed; source-editor undo/redo is not
+   proof of designer-property undo.
+3. Harden production multi-IDE identity ownership. The default registration path
+   still replaces an existing package when its location differs; the opt-in
+   experimental path does not.
+4. Improve conservative cache-hit latency (about 13 seconds in the IDE demo),
+   generation cleanup and shared package-staging concurrency. Generalize the
+   fixed Toolkit resource closure only as a separately validated change.
+5. Establish dedicated VS CI, clean-machine/runtime coverage, trust policy,
+   dependency-license review, signing and release ownership. None is implied by
+   the demo. VS Code UI/LSP reconciliation remains separate.
+
+The following sections preserve checkpoint and demo evidence in chronological
+order. Historical references to local-only/uncommitted work describe that phase,
+not the Git handoff state.
+
+## Shared-foundation checkpoint (approved milestone 2)
 
 The parent-approved shared-foundation implementation checkpoints the intentional
 import in the **same** `nmetulev-migrate-winui-designer` branch/worktree,
@@ -169,7 +240,224 @@ net472 **WPF** adapter to WinUI `x:Bind`. The two blockers are fixed; existing
 renderer/platform and VSTHRD/VSSDK warnings are retained, not expanded into an
 unapproved UI/engine migration.
 
-### Remaining limitations / release gates
+### Isolated VS execution — 2026-09-08 (follow-up evidence)
+
+The user subsequently **approved the separate experimental identity** and an
+isolated current-user VS demo. This section supersedes the preflight's
+pending-approval/no-IDE-execution statements below, without changing the
+checkpoint's historical results. Work remained in the same worktree/branch at
+`24e47e37e32a5b0b5414374abfec2722bbc8ba7e`. Subsequent source/docs changes were
+kept separate for the follow-up handoff commit. During this demo, no amend, push, PR, publishing, normal-hive installation,
+machine policy change, elevation, hive reset, original Gallery source edit, or
+experimental AppX unregistration was performed.
+
+#### Explicit build identity and registration safety
+
+```powershell
+.\vs-extension\WinUIXamlPreview\Build-Vsix.ps1 -Configuration Debug -NoDeploy
+.\vs-extension\WinUIXamlPreview\Build-Vsix.ps1 -Configuration Debug -NoDeploy `
+  -SurfaceIdentity Migration24e47e37
+.\vs-extension\Test-ExperimentalIdentity.ps1
+.\vs-extension\Test-ExperimentalPackaging.ps1
+.\vs-extension\Test-BuildGuards.ps1
+.\vs-extension\Test-Migration.ps1 -IncludeRenderer
+```
+
+`Shipping` remains the default. `WinUISurfaceIdentity=Migration24e47e37` is an
+explicit MSBuild configuration, not an environment-only launch override.
+Experimental binaries, flat intermediates and identity staging have distinct
+paths. Only generated staged PE/Appx manifests receive the experimental name;
+shipping source manifests and all renderer/SDK sources, pins, guards and wire
+behavior are unchanged.
+
+The experimental adapter compiles the exact package name, publisher and AppId
+and embeds a separately tested registration function; its registration path
+does not compile or execute the shipping replacement script. It validates the
+manifest, fails on query errors, multiple/unhealthy registrations, identity
+mismatches, directory links, or an existing different location, and never
+unregisters. It rechecks rather than caching success for the entire IDE process.
+The package validator checks the **actual archived PE**, AppxManifest, compiled
+adapter constants, and embedded registration resource against the selected
+configuration. This is an ownership guard, not a security sandbox or a
+transaction against unrelated external AppX installers.
+
+Final replay: **17 mocked registration cases**, **4 negative archive cases**
+(including mixed shipping adapter/experimental payload and missing advertised
+pkgdef), **6 existing build guards**, **10 D2 / 5 D2Residual**, and **66 bundled
+renderer smoke checks** passed. Both full builds passed, retaining existing
+renderer/VSTHRD/VSSDK warnings. Neither negative test invokes real AppX mutation.
+
+#### Proven dedicated deployment
+
+Installed VS2026 Enterprise 18.8 instance: `14a6ebd8`,
+`C:\Program Files\Microsoft Visual Studio\18\Enterprise`.
+The installed VSIXInstaller's **actual help dialog** explicitly documents
+`/rootSuffix:<root suffix>` for installation, not merely IDE launch.
+The fresh `Migration24e47e37` suffix did not exist in the preflight.
+
+```text
+CreateExpInstance.exe /Create /VSInstance=18.0_14a6ebd8 /RootSuffix=Migration24e47e37
+VSIXInstaller.exe /quiet /norepair /instanceIds:14a6ebd8
+  /rootSuffix:Migration24e47e37 /logFile:Migration24e47e37-install.log
+  "<worktree>\vs-extension\WinUIXamlPreview\bin\Debug\Migration24e47e37\WinUIXamlPreview.vsix"
+```
+
+Both exited 0. `/Create` copied the normal Extensions directory into a
+**new invocation-owned** `Extensions\Extensions-18.0_14a6ebd8` child. Before any
+VS launch, only those new copies were moved outside the hive to the session
+artifact directory; no original normal/Exp contents were moved or deleted.
+This avoided accidentally activating the copied shipping adapter.
+
+Live testing exposed an imported package-registration gap: the manifest
+advertised the DLL instead of the handcrafted pkgdef, and the disabled
+generated-pkgdef lane omitted the Properties tool window's registration.
+The narrowly scoped fix advertises the retained handcrafted CodeBase pkgdef,
+adds a companion Properties pkgdef, and asserts those assets in package tests.
+No WPF/renderer feature rewrite was made.
+
+After separate `-NoDeploy` rebuilds, an in-place update used the installed public
+VSSDK `GetExtensionsPath` and `FindInstalledExtension` tasks first to prove the
+exact dedicated root, existing location and `AllUsers=False`. The session-owned
+`Update-OwnedExperimental.proj` fails on any different root/location, then uses
+the SDK's `Unzip`, `EnableLoadingAllExtensions` and `EnableExtension` deployment
+operations. The local-extension loading setting was applied only to the new
+suffix. No uninstall, AppX operation, relocation, compile or packaging occurs in
+that update target. Actual VS subsequently logged Begin/End load of
+`WinUIXamlPreview.PreviewPackage` and displayed the functioning Properties pane.
+
+#### Actual IDE observations and remaining functional gap
+
+The demo used `winapp ui` (whose installed help explicitly supports WPF), real
+VS UI file/solution opening, and public DTE automation bound to the exact owned
+PID/ROT entry. A disposable copy at
+`%TEMP%\wxp-demo-24e47e37` contains 749 tracked Gallery files and the existing
+x64 build output. Original Gallery status and input hashes remained unchanged;
+no original Gallery build or dependency upgrade was needed. The existing pin is
+WASDK **2.2.2-experimental9**, WinUI component **2.2.2-experimental**.
+
+- Actual VS XAML editor/margin showed the bundled native preview, then built
+  and promoted a matched host. SettingsPage's Toolkit cards and
+  IncreaseFidelity's real Toolkit GridSplitter were observed in the IDE.
+- Switching documents during a build cancelled the old request; the explicit
+  Cancel button also cancelled the provisioner. Close/reopen restarted work.
+  A completed matched build took **44.8s**; later IDE reopens logged
+  `Validating cached payload` and successful promotion (including **12.8–12.9s**
+  cache checks). These are not headless substitutes for the IDE demo.
+- Source selection and native GridSplitter selection were observed together
+  at authored line 57; selecting the Settings heading populated a TextBlock
+  Properties panel. A separate reverse-navigation-to-another-source-location
+  assertion was not recorded.
+- Actual Properties `Text` editing delivered `SetProperty #1 Text='Settings
+  isolated'`, but **does not write the XAML buffer/file or create a VS source
+  undo transaction**. Saving the unchanged source restores that transient
+  renderer edit. The imported adapter lacks this writeback feature; adding it
+  was outside the authorized “no new UI features” boundary.
+- Separately, editing the Text attribute through the real VS source editor,
+  Save, Undo, Save, Redo, Save and final Undo/Save all passed file-content
+  assertions. The last file hash exactly matched the original. Actual VS
+  screenshots show source, hosted preview and Properties together. This proves
+  **source-editor undo/redo**, not designer-property writeback/undo.
+- UIA's broad searches can revisit the reparented native tree and be slow.
+  Explicit main VS HWND targeting plus focusing the actual WPF Text Editor
+  made native clicks reliable; rejected foreground operations were not counted
+  as interactions. Loose-file XML-editor opening did not activate the XAML
+  margin; opening as Code under the disposable Gallery solution did.
+- Baseline visual limitations remain: toolbar clipping in a narrow margin,
+  transient zoom/layout changes and stale Properties values after source
+  re-render until reselection. Some immediate undo/redo screenshots precede
+  asynchronous repaint; the saved source fixtures are the assertion evidence.
+  Bundled mismatched-type warnings and loose-XBF contention disappear from
+  the matched run-copy path but are not repaired here.
+
+Matched immutable host:
+`%LOCALAPPDATA%\WinUISurface\host-cache\v2\entries\234588bd2412dbed052588ca13b481444eaa373fe4a801b4ec6184cda7943993-ed76714073ca464f90c10fd72fcb0b48\host`.
+Its manifest records the unchanged engine stamp
+`060b680fd2c2081b2387a3eb31d19b5aa5aef758108473ca485df3b073571604`,
+managed `Microsoft.WinUI.dll` hash
+`11dec0a4285b8335fb54c6c6c1bd238f7b4689867224ad95097a5c1a0cc91821`,
+and native `Microsoft.ui.xaml.dll` hash
+`93b3e95231ce9480939387aaf5e36f8828e32a4077ec1fc1c80f5c917443b9f0`.
+
+#### Final artifacts, retained registration and cleanup
+
+| Package relative to worktree | Bytes | SHA256 |
+| --- | ---: | --- |
+| `vs-extension/WinUIXamlPreview/bin/Debug/WinUIXamlPreview.vsix` | 43,302,948 | `5E3A22682524749F961CFBE5E952ED3FD79A04C24D4BEC95239946419A56D5AF` |
+| `vs-extension/WinUIXamlPreview/bin/Debug/Migration24e47e37/WinUIXamlPreview.vsix` | 43,305,526 | `16C4FF5E00CA03E3CE4EC1EE61C41920C882D64CD6D742EEDCE8019B98A7F89E` |
+
+The original checkpoint VSIX is preserved separately as
+`WinUIXamlPreview.baseline.vsix` (SHA256 `58C10D7B072500C1F4C17F210A7673120D2C446A9B7AB489862F3BC14A845992`).
+
+**Retained, current-user AppX registration (not hive-local):**
+
+```text
+Name: WinUIXamlPreviewSurface.Migration24e47e37
+FullName: WinUIXamlPreviewSurface.Migration24e47e37_1.0.0.0_x64__p47s87298xgjw
+Publisher: CN=WinUIXamlPreview
+AppId: Surface
+Location: C:\Users\nikolame\AppData\Local\Microsoft\VisualStudio\18.0_14a6ebd8Migration24e47e37\Extensions\0sin03zr.n0l\Surface
+Status: Ok
+```
+
+No removal was requested or performed. The dedicated suffix/installed extension,
+disposable Gallery, cache generation and quarantined SDK-created copies remain
+for explicit later cleanup. Owned VS PIDs **24808**, **492**, and **19112** were
+closed through DTE Quit. The final snapshot found **no devenv, VSIXInstaller,
+Surface or SurfaceProvisioner processes**. No user process was killed.
+Normal sparse identity, publisher/family/full name, status and installation path
+match the before snapshot; the normal extension's **212 files** have unchanged
+hashes and file count.
+
+Evidence directory (not committed):
+`C:\Users\nikolame\.copilot\session-state\eca76c69-24c5-4b1a-9ff1-cc9d3d36dc57\files`.
+Key files: `isolated-before.json`, `isolated-after.json`,
+`normal-extension-before-deploy.json`, `after-registration-packages.json`,
+`after-update-packages.json`, `vsixinstaller-help.json/.png`,
+`Migration24e47e37-install.log`, `in-place-sdk-update.txt`,
+`VS-ActivityLog-run3.xml`, `isolated-preview.log`, `matched-payload.json`,
+`owned-process-ledger-run1/2/3.json`, `pkgdef-fix-builds.txt`,
+`final-migration-regressions.txt`, and saved `SettingsPage.source-*.xaml`.
+Actual IDE images include `vs-settings-bundled-building.png`,
+`vs-switch-during-build.png`, `vs-cancel-requested.png`,
+`vs-increase-matched.png`, `vs-gridsplitter-source-selection.png`,
+`vs-settings-matched-final.png`, `vs-heading-selected-properties.png`,
+and `vs-source-property-edit.png`.
+
+The isolated deployment/runtime milestone is demonstrated, **not a fully passed
+designer acceptance/release gate**: designer-property source writeback/undo,
+the visual issues above, independent reverse-navigation coverage, clean-machine
+installation, broader runtime/architecture coverage, trust policy, signing and
+publishing remain explicit follow-up work.
+
+### Remaining limitations / release gates — checkpoint preflight (superseded above)
+
+Experimental-IDE preflight after checkpoint
+`24e47e37e32a5b0b5414374abfec2722bbc8ba7e` found an existing **normal-hive**
+registration for `WinUIXamlPreviewSurface_1.0.0.0_x64__p47s87298xgjw` at:
+
+```text
+C:\Users\nikolame\AppData\Local\Microsoft\VisualStudio\18.0_14a6ebd8\Extensions\44qoptqw.uwn\Surface
+```
+
+**Production side-by-side issue:** `SurfaceIdentity.RunRegister` removes the
+existing user-scoped package when its recorded location differs, then registers
+the new payload. An experimental VS hive does not isolate AppX registrations.
+Two VS installations/payloads can therefore displace each other's identity, and
+a failed replacement can leave the previous registration unavailable. This
+baseline behavior has not been exercised or changed by the experimental preflight.
+No existing identity, hive or VS settings were changed.
+
+Proposed demo isolation, **pending approval and implementation**: use a dedicated
+test-only sparse package name in the staged embedded PE manifest, staged
+AppxManifest, and experimental adapter registration code; keep the default
+shipping identity unchanged. A dedicated suffix alone is insufficient. The test
+registration must fail on an existing different location rather than remove it.
+Developer Mode is already enabled on the inspected machine, but successful
+non-elevated side-by-side registration is not yet proven. The existing
+`18.0_14a6ebd8Exp` hive must not be reset or reused blindly; supported deployment
+to a fresh dedicated suffix still needs confirmation. Global multi-IDE identity
+ownership remains separate production hardening, not a reason to disturb the
+installed designer for a demo.
 
 - No real VS installation, docking, upgrade/uninstall or IDE bundled-to-matched
   hot-swap was performed. The new net472 glue builds; its real-process client is
