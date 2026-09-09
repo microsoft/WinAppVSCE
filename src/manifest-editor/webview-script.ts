@@ -588,6 +588,11 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     break;
                 }
                 case 'imagePathStatus': {
+                    // When MRT resolved the reference to a qualified variant, point the
+                    // preview at that variant — the unqualified path itself 404s.
+                    if (msg.status === 'found' && msg.previewPath) {
+                        applyResolvedPreview(msg.field, msg.index, msg.previewPath);
+                    }
                     // Find the form-group for this field
                     let fg = null;
                     if (msg.field === 'logo') {
@@ -637,18 +642,23 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
 
         function updateLogoPreview(imgEl, logoPath, captionEl) {
             if (logoPath && manifestDirUri && imgEl) {
+                // An MRT variant outside the manifest folder arrives as a ready-made
+                // webview URI; anything else is relative to the manifest folder.
+                const isAbsoluteUri = logoPath.indexOf('://') !== -1;
                 imgEl.classList.remove('loaded');
                 imgEl.removeAttribute('alt');
                 if (captionEl) { captionEl.textContent = ''; }
                 imgEl.onload = function() {
                     imgEl.classList.add('loaded');
                     if (captionEl) {
-                        const parts = logoPath.replace(/\\\\/g, '/').split('/');
-                        captionEl.textContent = parts[parts.length - 1];
+                        const parts = logoPath.split('?')[0].replace(/\\\\/g, '/').split('/');
+                        captionEl.textContent = decodeURIComponent(parts[parts.length - 1]);
                     }
                 };
                 imgEl.onerror = function() { imgEl.classList.remove('loaded'); if (captionEl) captionEl.textContent = ''; };
-                imgEl.src = manifestDirUri + '/' + encodeURI(logoPath.replace(/\\\\/g, '/')) + '?t=' + Date.now();
+                imgEl.src = isAbsoluteUri
+                    ? logoPath + (logoPath.indexOf('?') !== -1 ? '&' : '?') + 't=' + Date.now()
+                    : manifestDirUri + '/' + encodeURI(logoPath.replace(/\\\\/g, '/')) + '?t=' + Date.now();
             } else if (imgEl) {
                 imgEl.classList.remove('loaded');
                 imgEl.removeAttribute('alt');
@@ -656,15 +666,34 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             }
         }
 
+        // Repoints a logo preview at the file MRT actually resolved to
+        // (e.g. Square150x150Logo.scale-200.png for a Square150x150Logo.png reference).
+        function applyResolvedPreview(field, index, previewPath) {
+            let imgEl = null;
+            let captionEl = null;
+            if (field === 'logo') {
+                imgEl = document.getElementById('store-logo-preview');
+                captionEl = document.getElementById('store-logo-caption');
+            } else if (field === 'visualElements.square150x150Logo' && index !== undefined) {
+                imgEl = document.querySelector('.app-logo-preview[data-app-idx="' + index + '"]');
+                captionEl = document.querySelector('.app-logo-caption[data-app-idx="' + index + '"]');
+            }
+            if (imgEl) { updateLogoPreview(imgEl, previewPath, captionEl); }
+        }
+
         function checkImagePathWarning(formGroup, logoPath, fieldName, fieldIndex) {
             if (!formGroup) return;
             const msg = formGroup.querySelector('.validation-msg');
             if (!msg) return;
-            if (!logoPath || !isImagePath(logoPath)) {
+            // Drop any previous found/not-found status right away — the round-trip below is
+            // debounced, so a stale warning would otherwise sit under a path the user just retyped.
+            if (!msg.classList.contains('error')) {
                 formGroup.classList.remove('has-warning');
-                if (!msg.classList.contains('error')) { msg.textContent = ''; msg.classList.remove('warning'); msg.innerHTML = ''; }
-                return;
+                msg.textContent = '';
+                msg.innerHTML = '';
+                msg.classList.remove('warning');
             }
+            if (!logoPath || !isImagePath(logoPath)) { return; }
             vscode.postMessage({ type: 'checkImagePath', imagePath: logoPath, field: fieldName || '', index: fieldIndex });
         }
 

@@ -25,6 +25,36 @@ const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
 
 const FIXTURES_DIR = path.resolve(__dirname, '..', 'fixtures');
 
+// VS Code hands the command line off to an already-running instance and exits
+// immediately when both share the default user-data dir, which makes
+// `app.firstWindow()` fail with "Target page, context or browser has been closed".
+// Give the test instance its own profile so it always opens a real window.
+const USER_DATA_DIR = path.join(os.tmpdir(), `vscode-e2e-${process.pid}`);
+
+/** Seeds the throwaway profile so no welcome/walkthrough tab steals focus from the manifest. */
+function prepareUserDataDir(): void {
+    const userDir = path.join(USER_DATA_DIR, 'User');
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(
+        path.join(userDir, 'settings.json'),
+        JSON.stringify({
+            'workbench.startupEditor': 'none',
+            'window.restoreWindows': 'none',
+            'update.mode': 'none',
+            'extensions.autoCheckUpdates': false,
+            'telemetry.telemetryLevel': 'off',
+            'security.workspace.trust.enabled': false,
+        }, null, 2),
+    );
+}
+
+/** Removes the throwaway profile. Call only after VS Code has exited. */
+export function cleanupUserDataDir(): void {
+    try {
+        fs.rmSync(USER_DATA_DIR, { recursive: true, force: true });
+    } catch { /* best-effort — a locked file just leaves a temp dir behind */ }
+}
+
 // ──────────────────────────────────────────────────────
 // Launch helpers
 // ──────────────────────────────────────────────────────
@@ -53,12 +83,14 @@ export function createTempWorkspace(fixtureName: string): string {
  */
 export async function launchVSCode(workspacePath: string): Promise<VSCodeTestContext> {
     const manifestPath = path.join(workspacePath, 'AppxManifest.xml');
+    prepareUserDataDir();
     const app = await electron.launch({
         executablePath: VSCODE_EXE,
         args: [
             workspacePath,
             manifestPath,
             '--new-window',
+            `--user-data-dir=${USER_DATA_DIR}`,
             ...EXTENSION_ARGS,
             '--disable-telemetry',
             '--skip-release-notes',
@@ -71,8 +103,28 @@ export async function launchVSCode(workspacePath: string): Promise<VSCodeTestCon
     // Wait for VS Code to settle
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(5_000);
+    await dismissStartupDialogs(page);
 
     return { app, page, workspacePath };
+}
+
+/**
+ * A throwaway profile shows VS Code's first-run onboarding dialog (Copilot sign-in /
+ * "Make It Yours"), which is modal and blocks the command palette. Dismiss it.
+ */
+async function dismissStartupDialogs(page: Page): Promise<void> {
+    for (let i = 0; i < 5; i++) {
+        const close = page.getByRole('button', { name: /^Close$/i }).first();
+        const skipSignIn = page.getByRole('button', { name: /Continue without Signing In/i }).first();
+        if (await close.isVisible({ timeout: 2_000 }).catch(() => false)) {
+            await close.click();
+        } else if (await skipSignIn.isVisible({ timeout: 1_000 }).catch(() => false)) {
+            await skipSignIn.click();
+        } else {
+            return;
+        }
+        await page.waitForTimeout(1_500);
+    }
 }
 
 /**
