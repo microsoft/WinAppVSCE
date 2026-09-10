@@ -244,6 +244,13 @@ internal sealed class DocumentHighlight
 
 // --- Diagnostics ------------------------------------------------------------
 
+/// <summary>Parameters for the window/showMessage notification.</summary>
+internal sealed class ShowMessageParams
+{
+    [JsonPropertyName("type")] public int Type { get; set; }
+    [JsonPropertyName("message")] public string Message { get; set; } = string.Empty;
+}
+
 internal sealed class PublishDiagnosticsParams
 {
     [JsonPropertyName("uri")] public string Uri { get; set; } = string.Empty;

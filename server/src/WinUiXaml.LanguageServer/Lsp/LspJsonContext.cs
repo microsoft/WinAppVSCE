@@ -20,6 +20,7 @@ namespace WinUiXaml.LanguageServer.Lsp;
 [JsonSerializable(typeof(ResponseError))]
 // Lifecycle
 [JsonSerializable(typeof(InitializeParams))]
+[JsonSerializable(typeof(ShowMessageParams))]
 [JsonSerializable(typeof(InitializationOptions))]
 [JsonSerializable(typeof(DidChangeConfigurationParams))]
 [JsonSerializable(typeof(InitializeResult))]

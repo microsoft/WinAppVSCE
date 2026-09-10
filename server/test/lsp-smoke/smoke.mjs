@@ -477,9 +477,39 @@ async function main() {
   await reloadLoadingPromise;
   await reloadReadyPromise;
 
+  // The reload barrier can release on a load that a still-pending re-evaluation immediately
+  // supersedes, leaving a brief window where the context is loading again. Each response must
+  // still be fast (the server never blocks on a project load), so poll on a wall-clock budget
+  // rather than asserting a single instant.
+  const authoritativeDeadline = performance.now() + 15000;
+  let authoritativeText = "";
+  let authoritativeMs = 0;
+  let authoritativeId = 109;
+  while (performance.now() < authoritativeDeadline) {
+    const id = authoritativeId++;
+    const authoritativeStarted = performance.now();
+    send({
+      id,
+      method: "textDocument/hover",
+      params: { textDocument: { uri: xamlUri }, position: pageCaret },
+    });
+    const authoritativeResponse = await waitFor(responseFor(id), 5000, "post-reload Page hover");
+    authoritativeMs = performance.now() - authoritativeStarted;
+    if (authoritativeMs >= 1000) fail(`post-reload hover took ${authoritativeMs.toFixed(0)} ms`);
+    authoritativeText = authoritativeResponse.result?.contents?.value ?? "";
+    if (/```csharp/.test(authoritativeText) &&
+        /Represents|page/i.test((authoritativeText.split("```")[2] || ""))) {
+      break;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  if (!/```csharp/.test(authoritativeText) ||
+      !/Represents|page/i.test((authoritativeText.split("```")[2] || ""))) {
+    fail(`context did not restore authoritative Page hover after invalidation: ${authoritativeText}`);
+  }
   // SmokePage.xaml.cs is no longer part of the compilation, so F12 on the handler must not resolve.
-  // Asserted after the reload has completed, which proves the context actually changed rather than
-  // merely that the request arrived while the project was still loading.
+  // Asserted only once the hover above proved the context is authoritative again: a null result
+  // while the project is still loading would otherwise satisfy this for the wrong reason.
   send({
     id: 700,
     method: "textDocument/definition",
@@ -490,20 +520,6 @@ async function main() {
     fail(`imported props change did not alter project context: ${JSON.stringify(removedDefinition.result)}`);
   }
 
-  const authoritativeStarted = performance.now();
-  send({
-    id: 109,
-    method: "textDocument/hover",
-    params: { textDocument: { uri: xamlUri }, position: pageCaret },
-  });
-  const authoritativeResponse = await waitFor(responseFor(109), 5000, "post-reload Page hover");
-  const authoritativeMs = performance.now() - authoritativeStarted;
-  const authoritativeText = authoritativeResponse.result?.contents?.value ?? "";
-  if (authoritativeMs >= 1000) fail(`post-reload hover took ${authoritativeMs.toFixed(0)} ms`);
-  if (!/```csharp/.test(authoritativeText) ||
-      !/Represents|page/i.test((authoritativeText.split("```")[2] || ""))) {
-    fail(`context did not restore authoritative Page hover after invalidation: ${authoritativeText}`);
-  }
   console.log(`[ok] hover is suppressed during invalidation and authoritative after reload (${fallbackMs.toFixed(0)} ms suppressed, ${authoritativeMs.toFixed(0)} ms restored)`);
 
   cleanImportedBuild();
@@ -1104,25 +1120,36 @@ async function main() {
   await clearedGeneratedHandlerDiagnostic;
   await generatedHandlerReady;
 
-  const generatedDefinitionId = 9998;
-  send({
-    id: generatedDefinitionId,
-    method: "textDocument/definition",
-    params: {
-      textDocument: { uri: xamlUri },
-      position: offsetToPosition(
-        generatedHandlerText,
-        generatedHandlerText.indexOf(generatedHandlerName) + 3
-      ),
-    },
-  });
-  const generatedDefinition = await waitFor(
-    responseFor(generatedDefinitionId),
-    30000,
-    "generated event-handler definition"
-  );
-  if (!generatedDefinition.result?.uri?.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) {
-    fail(`generated event handler was not loaded from code-behind: ${JSON.stringify(generatedDefinition.result)}`);
+  // Same superseded-reload window as the post-invalidation hover above: the ready barrier can
+  // release on a load that a pending re-evaluation replaces, so poll on a wall-clock budget.
+  const generatedDeadline = performance.now() + 15000;
+  let generatedDefinition;
+  let generatedDefinitionId = 9998;
+  while (performance.now() < generatedDeadline) {
+    const id = generatedDefinitionId++;
+    send({
+      id,
+      method: "textDocument/definition",
+      params: {
+        textDocument: { uri: xamlUri },
+        position: offsetToPosition(
+          generatedHandlerText,
+          generatedHandlerText.indexOf(generatedHandlerName) + 3
+        ),
+      },
+    });
+    generatedDefinition = await waitFor(
+      responseFor(id),
+      30000,
+      "generated event-handler definition"
+    );
+    if (generatedDefinition.result?.uri?.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) {
+      break;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  if (!generatedDefinition?.result?.uri?.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) {
+    fail(`generated event handler was not loaded from code-behind: ${JSON.stringify(generatedDefinition?.result)}`);
   }
   console.log("[ok] generated event-handler save clears stale XAML diagnostics");
 

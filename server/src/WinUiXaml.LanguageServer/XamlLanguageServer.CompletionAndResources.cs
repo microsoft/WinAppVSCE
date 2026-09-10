@@ -501,10 +501,10 @@ internal sealed partial class XamlLanguageServer
         return Interlocked.Exchange(ref _msbuildUnavailableNotified, 1) == 0
             ? _connection.SendNotificationAsync(
                 "window/showMessage",
-                new
+                new ShowMessageParams
                 {
-                    type = 2,
-                    message = exception.Message +
+                    Type = 2,
+                    Message = exception.Message +
                         " The language server remains available for project-independent XAML features.",
                 })
             : Task.CompletedTask;
