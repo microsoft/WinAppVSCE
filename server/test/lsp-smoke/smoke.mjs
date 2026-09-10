@@ -98,11 +98,19 @@ if (resIdx < 0) fail("could not find {StaticResource SmokeAccentBrush} in the fi
 const resCaretOffset = xamlText.indexOf("SmokeAccentBrush", resIdx) + 3;
 const resCaret = offsetToPosition(xamlText, resCaretOffset);
 
-if (!serverPath.toLowerCase().endsWith(".dll")) fail(`server must be a framework-dependent DLL: ${serverPath}`);
-server = spawn("dotnet", [serverPath], {
-  stdio: ["pipe", "pipe", "inherit"],
-  cwd: dirname(serverPath),
-});
+// The server ships as a Native AOT executable, but the debug build used by most local runs is
+// still a framework-dependent DLL. Accept either and launch it the right way.
+const isNativeExe = serverPath.toLowerCase().endsWith(".exe");
+if (!isNativeExe && !serverPath.toLowerCase().endsWith(".dll"))
+  fail(`server must be a native .exe or a framework-dependent .dll: ${serverPath}`);
+server = spawn(
+  isNativeExe ? serverPath : "dotnet",
+  isNativeExe ? [] : [serverPath],
+  {
+    stdio: ["pipe", "pipe", "inherit"],
+    cwd: dirname(serverPath),
+  },
+);
 
 // --- LSP framing ---
 let buffer = Buffer.alloc(0);
@@ -505,8 +513,14 @@ async function main() {
     params: { changes: [{ uri: importedBuildUri, type: 3 }] },
   });
   let restoredDefinition;
-  for (let attempt = 0; attempt < 80; attempt++) {
-    const id = 701 + attempt;
+  // Recovery requires a full project reload, which runs MSBuild out of process. Bound this by
+  // wall clock rather than attempt count so it does not depend on how warm the MSBuild caches
+  // and the machine happen to be.
+  const recoveryStarted = performance.now();
+  const recoveryDeadline = recoveryStarted + 60000;
+  let attempt = 0;
+  while (performance.now() < recoveryDeadline) {
+    const id = 701 + attempt++;
     send({
       id,
       method: "textDocument/definition",
@@ -520,7 +534,9 @@ async function main() {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
   }
   if (!restoredDefinition) fail("project context did not recover after imported props removal");
-  console.log("[ok] imported props watched event changes and restores project context");
+  console.log(
+    `[ok] imported props watched event changes and restores project context (${(performance.now() - recoveryStarted).toFixed(0)} ms, ${attempt} attempts)`
+  );
 
   // Unsaved x:Class edits invalidate only this URI and resolution must use the in-memory text.
   const page2Text = xamlText

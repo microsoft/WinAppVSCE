@@ -2,13 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
-using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.MSBuild;
+using Microsoft.CodeAnalysis.Text;
 
 namespace WinUiXaml.Workspace
 {
@@ -23,33 +22,53 @@ namespace WinUiXaml.Workspace
         public string ProjectPath { get; }
     }
 
-    /// <summary>The Host B spine: a standalone Roslyn MSBuildWorkspace that loads a real project (including WinUI 3 apps) and exposes its Compilation and symbols.</summary>
+    /// <summary>
+    /// The Host B spine: loads a real project (including WinUI 3 apps) and exposes its Compilation
+    /// and symbols.
+    /// </summary>
+    /// <remarks>
+    /// This used to be a Roslyn <c>MSBuildWorkspace</c>. That design cannot run under Native AOT
+    /// for two independent reasons: <c>MSBuildLocator</c> resolves <c>Microsoft.Build</c> from the
+    /// user's SDK at runtime, and <c>MefHostServices.DefaultHost</c> -- which every Workspaces API
+    /// initializes -- fails composition once trimmed. Both are avoided by acquiring MSBuild data
+    /// out-of-process (<see cref="MsBuildCli"/>) and building the compilation directly with
+    /// <c>CSharpCompilation.Create</c>, which is AOT-clean. The observable surface is unchanged.
+    /// </remarks>
     public sealed class RoslynProjectWorkspace : IDisposable
     {
-        private readonly MSBuildWorkspace _workspace;
+        private readonly ImmutableHashSet<string> _projectPaths;
 
         private RoslynProjectWorkspace(
-            MSBuildWorkspace workspace,
-            Project project,
+            Compilation compilation,
+            ImmutableArray<MetadataReference> metadataReferences,
+            CSharpCompilationOptions compilationOptions,
+            string assemblyName,
+            ImmutableHashSet<string> projectPaths,
             ImmutableArray<string> xamlFiles,
             string? applicationDefinitionPath)
         {
-            _workspace = workspace;
-            Project = project;
+            Compilation = compilation;
+            MetadataReferences = metadataReferences;
+            CompilationOptions = compilationOptions;
+            AssemblyName = assemblyName;
+            _projectPaths = projectPaths;
             XamlFiles = xamlFiles;
             ApplicationDefinitionPath = applicationDefinitionPath;
         }
 
-        /// <summary>The loaded project.</summary>
-        public Project Project { get; }
+        /// <summary>The compilation for the loaded project, including source-generated members.</summary>
+        public Compilation Compilation { get; }
+
+        /// <summary>The resolved reference closure MSBuild selected for the project.</summary>
+        public ImmutableArray<MetadataReference> MetadataReferences { get; }
+
+        public CSharpCompilationOptions CompilationOptions { get; }
+        public string AssemblyName { get; }
         public ImmutableArray<string> XamlFiles { get; }
         public string? ApplicationDefinitionPath { get; }
 
-        /// <summary>Non-fatal diagnostics produced while loading the project (design-time build warnings, etc.).</summary>
-        public ImmutableList<WorkspaceDiagnostic> LoadDiagnostics => _workspace.Diagnostics;
-
         /// <summary>Loads a single project by path.</summary>
-        public static async Task<RoslynProjectWorkspace> LoadProjectAsync(
+        public static Task<RoslynProjectWorkspace> LoadProjectAsync(
             string projectPath,
             IDictionary<string, string>? globalProperties = null,
             CancellationToken cancellationToken = default)
@@ -58,8 +77,6 @@ namespace WinUiXaml.Workspace
             {
                 throw new ArgumentNullException(nameof(projectPath));
             }
-
-            MsBuildRegistrar.EnsureRegistered();
 
             var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (globalProperties != null)
@@ -70,49 +87,242 @@ namespace WinUiXaml.Workspace
                 }
             }
 
-            var (xamlFiles, applicationDefinitionPath, projectAssetsFile, hasPackageReferences) =
-                EvaluateXamlItems(projectPath, properties);
-            if (RequiresRestore(projectAssetsFile, hasPackageReferences))
-            {
-                throw new ProjectRestoreRequiredException(projectPath);
-            }
+            // The MSBuild and generator work is spent waiting on child processes and parsing, so it
+            // runs on the thread pool to keep the LSP dispatch loop responsive.
+            return Task.Run(() => Load(projectPath, properties, cancellationToken), cancellationToken);
+        }
 
-            var workspace = MSBuildWorkspace.Create(properties);
-            // Keep project references in the workspace graph so IntelliSense can discover controls
-            // directly from referenced source projects even when their output DLLs do not exist yet.
-            workspace.LoadMetadataForReferencedProjects = false;
+        private static RoslynProjectWorkspace Load(
+            string projectPath,
+            Dictionary<string, string> properties,
+            CancellationToken cancellationToken)
+        {
+            var fullPath = Path.GetFullPath(projectPath);
+            var (evaluation, arguments) = AcquireProjectData(fullPath, properties, cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var commandLine = arguments.IsDefaultOrEmpty
+                ? CscCommandLine.Empty
+                : CscCommandLine.Parse(arguments, Path.GetDirectoryName(fullPath)!);
+            var assemblyName = commandLine.AssemblyName
+                ?? evaluation.AssemblyName
+                ?? Path.GetFileNameWithoutExtension(fullPath);
+
+            var parseOptions = commandLine.CreateParseOptions();
+            var trees = ImmutableArray.CreateBuilder<SyntaxTree>();
+            AddSourceTrees(trees, commandLine.Sources, parseOptions, cancellationToken);
+
+            // Source generators run out-of-process because Native AOT cannot load analyzer
+            // assemblies. Their output is parsed here as ordinary source, which is what keeps
+            // {x:Bind} accurate against generated members such as [ObservableProperty].
+            var generated = GeneratorHostRunner.Run(fullPath, assemblyName, commandLine, cancellationToken);
+            AddSourceTrees(trees, generated, parseOptions, cancellationToken);
+
+            var references = ImmutableArray.CreateBuilder<MetadataReference>();
+            references.AddRange(commandLine.CreateMetadataReferences());
+
+            // Referenced projects are compiled from source so their types resolve even when their
+            // output assemblies have never been built. This preserves the behaviour MSBuildWorkspace
+            // gave us via LoadMetadataForReferencedProjects = false.
+            var projectPaths = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+            projectPaths.Add(fullPath);
+            AddProjectReferences(
+                references,
+                projectPaths,
+                evaluation.ProjectReferences,
+                properties,
+                cancellationToken);
+
+            var options = commandLine.CreateCompilationOptions();
+            var allReferences = references.ToImmutable();
+            var compilation = CSharpCompilation.Create(
+                assemblyName,
+                trees.ToImmutable(),
+                allReferences,
+                options);
+
+            return new RoslynProjectWorkspace(
+                compilation,
+                allReferences,
+                options,
+                assemblyName,
+                projectPaths.ToImmutable(),
+                evaluation.XamlFiles,
+                evaluation.ApplicationDefinition);
+        }
+
+        /// <summary>
+        /// Acquires evaluation data and the csc command line, preferring a single MSBuild
+        /// invocation and falling back to evaluation alone so an unrestored project still reports
+        /// the restore requirement rather than an opaque build failure.
+        /// </summary>
+        private static (MsBuildCli.Evaluation Evaluation, ImmutableArray<string> Arguments) AcquireProjectData(
+            string fullPath,
+            Dictionary<string, string> properties,
+            CancellationToken cancellationToken)
+        {
             try
             {
-                var project = await workspace
-                    .OpenProjectAsync(projectPath, cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (workspace.Diagnostics.Any(diagnostic =>
-                    IsMissingRestoreFailure(diagnostic.Message)))
+                var combined = MsBuildCli.EvaluateAndCompile(fullPath, properties, cancellationToken);
+                if (RequiresRestore(
+                        combined.Evaluation.ProjectAssetsFile,
+                        combined.Evaluation.HasPackageReferences))
                 {
-                    throw new ProjectRestoreRequiredException(projectPath);
+                    throw new ProjectRestoreRequiredException(fullPath);
                 }
-                return new RoslynProjectWorkspace(
-                    workspace, project, xamlFiles, applicationDefinitionPath);
-            }
 
-            catch (ProjectRestoreRequiredException)
-            {
-                workspace.Dispose();
-                throw;
+                return (combined.Evaluation, combined.CscCommandLineArgs);
             }
-            catch (Exception ex) when (IsMissingRestoreFailure(ex.ToString()))
+            catch (MsBuildUnavailableException ex)
             {
-                workspace.Dispose();
-                throw new ProjectRestoreRequiredException(projectPath, ex);
-            }
-            catch
-            {
-                workspace.Dispose();
+                var evaluation = MsBuildCli.Evaluate(fullPath, properties, cancellationToken);
+                if (RequiresRestore(evaluation.ProjectAssetsFile, evaluation.HasPackageReferences) ||
+                    IsMissingRestoreFailure(ex.Message))
+                {
+                    throw new ProjectRestoreRequiredException(fullPath, ex);
+                }
+
                 throw;
             }
         }
 
+        private static CscCommandLine ParseCommandLine(
+            string fullPath,
+            Dictionary<string, string> properties,
+            CancellationToken cancellationToken)
+        {
+            var arguments = MsBuildCli.GetCscCommandLineArgs(fullPath, properties, cancellationToken);
+            return arguments.IsDefaultOrEmpty
+                ? CscCommandLine.Empty
+                : CscCommandLine.Parse(arguments, Path.GetDirectoryName(fullPath)!);
+        }
+
+        private static void AddSourceTrees(
+            ImmutableArray<SyntaxTree>.Builder trees,
+            ImmutableArray<string> paths,
+            CSharpParseOptions parseOptions,
+            CancellationToken cancellationToken)
+        {
+            if (paths.IsDefaultOrEmpty)
+            {
+                return;
+            }
+
+            foreach (var path in paths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!File.Exists(path))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    trees.Add(CSharpSyntaxTree.ParseText(
+                        SourceText.From(File.ReadAllText(path)), parseOptions, path));
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+
+        private static void AddProjectReferences(
+            ImmutableArray<MetadataReference>.Builder references,
+            ImmutableHashSet<string>.Builder projectPaths,
+            ImmutableArray<string> projectReferences,
+            Dictionary<string, string> properties,
+            CancellationToken cancellationToken)
+        {
+            if (projectReferences.IsDefaultOrEmpty)
+            {
+                return;
+            }
+
+            foreach (var reference in projectReferences)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var referencePath = Path.GetFullPath(reference);
+                // Adding to the set before recursing is also the cycle guard.
+                if (!File.Exists(referencePath) || !projectPaths.Add(referencePath))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var referenced = BuildReferencedProject(
+                        referencePath, projectPaths, properties, cancellationToken);
+                    if (referenced != null)
+                    {
+                        references.Add(referenced.ToMetadataReference());
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    // A referenced project that cannot be evaluated must not fail the whole load;
+                    // the primary project still provides useful IntelliSense without it.
+                }
+            }
+        }
+
+        private static Compilation? BuildReferencedProject(
+            string projectPath,
+            ImmutableHashSet<string>.Builder projectPaths,
+            Dictionary<string, string> properties,
+            CancellationToken cancellationToken)
+        {
+            var (evaluation, arguments) = AcquireProjectData(projectPath, properties, cancellationToken);
+            if (arguments.IsDefaultOrEmpty)
+            {
+                return null;
+            }
+
+            var commandLine = CscCommandLine.Parse(arguments, Path.GetDirectoryName(projectPath)!);
+            if (commandLine.Sources.IsDefaultOrEmpty)
+            {
+                return null;
+            }
+
+            var assemblyName = commandLine.AssemblyName
+                ?? evaluation.AssemblyName
+                ?? Path.GetFileNameWithoutExtension(projectPath);
+            var parseOptions = commandLine.CreateParseOptions();
+            var trees = ImmutableArray.CreateBuilder<SyntaxTree>();
+            AddSourceTrees(trees, commandLine.Sources, parseOptions, cancellationToken);
+            AddSourceTrees(
+                trees,
+                GeneratorHostRunner.Run(projectPath, assemblyName, commandLine, cancellationToken),
+                parseOptions,
+                cancellationToken);
+
+            var references = ImmutableArray.CreateBuilder<MetadataReference>();
+            references.AddRange(commandLine.CreateMetadataReferences());
+            AddProjectReferences(
+                references, projectPaths, evaluation.ProjectReferences, properties, cancellationToken);
+
+            return CSharpCompilation.Create(
+                assemblyName,
+                trees.ToImmutable(),
+                references.ToImmutable(),
+                // A referenced project is consumed as a library regardless of how it builds.
+                new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary,
+                    allowUnsafe: commandLine.AllowUnsafe,
+                    nullableContextOptions: commandLine.NullableContext));
+        }
+
+        /// <summary>
+        /// Reads the project's XAML items, restore marker, and graph edges. Evaluation runs no
+        /// targets, so this answers even for a project that has never been restored.
+        /// </summary>
         internal static (
             ImmutableArray<string> Files,
             string? ApplicationDefinition,
@@ -121,37 +331,14 @@ namespace WinUiXaml.Workspace
             string projectPath,
             IDictionary<string, string> globalProperties)
         {
-            using var projects = new Microsoft.Build.Evaluation.ProjectCollection(globalProperties);
-            var project = projects.LoadProject(projectPath);
-            var applicationDefinitions = project.GetItems("ApplicationDefinition")
-                .Select(GetFullPath)
-                .Where(File.Exists)
-                .ToArray();
-            var files = project.GetItems("Page")
-                .Select(GetFullPath)
-                .Concat(applicationDefinitions)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                .ToImmutableArray();
-            var assetsFile = project.GetPropertyValue("ProjectAssetsFile");
-            if (!string.IsNullOrWhiteSpace(assetsFile) && !Path.IsPathRooted(assetsFile))
-            {
-                assetsFile = Path.Combine(Path.GetDirectoryName(projectPath)!, assetsFile);
-            }
+            var evaluation = MsBuildCli.Evaluate(
+                projectPath,
+                new Dictionary<string, string>(globalProperties, StringComparer.OrdinalIgnoreCase));
             return (
-                files,
-                applicationDefinitions.FirstOrDefault(),
-                string.IsNullOrWhiteSpace(assetsFile) ? null : Path.GetFullPath(assetsFile),
-                project.GetItems("PackageReference").Count > 0);
-
-            string GetFullPath(Microsoft.Build.Evaluation.ProjectItem item)
-            {
-                var fullPath = item.GetMetadataValue("FullPath");
-                return Path.GetFullPath(
-                    string.IsNullOrWhiteSpace(fullPath)
-                        ? Path.Combine(Path.GetDirectoryName(projectPath)!, item.EvaluatedInclude)
-                        : fullPath);
-            }
+                evaluation.XamlFiles,
+                evaluation.ApplicationDefinition,
+                evaluation.ProjectAssetsFile,
+                evaluation.HasPackageReferences);
         }
 
         internal static bool RequiresRestore(string? projectAssetsFile, bool hasPackageReferences)
@@ -275,18 +462,10 @@ namespace WinUiXaml.Workspace
 
         /// <summary>Gets the C# compilation for the loaded project.</summary>
         public Task<Compilation?> GetCompilationAsync(CancellationToken cancellationToken = default) =>
-            Project.GetCompilationAsync(cancellationToken);
+            Task.FromResult<Compilation?>(Compilation);
 
-        internal bool ContainsProject(string projectPath)
-        {
-            var target = Path.GetFullPath(projectPath);
-            return Project.Solution.Projects.Any(project =>
-                project.FilePath is { } filePath &&
-                string.Equals(
-                    Path.GetFullPath(filePath),
-                    target,
-                    StringComparison.OrdinalIgnoreCase));
-        }
+        internal bool ContainsProject(string projectPath) =>
+            _projectPaths.Contains(Path.GetFullPath(projectPath));
 
         /// <summary>
         /// Creates a source-free compilation over the exact references selected by MSBuild.
@@ -295,9 +474,9 @@ namespace WinUiXaml.Workspace
         /// </summary>
         public Compilation GetFrameworkCompilation() =>
             CSharpCompilation.Create(
-                Project.AssemblyName ?? "WinUiXaml.Framework",
-                references: Project.MetadataReferences,
-                options: Project.CompilationOptions as CSharpCompilationOptions);
+                AssemblyName,
+                references: MetadataReferences,
+                options: CompilationOptions);
 
         /// <summary> Resolves a type by its metadata name.</summary>
         public async Task<INamedTypeSymbol?> ResolveTypeAsync(string metadataName, CancellationToken cancellationToken = default)
@@ -306,6 +485,8 @@ namespace WinUiXaml.Workspace
             return compilation?.GetTypeByMetadataName(metadataName);
         }
 
-        public void Dispose() => _workspace.Dispose();
+        public void Dispose()
+        {
+        }
     }
 }

@@ -1,4 +1,4 @@
-// Smokes the framework-dependent server bundle in dist/server.
+// Smokes the bundled Native AOT server in dist/server.
 //
 // The bundle is prepared first so the suite can never silently validate a stale build. Which
 // bundle that is comes from WINUI_XAML_SERVER_BUNDLE_MODE, shared with ensure-server-bundle.mjs:
@@ -11,11 +11,14 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// The server is architecture-specific, so only the binary matching this host can be executed.
+const hostRid = process.arch === "arm64" ? "win-arm64" : "win-x64";
 const serverPath = path.join(
   root,
   "dist",
   "server",
-  "WinUiXaml.LanguageServer.dll"
+  hostRid,
+  "WinUiXaml.LanguageServer.exe"
 );
 
 const ensure = spawnSync(

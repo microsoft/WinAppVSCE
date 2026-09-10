@@ -262,7 +262,7 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
                 reference => Path.GetFullPath(reference.FilePath!),
                 reference => reference.Properties,
                 StringComparer.OrdinalIgnoreCase);
-        var workspaceReferences = workspace.Project.MetadataReferences
+        var workspaceReferences = workspace.MetadataReferences
             .OfType<PortableExecutableReference>()
             .ToDictionary(
                 reference => Path.GetFullPath(reference.FilePath!),

@@ -28,7 +28,8 @@ EDITOR_SUPPORT.md
 #   - exclude the C# server sources + build output and the test harness/fixtures
 #   - the published server (dist/server, produced by `bundle:server`) is NOT excluded and ships in the VSIX
 #   - trim debug symbols and XML doc comments
-#   - the framework-dependent server DLL and Roslyn BuildHost ship without a .NET runtime
+#   - the Native AOT server executables (one per architecture) and the framework-dependent
+#     generator host ship without a .NET runtime
 server/**
 test/**
 .vscode-test.mjs

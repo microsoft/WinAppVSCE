@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>WinUiXaml.GeneratorHost</AssemblyName>
+    <RootNamespace>WinUiXaml.GeneratorHost</RootNamespace>
+    <!--
+      This helper exists precisely because running source generators requires loading analyzer
+      assemblies at runtime, which Native AOT cannot do. It therefore stays framework-dependent
+      and runs on the SDK the extension already resolves for the user. Keep it apphost-free so
+      it stays architecture-neutral, exactly like the server bundle used to be.
+    -->
+    <UseAppHost>false</UseAppHost>
+    <IsPackable>false</IsPackable>
+    <!-- Localized Roslyn resources add ~5 MB to the VSIX for diagnostics we never surface. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+  </ItemGroup>
+
+</Project>

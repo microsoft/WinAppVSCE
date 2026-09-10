@@ -8,8 +8,15 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>WinUiXaml.LanguageServer</AssemblyName>
     <RootNamespace>WinUiXaml.LanguageServer</RootNamespace>
-    <!-- MSBuild refs are compile-only; runtime copies come from the SDK via Build.Locator. -->
-    <NoWarn>$(NoWarn);NU1903</NoWarn>
+    <!-- Native AOT. This must be set here rather than on the command line: command-line properties
+         propagate to project references, and WinUiXaml.Xaml targets netstandard2.0, which fails
+         with NETSDK1207. The RuntimeIdentifier is passed with -r at publish time (that one is safe
+         to propagate). PublishAot also implies JsonSerializerIsReflectionEnabledByDefault=false,
+         which is why the LSP layer uses a source-generated JsonSerializerContext. -->
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <!-- Report every trim/AOT warning individually instead of one rolled-up warning per assembly. -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,13 +29,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- As an MSBuildWorkspace entry point, this exe must also exclude MSBuild's runtime assemblies
-         (Build.Locator provides them from the SDK). See MSBL001. -->
-    <PackageReference Include="Microsoft.Build" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Build.Framework" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Build.Tasks.Core" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.NET.StringTools" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+    <!-- The generator host is a small framework-dependent helper: source generators are analyzer
+         assemblies loaded with Assembly.LoadFrom, which Native AOT cannot do. Building it here
+         keeps it in lockstep with the server, but ReferenceOutputAssembly is off because the
+         server never links against it: it launches it as a child process. -->
+    <ProjectReference Include="..\WinUiXaml.GeneratorHost\WinUiXaml.GeneratorHost.csproj"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true"
+                      Private="false" />
   </ItemGroup>
 
 </Project>

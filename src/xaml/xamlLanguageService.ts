@@ -652,11 +652,21 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
   }
   const dotnet = resolution.dotnetPath;
 
-  log(`Starting language server: ${dotnet} ${serverPath}`);
+  // The server ships as a Native AOT executable, so it is launched directly rather than through
+  // `dotnet <dll>`. The resolved .NET host is still required: it is handed to the child
+  // environment so the out-of-process MSBuild evaluation and generator host run on exactly the
+  // SDK the user resolved.
+  const isNativeServer = serverPath.toLowerCase().endsWith(".exe");
+
+  log(
+    isNativeServer
+      ? `Starting language server: ${serverPath} (native, dotnet host: ${dotnet})`
+      : `Starting language server: ${dotnet} ${serverPath}`
+  );
 
   const executable: Executable = {
-    command: dotnet,
-    args: [serverPath],
+    command: isNativeServer ? serverPath : dotnet,
+    args: isNativeServer ? [] : [serverPath],
     transport: TransportKind.stdio,
     options: {
       cwd: path.dirname(serverPath),
@@ -1017,7 +1027,7 @@ function runDegradedAction(
   });
 }
 
-/** Locates the framework-dependent server DLL or a development-only DLL override. */
+/** Locates the bundled Native AOT server executable, or a development-only override. */
 function resolveServerPath(context: vscode.ExtensionContext): string | undefined {
   // Exercise missing-server degradation in the integration harness.
   if (process.env.WINUI_XAML_FORCE_NO_SERVER === "1") {
@@ -1030,16 +1040,25 @@ function resolveServerPath(context: vscode.ExtensionContext): string | undefined
       : configured
         ? [configured, bundledServer(context)]
         : [bundledServer(context)];
+  // The bundled server is a native .exe; an override may still be a framework-dependent .dll,
+  // which is how local debug builds and the smoke harness run it.
   return firstExistingPath(
-    candidates.filter((candidate) => path.extname(candidate).toLowerCase() === ".dll")
+    candidates.filter((candidate) =>
+      [".exe", ".dll"].includes(path.extname(candidate).toLowerCase())
+    )
   );
 }
 
+/**
+ * The Native AOT server is architecture-specific, so the VSIX carries one executable per
+ * architecture under dist/server/win-<arch>/, mirroring how the winapp CLI ships in bin/win-<arch>/.
+ */
 function bundledServer(context: vscode.ExtensionContext): string {
   return path.join(
     context.extensionPath,
     "dist",
     "server",
-    "WinUiXaml.LanguageServer.dll"
+    process.arch === "arm64" ? "win-arm64" : "win-x64",
+    "WinUiXaml.LanguageServer.exe"
   );
 }

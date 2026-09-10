@@ -27,7 +27,9 @@ function resolveDotnetHost() {
 // Use a real project so the server can resolve types, x:Bind targets, and resources.
 const fixture = path.resolve(here, "test", "fixtures", "xaml", "fixture");
 
-// CI can test the packaged framework-dependent DLL instead of the local Debug DLL.
+// CI can test the packaged Native AOT executable instead of the local Debug DLL. The bundled
+// server is architecture-specific, so pick the build matching this host.
+const bundledServerRid = process.arch === "arm64" ? "win-arm64" : "win-x64";
 const debugServerDll = path.resolve(
   here,
   "server",
@@ -38,11 +40,12 @@ const debugServerDll = path.resolve(
   "net10.0",
   "WinUiXaml.LanguageServer.dll"
 );
-const bundledServerDll = path.resolve(
+const bundledServerExe = path.resolve(
   here,
   "dist",
   "server",
-  "WinUiXaml.LanguageServer.dll"
+  bundledServerRid,
+  "WinUiXaml.LanguageServer.exe"
 );
 
 export default defineConfig({
@@ -54,7 +57,7 @@ export default defineConfig({
   env: {
     ...(process.env.WINUI_XAML_TEST_BUNDLED === "1"
       ? {
-          WINUI_XAML_TEST_SERVER_PATH: bundledServerDll,
+          WINUI_XAML_TEST_SERVER_PATH: bundledServerExe,
           WINUI_XAML_REQUIRE_BUNDLED: "1",
         }
       : { WINUI_XAML_SERVER_PATH: debugServerDll }),
