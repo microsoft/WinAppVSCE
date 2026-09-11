@@ -11,6 +11,7 @@ export const PROJECT_CONTEXT_STATES = [
   "ready",
   "error",
   "build-required",
+  "restore-required",
   "idle",
 ] as const;
 
@@ -36,6 +37,8 @@ export const PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE =
   "Project IntelliSense failed to load.";
 export const PROJECT_CONTEXT_BUILD_REQUIRED_FALLBACK_MESSAGE =
   "Build the solution once so referenced projects produce their assemblies.";
+export const PROJECT_CONTEXT_RESTORE_REQUIRED_FALLBACK_MESSAGE =
+  "Restore the project's packages so its references resolve.";
 export const SHOW_XAML_OUTPUT_HINT =
   "Click to show the WinUI XAML output.";
 
@@ -70,6 +73,9 @@ export function selectProjectContextStatus(
 ): ProjectContextStatus | undefined {
   const values = [...statuses];
   return (
+    // Restore precedes build: an unrestored project cannot be built, so when both conditions are
+    // present, naming the build is telling the developer to do the step that will fail.
+    values.find((status) => status.state === "restore-required") ??
     values.find((status) => status.state === "build-required") ??
     values.find((status) => status.state === "error") ??
     values.find((status) => status.state === "loading") ??
@@ -89,6 +95,16 @@ export function getProjectContextStatusPresentation(
       return {
         text: "$(tools) WinApp: build required for XAML IntelliSense",
         tooltip: `${status.message ?? PROJECT_CONTEXT_BUILD_REQUIRED_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
+        transient: false,
+      };
+    // A never-restored project is as user-fixable as a never-built one, and on a clean clone it is
+    // the condition reached *first*. Falling back to the generic "unavailable" wording here sent
+    // developers looking for a broken extension at the exact moment the fix was one command --
+    // the same defect this state's build-side sibling above was added to remove.
+    case "restore-required":
+      return {
+        text: "$(package) WinApp: restore required for XAML IntelliSense",
+        tooltip: `${status.message ?? PROJECT_CONTEXT_RESTORE_REQUIRED_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
     case "error":

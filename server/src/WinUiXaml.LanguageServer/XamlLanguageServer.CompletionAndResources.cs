@@ -357,7 +357,8 @@ internal sealed partial class XamlLanguageServer
         catch (ProjectRestoreRequiredException ex)
         {
             await NotifyProjectRestoreRequiredAsync(ex).ConfigureAwait(false);
-            await NotifyProjectContextStatusAsync(uri, "error", ex.Message).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(uri, "restore-required", ex.Message)
+                .ConfigureAwait(false);
             return null;
         }
         catch (ProjectBuildRequiredException ex)
