@@ -197,7 +197,7 @@ public class LspJsonContextCoverageTests
     {
         foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
-            if (!property.CanWrite)
+            if (!property.CanWrite || property.GetIndexParameters().Length != 0)
             {
                 continue;
             }
