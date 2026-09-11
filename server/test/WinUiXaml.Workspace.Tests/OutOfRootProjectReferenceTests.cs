@@ -87,7 +87,7 @@ public sealed class OutOfRootProjectReferenceTests
         }
         finally
         {
-            Directory.Delete(solutionRoot, recursive: true);
+            TryDelete(solutionRoot);
         }
     }
 
@@ -122,7 +122,34 @@ public sealed class OutOfRootProjectReferenceTests
         }
         finally
         {
-            Directory.Delete(solutionRoot, recursive: true);
+            TryDelete(solutionRoot);
+        }
+    }
+
+    /// <summary>
+    /// Cleanup must never be able to fail the test that already finished. MSBuild can still hold a
+    /// handle on the reference output it just built, and on Windows that surfaces as an
+    /// access-denied delete -- most likely under the parallel load of a full suite run, which is
+    /// exactly when a spurious failure is hardest to attribute. A throw here would also mask the
+    /// real assertion result, so a leaked temp directory is strictly the better outcome.
+    /// </summary>
+    private static void TryDelete(string directory)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+                return;
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Thread.Sleep(100);
+            }
         }
     }
 }
