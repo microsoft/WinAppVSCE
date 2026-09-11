@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using WinUiXaml.Workspace;
@@ -118,6 +119,75 @@ namespace WinUiXaml.Workspace.Tests
                 "RunProcess did not return for a child that exits immediately.");
 
             Assert.False(succeeded);
+        }
+        /// <summary>
+        /// A project with no analyzers is not a failure, so it must stay silent -- otherwise the
+        /// log fills with noise for the common case and the real failures stop standing out.
+        /// </summary>
+        [Fact]
+        public void Run_WithoutAnalyzers_ReportsNothing()
+        {
+            var commandLine = CscCommandLine.Parse(new[] { "/out:App.dll" }, Path.GetTempPath());
+
+            var stderr = CaptureStandardError(() =>
+                GeneratorHostRunner.Run(
+                    Path.Combine(Path.GetTempPath(), "App.csproj"),
+                    "App",
+                    commandLine,
+                    CancellationToken.None));
+
+            Assert.Equal(string.Empty, stderr);
+        }
+
+        /// <summary>
+        /// Every generator-host failure degrades to "generated members do not resolve", which is
+        /// indistinguishable from a project that has no generators. Without a logged reason the
+        /// user just sees IntelliSense forget a type, with nothing to diagnose.
+        /// </summary>
+        [Fact]
+        public void Run_WhenHostIsMissing_ReportsTheReason()
+        {
+            var previous = Environment.GetEnvironmentVariable("WINUI_XAML_GENERATOR_HOST");
+            Environment.SetEnvironmentVariable(
+                "WINUI_XAML_GENERATOR_HOST",
+                Path.Combine(Path.GetTempPath(), $"no-such-host-{Guid.NewGuid():N}.dll"));
+
+            try
+            {
+                var commandLine = CscCommandLine.Parse(
+                    new[] { "/out:App.dll", "/analyzer:SomeGenerator.dll" }, Path.GetTempPath());
+
+                var stderr = CaptureStandardError(() =>
+                    GeneratorHostRunner.Run(
+                        Path.Combine(Path.GetTempPath(), "App.csproj"),
+                        "App",
+                        commandLine,
+                        CancellationToken.None));
+
+                Assert.Contains("generator host unavailable", stderr);
+                Assert.Contains("will not resolve", stderr);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("WINUI_XAML_GENERATOR_HOST", previous);
+            }
+        }
+
+        private static string CaptureStandardError(Action action)
+        {
+            var original = Console.Error;
+            using var writer = new StringWriter();
+            Console.SetError(writer);
+            try
+            {
+                action();
+            }
+            finally
+            {
+                Console.SetError(original);
+            }
+
+            return writer.ToString();
         }
     }
 }

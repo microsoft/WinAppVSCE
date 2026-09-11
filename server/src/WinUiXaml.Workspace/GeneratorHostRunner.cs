@@ -61,12 +61,18 @@ namespace WinUiXaml.Workspace
         /// array when the project has no generators, or when the helper is unavailable -- the
         /// server still works in that case, it just cannot see generated members.
         /// </summary>
+        /// <remarks>
+        /// Every failure here degrades to "generated members do not resolve", which looks
+        /// identical to a project that simply has no generators. Each failure is logged with its
+        /// reason so the user is not left with IntelliSense that has silently forgotten a type.
+        /// </remarks>
         internal static ImmutableArray<string> Run(
             string projectPath,
             string assemblyName,
             CscCommandLine commandLine,
             CancellationToken cancellationToken)
         {
+            // Not a failure: the project has nothing to generate.
             if (commandLine.Analyzers.IsDefaultOrEmpty)
             {
                 return ImmutableArray<string>.Empty;
@@ -75,7 +81,7 @@ namespace WinUiXaml.Workspace
             var host = HostAssemblyPath;
             if (host == null)
             {
-                return ImmutableArray<string>.Empty;
+                return Unavailable(projectPath, "helper assembly not found beside the server");
             }
 
             var outputDirectory = OutputDirectoryFor(projectPath);
@@ -88,13 +94,13 @@ namespace WinUiXaml.Workspace
                 File.WriteAllText(requestPath, BuildRequest(assemblyName, outputDirectory, commandLine));
                 if (!Invoke(host, requestPath, cancellationToken))
                 {
-                    return ImmutableArray<string>.Empty;
+                    return Unavailable(projectPath, "helper failed, timed out, or was cancelled");
                 }
 
                 var manifest = Path.Combine(outputDirectory, "generated-files.txt");
                 if (!File.Exists(manifest))
                 {
-                    return ImmutableArray<string>.Empty;
+                    return Unavailable(projectPath, "helper produced no manifest");
                 }
 
                 var builder = ImmutableArray.CreateBuilder<string>();
@@ -108,13 +114,13 @@ namespace WinUiXaml.Workspace
 
                 return builder.ToImmutable();
             }
-            catch (IOException)
+            catch (IOException ex)
             {
-                return ImmutableArray<string>.Empty;
+                return Unavailable(projectPath, $"I/O error: {ex.Message}");
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
-                return ImmutableArray<string>.Empty;
+                return Unavailable(projectPath, $"access denied: {ex.Message}");
             }
             finally
             {
@@ -187,6 +193,22 @@ namespace WinUiXaml.Workspace
             }
 
             writer.WriteEndArray();
+        }
+
+        /// <summary>
+        /// Reports a generator-host failure and degrades to "no generated files".
+        /// </summary>
+        /// <remarks>
+        /// Logged rather than surfaced as a diagnostic because the failure is project-wide, not
+        /// tied to any span in a XAML file. Writing to stderr matches the rest of the server and
+        /// is picked up by <c>WINUI_XAML_LOG</c>.
+        /// </remarks>
+        private static ImmutableArray<string> Unavailable(string projectPath, string reason)
+        {
+            Console.Error.WriteLine(
+                $"[winui-xaml-ls] generator host unavailable for '{projectPath}': {reason}. " +
+                "Source-generated members will not resolve for this project.");
+            return ImmutableArray<string>.Empty;
         }
 
         private static bool Invoke(string host, string requestPath, CancellationToken cancellationToken)
