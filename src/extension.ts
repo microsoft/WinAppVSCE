@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { spawn, execFile } from 'child_process';
 import {
@@ -48,6 +49,22 @@ import {
 } from './debugger-resolver';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
 import {
+	buildListArgs,
+	buildNewArgs,
+	describeNewFailure,
+	DEFAULT_PROJECT_NAME,
+	ensureAvailableName,
+	formatTemplateTags,
+	isProjectTemplate,
+	isSdkMissingExit,
+	parseScaffoldResult,
+	parseTemplateList,
+	sortTemplates,
+	validateProjectName,
+	type TemplateListResult,
+	type WinUiTemplate
+} from './new-command-utils';
+import {
 	createWinappToolTaskSpec,
 	executeWinappToolTask,
 	parseToolArguments,
@@ -58,6 +75,16 @@ import {
 const WINAPP_DEBUG_TYPE = 'winapp';
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
 const MAX_SIGNABLE_FILES = 10;
+
+/** URL shown when `winapp new` reports that the .NET SDK is missing or too old. */
+const DOTNET_DOWNLOAD_URL = 'https://dotnet.microsoft.com/download';
+
+/**
+ * Workspace state key holding the project directory scaffolded by `winapp.new`.
+ * `vscode.openFolder` restarts the extension host, so the post-scaffold
+ * follow-up has to survive a reload; the key is cleared once shown.
+ */
+const PENDING_SCAFFOLD_KEY = 'winapp.new.pendingScaffold';
 
 /**
  * Output channel for debugger-related activity (e.g. auto-installed extensions),
@@ -276,13 +303,17 @@ function getWinappOutputChannel(): vscode.OutputChannel {
  * command to finish so callers can inspect the output (e.g. the produced
  * package path).
  *
+ * @param cancelMessage Written to the output channel when the user cancels.
+ *                      Callers pass an operation-specific message so the log
+ *                      reads correctly for commands other than packaging.
  * @returns The process exit code and the full captured output.
  */
 async function runWinappCapture(
 	extensionPath: string,
 	args: string[],
 	cwd: string,
-	progressTitle: string
+	progressTitle: string,
+	cancelMessage: string = 'Packaging cancelled.'
 ): Promise<{ code: number | null; output: string; cancelled?: boolean }> {
 	const cliPath = getWinappCliPath(extensionPath);
 	const outputChannel = getWinappOutputChannel();
@@ -317,10 +348,11 @@ async function runWinappCapture(
 						return;
 					}
 					cancelled = true;
-					outputChannel.appendLine('\nPackaging cancelled.');
+					outputChannel.appendLine(`\n${cancelMessage}`);
 					if (child.pid) {
-						// On Windows, winapp pack may spawn helper processes; taskkill /t
-						// terminates the whole tree instead of only the direct child.
+						// On Windows, winapp commands may spawn helper processes (pack's
+						// SDK tools, new's `dotnet new`); taskkill /t terminates the whole
+						// tree instead of only the direct child.
 						const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
 							windowsHide: true
 						});
@@ -850,6 +882,325 @@ async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<str
 	return result?.[0]?.fsPath;
 }
 
+// --- winapp new (Create WinUI App) ---------------------------------------
+//
+// Unlike every other project command, `winapp.new` deliberately does not call
+// getWorkspacePath(): scaffolding is most useful with no folder open, and the
+// target is chosen by the user rather than derived from the workspace. It joins
+// winapp.certInfo as the second intentional no-workspace command.
+
+/**
+ * Templates returned by the most recent `winapp new --list --json`, cached for
+ * the lifetime of the extension host so repeat runs skip the CLI round trip.
+ *
+ * Deliberately not persisted to globalState: the template pack is a machine-wide
+ * `dotnet new` install that can change outside VS Code, and a cache that
+ * outlives the session would have no invalidation signal.
+ */
+let cachedTemplateList: TemplateListResult | undefined;
+
+/**
+ * Run `winapp new --list --json` and parse the result.
+ *
+ * This doubles as the prerequisite check for the whole command: `--list`
+ * requires the .NET SDK and installs the WinUI template pack when none is
+ * present, so a missing SDK or an unreachable NuGet feed surfaces here rather
+ * than after the user has answered three prompts.
+ *
+ * @param templateVersion When `'latest'`, installs the newest template pack
+ *                        before listing. Omitted on the normal path.
+ * @returns The parsed list, or `undefined` when the run failed or was cancelled
+ *          (the failure has already been reported to the user).
+ */
+async function loadWinUiTemplates(
+	extensionPath: string,
+	cwd: string,
+	templateVersion?: 'latest'
+): Promise<TemplateListResult | undefined> {
+	const result = await runWinappCapture(
+		extensionPath,
+		buildListArgs(templateVersion),
+		cwd,
+		templateVersion === 'latest' ? 'Installing the latest WinUI templates...' : 'Loading WinUI templates...',
+		'Loading templates cancelled.'
+	);
+
+	if (result.cancelled) {
+		return undefined;
+	}
+
+	const parsed = parseTemplateList(result.output);
+	if (!parsed.ok || result.code !== 0) {
+		const message = parsed.ok
+			? 'Failed to load the WinUI templates.'
+			: parsed.error;
+		await showNewFailure(message, isSdkMissingExit(result.code));
+		return undefined;
+	}
+
+	cachedTemplateList = parsed.value;
+	return parsed.value;
+}
+
+/**
+ * Show a `winapp new` failure with an actionable follow-up.
+ *
+ * A missing .NET SDK is the one failure with a specific remedy, so it gets a
+ * modal and a link to the installer; everything else points at the output
+ * channel, which already holds the CLI's full output.
+ */
+async function showNewFailure(message: string, sdkMissing: boolean): Promise<void> {
+	if (sdkMissing) {
+		const choice = await vscode.window.showErrorMessage(
+			message,
+			{ modal: true },
+			'Install .NET SDK'
+		);
+		if (choice === 'Install .NET SDK') {
+			await vscode.env.openExternal(vscode.Uri.parse(DOTNET_DOWNLOAD_URL));
+		}
+		return;
+	}
+
+	const choice = await vscode.window.showErrorMessage(message, 'Show Output');
+	if (choice === 'Show Output') {
+		getWinappOutputChannel().show();
+	}
+}
+
+/**
+ * Ask which WinUI template pack to scaffold from, when one is already installed.
+ *
+ * The CLI's default mode checks the feed and prompts before updating a stale
+ * pack, but `--json` forces `--use-defaults`, which means "keep installed
+ * templates" — so a JSON caller like this extension would otherwise pin itself
+ * to whatever pack is on the machine forever. Rather than detect staleness
+ * (which would mean scraping `dotnet new update --check-only`), put the choice
+ * to the user and let `--template-version` carry the answer.
+ *
+ * The "no changes to your machine" option is pre-selected so an accidental
+ * Enter can never trigger a machine-wide install — the same caution behind the
+ * CLI's deliberately default-less update prompt.
+ *
+ * @returns The list to use, or `undefined` if the user cancelled.
+ */
+async function resolveTemplatePack(
+	extensionPath: string,
+	cwd: string,
+	initial: TemplateListResult
+): Promise<TemplateListResult | undefined> {
+	// Nothing installed before this run means --list just installed the latest,
+	// so there is no meaningful choice to offer.
+	if (!initial.templateVersion) {
+		return initial;
+	}
+
+	const useInstalled = {
+		label: 'Use installed templates',
+		description: `Pack ${initial.templateVersion} — no changes to your machine`
+	};
+	const useLatest = {
+		label: 'Use latest templates',
+		description:
+			"Installs the newest WinUI template pack machine-wide, for all projects and tools that use 'dotnet new'"
+	};
+
+	const picked = await vscode.window.showQuickPick([useInstalled, useLatest], {
+		placeHolder: 'Which WinUI templates should be used?'
+	});
+
+	if (!picked) {
+		return undefined;
+	}
+
+	if (picked.label === useInstalled.label) {
+		return initial;
+	}
+
+	return loadWinUiTemplates(extensionPath, cwd, 'latest');
+}
+
+/**
+ * Let the user pick a WinUI template.
+ *
+ * Item templates are excluded: they add a file to an *existing* project rather
+ * than scaffolding one, so they need a different flow (a target project picker,
+ * and no folder-open step afterwards). None ship in the pack today.
+ */
+async function pickWinUiTemplate(templates: WinUiTemplate[]): Promise<WinUiTemplate | undefined> {
+	const projectTemplates = sortTemplates(templates.filter(isProjectTemplate));
+	if (projectTemplates.length === 0) {
+		vscode.window.showErrorMessage('No WinUI project templates are available.');
+		return undefined;
+	}
+
+	const items = projectTemplates.map((template) => ({
+		label: template.displayName,
+		description: template.shortName,
+		detail: formatTemplateTags(template.tags),
+		template
+	}));
+
+	const picked = await vscode.window.showQuickPick(items, {
+		placeHolder: 'Select a WinUI template',
+		matchOnDescription: true,
+		matchOnDetail: true
+	});
+
+	return picked?.template;
+}
+
+/**
+ * Decide the final project name and whether `--force` is needed, given a target
+ * directory that may already exist.
+ *
+ * Mirrors the CLI's preflight: an existing but *empty* directory is fine, while
+ * a non-empty one is refused unless `--force` is passed. The difference is that
+ * the CLI can only report this as an exit-2 failure once the whole invocation
+ * is over, whereas checking here lets us also offer the auto-numbered name the
+ * CLI gives users who let it pick the name. (`EnsureAvailableName` never runs
+ * for an explicit `--name`, which this extension always passes.)
+ *
+ * @returns The resolved name and force flag, or `undefined` if the user cancelled.
+ */
+async function resolveScaffoldTarget(
+	parentDirectory: string,
+	requestedName: string
+): Promise<{ name: string; force: boolean } | undefined> {
+	const targetDirectory = path.join(parentDirectory, requestedName);
+
+	let targetIsNonEmpty: boolean;
+	try {
+		targetIsNonEmpty = fs.existsSync(targetDirectory)
+			&& fs.readdirSync(targetDirectory).length > 0;
+	} catch {
+		// Can't inspect the folder (locked, protected). Don't block here — let the
+		// CLI surface it as a structured error with a real reason.
+		return { name: requestedName, force: false };
+	}
+
+	if (!targetIsNonEmpty) {
+		return { name: requestedName, force: false };
+	}
+
+	const availableName = ensureAvailableName(requestedName, parentDirectory, (candidate) =>
+		fs.existsSync(candidate)
+	);
+	const useAvailable = `Use ${availableName}`;
+	const createAnyway = 'Create Anyway';
+
+	const choice = await vscode.window.showWarningMessage(
+		`${targetDirectory} already contains files. Creating the app here may overwrite them.`,
+		{ modal: true },
+		useAvailable,
+		createAnyway
+	);
+
+	if (choice === useAvailable) {
+		return { name: availableName, force: false };
+	}
+	if (choice === createAnyway) {
+		return { name: requestedName, force: true };
+	}
+	return undefined;
+}
+
+/**
+ * Offer to open the freshly scaffolded project.
+ *
+ * When a workspace is already open, reusing the window would tear down the
+ * extension host and discard whatever the user was doing, so the non-destructive
+ * options lead. With no folder open there is nothing to lose, so the folder is
+ * opened in place.
+ */
+async function offerToOpenScaffoldedProject(
+	context: vscode.ExtensionContext,
+	projectPath: string,
+	projectName: string
+): Promise<void> {
+	const hasWorkspace = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
+	const projectUri = vscode.Uri.file(projectPath);
+
+	const openFolder = 'Open Folder';
+	const openInNewWindow = 'Open in New Window';
+	const addToWorkspace = 'Add to Workspace';
+	const reveal = 'Reveal in Explorer';
+
+	const actions = hasWorkspace
+		? [openInNewWindow, addToWorkspace, reveal]
+		: [openFolder, reveal];
+
+	const choice = await vscode.window.showInformationMessage(
+		`Created ${projectName} at ${projectPath}`,
+		...actions
+	);
+
+	if (choice === reveal) {
+		await vscode.commands.executeCommand('revealFileInOS', projectUri);
+		return;
+	}
+
+	if (choice === addToWorkspace) {
+		vscode.workspace.updateWorkspaceFolders(
+			vscode.workspace.workspaceFolders?.length ?? 0,
+			null,
+			{ uri: projectUri }
+		);
+		return;
+	}
+
+	if (choice === openFolder || choice === openInNewWindow) {
+		// Opening a folder restarts the extension host, so stash the path first;
+		// the follow-up notification is shown on the next activation.
+		await context.globalState.update(PENDING_SCAFFOLD_KEY, projectPath);
+		await vscode.commands.executeCommand(
+			'vscode.openFolder',
+			projectUri,
+			{ forceNewWindow: choice === openInNewWindow }
+		);
+	}
+}
+
+/**
+ * Show the one-time follow-up for a project scaffolded in a previous session,
+ * once its folder has been opened.
+ *
+ * Deliberately does not run `winapp init` automatically: `dotnet new` output is
+ * already buildable, and init is for retrofitting SDK setup onto an existing
+ * project. Offering it is the handoff point between the two commands.
+ */
+async function showPendingScaffoldFollowUp(context: vscode.ExtensionContext): Promise<void> {
+	const pendingPath = context.globalState.get<string>(PENDING_SCAFFOLD_KEY);
+	if (!pendingPath) {
+		return;
+	}
+
+	const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+	const isOpen = workspaceFolders.some(
+		(folder) => path.resolve(folder.uri.fsPath).toLowerCase() === path.resolve(pendingPath).toLowerCase()
+	);
+	if (!isOpen) {
+		return;
+	}
+
+	// Clear first so a dismissed notification never reappears on the next reload.
+	await context.globalState.update(PENDING_SCAFFOLD_KEY, undefined);
+
+	const runApp = 'Run Application';
+	const initProject = 'Initialize Project';
+	const choice = await vscode.window.showInformationMessage(
+		`${path.basename(pendingPath)} is ready.`,
+		runApp,
+		initProject
+	);
+
+	if (choice === runApp) {
+		await vscode.commands.executeCommand('winapp.run');
+	} else if (choice === initProject) {
+		await vscode.commands.executeCommand('winapp.init');
+	}
+}
+
 class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
 	private extensionPath: string;
 
@@ -1260,6 +1611,93 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			await vscode.commands.executeCommand('vscode.openWith', manifestUri, ManifestEditorProvider.viewType);
+		})
+	);
+
+	// Register winapp.new command
+	// Deliberately does not call getWorkspacePath(): scaffolding a new app is most
+	// useful when no folder is open, and it writes outside the current workspace.
+	context.subscriptions.push(
+		vscode.commands.registerCommand('winapp.new', async () => {
+			// All CLI calls run from an existing directory. Prefer the workspace so
+			// its global.json chain governs the SDK the scaffold resolves, matching
+			// what a terminal user in that folder would get.
+			const cliCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+
+			const initialList = cachedTemplateList ?? await loadWinUiTemplates(extensionPath, cliCwd);
+			if (!initialList) {
+				return;
+			}
+
+			const templateList = await resolveTemplatePack(extensionPath, cliCwd, initialList);
+			if (!templateList) {
+				return;
+			}
+
+			const template = await pickWinUiTemplate(templateList.templates);
+			if (!template) {
+				return;
+			}
+
+			const requestedName = await vscode.window.showInputBox({
+				prompt: 'Name for the new app',
+				value: DEFAULT_PROJECT_NAME,
+				valueSelection: [0, DEFAULT_PROJECT_NAME.length],
+				validateInput: validateProjectName
+			});
+			if (!requestedName) {
+				return;
+			}
+
+			const parentDirectory = await selectFolder(
+				'Select a folder for the new app',
+				vscode.Uri.file(cliCwd)
+			);
+			if (!parentDirectory) {
+				return;
+			}
+
+			const target = await resolveScaffoldTarget(parentDirectory, requestedName);
+			if (!target) {
+				return;
+			}
+
+			const outputDirectory = path.join(parentDirectory, target.name);
+			const result = await runWinappCapture(
+				extensionPath,
+				buildNewArgs({
+					template: template.shortName,
+					name: target.name,
+					output: outputDirectory,
+					force: target.force,
+					// The pack the user chose is already installed by the listing
+					// step, so pin to it rather than letting the scaffold re-check
+					// the feed (and potentially pull a newer pack mid-flow).
+					templateVersion: 'installed'
+				}),
+				parentDirectory,
+				`Creating ${target.name}...`,
+				'App creation cancelled.'
+			);
+
+			if (result.cancelled) {
+				return;
+			}
+
+			const scaffold = parseScaffoldResult(result.output);
+			if (result.code !== 0 || !scaffold?.created) {
+				await showNewFailure(
+					describeNewFailure(result.code, scaffold),
+					isSdkMissingExit(result.code)
+				);
+				return;
+			}
+
+			await offerToOpenScaffoldedProject(
+				context,
+				scaffold.projectPath ?? outputDirectory,
+				scaffold.name ?? target.name
+			);
 		})
 	);
 
@@ -1727,6 +2165,10 @@ export function activate(context: vscode.ExtensionContext) {
 			});
 		})
 	);
+
+	// A project scaffolded by winapp.new may have been opened in this window,
+	// which restarted the extension host — show its follow-up now.
+	void showPendingScaffoldFollowUp(context);
 }
 
 /**
