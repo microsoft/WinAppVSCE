@@ -388,10 +388,6 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        // The project loaded, so any previously reported build- or restore-required condition is
-        // resolved. Drop the latches: if the outputs go away again later in this same session (a
-        // clean, a branch switch) the user gets told a second time rather than facing the silent
-        // outage.
         // The project loaded, so any previously reported restore condition is resolved, and the
         // build condition is resolved only if nothing came up through the fallback. Dropping the
         // latch lets a later outage in this same session (a clean, a branch switch) be reported

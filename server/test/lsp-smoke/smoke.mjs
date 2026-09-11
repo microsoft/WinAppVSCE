@@ -1,7 +1,7 @@
 // End-to-end LSP smoke test for the WinUI XAML language server. Drives the real server over stdio (no VS Code, no test framework, no npm deps) and proves the spine: initialize -> didOpen (syntactic diagnostics) -> textDocument/definition (F12) resolves an event-handler attribute value to the C# method in the page's code-behind. Usage:  node smoke.mjs Exit 0 = pass. Requires the server to be built (Debug) and the WinUI smoke fixture on disk.
 
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -53,6 +53,43 @@ function offsetToPosition(text, offset) {
 }
 
 if (!existsSync(APP_XAML)) fail(`fixture not found: ${APP_XAML}`);
+
+// A project that has never been restored. The restore-required path could not be exercised from
+// the outside: a real editor session auto-restores on open, so the state cannot be held long
+// enough to observe. Here there is no editor, nothing runs restore, and the state is stable.
+//
+// The package is deliberately one that cannot resolve, so no ambient NuGet cache can accidentally
+// satisfy it and turn this into a project that merely loads slowly.
+// tmpdir() can hand back an 8.3 short path (CHIARA~1) while the server reports the long form, so
+// normalize here -- a comparison that can never match is indistinguishable from a missing
+// notification, and this leg exists precisely to tell those apart.
+const unrestoredRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "winui-xaml-unrestored-")));
+const unrestoredProject = join(unrestoredRoot, "Unrestored.csproj");
+writeFileSync(
+  unrestoredProject,
+  `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <ItemGroup><PackageReference Include="Example.Unrestored.Package" Version="1.0.0" /></ItemGroup>
+</Project>
+`,
+  "utf8"
+);
+const unrestoredXamlPath = join(unrestoredRoot, "UnrestoredPage.xaml");
+const unrestoredXamlText = `<Page
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <TextBlock Text="Hello" />
+</Page>
+`;
+writeFileSync(unrestoredXamlPath, unrestoredXamlText, "utf8");
+const unrestoredXamlUri = pathToFileURL(unrestoredXamlPath).href;
+process.once("exit", () => {
+  try {
+    rmSync(unrestoredRoot, { recursive: true, force: true });
+  } catch {
+    // A leaked temp directory must not turn a real pass into a failure.
+  }
+});
 const appXamlText = readFileSync(APP_XAML, "utf8");
 const accentKeyOffset = appXamlText.indexOf('x:Key="SmokeAccentBrush"');
 if (accentKeyOffset < 0) fail('could not find x:Key="SmokeAccentBrush" in App.xaml');
@@ -173,7 +210,11 @@ const notification = (method) => (m) => m.method === method;
 
 async function main() {
   // 1) initialize Pass the fixture directory as the sole trusted workspace root so the server performs project discovery / MSBuild evaluation for the in-root fixture (matching the real client, which sends its workspace folders as initializationOptions.allowedRoots).
-  const allowedRoots = [dirname(XAML)];
+  //
+  // The never-restored project below gets its own root rather than living under the fixture: an
+  // SDK-style project globs **/*.cs, so a nested project directory would be swept into the
+  // fixture's own compile items and could break unrelated legs of this test.
+  const allowedRoots = [dirname(XAML), unrestoredRoot];
   send({
     id: 1,
     method: "initialize",
@@ -1224,7 +1265,73 @@ async function main() {
   }
   console.log("[ok] didClose cancels pending diagnostics, evicts context, and prevents stale publication");
 
-  // 22) shutdown
+  // 22) The restore-required path, end to end on the wire.
+  //
+  // Two separate things were previously unproven here, and unit coverage could reach neither:
+  // that the server turns ProjectRestoreRequiredException into a notification at all, and that
+  // the payload can be serialized under the AOT context. Serialization has no fallback with
+  // JsonSerializerIsReflectionEnabledByDefault=false (set in this Debug build too, so this leg is
+  // not weaker than the shipped one), and a notification has no reply -- so a payload that failed
+  // to serialize would be silently absent, exactly like a project that restored fine.
+  const restoreRequired = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectRestoreRequired" &&
+      typeof message.params?.projectPath === "string" &&
+      message.params.projectPath.toLowerCase() === unrestoredProject.toLowerCase(),
+    90000,
+    "projectRestoreRequired for the never-restored project"
+  );
+  const restoreStatus = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectContextStatus" &&
+      message.params?.uri === unrestoredXamlUri &&
+      message.params?.state === "restore-required",
+    90000,
+    "restore-required project context status"
+  );
+  send({
+    method: "textDocument/didOpen",
+    params: {
+      textDocument: {
+        uri: unrestoredXamlUri,
+        languageId: "xaml",
+        version: 1,
+        text: unrestoredXamlText,
+      },
+    },
+  });
+  // didOpen alone does not drive project resolution -- the notification is raised from the
+  // context path a feature request goes through, so ask for completions to get there.
+  send({
+    id: 7301,
+    method: "textDocument/completion",
+    params: {
+      textDocument: { uri: unrestoredXamlUri },
+      position: { line: 3, character: 4 },
+    },
+  });
+  const restoreNotification = await restoreRequired;
+  const restoreStatusMessage = await restoreStatus;
+  // The status carries the reason the user reads. An empty one would render the bar's fallback
+  // text, which would look identical in a screenshot and tell them nothing about their project.
+  if (
+    typeof restoreStatusMessage.params.message !== "string" ||
+    restoreStatusMessage.params.message.length === 0
+  ) {
+    fail(
+      `restore-required status carried no message: ${JSON.stringify(restoreStatusMessage.params)}`
+    );
+  }
+  if (!restoreNotification.params.projectPath.endsWith("Unrestored.csproj")) {
+    fail(
+      `projectRestoreRequired named the wrong project: ${restoreNotification.params.projectPath}`
+    );
+  }
+  console.log(
+    "[ok] never-restored project: projectRestoreRequired + restore-required status both reach the wire"
+  );
+
+  // 23) shutdown
   send({ id: 11, method: "shutdown", params: null });
   await waitFor(responseFor(11), 10000, "shutdown");
 
