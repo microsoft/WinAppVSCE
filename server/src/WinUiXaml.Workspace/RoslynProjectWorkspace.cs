@@ -86,7 +86,8 @@ namespace WinUiXaml.Workspace
             string assemblyName,
             ImmutableHashSet<string> projectPaths,
             ImmutableArray<string> xamlFiles,
-            string? applicationDefinitionPath)
+            string? applicationDefinitionPath,
+            ImmutableArray<string> unresolvedProjectReferences)
         {
             Compilation = compilation;
             MetadataReferences = metadataReferences;
@@ -95,6 +96,9 @@ namespace WinUiXaml.Workspace
             _projectPaths = projectPaths;
             XamlFiles = xamlFiles;
             ApplicationDefinitionPath = applicationDefinitionPath;
+            UnresolvedProjectReferences = unresolvedProjectReferences.IsDefault
+                ? ImmutableArray<string>.Empty
+                : unresolvedProjectReferences;
         }
 
         /// <summary>The compilation for the loaded project, including source-generated members.</summary>
@@ -107,6 +111,14 @@ namespace WinUiXaml.Workspace
         public string AssemblyName { get; }
         public ImmutableArray<string> XamlFiles { get; }
         public string? ApplicationDefinitionPath { get; }
+
+        /// <summary>
+        /// Non-empty when the project loaded through the reference-resolution fallback because
+        /// these referenced assemblies had never been built. IntelliSense is serving real types,
+        /// but the markup compiler never ran, so generated members are missing and the user should
+        /// still be told to build.
+        /// </summary>
+        public ImmutableArray<string> UnresolvedProjectReferences { get; }
 
         /// <summary>Loads a single project by path.</summary>
         public static Task<RoslynProjectWorkspace> LoadProjectAsync(
@@ -139,7 +151,8 @@ namespace WinUiXaml.Workspace
             CancellationToken cancellationToken)
         {
             var fullPath = Path.GetFullPath(projectPath);
-            var (evaluation, arguments) = AcquireProjectData(fullPath, properties, cancellationToken);
+            var (evaluation, arguments, unresolvedProjectReferences) =
+                AcquireProjectData(fullPath, properties, cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
             var commandLine = arguments.IsDefaultOrEmpty
@@ -187,7 +200,8 @@ namespace WinUiXaml.Workspace
                 options,
                 assemblyName,
                 graph.KnownProjects.ToImmutable(),                evaluation.XamlFiles,
-                evaluation.ApplicationDefinition);
+                evaluation.ApplicationDefinition,
+                unresolvedProjectReferences);
         }
 
         /// <summary>
@@ -195,7 +209,10 @@ namespace WinUiXaml.Workspace
         /// invocation and falling back to evaluation alone so an unrestored project still reports
         /// the restore requirement rather than an opaque build failure.
         /// </summary>
-        private static (MsBuildCli.Evaluation Evaluation, ImmutableArray<string> Arguments) AcquireProjectData(
+        private static (
+            MsBuildCli.Evaluation Evaluation,
+            ImmutableArray<string> Arguments,
+            ImmutableArray<string> UnresolvedProjectReferences) AcquireProjectData(
             string fullPath,
             Dictionary<string, string> properties,
             CancellationToken cancellationToken)
@@ -210,7 +227,10 @@ namespace WinUiXaml.Workspace
                     throw new ProjectRestoreRequiredException(fullPath);
                 }
 
-                return (combined.Evaluation, combined.CscCommandLineArgs);
+                return (
+                    combined.Evaluation,
+                    combined.CscCommandLineArgs,
+                    combined.UnresolvedProjectReferences);
             }
             catch (MsBuildUnavailableException ex)
             {
@@ -376,7 +396,7 @@ namespace WinUiXaml.Workspace
             Dictionary<string, string> properties,
             CancellationToken cancellationToken)
         {
-            var (evaluation, arguments) = AcquireProjectData(projectPath, properties, cancellationToken);
+            var (evaluation, arguments, _) = AcquireProjectData(projectPath, properties, cancellationToken);
             if (arguments.IsDefaultOrEmpty)
             {
                 return null;

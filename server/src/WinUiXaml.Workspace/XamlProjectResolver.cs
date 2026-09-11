@@ -170,7 +170,8 @@ namespace WinUiXaml.Workspace
                 compilation,
                 referencedAssemblies,
                 workspace.XamlFiles,
-                workspace.ApplicationDefinitionPath);
+                workspace.ApplicationDefinitionPath,
+                workspace.UnresolvedProjectReferences);
         }
 
         /// <summary>
@@ -212,7 +213,8 @@ namespace WinUiXaml.Workspace
                     compilation,
                     compilation.SourceModule.ReferencedAssemblySymbols,
                     frameworkProject.XamlFiles,
-                    frameworkProject.ApplicationDefinitionPath);
+                    frameworkProject.ApplicationDefinitionPath,
+                    frameworkProject.UnresolvedProjectReferences);
             }
 
             // Unsupported custom project systems retain the existing authoritative path.
@@ -229,7 +231,8 @@ namespace WinUiXaml.Workspace
                 fallbackCompilation,
                 fallbackCompilation.SourceModule.ReferencedAssemblySymbols,
                 workspace.XamlFiles,
-                workspace.ApplicationDefinitionPath);
+                workspace.ApplicationDefinitionPath,
+                workspace.UnresolvedProjectReferences);
         }
 
         private static bool IsWithin(string path, string root)

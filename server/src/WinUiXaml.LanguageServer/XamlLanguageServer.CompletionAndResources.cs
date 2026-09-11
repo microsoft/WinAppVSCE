@@ -391,8 +391,27 @@ internal sealed partial class XamlLanguageServer
         // resolved. Drop the latches: if the outputs go away again later in this same session (a
         // clean, a branch switch) the user gets told a second time rather than facing the silent
         // outage.
-        _buildRequiredProjects.Clear(frameworkResolution.ProjectPath);
+        // The project loaded, so any previously reported restore condition is resolved, and the
+        // build condition is resolved only if nothing came up through the fallback. Dropping the
+        // latch lets a later outage in this same session (a clean, a branch switch) be reported
+        // again rather than silently.
         _restoreRequiredProjects.Clear(frameworkResolution.ProjectPath);
+
+        // Loaded through the reference-resolution fallback: IntelliSense is real but the markup
+        // compiler never ran, so generated members are missing. Report it -- a partial outage the
+        // user cannot see is worse than a total one they are told about. The latch is deliberately
+        // left set, so this prompts once rather than on every document load.
+        if (!frameworkResolution.UnresolvedProjectReferences.IsDefaultOrEmpty)
+        {
+            await NotifyProjectBuildRequiredAsync(
+                new ProjectBuildRequiredException(
+                    frameworkResolution.ProjectPath,
+                    frameworkResolution.UnresolvedProjectReferences)).ConfigureAwait(false);
+        }
+        else
+        {
+            _buildRequiredProjects.Clear(frameworkResolution.ProjectPath);
+        }
 
         var frameworkTypeSystem = latestContext?.Stage == XamlProjectStage.Framework
             ? latestContext.TypeSystem

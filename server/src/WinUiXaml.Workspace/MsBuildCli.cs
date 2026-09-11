@@ -82,7 +82,10 @@ namespace WinUiXaml.Workspace
         /// back to <see cref="Evaluate"/> when it fails: evaluation runs no targets and therefore
         /// still answers for an unrestored project.
         /// </remarks>
-        internal static (Evaluation Evaluation, ImmutableArray<string> CscCommandLineArgs) EvaluateAndCompile(
+        internal static (
+            Evaluation Evaluation,
+            ImmutableArray<string> CscCommandLineArgs,
+            ImmutableArray<string> UnresolvedProjectReferences) EvaluateAndCompile(
             string projectPath,
             IReadOnlyDictionary<string, string> globalProperties,
             CancellationToken cancellationToken = default)
@@ -105,12 +108,35 @@ namespace WinUiXaml.Workspace
             AppendEvaluationRequests(arguments);
             AppendProperties(arguments, globalProperties);
 
-            var output = Run(
-                arguments, Path.GetDirectoryName(fullPath), DesignTimeBuildTimeout, cancellationToken, fullPath);
+            string output;
+            try
+            {
+                output = Run(
+                    arguments, Path.GetDirectoryName(fullPath), DesignTimeBuildTimeout, cancellationToken, fullPath);
+            }
+            catch (ProjectBuildRequiredException ex)
+            {
+                // The markup compiler aborted because a referenced project has never been built.
+                // Reference resolution stops short of it, so it still yields the SDK and package
+                // references on a never-built tree. Degrading to that beats serving nothing; the
+                // unresolved list travels with the result so the build prompt is still raised.
+                var fallback = ResolveReferencesOnly(fullPath, globalProperties, cancellationToken);
+                if (fallback.Arguments.IsDefaultOrEmpty)
+                {
+                    throw;
+                }
+
+                return (
+                    fallback.Evaluation,
+                    fallback.Arguments,
+                    ex.UnresolvedAssemblies.ToImmutableArray());
+            }
+
             using var document = ParseJson(output, projectPath);
             return (
                 ReadEvaluation(document.RootElement, fullPath),
-                ReadItemIdentities(document.RootElement, "CscCommandLineArgs"));
+                ReadItemIdentities(document.RootElement, "CscCommandLineArgs"),
+                ImmutableArray<string>.Empty);
         }
 
         /// <summary>
@@ -136,6 +162,74 @@ namespace WinUiXaml.Workspace
             var output = Run(arguments, Path.GetDirectoryName(fullPath), EvaluateTimeout, cancellationToken);
             using var document = ParseJson(output, projectPath);
             return ReadEvaluation(document.RootElement, fullPath);
+        }
+
+        /// <summary>
+        /// Reference-resolution pass used when the full design-time compile aborts because a
+        /// referenced project has never been built.
+        /// </summary>
+        /// <remarks>
+        /// The WinUI markup compiler (MarkupCompilePass1) runs ahead of CoreCompile and hard-fails
+        /// with WMC1006 when a <c>ProjectReference</c>'s output assembly is missing, which takes
+        /// the whole compile down and leaves <c>CscCommandLineArgs</c> empty. <c>ResolveReferences</c>
+        /// stops short of the markup compiler, so it still resolves the SDK and package references
+        /// on a never-built tree. The result is shaped into csc-style arguments so the existing
+        /// <see cref="CscCommandLine"/> parser consumes it unchanged.
+        ///
+        /// What this cannot recover is the markup compiler's generated output (InitializeComponent
+        /// and the x:Name backing fields), so the caller still reports that a build is required --
+        /// this degrades the outage to a partial loss instead of serving nothing.
+        /// </remarks>
+        internal static (Evaluation Evaluation, ImmutableArray<string> Arguments) ResolveReferencesOnly(
+            string projectPath,
+            IReadOnlyDictionary<string, string> globalProperties,
+            CancellationToken cancellationToken = default)
+        {
+            var fullPath = Path.GetFullPath(projectPath);
+            var arguments = new List<string>
+            {
+                "msbuild",
+                fullPath,
+                "-nologo",
+                "-t:ResolveReferences",
+                "-p:BuildProjectReferences=false",
+                "-p:DesignTimeBuild=true",
+                "-p:DesignTimeSilentResolution=true",
+                "-p:BuildingInsideVisualStudio=true",
+                "-getItem:ReferencePath",
+                "-getItem:Compile",
+            };
+            AppendEvaluationRequests(arguments);
+            AppendProperties(arguments, globalProperties);
+
+            var output = Run(
+                arguments, Path.GetDirectoryName(fullPath), DesignTimeBuildTimeout, cancellationToken, fullPath);
+            using var document = ParseJson(output, projectPath);
+            var root = document.RootElement;
+            var evaluation = ReadEvaluation(root, fullPath);
+
+            var projectDirectory = Path.GetDirectoryName(fullPath)!;
+            var synthesized = ImmutableArray.CreateBuilder<string>();
+            foreach (var reference in ReadItemIdentities(root, "ReferencePath"))
+            {
+                synthesized.Add("/reference:" + reference);
+            }
+
+            // Bare .cs paths are what the parser treats as sources; anything else it ignores.
+            foreach (var source in ReadItemPaths(root, "Compile", projectDirectory))
+            {
+                if (source.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                {
+                    synthesized.Add(source);
+                }
+            }
+
+            if (!string.IsNullOrEmpty(evaluation.AssemblyName))
+            {
+                synthesized.Add("/out:" + evaluation.AssemblyName + ".dll");
+            }
+
+            return (evaluation, synthesized.ToImmutable());
         }
 
         private static void AppendEvaluationRequests(List<string> arguments)

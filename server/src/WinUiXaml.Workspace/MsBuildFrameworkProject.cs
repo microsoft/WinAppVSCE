@@ -26,16 +26,21 @@ namespace WinUiXaml.Workspace
         private MsBuildFrameworkProject(
             Compilation compilation,
             ImmutableArray<string> xamlFiles,
-            string? applicationDefinitionPath)
+            string? applicationDefinitionPath,
+            ImmutableArray<string> unresolvedProjectReferences)
         {
             Compilation = compilation;
             XamlFiles = xamlFiles;
             ApplicationDefinitionPath = applicationDefinitionPath;
+            UnresolvedProjectReferences = unresolvedProjectReferences;
         }
 
         internal Compilation Compilation { get; }
         internal ImmutableArray<string> XamlFiles { get; }
         internal string? ApplicationDefinitionPath { get; }
+
+        /// <summary>Referenced projects that had never been built when this project loaded.</summary>
+        internal ImmutableArray<string> UnresolvedProjectReferences { get; }
 
         internal static MsBuildFrameworkProject? Load(
             string projectPath,
@@ -50,7 +55,7 @@ namespace WinUiXaml.Workspace
             properties["BuildProjectReferences"] = "false";
 
             var fullPath = Path.GetFullPath(projectPath);
-            var (evaluation, arguments) = MsBuildCli.EvaluateAndCompile(
+            var (evaluation, arguments, unresolvedProjectReferences) = MsBuildCli.EvaluateAndCompile(
                 fullPath, properties, cancellationToken);
             if (RoslynProjectWorkspace.RequiresRestore(
                 evaluation.ProjectAssetsFile,
@@ -88,7 +93,8 @@ namespace WinUiXaml.Workspace
             return new MsBuildFrameworkProject(
                 compilation,
                 evaluation.XamlFiles,
-                evaluation.ApplicationDefinition);
+                evaluation.ApplicationDefinition,
+                unresolvedProjectReferences);
         }
     }
 }

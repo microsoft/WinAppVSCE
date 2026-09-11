@@ -133,4 +133,49 @@ public sealed class UnbuiltProjectReferenceDetectionTests
         Assert.Contains("a referenced project", exception.Message);
         Assert.DoesNotContain("()", exception.Message);
     }
+
+    [Fact]
+    public void ADegradedResolutionCarriesTheUnresolvedReferencesForward()
+    {
+        // The fallback load succeeds, so nothing throws and the server has no exception to read
+        // the unresolved list from. It travels on the resolution instead, and dropping it here
+        // would restore the silent outage the prompt exists to prevent.
+        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create("Probe");
+        var resolution = new XamlResolution(
+            @"C:\src\App\MainWindow.xaml",
+            @"C:\src\App\App.csproj",
+            className: "App.MainWindow",
+            classSymbol: null,
+            compilation,
+            System.Collections.Immutable.ImmutableArray<Microsoft.CodeAnalysis.IAssemblySymbol>.Empty,
+            System.Collections.Immutable.ImmutableArray<string>.Empty,
+            applicationDefinitionPath: null,
+            System.Collections.Immutable.ImmutableArray.Create("MiddleLib"));
+
+        Assert.Equal(new[] { "MiddleLib" }, resolution.UnresolvedProjectReferences);
+
+        // WithClassName runs on every XML-only edit. If it dropped the list the prompt would
+        // survive the first keystroke and vanish on the second.
+        Assert.Equal(
+            new[] { "MiddleLib" },
+            resolution.WithClassName("App.MainWindow").UnresolvedProjectReferences);
+    }
+
+    [Fact]
+    public void AHealthyResolutionReportsNoUnresolvedReferences()
+    {
+        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create("Probe");
+        var resolution = new XamlResolution(
+            @"C:\src\App\MainWindow.xaml",
+            @"C:\src\App\App.csproj",
+            className: null,
+            classSymbol: null,
+            compilation,
+            System.Collections.Immutable.ImmutableArray<Microsoft.CodeAnalysis.IAssemblySymbol>.Empty,
+            System.Collections.Immutable.ImmutableArray<string>.Empty,
+            applicationDefinitionPath: null);
+
+        Assert.False(resolution.UnresolvedProjectReferences.IsDefault);
+        Assert.Empty(resolution.UnresolvedProjectReferences);
+    }
 }
