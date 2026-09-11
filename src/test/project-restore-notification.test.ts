@@ -4,6 +4,7 @@ import {
   PROJECT_RESTORE_ACTIONS,
   PROJECT_RESTORE_MESSAGE,
   PROJECT_RESTORE_NOTIFICATION,
+  type ProjectRestoreNotificationHost,
   notifyProjectRestoreRequired,
 } from "../xaml/projectRestoreNotification";
 
@@ -27,22 +28,22 @@ describe("notifyProjectRestoreRequired", () => {
       restored: [] as string[],
       shownOutput: 0,
     };
-    return {
-      calls,
-      host: {
-        isTrustedWorkspaceProject: () => true,
-        showInformationMessage: async (message: string) => {
-          calls.prompted.push(message);
-          return choice;
-        },
-        showOutput: () => {
-          calls.shownOutput += 1;
-        },
-        restoreProject: async (projectPath: string) => {
-          calls.restored.push(projectPath);
-        },
+    // Typed as the real interface so a host member the fake does not implement is a compile
+    // error instead of a silently diverging test double.
+    const host: ProjectRestoreNotificationHost = {
+      isTrustedWorkspaceProject: () => true,
+      showInformationMessage: async (message: string) => {
+        calls.prompted.push(message);
+        return choice;
+      },
+      showOutput: () => {
+        calls.shownOutput += 1;
+      },
+      restoreProject: async (projectPath: string) => {
+        calls.restored.push(projectPath);
       },
     };
+    return { calls, host };
   }
 
   it("restores the project when the user approves", async () => {

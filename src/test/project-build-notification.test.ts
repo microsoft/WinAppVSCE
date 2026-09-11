@@ -3,19 +3,21 @@ import assert from "node:assert/strict";
 import {
   PROJECT_BUILD_ACTIONS,
   PROJECT_BUILD_NOTIFICATION,
+  type ProjectBuildNotificationHost,
   buildRequiredMessage,
   notifyProjectBuildRequired,
 } from "../xaml/projectBuildNotification";
 
 type Recorded = { message: string; actions: string[] };
 
-function createHost(overrides: Partial<{ trusted: boolean; show: boolean; choice: string }> = {}) {
+function createHost(overrides: Partial<{ trusted: boolean; choice: string }> = {}) {
   const shown: Recorded[] = [];
   let outputShown = false;
   const built: string[] = [];
-  const host = {
+  // Typed as the real interface rather than cast away, so a host member the fake does not
+  // implement is a compile error instead of a silently diverging test double.
+  const host: ProjectBuildNotificationHost = {
     isTrustedWorkspaceProject: () => overrides.trusted ?? true,
-    shouldShow: () => overrides.show ?? true,
     showWarningMessage: (message: string, ...actions: string[]) => {
       shown.push({ message, actions });
       return Promise.resolve(overrides.choice);
@@ -27,7 +29,7 @@ function createHost(overrides: Partial<{ trusted: boolean; show: boolean; choice
       built.push(projectPath);
     },
   };
-  return { host: host as never, shown, outputShown: () => outputShown, built };
+  return { host, shown, outputShown: () => outputShown, built };
 }
 
 // D5: the client must NOT keep its own once-per-project latch. The server latches and re-arms when
