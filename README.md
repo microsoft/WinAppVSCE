@@ -22,6 +22,7 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 
 | Command | Description |
 |---------|-------------|
+| **WinApp: Create WinUI App** | Scaffold a new WinUI 3 app from an official Windows App SDK template. Pick a template, name it, and choose where it goes; the extension then offers to open the new project. Works with no folder open. Requires the .NET SDK. |
 | **WinApp: Initialize Project** | Set up a new project with the Windows SDK and/or Windows App SDK. Prompts for SDK channel (stable, preview, experimental, or none). |
 | **WinApp: Restore Packages** | Restore project packages and dependencies. |
 | **WinApp: Update Packages** | Update packages and dependencies to the latest versions. |
@@ -52,7 +53,7 @@ When you run a project-context WinApp command — such as **Initialize Project**
 2. **Project at workspace root** — If a recognized project exists at the root, commands run there immediately.
 3. **Automatic scan** — Searches the workspace for compatible projects and prompts if multiple are found.
 
-Commands that already take an explicit target — such as **Run Application**, **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
+Commands that already take an explicit target — such as **Create WinUI App** (which needs no workspace at all, since it creates one), **Run Application**, **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
 **Configuration (optional):**
 
@@ -242,6 +243,17 @@ You can also disable just the diagnostic underlines while keeping completions an
 
 ## Scenarios
 
+### Create a new WinUI app
+
+Run **WinApp: Create WinUI App** to scaffold a WinUI 3 app from an official Windows App SDK template. It's the only WinApp command that doesn't need a project — run it with no folder open to start something from scratch. The command:
+
+1. **Loads the templates** — Fetches the available WinUI templates, installing the template pack on first run. If a pack is already on your machine, you're asked whether to use it or install the latest (a machine-wide change that affects all `dotnet new` tooling).
+2. **Asks for a template** — Choose from a list that includes the blank app, the NavigationView and TabView shells, the MVVM app, a class library, and a unit test project.
+3. **Asks for a name and a location** — Pick the folder to create the app in; the project lands in `<folder>/<name>`. If that directory already has files, you can use a free name instead (`MyApp2`) or create there anyway.
+4. **Offers to open it** — Open the new project in this window or a new one, add it to your workspace, or just reveal it in File Explorer.
+
+The .NET SDK is required. If it's missing, the command offers a link to the installer.
+
 ### Initialize and set up a project
 
 Run **WinApp: Initialize Project** to configure your project with the Windows SDK and/or Windows App SDK. The command:
@@ -285,6 +297,7 @@ The winapp CLI (and this extension) works with any Windows app framework:
 
 - Windows 10 or later
 - Visual Studio Code 1.109.0 or later
+- The [.NET SDK](https://dotnet.microsoft.com/download) 8.0.100 or later — only for **WinApp: Create WinUI App**, which delegates scaffolding to `dotnet new`
 
 The winapp CLI is bundled with the extension — no separate installation required.
 
