@@ -5,6 +5,7 @@ import {
   ProjectContextStatus,
   getRelevantProjectContextStatuses,
   getProjectContextStatusPresentation,
+  isProjectContextState,
   selectProjectContextStatus,
 } from "../xaml/projectContextStatus";
 
@@ -89,6 +90,34 @@ test("presents persistent loading and actionable error status", () => {
       transient: false,
     }
   );
+});
+
+test("names the build in the bar itself, and outranks a plain error", () => {
+  assert.deepEqual(
+    getProjectContextStatusPresentation({
+      uri: "file:///Diamond.xaml",
+      state: "build-required",
+      message: "Build required: App.csproj (unresolved: MiddleLib, SharedLib).",
+    }),
+    {
+      text: "$(tools) WinApp: build required for XAML IntelliSense",
+      tooltip:
+        "Build required: App.csproj (unresolved: MiddleLib, SharedLib). " +
+        "Click to show the WinUI XAML output.",
+      transient: false,
+    }
+  );
+
+  // A server that reports both must surface the one with a fix attached.
+  assert.equal(
+    selectProjectContextStatus([
+      { uri: "file:///A.xaml", state: "error", message: "boom" },
+      { uri: "file:///A.xaml", state: "build-required", message: "build me" },
+    ])?.state,
+    "build-required"
+  );
+
+  assert.equal(isProjectContextState("build-required"), true);
 });
 
 test("presents ready status briefly and hides idle status", () => {

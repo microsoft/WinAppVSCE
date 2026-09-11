@@ -10,6 +10,7 @@ export const PROJECT_CONTEXT_STATES = [
   "framework-ready",
   "ready",
   "error",
+  "build-required",
   "idle",
 ] as const;
 
@@ -33,6 +34,8 @@ export const PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE =
   "Framework IntelliSense is available. Project symbols and diagnostics are still loading.";
 export const PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE =
   "Project IntelliSense failed to load.";
+export const PROJECT_CONTEXT_BUILD_REQUIRED_FALLBACK_MESSAGE =
+  "Build the solution once so referenced projects produce their assemblies.";
 export const SHOW_XAML_OUTPUT_HINT =
   "Click to show the WinUI XAML output.";
 
@@ -67,6 +70,7 @@ export function selectProjectContextStatus(
 ): ProjectContextStatus | undefined {
   const values = [...statuses];
   return (
+    values.find((status) => status.state === "build-required") ??
     values.find((status) => status.state === "error") ??
     values.find((status) => status.state === "loading") ??
     values.find((status) => status.state === "framework-ready") ??
@@ -78,6 +82,15 @@ export function getProjectContextStatusPresentation(
   status: ProjectContextStatus
 ): ProjectContextStatusPresentation | undefined {
   switch (status.state) {
+    // The clean-clone case reaches every developer who opens XAML before their first build, so
+    // the instruction belongs in the bar itself. "unavailable" would send them looking for a
+    // broken extension when the fix is one build.
+    case "build-required":
+      return {
+        text: "$(tools) WinApp: build required for XAML IntelliSense",
+        tooltip: `${status.message ?? PROJECT_CONTEXT_BUILD_REQUIRED_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
+        transient: false,
+      };
     case "error":
       return {
         text: "$(warning) WinApp: XAML IntelliSense unavailable",

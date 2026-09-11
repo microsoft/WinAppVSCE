@@ -363,7 +363,8 @@ internal sealed partial class XamlLanguageServer
         catch (ProjectBuildRequiredException ex)
         {
             await NotifyProjectBuildRequiredAsync(ex).ConfigureAwait(false);
-            await NotifyProjectContextStatusAsync(uri, "error", ex.Message).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(uri, "build-required", ex.Message)
+                .ConfigureAwait(false);
             return null;
         }
         catch (Exception ex)
