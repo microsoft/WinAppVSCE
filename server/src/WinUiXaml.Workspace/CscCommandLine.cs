@@ -287,7 +287,18 @@ namespace WinUiXaml.Workspace
             equalsIndex == 1 && text.Length > 2 && (text[2] == '\\' || text[2] == '/');
 
         /// <summary>Materializes the reference closure, honouring any extern aliases.</summary>
-        public ImmutableArray<MetadataReference> CreateMetadataReferences()
+        /// <summary>Builds the metadata references for the compilation.</summary>
+        /// <param name="includeDocumentation">
+        /// Whether references carry their sibling XML documentation. This is not a preference: it
+        /// reproduces the two-stage behaviour of the MSBuildWorkspace design this replaced. The
+        /// framework stage built references without documentation, and the authoritative stage got
+        /// it implicitly from MSBuildWorkspace. Supplying it in both places populates Documentation
+        /// on completion items the moment a file opens, which makes VS Code open its details pane
+        /// beside the suggestion list far earlier than it used to -- a visible UI change unrelated
+        /// to Native AOT.
+        /// </param>
+        public ImmutableArray<MetadataReference> CreateMetadataReferences(
+            bool includeDocumentation = true)
         {
             var builder = ImmutableArray.CreateBuilder<MetadataReference>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -305,8 +316,12 @@ namespace WinUiXaml.Workspace
                     MetadataImageKind.Assembly,
                     aliasList,
                     EmbeddedInteropReferences.Contains(reference));
+                // Deliberately created without a DocumentationProvider when the caller asks for the
+                // framework stage, matching the base branch's MsBuildFrameworkProject.
                 builder.Add(MetadataReference.CreateFromFile(
-                    reference, properties, CreateDocumentationProvider(reference)));
+                    reference,
+                    properties,
+                    includeDocumentation ? CreateDocumentationProvider(reference) : null));
             }
 
             return builder.ToImmutable();
@@ -317,9 +332,9 @@ namespace WinUiXaml.Workspace
         /// their &lt;summary&gt; prose.
         /// </summary>
         /// <remarks>
-        /// MSBuildWorkspace did this implicitly. Creating references without it produces a
-        /// compilation that is correct in every way except that all documentation is silently
-        /// missing, which is why the smoke test asserts on it directly.
+        /// MSBuildWorkspace did this implicitly for the authoritative compilation, which is why the
+        /// smoke test asserts completion documentation. It did not do it for the framework stage, so
+        /// callers there must opt out.
         /// </remarks>
         private static DocumentationProvider? CreateDocumentationProvider(string referencePath)
         {

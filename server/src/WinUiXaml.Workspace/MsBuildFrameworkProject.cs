@@ -70,7 +70,11 @@ namespace WinUiXaml.Workspace
             }
 
             var commandLine = CscCommandLine.Parse(arguments, Path.GetDirectoryName(fullPath)!);
-            var references = commandLine.CreateMetadataReferences();
+            // No documentation at this stage. The framework compilation exists to answer as early
+            // as possible, and the base branch built its references without documentation here;
+            // adding it makes completion items carry prose the moment a file opens, which is a
+            // visible change in what the editor shows.
+            var references = commandLine.CreateMetadataReferences(includeDocumentation: false);
             if (references.IsDefaultOrEmpty)
             {
                 return null;
