@@ -32,6 +32,7 @@ internal sealed class JsonRpcConnection
     private const int MaxContentLength = 32 * 1024 * 1024;
     private const int MaxHeaderLineLength = 8 * 1024;
     private const int MaxHeaderBlockLength = 64 * 1024;
+    private const int InputBufferSize = 16 * 1024;
 
     private readonly Stream _input;
     private readonly Stream _output;
@@ -42,7 +43,12 @@ internal sealed class JsonRpcConnection
 
     public JsonRpcConnection(Stream input, Stream output)
     {
-        _input = input;
+        // Headers have no length prefix, so they are parsed a byte at a time. Over an unbuffered
+        // pipe that is one syscall per header byte -- on the order of a hundred per message,
+        // against a client that sends one per keystroke. Only non-seekable streams are wrapped:
+        // those are the real stdio pipes, whereas a seekable stream is an in-memory test double
+        // whose owner may still be writing to it, and read-ahead there would be surprising.
+        _input = input.CanSeek ? input : new BufferedStream(input, InputBufferSize);
         _output = output;
     }
 
@@ -137,7 +143,7 @@ internal sealed class JsonRpcConnection
     {
         object? result = null;
         ResponseError? error = null;
-        var requestKey = id.GetRawText();
+        var requestKey = RequestKey(id);
         using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(connectionToken);
         _requestCancellations[requestKey] = requestCancellation;
 
@@ -197,11 +203,31 @@ internal sealed class JsonRpcConnection
             return;
         }
 
-        if (_requestCancellations.TryGetValue(id.GetRawText(), out var cancellation))
+        if (_requestCancellations.TryGetValue(RequestKey(id), out var cancellation))
         {
             cancellation.Cancel();
         }
     }
+
+    /// <summary>
+    /// Normalizes a JSON-RPC id into a cancellation-table key.
+    /// </summary>
+    /// <remarks>
+    /// <c>JsonElement.GetRawText</c> returns the literal source token, so a peer that sends a
+    /// request id as <c>1</c> and then cancels it as <c>"1"</c> -- or writes <c>1.0</c>, or pads
+    /// the token -- produces a different string and the cancellation is dropped in silence, which
+    /// surfaces as a request that keeps running after the client gave up on it. Numbers and their
+    /// string spelling deliberately collapse to the same key: a peer using both forms as distinct
+    /// concurrent ids would already be violating JSON-RPC, whereas a peer that stringifies is
+    /// common enough to be worth tolerating.
+    /// </remarks>
+    private static string RequestKey(JsonElement id) => id.ValueKind switch
+    {
+        JsonValueKind.Number when id.TryGetInt64(out var number) =>
+            number.ToString(CultureInfo.InvariantCulture),
+        JsonValueKind.String => id.GetString() ?? string.Empty,
+        _ => id.GetRawText(),
+    };
 
     private async Task<byte[]?> ReadMessageAsync(CancellationToken cancellationToken)
     {

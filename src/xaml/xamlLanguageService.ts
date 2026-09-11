@@ -627,8 +627,10 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
 
   // The shipped server is a Windows-only native binary. On any other host the .exe is still
   // present in the VSIX, so path resolution succeeds and spawn fails with ENOEXEC -- a "failed to
-  // start" error that gives the user no hint their platform is simply unsupported.
-  if (!serverRidFor(process.platform, process.arch)) {
+  // start" error that gives the user no hint their platform is simply unsupported. An explicit
+  // WINUI_XAML_SERVER_PATH override bypasses the gate: that path is how a contributor points at a
+  // framework-dependent .dll, which does run cross-platform under the dotnet host.
+  if (!process.env.WINUI_XAML_SERVER_PATH && !serverRidFor(process.platform, process.arch)) {
     notifyDegraded(
       `WinUI XAML language support requires Windows on x64 or ARM64 (this host is ${process.platform}-${process.arch}). ` +
         "Syntax highlighting remains available.",
