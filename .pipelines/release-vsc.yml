@@ -143,12 +143,20 @@ extends:
                 targetType: 'inline'
                 script: |
                   $bundle = "$(Build.ArtifactStagingDirectory)/server-bundle"
-                  $binaries = Get-ChildItem -Path $bundle -Recurse -Include 'WinUiXaml*.dll','WinUiXaml*.exe'
+                  $binaries = Get-ChildItem -Path $bundle -Recurse -Include '*.dll','*.exe'
                   if ($binaries.Count -eq 0) {
-                    Write-Error "No first-party server binaries found under $bundle"
+                    Write-Error "No server binaries found under $bundle"
                     exit 1
                   }
 
+                  $firstParty = @($binaries | Where-Object { $_.Name -like 'WinUiXaml*' })
+                  if ($firstParty.Count -eq 0) {
+                    Write-Error "No first-party WinUiXaml binaries found under $bundle"
+                    exit 1
+                  }
+
+                  # Third-party dependencies arrive already signed by their publisher, so every
+                  # shipped binary is expected to carry a valid signature, not just ours.
                   $unsigned = @()
                   foreach ($binary in $binaries) {
                     $signature = Get-AuthenticodeSignature -FilePath $binary.FullName
@@ -159,11 +167,11 @@ extends:
                   }
 
                   if ($unsigned.Count -gt 0) {
-                    Write-Error "Unsigned first-party binaries:`n$($unsigned -join "`n")"
+                    Write-Error "Unsigned binaries in the server bundle:`n$($unsigned -join "`n")"
                     exit 1
                   }
 
-                  Write-Host "All $($binaries.Count) first-party server binaries are signed."
+                  Write-Host "All $($binaries.Count) server binaries are signed ($($firstParty.Count) first-party)."
           - task: 1ES.PublishPipelineArtifact@1
             displayName: Upload server artifact
             inputs:
