@@ -101,9 +101,10 @@ namespace WinUiXaml.Workspace
                 TryDeleteManifest(manifest);
 
                 File.WriteAllText(requestPath, BuildRequest(assemblyName, outputDirectory, commandLine));
-                if (!Invoke(host, requestPath, cancellationToken))
+                var run = Invoke(host, requestPath, cancellationToken);
+                if (!run.Succeeded)
                 {
-                    return Unavailable(projectPath, "helper failed, timed out, or was cancelled");
+                    return Unavailable(projectPath, run.Describe());
                 }
 
                 if (!File.Exists(manifest))
@@ -242,7 +243,7 @@ namespace WinUiXaml.Workspace
             return ImmutableArray<string>.Empty;
         }
 
-        private static bool Invoke(string host, string requestPath, CancellationToken cancellationToken)
+        private static HostRunResult Invoke(string host, string requestPath, CancellationToken cancellationToken)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -259,6 +260,38 @@ namespace WinUiXaml.Workspace
             return RunProcess(startInfo, Timeout, cancellationToken);
         }
 
+        /// <summary>Why a generator-host invocation did not produce a manifest.</summary>
+        /// <remarks>
+        /// A crash, a hang and a cancelled request are three different support paths, and an
+        /// operator reading a user's log cannot act on them the same way: a non-zero exit is a
+        /// defect to escalate, a timeout is usually load, and a cancellation is routine. Collapsing
+        /// them into one sentence threw that away at the only point it was known.
+        /// </remarks>
+        internal enum HostRunOutcome
+        {
+            Succeeded,
+            FailedToStart,
+            ExitedNonZero,
+            TimedOut,
+            Cancelled,
+        }
+
+        internal readonly record struct HostRunResult(HostRunOutcome Outcome, int ExitCode)
+        {
+            internal bool Succeeded => Outcome == HostRunOutcome.Succeeded;
+
+            /// <summary>Log-ready phrase naming the specific failure, with the exit code when there is one.</summary>
+            internal string Describe() => Outcome switch
+            {
+                HostRunOutcome.Succeeded => "helper succeeded",
+                HostRunOutcome.FailedToStart => "helper process could not be started",
+                HostRunOutcome.ExitedNonZero => $"helper exited with code {ExitCode}",
+                HostRunOutcome.TimedOut => $"helper did not exit within {Timeout.TotalMinutes:0} minutes and was terminated",
+                HostRunOutcome.Cancelled => "helper was cancelled before it finished",
+                _ => "helper failed",
+            };
+        }
+
         /// <summary>Runs a child process to completion, draining both pipes asynchronously.</summary>
         /// <remarks>
         /// Reading the pipes sequentially with <c>ReadToEnd</c> deadlocks: a generator that fills
@@ -269,7 +302,7 @@ namespace WinUiXaml.Workspace
         /// finishes loading and the server serves nothing at all for it. Async draining with an
         /// armed timeout is the shape <see cref="MsBuildCli"/> already uses.
         /// </remarks>
-        internal static bool RunProcess(
+        internal static HostRunResult RunProcess(
             ProcessStartInfo startInfo,
             TimeSpan timeout,
             CancellationToken cancellationToken)
@@ -286,7 +319,7 @@ namespace WinUiXaml.Workspace
             }
             catch (Exception)
             {
-                return false;
+                return new HostRunResult(HostRunOutcome.FailedToStart, 0);
             }
 
             process.BeginOutputReadLine();
@@ -297,13 +330,22 @@ namespace WinUiXaml.Workspace
             if (!process.WaitForExit((int)timeout.TotalMilliseconds))
             {
                 TryKill(process);
-                return false;
+                return new HostRunResult(HostRunOutcome.TimedOut, 0);
             }
 
             // Flushes the async readers so the exit code reflects a fully drained child.
             process.WaitForExit();
 
-            return process.ExitCode == 0;
+            // Cancellation kills the child, so its exit code is meaningless here. Checking the
+            // token first is what keeps a cancelled request from being reported as a crash.
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return new HostRunResult(HostRunOutcome.Cancelled, 0);
+            }
+
+            return process.ExitCode == 0
+                ? new HostRunResult(HostRunOutcome.Succeeded, 0)
+                : new HostRunResult(HostRunOutcome.ExitedNonZero, process.ExitCode);
         }
 
         private static void TryKill(Process process)

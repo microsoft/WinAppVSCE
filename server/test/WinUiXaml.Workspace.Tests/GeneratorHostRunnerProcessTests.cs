@@ -39,7 +39,7 @@ namespace WinUiXaml.Workspace.Tests
         /// Fails the test rather than hanging the run when the call under test never returns,
         /// which is the exact symptom being guarded against.
         /// </summary>
-        private static async Task<bool> CompleteWithin(Task<bool> run, TimeSpan budget, string because)
+        private static async Task<T> CompleteWithin<T>(Task<T> run, TimeSpan budget, string because)
         {
             var finished = await Task.WhenAny(run, Task.Delay(budget)).ConfigureAwait(false);
             Assert.True(ReferenceEquals(finished, run), because);
@@ -67,7 +67,7 @@ namespace WinUiXaml.Workspace.Tests
                 $"RunProcess did not return while the child wrote {StderrBytes} bytes to stderr. " +
                 "Both pipes must be drained concurrently.");
 
-            Assert.True(succeeded);
+            Assert.Equal(GeneratorHostRunner.HostRunOutcome.Succeeded, succeeded.Outcome);
         }
 
         /// <summary>
@@ -90,7 +90,9 @@ namespace WinUiXaml.Workspace.Tests
                 TimeSpan.FromSeconds(60),
                 "Cancelling did not interrupt the wait on a long-running generator host.");
 
-            Assert.False(succeeded);
+            // A cancelled request is routine; reporting it as a crash sends an operator hunting
+            // for a defect that is not there.
+            Assert.Equal(GeneratorHostRunner.HostRunOutcome.Cancelled, succeeded.Outcome);
         }
 
         /// <summary>The timeout must cap a child that never exits on its own.</summary>
@@ -105,7 +107,8 @@ namespace WinUiXaml.Workspace.Tests
                 TimeSpan.FromSeconds(60),
                 "RunProcess ignored its timeout for a child that does not exit.");
 
-            Assert.False(succeeded);
+            Assert.Equal(GeneratorHostRunner.HostRunOutcome.TimedOut, succeeded.Outcome);
+            Assert.Contains("did not exit within", succeeded.Describe());
         }
 
         /// <summary>A non-zero exit is reported as failure rather than silently succeeding.</summary>
@@ -118,7 +121,11 @@ namespace WinUiXaml.Workspace.Tests
                 TimeSpan.FromSeconds(60),
                 "RunProcess did not return for a child that exits immediately.");
 
-            Assert.False(succeeded);
+            // The exit code is the difference between "escalate" and "expected under load", so it
+            // has to survive into the log rather than being flattened to a boolean.
+            Assert.Equal(GeneratorHostRunner.HostRunOutcome.ExitedNonZero, succeeded.Outcome);
+            Assert.Equal(3, succeeded.ExitCode);
+            Assert.Contains("exited with code 3", succeeded.Describe());
         }
         /// <summary>
         /// A project with no analyzers is not a failure, so it must stay silent -- otherwise the
