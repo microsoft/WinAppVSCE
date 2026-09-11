@@ -32,6 +32,17 @@ internal sealed class ProjectRestoreRequiredParams
     [JsonPropertyName("projectPath")] public string? ProjectPath { get; set; }
 }
 
+/// <summary>
+/// Tells the client a referenced project has never been built, which the XAML markup compiler
+/// treats as fatal. Carries the project names so the prompt can say what to build.
+/// </summary>
+internal sealed class ProjectBuildRequiredParams
+{
+    [JsonPropertyName("projectPath")] public string? ProjectPath { get; set; }
+
+    [JsonPropertyName("unresolvedAssemblies")] public List<string>? UnresolvedAssemblies { get; set; }
+}
+
 // --- Base protocol envelope -------------------------------------------------
 
 internal sealed class IncomingMessage

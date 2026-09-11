@@ -58,6 +58,11 @@ import {
   notifyProjectRestoreRequired as runProjectRestoreNotification,
 } from "./projectRestoreNotification";
 import {
+  PROJECT_BUILD_NOTIFICATION,
+  ProjectBuildNotificationGate,
+  notifyProjectBuildRequired as runProjectBuildNotification,
+} from "./projectBuildNotification";
+import {
   PROJECT_CONTEXT_STATUS_NOTIFICATION,
   ProjectContextStatus,
   getRelevantProjectContextStatuses,
@@ -123,6 +128,7 @@ let lastDegradedCause: DegradedCause | undefined;
 let dotnetHostResolver: DotnetHostResolver | undefined;
 const csharpDevKitNotificationGate = new CsharpDevKitNotificationGate();
 const projectRestoreNotificationGate = new ProjectRestoreNotificationGate();
+const projectBuildNotificationGate = new ProjectBuildNotificationGate();
 const diagnosticsLevelInteraction = new DiagnosticsLevelInteraction({
   log,
   showWarningMessage: (message, action) =>
@@ -760,6 +766,16 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     ({ projectPath }: { projectPath?: string }) => notifyProjectRestoreRequired(projectPath)
   );
   candidate.onNotification(
+    PROJECT_BUILD_NOTIFICATION,
+    ({
+      projectPath,
+      unresolvedAssemblies,
+    }: {
+      projectPath?: string;
+      unresolvedAssemblies?: string[];
+    }) => notifyProjectBuildRequired(projectPath, unresolvedAssemblies)
+  );
+  candidate.onNotification(
     PROJECT_CONTEXT_STATUS_NOTIFICATION,
     (status: ProjectContextStatus) => updateProjectContextStatus(status)
   );
@@ -814,6 +830,19 @@ function notifyProjectRestoreRequired(projectPath: string | undefined): void {
       vscode.window.showInformationMessage(message, ...actions),
     showOutput: () => output?.show(true),
     restoreProject,
+  });
+}
+
+function notifyProjectBuildRequired(
+  projectPath: string | undefined,
+  unresolvedAssemblies: string[] | undefined
+): void {
+  void runProjectBuildNotification(projectPath, unresolvedAssemblies, {
+    isTrustedWorkspaceProject,
+    shouldShow: (path) => projectBuildNotificationGate.shouldShow(path),
+    showWarningMessage: (message, ...actions) =>
+      vscode.window.showWarningMessage(message, ...actions),
+    showOutput: () => output?.show(true),
   });
 }
 

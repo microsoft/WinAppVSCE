@@ -360,6 +360,12 @@ internal sealed partial class XamlLanguageServer
             await NotifyProjectContextStatusAsync(uri, "error", ex.Message).ConfigureAwait(false);
             return null;
         }
+        catch (ProjectBuildRequiredException ex)
+        {
+            await NotifyProjectBuildRequiredAsync(ex).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(uri, "error", ex.Message).ConfigureAwait(false);
+            return null;
+        }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[winui-xaml-ls] resolve failed: {ex.Message}");
@@ -517,6 +523,27 @@ internal sealed partial class XamlLanguageServer
             ? _connection.SendNotificationAsync(
                 "winui-xaml/projectRestoreRequired",
                 new ProjectRestoreRequiredParams { ProjectPath = exception.ProjectPath })
+            : Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Surfaces the clean-clone case. Without this the markup compiler's WMC1006 abort produced no
+    /// compilation and therefore no completions, no hovers, and no diagnostics, with nothing in the
+    /// UI to say why -- indistinguishable from the extension being broken.
+    /// </summary>
+    private Task NotifyProjectBuildRequiredAsync(ProjectBuildRequiredException exception)
+    {
+        Console.Error.WriteLine(
+            $"[winui-xaml-ls] build required: {exception.ProjectPath} " +
+            $"(unresolved: {string.Join(", ", exception.UnresolvedAssemblies)})");
+        return _buildRequiredProjects.TryAdd(exception.ProjectPath, 0)
+            ? _connection.SendNotificationAsync(
+                "winui-xaml/projectBuildRequired",
+                new ProjectBuildRequiredParams
+                {
+                    ProjectPath = exception.ProjectPath,
+                    UnresolvedAssemblies = exception.UnresolvedAssemblies.ToList(),
+                })
             : Task.CompletedTask;
     }
 

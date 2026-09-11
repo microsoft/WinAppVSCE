@@ -36,6 +36,8 @@ internal sealed partial class XamlLanguageServer
     private int _msbuildUnavailableNotified;
     private readonly ConcurrentDictionary<string, byte> _restoreRequiredProjects =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _buildRequiredProjects =
+        new(StringComparer.OrdinalIgnoreCase);
     private bool _shuttingDown;
 
     // MSBuild evaluation is restricted to trusted roots because project files can execute code. An empty list disables project evaluation.

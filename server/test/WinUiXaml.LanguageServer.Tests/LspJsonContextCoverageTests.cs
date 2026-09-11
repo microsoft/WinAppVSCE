@@ -95,9 +95,43 @@ public class LspJsonContextCoverageTests
             "closed generic itself:\n  " + string.Join("\n  ", missing));
     }
 
-    private static Type? ElementOf(Type type)
+    /// <summary>
+    /// The reflection guards above prove a payload type is registered; they do not prove it can
+    /// actually be written. A collection-valued property is where that gap bites -- registering
+    /// the owner does not by itself guarantee metadata for the closed generic it holds -- so the
+    /// build-required payload is serialized here for real, with reflection unavailable exactly as
+    /// it is under Native AOT.
+    /// </summary>
+    [Fact]
+    public void ProjectBuildRequiredPayloadSerializesWithoutReflection()
     {
-        if (type.IsArray)
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            new ProjectBuildRequiredParams
+            {
+                ProjectPath = @"C:\src\App\App.csproj",
+                UnresolvedAssemblies = ["MiddleLib", "SharedLib"],
+            },
+            typeof(ProjectBuildRequiredParams),
+            LspJsonContext.Default);
+
+        Assert.Contains("\"projectPath\"", json);
+        Assert.Contains("MiddleLib", json);
+        Assert.Contains("SharedLib", json);
+    }
+
+    [Fact]
+    public void ProjectBuildRequiredPayloadSerializesWithNoAssembliesNamed()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            new ProjectBuildRequiredParams { ProjectPath = @"C:\src\App\App.csproj" },
+            typeof(ProjectBuildRequiredParams),
+            LspJsonContext.Default);
+
+        Assert.Contains("\"projectPath\"", json);
+    }
+
+    private static Type? ElementOf(Type type)
+    {        if (type.IsArray)
         {
             return type.GetElementType();
         }

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
@@ -20,6 +22,45 @@ namespace WinUiXaml.Workspace
         }
 
         public string ProjectPath { get; }
+    }
+
+    /// <summary>
+    /// A referenced project's assembly does not exist yet, so the XAML markup compiler aborts the
+    /// design-time evaluation before <c>CoreCompile</c> runs and no compilation is produced at all.
+    /// </summary>
+    /// <remarks>
+    /// This is the clean-clone path. <c>BuildProjectReferences=false</c> keeps evaluation fast and
+    /// lets referenced projects be compiled from source, but the WinUI markup compiler resolves
+    /// project references as assemblies on disk and hard-fails with WMC1006 when they are missing.
+    /// The result is a total outage -- not merely the referenced types, but built-in framework
+    /// types, page members, and every diagnostic -- and before this exception existed it reached
+    /// the user as silence. Naming the unbuilt projects turns that into a self-diagnosing failure.
+    /// </remarks>
+    public sealed class ProjectBuildRequiredException : InvalidOperationException
+    {
+        public ProjectBuildRequiredException(
+            string projectPath, IReadOnlyList<string> unresolvedAssemblies, Exception? innerException = null)
+            : base(
+                BuildMessage(unresolvedAssemblies),
+                innerException)
+        {
+            ProjectPath = projectPath;
+            UnresolvedAssemblies = unresolvedAssemblies;
+        }
+
+        public string ProjectPath { get; }
+
+        /// <summary>Assemblies the markup compiler could not resolve, most useful as project names.</summary>
+        public IReadOnlyList<string> UnresolvedAssemblies { get; }
+
+        private static string BuildMessage(IReadOnlyList<string> unresolvedAssemblies)
+        {
+            var names = unresolvedAssemblies.Count == 0
+                ? "a referenced project"
+                : string.Join(", ", unresolvedAssemblies);
+            return $"Referenced project output is missing ({names}). " +
+                "Build the solution once to enable project-aware XAML features.";
+        }
     }
 
     /// <summary>
@@ -515,6 +556,56 @@ namespace WinUiXaml.Workspace
             message.Contains("NETSDK1005", StringComparison.OrdinalIgnoreCase) ||
             (message.Contains("project.assets.json", StringComparison.OrdinalIgnoreCase) &&
              message.Contains("not found", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// WMC1006 is the WinUI markup compiler failing to resolve a project reference's assembly.
+        /// It is emitted once per unresolved assembly and aborts the evaluation, so it must be
+        /// distinguished from a generic MSBuild failure: the user's fix is a build, not a repair.
+        /// </summary>
+        internal static bool IsUnbuiltProjectReferenceFailure(string message) =>
+            message.Contains("WMC1006", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains(
+                "Cannot resolve Assembly or Windows Metadata file",
+                StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Pulls the assembly paths out of the WMC1006 lines so the user is told which projects to
+        /// build. The compiler quotes the full path; the file name is what matches a project name.
+        /// </summary>
+        internal static IReadOnlyList<string> ExtractUnresolvedAssemblies(string message)
+        {
+            var names = new List<string>();
+            foreach (Match match in UnresolvedAssemblyPattern.Matches(message))
+            {
+                var raw = match.Groups["path"].Value.Trim();
+                if (raw.Length == 0)
+                {
+                    continue;
+                }
+
+                string name;
+                try
+                {
+                    name = Path.GetFileNameWithoutExtension(raw);
+                }
+                catch (ArgumentException)
+                {
+                    // A malformed path in compiler output must not take down project loading.
+                    continue;
+                }
+
+                if (name.Length > 0 && !names.Contains(name, StringComparer.OrdinalIgnoreCase))
+                {
+                    names.Add(name);
+                }
+            }
+
+            return names;
+        }
+
+        private static readonly Regex UnresolvedAssemblyPattern = new(
+            @"Cannot resolve Assembly or Windows Metadata file '(?<path>[^']*)'",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         /// <summary>Gets the C# compilation for the loaded project.</summary>
         public Task<Compilation?> GetCompilationAsync(CancellationToken cancellationToken = default) =>

@@ -106,7 +106,7 @@ namespace WinUiXaml.Workspace
             AppendProperties(arguments, globalProperties);
 
             var output = Run(
-                arguments, Path.GetDirectoryName(fullPath), DesignTimeBuildTimeout, cancellationToken);
+                arguments, Path.GetDirectoryName(fullPath), DesignTimeBuildTimeout, cancellationToken, fullPath);
             using var document = ParseJson(output, projectPath);
             return (
                 ReadEvaluation(document.RootElement, fullPath),
@@ -218,7 +218,8 @@ namespace WinUiXaml.Workspace
                 arguments,
                 Path.GetDirectoryName(Path.GetFullPath(projectPath)),
                 DesignTimeBuildTimeout,
-                cancellationToken);
+                cancellationToken,
+                Path.GetFullPath(projectPath));
             using var document = ParseJson(output, projectPath);
             return ReadItemIdentities(document.RootElement, "CscCommandLineArgs");
         }
@@ -388,7 +389,8 @@ namespace WinUiXaml.Workspace
             IReadOnlyList<string> arguments,
             string? workingDirectory,
             TimeSpan timeout,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string? projectPath = null)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -446,10 +448,25 @@ namespace WinUiXaml.Workspace
             if (process.ExitCode != 0)
             {
                 var detail = standardError.Length > 0 ? standardError.ToString() : combined;
+                // The client only prompts for a path it can recognize as a project, so reporting
+                // the working directory here silently dropped the prompt.
+                var reportedPath = projectPath ?? workingDirectory ?? string.Empty;
                 if (RoslynProjectWorkspace.IsMissingRestoreFailure(detail))
                 {
-                    throw new ProjectRestoreRequiredException(
-                        workingDirectory ?? string.Empty);
+                    throw new ProjectRestoreRequiredException(reportedPath);
+                }
+
+                // The markup compiler writes WMC1006 to stdout, so a non-empty stderr from an
+                // unrelated warning would otherwise hide it and turn an actionable "build once"
+                // into a generic MSBuild failure.
+                var diagnosticText = standardError.Length > 0 && !ReferenceEquals(detail, combined)
+                    ? detail + Environment.NewLine + combined
+                    : detail;
+                if (RoslynProjectWorkspace.IsUnbuiltProjectReferenceFailure(diagnosticText))
+                {
+                    throw new ProjectBuildRequiredException(
+                        reportedPath,
+                        RoslynProjectWorkspace.ExtractUnresolvedAssemblies(diagnosticText));
                 }
 
                 throw new MsBuildUnavailableException(
