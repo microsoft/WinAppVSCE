@@ -627,7 +627,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
   const serverPath = resolveServerPath(context);
   if (!serverPath) {
     notifyDegraded(
-      "Framework-dependent language server DLL not found. IntelliSense, diagnostics, and navigation are unavailable; " +
+      "Bundled WinUI XAML language server executable not found. IntelliSense, diagnostics, and navigation are unavailable; " +
         "syntax highlighting remains available.",
       "server",
       userInitiated,
