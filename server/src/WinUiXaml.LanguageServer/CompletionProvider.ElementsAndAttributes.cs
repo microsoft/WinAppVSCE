@@ -882,7 +882,6 @@ internal static partial class CompletionProvider
                  valueType.SpecialType != SpecialType.System_Boolean &&
                  valueType is not INamedTypeSymbol { Name: "Type", ContainingNamespace.Name: "System" } &&
                  !XamlValueConverter.IsGridLength(valueType, typeSystem) &&
-                 !XamlValueConverter.IsThickness(valueType, typeSystem) &&
                  !XamlValueConverter.IsFontFamily(valueType, typeSystem) &&
                  !XamlValueConverter.IsGridDefinitionCollection(valueType, typeSystem) &&
                  !XamlValueConverter.IsBrush(valueType, typeSystem) &&
@@ -1085,16 +1084,10 @@ internal static partial class CompletionProvider
                 ("*,*", $"Two equal star-sized {dimension}"));
         }
 
-        if (XamlValueConverter.IsThickness(valueType, typeSystem))
-        {
-            return CompleteLiteralValues(
-                partial,
-                valueReplaceRange,
-                ("0", "Uniform thickness"),
-                ("0,0", "Horizontal and vertical thickness"),
-                ("0,0,0,0", "Left, top, right, and bottom thickness"));
-        }
-
+        // Thickness is deliberately not completed. Unlike the other literal types here, its values
+        // are not drawn from a fixed set -- "0", "0,0" and "0,0,0,0" are only arity examples, and
+        // the author has to replace the digits in every case. Offering them puts a list in front of
+        // a number nobody wants, so thickness attributes are left free-form.
         if (XamlValueConverter.IsFontFamily(valueType, typeSystem))
         {
             return CompleteLiteralValues(
