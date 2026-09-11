@@ -13,6 +13,7 @@ type Recorded = { message: string; actions: string[] };
 function createHost(overrides: Partial<{ trusted: boolean; show: boolean; choice: string }> = {}) {
   const shown: Recorded[] = [];
   let outputShown = false;
+  const built: string[] = [];
   const host = {
     isTrustedWorkspaceProject: () => overrides.trusted ?? true,
     shouldShow: () => overrides.show ?? true,
@@ -23,8 +24,11 @@ function createHost(overrides: Partial<{ trusted: boolean; show: boolean; choice
     showOutput: () => {
       outputShown = true;
     },
+    buildProject: (projectPath: string) => {
+      built.push(projectPath);
+    },
   };
-  return { host: host as never, shown, outputShown: () => outputShown };
+  return { host: host as never, shown, outputShown: () => outputShown, built };
 }
 
 describe("ProjectBuildNotificationGate", () => {
@@ -62,14 +66,26 @@ describe("buildRequiredMessage", () => {
 });
 
 describe("notifyProjectBuildRequired", () => {
-  it("prompts with the Show Output action", async () => {
+  it("offers Build first, because building is the fix and Show Output is only diagnosis", async () => {
     const { host, shown } = createHost();
 
     await notifyProjectBuildRequired("C:\\app\\App.csproj", ["SharedLib"], host);
 
     assert.equal(shown.length, 1);
     assert.match(shown[0].message, /SharedLib has not been built/);
-    assert.deepEqual(shown[0].actions, [PROJECT_BUILD_ACTIONS.showOutput]);
+    assert.deepEqual(shown[0].actions, [
+      PROJECT_BUILD_ACTIONS.build,
+      PROJECT_BUILD_ACTIONS.showOutput,
+    ]);
+  });
+
+  it("builds the project that was reported, not a workspace guess", async () => {
+    const { host, built, outputShown } = createHost({ choice: PROJECT_BUILD_ACTIONS.build });
+
+    await notifyProjectBuildRequired("C:\\app\\App.csproj", ["SharedLib"], host);
+
+    assert.deepEqual(built, ["C:\\app\\App.csproj"]);
+    assert.equal(outputShown(), false);
   });
 
   it("stays silent without a project path", async () => {
@@ -114,11 +130,12 @@ describe("notifyProjectBuildRequired", () => {
   });
 
   it("does nothing when the prompt is dismissed", async () => {
-    const { host, outputShown } = createHost({ choice: undefined });
+    const { host, outputShown, built } = createHost({ choice: undefined });
 
     await notifyProjectBuildRequired("C:\\app\\App.csproj", ["SharedLib"], host);
 
     assert.equal(outputShown(), false);
+    assert.deepEqual(built, []);
   });
 
   it("exposes the notification contract the server sends", () => {

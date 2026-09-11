@@ -1,5 +1,6 @@
 export const PROJECT_BUILD_NOTIFICATION = "winui-xaml/projectBuildRequired";
 export const PROJECT_BUILD_ACTIONS = {
+  build: "Build",
   showOutput: "Show Output",
 } as const;
 
@@ -48,6 +49,8 @@ export interface ProjectBuildNotificationHost {
     ...actions: ProjectBuildAction[]
   ): Thenable<string | undefined>;
   showOutput(): void;
+  /** Runs a build for the project so the user can act without leaving the prompt. */
+  buildProject(projectPath: string): void;
 }
 
 /**
@@ -69,8 +72,14 @@ export async function notifyProjectBuildRequired(
 
   const choice = await host.showWarningMessage(
     buildRequiredMessage(unresolvedAssemblies ?? []),
+    PROJECT_BUILD_ACTIONS.build,
     PROJECT_BUILD_ACTIONS.showOutput,
   );
+
+  if (choice === PROJECT_BUILD_ACTIONS.build) {
+    host.buildProject(projectPath);
+    return;
+  }
 
   if (choice === PROJECT_BUILD_ACTIONS.showOutput) {
     host.showOutput();

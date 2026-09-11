@@ -387,6 +387,11 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
+        // The project loaded, so a previously reported build-required condition is resolved. Drop
+        // the latch: if the outputs are removed again later in this same session (a clean, a branch
+        // switch) the user gets told a second time rather than facing the silent outage.
+        _buildRequiredProjects.Clear(frameworkResolution.ProjectPath);
+
         var frameworkTypeSystem = latestContext?.Stage == XamlProjectStage.Framework
             ? latestContext.TypeSystem
             : _typeSystems.GetValue(
@@ -537,7 +542,7 @@ internal sealed partial class XamlLanguageServer
         Console.Error.WriteLine(
             $"[winui-xaml-ls] build required: {exception.ProjectPath} " +
             $"(unresolved: {string.Join(", ", exception.UnresolvedAssemblies)})");
-        return _buildRequiredProjects.TryAdd(exception.ProjectPath, 0)
+        return _buildRequiredProjects.ShouldNotify(exception.ProjectPath)
             ? _connection.SendNotificationAsync(
                 "winui-xaml/projectBuildRequired",
                 new ProjectBuildRequiredParams

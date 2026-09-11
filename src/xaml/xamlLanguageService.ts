@@ -843,7 +843,22 @@ function notifyProjectBuildRequired(
     showWarningMessage: (message, ...actions) =>
       vscode.window.showWarningMessage(message, ...actions),
     showOutput: () => output?.show(true),
+    buildProject: (projectPath) => runProjectBuild(projectPath),
   });
+}
+
+/**
+ * Builds in a visible terminal rather than silently: the build is the user's own action, its
+ * output is where a genuine build error will surface, and a terminal needs no new command
+ * contribution or progress UI. Once the outputs exist the server re-resolves on the next request.
+ */
+function runProjectBuild(projectPath: string): void {
+  const terminal = vscode.window.createTerminal({
+    name: "WinApp: Build",
+    cwd: path.dirname(projectPath),
+  });
+  terminal.show(true);
+  terminal.sendText(`dotnet build "${projectPath}"`);
 }
 
 function isTrustedWorkspaceProject(projectPath: string): boolean {
