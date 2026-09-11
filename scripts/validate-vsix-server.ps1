@@ -51,6 +51,11 @@ try {
         if (($forbiddenNames -icontains $name) -or $isUnexpectedAppHost) {
             throw "VSIX must not bundle a .NET apphost or runtime file: $($entry.FullName)"
         }
+        # Native-linker intermediates carry no runtime value and are pure download weight.
+        # .vscodeignore excludes them; this fails the build if that exclusion is ever dropped.
+        if ($name -imatch '\.(lib|exp|ilk|obj)$') {
+            throw "VSIX must not bundle native linker intermediates: $($entry.FullName)"
+        }
     }
 }
 finally {

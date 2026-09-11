@@ -170,6 +170,16 @@ function publish(label, args) {
         "MSB3073/link.exe, ensure the Visual Studio C++ build tools for the target architecture " +
         "are installed and that vswhere.exe is resolvable."
     );
+    if (label !== hostRid) {
+      // Cross-compiling needs a distinct component, and the base C++ workload does not include
+      // it. CI hosts happen to ship it today, so this only bites when an image drifts.
+      const target = label === "win-arm64" ? "ARM64" : "x64";
+      console.error(
+        `[ensure-server-bundle] ${label} is being cross-compiled from ${hostRid}, which needs the ` +
+          `"MSVC v143 - VS 2022 C++ ${target} build tools" component specifically, not just the ` +
+          "Desktop development with C++ workload."
+      );
+    }
     process.exit(result.status ?? 1);
   }
 }

@@ -124,6 +124,13 @@ jobs:
         $sizes = [ordered]@{ vsix = $bytes }
         $sizes | ConvertTo-Json | Set-Content artifacts/vsix-sizes.json
         Write-Host "VSIX size: $([math]::Round($bytes / 1MB, 2)) MB ($bytes bytes)"
+        # Hard ceiling. The size delta is otherwise only reported as a PR comment, which nothing
+        # blocks on -- the AOT migration roughly doubled the VSIX and would have landed silently.
+        # Native binaries now dominate the payload, so raise this deliberately, with a reason.
+        $maxMB = 70
+        if ($bytes -gt $maxMB * 1MB) {
+          throw "VSIX is $([math]::Round($bytes / 1MB, 2)) MB, over the $maxMB MB ceiling. Reduce the payload or raise the ceiling with justification."
+        }
 
     - name: Upload VSIX artifact
       if: ${{ success() }}

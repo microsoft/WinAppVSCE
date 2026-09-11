@@ -36,4 +36,11 @@ test/**
 server-test.log
 dist/server/**/*.pdb
 dist/server/**/*.xml
+# Native-linker intermediates. The AOT publish output is clean today, but an SDK or PublishAot
+# change that leaves an import library behind would otherwise ship it silently, and native
+# artifacts now dominate the VSIX. validate-vsix-server.ps1 rejects these too.
+dist/server/**/*.lib
+dist/server/**/*.exp
+dist/server/**/*.ilk
+dist/server/**/*.obj
 winapp.yaml

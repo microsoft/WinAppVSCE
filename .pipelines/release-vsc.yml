@@ -80,7 +80,7 @@ extends:
                   if ($LASTEXITCODE -ne 0) { Write-Error "WinUI XAML language server tests failed: $project"; exit 1 }
                 }
           - task: PowerShell@2
-            displayName: Publish framework-dependent WinUI XAML language server
+            displayName: Publish Native AOT WinUI XAML language server and generator host
             inputs:
               pwsh: true
               errorActionPreference: 'stop'
@@ -223,7 +223,7 @@ extends:
               filePath: $(System.DefaultWorkingDirectory)\scripts\download-server.ps1
               arguments: "-ArtifactPath '$(Pipeline.Workspace)/winui-xaml-server'"
           - task: PowerShell@2
-            displayName: Smoke signed framework-dependent WinUI XAML server
+            displayName: Smoke the signed Native AOT WinUI XAML server
             env:
               # Smoke the SIGNED artifact installed above; never republish over it.
               WINUI_XAML_SERVER_BUNDLE_MODE: artifact
