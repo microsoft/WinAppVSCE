@@ -87,7 +87,27 @@ namespace WinUiXaml.Workspace
 
             for (var dir = directory; dir != null; dir = dir.Parent)
             {
-                var candidates = dir.GetFiles("*.csproj");
+                // A directory that cannot be listed must not end the walk. The nearest owning
+                // project usually lives in an ancestor, and that ancestor is still readable when
+                // a leaf has just been renamed, deleted, or momentarily lost on a network share.
+                // Letting the exception escape threw away the project context for the file
+                // entirely, turning a transient filesystem hiccup into a document that stays
+                // project-less until it is reopened. DirectoryNotFoundException is an IOException,
+                // so the two clauses below cover the missing-leaf case as well.
+                FileInfo[] candidates;
+                try
+                {
+                    candidates = dir.GetFiles("*.csproj");
+                }
+                catch (IOException)
+                {
+                    continue;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    continue;
+                }
+
                 if (candidates.Length == 1)
                 {
                     return candidates[0].FullName;
