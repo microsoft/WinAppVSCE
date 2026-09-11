@@ -27,7 +27,7 @@ public class LspJsonContextCoverageTests
 
         Assert.True(
             missing.Count == 0,
-            "These types carry [JsonPropertyName] members but are absent from LspJsonContext, so " +
+            "These DTOs live in the Lsp namespace but are absent from LspJsonContext, so " +
             "serializing one throws at runtime. Add a [JsonSerializable] entry for each:\n  " +
             string.Join("\n  ", missing));
     }
@@ -130,6 +130,93 @@ public class LspJsonContextCoverageTests
         Assert.Contains("\"projectPath\"", json);
     }
 
+    /// <summary>
+    /// Registration is not writability. The guards above ask whether the context has metadata for
+    /// a type; this one asks the only question that matters on the wire -- does writing it throw --
+    /// for every payload the server can construct, rather than for the one payload someone
+    /// remembered to sample.
+    /// </summary>
+    /// <remarks>
+    /// Collection-valued properties are populated because an empty or null collection can serialize
+    /// without ever needing its element metadata, which would let exactly the
+    /// <c>window/showMessage</c> defect pass a test that looks exhaustive.
+    /// </remarks>
+    [Fact]
+    public void EveryConstructibleWirePayloadActuallySerializes()
+    {
+        var failures = new SortedSet<string>(StringComparer.Ordinal);
+        var covered = 0;
+
+        foreach (var payload in typeof(JsonRpcConnection).Assembly
+            .GetTypes()
+            .Where(IsWirePayload)
+            .Where(type => type.GetConstructor(Type.EmptyTypes) is not null)
+            .OrderBy(type => type.FullName, StringComparer.Ordinal))
+        {
+            if (LspJsonContext.Default.GetTypeInfo(payload) is null)
+            {
+                // Already reported by EveryWirePayloadTypeHasSourceGeneratedMetadata.
+                continue;
+            }
+
+            object instance;
+            try
+            {
+                instance = Activator.CreateInstance(payload)!;
+                PopulateStringMembers(instance, payload);
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"{payload.FullName} could not be constructed: {ex.GetType().Name}");
+                continue;
+            }
+
+            try
+            {
+                System.Text.Json.JsonSerializer.Serialize(instance, payload, LspJsonContext.Default);
+                covered++;
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"{payload.FullName} threw {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        Assert.True(
+            failures.Count == 0,
+            "These payloads are registered but cannot actually be written:\n  " +
+            string.Join("\n  ", failures));
+
+        // A construction or filter regression that silently emptied this set would turn the test
+        // into a tautology, so the coverage itself is asserted.
+        Assert.True(covered > 20, $"Expected broad payload coverage, only exercised {covered}.");
+    }
+
+    /// <summary>Gives string-shaped members a value so their metadata is genuinely exercised.</summary>
+    private static void PopulateStringMembers(object instance, Type type)
+    {
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (!property.CanWrite)
+            {
+                continue;
+            }
+
+            object? value = property.PropertyType switch
+            {
+                var t when t == typeof(string) => "probe",
+                var t when t == typeof(List<string>) => new List<string> { "probe" },
+                var t when t == typeof(string[]) => new[] { "probe" },
+                _ => null,
+            };
+
+            if (value is not null)
+            {
+                property.SetValue(instance, value);
+            }
+        }
+    }
+
     private static Type? ElementOf(Type type)
     {        if (type.IsArray)
         {
@@ -151,8 +238,35 @@ public class LspJsonContextCoverageTests
         };
     }
 
+    // A wire payload is any concrete DTO declared in the Lsp namespace. This deliberately does
+    // NOT require [JsonPropertyName]: the context sets PropertyNamingPolicy = CamelCase, so a DTO
+    // can serialize correctly with no attributes at all. Requiring the attribute made exactly
+    // those types invisible to every guard here -- the same shape as the window/showMessage
+    // defect, but with the detector switched off.
     private static bool IsWirePayload(Type type) =>
         type is { IsClass: true, IsAbstract: false, IsGenericTypeDefinition: false } &&
+        type.Namespace == "WinUiXaml.LanguageServer.Lsp" &&
+        !typeof(Exception).IsAssignableFrom(type) &&
+        !typeof(JsonSerializerContext).IsAssignableFrom(type) &&
+        !IsJsonConverter(type) &&
+        !typeof(IDisposable).IsAssignableFrom(type) &&
+        !typeof(IAsyncDisposable).IsAssignableFrom(type) &&
         type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Any(property => property.GetCustomAttribute<JsonPropertyNameAttribute>() is not null);
+            .Any(property =>
+                property.CanRead &&
+                property.SetMethod is { IsPublic: true } &&
+                !typeof(Delegate).IsAssignableFrom(property.PropertyType));
+
+    private static bool IsJsonConverter(Type type)
+    {
+        for (Type? current = type; current is not null; current = current.BaseType)
+        {
+            if (current == typeof(JsonConverter))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
