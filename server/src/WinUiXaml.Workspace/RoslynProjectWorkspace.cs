@@ -124,11 +124,10 @@ namespace WinUiXaml.Workspace
             // Referenced projects are compiled from source so their types resolve even when their
             // output assemblies have never been built. This preserves the behaviour MSBuildWorkspace
             // gave us via LoadMetadataForReferencedProjects = false.
-            var projectPaths = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
-            projectPaths.Add(fullPath);
+            var graph = new ProjectGraphContext(fullPath);
             AddProjectReferences(
                 references,
-                projectPaths,
+                graph,
                 evaluation.ProjectReferences,
                 properties,
                 cancellationToken);
@@ -146,8 +145,7 @@ namespace WinUiXaml.Workspace
                 allReferences,
                 options,
                 assemblyName,
-                projectPaths.ToImmutable(),
-                evaluation.XamlFiles,
+                graph.KnownProjects.ToImmutable(),                evaluation.XamlFiles,
                 evaluation.ApplicationDefinition);
         }
 
@@ -230,9 +228,40 @@ namespace WinUiXaml.Workspace
             }
         }
 
+        /// <summary>
+        /// Walks the project-reference graph once, reusing each project's compilation.
+        /// </summary>
+        /// <remarks>
+        /// The "visited" set cannot double as the cycle guard. In a diamond (A references B and C,
+        /// B also references C) whichever branch reached C first would mark it visited, and the
+        /// sibling branch would skip it entirely -- so A would not reference C at all. A's own
+        /// <c>/reference:C.dll</c> cannot cover for that, because <c>BuildProjectReferences=false</c>
+        /// means C.dll may never have been produced, which makes the failure depend on whether the
+        /// user happens to have built. Cycle detection therefore tracks only the projects currently
+        /// being loaded, while a separate cache lets a project be referenced from many places.
+        /// </remarks>
+        private sealed class ProjectGraphContext
+        {
+            public ProjectGraphContext(string rootPath)
+            {
+                KnownProjects = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+                KnownProjects.Add(rootPath);
+                InProgress = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootPath };
+                Compilations = new Dictionary<string, Compilation?>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            public ImmutableHashSet<string>.Builder KnownProjects { get; }
+
+            /// <summary>Projects on the current recursion path; re-entering one is a cycle.</summary>
+            public HashSet<string> InProgress { get; }
+
+            /// <summary>Every project already built, including those that produced nothing.</summary>
+            public Dictionary<string, Compilation?> Compilations { get; }
+        }
+
         private static void AddProjectReferences(
             ImmutableArray<MetadataReference>.Builder references,
-            ImmutableHashSet<string>.Builder projectPaths,
+            ProjectGraphContext context,
             ImmutableArray<string> projectReferences,
             Dictionary<string, string> properties,
             CancellationToken cancellationToken)
@@ -246,8 +275,24 @@ namespace WinUiXaml.Workspace
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var referencePath = Path.GetFullPath(reference);
-                // Adding to the set before recursing is also the cycle guard.
-                if (!File.Exists(referencePath) || !projectPaths.Add(referencePath))
+                if (!File.Exists(referencePath))
+                {
+                    continue;
+                }
+
+                // Already built somewhere else in the graph: reuse it rather than skipping it.
+                if (context.Compilations.TryGetValue(referencePath, out var cached))
+                {
+                    if (cached != null)
+                    {
+                        references.Add(cached.ToMetadataReference());
+                    }
+
+                    continue;
+                }
+
+                // Currently being loaded further up the stack, so this edge closes a cycle.
+                if (!context.InProgress.Add(referencePath))
                 {
                     continue;
                 }
@@ -255,7 +300,9 @@ namespace WinUiXaml.Workspace
                 try
                 {
                     var referenced = BuildReferencedProject(
-                        referencePath, projectPaths, properties, cancellationToken);
+                        referencePath, context, properties, cancellationToken);
+                    context.Compilations[referencePath] = referenced;
+                    context.KnownProjects.Add(referencePath);
                     if (referenced != null)
                     {
                         references.Add(referenced.ToMetadataReference());
@@ -265,17 +312,26 @@ namespace WinUiXaml.Workspace
                 {
                     throw;
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
                     // A referenced project that cannot be evaluated must not fail the whole load;
-                    // the primary project still provides useful IntelliSense without it.
+                    // the primary project still provides useful IntelliSense without it. The
+                    // reason is logged because the symptom -- types from that project silently
+                    // failing to resolve -- is otherwise indistinguishable from a code error.
+                    context.Compilations[referencePath] = null;
+                    Console.Error.WriteLine(
+                        $"[winui-xaml-ls] referenced project '{referencePath}' was skipped: {ex.Message}");
+                }
+                finally
+                {
+                    context.InProgress.Remove(referencePath);
                 }
             }
         }
 
         private static Compilation? BuildReferencedProject(
             string projectPath,
-            ImmutableHashSet<string>.Builder projectPaths,
+            ProjectGraphContext context,
             Dictionary<string, string> properties,
             CancellationToken cancellationToken)
         {
@@ -306,7 +362,7 @@ namespace WinUiXaml.Workspace
             var references = ImmutableArray.CreateBuilder<MetadataReference>();
             references.AddRange(commandLine.CreateMetadataReferences());
             AddProjectReferences(
-                references, projectPaths, evaluation.ProjectReferences, properties, cancellationToken);
+                references, context, evaluation.ProjectReferences, properties, cancellationToken);
 
             return CSharpCompilation.Create(
                 assemblyName,

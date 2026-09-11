@@ -26,6 +26,7 @@ namespace WinUiXaml.Workspace
             ImmutableArray<string> additionalFiles,
             ImmutableArray<string> preprocessorSymbols,
             ImmutableDictionary<string, ImmutableArray<string>> referenceAliases,
+            ImmutableHashSet<string> embeddedInteropReferences,
             string? languageVersion,
             OutputKind outputKind,
             bool allowUnsafe,
@@ -39,6 +40,7 @@ namespace WinUiXaml.Workspace
             AdditionalFiles = additionalFiles;
             PreprocessorSymbols = preprocessorSymbols;
             ReferenceAliases = referenceAliases;
+            EmbeddedInteropReferences = embeddedInteropReferences;
             LanguageVersion = languageVersion;
             OutputKind = outputKind;
             AllowUnsafe = allowUnsafe;
@@ -66,6 +68,19 @@ namespace WinUiXaml.Workspace
 
         public ImmutableArray<string> PreprocessorSymbols { get; }
         public ImmutableDictionary<string, ImmutableArray<string>> ReferenceAliases { get; }
+
+        /// <summary>
+        /// References csc was told to embed rather than link, via <c>/link:</c>.
+        /// </summary>
+        /// <remarks>
+        /// This is the csc spelling of MSBuild's <c>EmbedInteropTypes</c> metadata, which the
+        /// pre-AOT <c>MsBuildFrameworkProject</c> read directly off the <c>ReferencePath</c> item.
+        /// Dropping it does not just lose an option: an embedded-interop reference carries no
+        /// runtime identity of its own, so every COM/WinRT PIA type resolves as if the assembly
+        /// were absent, and XAML that binds to those types silently stops resolving.
+        /// </remarks>
+        public ImmutableHashSet<string> EmbeddedInteropReferences { get; }
+
         public string? LanguageVersion { get; }
         public OutputKind OutputKind { get; }
         public bool AllowUnsafe { get; }
@@ -80,6 +95,7 @@ namespace WinUiXaml.Workspace
             ImmutableArray<string>.Empty,
             ImmutableArray<string>.Empty,
             ImmutableDictionary<string, ImmutableArray<string>>.Empty,
+            ImmutableHashSet<string>.Empty,
             null,
             OutputKind.DynamicallyLinkedLibrary,
             false,
@@ -106,6 +122,7 @@ namespace WinUiXaml.Workspace
             var symbols = ImmutableArray.CreateBuilder<string>();
             var aliases = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(
                 StringComparer.OrdinalIgnoreCase);
+            var embedded = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
             string? languageVersion = null;
             string? assemblyName = null;
             var outputKind = OutputKind.DynamicallyLinkedLibrary;
@@ -163,7 +180,14 @@ namespace WinUiXaml.Workspace
                 {
                     case "reference":
                     case "r":
-                        AddReference(value);
+                        AddReference(value, embedInteropTypes: false);
+                        break;
+                    // MSBuild emits EmbedInteropTypes="true" references as /link:, never as
+                    // /reference: with extra metadata, so this switch is the only source of truth
+                    // for interop embedding on a csc command line.
+                    case "link":
+                    case "l":
+                        AddReference(value, embedInteropTypes: true);
                         break;
                     case "analyzer":
                     case "a":
@@ -218,13 +242,14 @@ namespace WinUiXaml.Workspace
                 additionalFiles.ToImmutable(),
                 symbols.ToImmutable(),
                 aliases.ToImmutable(),
+                embedded.ToImmutable(),
                 languageVersion,
                 outputKind,
                 allowUnsafe,
                 nullableContext,
                 assemblyName);
 
-            void AddReference(string value)
+            void AddReference(string value, bool embedInteropTypes)
             {
                 // extern aliases arrive as /reference:Alias=path.
                 var text = value.Trim().Trim('"');
@@ -241,10 +266,20 @@ namespace WinUiXaml.Workspace
                         aliases[path] = aliasList;
                     }
 
+                    if (embedInteropTypes)
+                    {
+                        embedded.Add(path);
+                    }
+
                     return;
                 }
 
-                references.Add(Resolve(text));
+                var resolved = Resolve(text);
+                references.Add(resolved);
+                if (embedInteropTypes)
+                {
+                    embedded.Add(resolved);
+                }
             }
         }
 
@@ -263,9 +298,13 @@ namespace WinUiXaml.Workspace
                     continue;
                 }
 
-                var properties = ReferenceAliases.TryGetValue(reference, out var aliases)
-                    ? new MetadataReferenceProperties(MetadataImageKind.Assembly, aliases)
-                    : MetadataReferenceProperties.Assembly;
+                var aliasList = ReferenceAliases.TryGetValue(reference, out var found)
+                    ? found
+                    : ImmutableArray<string>.Empty;
+                var properties = new MetadataReferenceProperties(
+                    MetadataImageKind.Assembly,
+                    aliasList,
+                    EmbeddedInteropReferences.Contains(reference));
                 builder.Add(MetadataReference.CreateFromFile(
                     reference, properties, CreateDocumentationProvider(reference)));
             }

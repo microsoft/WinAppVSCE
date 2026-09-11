@@ -22,6 +22,48 @@ public class CscCommandLineParseTests
         CscCommandLine.Parse(arguments, ProjectDirectory);
 
     [Fact]
+    public void Parse_TreatsLinkAsAnEmbeddedInteropReference()
+    {
+        // MSBuild spells EmbedInteropTypes="true" as /link: on the csc command line. An embedded
+        // interop reference carries no runtime assembly identity, so recording it as an ordinary
+        // reference makes every COM/WinRT PIA type bind differently from the real build.
+        var parsed = Parse(@"/link:C:\proj\Interop.dll", @"/reference:C:\proj\Plain.dll");
+
+        Assert.Contains(@"C:\proj\Interop.dll", parsed.References);
+        Assert.Contains(@"C:\proj\Plain.dll", parsed.References);
+        Assert.Contains(@"C:\proj\Interop.dll", parsed.EmbeddedInteropReferences);
+        Assert.DoesNotContain(@"C:\proj\Plain.dll", parsed.EmbeddedInteropReferences);
+    }
+
+    [Fact]
+    public void Parse_AcceptsShortLinkForm()
+    {
+        var parsed = Parse(@"/l:C:\proj\Interop.dll");
+
+        Assert.Contains(@"C:\proj\Interop.dll", parsed.References);
+        Assert.Contains(@"C:\proj\Interop.dll", parsed.EmbeddedInteropReferences);
+    }
+
+    [Fact]
+    public void Parse_KeepsAliasesOnLinkedReferences()
+    {
+        var parsed = Parse(@"/link:Interop=C:\proj\Interop.dll");
+
+        Assert.Contains(@"C:\proj\Interop.dll", parsed.EmbeddedInteropReferences);
+        Assert.Equal(
+            new[] { "Interop" },
+            parsed.ReferenceAliases[@"C:\proj\Interop.dll"]);
+    }
+
+    [Fact]
+    public void Parse_LeavesEmbeddedInteropEmptyWhenNothingIsLinked()
+    {
+        var parsed = Parse(@"/reference:C:\proj\Plain.dll");
+
+        Assert.Empty(parsed.EmbeddedInteropReferences);
+    }
+
+    [Fact]
     public void Parse_SplitsDefineOnSemicolons()
     {
         var parsed = Parse("/define:DEBUG;TRACE;WINDOWS");
