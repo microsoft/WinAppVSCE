@@ -387,10 +387,12 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        // The project loaded, so a previously reported build-required condition is resolved. Drop
-        // the latch: if the outputs are removed again later in this same session (a clean, a branch
-        // switch) the user gets told a second time rather than facing the silent outage.
+        // The project loaded, so any previously reported build- or restore-required condition is
+        // resolved. Drop the latches: if the outputs go away again later in this same session (a
+        // clean, a branch switch) the user gets told a second time rather than facing the silent
+        // outage.
         _buildRequiredProjects.Clear(frameworkResolution.ProjectPath);
+        _restoreRequiredProjects.Clear(frameworkResolution.ProjectPath);
 
         var frameworkTypeSystem = latestContext?.Stage == XamlProjectStage.Framework
             ? latestContext.TypeSystem
@@ -525,7 +527,7 @@ internal sealed partial class XamlLanguageServer
     private Task NotifyProjectRestoreRequiredAsync(ProjectRestoreRequiredException exception)
     {
         Console.Error.WriteLine($"[winui-xaml-ls] restore required: {exception.ProjectPath}");
-        return _restoreRequiredProjects.TryAdd(exception.ProjectPath, 0)
+        return _restoreRequiredProjects.ShouldNotify(exception.ProjectPath)
             ? _connection.SendNotificationAsync(
                 "winui-xaml/projectRestoreRequired",
                 new ProjectRestoreRequiredParams { ProjectPath = exception.ProjectPath })

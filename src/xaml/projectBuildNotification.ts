@@ -22,28 +22,17 @@ export function buildRequiredMessage(unresolvedAssemblies: readonly string[]): s
   );
 }
 
-/** Prevents repeated build prompts for the same project during one extension-host session. */
-export class ProjectBuildNotificationGate {
-  private readonly shownProjects = new Set<string>();
-
-  shouldShow(projectPath: string): boolean {
-    const key = projectPath.toLowerCase();
-    if (this.shownProjects.has(key)) {
-      return false;
-    }
-
-    this.shownProjects.add(key);
-    return true;
-  }
-}
-
 export type ProjectBuildAction =
   (typeof PROJECT_BUILD_ACTIONS)[keyof typeof PROJECT_BUILD_ACTIONS];
 
-/** The VS Code surfaces the build prompt drives, injected so the flow is testable without a host. */
+/**
+ * The server owns the once-per-condition decision: it latches per project and clears the latch when * the project loads, so a second outage is reported again. The client deliberately does NOT keep a
+ * second latch -- one did exist, and because nothing ever cleared it the server's re-arm could not
+ * reach the user. Two owners for one decision meant the server-side test passed while the toast
+ * stayed silent. If a notification arrives, it is meant to be shown.
+ */
 export interface ProjectBuildNotificationHost {
   isTrustedWorkspaceProject(projectPath: string): boolean;
-  shouldShow(projectPath: string): boolean;
   showWarningMessage(
     message: string,
     ...actions: ProjectBuildAction[]
@@ -54,19 +43,15 @@ export interface ProjectBuildNotificationHost {
 }
 
 /**
- * Prompts once for a project whose referenced output the server reported as missing. Silently
- * ignores projects that are absent, outside a trusted workspace, or already prompted for.
+ * Prompts for a project whose referenced output the server reported as missing. Silently ignores
+ * projects that are absent or outside a trusted workspace; repetition is the server's call.
  */
 export async function notifyProjectBuildRequired(
   projectPath: string | undefined,
   unresolvedAssemblies: readonly string[] | undefined,
   host: ProjectBuildNotificationHost,
 ): Promise<void> {
-  if (
-    !projectPath ||
-    !host.isTrustedWorkspaceProject(projectPath) ||
-    !host.shouldShow(projectPath)
-  ) {
+  if (!projectPath || !host.isTrustedWorkspaceProject(projectPath)) {
     return;
   }
 

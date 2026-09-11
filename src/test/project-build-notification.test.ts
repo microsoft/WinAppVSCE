@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   PROJECT_BUILD_ACTIONS,
   PROJECT_BUILD_NOTIFICATION,
-  ProjectBuildNotificationGate,
   buildRequiredMessage,
   notifyProjectBuildRequired,
 } from "../xaml/projectBuildNotification";
@@ -31,13 +30,17 @@ function createHost(overrides: Partial<{ trusted: boolean; show: boolean; choice
   return { host: host as never, shown, outputShown: () => outputShown, built };
 }
 
-describe("ProjectBuildNotificationGate", () => {
-  it("shows once per project per session, case-insensitively", () => {
-    const gate = new ProjectBuildNotificationGate();
+// D5: the client must NOT keep its own once-per-project latch. The server latches and re-arms when
+// the project loads; a second latch here swallowed the re-armed notification, so the server-side
+// re-arm test passed while the toast stayed silent through a second outage.
+describe("second outage for the same project", () => {
+  it("prompts again, because repetition is the server's decision", async () => {
+    const { host, shown } = createHost();
 
-    assert.equal(gate.shouldShow("C:\\app\\App.csproj"), true);
-    assert.equal(gate.shouldShow("c:\\APP\\app.csproj"), false);
-    assert.equal(gate.shouldShow("C:\\other\\Other.csproj"), true);
+    await notifyProjectBuildRequired("C:\\app\\App.csproj", ["SharedLib"], host);
+    await notifyProjectBuildRequired("C:\\app\\App.csproj", ["SharedLib"], host);
+
+    assert.equal(shown.length, 2);
   });
 });
 
@@ -98,14 +101,6 @@ describe("notifyProjectBuildRequired", () => {
 
   it("stays silent outside a trusted workspace", async () => {
     const { host, shown } = createHost({ trusted: false });
-
-    await notifyProjectBuildRequired("C:\\app\\App.csproj", ["SharedLib"], host);
-
-    assert.equal(shown.length, 0);
-  });
-
-  it("stays silent when the gate has already prompted", async () => {
-    const { host, shown } = createHost({ show: false });
 
     await notifyProjectBuildRequired("C:\\app\\App.csproj", ["SharedLib"], host);
 

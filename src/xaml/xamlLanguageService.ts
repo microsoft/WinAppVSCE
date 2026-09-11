@@ -54,12 +54,10 @@ import {
 import {
   PROJECT_RESTORE_ACTIONS,
   PROJECT_RESTORE_NOTIFICATION,
-  ProjectRestoreNotificationGate,
   notifyProjectRestoreRequired as runProjectRestoreNotification,
 } from "./projectRestoreNotification";
 import {
   PROJECT_BUILD_NOTIFICATION,
-  ProjectBuildNotificationGate,
   notifyProjectBuildRequired as runProjectBuildNotification,
 } from "./projectBuildNotification";
 import {
@@ -127,8 +125,6 @@ let lastDegradedCause: DegradedCause | undefined;
 /** Resolves the .NET host through the Install Tool; created during activation. */
 let dotnetHostResolver: DotnetHostResolver | undefined;
 const csharpDevKitNotificationGate = new CsharpDevKitNotificationGate();
-const projectRestoreNotificationGate = new ProjectRestoreNotificationGate();
-const projectBuildNotificationGate = new ProjectBuildNotificationGate();
 const diagnosticsLevelInteraction = new DiagnosticsLevelInteraction({
   log,
   showWarningMessage: (message, action) =>
@@ -825,7 +821,6 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
 function notifyProjectRestoreRequired(projectPath: string | undefined): void {
   void runProjectRestoreNotification(projectPath, {
     isTrustedWorkspaceProject,
-    shouldShow: (path) => projectRestoreNotificationGate.shouldShow(path),
     showInformationMessage: (message, ...actions) =>
       vscode.window.showInformationMessage(message, ...actions),
     showOutput: () => output?.show(true),
@@ -839,7 +834,6 @@ function notifyProjectBuildRequired(
 ): void {
   void runProjectBuildNotification(projectPath, unresolvedAssemblies, {
     isTrustedWorkspaceProject,
-    shouldShow: (path) => projectBuildNotificationGate.shouldShow(path),
     showWarningMessage: (message, ...actions) =>
       vscode.window.showWarningMessage(message, ...actions),
     showOutput: () => output?.show(true),

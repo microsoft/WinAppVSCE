@@ -7,28 +7,16 @@ export const PROJECT_RESTORE_ACTIONS = {
 export const PROJECT_RESTORE_MESSAGE =
   "WinUI XAML project packages are not restored, so project-aware IntelliSense is unavailable.";
 
-/** Prevents repeated restore prompts for the same project during one extension-host session. */
-export class ProjectRestoreNotificationGate {
-  private readonly shownProjects = new Set<string>();
-
-  shouldShow(projectPath: string): boolean {
-    const key = projectPath.toLowerCase();
-    if (this.shownProjects.has(key)) {
-      return false;
-    }
-
-    this.shownProjects.add(key);
-    return true;
-  }
-}
-
 export type ProjectRestoreAction =
   (typeof PROJECT_RESTORE_ACTIONS)[keyof typeof PROJECT_RESTORE_ACTIONS];
 
-/** The VS Code surfaces the restore prompt drives, injected so the flow is testable without a host. */
+/**
+ * As with the build prompt, the server owns the once-per-condition decision and clears its latch
+ * when the project loads. A second client-side latch would silently swallow the re-armed
+ * notification, so there isn't one.
+ */
 export interface ProjectRestoreNotificationHost {
   isTrustedWorkspaceProject(projectPath: string): boolean;
-  shouldShow(projectPath: string): boolean;
   showInformationMessage(
     message: string,
     ...actions: ProjectRestoreAction[]
@@ -38,19 +26,14 @@ export interface ProjectRestoreNotificationHost {
 }
 
 /**
- * Prompts once to restore a project whose packages the server reported as missing, then runs the
- * choice. Silently ignores projects that are absent, outside a trusted workspace, or already
- * prompted for.
+ * Prompts to restore a project whose packages the server reported as missing, then runs the choice.
+ * Silently ignores projects that are absent or outside a trusted workspace.
  */
 export async function notifyProjectRestoreRequired(
   projectPath: string | undefined,
   host: ProjectRestoreNotificationHost,
 ): Promise<void> {
-  if (
-    !projectPath ||
-    !host.isTrustedWorkspaceProject(projectPath) ||
-    !host.shouldShow(projectPath)
-  ) {
+  if (!projectPath || !host.isTrustedWorkspaceProject(projectPath)) {
     return;
   }
 

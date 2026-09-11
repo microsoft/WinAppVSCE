@@ -34,8 +34,7 @@ internal sealed partial class XamlLanguageServer
     private readonly ConcurrentDictionary<string, AsyncCancellationLifetime> _semanticDiagnosticCancellations =
         new(StringComparer.OrdinalIgnoreCase);
     private int _msbuildUnavailableNotified;
-    private readonly ConcurrentDictionary<string, byte> _restoreRequiredProjects =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ProjectPromptLatch _restoreRequiredProjects = new();
     private readonly ProjectPromptLatch _buildRequiredProjects = new();
     private bool _shuttingDown;
 
