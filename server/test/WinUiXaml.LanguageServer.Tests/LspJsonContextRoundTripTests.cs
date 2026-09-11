@@ -184,7 +184,7 @@ public class LspJsonContextRoundTripTests
     /// list is the whole point: a list someone has to remember to update samples the context, and
     /// the registration that gets forgotten is the one that breaks.
     /// </remarks>
-    private static IEnumerable<Type> RegisteredTypes() =>
+    internal static IEnumerable<Type> RegisteredTypes() =>
         typeof(LspJsonContext)
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Select(property => property.PropertyType)
