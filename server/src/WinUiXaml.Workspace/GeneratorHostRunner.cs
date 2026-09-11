@@ -203,7 +203,30 @@ namespace WinUiXaml.Workspace
             startInfo.ArgumentList.Add(host);
             startInfo.ArgumentList.Add(requestPath);
 
+            return RunProcess(startInfo, Timeout, cancellationToken);
+        }
+
+        /// <summary>Runs a child process to completion, draining both pipes asynchronously.</summary>
+        /// <remarks>
+        /// Reading the pipes sequentially with <c>ReadToEnd</c> deadlocks: a generator that fills
+        /// the stderr buffer blocks writing while this process is still blocked on stdout, so the
+        /// child never exits and stdout never reaches EOF. That read also sits ahead of the timeout
+        /// and the cancellation registration, which makes the hang unbounded rather than capped --
+        /// and because <see cref="RoslynProjectWorkspace"/> waits on this call, the project never
+        /// finishes loading and the server serves nothing at all for it. Async draining with an
+        /// armed timeout is the shape <see cref="MsBuildCli"/> already uses.
+        /// </remarks>
+        internal static bool RunProcess(
+            ProcessStartInfo startInfo,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+        {
             using var process = new Process { StartInfo = startInfo };
+
+            // The output is not consumed, but the pipes must still be drained or the child blocks.
+            process.OutputDataReceived += static (_, _) => { };
+            process.ErrorDataReceived += static (_, _) => { };
+
             try
             {
                 process.Start();
@@ -213,45 +236,38 @@ namespace WinUiXaml.Workspace
                 return false;
             }
 
-            // Draining both pipes prevents a generator that logs heavily from filling the buffer
-            // and deadlocking the child before it can write the manifest.
-            process.StandardOutput.ReadToEnd();
-            process.StandardError.ReadToEnd();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
 
-            using var registration = cancellationToken.Register(() =>
+            using var registration = cancellationToken.Register(() => TryKill(process));
+
+            if (!process.WaitForExit((int)timeout.TotalMilliseconds))
             {
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill(entireProcessTree: true);
-                    }
-                }
-                catch (InvalidOperationException)
-                {
-                }
-                catch (System.ComponentModel.Win32Exception)
-                {
-                }
-            });
-
-            if (!process.WaitForExit((int)Timeout.TotalMilliseconds))
-            {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch (InvalidOperationException)
-                {
-                }
-                catch (System.ComponentModel.Win32Exception)
-                {
-                }
-
+                TryKill(process);
                 return false;
             }
 
+            // Flushes the async readers so the exit code reflects a fully drained child.
+            process.WaitForExit();
+
             return process.ExitCode == 0;
+        }
+
+        private static void TryKill(Process process)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+            }
         }
     }
 }
