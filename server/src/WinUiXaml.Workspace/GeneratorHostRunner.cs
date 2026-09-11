@@ -91,13 +91,21 @@ namespace WinUiXaml.Workspace
 
             try
             {
+                var manifest = Path.Combine(outputDirectory, "generated-files.txt");
+
+                // The manifest is the runner's only proof the host finished. A manifest left over
+                // from an earlier run would otherwise be read as this run's output, so a host that
+                // dies before it can clear its own directory would look like success and feed
+                // stale generated members into IntelliSense. Clearing it first makes its presence
+                // afterwards mean "this invocation wrote it".
+                TryDeleteManifest(manifest);
+
                 File.WriteAllText(requestPath, BuildRequest(assemblyName, outputDirectory, commandLine));
                 if (!Invoke(host, requestPath, cancellationToken))
                 {
                     return Unavailable(projectPath, "helper failed, timed out, or was cancelled");
                 }
 
-                var manifest = Path.Combine(outputDirectory, "generated-files.txt");
                 if (!File.Exists(manifest))
                 {
                     return Unavailable(projectPath, "helper produced no manifest");
@@ -134,6 +142,27 @@ namespace WinUiXaml.Workspace
                 catch (UnauthorizedAccessException)
                 {
                 }
+            }
+        }
+
+        /// <summary>
+        /// Removes a previous run's completion marker. Failure is not fatal on its own: the host
+        /// clears the whole directory, and a manifest it cannot overwrite would fail the run.
+        /// </summary>
+        private static void TryDeleteManifest(string manifest)
+        {
+            try
+            {
+                if (File.Exists(manifest))
+                {
+                    File.Delete(manifest);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
             }
         }
 

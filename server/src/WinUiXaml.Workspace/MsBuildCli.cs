@@ -238,27 +238,60 @@ namespace WinUiXaml.Workspace
             }
         }
 
+        /// <summary>
+        /// Extracts the <c>-getItem</c>/<c>-getProperty</c> JSON payload from MSBuild's stdout.
+        /// </summary>
+        /// <remarks>
+        /// Anchoring on the first <c>{</c> is not safe: MSBuild interleaves diagnostics ahead of
+        /// the payload, and a warning containing a brace either desynchronizes the parse or --
+        /// worse -- parses cleanly against a fragment and yields an empty result, which silently
+        /// produces a compilation with no sources instead of an error. Each candidate offset is
+        /// therefore tried in turn and accepted only if it parses <em>and</em> carries a key the
+        /// request actually asked for.
+        /// </remarks>
         private static JsonDocument ParseJson(string output, string projectPath)
         {
-            // MSBuild prefixes diagnostics ahead of the JSON payload; take the document only.
+            JsonException? lastFailure = null;
             var start = output.IndexOf('{');
-            if (start < 0)
+            while (start >= 0)
             {
-                throw new MsBuildUnavailableException(
-                    $"MSBuild produced no JSON output for '{projectPath}'. Output: {Truncate(output)}");
+                JsonDocument? candidate = null;
+                try
+                {
+                    candidate = JsonDocument.Parse(output.Substring(start));
+                }
+                catch (JsonException ex)
+                {
+                    lastFailure = ex;
+                }
+
+                if (candidate != null)
+                {
+                    if (LooksLikeMsBuildResult(candidate.RootElement))
+                    {
+                        return candidate;
+                    }
+
+                    candidate.Dispose();
+                }
+
+                start = output.IndexOf('{', start + 1);
             }
 
-            try
-            {
-                return JsonDocument.Parse(output.Substring(start));
-            }
-            catch (JsonException ex)
-            {
-                throw new MsBuildUnavailableException(
-                    $"MSBuild output for '{projectPath}' was not valid JSON. Output: {Truncate(output)}",
-                    ex);
-            }
+            throw new MsBuildUnavailableException(
+                $"MSBuild produced no usable JSON output for '{projectPath}'. Output: {Truncate(output)}",
+                lastFailure);
         }
+
+        /// <summary>
+        /// MSBuild answers <c>-getItem</c>/<c>-getProperty</c> with an object holding these keys,
+        /// so their presence distinguishes the payload from a brace inside a diagnostic message.
+        /// </summary>
+        private static bool LooksLikeMsBuildResult(JsonElement root) =>
+            root.ValueKind == JsonValueKind.Object &&
+            (root.TryGetProperty("Items", out _) ||
+                root.TryGetProperty("Properties", out _) ||
+                root.TryGetProperty("TargetResults", out _));
 
         private static string Truncate(string value) =>
             value.Length <= 4000 ? value : value.Substring(0, 4000) + "...";

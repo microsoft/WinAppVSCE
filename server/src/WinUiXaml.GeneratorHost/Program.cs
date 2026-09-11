@@ -197,7 +197,10 @@ internal static class Program
 
             foreach (var type in types)
             {
-                if (type is null || type.IsAbstract || !type.IsPublic)
+                // IsPublic is false for a public type nested in a public type, which csc loads
+                // happily. IsVisible is the accessibility csc actually requires, so using IsPublic
+                // silently drops nested generators with no diagnostic anywhere.
+                if (type is null || type.IsAbstract || !type.IsVisible)
                 {
                     continue;
                 }
@@ -212,16 +215,50 @@ internal static class Program
                     {
                         generators.Add((ISourceGenerator)Activator.CreateInstance(type)!);
                     }
+                    else
+                    {
+                        WarnOnRoslynVersionMismatch(type, analyzer);
+                    }
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
                     // A generator that cannot be constructed is skipped rather than failing the
-                    // whole run; the remaining generators still produce usable members.
+                    // whole run; the remaining generators still produce usable members. The reason
+                    // is reported because the symptom is a type that stops resolving, which looks
+                    // nothing like a generator that failed to load.
+                    Console.Error.WriteLine(
+                        $"[winui-xaml-genhost] generator '{type.FullName}' in '{analyzer}' could not be created: {ex.Message}");
                 }
             }
         }
 
         return generators;
+    }
+
+    /// <summary>
+    /// Reports a generator the host can see but cannot use.
+    /// </summary>
+    /// <remarks>
+    /// <c>Assembly.LoadFrom</c> does not unify Roslyn's identity, so a generator compiled against
+    /// a different <c>Microsoft.CodeAnalysis</c> version implements an <c>IIncrementalGenerator</c>
+    /// that is a different type from the host's. The interface check then fails even though the
+    /// type is plainly a generator, and the run continues with it quietly missing -- the same class
+    /// of version-skew failure MSBuildLocator existed to prevent.
+    /// </remarks>
+    private static void WarnOnRoslynVersionMismatch(Type type, string analyzer)
+    {
+        foreach (var contract in type.GetInterfaces())
+        {
+            if (contract.FullName is "Microsoft.CodeAnalysis.IIncrementalGenerator"
+                or "Microsoft.CodeAnalysis.ISourceGenerator")
+            {
+                Console.Error.WriteLine(
+                    $"[winui-xaml-genhost] '{type.FullName}' in '{analyzer}' implements {contract.FullName} " +
+                    "from a different Microsoft.CodeAnalysis version than the helper hosts, so it was skipped. " +
+                    "Generated members from this analyzer will not resolve.");
+                return;
+            }
+        }
     }
 
     private static LanguageVersion ParseLanguageVersion(string? value) =>
