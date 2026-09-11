@@ -39,4 +39,23 @@
                       Private="false" />
   </ItemGroup>
 
+  <!--
+    Deploy the helper beside the server's *build* output in the layout HostAssemblyPath probes.
+    Without this it is only present in the packaged bundle, so running the server from bin (which
+    is what the XAML smoke suite does) silently degraded every project to "no generated members".
+    That blind spot is why a deadlock in the helper shipped past a green suite.
+
+    This copies to $(OutDir), not $(PublishDir), so it does not add managed files to the Native
+    AOT publish output; ensure-server-bundle.mjs stages the shipped copy separately.
+  -->
+  <Target Name="CopyGeneratorHostBesideServer" AfterTargets="Build">
+    <ItemGroup>
+      <_HostPayload Include="$(MSBuildThisFileDirectory)..\WinUiXaml.GeneratorHost\bin\$(Configuration)\net10.0\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_HostPayload)"
+          DestinationFiles="@(_HostPayload->'$(OutDir)generator-host\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_HostPayload)' != ''" />
+  </Target>
+
 </Project>

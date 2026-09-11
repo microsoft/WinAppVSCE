@@ -164,22 +164,21 @@ function publish(label, args) {
   if (result.status !== 0) {
     console.error(`[ensure-server-bundle] dotnet publish failed for ${label}.`);
     // The most common local failure is ILC not finding the MSVC linker, which surfaces as an
-    // MSB3073 'link.exe exited with code 123' well after code generation succeeded.
+    // MSB3073 'link.exe exited with code 123' well after code generation succeeded. Keep both
+    // hints under that condition -- publish fails for plenty of unrelated reasons (disk space,
+    // restore, a compile error), and asserting a toolchain cause for those misdirects triage.
+    const crossNote =
+      label === hostRid
+        ? ""
+        : ` Cross-compiling ${label} from ${hostRid} additionally needs the "MSVC v143 - VS 2022 ` +
+          `C++ ${label === "win-arm64" ? "ARM64" : "x64"} build tools" component specifically, ` +
+          "which the Desktop development with C++ workload does not include by itself.";
     console.error(
-      "[ensure-server-bundle] Native AOT requires the MSVC toolchain. If the failure is " +
-        "MSB3073/link.exe, ensure the Visual Studio C++ build tools for the target architecture " +
-        "are installed and that vswhere.exe is resolvable."
+      "[ensure-server-bundle] If the failure above is MSB3073/link.exe, Native AOT could not " +
+        "reach the MSVC toolchain: ensure the Visual Studio C++ build tools for the target " +
+        "architecture are installed and that vswhere.exe is resolvable." +
+        crossNote
     );
-    if (label !== hostRid) {
-      // Cross-compiling needs a distinct component, and the base C++ workload does not include
-      // it. CI hosts happen to ship it today, so this only bites when an image drifts.
-      const target = label === "win-arm64" ? "ARM64" : "x64";
-      console.error(
-        `[ensure-server-bundle] ${label} is being cross-compiled from ${hostRid}, which needs the ` +
-          `"MSVC v143 - VS 2022 C++ ${target} build tools" component specifically, not just the ` +
-          "Desktop development with C++ workload."
-      );
-    }
     process.exit(result.status ?? 1);
   }
 }
