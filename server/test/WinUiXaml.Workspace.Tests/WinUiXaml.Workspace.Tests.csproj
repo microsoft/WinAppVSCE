@@ -25,6 +25,23 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\WinUiXaml.Workspace\WinUiXaml.Workspace.csproj" />
+    <!-- Built for ordering only; the assembly is loaded out-of-process, never referenced. -->
+    <ProjectReference Include="..\..\src\WinUiXaml.GeneratorHost\WinUiXaml.GeneratorHost.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
   </ItemGroup>
+
+  <!--
+    Mirror the shipped layout (dist/server/<rid>/../generator-host/) so the integration tests
+    resolve the helper exactly the way the product does, instead of through a test-only override.
+  -->
+  <Target Name="CopyGeneratorHostForTests" AfterTargets="Build">
+    <ItemGroup>
+      <_GeneratorHostFiles Include="$(MSBuildThisFileDirectory)..\..\src\WinUiXaml.GeneratorHost\bin\$(Configuration)\net10.0\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_GeneratorHostFiles)"
+          DestinationFiles="@(_GeneratorHostFiles->'$(OutDir)generator-host\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

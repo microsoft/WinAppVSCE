@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
@@ -50,6 +51,8 @@ internal static class Program
         var references = ReadArray(root, "references");
         var analyzers = ReadArray(root, "analyzers");
         var sources = ReadArray(root, "sources");
+        var analyzerConfigs = ReadArray(root, "analyzerConfigs");
+        var additionalFilePaths = ReadArray(root, "additionalFiles");
         var preprocessorSymbols = ReadArray(root, "preprocessorSymbols");
 
         // A stale directory would otherwise leak members that the current sources no longer declare.
@@ -97,7 +100,11 @@ internal static class Program
             return;
         }
 
-        var driver = CSharpGeneratorDriver.Create(generators, parseOptions: parseOptions);
+        var driver = CSharpGeneratorDriver.Create(
+            generators,
+            additionalTexts: BuildAdditionalTexts(additionalFilePaths),
+            parseOptions: parseOptions,
+            optionsProvider: AnalyzerConfigOptionsProviderFactory.Create(analyzerConfigs));
         var runResult = driver.RunGenerators(compilation).GetRunResult();
 
         var written = new List<string>();
@@ -126,6 +133,20 @@ internal static class Program
         }
 
         WriteManifest(outputDirectory, written);
+    }
+
+    private static ImmutableArray<AdditionalText> BuildAdditionalTexts(IReadOnlyList<string> paths)
+    {
+        var builder = ImmutableArray.CreateBuilder<AdditionalText>();
+        foreach (var path in paths)
+        {
+            if (File.Exists(path))
+            {
+                builder.Add(new PhysicalAdditionalText(path));
+            }
+        }
+
+        return builder.ToImmutable();
     }
 
     /// <summary>

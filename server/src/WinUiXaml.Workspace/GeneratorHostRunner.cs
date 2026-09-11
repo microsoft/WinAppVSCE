@@ -171,6 +171,8 @@ namespace WinUiXaml.Workspace
                 WriteArray(writer, "references", commandLine.References);
                 WriteArray(writer, "analyzers", commandLine.Analyzers);
                 WriteArray(writer, "sources", commandLine.Sources);
+                WriteArray(writer, "analyzerConfigs", commandLine.AnalyzerConfigs);
+                WriteArray(writer, "additionalFiles", commandLine.AdditionalFiles);
                 WriteArray(writer, "preprocessorSymbols", commandLine.PreprocessorSymbols);
                 writer.WriteEndObject();
             }

@@ -22,6 +22,8 @@ namespace WinUiXaml.Workspace
             ImmutableArray<string> references,
             ImmutableArray<string> analyzers,
             ImmutableArray<string> sources,
+            ImmutableArray<string> analyzerConfigs,
+            ImmutableArray<string> additionalFiles,
             ImmutableArray<string> preprocessorSymbols,
             ImmutableDictionary<string, ImmutableArray<string>> referenceAliases,
             string? languageVersion,
@@ -33,6 +35,8 @@ namespace WinUiXaml.Workspace
             References = references;
             Analyzers = analyzers;
             Sources = sources;
+            AnalyzerConfigs = analyzerConfigs;
+            AdditionalFiles = additionalFiles;
             PreprocessorSymbols = preprocessorSymbols;
             ReferenceAliases = referenceAliases;
             LanguageVersion = languageVersion;
@@ -45,6 +49,21 @@ namespace WinUiXaml.Workspace
         public ImmutableArray<string> References { get; }
         public ImmutableArray<string> Analyzers { get; }
         public ImmutableArray<string> Sources { get; }
+
+        /// <summary>
+        /// The <c>.editorconfig</c> and generated <c>.GlobalConfig</c> files csc was given.
+        /// </summary>
+        /// <remarks>
+        /// MSBuild writes <c>build_property.*</c> values -- <c>RootNamespace</c>,
+        /// <c>ProjectDir</c>, <c>TargetFramework</c> and the rest -- into a generated global
+        /// config. A generator that reads them produces different output when they are absent, so
+        /// dropping these switches makes generated members silently wrong rather than missing.
+        /// </remarks>
+        public ImmutableArray<string> AnalyzerConfigs { get; }
+
+        /// <summary>Files passed as <c>/additionalfile:</c>, which generators read as inputs.</summary>
+        public ImmutableArray<string> AdditionalFiles { get; }
+
         public ImmutableArray<string> PreprocessorSymbols { get; }
         public ImmutableDictionary<string, ImmutableArray<string>> ReferenceAliases { get; }
         public string? LanguageVersion { get; }
@@ -54,6 +73,8 @@ namespace WinUiXaml.Workspace
         public string? AssemblyName { get; }
 
         public static CscCommandLine Empty { get; } = new(
+            ImmutableArray<string>.Empty,
+            ImmutableArray<string>.Empty,
             ImmutableArray<string>.Empty,
             ImmutableArray<string>.Empty,
             ImmutableArray<string>.Empty,
@@ -79,6 +100,8 @@ namespace WinUiXaml.Workspace
         {
             var references = ImmutableArray.CreateBuilder<string>();
             var analyzers = ImmutableArray.CreateBuilder<string>();
+            var analyzerConfigs = ImmutableArray.CreateBuilder<string>();
+            var additionalFiles = ImmutableArray.CreateBuilder<string>();
             var sources = ImmutableArray.CreateBuilder<string>();
             var symbols = ImmutableArray.CreateBuilder<string>();
             var aliases = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(
@@ -135,6 +158,12 @@ namespace WinUiXaml.Workspace
                     case "a":
                         analyzers.Add(Resolve(value));
                         break;
+                    case "analyzerconfig":
+                        analyzerConfigs.Add(Resolve(value));
+                        break;
+                    case "additionalfile":
+                        additionalFiles.Add(Resolve(value));
+                        break;
                     case "define":
                     case "d":
                         symbols.AddRange(value.Split(
@@ -174,6 +203,8 @@ namespace WinUiXaml.Workspace
                 references.ToImmutable(),
                 analyzers.ToImmutable(),
                 sources.ToImmutable(),
+                analyzerConfigs.ToImmutable(),
+                additionalFiles.ToImmutable(),
                 symbols.ToImmutable(),
                 aliases.ToImmutable(),
                 languageVersion,
