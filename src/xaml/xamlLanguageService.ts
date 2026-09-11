@@ -76,6 +76,7 @@ import {
   XamlStatusAction,
 } from "./xamlConfiguration";
 import { hasOpenXamlDocument } from "./xamlDemand";
+import { serverRidFor } from "./serverRid";
 import {
   DOCUMENT_CHANGED_MESSAGE,
   INVALID_EDIT_RANGE_MESSAGE,
@@ -624,6 +625,20 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     return;
   }
 
+  // The shipped server is a Windows-only native binary. On any other host the .exe is still
+  // present in the VSIX, so path resolution succeeds and spawn fails with ENOEXEC -- a "failed to
+  // start" error that gives the user no hint their platform is simply unsupported.
+  if (!serverRidFor(process.platform, process.arch)) {
+    notifyDegraded(
+      `WinUI XAML language support requires Windows on x64 or ARM64 (this host is ${process.platform}-${process.arch}). ` +
+        "Syntax highlighting remains available.",
+      "server",
+      userInitiated,
+      context
+    );
+    return;
+  }
+
   const serverPath = resolveServerPath(context);
   if (!serverPath) {
     notifyDegraded(
@@ -778,7 +793,9 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     // The client never took ownership of this watcher.
     disposeFileWatcher();
     notifyDegraded(
-      `Failed to start language server (${dotnet}): ${detail}. ` +
+      // Name the executable that was actually launched. For the AOT server this is the native
+      // binary, and blaming `dotnet` for its spawn failure sends triage to the wrong process.
+      `Failed to start language server (${isNativeServer ? serverPath : dotnet}): ${detail}. ` +
         "Syntax highlighting remains available.",
       "server",
       userInitiated,
@@ -1054,11 +1071,9 @@ function resolveServerPath(context: vscode.ExtensionContext): string | undefined
  * architecture under dist/server/win-<arch>/, mirroring how the winapp CLI ships in bin/win-<arch>/.
  */
 function bundledServer(context: vscode.ExtensionContext): string {
-  return path.join(
-    context.extensionPath,
-    "dist",
-    "server",
-    process.arch === "arm64" ? "win-arm64" : "win-x64",
-    "WinUiXaml.LanguageServer.exe"
-  );
+  return path.join(context.extensionPath, "dist", "server", serverRid(), "WinUiXaml.LanguageServer.exe");
+}
+
+function serverRid(): string {
+  return serverRidFor(process.platform, process.arch) ?? "win-x64";
 }

@@ -148,6 +148,17 @@ namespace WinUiXaml.Workspace
                 var name = separator < 0 ? body : body.Substring(0, separator);
                 var value = separator < 0 ? string.Empty : body.Substring(separator + 1);
 
+                // Boolean switches carry their value as a trailing sign rather than after a
+                // colon, and MSBuild always emits the explicit form. Reading "/unsafe+" as an
+                // unknown switch silently disables unsafe blocks for every project that enables
+                // them, which then fails to bind rather than failing to parse.
+                if (separator < 0 && name.Length > 1 &&
+                    (name[name.Length - 1] == '+' || name[name.Length - 1] == '-'))
+                {
+                    value = name.Substring(name.Length - 1);
+                    name = name.Substring(0, name.Length - 1);
+                }
+
                 switch (name.ToLowerInvariant())
                 {
                     case "reference":
@@ -190,7 +201,7 @@ namespace WinUiXaml.Workspace
                     case "nullable":
                         nullableContext = value.Trim().ToLowerInvariant() switch
                         {
-                            "" or "enable" => NullableContextOptions.Enable,
+                            "" or "+" or "enable" => NullableContextOptions.Enable,
                             "warnings" => NullableContextOptions.Warnings,
                             "annotations" => NullableContextOptions.Annotations,
                             _ => NullableContextOptions.Disable,

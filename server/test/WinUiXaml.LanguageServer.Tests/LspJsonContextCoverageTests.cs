@@ -50,6 +50,73 @@ public class LspJsonContextCoverageTests
             string.Join("\n  ", anonymous));
     }
 
+    /// <summary>
+    /// A handler returning <c>List&lt;T&gt;</c> or <c>T[]</c> serializes by that closed generic
+    /// type, not by <c>T</c> -- registering only the element type is not enough.
+    /// </summary>
+    /// <remarks>
+    /// The two tests above cannot see this: a <c>List&lt;CompletionItem&gt;</c> carries no
+    /// <c>[JsonPropertyName]</c> of its own and is not an anonymous type, so it passes both while
+    /// still throwing on the wire. That is exactly how <c>window/showMessage</c> shipped broken
+    /// past 2,000 green tests.
+    /// </remarks>
+    [Fact]
+    public void EveryCollectionOfAWirePayloadIsRegisteredAsAClosedGeneric()
+    {
+        var payloads = typeof(JsonRpcConnection).Assembly
+            .GetTypes()
+            .Where(IsWirePayload)
+            .ToHashSet();
+
+        var missing = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var payload in payloads)
+        {
+            foreach (var property in payload.GetProperties(
+                BindingFlags.Public | BindingFlags.Instance))
+            {
+                var candidate = property.PropertyType;
+                var element = ElementOf(candidate);
+                if (element is null || !payloads.Contains(element))
+                {
+                    continue;
+                }
+
+                if (LspJsonContext.Default.GetTypeInfo(candidate) is null)
+                {
+                    missing.Add($"{candidate} (on {payload.Name}.{property.Name})");
+                }
+            }
+        }
+
+        Assert.True(
+            missing.Count == 0,
+            "These collection types reach the wire but are not registered. Registering the " +
+            "element type alone does not cover them -- add a [JsonSerializable] entry for the " +
+            "closed generic itself:\n  " + string.Join("\n  ", missing));
+    }
+
+    private static Type? ElementOf(Type type)
+    {
+        if (type.IsArray)
+        {
+            return type.GetElementType();
+        }
+
+        if (!type.IsGenericType)
+        {
+            return null;
+        }
+
+        var arguments = type.GetGenericArguments();
+        return arguments.Length switch
+        {
+            1 => arguments[0],
+            // Dictionary<string, T> and friends: the value is the payload.
+            2 => arguments[1],
+            _ => null,
+        };
+    }
+
     private static bool IsWirePayload(Type type) =>
         type is { IsClass: true, IsAbstract: false, IsGenericTypeDefinition: false } &&
         type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
