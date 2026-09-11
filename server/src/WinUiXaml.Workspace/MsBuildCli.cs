@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
@@ -480,6 +481,101 @@ namespace WinUiXaml.Workspace
         }
 
         private static string Run(
+            IReadOnlyList<string> arguments,
+            string? workingDirectory,
+            TimeSpan timeout,
+            CancellationToken cancellationToken,
+            string? projectPath = null)
+        {
+            // Two MSBuild invocations against one project race on that project's obj directory --
+            // the WinUI markup compiler writes output.json from the Compile target chain, so the
+            // loser dies with "being used by another process". Both stages of a load (the fast
+            // framework resolve and the authoritative one) target the same csproj, and the
+            // in-process BuildManager this replaced serialized them for free. Shelling out does
+            // not, so the gate has to be explicit.
+            var gate = ProjectGates.GetOrAdd(
+                ProjectGateKey(projectPath, workingDirectory),
+                _ => new SemaphoreSlim(1, 1));
+            gate.Wait(cancellationToken);
+            try
+            {
+                for (var attempt = 0; ; attempt++)
+                {
+                    try
+                    {
+                        return RunCore(arguments, workingDirectory, timeout, cancellationToken, projectPath);
+                    }
+                    catch (MsBuildUnavailableException ex)
+                        when (attempt < ObjContentionRetries && IsProjectFileInUseFailure(ex.Message))
+                    {
+                        // The gate only covers this process. A build running in a terminal or
+                        // another extension holds the same files, and that contention is transient.
+                        cancellationToken.ThrowIfCancellationRequested();
+                        Thread.Sleep(TimeSpan.FromMilliseconds(250 * (attempt + 1)));
+                    }
+                }
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+
+        /// <summary>Serializes invocations that would write the same project's intermediate output.</summary>
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> ProjectGates =
+            new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
+
+        private const int ObjContentionRetries = 3;
+
+        /// <summary>
+        /// The directory an invocation writes its intermediate output under. Keying on the
+        /// directory rather than the project file matters: callers are inconsistent about
+        /// supplying <c>projectPath</c>, and two invocations that disagree about the key would not
+        /// exclude each other -- which is the whole point. Keying per directory rather than
+        /// globally still lets unrelated projects load in parallel, since they own different obj
+        /// trees.
+        /// </summary>
+        internal static string ProjectGateKey(string? projectPath, string? workingDirectory)
+        {
+            var raw = !string.IsNullOrEmpty(projectPath)
+                ? projectPath!
+                : !string.IsNullOrEmpty(workingDirectory)
+                    ? workingDirectory!
+                    : Environment.CurrentDirectory;
+
+            try
+            {
+                var full = Path.GetFullPath(raw);
+                // projectPath is a file, workingDirectory is already a directory.
+                return Path.GetDirectoryName(full) is { Length: > 0 } directory &&
+                       !Directory.Exists(full)
+                    ? directory
+                    : full;
+            }
+            catch (ArgumentException)
+            {
+                return raw;
+            }
+            catch (IOException)
+            {
+                return raw;
+            }
+            catch (NotSupportedException)
+            {
+                return raw;
+            }
+        }
+
+        /// <summary>
+        /// Whether a failure is another process holding a file this build needed, which is worth
+        /// retrying. MSBuild reports it as plain text, and the invocation forces
+        /// <c>DOTNET_CLI_UI_LANGUAGE=en</c>, so matching the English phrasing is sound here.
+        /// </summary>
+        internal static bool IsProjectFileInUseFailure(string? detail) =>
+            detail is not null &&
+            detail.Contains("being used by another process", StringComparison.OrdinalIgnoreCase);
+
+        private static string RunCore(
             IReadOnlyList<string> arguments,
             string? workingDirectory,
             TimeSpan timeout,
