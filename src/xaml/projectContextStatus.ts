@@ -68,6 +68,37 @@ export function getRelevantProjectContextStatuses(
   return values.filter((status) => status.uri === activeDocumentUri);
 }
 
+/**
+ * States that describe the project on disk rather than an operation in flight. They stay true
+ * until the developer acts, so a reload starting is not evidence they stopped being true.
+ */
+const DURABLE_STATES: readonly ProjectContextState[] = [
+  "build-required",
+  "restore-required",
+];
+
+/**
+ * Decides whether an incoming status replaces the one already held for that document.
+ *
+ * Every save restarts the project load, which re-sends `loading` before failing the same way
+ * again -- so on an unbuilt project the bar would drop its instruction and spin on each
+ * keystroke-plus-save, which is precisely the clean-clone case the instruction exists for.
+ * A load that genuinely resolves ends in `ready` / `framework-ready` / `error`, none of which
+ * are suppressed here, so recovery after a real build still lands immediately.
+ */
+export function shouldReplaceProjectContextStatus(
+  current: ProjectContextStatus | undefined,
+  incoming: ProjectContextStatus
+): boolean {
+  if (!current) {
+    return true;
+  }
+  if (incoming.state !== "loading") {
+    return true;
+  }
+  return !DURABLE_STATES.includes(current.state);
+}
+
 export function selectProjectContextStatus(
   statuses: Iterable<ProjectContextStatus>
 ): ProjectContextStatus | undefined {

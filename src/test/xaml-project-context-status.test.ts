@@ -10,7 +10,71 @@ import {
   getProjectContextStatusPresentation,
   isProjectContextState,
   selectProjectContextStatus,
+  shouldReplaceProjectContextStatus,
 } from "../xaml/projectContextStatus";
+
+test("a starting reload does not erase a build-required the developer has not fixed", () => {
+  // Every save restarts the load, so an unbuilt project re-sends `loading` indefinitely.
+  const current: ProjectContextStatus = {
+    uri: "file:///a.xaml",
+    state: "build-required",
+    message: "PlainLib has not been built",
+  };
+  assert.equal(
+    shouldReplaceProjectContextStatus(current, {
+      uri: "file:///a.xaml",
+      state: "loading",
+    }),
+    false
+  );
+  assert.equal(
+    shouldReplaceProjectContextStatus(
+      { uri: "file:///a.xaml", state: "restore-required" },
+      { uri: "file:///a.xaml", state: "loading" }
+    ),
+    false
+  );
+});
+
+test("recovery after a real build still lands immediately", () => {
+  // The suppression must be narrow: only `loading` is held off. If any terminal state were
+  // suppressed too, a developer who built would be stuck reading "build required" forever --
+  // strictly worse than the flapping this fixes.
+  const current: ProjectContextStatus = {
+    uri: "file:///a.xaml",
+    state: "build-required",
+  };
+  for (const state of PROJECT_CONTEXT_STATES.filter((s) => s !== "loading")) {
+    assert.equal(
+      shouldReplaceProjectContextStatus(current, {
+        uri: "file:///a.xaml",
+        state,
+      }),
+      true,
+      `${state} must replace build-required`
+    );
+  }
+});
+
+test("a reload replaces any state that is not a durable fact about the project", () => {
+  assert.equal(
+    shouldReplaceProjectContextStatus(undefined, {
+      uri: "file:///a.xaml",
+      state: "loading",
+    }),
+    true
+  );
+  for (const state of ["ready", "framework-ready", "error"] as const) {
+    assert.equal(
+      shouldReplaceProjectContextStatus(
+        { uri: "file:///a.xaml", state },
+        { uri: "file:///a.xaml", state: "loading" }
+      ),
+      true,
+      `loading must replace ${state}`
+    );
+  }
+});
 
 /**
  * The server sends the state as a bare string and the client narrows it with

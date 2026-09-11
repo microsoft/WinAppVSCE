@@ -67,6 +67,7 @@ import {
   getProjectContextStatusPresentation,
   isProjectContextState,
   selectProjectContextStatus,
+  shouldReplaceProjectContextStatus,
 } from "./projectContextStatus";
 import {
   normalizeDiagnosticsLevel,
@@ -946,7 +947,12 @@ function updateProjectContextStatus(status: ProjectContextStatus): void {
 
   if (status.state === "idle") {
     projectContextStatuses.delete(status.uri);
-  } else {
+  } else if (
+    shouldReplaceProjectContextStatus(
+      projectContextStatuses.get(status.uri),
+      status
+    )
+  ) {
     projectContextStatuses.set(status.uri, status);
   }
   renderProjectContextStatus();
