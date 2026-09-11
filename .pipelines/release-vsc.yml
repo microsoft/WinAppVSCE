@@ -105,7 +105,10 @@ extends:
                 AuthCertName: $(SigningAuthCertName)
                 AuthSignCertName: $(SigningSignCertName)
                 FolderPath: '$(Build.ArtifactStagingDirectory)/server-bundle'
-                Pattern: '**/WinUiXaml*.dll'
+                # The Native AOT server ships as WinUiXaml.LanguageServer.exe per RID; only the
+                # out-of-proc generator host is still a managed .dll. A .dll-only glob silently
+                # leaves the primary binaries unsigned.
+                Pattern: '**/WinUiXaml*.dll,**/WinUiXaml*.exe'
                 UseMinimatch: true
                 signConfigType: inlineSignParams
                 inlineOperation: |
@@ -131,6 +134,36 @@ extends:
                           "ToolVersion": "1.0"
                       }
                   ]
+            # SigntoolVerify above only checks files the Pattern already matched, so it cannot
+            # catch the Pattern missing a binary. Enumerate the bundle independently instead.
+            - task: PowerShell@2
+              displayName: Verify every first-party server binary is signed
+              inputs:
+                errorActionPreference: 'stop'
+                targetType: 'inline'
+                script: |
+                  $bundle = "$(Build.ArtifactStagingDirectory)/server-bundle"
+                  $binaries = Get-ChildItem -Path $bundle -Recurse -Include 'WinUiXaml*.dll','WinUiXaml*.exe'
+                  if ($binaries.Count -eq 0) {
+                    Write-Error "No first-party server binaries found under $bundle"
+                    exit 1
+                  }
+
+                  $unsigned = @()
+                  foreach ($binary in $binaries) {
+                    $signature = Get-AuthenticodeSignature -FilePath $binary.FullName
+                    Write-Host "$($signature.Status)`t$($binary.FullName)"
+                    if ($signature.Status -ne 'Valid') {
+                      $unsigned += "$($binary.FullName) [$($signature.Status)]"
+                    }
+                  }
+
+                  if ($unsigned.Count -gt 0) {
+                    Write-Error "Unsigned first-party binaries:`n$($unsigned -join "`n")"
+                    exit 1
+                  }
+
+                  Write-Host "All $($binaries.Count) first-party server binaries are signed."
           - task: 1ES.PublishPipelineArtifact@1
             displayName: Upload server artifact
             inputs:
