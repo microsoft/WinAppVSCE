@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using WinUiXaml.Workspace;
 using Xunit;
 
@@ -113,6 +115,149 @@ public sealed class MsBuildContentionTests
 
         // And nothing may start a process outside the launcher itself.
         Assert.Equal(1, Regex.Matches(source, @"new Process\b").Count);
+    }
+
+    /// <summary>
+    /// The property the gate exists for, measured rather than inferred: invocations that would
+    /// write the same obj directory never overlap. The source-harvest test above proves the gate
+    /// is wired in; this proves it actually excludes.
+    /// </summary>
+    [Fact]
+    public void InvocationsAgainstOneProjectNeverOverlap()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(), "winuixaml-gate-exclusion-" + Guid.NewGuid().ToString("N"));
+        var project = Path.Combine(directory, "App.csproj");
+
+        var active = 0;
+        var peak = 0;
+        var entered = 0;
+
+        Parallel.For(0, 8, index =>
+        {
+            // Half arrive as EvaluateAndCompile does and half as Evaluate does, because the two
+            // forms have to land on the same gate for any of this to hold.
+            var path = index % 2 == 0 ? project : null;
+            MsBuildCli.RunGated(path, directory, CancellationToken.None, () =>
+            {
+                var current = Interlocked.Increment(ref active);
+                Interlocked.Increment(ref entered);
+                InterlockedMax(ref peak, current);
+                Thread.Sleep(25);
+                Interlocked.Decrement(ref active);
+                return 0;
+            });
+        });
+
+        Assert.Equal(8, entered);
+        Assert.Equal(1, peak);
+    }
+
+    /// <summary>
+    /// The other half of the contract. A gate that serialized every project would turn a solution
+    /// load into a queue, and the exclusion test above would pass just as happily -- so the
+    /// negative has to be measured too. Each side refuses to finish until it has seen the other
+    /// inside, which cannot happen if they share a gate.
+    /// </summary>
+    [Fact]
+    public async Task UnrelatedProjectsStillLoadInParallel()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(), "winuixaml-gate-parallel-" + Guid.NewGuid().ToString("N"));
+        var first = Path.Combine(root, "AppOne");
+        var second = Path.Combine(root, "AppTwo");
+
+        using var firstInside = new ManualResetEventSlim(false);
+        using var secondInside = new ManualResetEventSlim(false);
+
+        // Each side gives up waiting rather than hanging, so a shared gate fails the assertion
+        // instead of stalling the suite.
+        var timeout = TimeSpan.FromSeconds(10);
+
+        var firstSawSecond = Task.Run(() => MsBuildCli.RunGated(
+            Path.Combine(first, "AppOne.csproj"), first, CancellationToken.None, () =>
+            {
+                firstInside.Set();
+                return secondInside.Wait(timeout);
+            }));
+
+        var secondSawFirst = Task.Run(() => MsBuildCli.RunGated(
+            Path.Combine(second, "AppTwo.csproj"), second, CancellationToken.None, () =>
+            {
+                secondInside.Set();
+                return firstInside.Wait(timeout);
+            }));
+
+        var results = await Task.WhenAll(firstSawSecond, secondSawFirst);
+
+        Assert.True(results[0]);
+        Assert.True(results[1]);
+    }
+
+    /// <summary>
+    /// A body that throws must not strand the gate; the next invocation for that project would
+    /// block forever, which presents as the language server hanging rather than failing.
+    /// </summary>
+    [Fact]
+    public async Task AFailedInvocationReleasesTheGate()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(), "winuixaml-gate-release-" + Guid.NewGuid().ToString("N"));
+
+        Assert.Throws<InvalidOperationException>(() =>
+            MsBuildCli.RunGated<int>(null, directory, CancellationToken.None,
+                () => throw new InvalidOperationException("build failed")));
+
+        var second = Task.Run(() => MsBuildCli.RunGated(
+            null, directory, CancellationToken.None, () => true));
+
+        // A stranded gate never completes, so the delay is what turns a hang into a failure.
+        var finished = await Task.WhenAny(second, Task.Delay(TimeSpan.FromSeconds(10)));
+
+        Assert.Same(second, finished);
+        Assert.True(await second);
+    }
+
+    /// <summary>
+    /// The key must be a pure function of the two arguments. An earlier version probed
+    /// <c>Directory.Exists</c>, so a project whose directory had not been created yet keyed
+    /// differently from the same project a moment later -- the gate silently stopped excluding
+    /// while every key-equality test still passed.
+    /// </summary>
+    [Fact]
+    public void TheGateKeyDoesNotDependOnWhetherThePathExists()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(), "winuixaml-gate-absent-" + Guid.NewGuid().ToString("N"));
+        var project = Path.Combine(directory, "App.csproj");
+
+        Assert.False(Directory.Exists(directory));
+        var absentCompile = MsBuildCli.ProjectGateKey(project, directory);
+        var absentEvaluate = MsBuildCli.ProjectGateKey(null, directory);
+        Assert.Equal(absentCompile, absentEvaluate);
+
+        Directory.CreateDirectory(directory);
+        try
+        {
+            Assert.Equal(absentCompile, MsBuildCli.ProjectGateKey(project, directory));
+            Assert.Equal(absentEvaluate, MsBuildCli.ProjectGateKey(null, directory));
+        }
+        finally
+        {
+            TryDelete(directory);
+        }
+    }
+
+    private static void InterlockedMax(ref int target, int value)
+    {
+        int seen;
+        while (value > (seen = Volatile.Read(ref target)))
+        {
+            if (Interlocked.CompareExchange(ref target, value, seen) == seen)
+            {
+                return;
+            }
+        }
     }
 
     private static string WorkspaceSourceDirectory()

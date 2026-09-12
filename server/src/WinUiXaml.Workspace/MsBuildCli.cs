@@ -638,33 +638,60 @@ namespace WinUiXaml.Workspace
             CancellationToken cancellationToken,
             string? projectPath = null)
         {
-            // Two MSBuild invocations against one project race on that project's obj directory --
-            // the WinUI markup compiler writes output.json from the Compile target chain, so the
-            // loser dies with "being used by another process". Both stages of a load (the fast
-            // framework resolve and the authoritative one) target the same csproj, and the
-            // in-process BuildManager this replaced serialized them for free. Shelling out does
-            // not, so the gate has to be explicit.
+            return RunGated(
+                projectPath,
+                workingDirectory,
+                cancellationToken,
+                () =>
+                {
+                    for (var attempt = 0; ; attempt++)
+                    {
+                        try
+                        {
+                            return RunCore(
+                                arguments, workingDirectory, timeout, cancellationToken, projectPath);
+                        }
+                        catch (MsBuildUnavailableException ex)
+                            when (attempt < ObjContentionRetries && IsProjectFileInUseFailure(ex.Message))
+                        {
+                            // The gate only covers this process. A build running in a terminal or
+                            // another extension holds the same files, and that contention is transient.
+                            cancellationToken.ThrowIfCancellationRequested();
+                            Thread.Sleep(TimeSpan.FromMilliseconds(250 * (attempt + 1)));
+                    }
+                }
+            });
+        }
+
+        /// <summary>
+        /// Runs <paramref name="body"/> with exclusive access to one project's intermediate output
+        /// directory.
+        /// </summary>
+        /// <remarks>
+        /// Two MSBuild invocations against one project race on that project's obj directory -- the
+        /// WinUI markup compiler writes output.json from the Compile target chain, so the loser
+        /// dies with "being used by another process". Both stages of a load (the fast framework
+        /// resolve and the authoritative one) target the same csproj, and the in-process
+        /// BuildManager this replaced serialized them for free. Shelling out does not, so the gate
+        /// has to be explicit.
+        ///
+        /// This is a separate method so the exclusion itself can be tested. Driving it through a
+        /// real build would need a project that actually contends, and a fixture that does not
+        /// contend produces a test that passes whether or not the gate is there at all.
+        /// </remarks>
+        internal static T RunGated<T>(
+            string? projectPath,
+            string? workingDirectory,
+            CancellationToken cancellationToken,
+            Func<T> body)
+        {
             var gate = ProjectGates.GetOrAdd(
                 ProjectGateKey(projectPath, workingDirectory),
                 _ => new SemaphoreSlim(1, 1));
             gate.Wait(cancellationToken);
             try
             {
-                for (var attempt = 0; ; attempt++)
-                {
-                    try
-                    {
-                        return RunCore(arguments, workingDirectory, timeout, cancellationToken, projectPath);
-                    }
-                    catch (MsBuildUnavailableException ex)
-                        when (attempt < ObjContentionRetries && IsProjectFileInUseFailure(ex.Message))
-                    {
-                        // The gate only covers this process. A build running in a terminal or
-                        // another extension holds the same files, and that contention is transient.
-                        cancellationToken.ThrowIfCancellationRequested();
-                        Thread.Sleep(TimeSpan.FromMilliseconds(250 * (attempt + 1)));
-                    }
-                }
+                return body();
             }
             finally
             {
@@ -685,36 +712,47 @@ namespace WinUiXaml.Workspace
         /// exclude each other -- which is the whole point. Keying per directory rather than
         /// globally still lets unrelated projects load in parallel, since they own different obj
         /// trees.
+        ///
+        /// The two forms are told apart by which argument was supplied, never by probing the disk.
+        /// An earlier version asked <c>Directory.Exists</c>, which made the key depend on whether
+        /// the path happened to exist yet -- so the same project could take two different gates.
         /// </summary>
         internal static string ProjectGateKey(string? projectPath, string? workingDirectory)
         {
-            var raw = !string.IsNullOrEmpty(projectPath)
-                ? projectPath!
-                : !string.IsNullOrEmpty(workingDirectory)
-                    ? workingDirectory!
-                    : Environment.CurrentDirectory;
-
             try
             {
-                var full = Path.GetFullPath(raw);
-                // projectPath is a file, workingDirectory is already a directory.
-                return Path.GetDirectoryName(full) is { Length: > 0 } directory &&
-                       !Directory.Exists(full)
-                    ? directory
-                    : full;
+                if (!string.IsNullOrEmpty(projectPath))
+                {
+                    // Always a project file, so its directory is the obj tree's owner.
+                    var full = Path.GetFullPath(projectPath!);
+                    return Path.GetDirectoryName(full) is { Length: > 0 } directory
+                        ? directory
+                        : full;
+                }
+
+                return !string.IsNullOrEmpty(workingDirectory)
+                    ? Path.GetFullPath(workingDirectory!)
+                    : Environment.CurrentDirectory;
             }
             catch (ArgumentException)
             {
-                return raw;
+                return Fallback(projectPath, workingDirectory);
             }
             catch (IOException)
             {
-                return raw;
+                return Fallback(projectPath, workingDirectory);
             }
             catch (NotSupportedException)
             {
-                return raw;
+                return Fallback(projectPath, workingDirectory);
             }
+
+            static string Fallback(string? projectPath, string? workingDirectory) =>
+                !string.IsNullOrEmpty(projectPath)
+                    ? projectPath!
+                    : !string.IsNullOrEmpty(workingDirectory)
+                        ? workingDirectory!
+                        : Environment.CurrentDirectory;
         }
 
         /// <summary>
