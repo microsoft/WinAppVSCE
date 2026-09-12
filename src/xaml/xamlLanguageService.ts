@@ -843,17 +843,33 @@ function notifyProjectBuildRequired(
 }
 
 /**
- * Builds in a visible terminal rather than silently: the build is the user's own action, its
- * output is where a genuine build error will surface, and a terminal needs no new command
- * contribution or progress UI. Once the outputs exist the server re-resolves on the next request.
+ * Builds in a visible task terminal rather than silently: the build is the user's own action, its
+ * output is where a genuine build error will surface, and a task needs no new command contribution
+ * or progress UI. Once the outputs exist the server re-resolves on the next request.
+ *
+ * The project path is passed as a process argument rather than interpolated into shell text. It
+ * originates from the server and is checked against the workspace roots, but a `.csproj` whose
+ * path contains `$(...)` or a backtick would still be expanded by PowerShell inside double quotes,
+ * and a build the user did not ask for is a poor thing to learn that from. `ProcessExecution`
+ * starts `dotnet` directly, so there is no shell to do the expanding.
  */
 function runProjectBuild(projectPath: string): void {
-  const terminal = vscode.window.createTerminal({
-    name: "WinApp: Build",
-    cwd: path.dirname(projectPath),
-  });
-  terminal.show(true);
-  terminal.sendText(`dotnet build "${projectPath}"`);
+  const task = new vscode.Task(
+    { type: "winapp-xaml-build" },
+    vscode.TaskScope.Workspace,
+    "Build",
+    "WinApp",
+    new vscode.ProcessExecution("dotnet", ["build", projectPath], {
+      cwd: path.dirname(projectPath),
+    })
+  );
+  task.presentationOptions = {
+    reveal: vscode.TaskRevealKind.Always,
+    panel: vscode.TaskPanelKind.Dedicated,
+    clear: true,
+  };
+
+  void vscode.tasks.executeTask(task);
 }
 
 function isTrustedWorkspaceProject(projectPath: string): boolean {
