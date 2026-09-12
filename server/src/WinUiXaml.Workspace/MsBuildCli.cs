@@ -92,6 +92,42 @@ namespace WinUiXaml.Workspace
             CancellationToken cancellationToken = default)
         {
             var fullPath = Path.GetFullPath(projectPath);
+            try
+            {
+                return EvaluateAndCompileCore(fullPath, globalProperties, cancellationToken);
+            }
+            catch (MsBuildUnavailableException ex)
+                when (IsCrossTargetingFailure(ex.Message) &&
+                      !globalProperties.ContainsKey(TargetFrameworkProperty))
+            {
+                // A multi-targeted project's outer build defines no Compile target, so the design
+                // time build dies with MSB4057 and the project is dropped -- silently costing the
+                // user every type in it. Only an inner build has that target, so pick one target
+                // framework and ask for it by name. The old MSBuildWorkspace handled this itself,
+                // which is why nothing above this layer expects to have to.
+                var framework = SelectTargetFramework(
+                    ReadTargetFrameworks(fullPath, globalProperties, cancellationToken));
+                if (framework == null)
+                {
+                    throw;
+                }
+
+                var pinned = globalProperties.ToDictionary(
+                    entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
+                pinned[TargetFrameworkProperty] = framework;
+                return EvaluateAndCompileCore(fullPath, pinned, cancellationToken);
+            }
+        }
+
+        private static (
+            Evaluation Evaluation,
+            ImmutableArray<string> CscCommandLineArgs,
+            ImmutableArray<string> UnresolvedProjectReferences) EvaluateAndCompileCore(
+            string fullPath,
+            IReadOnlyDictionary<string, string> globalProperties,
+            CancellationToken cancellationToken)
+        {
+            var projectPath = fullPath;
             var arguments = new List<string>
             {
                 "msbuild",
@@ -231,6 +267,121 @@ namespace WinUiXaml.Workspace
             }
 
             return (evaluation, synthesized.ToImmutable());
+        }
+
+        /// <summary>
+        /// The MSBuild property that selects one inner build of a multi-targeted project.
+        /// </summary>
+        private const string TargetFrameworkProperty = "TargetFramework";
+
+        /// <summary>
+        /// Whether a failure is the outer build of a multi-targeted project being asked for a
+        /// target only its inner builds define. MSB4057 is an error code rather than prose, so
+        /// this survives a localized MSBuild -- unlike the text-matched checks nearby, which have
+        /// <c>DOTNET_CLI_UI_LANGUAGE=en</c> forced to make them safe.
+        /// </summary>
+        internal static bool IsCrossTargetingFailure(string? detail) =>
+            detail is not null &&
+            detail.Contains("MSB4057", StringComparison.Ordinal);
+
+        /// <summary>
+        /// Reads the declared target frameworks. This runs no targets, which is exactly why it
+        /// answers for the outer build that just refused to compile.
+        /// </summary>
+        private static string? ReadTargetFrameworks(
+            string fullPath,
+            IReadOnlyDictionary<string, string> globalProperties,
+            CancellationToken cancellationToken)
+        {
+            var arguments = new List<string>
+            {
+                "msbuild",
+                fullPath,
+                "-nologo",
+                "-getProperty:TargetFrameworks",
+            };
+            AppendProperties(arguments, globalProperties);
+
+            try
+            {
+                var output = Run(
+                    arguments, Path.GetDirectoryName(fullPath), EvaluateTimeout, cancellationToken);
+
+                // A single -getProperty prints the bare value; MSBuild only switches to JSON once
+                // more than one value is requested. Both shapes are accepted rather than relying
+                // on that, because the difference is undocumented and silently yields null.
+                if (output.IndexOf('{') < 0)
+                {
+                    var value = output.Trim();
+                    return value.Length == 0 ? null : value;
+                }
+
+                using var document = ParseJson(output, fullPath);
+                return ReadProperty(document.RootElement, "TargetFrameworks");
+            }
+            catch (MsBuildUnavailableException)
+            {
+                // Nothing is recoverable from here; the caller rethrows the original failure,
+                // which describes the real problem better than this one would.
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Picks the inner build to load for a multi-targeted project. Preferring the highest
+        /// modern .NET target approximates what a consuming app resolves to, and it is the target
+        /// most likely to expose the project's full API surface; a <c>netstandard</c> leg is the
+        /// compatibility shim. This is a heuristic, not NuGet's resolution -- but loading one
+        /// reasonable framework is strictly better than the alternative of loading none.
+        /// </summary>
+        internal static string? SelectTargetFramework(string? declared)
+        {
+            if (string.IsNullOrWhiteSpace(declared))
+            {
+                return null;
+            }
+
+            string? best = null;
+            var bestRank = (Modern: false, Version: -1);
+            foreach (var raw in declared!.Split(';'))
+            {
+                var candidate = raw.Trim();
+                if (candidate.Length == 0)
+                {
+                    continue;
+                }
+
+                var rank = RankTargetFramework(candidate);
+                if (best == null ||
+                    (rank.Modern, rank.Version).CompareTo(bestRank) > 0)
+                {
+                    best = candidate;
+                    bestRank = rank;
+                }
+            }
+
+            return best;
+        }
+
+        private static (bool Modern, int Version) RankTargetFramework(string framework)
+        {
+            // "net9.0" and "net9.0-windows10.0.26100.0" are modern; "netstandard2.0" and "net48"
+            // are not. The digits before the first '.' separate them: a modern target always has
+            // one, a net48-style target never does.
+            if (!framework.StartsWith("net", StringComparison.OrdinalIgnoreCase))
+            {
+                return (false, -1);
+            }
+
+            var rest = framework.Substring(3);
+            var dot = rest.IndexOf('.');
+            if (dot <= 0 ||
+                !int.TryParse(rest.Substring(0, dot), out var major))
+            {
+                return (false, -1);
+            }
+
+            return (true, major);
         }
 
         private static void AppendEvaluationRequests(List<string> arguments)
