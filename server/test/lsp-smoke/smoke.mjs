@@ -1,7 +1,16 @@
 // End-to-end LSP smoke test for the WinUI XAML language server. Drives the real server over stdio (no VS Code, no test framework, no npm deps) and proves the spine: initialize -> didOpen (syntactic diagnostics) -> textDocument/definition (F12) resolves an event-handler attribute value to the C# method in the page's code-behind. Usage:  node smoke.mjs Exit 0 = pass. Requires the server to be built (Debug) and the WinUI smoke fixture on disk.
 
-import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+import { spawn, execFileSync } from "node:child_process";
+import {
+  readFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  writeFileSync,
+  rmSync,
+  realpathSync,
+} from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -90,8 +99,138 @@ process.once("exit", () => {
     // A leaked temp directory must not turn a real pass into a failure.
   }
 });
-const appXamlText = readFileSync(APP_XAML, "utf8");
-const accentKeyOffset = appXamlText.indexOf('x:Key="SmokeAccentBrush"');
+// A project whose ProjectReference has never been built. This is the other durable "the developer
+// must act" state, and like restore-required it cannot be held still in a real editor: the first
+// build resolves it permanently. The reference is left unbuilt here and nothing ever builds it.
+//
+// The markup compiler is what detects this (WMC1006), so the fixture has to be a real WinUI
+// project. Package versions are read from the checked-in fixture rather than written literally --
+// a version this machine has never restored would send this leg to the network, and a restore
+// failure would read exactly like a project that resolved fine.
+const buildRequiredRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "winui-xaml-unbuilt-")));
+const buildRequiredAppDir = join(buildRequiredRoot, "App");
+const buildRequiredLibDir = join(buildRequiredRoot, "Lib");
+mkdirSync(buildRequiredAppDir);
+mkdirSync(buildRequiredLibDir);
+process.once("exit", () => {
+  try {
+    rmSync(buildRequiredRoot, { recursive: true, force: true });
+  } catch {
+    // A leaked temp directory must not turn a real pass into a failure.
+  }
+});
+
+const fixtureDir = dirname(XAML);
+const fixtureProjectName = readdirSync(fixtureDir).find((name) => name.endsWith(".csproj"));
+if (!fixtureProjectName) fail(`no .csproj beside the fixture: ${fixtureDir}`);
+const fixtureProjectText = readFileSync(join(fixtureDir, fixtureProjectName), "utf8");
+function fixturePackageVersion(id) {
+  const match = fixtureProjectText.match(
+    new RegExp(`Include="${id}"\\s+Version="([^"]+)"`, "i")
+  );
+  if (!match) fail(`could not read the ${id} version from ${fixtureProjectName}`);
+  return match[1];
+}
+const targetFrameworkMatch = fixtureProjectText.match(/<TargetFramework>([^<]+)</);
+if (!targetFrameworkMatch) fail(`could not read TargetFramework from ${fixtureProjectName}`);
+const buildRequiredTfm = targetFrameworkMatch[1];
+
+writeFileSync(
+  join(buildRequiredLibDir, "Lib.csproj"),
+  `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>${buildRequiredTfm}</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+  </PropertyGroup>
+</Project>
+`,
+  "utf8"
+);
+writeFileSync(
+  join(buildRequiredLibDir, "Greeter.cs"),
+  "namespace Lib;\npublic class Greeter { public string Text => \"hi\"; }\n",
+  "utf8"
+);
+const buildRequiredProject = join(buildRequiredAppDir, "UnbuiltRef.csproj");
+writeFileSync(
+  buildRequiredProject,
+  `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>${buildRequiredTfm}</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>UnbuiltRefApp</RootNamespace>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="${fixturePackageVersion(
+      "Microsoft.Windows.SDK.BuildTools"
+    )}" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="${fixturePackageVersion(
+      "Microsoft.WindowsAppSDK"
+    )}" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\\Lib\\Lib.csproj" />
+  </ItemGroup>
+</Project>
+`,
+  "utf8"
+);
+writeFileSync(
+  join(buildRequiredAppDir, "App.xaml"),
+  `<Application
+    x:Class="UnbuiltRefApp.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+</Application>
+`,
+  "utf8"
+);
+writeFileSync(
+  join(buildRequiredAppDir, "App.xaml.cs"),
+  "namespace UnbuiltRefApp;\npublic partial class App : Microsoft.UI.Xaml.Application { public App() { InitializeComponent(); } }\n",
+  "utf8"
+);
+const buildRequiredXamlPath = join(buildRequiredAppDir, "UnbuiltRefPage.xaml");
+const buildRequiredXamlText = `<Page
+    x:Class="UnbuiltRefApp.UnbuiltRefPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <TextBlock Text="Hello" />
+</Page>
+`;
+writeFileSync(buildRequiredXamlPath, buildRequiredXamlText, "utf8");
+writeFileSync(
+  join(buildRequiredAppDir, "UnbuiltRefPage.xaml.cs"),
+  "namespace UnbuiltRefApp;\npublic partial class UnbuiltRefPage : Microsoft.UI.Xaml.Controls.Page { public UnbuiltRefPage() { InitializeComponent(); } }\n",
+  "utf8"
+);
+
+// Restore, but never build. Restore is what separates this leg from the restore-required one
+// above: without it the server would stop at the earlier state and this leg would pass while
+// testing nothing. `dotnet restore` does not build project references, so Lib.dll stays absent.
+let buildRequiredFixtureReady = false;
+try {
+  execFileSync("dotnet", ["restore", buildRequiredProject], {
+    stdio: "pipe",
+    timeout: 300000,
+  });
+  buildRequiredFixtureReady = true;
+} catch (err) {
+  console.error(
+    `[warn] could not restore the unbuilt-reference fixture, skipping the build-required leg: ${err.message}`
+  );
+}
+const buildRequiredXamlUri = pathToFileURL(buildRequiredXamlPath).href;
+
+const appXamlText = readFileSync(APP_XAML, "utf8");const accentKeyOffset = appXamlText.indexOf('x:Key="SmokeAccentBrush"');
 if (accentKeyOffset < 0) fail('could not find x:Key="SmokeAccentBrush" in App.xaml');
 const EXPECTED_ACCENT_KEY_LINE = offsetToPosition(appXamlText, accentKeyOffset).line;
 
@@ -214,7 +353,7 @@ async function main() {
   // The never-restored project below gets its own root rather than living under the fixture: an
   // SDK-style project globs **/*.cs, so a nested project directory would be swept into the
   // fixture's own compile items and could break unrelated legs of this test.
-  const allowedRoots = [dirname(XAML), unrestoredRoot];
+  const allowedRoots = [dirname(XAML), unrestoredRoot, buildRequiredRoot];
   send({
     id: 1,
     method: "initialize",
@@ -1330,6 +1469,90 @@ async function main() {
   console.log(
     "[ok] never-restored project: projectRestoreRequired + restore-required status both reach the wire"
   );
+
+  // 22b) The build-required path, end to end on the wire.
+  //
+  // Same gap as the restore-required leg, and the one the status bar's durable state exists for:
+  // `projectBuildRequired` carries an `unresolvedAssemblies` array, a payload shape nothing else
+  // on the wire exercises, and a notification that failed to serialize under the AOT context
+  // would be silently absent -- indistinguishable from a project that resolved fine.
+  if (buildRequiredFixtureReady) {
+    const buildRequired = waitFor(
+      (message) =>
+        message.method === "winui-xaml/projectBuildRequired" &&
+        typeof message.params?.projectPath === "string" &&
+        message.params.projectPath.toLowerCase() === buildRequiredProject.toLowerCase(),
+      180000,
+      "projectBuildRequired for the never-built project reference"
+    );
+    const buildStatus = waitFor(
+      (message) =>
+        message.method === "winui-xaml/projectContextStatus" &&
+        message.params?.uri === buildRequiredXamlUri &&
+        message.params?.state === "build-required",
+      180000,
+      "build-required project context status"
+    );
+    send({
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: {
+          uri: buildRequiredXamlUri,
+          languageId: "xaml",
+          version: 1,
+          text: buildRequiredXamlText,
+        },
+      },
+    });
+    send({
+      id: 7302,
+      method: "textDocument/completion",
+      params: {
+        textDocument: { uri: buildRequiredXamlUri },
+        position: { line: 4, character: 4 },
+      },
+    });
+    const buildNotification = await buildRequired;
+    const buildStatusMessage = await buildStatus;
+    // The array is the whole point of the notification: it is what lets the client name the
+    // project to build rather than telling the developer only that something is wrong.
+    if (
+      !Array.isArray(buildNotification.params.unresolvedAssemblies) ||
+      buildNotification.params.unresolvedAssemblies.length === 0
+    ) {
+      fail(
+        `projectBuildRequired carried no unresolved assemblies: ${JSON.stringify(
+          buildNotification.params
+        )}`
+      );
+    }
+    if (
+      !buildNotification.params.unresolvedAssemblies.some((name) =>
+        String(name).toLowerCase().includes("lib")
+      )
+    ) {
+      fail(
+        `projectBuildRequired named the wrong assemblies: ${JSON.stringify(
+          buildNotification.params.unresolvedAssemblies
+        )}`
+      );
+    }
+    if (
+      typeof buildStatusMessage.params.message !== "string" ||
+      buildStatusMessage.params.message.length === 0
+    ) {
+      fail(
+        `build-required status carried no message: ${JSON.stringify(buildStatusMessage.params)}`
+      );
+    }
+    console.log(
+      "[ok] never-built project reference: projectBuildRequired + build-required status both reach the wire"
+    );
+  } else {
+    console.log(
+      "[skip] build-required leg did not run -- the fixture could not be restored (see the warning above)"
+    );
+  }
 
   // 23) shutdown
   send({ id: 11, method: "shutdown", params: null });

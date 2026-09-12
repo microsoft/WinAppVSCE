@@ -398,7 +398,8 @@ internal sealed partial class XamlLanguageServer
         // compiler never ran, so generated members are missing. Report it -- a partial outage the
         // user cannot see is worse than a total one they are told about. The latch is deliberately
         // left set, so this prompts once rather than on every document load.
-        if (!frameworkResolution.UnresolvedProjectReferences.IsDefaultOrEmpty)
+        var buildRequired = !frameworkResolution.UnresolvedProjectReferences.IsDefaultOrEmpty;
+        if (buildRequired)
         {
             await NotifyProjectBuildRequiredAsync(
                 new ProjectBuildRequiredException(
@@ -421,7 +422,16 @@ internal sealed partial class XamlLanguageServer
             XamlProjectStage.Framework);
         if (publishIntermediate(frameworkContext))
         {
-            await NotifyProjectContextStatusAsync(uri, "framework-ready").ConfigureAwait(false);
+            // The toast fires once per project per session, so on every later document this status
+            // is the only thing still saying a build is needed. Publishing `framework-ready` here
+            // would report a working state while generated members are missing -- a bar that lies
+            // is worse than one that says nothing.
+            await NotifyProjectContextStatusAsync(
+                uri,
+                buildRequired ? "build-required" : "framework-ready",
+                buildRequired
+                    ? BuildRequiredStatusMessage(frameworkResolution.UnresolvedProjectReferences)
+                    : null).ConfigureAwait(false);
         }
 
         XamlResolution? fullResolution;
@@ -458,8 +468,17 @@ internal sealed partial class XamlLanguageServer
         return new XamlProjectContext(fullResolution, fullTypeSystem, XamlProjectStage.Full);
     }
 
-    private Task NotifyProjectContextStatusAsync(
-        string uri,
+    /// <summary>
+    /// The text the status bar shows. It names the projects to build, because "build required"
+    /// alone leaves the developer guessing which of their references is the unbuilt one.
+    /// </summary>
+    private static string BuildRequiredStatusMessage(
+        System.Collections.Immutable.ImmutableArray<string> unresolved) =>
+        unresolved.IsDefaultOrEmpty
+            ? "A referenced project has not been built yet."
+            : $"Build required: {string.Join(", ", unresolved)}";
+
+    private Task NotifyProjectContextStatusAsync(        string uri,
         string state,
         string? message = null) =>
         _connection.SendNotificationAsync(
@@ -928,9 +947,16 @@ internal sealed partial class XamlLanguageServer
             var context = await GetOrStartContext(uri).ConfigureAwait(false);
             if (context is not null)
             {
+                // Same rule as the first publish: an unbuilt reference outranks the stage, or this
+                // republish would quietly overwrite the build instruction with a working state.
+                var unresolved = context.Resolution.UnresolvedProjectReferences;
                 await NotifyProjectContextStatusAsync(
                     uri,
-                    context.Stage == XamlProjectStage.Full ? "ready" : "framework-ready").ConfigureAwait(false);
+                    !unresolved.IsDefaultOrEmpty
+                        ? "build-required"
+                        : context.Stage == XamlProjectStage.Full ? "ready" : "framework-ready",
+                    unresolved.IsDefaultOrEmpty ? null : BuildRequiredStatusMessage(unresolved))
+                    .ConfigureAwait(false);
             }
         });
     }
