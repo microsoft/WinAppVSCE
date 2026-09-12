@@ -174,8 +174,14 @@ internal static class Program
             {
                 assembly = Assembly.LoadFrom(analyzer);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                // Skipping quietly costs the user every generated member this analyzer would have
+                // produced, with nothing on the wire or in the log to connect that to a cause.
+                // The neighbouring version-skew path already reports; this one did not.
+                Console.Error.WriteLine(
+                    $"[winui-xaml-genhost] analyzer '{analyzer}' could not be loaded: {ex.Message}. " +
+                    "Generated members from this analyzer will not resolve.");
                 continue;
             }
 
@@ -190,8 +196,11 @@ internal static class Program
                 // deployed here. Partial results still contain every generator we care about.
                 types = ex.Types;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Console.Error.WriteLine(
+                    $"[winui-xaml-genhost] analyzer '{analyzer}' could not be inspected: {ex.Message}. " +
+                    "Generated members from this analyzer will not resolve.");
                 continue;
             }
 
