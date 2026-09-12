@@ -167,9 +167,24 @@ public class CscCommandLineParseTests
         Assert.Equal(LanguageVersion.Preview, parsed.CreateParseOptions().LanguageVersion);
     }
 
+    /// <summary>
+    /// csc parses doc comments only under /doc, which MSBuild omits unless the project emits an
+    /// XML file -- but quick info for the user's own members is read off these syntax trees, so
+    /// DocumentationMode.None makes every summary on their types vanish while framework prose
+    /// keeps working. That reads as a documentation problem, not a parse option.
+    /// </summary>
     [Fact]
-    public void Parse_IgnoresNonSourceBareArguments()
+    public void Parse_KeepsDocCommentsEvenWithoutTheDocSwitch()
     {
+        var parsed = Parse("MainPage.xaml.cs");
+
+        Assert.NotEqual(
+            DocumentationMode.None,
+            parsed.CreateParseOptions().DocumentationMode);
+    }
+
+    [Fact]
+    public void Parse_IgnoresNonSourceBareArguments()    {
         var parsed = Parse("MainPage.xaml.cs", "readme.txt", "App.xaml");
 
         Assert.Equal(

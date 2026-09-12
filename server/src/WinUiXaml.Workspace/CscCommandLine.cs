@@ -31,9 +31,12 @@ namespace WinUiXaml.Workspace
             OutputKind outputKind,
             bool allowUnsafe,
             NullableContextOptions nullableContext,
-            string? assemblyName)
+            string? assemblyName,
+            CSharpParseOptions? parseOptions = null,
+            CSharpCompilationOptions? compilationOptions = null)
         {
-            References = references;
+            _parseOptions = parseOptions;
+            _compilationOptions = compilationOptions;            References = references;
             Analyzers = analyzers;
             Sources = sources;
             AnalyzerConfigs = analyzerConfigs;
@@ -48,8 +51,13 @@ namespace WinUiXaml.Workspace
             AssemblyName = assemblyName;
         }
 
-        public ImmutableArray<string> References { get; }
-        public ImmutableArray<string> Analyzers { get; }
+        // The options Roslyn's own parser produced, kept verbatim so nothing is lost in the
+        // round-trip through this type's properties. Null only for Empty, which has no command
+        // line to have parsed.
+        private readonly CSharpParseOptions? _parseOptions;
+        private readonly CSharpCompilationOptions? _compilationOptions;
+
+        public ImmutableArray<string> References { get; }        public ImmutableArray<string> Analyzers { get; }
         public ImmutableArray<string> Sources { get; }
 
         /// <summary>
@@ -114,21 +122,6 @@ namespace WinUiXaml.Workspace
             IEnumerable<string> arguments,
             string projectDirectory)
         {
-            var references = ImmutableArray.CreateBuilder<string>();
-            var analyzers = ImmutableArray.CreateBuilder<string>();
-            var analyzerConfigs = ImmutableArray.CreateBuilder<string>();
-            var additionalFiles = ImmutableArray.CreateBuilder<string>();
-            var sources = ImmutableArray.CreateBuilder<string>();
-            var symbols = ImmutableArray.CreateBuilder<string>();
-            var aliases = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(
-                StringComparer.OrdinalIgnoreCase);
-            var embedded = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
-            string? languageVersion = null;
-            string? assemblyName = null;
-            var outputKind = OutputKind.DynamicallyLinkedLibrary;
-            var allowUnsafe = false;
-            var nullableContext = NullableContextOptions.Disable;
-
             string Resolve(string value)
             {
                 var trimmed = value.Trim().Trim('"');
@@ -137,150 +130,130 @@ namespace WinUiXaml.Workspace
                     : Path.GetFullPath(Path.Combine(projectDirectory, trimmed));
             }
 
-            foreach (var raw in arguments)
+            // Roslyn's own parser rather than a hand-rolled switch table. It is the code csc runs,
+            // so spellings we would otherwise have to enumerate -- +/- boolean forms, extern
+            // aliases, /langversion values, /nullable modes -- are correct by construction instead
+            // of by having thought of them. It lives in Microsoft.CodeAnalysis.CSharp, which this
+            // project already references; only Microsoft.CodeAnalysis.Workspaces is excluded under
+            // Native AOT, so nothing here is blocked by it.
+            var parsed = CSharpCommandLineParser.Default.Parse(
+                arguments.Where(argument => !string.IsNullOrWhiteSpace(argument))
+                    .SelectMany(argument => ExpandMultiAliasReference(argument.Trim())),
+                baseDirectory: projectDirectory,
+                sdkDirectory: null);
+
+            var references = ImmutableArray.CreateBuilder<string>();
+            var aliases = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(
+                StringComparer.OrdinalIgnoreCase);
+            var embedded = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var reference in parsed.MetadataReferences)
             {
-                if (string.IsNullOrWhiteSpace(raw))
+                var path = Resolve(reference.Reference);
+                if (!references.Contains(path))
                 {
-                    continue;
+                    references.Add(path);
                 }
 
-                var argument = raw.Trim();
-                if (argument.Length == 0)
+                if (!reference.Properties.Aliases.IsDefaultOrEmpty)
                 {
-                    continue;
+                    // One reference per alias after the expansion above, so union rather than
+                    // overwrite: assigning would keep only the last alias of a multi-alias switch.
+                    aliases[path] = aliases.TryGetValue(path, out var existing)
+                        ? existing.AddRange(
+                            reference.Properties.Aliases.Where(alias => !existing.Contains(alias)))
+                        : reference.Properties.Aliases;
                 }
 
-                if (argument[0] != '/' && argument[0] != '-')
+                if (reference.Properties.EmbedInteropTypes)
                 {
-                    if (argument.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-                    {
-                        sources.Add(Resolve(argument));
-                    }
-
-                    continue;
-                }
-
-                var body = argument.Substring(1);
-                var separator = body.IndexOf(':');
-                var name = separator < 0 ? body : body.Substring(0, separator);
-                var value = separator < 0 ? string.Empty : body.Substring(separator + 1);
-
-                // Boolean switches carry their value as a trailing sign rather than after a
-                // colon, and MSBuild always emits the explicit form. Reading "/unsafe+" as an
-                // unknown switch silently disables unsafe blocks for every project that enables
-                // them, which then fails to bind rather than failing to parse.
-                if (separator < 0 && name.Length > 1 &&
-                    (name[name.Length - 1] == '+' || name[name.Length - 1] == '-'))
-                {
-                    value = name.Substring(name.Length - 1);
-                    name = name.Substring(0, name.Length - 1);
-                }
-
-                switch (name.ToLowerInvariant())
-                {
-                    case "reference":
-                    case "r":
-                        AddReference(value, embedInteropTypes: false);
-                        break;
-                    // MSBuild emits EmbedInteropTypes="true" references as /link:, never as
-                    // /reference: with extra metadata, so this switch is the only source of truth
-                    // for interop embedding on a csc command line.
-                    case "link":
-                    case "l":
-                        AddReference(value, embedInteropTypes: true);
-                        break;
-                    case "analyzer":
-                    case "a":
-                        analyzers.Add(Resolve(value));
-                        break;
-                    case "analyzerconfig":
-                        analyzerConfigs.Add(Resolve(value));
-                        break;
-                    case "additionalfile":
-                        additionalFiles.Add(Resolve(value));
-                        break;
-                    case "define":
-                    case "d":
-                        symbols.AddRange(value.Split(
-                            ';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-                        break;
-                    case "langversion":
-                        languageVersion = value.Trim();
-                        break;
-                    case "out":
-                        assemblyName = Path.GetFileNameWithoutExtension(value.Trim().Trim('"'));
-                        break;
-                    case "target":
-                        outputKind = value.Trim().ToLowerInvariant() switch
-                        {
-                            "exe" => OutputKind.ConsoleApplication,
-                            "winexe" => OutputKind.WindowsApplication,
-                            "module" => OutputKind.NetModule,
-                            _ => OutputKind.DynamicallyLinkedLibrary,
-                        };
-                        break;
-                    case "unsafe":
-                        allowUnsafe = !value.Equals("-", StringComparison.Ordinal);
-                        break;
-                    case "nullable":
-                        nullableContext = value.Trim().ToLowerInvariant() switch
-                        {
-                            "" or "+" or "enable" => NullableContextOptions.Enable,
-                            "warnings" => NullableContextOptions.Warnings,
-                            "annotations" => NullableContextOptions.Annotations,
-                            _ => NullableContextOptions.Disable,
-                        };
-                        break;
+                    embedded.Add(path);
                 }
             }
 
+            var parseOptions = parsed.ParseOptions;
+            // csc only parses doc comments when /doc is passed, and MSBuild omits it unless the
+            // project generates an XML file -- but quick info for the user's own members is read
+            // straight off these syntax trees. Left at None, every summary on their own types
+            // silently disappears while framework prose keeps working, which looks like a docs
+            // problem rather than a parse option.
+            if (parseOptions.DocumentationMode == DocumentationMode.None)
+            {
+                parseOptions = parseOptions.WithDocumentationMode(DocumentationMode.Parse);
+            }
+
+            var compilationOptions = parsed.CompilationOptions;
             return new CscCommandLine(
                 references.ToImmutable(),
-                analyzers.ToImmutable(),
-                sources.ToImmutable(),
-                analyzerConfigs.ToImmutable(),
-                additionalFiles.ToImmutable(),
-                symbols.ToImmutable(),
+                parsed.AnalyzerReferences.Select(analyzer => Resolve(analyzer.FilePath)).ToImmutableArray(),
+                // csc would treat any bare argument as C#; MSBuild only ever passes .cs, and
+                // handing a .xaml or .txt to the parser produces a syntax tree of garbage rather
+                // than an error anyone sees.
+                parsed.SourceFiles
+                    .Select(source => Resolve(source.Path))
+                    .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                    .ToImmutableArray(),
+                parsed.AnalyzerConfigPaths.Select(Resolve).ToImmutableArray(),
+                parsed.AdditionalFiles.Select(file => Resolve(file.Path)).ToImmutableArray(),
+                parseOptions.PreprocessorSymbolNames.ToImmutableArray(),
                 aliases.ToImmutable(),
                 embedded.ToImmutable(),
-                languageVersion,
-                outputKind,
-                allowUnsafe,
-                nullableContext,
-                assemblyName);
+                parseOptions.LanguageVersion.ToDisplayString(),
+                compilationOptions.OutputKind,
+                compilationOptions.AllowUnsafe,
+                compilationOptions.NullableContextOptions,
+                parsed.CompilationName is { } name
+                    ? Path.GetFileNameWithoutExtension(name)
+                    : null,
+                parseOptions,
+                compilationOptions);
+        }
 
-            void AddReference(string value, bool embedInteropTypes)
+        /// <summary>
+        /// Splits <c>/reference:Alpha,Beta=path</c> into one switch per alias.
+        /// </summary>
+        /// <remarks>
+        /// csc itself takes a single alias per switch, so Roslyn's parser rejects the comma form
+        /// outright and drops the reference -- which would remove the assembly from the
+        /// compilation, not just its aliases. Expanding first keeps the tolerance the hand-rolled
+        /// parser had without giving up the real parser everywhere else.
+        /// </remarks>
+        private static IEnumerable<string> ExpandMultiAliasReference(string argument)
+        {
+            if (argument.Length == 0 || (argument[0] != '/' && argument[0] != '-'))
             {
-                // extern aliases arrive as /reference:Alias=path.
-                var text = value.Trim().Trim('"');
-                var equals = text.IndexOf('=');
-                if (equals > 0 && !LooksLikeDriveLetter(text, equals))
-                {
-                    var aliasList = text.Substring(0, equals)
-                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                        .ToImmutableArray();
-                    var path = Resolve(text.Substring(equals + 1));
-                    references.Add(path);
-                    if (!aliasList.IsDefaultOrEmpty)
-                    {
-                        aliases[path] = aliasList;
-                    }
-
-                    if (embedInteropTypes)
-                    {
-                        embedded.Add(path);
-                    }
-
-                    return;
-                }
-
-                var resolved = Resolve(text);
-                references.Add(resolved);
-                if (embedInteropTypes)
-                {
-                    embedded.Add(resolved);
-                }
+                return new[] { argument };
             }
+
+            var separator = argument.IndexOf(':');
+            if (separator < 0)
+            {
+                return new[] { argument };
+            }
+
+            var name = argument.Substring(1, separator - 1).ToLowerInvariant();
+            if (name is not ("reference" or "r" or "link" or "l"))
+            {
+                return new[] { argument };
+            }
+
+            var value = argument.Substring(separator + 1).Trim().Trim('"');
+            var equals = value.IndexOf('=');
+            if (equals <= 0 || LooksLikeDriveLetter(value, equals))
+            {
+                return new[] { argument };
+            }
+
+            var aliasText = value.Substring(0, equals);
+            if (aliasText.IndexOf(',') < 0)
+            {
+                return new[] { argument };
+            }
+
+            var path = value.Substring(equals + 1);
+            var prefix = argument.Substring(0, separator + 1);
+            return aliasText
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(alias => $"{prefix}{alias}={path}");
         }
 
         private static bool LooksLikeDriveLetter(string text, int equalsIndex) =>
@@ -356,13 +329,18 @@ namespace WinUiXaml.Workspace
         }
 
         public CSharpCompilationOptions CreateCompilationOptions() =>
-            new CSharpCompilationOptions(
+            _compilationOptions ?? new CSharpCompilationOptions(
                 OutputKind,
                 allowUnsafe: AllowUnsafe,
                 nullableContextOptions: NullableContext);
 
         public CSharpParseOptions CreateParseOptions()
         {
+            if (_parseOptions is not null)
+            {
+                return _parseOptions;
+            }
+
             var version = Microsoft.CodeAnalysis.CSharp.LanguageVersion.Preview;
             if (!string.IsNullOrWhiteSpace(LanguageVersion) &&
                 LanguageVersionFacts.TryParse(LanguageVersion, out var parsed))
