@@ -1247,7 +1247,8 @@ async function resolveTemplatePack(
 		return initial;
 	}
 
-	return loadWinUiTemplates(extensionPath, cwd, 'latest').then(loaded => loaded?.list);
+	const latest = await loadWinUiTemplates(extensionPath, cwd, 'latest');
+	return latest?.list;
 }
 
 /**
