@@ -174,7 +174,8 @@ export async function runCommand(page: Page, commandLabel: string): Promise<void
         .not.toContain('Type the name of a command to run');
 }
 
-/** Closes a launched VS Code instance and removes its isolated profile directories. */export async function closeVSCodeApp(launched: { app: ElectronApplication; profileDirs: string[] }): Promise<void> {
+/** Closes a launched VS Code instance and removes its isolated profile directories. */
+export async function closeVSCodeApp(launched: { app: ElectronApplication; profileDirs: string[] }): Promise<void> {
     try {
         await launched.app.close();
     } catch { /* already closed */ }
