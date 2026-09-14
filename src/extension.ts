@@ -53,15 +53,19 @@ import {
 	buildNewArgs,
 	describeNewFailure,
 	DEFAULT_PROJECT_NAME,
-	ensureAvailableName,
 	formatTemplateTags,
 	isProjectTemplate,
 	isSdkMissingExit,
+	loadWinUiTemplates as loadWinUiTemplatesLogic,
 	parseScaffoldResult,
 	parseTemplateList,
+	resolveScaffoldTarget as resolveScaffoldTargetLogic,
 	sortTemplates,
 	validateProjectName,
+	type ScaffoldTargetAdapter,
 	type TemplateListResult,
+	type TemplateLoad,
+	type TemplateLoadAdapter,
 	type WinUiTemplate
 } from './new-command-utils';
 import {
@@ -893,15 +897,7 @@ async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<str
 let cachedTemplateList: TemplateListResult | undefined;
 
 /**
- * A template listing plus whether this run had to install the pack.
- *
- * `freshlyInstalled` suppresses the installed-versus-latest question: when the
- * listing just fetched the newest pack, both answers name the same version.
- */
-type TemplateLoad = { list: TemplateListResult; freshlyInstalled: boolean };
-
-/**
- * Run `winapp new --list --json` and parse the result.
+ * Run `winapp new --list --json`, caching the result for the window.
  *
  * This doubles as the prerequisite check for the whole command: `--list`
  * requires the .NET SDK and installs the WinUI template pack when none is
@@ -913,67 +909,27 @@ type TemplateLoad = { list: TemplateListResult; freshlyInstalled: boolean };
  * whether the installed pack is stale, which contacts the configured NuGet feed
  * on every single invocation (measured at ~8s versus ~1.6s). That check is pure
  * waste here: this command asks the user which pack version they want rather
- * than detecting staleness, so its answer is discarded. Falling back to the
- * unpinned listing covers the first run, where nothing is installed yet and
- * `installed` legitimately fails.
+ * than detecting staleness, so its answer is discarded.
  *
- * @param templateVersion When `'latest'`, installs the newest template pack
- *                        before listing. Omitted on the normal path.
- * @returns The parsed list, or `undefined` when the run failed or was cancelled
- *          (the failure has already been reported to the user).
+ * The decision logic lives in `new-command-utils` so it can be tested without
+ * spawning the CLI; this wrapper supplies the real runner and error reporting.
  */
 async function loadWinUiTemplates(
 	extensionPath: string,
 	cwd: string,
 	templateVersion?: 'latest'
 ): Promise<TemplateLoad | undefined> {
-	if (templateVersion !== 'latest') {
-		const local = await runTemplateList(extensionPath, cwd, 'installed', 'Loading WinUI templates...');
-		if (local.cancelled) {
-			return undefined;
-		}
-		if (local.parsed?.ok && local.code === 0) {
-			cachedTemplateList = local.parsed.value;
-			return { list: local.parsed.value, freshlyInstalled: false };
-		}
-		if (isSdkMissingExit(local.code)) {
-			// No .NET SDK means the fallback cannot succeed either, and its
-			// "Installing..." progress would imply work that can never happen.
-			// Prefer the CLI's own message: it distinguishes "no SDK found" from
-			// "SDK too old", and names the required version.
-			const detail = local.parsed && !local.parsed.ok
-				? local.parsed.error
-				: describeNewFailure(local.code, undefined);
-			await showNewFailure(detail, true);
-			return undefined;
-		}
-		// No pack installed yet: fall through to the unpinned listing, which
-		// installs the latest pack on demand.
+	const adapter: TemplateLoadAdapter = {
+		listTemplates: (version, progressMessage) =>
+			runTemplateList(extensionPath, cwd, version, progressMessage),
+		reportFailure: (message, sdkMissing) => showNewFailure(message, sdkMissing)
+	};
+
+	const loaded = await loadWinUiTemplatesLogic(adapter, templateVersion);
+	if (loaded) {
+		cachedTemplateList = loaded.list;
 	}
-
-	const result = await runTemplateList(
-		extensionPath,
-		cwd,
-		templateVersion,
-		templateVersion === 'latest' ? 'Installing the latest WinUI templates...' : 'Installing the WinUI templates...'
-	);
-
-	if (result.cancelled) {
-		return undefined;
-	}
-
-	if (!result.parsed?.ok || result.code !== 0) {
-		const message = result.parsed && !result.parsed.ok
-			? result.parsed.error
-			: 'Failed to load the WinUI templates.';
-		await showNewFailure(message, isSdkMissingExit(result.code));
-		return undefined;
-	}
-
-	cachedTemplateList = result.parsed.value;
-	// Reaching the unpinned listing on the default path means nothing was
-	// installed and the CLI has just fetched the newest pack.
-	return { list: result.parsed.value, freshlyInstalled: templateVersion !== 'latest' };
+	return loaded;
 }
 
 /**
@@ -1113,58 +1069,38 @@ async function pickWinUiTemplate(templates: WinUiTemplate[]): Promise<WinUiTempl
 }
 
 /**
- * Decide the final project name and whether `--force` is needed, given a target
- * directory that may already exist.
- *
- * Mirrors the CLI's preflight: an existing but *empty* directory is fine, while
- * a non-empty one is refused unless `--force` is passed. The difference is that
- * the CLI can only report this as an exit-2 failure once the whole invocation
- * is over, whereas checking here lets us also offer the auto-numbered name the
- * CLI gives users who let it pick the name. (`EnsureAvailableName` never runs
- * for an explicit `--name`, which this extension always passes.)
- *
- * @returns The resolved name and force flag, or `undefined` if the user cancelled.
+ * Wire the real file system and VS Code prompts into
+ * {@link resolveScaffoldTargetLogic}.
  */
 async function resolveScaffoldTarget(
 	parentDirectory: string,
 	requestedName: string
 ): Promise<{ name: string; force: boolean } | undefined> {
-	const targetDirectory = path.join(parentDirectory, requestedName);
+	const adapter: ScaffoldTargetAdapter = {
+		pathExists: (candidatePath) => fs.existsSync(candidatePath),
+		readDirectory: (directoryPath) => fs.readdirSync(directoryPath),
+		confirmNonEmptyTarget: async (targetDirectory, availableName) => {
+			const useAvailable = `Use ${availableName}`;
+			const createAnyway = 'Create Anyway';
 
-	let targetIsNonEmpty: boolean;
-	try {
-		targetIsNonEmpty = fs.existsSync(targetDirectory)
-			&& fs.readdirSync(targetDirectory).length > 0;
-	} catch {
-		// Can't inspect the folder (locked, protected). Don't block here — let the
-		// CLI surface it as a structured error with a real reason.
-		return { name: requestedName, force: false };
-	}
+			const choice = await vscode.window.showWarningMessage(
+				`${targetDirectory} already contains files. Creating the app here may overwrite them.`,
+				{ modal: true },
+				useAvailable,
+				createAnyway
+			);
 
-	if (!targetIsNonEmpty) {
-		return { name: requestedName, force: false };
-	}
+			if (choice === useAvailable) {
+				return 'use-available';
+			}
+			if (choice === createAnyway) {
+				return 'create-anyway';
+			}
+			return undefined;
+		}
+	};
 
-	const availableName = ensureAvailableName(requestedName, parentDirectory, (candidate) =>
-		fs.existsSync(candidate)
-	);
-	const useAvailable = `Use ${availableName}`;
-	const createAnyway = 'Create Anyway';
-
-	const choice = await vscode.window.showWarningMessage(
-		`${targetDirectory} already contains files. Creating the app here may overwrite them.`,
-		{ modal: true },
-		useAvailable,
-		createAnyway
-	);
-
-	if (choice === useAvailable) {
-		return { name: availableName, force: false };
-	}
-	if (choice === createAnyway) {
-		return { name: requestedName, force: true };
-	}
-	return undefined;
+	return resolveScaffoldTargetLogic(adapter, parentDirectory, requestedName);
 }
 
 /**
@@ -1637,21 +1573,29 @@ export function activate(context: vscode.ExtensionContext) {
 	// useful when no folder is open, and it writes outside the current workspace.
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.new', async () => {
-			// All CLI calls run from an existing directory. Prefer the workspace so
-			// its global.json chain governs the SDK the scaffold resolves, matching
-			// what a terminal user in that folder would get.
-			const cliCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+			// The folder picker should open somewhere familiar, so it still starts
+			// from the workspace (or home when nothing is open).
+			const defaultFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+
+			// Listing runs from a neutral directory instead. The template pack is
+			// machine-wide, so nothing about the listing depends on the workspace —
+			// but a global.json there pinning an unavailable SDK makes `dotnet`
+			// resolve nothing, which the CLI reports as exit 3 ("install the .NET
+			// SDK") even though the SDK is installed and the chosen destination
+			// would scaffold fine. The scaffold itself still runs from the
+			// destination below, so that folder's global.json governs the TFM.
+			const listingCwd = os.tmpdir();
 
 			const initialLoad = cachedTemplateList
 				? { list: cachedTemplateList, freshlyInstalled: false }
-				: await loadWinUiTemplates(extensionPath, cliCwd);
+				: await loadWinUiTemplates(extensionPath, listingCwd);
 			if (!initialLoad) {
 				return;
 			}
 
 			const templateList = await resolveTemplatePack(
 				extensionPath,
-				cliCwd,
+				listingCwd,
 				initialLoad.list,
 				initialLoad.freshlyInstalled
 			);
@@ -1676,7 +1620,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			const parentDirectory = await selectFolder(
 				'Select a folder for the new app',
-				vscode.Uri.file(cliCwd)
+				vscode.Uri.file(defaultFolder)
 			);
 			if (!parentDirectory) {
 				return;

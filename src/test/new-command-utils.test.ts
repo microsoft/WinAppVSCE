@@ -9,11 +9,18 @@ import {
 	formatTemplateTags,
 	isProjectTemplate,
 	isSdkMissingExit,
+	loadWinUiTemplates,
 	MAX_PROJECT_NAME_LENGTH,
 	parseScaffoldResult,
 	parseTemplateList,
+	resolveScaffoldTarget,
 	sortTemplates,
 	validateProjectName,
+	type NonEmptyTargetChoice,
+	type ScaffoldTargetAdapter,
+	type TemplateListAttempt,
+	type TemplateListResult,
+	type TemplateLoadAdapter,
 	type WinUiTemplate
 } from '../new-command-utils';
 
@@ -173,6 +180,144 @@ describe('ensureAvailableName', () => {
 		assert.equal(available.length, MAX_PROJECT_NAME_LENGTH);
 		assert.equal(validateProjectName(available), undefined);
 		assert.ok(available.endsWith('2'));
+	});
+});
+
+describe('resolveScaffoldTarget', () => {
+	const parent = path.join('C:', 'src');
+
+	/**
+	 * Build an adapter over a fake directory listing.
+	 *
+	 * `directories` maps an absolute path to the entries it contains, so an
+	 * empty array models an existing-but-empty directory and a missing key
+	 * models a path that does not exist at all.
+	 */
+	function createAdapter(
+		directories: Record<string, string[]>,
+		choice?: NonEmptyTargetChoice,
+		options?: { readThrows?: boolean }
+	) {
+		const prompts: { targetDirectory: string; availableName: string }[] = [];
+		const adapter: ScaffoldTargetAdapter = {
+			pathExists: (candidatePath) => candidatePath in directories,
+			readDirectory: (directoryPath) => {
+				if (options?.readThrows) {
+					throw new Error('EACCES');
+				}
+				return directories[directoryPath] ?? [];
+			},
+			confirmNonEmptyTarget: async (targetDirectory, availableName) => {
+				prompts.push({ targetDirectory, availableName });
+				return choice;
+			}
+		};
+		return { adapter, prompts };
+	}
+
+	it('uses the requested name when the target does not exist', async () => {
+		const { adapter, prompts } = createAdapter({});
+
+		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
+
+		assert.deepEqual(target, { name: 'PhotoViewer', force: false });
+		// An absent directory is not a conflict, so the user is never asked.
+		assert.equal(prompts.length, 0);
+	});
+
+	it('uses the requested name when the target exists but is empty', async () => {
+		const { adapter, prompts } = createAdapter({
+			[path.join(parent, 'PhotoViewer')]: []
+		});
+
+		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
+
+		// The CLI itself tolerates an existing empty directory.
+		assert.deepEqual(target, { name: 'PhotoViewer', force: false });
+		assert.equal(prompts.length, 0);
+	});
+
+	it('offers the auto-numbered name for a non-empty target', async () => {
+		const { adapter, prompts } = createAdapter(
+			{ [path.join(parent, 'PhotoViewer')]: ['App.xaml'] },
+			'use-available'
+		);
+
+		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
+
+		assert.deepEqual(target, { name: 'PhotoViewer1', force: false });
+		assert.equal(prompts.length, 1);
+		assert.equal(prompts[0].availableName, 'PhotoViewer1');
+		assert.equal(prompts[0].targetDirectory, path.join(parent, 'PhotoViewer'));
+	});
+
+	it('passes force when the user chooses to create anyway', async () => {
+		const { adapter } = createAdapter(
+			{ [path.join(parent, 'PhotoViewer')]: ['App.xaml'] },
+			'create-anyway'
+		);
+
+		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
+
+		// --force overwrites the user's files, so it must only ever come from an
+		// explicit choice.
+		assert.deepEqual(target, { name: 'PhotoViewer', force: true });
+	});
+
+	it('returns undefined when the user dismisses the conflict prompt', async () => {
+		const { adapter } = createAdapter(
+			{ [path.join(parent, 'PhotoViewer')]: ['App.xaml'] },
+			undefined
+		);
+
+		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
+
+		assert.equal(target, undefined);
+	});
+
+	it('never forces when the conflict prompt is dismissed', async () => {
+		const { adapter } = createAdapter(
+			{ [path.join(parent, 'PhotoViewer')]: ['App.xaml'] },
+			undefined
+		);
+
+		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
+
+		// Guards the destructive path specifically: cancelling must not fall
+		// through to a forced scaffold.
+		assert.notEqual(target?.force, true);
+	});
+
+	it('skips numbering past directories that are already taken', async () => {
+		const { adapter, prompts } = createAdapter(
+			{
+				[path.join(parent, 'PhotoViewer')]: ['App.xaml'],
+				[path.join(parent, 'PhotoViewer1')]: ['App.xaml'],
+				[path.join(parent, 'PhotoViewer2')]: []
+			},
+			'use-available'
+		);
+
+		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
+
+		// PhotoViewer2 exists, so it is taken even though it is empty.
+		assert.equal(target?.name, 'PhotoViewer3');
+		assert.equal(prompts[0].availableName, 'PhotoViewer3');
+	});
+
+	it('proceeds without forcing when the target cannot be inspected', async () => {
+		const { adapter, prompts } = createAdapter(
+			{ [path.join(parent, 'PhotoViewer')]: ['App.xaml'] },
+			'create-anyway',
+			{ readThrows: true }
+		);
+
+		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
+
+		// An unreadable directory defers to the CLI's structured error rather
+		// than prompting on a guess.
+		assert.deepEqual(target, { name: 'PhotoViewer', force: false });
+		assert.equal(prompts.length, 0);
 	});
 });
 
@@ -380,5 +525,173 @@ describe('buildListArgs', () => {
 
 	it('pins the template version when asked', () => {
 		assert.deepEqual(buildListArgs('latest'), ['new', '--list', '--json', '--template-version', 'latest']);
+	});
+});
+
+describe('loadWinUiTemplates', () => {
+	const parsedOk = parseTemplateList(LIST_JSON) as { ok: true; value: TemplateListResult };
+
+	/**
+	 * Build an adapter that replays a queue of listing attempts.
+	 *
+	 * Each `listTemplates` call shifts the next queued outcome, so a test states
+	 * exactly what the CLI returns on the first and second attempt without
+	 * spawning anything or touching the installed template pack.
+	 */
+	function createAdapter(attempts: TemplateListAttempt[]) {
+		const requested: ('latest' | 'installed' | undefined)[] = [];
+		const progress: string[] = [];
+		const failures: { message: string; sdkMissing: boolean }[] = [];
+
+		const adapter: TemplateLoadAdapter = {
+			listTemplates: async (templateVersion, progressMessage) => {
+				requested.push(templateVersion);
+				progress.push(progressMessage);
+				const next = attempts.shift();
+				assert.ok(next, 'listTemplates called more times than the test queued');
+				return next;
+			},
+			reportFailure: async (message, sdkMissing) => {
+				failures.push({ message, sdkMissing });
+			}
+		};
+
+		return { adapter, requested, progress, failures };
+	}
+
+	const ok = (): TemplateListAttempt => ({ cancelled: false, code: 0, parsed: parsedOk });
+	const noPack = (): TemplateListAttempt => ({
+		cancelled: false,
+		code: 4,
+		parsed: { ok: false, error: 'No template pack installed.' }
+	});
+
+	it('uses the installed pack without installing anything', async () => {
+		const { adapter, requested, failures } = createAdapter([ok()]);
+
+		const loaded = await loadWinUiTemplates(adapter);
+
+		assert.deepEqual(loaded, { list: parsedOk.value, freshlyInstalled: false });
+		// Exactly one purely local attempt — no unpinned listing, so no feed call
+		// and no machine-wide install.
+		assert.deepEqual(requested, ['installed']);
+		assert.equal(failures.length, 0);
+	});
+
+	it('falls back to the unpinned listing when no pack is installed', async () => {
+		const { adapter, requested, failures } = createAdapter([noPack(), ok()]);
+
+		const loaded = await loadWinUiTemplates(adapter);
+
+		// freshlyInstalled must be true here: the fallback just fetched the pack,
+		// so asking "installed or latest?" would be asking the same question twice.
+		assert.deepEqual(loaded, { list: parsedOk.value, freshlyInstalled: true });
+		assert.deepEqual(requested, ['installed', undefined]);
+		assert.equal(failures.length, 0);
+	});
+
+	it('stops at a missing SDK instead of attempting the install fallback', async () => {
+		const { adapter, requested, failures } = createAdapter([
+			{
+				cancelled: false,
+				code: 3,
+				parsed: { ok: false, error: 'The .NET SDK is required to create a WinUI app.' }
+			}
+		]);
+
+		const loaded = await loadWinUiTemplates(adapter);
+
+		assert.equal(loaded, undefined);
+		// The fallback cannot succeed without an SDK, and its "Installing..."
+		// progress would imply work that can never happen.
+		assert.deepEqual(requested, ['installed']);
+		assert.equal(failures.length, 1);
+		assert.equal(failures[0].sdkMissing, true);
+		// The CLI's own text distinguishes "no SDK" from "SDK too old".
+		assert.match(failures[0].message, /\.NET SDK is required/);
+	});
+
+	it('reports a too-old SDK using the CLI wording', async () => {
+		const { adapter, failures } = createAdapter([
+			{
+				cancelled: false,
+				code: 3,
+				parsed: { ok: false, error: 'The .NET SDK 8.0.100 or newer is required.' }
+			}
+		]);
+
+		await loadWinUiTemplates(adapter);
+
+		assert.equal(failures[0].message, 'The .NET SDK 8.0.100 or newer is required.');
+		assert.equal(failures[0].sdkMissing, true);
+	});
+
+	it('installs the latest pack when asked, without probing installed first', async () => {
+		const { adapter, requested, progress } = createAdapter([ok()]);
+
+		const loaded = await loadWinUiTemplates(adapter, 'latest');
+
+		// 'latest' was an explicit user choice, so both answers now name the same
+		// pack and the follow-up question must not be asked again.
+		assert.deepEqual(loaded, { list: parsedOk.value, freshlyInstalled: false });
+		assert.deepEqual(requested, ['latest']);
+		assert.match(progress[0], /Installing the latest/);
+	});
+
+	it('returns undefined when the first attempt is cancelled', async () => {
+		const { adapter, requested, failures } = createAdapter([
+			{ cancelled: true, code: null }
+		]);
+
+		const loaded = await loadWinUiTemplates(adapter);
+
+		assert.equal(loaded, undefined);
+		// Cancelling is not a failure, so nothing is reported to the user.
+		assert.equal(failures.length, 0);
+		assert.deepEqual(requested, ['installed']);
+	});
+
+	it('returns undefined when the fallback attempt is cancelled', async () => {
+		const { adapter, failures } = createAdapter([
+			noPack(),
+			{ cancelled: true, code: null }
+		]);
+
+		const loaded = await loadWinUiTemplates(adapter);
+
+		assert.equal(loaded, undefined);
+		assert.equal(failures.length, 0);
+	});
+
+	it('reports the CLI error when the fallback fails', async () => {
+		const { adapter, failures } = createAdapter([
+			noPack(),
+			{
+				cancelled: false,
+				code: 4,
+				parsed: { ok: false, error: 'Failed to install the WinUI template pack.' }
+			}
+		]);
+
+		const loaded = await loadWinUiTemplates(adapter);
+
+		assert.equal(loaded, undefined);
+		assert.equal(failures.length, 1);
+		assert.equal(failures[0].message, 'Failed to install the WinUI template pack.');
+		// Not an SDK problem, so it must not get the "Install .NET SDK" call to action.
+		assert.equal(failures[0].sdkMissing, false);
+	});
+
+	it('treats a non-zero exit with a parsable payload as a failure', async () => {
+		const { adapter, failures } = createAdapter([
+			noPack(),
+			{ cancelled: false, code: 5, parsed: parsedOk }
+		]);
+
+		const loaded = await loadWinUiTemplates(adapter);
+
+		// A payload that parsed is not enough — the exit code still has to be 0.
+		assert.equal(loaded, undefined);
+		assert.equal(failures.length, 1);
 	});
 });

@@ -174,6 +174,91 @@ export function ensureAvailableName(
 }
 
 /**
+ * How the user chose to handle an existing, non-empty target directory.
+ *
+ * `use-available` takes the auto-numbered name; `create-anyway` keeps the
+ * requested name and scaffolds over the existing contents with `--force`.
+ */
+export type NonEmptyTargetChoice = 'use-available' | 'create-anyway';
+
+/** The resolved scaffold target. */
+export interface ScaffoldTarget {
+	/** Final project name to pass as `--name`. */
+	name: string;
+	/** Whether `--force` is needed to scaffold into a non-empty directory. */
+	force: boolean;
+}
+
+/**
+ * Everything {@link resolveScaffoldTarget} needs from the outside world.
+ *
+ * Kept as an interface so the decision logic can be tested without a real file
+ * system or VS Code, matching the `SignFlowAdapter` pattern in `sign-utils.ts`.
+ */
+export interface ScaffoldTargetAdapter {
+	/** Whether a path exists, as either a file or a directory. */
+	pathExists(candidatePath: string): boolean;
+
+	/** Entry names in a directory. May throw when the directory can't be read. */
+	readDirectory(directoryPath: string): string[];
+
+	/** Ask how to handle an existing, non-empty target directory. */
+	confirmNonEmptyTarget(
+		targetDirectory: string,
+		availableName: string
+	): Promise<NonEmptyTargetChoice | undefined>;
+}
+
+/**
+ * Decide the final project name and whether `--force` is needed, given a target
+ * directory that may already exist.
+ *
+ * Mirrors the CLI's preflight: an existing but *empty* directory is fine, while
+ * a non-empty one is refused unless `--force` is passed. The difference is that
+ * the CLI can only report this as an exit-2 failure once the whole invocation
+ * is over, whereas checking here lets us also offer the auto-numbered name the
+ * CLI gives users who let it pick the name. (`EnsureAvailableName` never runs
+ * for an explicit `--name`, which this extension always passes.)
+ *
+ * @returns The resolved name and force flag, or `undefined` if the user cancelled.
+ */
+export async function resolveScaffoldTarget(
+	adapter: ScaffoldTargetAdapter,
+	parentDirectory: string,
+	requestedName: string
+): Promise<ScaffoldTarget | undefined> {
+	const targetDirectory = path.join(parentDirectory, requestedName);
+
+	let targetIsNonEmpty: boolean;
+	try {
+		targetIsNonEmpty = adapter.pathExists(targetDirectory)
+			&& adapter.readDirectory(targetDirectory).length > 0;
+	} catch {
+		// Can't inspect the folder (locked, protected). Don't block here — let the
+		// CLI surface it as a structured error with a real reason.
+		return { name: requestedName, force: false };
+	}
+
+	if (!targetIsNonEmpty) {
+		return { name: requestedName, force: false };
+	}
+
+	const availableName = ensureAvailableName(requestedName, parentDirectory, (candidate) =>
+		adapter.pathExists(candidate)
+	);
+
+	const choice = await adapter.confirmNonEmptyTarget(targetDirectory, availableName);
+
+	if (choice === 'use-available') {
+		return { name: availableName, force: false };
+	}
+	if (choice === 'create-anyway') {
+		return { name: requestedName, force: true };
+	}
+	return undefined;
+}
+
+/**
  * Parse the payload of `winapp new --list --json`.
  *
  * @returns The parsed list, or an error message when the payload is missing,
@@ -348,6 +433,107 @@ export function describeNewFailure(
 /** True when the failure is a missing or too-old .NET SDK, which has its own call to action. */
 export function isSdkMissingExit(exitCode: number | null): boolean {
 	return exitCode === NEW_EXIT.sdkMissing;
+}
+
+/** Outcome of one `winapp new --list --json` attempt. */
+export interface TemplateListAttempt {
+	cancelled: boolean;
+	code: number | null;
+	parsed?: { ok: true; value: TemplateListResult } | { ok: false; error: string };
+}
+
+/**
+ * A template listing plus whether this run had to install the pack.
+ *
+ * `freshlyInstalled` suppresses the installed-versus-latest question: when the
+ * listing just fetched the newest pack, both answers name the same version.
+ */
+export interface TemplateLoad {
+	list: TemplateListResult;
+	freshlyInstalled: boolean;
+}
+
+/**
+ * Everything {@link loadWinUiTemplates} needs from the outside world.
+ *
+ * Kept as an interface so the listing state machine can be tested without
+ * spawning the CLI or installing a template pack, matching the
+ * `SignFlowAdapter` pattern in `sign-utils.ts`.
+ */
+export interface TemplateLoadAdapter {
+	/** Run one `winapp new --list --json` attempt without reporting failures. */
+	listTemplates(
+		templateVersion: 'latest' | 'installed' | undefined,
+		progressMessage: string
+	): Promise<TemplateListAttempt>;
+
+	/** Report a failure to the user. */
+	reportFailure(message: string, sdkMissing: boolean): Promise<void>;
+}
+
+/**
+ * Load the WinUI template list, installing the pack only when necessary.
+ *
+ * The default path probes `--template-version installed` first because the
+ * unpinned listing asks the package feed whether a newer pack exists on every
+ * run, which costs seconds. The unpinned listing is still the fallback: it
+ * covers the first run, where nothing is installed yet and `installed`
+ * legitimately fails.
+ *
+ * @param templateVersion When `'latest'`, installs the newest template pack
+ *                        before listing. Omitted on the normal path.
+ * @returns The parsed list, or `undefined` when the run failed or was cancelled
+ *          (the failure has already been reported to the user).
+ */
+export async function loadWinUiTemplates(
+	adapter: TemplateLoadAdapter,
+	templateVersion?: 'latest'
+): Promise<TemplateLoad | undefined> {
+	if (templateVersion !== 'latest') {
+		const local = await adapter.listTemplates('installed', 'Loading WinUI templates...');
+		if (local.cancelled) {
+			return undefined;
+		}
+		if (local.parsed?.ok && local.code === 0) {
+			return { list: local.parsed.value, freshlyInstalled: false };
+		}
+		if (isSdkMissingExit(local.code)) {
+			// No .NET SDK means the fallback cannot succeed either, and its
+			// "Installing..." progress would imply work that can never happen.
+			// Prefer the CLI's own message: it distinguishes "no SDK found" from
+			// "SDK too old", and names the required version.
+			const detail = local.parsed && !local.parsed.ok
+				? local.parsed.error
+				: describeNewFailure(local.code, undefined);
+			await adapter.reportFailure(detail, true);
+			return undefined;
+		}
+		// No pack installed yet: fall through to the unpinned listing, which
+		// installs the latest pack on demand.
+	}
+
+	const result = await adapter.listTemplates(
+		templateVersion,
+		templateVersion === 'latest'
+			? 'Installing the latest WinUI templates...'
+			: 'Installing the WinUI templates...'
+	);
+
+	if (result.cancelled) {
+		return undefined;
+	}
+
+	if (!result.parsed?.ok || result.code !== 0) {
+		const message = result.parsed && !result.parsed.ok
+			? result.parsed.error
+			: 'Failed to load the WinUI templates.';
+		await adapter.reportFailure(message, isSdkMissingExit(result.code));
+		return undefined;
+	}
+
+	// Reaching the unpinned listing on the default path means nothing was
+	// installed and the CLI has just fetched the newest pack.
+	return { list: result.parsed.value, freshlyInstalled: templateVersion !== 'latest' };
 }
 
 /**
