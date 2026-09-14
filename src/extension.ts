@@ -49,6 +49,12 @@ import {
 	planPackCompletion
 } from './pack-result';
 import {
+	buildPackArgs,
+	isBundleSelection,
+	packProgressTitle,
+	shouldCheckSelfContainedArch
+} from './pack-args';
+import {
 	findWorkspaceArtifacts,
 	buildSignCommand,
 	CERTIFICATE_TIERS,
@@ -1424,9 +1430,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			// Two or more input folders make the CLI emit an MSIX bundle instead
-			// of a single package.
-			const isBundle = inputFolders.length > 1;
+			const isBundle = isBundleSelection(inputFolders);
 
 			const generateCert = await vscode.window.showQuickPick(
 				['Yes', 'No'],
@@ -1442,6 +1446,11 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			);
 
+			const packOptions = {
+				generateCert: generateCert === 'Yes',
+				selfContained: selfContained === 'Yes'
+			};
+
 			// --- Architecture mismatch warning for self-contained packages ---
 			// Only meaningful for a single package: the CLI resolves the runtime
 			// from the *machine's* architecture there, so packaging x64 output on
@@ -1449,7 +1458,7 @@ export function activate(context: vscode.ExtensionContext) {
 			// packs each slice with an explicit per-slice architecture override,
 			// so the runtime always matches its package and the warning would be
 			// misleading.
-			if (selfContained === 'Yes' && !isBundle) {
+			if (shouldCheckSelfContainedArch(inputFolders, packOptions.selfContained)) {
 				const detectedArch = detectArchFromPath(inputFolders[0]);
 				const machineArch = getMachineArch();
 				const mismatchResult = checkSelfContainedArchMismatch(detectedArch, machineArch);
@@ -1466,23 +1475,14 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			}
 
-			// Build the argument array for spawn (shell: false) so paths and flags
-			// are passed literally — no PowerShell parsing/escaping required.
-			// Every selected folder is passed positionally; the CLI decides
-			// between .msix and .msixbundle from how many it receives.
-			const args = ['pack', ...inputFolders];
-			if (generateCert === 'Yes') {
-				args.push('--generate-cert', '--install-cert');
-			}
-			if (selfContained === 'Yes') {
-				args.push('--self-contained');
-			}
+			// Spawned with shell: false, so paths and flags are passed literally.
+			const args = buildPackArgs(inputFolders, packOptions);
 
 			const result = await runWinappCapture(
 				extensionPath,
 				args,
 				workspacePath,
-				isBundle ? 'Creating MSIX bundle...' : 'Packaging app...'
+				packProgressTitle(inputFolders)
 			);
 			await handlePackCompletion(extensionPath, workspacePath, inputFolders, result);
 		})
