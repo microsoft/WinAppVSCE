@@ -57,6 +57,62 @@ describe('parsePackagedArtifactPath', () => {
 		);
 	});
 
+	it('extracts the path from the "Bundle:" marker used by multi-folder runs', () => {
+		// A bundle run prints "📦 Bundle:" instead of "📦 Package:" — see
+		// PackageCommand.cs in microsoft/winappcli.
+		const output = [
+			'[1/2] Packing x64...',
+			'[2/2] Packing arm64...',
+			'Creating bundle...',
+			'  📦 Bundle: C:\\out\\MyApp_1.0.0.0_arm64_x64.msixbundle',
+			'✅ MSIX bundle creation completed.',
+			''
+		].join('\n');
+
+		assert.equal(
+			parsePackagedArtifactPath(output),
+			'C:\\out\\MyApp_1.0.0.0_arm64_x64.msixbundle'
+		);
+	});
+
+	it('extracts a wrapped following-line path after the "Bundle:" marker', () => {
+		// Verbatim output from a real `winapp pack publish\x64 publish\arm64
+		// --generate-cert` run against winappcli 0.6.1, including the
+		// Spectre.Console wrap that splits ".msixbundle" onto its own line.
+		const output = [
+			'Creating MSIX bundle...',
+			'  [1/2] Packing x64...',
+			'  [2/2] Packing arm64...',
+			'  ℹ  Creating bundle...',
+			'  📦 Bundle: ',
+			'C:\\Users\\me\\AppData\\Local\\Temp\\bundletest\\bundletest_1.0.0.0_arm64_x64',
+			'.msixbundle',
+			'  🔒 Bundle has been signed',
+			'✅ MSIX bundle creation completed.'
+		].join('\n');
+
+		assert.equal(
+			parsePackagedArtifactPath(output),
+			'C:\\Users\\me\\AppData\\Local\\Temp\\bundletest\\bundletest_1.0.0.0_arm64_x64.msixbundle'
+		);
+	});
+
+	it('does not mistake a slice progress line for the bundle artifact', () => {
+		// Slices are reported as "[1/2] Packing x64..." with no artifact marker,
+		// so only the final bundle path should ever be returned.
+		const output = [
+			'[1/2] Packing x64...',
+			'[2/2] Packing arm64...',
+			'  📦 Bundle: C:\\out\\MyApp_1.0.0.0_arm64_x64.msixbundle',
+			'🔒 Bundle has been signed'
+		].join('\n');
+
+		assert.equal(
+			parsePackagedArtifactPath(output),
+			'C:\\out\\MyApp_1.0.0.0_arm64_x64.msixbundle'
+		);
+	});
+
 	it('is case-insensitive about the extension', () => {
 		const output = '  📦 Package: \nC:\\out\\MyApp_1.0.0_x64.MSIX\n';
 		assert.equal(parsePackagedArtifactPath(output), 'C:\\out\\MyApp_1.0.0_x64.MSIX');
@@ -282,6 +338,26 @@ describe('planPackCompletion', () => {
 				artifactPath: 'C:\\out\\CounterApp_1.0.0.0_x64.msix',
 				appName: 'CounterApp',
 				message: 'CounterApp packaged → CounterApp_1.0.0.0_x64.msix'
+			}
+		);
+	});
+
+	it('plans success for a bundle run', () => {
+		// Regression guard: before the "📦 Bundle:" marker was recognised, a
+		// successful bundle parsed to undefined and was reported as a failure.
+		assert.deepEqual(
+			planPackCompletion({
+				code: 0,
+				output:
+					'Creating bundle...\n' +
+					'  📦 Bundle: C:\\out\\CounterApp_1.0.0.0_arm64_x64.msixbundle\n' +
+					'✅ MSIX bundle creation completed.\n'
+			}),
+			{
+				kind: 'success',
+				artifactPath: 'C:\\out\\CounterApp_1.0.0.0_arm64_x64.msixbundle',
+				appName: 'CounterApp',
+				message: 'CounterApp packaged → CounterApp_1.0.0.0_arm64_x64.msixbundle'
 			}
 		);
 	});

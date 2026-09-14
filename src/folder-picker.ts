@@ -11,9 +11,9 @@ import { selectFolder } from './winapp-host';
 /**
  * Folder selection shared by the run, pack, and project commands.
  *
- * `winapp package` only ever accepts a build output folder, so it uses the
- * build-output picker directly. The run picker lives in `run-utils` because it
- * also offers projects and solutions, and borrows the scan from here.
+ * Pack uses the single-root scan with a multi-select picker so multiple build
+ * outputs can form a bundle. Run borrows the same scan while also offering
+ * projects and solutions.
  */
 
 export const FOLDER_PICKER_DETAIL = 'Open a folder picker';
@@ -36,6 +36,8 @@ export interface BuildOutputFolder {
 	rootPath: string;
 	path: string;
 }
+
+type BuildOutputQuickPickItem = vscode.QuickPickItem & { directory?: string };
 
 /**
  * Prompt the user to select a folder.
@@ -123,17 +125,7 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 		return selectFolder(SELECT_BUILD_OUTPUT_TITLE, vscode.Uri.file(workspacePath));
 	}
 
-	const items: Array<vscode.QuickPickItem & { directory?: string }> = outputFolders.map(({ path: folderPath }) => ({
-		label: path.relative(workspacePath, folderPath) || '.',
-		detail: folderPath,
-		directory: folderPath
-	}));
-
-	// alwaysShow keeps the escape hatch reachable: without it, typing a path
-	// that matches no discovered folder filters Browse… out of the list too.
-	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, alwaysShow: true });
-
-	const picked = await vscode.window.showQuickPick(items, {
+	const picked = await vscode.window.showQuickPick(buildOutputFolderItems(workspacePath, outputFolders), {
 		placeHolder: SELECT_BUILD_OUTPUT_PLACEHOLDER
 	});
 
@@ -146,4 +138,64 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 	}
 
 	return picked.directory;
+}
+
+/** Pick one or more build outputs; multiple folders produce an MSIX bundle. */
+export async function pickBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
+	const outputFolders = await findBuildOutputFolders([workspacePath]);
+	if (!outputFolders) {
+		return undefined;
+	}
+
+	if (outputFolders.length === 0) {
+		vscode.window.showWarningMessage(NO_BUILD_OUTPUT_MESSAGE);
+		return selectFolders('Select build output folder(s)', vscode.Uri.file(workspacePath));
+	}
+
+	const picked = await vscode.window.showQuickPick(
+		buildOutputFolderItems(workspacePath, outputFolders),
+		{
+			placeHolder: 'Select build output folder(s) — pick two or more to create an MSIX bundle',
+			canPickMany: true
+		}
+	);
+
+	if (!picked || picked.length === 0) {
+		return undefined;
+	}
+
+	if (picked.some(item => item.detail === FOLDER_PICKER_DETAIL)) {
+		return selectFolders('Select build output folder(s)', vscode.Uri.file(workspacePath));
+	}
+
+	return picked
+		.map(item => item.directory)
+		.filter((directory): directory is string => directory !== undefined);
+}
+
+function buildOutputFolderItems(
+	workspacePath: string,
+	outputFolders: readonly BuildOutputFolder[]
+): BuildOutputQuickPickItem[] {
+	const items: BuildOutputQuickPickItem[] = outputFolders.map(({ path: folderPath }) => ({
+		label: path.relative(workspacePath, folderPath) || '.',
+		detail: folderPath,
+		directory: folderPath
+	}));
+
+	// alwaysShow keeps the escape hatch reachable when filtering the list.
+	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, alwaysShow: true });
+	return items;
+}
+
+async function selectFolders(title: string, defaultUri?: vscode.Uri): Promise<string[] | undefined> {
+	const result = await vscode.window.showOpenDialog({
+		canSelectFiles: false,
+		canSelectFolders: true,
+		canSelectMany: true,
+		title,
+		defaultUri
+	});
+
+	return result?.length ? result.map(uri => uri.fsPath) : undefined;
 }
