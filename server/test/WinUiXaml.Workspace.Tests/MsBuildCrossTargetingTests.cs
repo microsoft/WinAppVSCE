@@ -110,6 +110,66 @@ public sealed class MsBuildCrossTargetingTests
     }
 
     /// <summary>
+    /// Deciding the framework costs an evaluation pass on a path that reruns on every C# save, so
+    /// the answer is memoized. The risk that buys is a stale pin: a project edited from multi- to
+    /// single-target (or the reverse) must not keep the old decision, because that silently drops
+    /// it again -- the exact defect this file exists to prevent. Rewriting the project must
+    /// therefore change the answer.
+    /// </summary>
+    [Fact]
+    public void EditingTheProjectFileDefeatsTheMemoizedDecision()
+    {
+        WithCrossTargetedProject((directory, project) =>
+        {
+            var properties = new Dictionary<string, string>();
+
+            Assert.Equal(
+                "netstandard2.0;net9.0",
+                MsBuildCli.ReadDeclaredTargetFrameworks(project, properties));
+
+            // Prove the memo is actually in play without disturbing the stamp: swap in content
+            // that evaluates differently, then restore the original length and write time. A
+            // stamp-keyed memo must still answer with the first result.
+            var original = new FileInfo(project);
+            var originalWriteTime = original.LastWriteTimeUtc;
+            var originalLength = original.Length;
+            var decoy = """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net9.0</TargetFramework>
+                  </PropertyGroup>
+                </Project>
+                """;
+            decoy += new string(' ', Math.Max(0, (int)originalLength - decoy.Length));
+            File.WriteAllText(project, decoy);
+            if (new FileInfo(project).Length == originalLength)
+            {
+                File.SetLastWriteTimeUtc(project, originalWriteTime);
+                Assert.Equal(
+                    "netstandard2.0;net9.0",
+                    MsBuildCli.ReadDeclaredTargetFrameworks(project, properties));
+            }
+
+            // A same-tick rewrite is the adversarial case: the stamp must still move.
+            File.WriteAllText(
+                project,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net9.0</TargetFramework>
+                  </PropertyGroup>
+                </Project>
+                """);
+
+            var reread = MsBuildCli.ReadDeclaredTargetFrameworks(project, properties);
+
+            Assert.True(
+                string.IsNullOrEmpty(reread),
+                $"expected the rewritten project to declare no TargetFrameworks, got '{reread}'");
+        });
+    }
+
+    /// <summary>
     /// The end-to-end proof, against a genuinely multi-targeted project built by MSBuild itself.
     /// The unit tests above pin the decision inputs in isolation; only this one fails if the
     /// framework is never actually pinned, which is precisely how the original defect survived.

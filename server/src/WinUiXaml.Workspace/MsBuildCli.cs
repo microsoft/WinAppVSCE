@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -127,7 +128,7 @@ namespace WinUiXaml.Workspace
             }
 
             var framework = SelectTargetFramework(
-                Evaluate(fullPath, globalProperties, cancellationToken).TargetFrameworks);
+                ReadDeclaredTargetFrameworks(fullPath, globalProperties, cancellationToken));
             if (framework == null)
             {
                 return globalProperties;
@@ -137,6 +138,90 @@ namespace WinUiXaml.Workspace
                 entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
             pinned[TargetFrameworkProperty] = framework;
             return pinned;
+        }
+
+        /// <summary>
+        /// Memo of each project's declared <c>TargetFrameworks</c>, keyed by the write stamp of
+        /// every file that can declare it.
+        /// </summary>
+        private static readonly ConcurrentDictionary<string, (string Stamp, string? Declared)>
+            TargetFrameworkMemo = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The declared target frameworks, evaluated at most once per edit of the files that can
+        /// declare them.
+        /// </summary>
+        /// <remarks>
+        /// Deciding the framework costs a full evaluation pass, and the project reloads on every
+        /// C# save -- but a C# edit cannot change which frameworks a project targets, so re-asking
+        /// is provably repeated work. The stamp covers the project file and the
+        /// <c>Directory.Build.props</c>/<c>.targets</c> chain above it, which is the entire
+        /// surface that can set the property before restore: NuGet has to know the target
+        /// frameworks in order to restore, so a restored package cannot be what introduces them.
+        ///
+        /// A stale entry would silently drop a project, so this is keyed on content stamps rather
+        /// than cleared on notification -- there is no invalidation message to miss.
+        /// </remarks>
+        internal static string? ReadDeclaredTargetFrameworks(
+            string fullPath,
+            IReadOnlyDictionary<string, string> globalProperties,
+            CancellationToken cancellationToken = default)
+        {
+            fullPath = Path.GetFullPath(fullPath);
+            var stamp = DeclaringFileStamp(fullPath);
+            if (TargetFrameworkMemo.TryGetValue(fullPath, out var memo) &&
+                string.Equals(memo.Stamp, stamp, StringComparison.Ordinal))
+            {
+                return memo.Declared;
+            }
+
+            var declared = Evaluate(fullPath, globalProperties, cancellationToken).TargetFrameworks;
+            TargetFrameworkMemo[fullPath] = (stamp, declared);
+            return declared;
+        }
+
+        /// <summary>
+        /// A stamp over the project file and every <c>Directory.Build.props</c>/<c>.targets</c>
+        /// above it. A file that does not exist contributes a marker, so creating one later is
+        /// itself a change.
+        /// </summary>
+        private static string DeclaringFileStamp(string fullPath)
+        {
+            var builder = new StringBuilder();
+            AppendStamp(builder, fullPath);
+
+            var directory = Path.GetDirectoryName(fullPath);
+            while (!string.IsNullOrEmpty(directory))
+            {
+                AppendStamp(builder, Path.Combine(directory, "Directory.Build.props"));
+                AppendStamp(builder, Path.Combine(directory, "Directory.Build.targets"));
+                directory = Path.GetDirectoryName(directory);
+            }
+
+            return builder.ToString();
+
+            static void AppendStamp(StringBuilder builder, string path)
+            {
+                try
+                {
+                    var info = new FileInfo(path);
+                    // Length joins the timestamp because a rewrite inside one filesystem tick is
+                    // exactly the case a test -- or a scripted edit -- produces.
+                    builder.Append(info.Exists
+                        ? string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"{info.LastWriteTimeUtc.Ticks}:{info.Length}")
+                        : "-");
+                }
+                catch (Exception)
+                {
+                    // An unreadable stamp must not be mistaken for a stable one, or the memo
+                    // would pin a framework the project no longer declares.
+                    builder.Append(Guid.NewGuid().ToString("N"));
+                }
+
+                builder.Append('|');
+            }
         }
 
         private static (
