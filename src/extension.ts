@@ -80,13 +80,6 @@ const MAX_SIGNABLE_FILES = 10;
 const DOTNET_DOWNLOAD_URL = 'https://dotnet.microsoft.com/download';
 
 /**
- * Workspace state key holding the project directory scaffolded by `winapp.new`.
- * `vscode.openFolder` restarts the extension host, so the post-scaffold
- * follow-up has to survive a reload; the key is cleared once shown.
- */
-const PENDING_SCAFFOLD_KEY = 'winapp.new.pendingScaffold';
-
-/**
  * Output channel for debugger-related activity (e.g. auto-installed extensions),
  * so the user has a durable record of why WinApp added an extension. Created lazily.
  */
@@ -907,6 +900,15 @@ let cachedTemplateList: TemplateListResult | undefined;
  * present, so a missing SDK or an unreachable NuGet feed surfaces here rather
  * than after the user has answered three prompts.
  *
+ * The normal path asks for `--template-version installed`, which is a purely
+ * local query. Without it the CLI runs `dotnet new update --check-only` to see
+ * whether the installed pack is stale, which contacts the configured NuGet feed
+ * on every single invocation (measured at ~8s versus ~1.6s). That check is pure
+ * waste here: this command asks the user which pack version they want rather
+ * than detecting staleness, so its answer is discarded. Falling back to the
+ * unpinned listing covers the first run, where nothing is installed yet and
+ * `installed` legitimately fails.
+ *
  * @param templateVersion When `'latest'`, installs the newest template pack
  *                        before listing. Omitted on the normal path.
  * @returns The parsed list, or `undefined` when the run failed or was cancelled
@@ -917,29 +919,65 @@ async function loadWinUiTemplates(
 	cwd: string,
 	templateVersion?: 'latest'
 ): Promise<TemplateListResult | undefined> {
-	const result = await runWinappCapture(
+	if (templateVersion !== 'latest') {
+		const local = await runTemplateList(extensionPath, cwd, 'installed', 'Loading WinUI templates...');
+		if (local.cancelled) {
+			return undefined;
+		}
+		if (local.parsed?.ok && local.code === 0) {
+			cachedTemplateList = local.parsed.value;
+			return local.parsed.value;
+		}
+		// No pack installed yet: fall through to the unpinned listing, which
+		// installs the latest pack on demand.
+	}
+
+	const result = await runTemplateList(
 		extensionPath,
-		buildListArgs(templateVersion),
 		cwd,
-		templateVersion === 'latest' ? 'Installing the latest WinUI templates...' : 'Loading WinUI templates...',
-		'Loading templates cancelled.'
+		templateVersion,
+		templateVersion === 'latest' ? 'Installing the latest WinUI templates...' : 'Installing the WinUI templates...'
 	);
 
 	if (result.cancelled) {
 		return undefined;
 	}
 
-	const parsed = parseTemplateList(result.output);
-	if (!parsed.ok || result.code !== 0) {
-		const message = parsed.ok
-			? 'Failed to load the WinUI templates.'
-			: parsed.error;
+	if (!result.parsed?.ok || result.code !== 0) {
+		const message = result.parsed && !result.parsed.ok
+			? result.parsed.error
+			: 'Failed to load the WinUI templates.';
 		await showNewFailure(message, isSdkMissingExit(result.code));
 		return undefined;
 	}
 
-	cachedTemplateList = parsed.value;
-	return parsed.value;
+	cachedTemplateList = result.parsed.value;
+	return result.parsed.value;
+}
+
+/**
+ * Run one `winapp new --list --json` attempt without reporting failures, so the
+ * caller can retry with different arguments before surfacing an error.
+ */
+async function runTemplateList(
+	extensionPath: string,
+	cwd: string,
+	templateVersion: 'latest' | 'installed' | undefined,
+	progressMessage: string
+): Promise<{ cancelled: boolean; code: number | null; parsed?: ReturnType<typeof parseTemplateList> }> {
+	const result = await runWinappCapture(
+		extensionPath,
+		buildListArgs(templateVersion),
+		cwd,
+		progressMessage,
+		'Loading templates cancelled.'
+	);
+
+	if (result.cancelled) {
+		return { cancelled: true, code: result.code };
+	}
+
+	return { cancelled: false, code: result.code, parsed: parseTemplateList(result.output) };
 }
 
 /**
@@ -1114,7 +1152,6 @@ async function resolveScaffoldTarget(
  * opened in place.
  */
 async function offerToOpenScaffoldedProject(
-	context: vscode.ExtensionContext,
 	projectPath: string,
 	projectName: string
 ): Promise<void> {
@@ -1150,54 +1187,11 @@ async function offerToOpenScaffoldedProject(
 	}
 
 	if (choice === openFolder || choice === openInNewWindow) {
-		// Opening a folder restarts the extension host, so stash the path first;
-		// the follow-up notification is shown on the next activation.
-		await context.globalState.update(PENDING_SCAFFOLD_KEY, projectPath);
 		await vscode.commands.executeCommand(
 			'vscode.openFolder',
 			projectUri,
 			{ forceNewWindow: choice === openInNewWindow }
 		);
-	}
-}
-
-/**
- * Show the one-time follow-up for a project scaffolded in a previous session,
- * once its folder has been opened.
- *
- * Deliberately does not run `winapp init` automatically: `dotnet new` output is
- * already buildable, and init is for retrofitting SDK setup onto an existing
- * project. Offering it is the handoff point between the two commands.
- */
-async function showPendingScaffoldFollowUp(context: vscode.ExtensionContext): Promise<void> {
-	const pendingPath = context.globalState.get<string>(PENDING_SCAFFOLD_KEY);
-	if (!pendingPath) {
-		return;
-	}
-
-	const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
-	const isOpen = workspaceFolders.some(
-		(folder) => path.resolve(folder.uri.fsPath).toLowerCase() === path.resolve(pendingPath).toLowerCase()
-	);
-	if (!isOpen) {
-		return;
-	}
-
-	// Clear first so a dismissed notification never reappears on the next reload.
-	await context.globalState.update(PENDING_SCAFFOLD_KEY, undefined);
-
-	const runApp = 'Run Application';
-	const initProject = 'Initialize Project';
-	const choice = await vscode.window.showInformationMessage(
-		`${path.basename(pendingPath)} is ready.`,
-		runApp,
-		initProject
-	);
-
-	if (choice === runApp) {
-		await vscode.commands.executeCommand('winapp.run');
-	} else if (choice === initProject) {
-		await vscode.commands.executeCommand('winapp.init');
 	}
 }
 
@@ -1694,7 +1688,6 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			await offerToOpenScaffoldedProject(
-				context,
 				scaffold.projectPath ?? outputDirectory,
 				scaffold.name ?? target.name
 			);
@@ -2165,10 +2158,6 @@ export function activate(context: vscode.ExtensionContext) {
 			});
 		})
 	);
-
-	// A project scaffolded by winapp.new may have been opened in this window,
-	// which restarted the extension host — show its follow-up now.
-	void showPendingScaffoldFollowUp(context);
 }
 
 /**
