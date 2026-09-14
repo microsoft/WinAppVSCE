@@ -25,7 +25,8 @@ import {
 } from './run-options';
 import {
 	FOLDER_PICKER_DETAIL,
-	pickBuildOutputFolder
+	pickBuildOutputFolder,
+	pickBuildOutputFolders
 } from './folder-picker';
 import {
 	pickRunTarget,
@@ -676,11 +677,15 @@ function installPackage(artifactPath: string, cwd: string): void {
  * Surface the result of a pack run. On success, show a completion notification
  * naming the produced artifact with Reveal / Sign / Install actions. On
  * failure, direct the user to the WinApp output channel.
+ *
+ * @param inputFolders The folder(s) passed to the CLI. More than one means a
+ *   bundle was requested; the artifact may land under any of them, so each is
+ *   accepted as a containment root.
  */
 async function handlePackCompletion(
 	extensionPath: string,
 	workspacePath: string,
-	inputFolder: string,
+	inputFolders: string[],
 	result: { code: number | null; output: string; cancelled?: boolean }
 ): Promise<void> {
 	const plan = planPackCompletion(result);
@@ -696,7 +701,7 @@ async function handlePackCompletion(
 	if (
 		!fs.existsSync(plan.artifactPath) ||
 		(!isArtifactWithinRoot(plan.artifactPath, workspacePath) &&
-			!isArtifactWithinRoot(plan.artifactPath, inputFolder))
+			!inputFolders.some((folder) => isArtifactWithinRoot(plan.artifactPath, folder)))
 	) {
 		getWinappOutputChannel().show();
 		vscode.window.showErrorMessage('Packaging failed. See the WinApp output channel for details.');
@@ -1414,10 +1419,14 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const inputFolder = await pickBuildOutputFolder(workspacePath);
-			if (!inputFolder) {
+			const inputFolders = await pickBuildOutputFolders(workspacePath);
+			if (!inputFolders || inputFolders.length === 0) {
 				return;
 			}
+
+			// Two or more input folders make the CLI emit an MSIX bundle instead
+			// of a single package.
+			const isBundle = inputFolders.length > 1;
 
 			const generateCert = await vscode.window.showQuickPick(
 				['Yes', 'No'],
@@ -1426,12 +1435,22 @@ export function activate(context: vscode.ExtensionContext) {
 
 			const selfContained = await vscode.window.showQuickPick(
 				['Yes', 'No'],
-				{ placeHolder: 'Bundle Windows App SDK runtime (self-contained)?' }
+				{
+					placeHolder: isBundle
+						? 'Bundle Windows App SDK runtime into each package (self-contained)?'
+						: 'Bundle Windows App SDK runtime (self-contained)?'
+				}
 			);
 
 			// --- Architecture mismatch warning for self-contained packages ---
-			if (selfContained === 'Yes') {
-				const detectedArch = detectArchFromPath(inputFolder);
+			// Only meaningful for a single package: the CLI resolves the runtime
+			// from the *machine's* architecture there, so packaging x64 output on
+			// an arm64 host silently mixes architectures. For bundles the CLI
+			// packs each slice with an explicit per-slice architecture override,
+			// so the runtime always matches its package and the warning would be
+			// misleading.
+			if (selfContained === 'Yes' && !isBundle) {
+				const detectedArch = detectArchFromPath(inputFolders[0]);
 				const machineArch = getMachineArch();
 				const mismatchResult = checkSelfContainedArchMismatch(detectedArch, machineArch);
 				if (mismatchResult.mismatch) {
@@ -1449,7 +1468,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 			// Build the argument array for spawn (shell: false) so paths and flags
 			// are passed literally — no PowerShell parsing/escaping required.
-			const args = ['pack', inputFolder];
+			// Every selected folder is passed positionally; the CLI decides
+			// between .msix and .msixbundle from how many it receives.
+			const args = ['pack', ...inputFolders];
 			if (generateCert === 'Yes') {
 				args.push('--generate-cert', '--install-cert');
 			}
@@ -1461,9 +1482,9 @@ export function activate(context: vscode.ExtensionContext) {
 				extensionPath,
 				args,
 				workspacePath,
-				'Packaging app...'
+				isBundle ? 'Creating MSIX bundle...' : 'Packaging app...'
 			);
-			await handlePackCompletion(extensionPath, workspacePath, inputFolder, result);
+			await handlePackCompletion(extensionPath, workspacePath, inputFolders, result);
 		})
 	);
 
