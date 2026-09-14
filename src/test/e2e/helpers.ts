@@ -217,17 +217,7 @@ export async function launchVSCode(workspacePath: string): Promise<VSCodeTestCon
  * custom manifest editor. Then locates and returns the webview FrameLocator.
  */
 export async function openManifestEditor(page: Page): Promise<FrameLocator> {
-    // The file is already open from launch args, but a brand-new profile may
-    // also open a Get Started tab — make sure the manifest is the active editor
-    // before driving the Command Palette.
-    const manifestTab = page.locator('.tab').filter({ hasText: 'AppxManifest.xml' }).first();
-    await manifestTab.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => { /* tolerated */ });
-    await manifestTab.click({ timeout: 5_000 }).catch(() => { /* tolerated */ });
-    // Move the pointer off the tab: its hover tooltip renders over the editor
-    // area and would intercept later clicks inside the webview.
-    await page.mouse.move(0, 0);
-    await page.locator('.hover-contents').waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => { /* none shown */ });
-
+    // The file is already open from launch args.
     // Reopen with the custom editor via Command Palette.
     await runCommand(page, 'View: Reopen Editor With...');
     await page.waitForTimeout(2_000);

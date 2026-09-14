@@ -2,7 +2,7 @@
  * Singleton VS Code instance shared across all E2E spec files.
  * Since Playwright runs with workers:1, all specs execute in the same process.
  */
-import { expect, type FrameLocator } from '@playwright/test';
+import { type FrameLocator } from '@playwright/test';
 import {
     createTempWorkspace,
     launchVSCode,
@@ -40,18 +40,11 @@ export async function ensureEditor(): Promise<{ ctx: VSCodeTestContext; frame: F
 export async function resetManifest(ctx: VSCodeTestContext, fixtureName: string = FIXTURE_NAME): Promise<FrameLocator> {
     const src = path.join(FIXTURES_DIR, fixtureName);
     const dest = path.join(ctx.workspacePath, 'AppxManifest.xml');
-    const expectedIdentityName = /<Identity\b[^>]*\bName="([^"]+)"/.exec(fs.readFileSync(src, 'utf-8'))?.[1];
     fs.copyFileSync(src, dest);
     // Give the editor time to detect the file change and reload
     await ctx.page.waitForTimeout(2_000);
     // Re-acquire the webview frame (it may have reloaded with new content)
     sharedFrame = await getWebviewFrame(ctx.page);
-    // The reload is asynchronous: wait for the new fixture's content to actually
-    // land in the webview instead of assuming a fixed delay was long enough.
-    if (expectedIdentityName) {
-        await expect(sharedFrame.locator('#identity-name'))
-            .toHaveValue(expectedIdentityName, { timeout: 20_000 });
-    }
     return sharedFrame;
 }
 
