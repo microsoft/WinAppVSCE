@@ -928,6 +928,12 @@ async function loadWinUiTemplates(
 			cachedTemplateList = local.parsed.value;
 			return local.parsed.value;
 		}
+		if (isSdkMissingExit(local.code)) {
+			// No .NET SDK means the fallback cannot succeed either, and its
+			// "Installing..." progress would imply work that can never happen.
+			await showNewFailure('Failed to load the WinUI templates.', true);
+			return undefined;
+		}
 		// No pack installed yet: fall through to the unpinned listing, which
 		// installs the latest pack on demand.
 	}
