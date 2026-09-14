@@ -161,7 +161,12 @@ export function ensureAvailableName(
 	}
 
 	for (let suffix = 1; ; suffix++) {
-		const candidate = `${baseName}${suffix}`;
+		const suffixText = `${suffix}`;
+		// Trim the base so the numbered variant still fits the CLI's limit. A name
+		// already at the maximum would otherwise grow past it and come back as an
+		// exit-2 failure, turning the recovery offer into a dead end.
+		const trimmedBase = baseName.slice(0, MAX_PROJECT_NAME_LENGTH - suffixText.length);
+		const candidate = `${trimmedBase}${suffixText}`;
 		if (!isTaken(candidate)) {
 			return candidate;
 		}

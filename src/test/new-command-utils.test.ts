@@ -146,6 +146,34 @@ describe('ensureAvailableName', () => {
 			'PhotoViewer'
 		);
 	});
+
+	it('keeps a numbered variant of a max-length name within the limit', () => {
+		const baseName = 'a'.repeat(MAX_PROJECT_NAME_LENGTH);
+		const taken = new Set([path.join(parent, baseName)]);
+
+		const available = ensureAvailableName(baseName, parent, (p) => taken.has(p));
+
+		// The numbered variant has to stay valid, or the recovery offer hands the
+		// user a name the CLI rejects with exit 2.
+		assert.equal(available.length, MAX_PROJECT_NAME_LENGTH);
+		assert.equal(validateProjectName(available), undefined);
+		assert.ok(available.endsWith('1'));
+	});
+
+	it('keeps a numbered variant within the limit past single digits', () => {
+		const baseName = 'a'.repeat(MAX_PROJECT_NAME_LENGTH);
+		const taken = new Set(
+			[baseName, `${baseName.slice(0, MAX_PROJECT_NAME_LENGTH - 1)}1`].map((name) =>
+				path.join(parent, name)
+			)
+		);
+
+		const available = ensureAvailableName(baseName, parent, (p) => taken.has(p));
+
+		assert.equal(available.length, MAX_PROJECT_NAME_LENGTH);
+		assert.equal(validateProjectName(available), undefined);
+		assert.ok(available.endsWith('2'));
+	});
 });
 
 describe('parseTemplateList', () => {
