@@ -6,6 +6,7 @@ import {
 	deduplicateBuildOutputFolders
 } from './project-detection';
 import { walkDirectoryTree, scanRoots, type ScanCancellationToken } from './directory-walk';
+import { resolveFolderSelection } from './pack-args';
 import { selectFolder } from './winapp-host';
 
 /**
@@ -160,17 +161,15 @@ export async function pickBuildOutputFolders(workspacePath: string): Promise<str
 		}
 	);
 
-	if (!picked || picked.length === 0) {
-		return undefined;
+	const selection = resolveFolderSelection(picked, FOLDER_PICKER_DETAIL);
+	switch (selection.kind) {
+		case 'none':
+			return undefined;
+		case 'browse':
+			return selectFolders('Select build output folder(s)', vscode.Uri.file(workspacePath));
+		case 'folders':
+			return selection.folders;
 	}
-
-	if (picked.some(item => item.detail === FOLDER_PICKER_DETAIL)) {
-		return selectFolders('Select build output folder(s)', vscode.Uri.file(workspacePath));
-	}
-
-	return picked
-		.map(item => item.directory)
-		.filter((directory): directory is string => directory !== undefined);
 }
 
 function buildOutputFolderItems(
