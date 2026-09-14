@@ -1,11 +1,9 @@
 /**
  * Pure helpers for the `winapp cert generate` flow.
  *
- * No VS Code dependency, so the argument construction, output parsing and
- * redaction rules can be unit tested directly.
+ * No VS Code dependency, so the argument construction and output parsing can be
+ * unit tested directly.
  */
-
-import { parseManifestXml } from './manifest-schema/xml-parser';
 
 /**
  * Glob patterns for app manifests within a project directory.
@@ -29,9 +27,6 @@ export const MANIFEST_GLOBS = ['**/*.appxmanifest', '**/[Aa]ppx[Mm]anifest.xml']
 export const CERTIFICATE_DIALOG_FILTER: Record<string, string[]> = {
 	'Certificates': ['pfx']
 };
-
-/** Placeholder substituted for secrets in echoed commands and captured output. */
-export const REDACTED = '***';
 
 /** Behaviour when the output certificate file already exists. */
 export type CertIfExists = 'error' | 'overwrite';
@@ -68,109 +63,12 @@ export function buildCertGenerateArgs(options: CertGenerateArgOptions = {}): str
 	}
 
 	args.push('--if-exists', options.ifExists ?? 'error');
-	args.push('--json');
 
 	return args;
 }
 
 /**
- * Mask the value following `--password` so a command echo never reveals it.
- *
- * The extension does not pass `--password` today, but the echo path is shared
- * and must not become a leak the moment it does.
- */
-export function redactPasswordArgs(args: string[]): string[] {
-	const redacted = [...args];
-	for (let i = 0; i < redacted.length; i++) {
-		if (redacted[i] === '--password' && i + 1 < redacted.length) {
-			redacted[i + 1] = REDACTED;
-			i++;
-		}
-	}
-	return redacted;
-}
-
-/**
- * Mask the `password` field in CLI JSON output.
- *
- * `cert generate --json` echoes the certificate password back in its result
- * payload, so streaming raw CLI output to the output channel would re-leak the
- * secret even though the command itself was spawned with an argument array.
- */
-export function redactPasswordInOutput(output: string): string {
-	return output.replace(
-		/("password"\s*:\s*)"(?:[^"\\]|\\.)*"/gi,
-		`$1"${REDACTED}"`
-	);
-}
-
-export interface CertGenerateResult {
-	certificatePath: string;
-	publisher?: string;
-	subjectName?: string;
-	publicCertificatePath?: string;
-}
-
-/**
- * Extract the first JSON object from CLI output.
- *
- * The CLI prints a bare JSON document under `--json`, but progress or warning
- * lines can still precede it on stderr, so the object is located rather than
- * assumed to be the whole payload.
- */
-function parseJsonObject(output: string): Record<string, unknown> | undefined {
-	const start = output.indexOf('{');
-	const end = output.lastIndexOf('}');
-	if (start === -1 || end === -1 || end < start) {
-		return undefined;
-	}
-
-	try {
-		const parsed: unknown = JSON.parse(output.slice(start, end + 1));
-		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-			return parsed as Record<string, unknown>;
-		}
-	} catch {
-		// Not valid JSON — callers fall back to the raw output.
-	}
-
-	return undefined;
-}
-
-function asString(value: unknown): string | undefined {
-	return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-/** Parse a successful `cert generate --json` payload. */
-export function parseCertGenerateResult(output: string): CertGenerateResult | undefined {
-	const json = parseJsonObject(output);
-	const certificatePath = asString(json?.certificatePath);
-	if (!certificatePath) {
-		return undefined;
-	}
-
-	return {
-		certificatePath,
-		publisher: asString(json?.publisher),
-		subjectName: asString(json?.subjectName),
-		publicCertificatePath: asString(json?.publicCertificatePath)
-	};
-}
-
-/**
- * Pull the subject DN out of a `cert info --json` payload.
- *
- * `cert info` reports the certificate's identity as `subject`, not `publisher`,
- * so the reuse path needs its own reader to fill in what `cert generate` would
- * otherwise have provided.
- */
-export function parseCertInfoSubject(output: string): string | undefined {
-	return asString(parseJsonObject(output)?.subject);
-}
-
-/**
- * Matches the CLI's "already exists" failure, in both its JSON form
- * (`{"error":"Certificate file already exists: …"}`) and its plain-text form.
+ * Matches the CLI's "already exists" failure.
  */
 const ALREADY_EXISTS_RE = /certificate file already exists/i;
 
@@ -184,23 +82,15 @@ export function isAlreadyExistsError(output: string): boolean {
  * be told *which* file is about to be overwritten.
  */
 export function parseExistingCertificatePath(output: string): string | undefined {
-	// Match against the decoded error message when the CLI emitted JSON, so
-	// Windows path separators are not reported back with doubled backslashes.
-	const source = parseCertErrorMessage(output) ?? output;
-	const match = /certificate file already exists:\s*([^"\r\n]+)/i.exec(source);
+	const match = /certificate file already exists:\s*([^"\r\n]+)/i.exec(output);
 	return match?.[1].trim() || undefined;
 }
 
 /** Extract a human-readable error message from CLI output. */
 export function parseCertErrorMessage(output: string): string | undefined {
-	const fromJson = asString(parseJsonObject(output)?.error);
-	if (fromJson) {
-		return fromJson;
-	}
-
-	// Fall back to the first non-empty line. This runs only after a non-zero
-	// exit, so any output is more useful to the user than the generic "see the
-	// output channel" message. Stripping the CLI's leading status glyph is
+	// The first non-empty line. This runs only after a non-zero exit, so any
+	// output is more useful to the user than the generic "see the output
+	// channel" message. Stripping the CLI's leading status glyph is
 	// normalization, not a match condition: plain-text errors without a glyph
 	// must still be reported.
 	for (const rawLine of output.split(/\r?\n/)) {
@@ -218,7 +108,7 @@ export function parseCertErrorMessage(output: string): string | undefined {
 }
 
 export type CertGenerateOutcome =
-	| { kind: 'success'; result: CertGenerateResult }
+	| { kind: 'success'; certificatePath: string }
 	| { kind: 'already-exists'; existingPath?: string }
 	| { kind: 'cancelled' }
 	| { kind: 'failed'; message?: string };
@@ -228,10 +118,15 @@ export type CertGenerateOutcome =
  *
  * "Already exists" is separated from other failures because it is recoverable
  * in the UI (offer to overwrite) rather than simply reported.
+ *
+ * @param expectedPath Where the certificate was asked to be written. The CLI is
+ *   run without `--json`, so success is taken from the exit code and the path is
+ *   the one the caller specified rather than one parsed back out of the output.
  */
 export function decideCertGenerateOutcome(
 	code: number | null,
 	output: string,
+	expectedPath: string,
 	cancelled?: boolean
 ): CertGenerateOutcome {
 	if (cancelled) {
@@ -239,14 +134,7 @@ export function decideCertGenerateOutcome(
 	}
 
 	if (code === 0) {
-		const result = parseCertGenerateResult(output);
-		if (result) {
-			return { kind: 'success', result };
-		}
-		// Exit 0 without a parsable payload means the certificate may well exist
-		// but we cannot name it, so treat it as a failure rather than reporting
-		// a success we cannot substantiate.
-		return { kind: 'failed', message: parseCertErrorMessage(output) };
+		return { kind: 'success', certificatePath: expectedPath };
 	}
 
 	if (isAlreadyExistsError(output)) {
@@ -254,69 +142,6 @@ export function decideCertGenerateOutcome(
 	}
 
 	return { kind: 'failed', message: parseCertErrorMessage(output) };
-}
-
-/**
- * Extract `Identity/@Publisher` from manifest XML.
- *
- * Used to verify what the CLI actually produced: `cert generate --manifest`
- * silently falls back to the current user name when it cannot parse the
- * manifest (exit 0, no warning), which yields a certificate that can never
- * match the package. See microsoft/winappCli#839.
- */
-export function parseManifestPublisher(xml: string): string | undefined {
-	// Parsed as a DOM rather than pattern-matched. A regex over the raw text
-	// reads commented-out <Identity> elements, misses single-quoted attributes,
-	// and returns entity references undecoded — all of which turn into either a
-	// false mismatch warning or a real one that never fires.
-	let doc;
-	try {
-		// A UTF-8 BOM survives fs.readFile(…, 'utf8') and makes the parser reject
-		// the document, and Visual Studio writes manifests with one.
-		const parsed = parseManifestXml(xml.replace(/^\uFEFF/, ''));
-		if (parsed.errors.length > 0) {
-			return undefined;
-		}
-		doc = parsed.doc;
-	} catch {
-		return undefined;
-	}
-
-	const root = doc.documentElement;
-	if (!root) {
-		return undefined;
-	}
-
-	// Only a direct child of the package root counts: Publisher also appears on
-	// PackageDependency and ExternalDependency elements deeper in the manifest.
-	for (let node = root.firstChild; node; node = node.nextSibling) {
-		const element = node as { nodeType?: number; localName?: string; getAttribute?: (name: string) => string | null };
-		if (element.nodeType !== 1 || element.localName !== 'Identity') {
-			continue;
-		}
-		return element.getAttribute?.('Publisher')?.trim() || undefined;
-	}
-
-	return undefined;
-}
-
-/**
- * Compare two distinguished names for practical equality.
- *
- * Comparison ignores case and the optional whitespace around `=` and `,`, so
- * `CN=Contoso, O=Contoso Ltd` and `cn=Contoso,o=Contoso Ltd` are the same
- * publisher. It is deliberately not a full RFC 4514 parser: this only needs to
- * be good enough to catch the CLI having ignored the manifest entirely.
- */
-export function publishersMatch(a: string, b: string): boolean {
-	const normalize = (value: string) =>
-		value
-			.trim()
-			.replace(/\s*=\s*/g, '=')
-			.replace(/\s*,\s*/g, ',')
-			.toLowerCase();
-
-	return normalize(a) === normalize(b);
 }
 
 /**
@@ -402,28 +227,9 @@ export interface CertGenerateFlowAdapter {
 	/** Install the certificate into the machine store (requires elevation). */
 	installCertificate(certificatePath: string): Promise<void>;
 
-	/**
-	 * Read the publisher out of an existing certificate on disk.
-	 *
-	 * Used on the reuse path, where the CLI produced no payload to verify: without
-	 * it, "Use Existing Cert" would skip the publisher check entirely. Returns
-	 * `undefined` when the certificate cannot be read (for example because it uses
-	 * a non-default password).
-	 */
-	inspectCertificate(certificatePath: string): Promise<CertGenerateResult | undefined>;
-
-	/**
-	 * Check the certificate against the manifest it was meant to be derived from.
-	 *
-	 * Runs before any install so the user is never asked to approve UAC for a
-	 * certificate that cannot work. `'unverified'` means the check could not be
-	 * performed, which is not the same as a mismatch and must not block.
-	 */
-	verifyPublisher(result: CertGenerateResult): Promise<'ok' | 'mismatch' | 'unverified'>;
-
 	/** Report the certificate that is now available. */
 	reportSuccess(
-		result: CertGenerateResult,
+		certificatePath: string,
 		context: { created: boolean; installing: boolean }
 	): Promise<void>;
 
@@ -432,12 +238,6 @@ export interface CertGenerateFlowAdapter {
 
 	/** Tell the user the existing certificate was left alone and nothing else happened. */
 	reportKeptExisting(existingPath: string | undefined): void;
-
-	/**
-	 * Report that the install was skipped because the certificate does not match
-	 * the manifest. Trusting it would not make the package installable.
-	 */
-	reportInstallSkipped(result: CertGenerateResult): void;
 }
 
 export interface CertGenerateFlowResult {
@@ -449,8 +249,6 @@ export interface CertGenerateFlowResult {
 	installed: boolean;
 	/** Whether the "already exists" warning was shown. */
 	overwritePrompted: boolean;
-	/** Outcome of the manifest-publisher check, when one was reached. */
-	publisherVerified?: 'ok' | 'mismatch' | 'unverified';
 }
 
 /**
@@ -485,14 +283,7 @@ export async function executeCertGenerateFlow(
 		const choice = await adapter.confirmOverwrite(existingPath, existingPath !== undefined);
 
 		if (choice === 'reuse' && existingPath) {
-			// The CLI emitted no payload for a certificate it refused to replace, so
-			// read the publisher back off disk. Otherwise the verification below has
-			// nothing to compare and silently passes a possibly-wrong certificate.
-			const inspected = await adapter.inspectCertificate(existingPath);
-			outcome = {
-				kind: 'success',
-				result: inspected ?? { certificatePath: existingPath }
-			};
+			outcome = { kind: 'success', certificatePath: existingPath };
 			created = false;
 		} else if (choice === 'overwrite') {
 			outcome = await adapter.runGenerate('overwrite');
@@ -519,28 +310,17 @@ export async function executeCertGenerateFlow(
 			return result;
 	}
 
-	result.certificatePath = outcome.result.certificatePath;
+	result.certificatePath = outcome.certificatePath;
 	result.created = created;
 
-	// Verified before installing, not after. The install hands off to a UAC
-	// window, so discovering a mismatch afterwards means the user has already
-	// approved trusting a certificate that cannot sign their package.
-	const verdict = await adapter.verifyPublisher(outcome.result);
-	result.publisherVerified = verdict;
-
-	if (install && verdict === 'mismatch') {
-		adapter.reportInstallSkipped(outcome.result);
-		return result;
-	}
-
 	if (install) {
-		await adapter.installCertificate(outcome.result.certificatePath);
+		await adapter.installCertificate(outcome.certificatePath);
 		result.installed = true;
 	}
 
 	// Reported for both branches: the install is handed to another window, so
 	// this is the only place the certificate's location surfaces in VS Code.
-	await adapter.reportSuccess(outcome.result, { created, installing: result.installed });
+	await adapter.reportSuccess(outcome.certificatePath, { created, installing: result.installed });
 
 	return result;
 }

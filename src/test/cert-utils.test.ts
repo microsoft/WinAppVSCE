@@ -3,40 +3,27 @@ import assert from 'node:assert/strict';
 
 import {
 	CERTIFICATE_DIALOG_FILTER,
-	REDACTED,
 	buildCertGenerateArgs,
 	decideCertGenerateOutcome,
 	executeCertGenerateFlow,
 	isAlreadyExistsError,
 	parseCertErrorMessage,
-	parseCertGenerateResult,
-	parseCertInfoSubject,
 	parseExistingCertificatePath,
-	parseManifestPublisher,
-	publishersMatch,
-	redactPasswordArgs,
-	redactPasswordInOutput,
 	resolveCertPublisherSourceDecision,
 	validatePublisherInput,
 	type CertGenerateFlowAdapter,
 	type CertGenerateOutcome,
-	type CertGenerateResult,
 	type CertIfExists,
 	type CertPublisherSourceAdapter,
 	type OverwriteChoice
 } from '../cert-utils';
 
-/** A representative `cert generate --json` success payload. */
-const SUCCESS_JSON = JSON.stringify({
-	certificatePath: 'C:\\proj\\devcert.pfx',
-	password: 'password',
-	publisher: 'CN=Contoso',
-	subjectName: 'CN=Contoso'
-});
+/** Where the CLI writes by default, and therefore the path the flow expects. */
+const EXPECTED_PATH = 'C:\\proj\\devcert.pfx';
 
-const ALREADY_EXISTS_JSON = JSON.stringify({
-	error: 'Certificate file already exists: C:\\proj\\devcert.pfx'
-});
+/** A representative plain-text "already exists" failure. */
+const ALREADY_EXISTS_TEXT =
+	'❌ Certificate file already exists: C:\\proj\\devcert.pfx\nPlease specify a different output path or remove the existing file.';
 
 describe('buildCertGenerateArgs', () => {
 	test('prefers the manifest and never emits --publisher alongside it', () => {
@@ -51,8 +38,7 @@ describe('buildCertGenerateArgs', () => {
 			'--manifest',
 			'C:\\proj\\Package.appxmanifest',
 			'--if-exists',
-			'error',
-			'--json'
+			'error'
 		]);
 	});
 
@@ -65,20 +51,22 @@ describe('buildCertGenerateArgs', () => {
 			'--publisher',
 			'CN=Contoso, O=Contoso Ltd',
 			'--if-exists',
-			'error',
-			'--json'
+			'error'
 		]);
 	});
 
 	test('defaults --if-exists to error and honours overwrite', () => {
-		assert.deepEqual(buildCertGenerateArgs({ publisher: 'Contoso' }).slice(-3), [
+		assert.deepEqual(buildCertGenerateArgs({ publisher: 'Contoso' }).slice(-2), [
 			'--if-exists',
-			'error',
-			'--json'
+			'error'
 		]);
 
 		const overwrite = buildCertGenerateArgs({ publisher: 'Contoso', ifExists: 'overwrite' });
 		assert.equal(overwrite[overwrite.indexOf('--if-exists') + 1], 'overwrite');
+	});
+
+	test('never requests --json, so the CLI never echoes the password back', () => {
+		assert.ok(!buildCertGenerateArgs({ publisher: 'Contoso' }).includes('--json'));
 	});
 
 	test('never emits --install, because generation stays un-elevated', () => {
@@ -93,91 +81,25 @@ describe('buildCertGenerateArgs', () => {
 	});
 });
 
-describe('redactPasswordArgs', () => {
-	test('masks the value after --password without touching other arguments', () => {
-		const args = redactPasswordArgs(['cert', 'generate', '--password', 'hunter2', '--json']);
-		assert.deepEqual(args, ['cert', 'generate', '--password', REDACTED, '--json']);
-	});
-
-	test('does not mutate the caller array', () => {
-		const original = ['--password', 'hunter2'];
-		redactPasswordArgs(original);
-		assert.deepEqual(original, ['--password', 'hunter2']);
-	});
-
-	test('tolerates a trailing --password with no value', () => {
-		assert.deepEqual(redactPasswordArgs(['cert', '--password']), ['cert', '--password']);
-	});
-
-	test('does not redact a literal argument that merely looks like a secret', () => {
-		assert.deepEqual(redactPasswordArgs(['--publisher', 'CN=password']), ['--publisher', 'CN=password']);
-	});
-});
-
-describe('redactPasswordInOutput', () => {
-	test('masks the password echoed back by --json', () => {
-		const redacted = redactPasswordInOutput(SUCCESS_JSON);
-		assert.ok(!redacted.includes('"password":"password"'));
-		assert.ok(redacted.includes(`"password":"${REDACTED}"`));
-		// The rest of the payload must remain parsable.
-		assert.equal(parseCertGenerateResult(redacted)?.certificatePath, 'C:\\proj\\devcert.pfx');
-	});
-
-	test('masks passwords containing escaped quotes', () => {
-		const redacted = redactPasswordInOutput('{"password": "a\\"b", "certificatePath": "c.pfx"}');
-		assert.ok(!redacted.includes('a\\"b'));
-		assert.equal(parseCertGenerateResult(redacted)?.certificatePath, 'c.pfx');
-	});
-
-	test('leaves output without a password untouched', () => {
-		const output = '{"certificatePath":"c.pfx"}';
-		assert.equal(redactPasswordInOutput(output), output);
-	});
-});
-
-describe('parseCertGenerateResult', () => {
-	test('reads the certificate path and publisher', () => {
-		const result = parseCertGenerateResult(SUCCESS_JSON);
-		assert.equal(result?.certificatePath, 'C:\\proj\\devcert.pfx');
-		assert.equal(result?.publisher, 'CN=Contoso');
-		assert.equal(result?.subjectName, 'CN=Contoso');
-	});
-
-	test('finds the payload when the CLI prints leading noise', () => {
-		const result = parseCertGenerateResult(`Generating certificate...\n${SUCCESS_JSON}\n`);
-		assert.equal(result?.certificatePath, 'C:\\proj\\devcert.pfx');
-	});
-
-	test('returns undefined for unparsable or pathless output', () => {
-		assert.equal(parseCertGenerateResult('not json at all'), undefined);
-		assert.equal(parseCertGenerateResult('{"publisher":"CN=Contoso"}'), undefined);
-		assert.equal(parseCertGenerateResult('{"certificatePath":""}'), undefined);
-	});
-});
-
 describe('isAlreadyExistsError / parseExistingCertificatePath', () => {
-	test('detects the JSON form and extracts the path', () => {
-		assert.ok(isAlreadyExistsError(ALREADY_EXISTS_JSON));
-		assert.equal(parseExistingCertificatePath(ALREADY_EXISTS_JSON), 'C:\\proj\\devcert.pfx');
+	test('detects the plain-text form and extracts the path', () => {
+		assert.ok(isAlreadyExistsError(ALREADY_EXISTS_TEXT));
+		assert.equal(parseExistingCertificatePath(ALREADY_EXISTS_TEXT), 'C:\\proj\\devcert.pfx');
 	});
 
-	test('detects the plain-text form and extracts the path', () => {
-		const output = '❌ Certificate file already exists: C:\\proj\\devcert.pfx\nPlease specify a different output path.';
+	test('extracts the path when no status glyph precedes it', () => {
+		const output = 'Certificate file already exists: C:\\proj\\devcert.pfx';
 		assert.ok(isAlreadyExistsError(output));
 		assert.equal(parseExistingCertificatePath(output), 'C:\\proj\\devcert.pfx');
 	});
 
 	test('does not fire on unrelated failures', () => {
-		assert.equal(isAlreadyExistsError('{"error":"Invalid publisher"}'), false);
-		assert.equal(parseExistingCertificatePath('{"error":"Invalid publisher"}'), undefined);
+		assert.equal(isAlreadyExistsError('❌ Invalid publisher'), false);
+		assert.equal(parseExistingCertificatePath('❌ Invalid publisher'), undefined);
 	});
 });
 
 describe('parseCertErrorMessage', () => {
-	test('prefers the JSON error field', () => {
-		assert.equal(parseCertErrorMessage('{"error":"Invalid publisher"}'), 'Invalid publisher');
-	});
-
 	test('strips the CLI status glyph from plain-text errors', () => {
 		assert.equal(parseCertErrorMessage('❌ Invalid publisher format'), 'Invalid publisher format');
 	});
@@ -201,25 +123,24 @@ describe('parseCertErrorMessage', () => {
 
 describe('decideCertGenerateOutcome', () => {
 	test('cancellation wins over the exit code', () => {
-		assert.deepEqual(decideCertGenerateOutcome(0, SUCCESS_JSON, true), { kind: 'cancelled' });
-		assert.deepEqual(decideCertGenerateOutcome(null, '', true), { kind: 'cancelled' });
+		assert.deepEqual(decideCertGenerateOutcome(0, '', EXPECTED_PATH, true), { kind: 'cancelled' });
+		assert.deepEqual(decideCertGenerateOutcome(null, '', EXPECTED_PATH, true), { kind: 'cancelled' });
 	});
 
-	test('exit 0 with a payload is a success', () => {
-		const outcome = decideCertGenerateOutcome(0, SUCCESS_JSON);
+	test('exit 0 is a success reported at the path the caller asked for', () => {
+		const outcome = decideCertGenerateOutcome(0, 'Development certificate generated', EXPECTED_PATH);
 		assert.equal(outcome.kind, 'success');
-		assert.equal(
-			outcome.kind === 'success' ? outcome.result.certificatePath : undefined,
-			'C:\\proj\\devcert.pfx'
-		);
+		assert.equal(outcome.kind === 'success' ? outcome.certificatePath : undefined, EXPECTED_PATH);
 	});
 
-	test('exit 0 without a parsable payload is a failure, not an unsubstantiated success', () => {
-		assert.equal(decideCertGenerateOutcome(0, 'done!').kind, 'failed');
+	test('exit 0 stays a success even when the CLI prints nothing parsable', () => {
+		// The exit code is the authority, so a change in the CLI's human-readable
+		// output cannot turn a successful generation into a reported failure.
+		assert.equal(decideCertGenerateOutcome(0, 'done!', EXPECTED_PATH).kind, 'success');
 	});
 
 	test('an already-exists failure is reported separately so it can be retried', () => {
-		const outcome = decideCertGenerateOutcome(1, ALREADY_EXISTS_JSON);
+		const outcome = decideCertGenerateOutcome(1, ALREADY_EXISTS_TEXT, EXPECTED_PATH);
 		assert.equal(outcome.kind, 'already-exists');
 		assert.equal(
 			outcome.kind === 'already-exists' ? outcome.existingPath : undefined,
@@ -228,13 +149,13 @@ describe('decideCertGenerateOutcome', () => {
 	});
 
 	test('other non-zero exits carry the error message through', () => {
-		const outcome = decideCertGenerateOutcome(1, '{"error":"Invalid publisher"}');
+		const outcome = decideCertGenerateOutcome(1, '❌ Invalid publisher', EXPECTED_PATH);
 		assert.equal(outcome.kind, 'failed');
 		assert.equal(outcome.kind === 'failed' ? outcome.message : undefined, 'Invalid publisher');
 	});
 
 	test('a null exit code with no output is a failure', () => {
-		assert.equal(decideCertGenerateOutcome(null, '').kind, 'failed');
+		assert.equal(decideCertGenerateOutcome(null, '', EXPECTED_PATH).kind, 'failed');
 	});
 });
 
@@ -274,24 +195,17 @@ describe('validatePublisherInput', () => {
 	});
 });
 
-const GENERATED: CertGenerateResult = {
-	certificatePath: 'C:\\proj\\devcert.pfx',
-	publisher: 'CN=Contoso',
-	subjectName: 'CN=Contoso'
-};
+const GENERATED_PATH = 'C:\\proj\\devcert.pfx';
 
 const EXISTING_PATH = 'C:\\proj\\existing.pfx';
 
 interface FlowCalls {
 	generateModes: CertIfExists[];
 	installed: string[];
-	successes: { result: CertGenerateResult; created: boolean; installing: boolean }[];
+	successes: { certificatePath: string; created: boolean; installing: boolean }[];
 	failures: (string | undefined)[];
 	keptExisting: (string | undefined)[];
 	confirmCanReuse: boolean[];
-	inspected: string[];
-	verified: CertGenerateResult[];
-	installSkipped: CertGenerateResult[];
 	/** Order of the delegated calls, so ordering guarantees can be asserted. */
 	sequence: string[];
 }
@@ -304,11 +218,7 @@ interface FlowCalls {
  */
 function createFakeAdapter(
 	outcomes: CertGenerateOutcome[],
-	choice: OverwriteChoice = 'dismiss',
-	options: {
-		verdict?: 'ok' | 'mismatch' | 'unverified';
-		inspected?: CertGenerateResult;
-	} = {}
+	choice: OverwriteChoice = 'dismiss'
 ): { adapter: CertGenerateFlowAdapter; calls: FlowCalls } {
 	const calls: FlowCalls = {
 		generateModes: [],
@@ -317,9 +227,6 @@ function createFakeAdapter(
 		failures: [],
 		keptExisting: [],
 		confirmCanReuse: [],
-		inspected: [],
-		verified: [],
-		installSkipped: [],
 		sequence: []
 	};
 
@@ -342,18 +249,8 @@ function createFakeAdapter(
 			calls.installed.push(certificatePath);
 			calls.sequence.push('installCertificate');
 		},
-		inspectCertificate: async (certificatePath) => {
-			calls.inspected.push(certificatePath);
-			calls.sequence.push('inspectCertificate');
-			return options.inspected;
-		},
-		verifyPublisher: async (result) => {
-			calls.verified.push(result);
-			calls.sequence.push('verifyPublisher');
-			return options.verdict ?? 'ok';
-		},
-		reportSuccess: async (result, context) => {
-			calls.successes.push({ result, ...context });
+		reportSuccess: async (certificatePath, context) => {
+			calls.successes.push({ certificatePath, ...context });
 			calls.sequence.push('reportSuccess');
 		},
 		reportFailure: (message) => {
@@ -363,10 +260,6 @@ function createFakeAdapter(
 		reportKeptExisting: (existingPath) => {
 			calls.keptExisting.push(existingPath);
 			calls.sequence.push('reportKeptExisting');
-		},
-		reportInstallSkipped: (result) => {
-			calls.installSkipped.push(result);
-			calls.sequence.push('reportInstallSkipped');
 		}
 	};
 
@@ -375,36 +268,44 @@ function createFakeAdapter(
 
 describe('executeCertGenerateFlow', () => {
 	test('generate-only success reports the certificate and installs nothing', async () => {
-		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }]);
+		const { adapter, calls } = createFakeAdapter([
+			{ kind: 'success', certificatePath: GENERATED_PATH }
+		]);
 
 		const result = await executeCertGenerateFlow(adapter, false);
 
 		assert.deepEqual(calls.generateModes, ['error']);
-		assert.equal(result.certificatePath, GENERATED.certificatePath);
+		assert.equal(result.certificatePath, GENERATED_PATH);
 		assert.equal(result.created, true);
 		assert.equal(result.installed, false);
 		assert.equal(result.overwritePrompted, false);
 		assert.deepEqual(calls.installed, []);
-		assert.deepEqual(calls.successes, [{ result: GENERATED, created: true, installing: false }]);
+		assert.deepEqual(calls.successes, [
+			{ certificatePath: GENERATED_PATH, created: true, installing: false }
+		]);
 	});
 
 	test('generate-and-install installs and still reports where the cert landed', async () => {
-		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }]);
+		const { adapter, calls } = createFakeAdapter([
+			{ kind: 'success', certificatePath: GENERATED_PATH }
+		]);
 
 		const result = await executeCertGenerateFlow(adapter, true);
 
 		assert.equal(result.installed, true);
-		assert.deepEqual(calls.installed, [GENERATED.certificatePath]);
+		assert.deepEqual(calls.installed, [GENERATED_PATH]);
 		// The install runs in a separate elevated window, so the success
 		// notification is the only in-VS-Code trace of the certificate path.
-		assert.deepEqual(calls.successes, [{ result: GENERATED, created: true, installing: true }]);
+		assert.deepEqual(calls.successes, [
+			{ certificatePath: GENERATED_PATH, created: true, installing: true }
+		]);
 	});
 
 	test('overwrite retries generation with --if-exists overwrite', async () => {
 		const { adapter, calls } = createFakeAdapter(
 			[
 				{ kind: 'already-exists', existingPath: EXISTING_PATH },
-				{ kind: 'success', result: GENERATED }
+				{ kind: 'success', certificatePath: GENERATED_PATH }
 			],
 			'overwrite'
 		);
@@ -414,7 +315,7 @@ describe('executeCertGenerateFlow', () => {
 		assert.deepEqual(calls.generateModes, ['error', 'overwrite']);
 		assert.equal(result.overwritePrompted, true);
 		assert.equal(result.created, true);
-		assert.equal(result.certificatePath, GENERATED.certificatePath);
+		assert.equal(result.certificatePath, GENERATED_PATH);
 	});
 
 	test('reusing an existing certificate skips generation but still installs it', async () => {
@@ -433,7 +334,7 @@ describe('executeCertGenerateFlow', () => {
 		// silently drop the install as well.
 		assert.deepEqual(calls.installed, [EXISTING_PATH]);
 		assert.deepEqual(calls.successes, [
-			{ result: { certificatePath: EXISTING_PATH }, created: false, installing: true }
+			{ certificatePath: EXISTING_PATH, created: false, installing: true }
 		]);
 	});
 
@@ -524,143 +425,6 @@ describe('CERTIFICATE_DIALOG_FILTER', () => {
 	});
 });
 
-describe('parseManifestPublisher', () => {
-	const MANIFEST = `<?xml version="1.0" encoding="utf-8"?>
-<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
-  <Identity Name="App" Publisher="CN=Contoso, O=Contoso Ltd, C=US" Version="1.0.0.0" />
-  <Properties>
-    <PublisherDisplayName>Contoso Display</PublisherDisplayName>
-  </Properties>
-</Package>`;
-
-	test('reads Identity/@Publisher', () => {
-		assert.equal(parseManifestPublisher(MANIFEST), 'CN=Contoso, O=Contoso Ltd, C=US');
-	});
-
-	test('does not confuse PublisherDisplayName for the publisher', () => {
-		assert.notEqual(parseManifestPublisher(MANIFEST), 'Contoso Display');
-	});
-
-	test('handles a namespace-prefixed Identity element', () => {
-		assert.equal(
-			parseManifestPublisher(
-				`<pkg:Package xmlns:pkg="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
-  <pkg:Identity Name="A" Publisher="CN=X" Version="1.0.0.0" />
-</pkg:Package>`
-			),
-			'CN=X'
-		);
-	});
-
-	test('ignores a commented-out Identity element', () => {
-		assert.equal(
-			parseManifestPublisher(
-				`<Package>
-  <!-- <Identity Name="Old" Publisher="CN=Stale" /> -->
-  <Identity Name="App" Publisher="CN=Current" />
-</Package>`
-			),
-			'CN=Current'
-		);
-	});
-
-	test('reads a single-quoted Publisher attribute', () => {
-		assert.equal(
-			parseManifestPublisher(`<Package><Identity Name='A' Publisher='CN=Quoted' /></Package>`),
-			'CN=Quoted'
-		);
-	});
-
-	test('decodes XML entities in the publisher', () => {
-		assert.equal(
-			parseManifestPublisher('<Package><Identity Publisher="CN=A &amp; B" /></Package>'),
-			'CN=A & B'
-		);
-	});
-
-	test('ignores Publisher on nested dependency elements', () => {
-		assert.equal(
-			parseManifestPublisher(
-				`<Package>
-  <Identity Name="App" Publisher="CN=Real" />
-  <Dependencies>
-    <PackageDependency Name="Dep" Publisher="CN=SomeoneElse" />
-  </Dependencies>
-</Package>`
-			),
-			'CN=Real'
-		);
-	});
-
-	test('tolerates a leading BOM and CRLF line endings', () => {
-		assert.equal(
-			parseManifestPublisher('\uFEFF<Package>\r\n  <Identity Publisher="CN=Bom" />\r\n</Package>'),
-			'CN=Bom'
-		);
-	});
-
-	test('returns undefined when there is no Identity element', () => {
-		assert.equal(parseManifestPublisher('<Package></Package>'), undefined);
-		assert.equal(parseManifestPublisher('not xml at all'), undefined);
-	});
-
-	test('returns undefined when Identity carries no Publisher', () => {
-		assert.equal(parseManifestPublisher('<Identity Name="App" Version="1.0.0.0" />'), undefined);
-	});
-});
-
-describe('publishersMatch', () => {
-	test('ignores case and spacing differences within a distinguished name', () => {
-		assert.equal(publishersMatch('CN=Contoso, O=Contoso Ltd', 'cn=Contoso,o=contoso ltd'), true);
-		assert.equal(publishersMatch('CN = Contoso', 'CN=Contoso'), true);
-	});
-
-	test('detects the CLI silently falling back to the user name', () => {
-		// Regression guard for microsoft/winappCli#839.
-		assert.equal(publishersMatch('CN=Contoso, O=Contoso Ltd, C=US', 'CN=chiaramooney'), false);
-	});
-
-	test('does not treat a prefix as a match', () => {
-		assert.equal(publishersMatch('CN=Contoso', 'CN=Contoso, O=Contoso Ltd'), false);
-	});
-});
-
-describe('parseCertInfoSubject', () => {
-	test('reads the subject from a cert info payload', () => {
-		assert.equal(
-			parseCertInfoSubject(JSON.stringify({ subject: 'CN=Probe', thumbprint: 'AB' })),
-			'CN=Probe'
-		);
-	});
-
-	test('returns undefined for output without a subject', () => {
-		assert.equal(parseCertInfoSubject('{"error":"bad password"}'), undefined);
-		assert.equal(parseCertInfoSubject('not json'), undefined);
-	});
-});
-
-describe('redact-then-classify', () => {
-	// Redaction happens in runWinappCapture before the output is classified, so
-	// no downstream message can contain the password the CLI echoes back. The
-	// exit-0-but-unparsable branch is the one that matters: it routes a SUCCESS
-	// payload into the error path.
-	test('an exit-0 payload without certificatePath never leaks the password', () => {
-		const renamed = JSON.stringify({ certPath: 'C:\\proj\\devcert.pfx', password: 'hunter2' });
-		const outcome = decideCertGenerateOutcome(0, redactPasswordInOutput(renamed));
-
-		assert.equal(outcome.kind, 'failed');
-		assert.ok(outcome.kind === 'failed' && !outcome.message?.includes('hunter2'));
-	});
-
-	test('a failure payload never leaks the password', () => {
-		const failure = JSON.stringify({ error: 'boom', password: 'hunter2' });
-		const outcome = decideCertGenerateOutcome(1, redactPasswordInOutput(failure));
-
-		assert.equal(outcome.kind, 'failed');
-		assert.ok(outcome.kind === 'failed' && !outcome.message?.includes('hunter2'));
-	});
-});
-
 describe('resolveCertPublisherSourceDecision', () => {
 	function adapterFor(
 		manifests: string[] | undefined,
@@ -731,95 +495,5 @@ describe('resolveCertPublisherSourceDecision', () => {
 
 		const blank = adapterFor([], { promptPublisher: async () => '   ' });
 		assert.equal(await resolveCertPublisherSourceDecision(blank.adapter), undefined);
-	});
-});
-describe('executeCertGenerateFlow publisher verification', () => {
-	test('verifies the publisher before handing off to the elevated install', async () => {
-		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }]);
-		await executeCertGenerateFlow(adapter, true);
-
-		const verifyAt = calls.sequence.indexOf('verifyPublisher');
-		const installAt = calls.sequence.indexOf('installCertificate');
-		assert.ok(verifyAt !== -1 && installAt !== -1);
-		assert.ok(
-			verifyAt < installAt,
-			`verifyPublisher must run before installCertificate, got ${calls.sequence.join(' -> ')}`
-		);
-	});
-
-	test('skips the install when the publisher does not match the manifest', async () => {
-		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }], 'dismiss', {
-			verdict: 'mismatch'
-		});
-		const result = await executeCertGenerateFlow(adapter, true);
-
-		assert.deepEqual(calls.installed, []);
-		assert.equal(calls.installSkipped.length, 1);
-		assert.equal(result.installed, false);
-		assert.equal(result.publisherVerified, 'mismatch');
-		// The certificate still exists, so the path is reported back.
-		assert.equal(result.certificatePath, GENERATED.certificatePath);
-	});
-
-	test('a mismatch without an install request does not report a skipped install', async () => {
-		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }], 'dismiss', {
-			verdict: 'mismatch'
-		});
-		await executeCertGenerateFlow(adapter, false);
-
-		assert.deepEqual(calls.installSkipped, []);
-		assert.equal(calls.successes.length, 1);
-	});
-
-	test('an unverifiable publisher does not block the install', async () => {
-		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }], 'dismiss', {
-			verdict: 'unverified'
-		});
-		const result = await executeCertGenerateFlow(adapter, true);
-
-		assert.deepEqual(calls.installed, [GENERATED.certificatePath]);
-		assert.equal(result.installed, true);
-	});
-
-	test('reuse reads the existing certificate so it can be verified', async () => {
-		const inspected: CertGenerateResult = {
-			certificatePath: EXISTING_PATH,
-			subjectName: 'CN=Existing'
-		};
-		const { adapter, calls } = createFakeAdapter(
-			[{ kind: 'already-exists', existingPath: EXISTING_PATH }],
-			'reuse',
-			{ inspected }
-		);
-		await executeCertGenerateFlow(adapter, false);
-
-		assert.deepEqual(calls.inspected, [EXISTING_PATH]);
-		// Without the inspection the verifier would receive a bare path and skip
-		// the check entirely, which is how a wrong certificate used to get through.
-		assert.equal(calls.verified[0].subjectName, 'CN=Existing');
-	});
-
-	test('reuse still succeeds when the existing certificate cannot be read', async () => {
-		const { adapter, calls } = createFakeAdapter(
-			[{ kind: 'already-exists', existingPath: EXISTING_PATH }],
-			'reuse'
-		);
-		const result = await executeCertGenerateFlow(adapter, false);
-
-		assert.equal(result.certificatePath, EXISTING_PATH);
-		assert.equal(result.created, false);
-		assert.equal(calls.successes.length, 1);
-	});
-
-	test('a mismatched reused certificate is not installed', async () => {
-		const { adapter, calls } = createFakeAdapter(
-			[{ kind: 'already-exists', existingPath: EXISTING_PATH }],
-			'reuse',
-			{ inspected: { certificatePath: EXISTING_PATH, subjectName: 'CN=Wrong' }, verdict: 'mismatch' }
-		);
-		await executeCertGenerateFlow(adapter, true);
-
-		assert.deepEqual(calls.installed, []);
-		assert.equal(calls.installSkipped.length, 1);
 	});
 });

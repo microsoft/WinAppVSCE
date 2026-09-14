@@ -36,17 +36,12 @@ import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
 	CERTIFICATE_DIALOG_FILTER,
 	MANIFEST_GLOBS,
-	parseManifestPublisher,
-	publishersMatch,
 	buildCertGenerateArgs,
 	decideCertGenerateOutcome,
 	executeCertGenerateFlow,
-	parseCertInfoSubject,
-	redactPasswordInOutput,
 	resolveCertPublisherSourceDecision,
 	validatePublisherInput,
 	type CertGenerateFlowAdapter,
-	type CertGenerateResult,
 	type CertIfExists,
 	type CertPublisherSource
 } from './cert-utils';
@@ -295,13 +290,6 @@ function getWinappOutputChannel(): vscode.OutputChannel {
  *
  * @param options.cancelMessage Line written to the output channel when the user
  *   cancels. Defaults to the packaging wording.
- * @param options.redact Applied to the echoed command line, to every output
- *   chunk before it reaches the output channel, and to the captured output
- *   returned to the caller. Commands whose output can contain secrets (e.g.
- *   `cert generate --json`, which echoes the certificate password) must supply
- *   this. Redacting the returned value too is deliberate: callers surface that
- *   string in notifications, and only the secret itself is masked, so the
- *   payload stays parseable.
  * @returns The process exit code and the full captured output.
  */
 async function runWinappCapture(
@@ -309,13 +297,12 @@ async function runWinappCapture(
 	args: string[],
 	cwd: string,
 	progressTitle: string,
-	options: { cancelMessage?: string; redact?: (text: string) => string } = {}
+	options: { cancelMessage?: string } = {}
 ): Promise<{ code: number | null; output: string; cancelled?: boolean }> {
 	const cliPath = getWinappCliPath(extensionPath);
 	const outputChannel = getWinappOutputChannel();
-	const redact = options.redact ?? ((text: string) => text);
 	const cancelMessage = options.cancelMessage ?? 'Packaging cancelled.';
-	outputChannel.appendLine(redact(`> winapp ${args.join(' ')}`));
+	outputChannel.appendLine(`> winapp ${args.join(' ')}`);
 
 	return vscode.window.withProgress(
 		{
@@ -337,11 +324,7 @@ async function runWinappCapture(
 				const finish = (result: { code: number | null; output: string; cancelled?: boolean }) => {
 					if (!settled) {
 						settled = true;
-						// Redact on the way out as well as on the way to the output
-						// channel. Callers interpolate this string into error
-						// notifications, so leaving it raw re-leaks any secret the
-						// redactor exists to mask.
-						resolve({ ...result, output: redact(result.output) });
+						resolve(result);
 					}
 				};
 
@@ -368,35 +351,20 @@ async function runWinappCapture(
 					}
 				});
 
-				// When a redactor is supplied the output is buffered and written once
-				// at the end. Redacting each chunk as it arrives would miss a secret
-				// that happens to straddle a chunk boundary.
-				const streamLive = options.redact === undefined;
-				const flushOutput = () => {
-					if (!streamLive && output) {
-						outputChannel.append(redact(output));
-					}
-				};
-
 				child.stdout!.on('data', (data: Buffer) => {
 					const text = data.toString();
 					output += text;
-					if (streamLive) {
-						outputChannel.append(text);
-					}
+					outputChannel.append(text);
 				});
 
 				child.stderr!.on('data', (data: Buffer) => {
 					const text = data.toString();
 					output += text;
-					if (streamLive) {
-						outputChannel.append(text);
-					}
+					outputChannel.append(text);
 				});
 
 				child.on('error', (err) => {
 					cancellation.dispose();
-					flushOutput();
 					if (cancelled) {
 						finish({ code: null, output, cancelled: true });
 						return;
@@ -407,7 +375,6 @@ async function runWinappCapture(
 
 				child.on('close', (code) => {
 					cancellation.dispose();
-					flushOutput();
 					finish({ code, output, cancelled });
 				});
 			})
@@ -656,100 +623,37 @@ function certGenerateArgsFor(source: CertPublisherSource, ifExists: CertIfExists
 /**
  * Report the outcome, offering to reveal the certificate.
  *
- * The publisher is surfaced because a mismatch with the manifest is the most
- * common reason a dev certificate later fails to sign or install.
- *
  * @param created `false` when an existing certificate was reused rather than
  *   generated, so the message does not claim work that did not happen.
  * @param installing `true` when an elevated `cert install` was handed off; the
  *   install runs in a separate window, so its own result is reported there.
  */
 async function showCertGenerateSuccess(
-	result: CertGenerateResult,
+	certificatePath: string,
 	{ created, installing }: { created: boolean; installing: boolean }
 ): Promise<void> {
-	const publisher = result.subjectName ?? result.publisher;
-	const subject = publisher ? ` for ${publisher}` : '';
 	const lead = created
-		? `Certificate created${subject} at ${result.certificatePath}.`
-		: `Using the existing certificate at ${result.certificatePath}.`;
+		? `Certificate created at ${certificatePath}.`
+		: `Using the existing certificate at ${certificatePath}.`;
 	const message = installing
 		? `${lead} Approve the UAC prompt in the elevated window to finish installing it.`
 		: lead;
 
 	const action = await vscode.window.showInformationMessage(message, 'Reveal in Explorer');
 	if (action === 'Reveal in Explorer') {
-		await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(result.certificatePath));
+		await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(certificatePath));
 	}
 }
 
 /**
- * Largest manifest this will read back for verification.
+ * Where `cert generate` writes by default.
  *
- * An app manifest is a few kilobytes; anything far beyond that is not something
- * worth pulling into the extension host to run a string comparison on.
+ * The extension does not pass `--output`, so the CLI writes `devcert.pfx` into
+ * the working directory it is spawned in. Knowing the path up front means the
+ * result does not have to be parsed back out of the CLI's output.
  */
-const MAX_MANIFEST_VERIFY_BYTES = 2 * 1024 * 1024;
-
-/**
- * Check the generated certificate against the manifest it was derived from.
- *
- * `cert generate --manifest` falls back to the current user name when it cannot
- * parse the manifest, and reports success while doing it
- * (microsoft/winappCli#839). Silently handing back such a certificate defeats
- * the entire point of passing `--manifest`, so the mismatch is surfaced.
- *
- * @returns `'mismatch'` only when both publishers are known and differ.
- *   `'unverified'` when the comparison could not be made, which must not be
- *   treated as a failure.
- */
-async function verifyPublisherAgainstManifest(
-	source: CertPublisherSource,
-	result: CertGenerateResult
-): Promise<{ verdict: 'ok' | 'mismatch' | 'unverified'; expected?: string }> {
-	if (source.kind !== 'manifest') {
-		return { verdict: 'unverified' };
-	}
-
-	const actual = result.publisher ?? result.subjectName;
-	if (!actual) {
-		return { verdict: 'unverified' };
-	}
-
-	let expected: string | undefined;
-	try {
-		const stat = await fs.promises.stat(source.manifestPath);
-		if (stat.size > MAX_MANIFEST_VERIFY_BYTES) {
-			return { verdict: 'unverified' };
-		}
-		const xml = await fs.promises.readFile(source.manifestPath, 'utf8');
-		expected = parseManifestPublisher(xml);
-	} catch {
-		// The manifest was readable when we globbed it; if it is not now, the
-		// certificate is still valid output and the user has a bigger problem.
-		return { verdict: 'unverified' };
-	}
-
-	if (!expected) {
-		return { verdict: 'unverified' };
-	}
-
-	return { verdict: publishersMatch(expected, actual) ? 'ok' : 'mismatch', expected };
-}
-
-/** Describe a publisher mismatch, naming both sides so the user can act on it. */
-function describePublisherMismatch(
-	source: CertPublisherSource,
-	result: CertGenerateResult,
-	expected: string | undefined
-): string {
-	const actual = result.publisher ?? result.subjectName ?? 'unknown';
-	const manifest = source.kind === 'manifest' ? path.basename(source.manifestPath) : 'the manifest';
-	const expectedText = expected ? ` (${expected})` : '';
-	return (
-		`The certificate's publisher (${actual}) does not match ${manifest}${expectedText}. ` +
-		'Packages signed with it will fail to install. Check that the manifest is valid XML with an Identity/@Publisher attribute.'
-	);
+function defaultCertificatePath(projectDir: string): string {
+	return path.join(projectDir, 'devcert.pfx');
 }
 
 /**
@@ -763,9 +667,7 @@ function createCertGenerateFlowAdapter(
 	projectDir: string,
 	source: CertPublisherSource
 ): CertGenerateFlowAdapter {
-	// Captured by verifyPublisher so the skipped-install message can name the
-	// publisher the manifest actually asked for.
-	let lastMismatchExpected: string | undefined;
+	const certificatePath = defaultCertificatePath(projectDir);
 
 	return {
 		runGenerate: async (ifExists: CertIfExists) => {
@@ -774,14 +676,9 @@ function createCertGenerateFlowAdapter(
 				certGenerateArgsFor(source, ifExists),
 				projectDir,
 				'Generating certificate...',
-				{
-					cancelMessage: 'Certificate generation cancelled.',
-					// cert generate --json echoes the certificate password back, so the
-					// output must never reach the output channel verbatim.
-					redact: redactPasswordInOutput
-				}
+				{ cancelMessage: 'Certificate generation cancelled.' }
 			);
-			return decideCertGenerateOutcome(code, output, cancelled);
+			return decideCertGenerateOutcome(code, output, certificatePath, cancelled);
 		},
 
 		confirmOverwrite: async (existingPath, canReuse) => {
@@ -815,40 +712,8 @@ function createCertGenerateFlowAdapter(
 			);
 		},
 
-		inspectCertificate: async (certificatePath: string) => {
-			// cert info needs the PFX password; the CLI's default is what we
-			// generate with, so a certificate we produced reads back cleanly and
-			// one with a custom password simply stays unverified.
-			const { code, output } = await runWinappCapture(
-				extensionPath,
-				['cert', 'info', certificatePath, '--json'],
-				projectDir,
-				'Reading certificate...',
-				{
-					cancelMessage: 'Reading certificate cancelled.',
-					redact: redactPasswordInOutput
-				}
-			);
-
-			if (code !== 0) {
-				return undefined;
-			}
-
-			const subject = parseCertInfoSubject(output);
-			return subject ? { certificatePath, subjectName: subject } : undefined;
-		},
-
-		verifyPublisher: async (result) => {
-			const { verdict, expected } = await verifyPublisherAgainstManifest(source, result);
-			lastMismatchExpected = expected;
-			if (verdict === 'mismatch') {
-				vscode.window.showWarningMessage(describePublisherMismatch(source, result, expected));
-			}
-			return verdict;
-		},
-
-		reportSuccess: async (result, context) => {
-			await showCertGenerateSuccess(result, context);
+		reportSuccess: async (certPath, context) => {
+			await showCertGenerateSuccess(certPath, context);
 		},
 
 		reportFailure: (message?: string) => {
@@ -864,16 +729,6 @@ function createCertGenerateFlowAdapter(
 		reportKeptExisting: (existingPath?: string) => {
 			vscode.window.showInformationMessage(
 				`Kept the existing certificate at ${existingPath ?? 'the output path'}. No certificate was generated or installed.`
-			);
-		},
-
-		reportInstallSkipped: (result) => {
-			// The mismatch itself was already reported by verifyPublisher; this
-			// explains the consequence, so the missing UAC prompt is not a mystery.
-			vscode.window.showWarningMessage(
-				`The certificate at ${result.certificatePath} was not installed because its publisher does not match ` +
-					`${source.kind === 'manifest' ? path.basename(source.manifestPath) : 'the manifest'}` +
-					`${lastMismatchExpected ? ` (${lastMismatchExpected})` : ''}. Trusting it would not make the package installable.`
 			);
 		}
 	};

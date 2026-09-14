@@ -56,8 +56,6 @@ Commands that already take an explicit target — such as **Run Application**, *
 
 **Certificate publisher resolution:** **Generate Certificate** additionally resolves the publisher for the certificate, because a dev certificate only works if its publisher matches the manifest's `Identity/@Publisher`. The extension searches the resolved project for an app manifest and passes it to the CLI (prompting you to choose when several are found), so the publisher is taken from the manifest automatically. Only when no manifest exists does it ask you to enter a publisher — remembered per project and pre-filled on the next run.
 
-After generating, WinApp re-reads the manifest and compares publishers. If they differ you get a warning, because packages signed with that certificate will fail to install — check that the manifest is valid XML with an `Identity/@Publisher` attribute, or pick the right manifest. When you asked for the certificate to be installed as well, a mismatch **skips the install**: trusting a certificate that cannot match the package would not make it installable.
-
 **Configuration (optional):**
 
 To skip automatic scanning, add the `winapp.appDirectories` setting to your workspace:
