@@ -63,7 +63,7 @@ Validates that `winapp.sign` discovers signable files and certificates in worksp
 
 ### `input-folder-validation.spec.ts` — 1 test
 
-Validates that an invalid configured `inputFolder` offers to open its owning debug configuration.
+Validates that an invalid configured `inputFolder` offers to open its owning debug configuration. This also covers the deprecated `inputFolder` alias: the error message must keep naming `inputFolder` (not `input`) when that is the property the user actually set.
 
 | # | Test | Validates |
 |---|------|-----------|

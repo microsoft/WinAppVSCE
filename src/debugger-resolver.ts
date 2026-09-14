@@ -7,7 +7,7 @@ export interface DebuggerExtensionRequirement {
 	name: string;
 }
 
-export type InputFolderValidation = {
+export type RunInputValidation = {
 	valid: true;
 } | {
 	valid: false;
@@ -16,41 +16,66 @@ export type InputFolderValidation = {
 };
 
 /**
- * Validates that an inputFolder path is suitable for a debug launch:
- * - The path must exist
- * - It must be a directory
- * - It must contain at least one .exe file
+ * Validates the `input` of a debug launch.
+ *
+ * Validation must branch on the target kind: in project mode the build output
+ * does not exist yet — producing it is the point — so requiring an `.exe`
+ * would reject every valid project. Only folder mode carries that requirement.
  *
  * Relative paths are resolved against the provided cwd.
+ *
+ * @param kind How `winapp run` will interpret the input. Callers derive this
+ *   with `classifyRunTarget` from `run-target.ts`.
  */
-export async function validateInputFolder(inputFolder: string, cwd: string): Promise<InputFolderValidation> {
-	const resolvedFolder = path.isAbsolute(inputFolder) ? inputFolder : path.resolve(cwd, inputFolder);
-	const folderStat = await fs.promises.stat(resolvedFolder).catch(() => undefined);
-	if (!folderStat) {
+export async function validateRunInput(
+	input: string,
+	cwd: string,
+	kind: 'project' | 'solution' | 'folder' | 'unknown',
+	propertyName: string = 'input'
+): Promise<RunInputValidation> {
+	const resolved = path.isAbsolute(input) ? input : path.resolve(cwd, input);
+	const stat = await fs.promises.stat(resolved).catch(() => undefined);
+
+	if (kind === 'project' || kind === 'solution') {
+		if (!stat) {
+			const noun = kind === 'solution' ? 'solution' : 'project';
+			return {
+				valid: false,
+				reason: 'not-found',
+				message: `The configured "${propertyName}" ${noun} does not exist: ${input}. `
+					+ `Update "${propertyName}" in launch.json to point to your ${noun} file.`
+			};
+		}
+		// A project/solution input may be the file itself or a directory
+		// containing one; both are valid and the CLI resolves the difference.
+		return { valid: true };
+	}
+
+	if (!stat) {
 		return {
 			valid: false,
 			reason: 'not-found',
-			message: `The configured "inputFolder" path does not exist: ${inputFolder}. `
-				+ 'Build your project first, or update "inputFolder" in launch.json to point to your build output directory.'
+			message: `The configured "${propertyName}" path does not exist: ${input}. `
+				+ `Build your project first, or update "${propertyName}" in launch.json to point to your build output directory.`
 		};
 	}
 
-	if (!folderStat.isDirectory()) {
+	if (!stat.isDirectory()) {
 		return {
 			valid: false,
 			reason: 'not-directory',
-			message: `The configured "inputFolder" is not a directory: ${inputFolder}. `
-				+ 'Update "inputFolder" in launch.json to point to the folder containing your built application.'
+			message: `The configured "${propertyName}" is not a directory or a project file: ${input}. `
+				+ `Update "${propertyName}" in launch.json to point to a project, a solution, or the folder containing your built application.`
 		};
 	}
 
-	const exesInFolder = await glob('*.exe', { cwd: resolvedFolder, absolute: true, nocase: true });
+	const exesInFolder = await glob('*.exe', { cwd: resolved, absolute: true, nocase: true });
 	if (exesInFolder.length === 0) {
 		return {
 			valid: false,
 			reason: 'no-exe',
-			message: `The configured "inputFolder" does not contain any .exe files: ${inputFolder}. `
-				+ 'Build your project first, or update "inputFolder" in launch.json to point to the folder containing your built application.'
+			message: `The configured "${propertyName}" does not contain any .exe files: ${input}. `
+				+ `Build your project first, or update "${propertyName}" in launch.json to point to a project file or the folder containing your built application.`
 		};
 	}
 

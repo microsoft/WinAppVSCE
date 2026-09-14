@@ -1,0 +1,210 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert';
+import * as path from 'path';
+import {
+	classifyRunTargetEntries,
+	classifyRunTargetFile,
+	dedupeSolutionMembers,
+	findOwningRoot,
+	isProjectMode,
+	parseSolutionProjectPaths,
+	sortRunTargets,
+	type RunTargetCandidate,
+	type WorkspaceRoot
+} from '../run-target';
+
+const rootA: WorkspaceRoot = { name: 'AppA', path: path.resolve('C:/ws/AppA') };
+const rootB: WorkspaceRoot = { name: 'AppB', path: path.resolve('C:/ws/AppB') };
+
+function candidate(kind: RunTargetCandidate['kind'], p: string, root = rootA): RunTargetCandidate {
+	return { kind, path: path.resolve(p), root };
+}
+
+describe('classifyRunTargetFile', () => {
+	it('recognizes project files', () => {
+		assert.strictEqual(classifyRunTargetFile('C:/ws/MyApp.csproj'), 'project');
+	});
+
+	it('recognizes both solution formats', () => {
+		assert.strictEqual(classifyRunTargetFile('C:/ws/MyApp.sln'), 'solution');
+		assert.strictEqual(classifyRunTargetFile('C:/ws/MyApp.slnx'), 'solution');
+	});
+
+	it('is case-insensitive', () => {
+		assert.strictEqual(classifyRunTargetFile('C:/ws/MyApp.CSPROJ'), 'project');
+		assert.strictEqual(classifyRunTargetFile('C:/ws/MyApp.SLN'), 'solution');
+	});
+
+	it('returns undefined for anything else', () => {
+		assert.strictEqual(classifyRunTargetFile('C:/ws/bin/Debug/MyApp.exe'), undefined);
+		assert.strictEqual(classifyRunTargetFile('C:/ws/bin/Debug'), undefined);
+	});
+});
+
+describe('classifyRunTargetEntries', () => {
+	it('prefers a solution over a project', () => {
+		assert.strictEqual(classifyRunTargetEntries(['MyApp.csproj', 'MyApp.sln']), 'solution');
+	});
+
+	it('prefers a project over loose executables', () => {
+		assert.strictEqual(classifyRunTargetEntries(['MyApp.csproj', 'MyApp.exe']), 'project');
+	});
+
+	it('falls back to folder mode for executables only', () => {
+		assert.strictEqual(classifyRunTargetEntries(['MyApp.exe', 'MyApp.dll']), 'folder');
+	});
+
+	it('reports unknown when nothing is recognizable', () => {
+		assert.strictEqual(classifyRunTargetEntries(['readme.md', 'src']), 'unknown');
+		assert.strictEqual(classifyRunTargetEntries([]), 'unknown');
+	});
+});
+
+describe('isProjectMode', () => {
+	it('covers projects and solutions only', () => {
+		assert.ok(isProjectMode('project'));
+		assert.ok(isProjectMode('solution'));
+		assert.ok(!isProjectMode('folder'));
+		assert.ok(!isProjectMode('unknown'));
+	});
+});
+
+describe('parseSolutionProjectPaths (.sln)', () => {
+	const sln = [
+		'Microsoft Visual Studio Solution File, Format Version 12.00',
+		'Project("{FAE04EC0-0301-11D1-9B3E-00C04FC6595F}") = "MyApp", "src\\MyApp\\MyApp.csproj", "{11111111-1111-1111-1111-111111111111}"',
+		'EndProject',
+		'Project("{FAE04EC0-0301-11D1-9B3E-00C04FC6595F}") = "MyApp.Tests", "tests\\MyApp.Tests\\MyApp.Tests.csproj", "{22222222-2222-2222-2222-222222222222}"',
+		'EndProject',
+		'Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{33333333-3333-3333-3333-333333333333}"',
+		'EndProject'
+	].join('\r\n');
+
+	it('extracts project paths', () => {
+		const result = parseSolutionProjectPaths(sln, 'C:/ws/MyApp.sln');
+		assert.deepStrictEqual(result, ['src\\MyApp\\MyApp.csproj', 'tests\\MyApp.Tests\\MyApp.Tests.csproj']);
+	});
+
+	it('excludes solution folders, which share the Project( syntax', () => {
+		const result = parseSolutionProjectPaths(sln, 'C:/ws/MyApp.sln');
+		assert.ok(!result.some(p => p.includes('Solution Items')));
+	});
+
+	it('returns an empty array for content with no projects', () => {
+		assert.deepStrictEqual(parseSolutionProjectPaths('Global\r\nEndGlobal', 'C:/ws/MyApp.sln'), []);
+	});
+});
+
+describe('parseSolutionProjectPaths (.slnx)', () => {
+	const slnx = [
+		'<Solution>',
+		'  <Folder Name="/src/">',
+		'    <Project Path="src/MyApp/MyApp.csproj" />',
+		'    <Project Path="src/Other/Other.csproj" Type="C#" />',
+		'  </Folder>',
+		'</Solution>'
+	].join('\n');
+
+	it('extracts project paths from XML', () => {
+		const result = parseSolutionProjectPaths(slnx, 'C:/ws/MyApp.slnx');
+		assert.deepStrictEqual(result, ['src/MyApp/MyApp.csproj', 'src/Other/Other.csproj']);
+	});
+
+	it('ignores non-project elements', () => {
+		const result = parseSolutionProjectPaths(slnx, 'C:/ws/MyApp.slnx');
+		assert.ok(!result.some(p => p.includes('src/')  && p.endsWith('/')));
+	});
+});
+
+describe('dedupeSolutionMembers', () => {
+	it('drops projects already covered by a solution', () => {
+		const solution = candidate('solution', 'C:/ws/AppA/MyApp.sln');
+		const member = candidate('project', 'C:/ws/AppA/src/MyApp/MyApp.csproj');
+		const loose = candidate('project', 'C:/ws/AppA/tools/Tool/Tool.csproj');
+
+		const result = dedupeSolutionMembers(
+			[solution, member, loose],
+			new Map([[solution.path, [member.path]]])
+		);
+
+		assert.deepStrictEqual(result.map(c => c.path), [solution.path, loose.path]);
+	});
+
+	it('compares paths case-insensitively and across separators', () => {
+		const solution = candidate('solution', 'C:/ws/AppA/MyApp.sln');
+		const member = candidate('project', 'C:/ws/AppA/src/MyApp/MyApp.csproj');
+
+		const result = dedupeSolutionMembers(
+			[solution, member],
+			new Map([[solution.path, [path.resolve('c:/WS/appa/SRC/myapp/MyApp.csproj')]]])
+		);
+
+		assert.deepStrictEqual(result.map(c => c.path), [solution.path]);
+	});
+
+	it('never drops build output folders', () => {
+		const solution = candidate('solution', 'C:/ws/AppA/MyApp.sln');
+		const folder = candidate('folder', 'C:/ws/AppA/src/MyApp/bin/Debug');
+
+		const result = dedupeSolutionMembers(
+			[solution, folder],
+			new Map([[solution.path, [path.resolve('C:/ws/AppA/src/MyApp/bin/Debug')]]])
+		);
+
+		assert.strictEqual(result.length, 2);
+	});
+
+	it('returns everything when there are no solutions', () => {
+		const items = [candidate('project', 'C:/ws/AppA/a.csproj'), candidate('folder', 'C:/ws/AppA/bin')];
+		assert.deepStrictEqual(dedupeSolutionMembers(items, new Map()).length, 2);
+	});
+});
+
+describe('sortRunTargets', () => {
+	it('ranks solutions, then projects, then folders', () => {
+		const result = sortRunTargets([
+			candidate('folder', 'C:/ws/AppA/bin'),
+			candidate('project', 'C:/ws/AppA/a.csproj'),
+			candidate('solution', 'C:/ws/AppA/a.sln')
+		]);
+		assert.deepStrictEqual(result.map(c => c.kind), ['solution', 'project', 'folder']);
+	});
+
+	it('puts the preferred root first, ahead of kind', () => {
+		const result = sortRunTargets(
+			[
+				candidate('solution', 'C:/ws/AppA/a.sln', rootA),
+				candidate('folder', 'C:/ws/AppB/bin', rootB)
+			],
+			rootB.path
+		);
+		assert.strictEqual(result[0].root.name, 'AppB');
+	});
+
+	it('does not mutate its input', () => {
+		const input = [candidate('folder', 'C:/ws/AppA/bin'), candidate('solution', 'C:/ws/AppA/a.sln')];
+		sortRunTargets(input);
+		assert.strictEqual(input[0].kind, 'folder');
+	});
+});
+
+describe('findOwningRoot', () => {
+	it('finds the containing root', () => {
+		const result = findOwningRoot([rootA, rootB], path.resolve('C:/ws/AppB/src/Program.cs'));
+		assert.strictEqual(result?.name, 'AppB');
+	});
+
+	it('prefers the deepest root when they nest', () => {
+		const outer: WorkspaceRoot = { name: 'ws', path: path.resolve('C:/ws') };
+		const result = findOwningRoot([outer, rootA], path.resolve('C:/ws/AppA/src/Program.cs'));
+		assert.strictEqual(result?.name, 'AppA');
+	});
+
+	it('returns undefined for files outside every root', () => {
+		assert.strictEqual(findOwningRoot([rootA], path.resolve('C:/elsewhere/x.cs')), undefined);
+	});
+
+	it('returns undefined when there is no file', () => {
+		assert.strictEqual(findOwningRoot([rootA], undefined), undefined);
+	});
+});
