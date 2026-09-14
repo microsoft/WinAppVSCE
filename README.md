@@ -230,8 +230,14 @@ XAML tooling supports these settings:
 | `winapp.xaml.intelliSense.enable` | `true` | Starts the XAML language server when XAML files are opened. Disabling it keeps syntax highlighting active. |
 | `winapp.xaml.diagnostics.level` | `all` | Controls XAML diagnostics: `all`, `errorsOnly`, or `off`. Changes apply immediately to open XAML documents. |
 
-#### When the language server cannot start
+#### Resolving references that have never been built
 
+To read a project the language server runs a design-time build with `dotnet msbuild`. The WinUI markup compiler runs out of process and resolves project references as assemblies on disk, so on a fresh clone — where nothing has been built yet — it would abort and no `InitializeComponent` or `x:Name` members would exist. Rather than asking you to build first, the server compiles referenced projects from source and supplies stand-in assemblies for that build only. Two things are worth knowing:
+
+- **Temporary files.** Stand-ins are written under `%TEMP%\winui-xaml-ls\refs\`, never into a project's own `bin` — writing there would make your next real build skip the project. Each repair uses a fresh subdirectory; old ones are reclaimed automatically after an hour and are safe to delete at any time.
+- **An MSBuild property is set.** The design-time build is passed `CustomAfterMicrosoftCommonTargets`, which redirects unresolvable references to the stand-ins. If your project already sets that property, its value is re-imported rather than replaced, so your own targets still run. This applies only to the server's design-time build; your normal builds are untouched.
+
+#### When the language server cannot start
 XAML editing degrades to **syntax highlighting only** rather than failing outright. Everything else in the extension keeps working. This happens when the workspace is not trusted, no .NET 10 runtime is available, the .NET Install Tool cannot supply one, or the server itself fails to start. WinApp shows a one-time notification naming the cause with the relevant recovery action, and **WinApp: Show Info** repeats it on demand.
 
 #### What works at each loading stage

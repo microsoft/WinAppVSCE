@@ -47,26 +47,33 @@ describe("second outage for the same project", () => {
 });
 
 describe("buildRequiredMessage", () => {
-  it("names the unbuilt projects so the failure is self-diagnosing", () => {
+  it("names the unresolved projects so the failure is self-diagnosing", () => {
     const message = buildRequiredMessage(["MiddleLib", "SharedLib"]);
 
-    assert.match(message, /MiddleLib, SharedLib have not been built/);
-    assert.match(message, /Build the solution once/);
+    assert.match(message, /MiddleLib, SharedLib could not be resolved/);
+    assert.match(message, /Building the solution usually fixes this/);
   });
 
-  it("uses singular agreement for one project", () => {
-    assert.match(buildRequiredMessage(["SharedLib"]), /SharedLib has not been built/);
+  it("scopes the outage to project-defined types, because the rest still resolves", () => {
+    // The server compiles never-built references from source now, so this prompt means the
+    // narrower failure. Claiming IntelliSense is unavailable would send the user hunting for a
+    // breakage that is not there.
+    const message = buildRequiredMessage(["SharedLib"]);
+
+    assert.match(message, /SharedLib could not be resolved/);
+    assert.match(message, /Framework and package types still work/);
+    assert.doesNotMatch(message, /IntelliSense is unavailable/);
   });
 
   it("degrades to a generic subject when the compiler named nothing", () => {
     const message = buildRequiredMessage([]);
 
-    assert.match(message, /A referenced project has not been built/);
+    assert.match(message, /A referenced project could not be resolved/);
     assert.doesNotMatch(message, /undefined/);
   });
 
   it("ignores blank names rather than emitting empty clauses", () => {
-    assert.match(buildRequiredMessage(["", "  "]), /A referenced project has not been built/);
+    assert.match(buildRequiredMessage(["", "  "]), /A referenced project could not be resolved/);
   });
 });
 
@@ -77,7 +84,7 @@ describe("notifyProjectBuildRequired", () => {
     await notifyProjectBuildRequired("C:\\app\\App.csproj", ["SharedLib"], host);
 
     assert.equal(shown.length, 1);
-    assert.match(shown[0].message, /SharedLib has not been built/);
+    assert.match(shown[0].message, /SharedLib could not be resolved/);
     assert.deepEqual(shown[0].actions, [
       PROJECT_BUILD_ACTIONS.build,
       PROJECT_BUILD_ACTIONS.showOutput,
@@ -115,7 +122,7 @@ describe("notifyProjectBuildRequired", () => {
     await notifyProjectBuildRequired("C:\\app\\App.csproj", undefined, host);
 
     assert.equal(shown.length, 1);
-    assert.match(shown[0].message, /A referenced project has not been built/);
+    assert.match(shown[0].message, /A referenced project could not be resolved/);
   });
 
   it("opens the output channel when that action is chosen", async () => {

@@ -252,6 +252,110 @@ try {
 const buildRequiredXamlUri = pathToFileURL(buildRequiredXamlPath).href;
 const buildRequiredSecondXamlUri = pathToFileURL(buildRequiredSecondXamlPath).href;
 
+// The residual case the repair cannot close: a reference that is not merely unbuilt but cannot be
+// produced from source at all, so there is nothing to synthesize. This is now the only way a
+// developer sees the build prompt, and without a fixture for it the repair could start swallowing
+// the failure and every remaining test would still pass.
+//
+// `EnableDefaultCompileItems=false` with `GenerateAssemblyInfo=false` is the smallest honest way
+// to get there: the project evaluates, so it is a real reference the markup compiler expects on
+// disk, but csc is handed no source files at all, so there is no compilation to emit. (Leaving
+// assembly-info generation on is not enough -- the SDK's generated file is a source, and the
+// repair compiles it happily.)
+const unresolvableAppDir = join(buildRequiredRoot, "UnresolvableApp");
+const unresolvableLibDir = join(buildRequiredRoot, "BrokenLib");
+mkdirSync(unresolvableAppDir);
+mkdirSync(unresolvableLibDir);
+writeFileSync(
+  join(unresolvableLibDir, "BrokenLib.csproj"),
+  `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>${buildRequiredTfm}</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+  </PropertyGroup>
+</Project>
+`,
+  "utf8"
+);
+const unresolvableProject = join(unresolvableAppDir, "UnresolvableRef.csproj");
+writeFileSync(
+  unresolvableProject,
+  `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>${buildRequiredTfm}</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>UnresolvableRefApp</RootNamespace>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="${fixturePackageVersion(
+      "Microsoft.Windows.SDK.BuildTools"
+    )}" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="${fixturePackageVersion(
+      "Microsoft.WindowsAppSDK"
+    )}" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\\BrokenLib\\BrokenLib.csproj" />
+  </ItemGroup>
+</Project>
+`,
+  "utf8"
+);
+writeFileSync(
+  join(unresolvableAppDir, "App.xaml"),
+  `<Application
+    x:Class="UnresolvableRefApp.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+</Application>
+`,
+  "utf8"
+);
+writeFileSync(
+  join(unresolvableAppDir, "App.xaml.cs"),
+  "namespace UnresolvableRefApp;\npublic partial class App : Microsoft.UI.Xaml.Application { public App() { InitializeComponent(); } }\n",
+  "utf8"
+);
+const unresolvableXamlPath = join(unresolvableAppDir, "UnresolvablePage.xaml");
+const unresolvableXamlText = `<Page
+    x:Class="UnresolvableRefApp.UnresolvablePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <TextBlock Text="Hello" />
+</Page>
+`;
+writeFileSync(unresolvableXamlPath, unresolvableXamlText, "utf8");
+writeFileSync(
+  join(unresolvableAppDir, "UnresolvablePage.xaml.cs"),
+  "namespace UnresolvableRefApp;\npublic partial class UnresolvablePage : Microsoft.UI.Xaml.Controls.Page { public UnresolvablePage() { InitializeComponent(); } }\n",
+  "utf8"
+);
+
+let unresolvableFixtureReady = false;
+try {
+  execFileSync("dotnet", ["restore", unresolvableProject], {
+    stdio: "pipe",
+    timeout: 300000,
+  });
+  unresolvableFixtureReady = true;
+} catch (err) {
+  console.error(
+    `[warn] could not restore the unresolvable-reference fixture, skipping that leg: ${err.message}`
+  );
+}
+const unresolvableXamlUri = pathToFileURL(unresolvableXamlPath).href;
+
 const appXamlText = readFileSync(APP_XAML, "utf8");const accentKeyOffset = appXamlText.indexOf('x:Key="SmokeAccentBrush"');
 if (accentKeyOffset < 0) fail('could not find x:Key="SmokeAccentBrush" in App.xaml');
 const EXPECTED_ACCENT_KEY_LINE = offsetToPosition(appXamlText, accentKeyOffset).line;
@@ -1610,6 +1714,64 @@ async function main() {
     fail(
       "the unbuilt-reference fixture could not be restored, so the never-built-reference leg " +
         "tested nothing (see the warning above)"
+    );
+  }
+
+  // 22c) The residual case: the reference cannot be produced from source either.
+  //
+  // The repair is what removed leg 22b's prompt, so this is the leg that proves the prompt still
+  // exists at all. Without it, a repair that started swallowing `ProjectBuildRequiredException`
+  // would leave the developer with no signal and the whole suite still green.
+  if (unresolvableFixtureReady) {
+    const buildRequired = waitFor(
+      (message) =>
+        message.method === "winui-xaml/projectContextStatus" &&
+        message.params?.uri === unresolvableXamlUri &&
+        message.params?.state === "build-required",
+      180000,
+      "build-required project context status for an unresolvable project reference"
+    );
+    send({
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: {
+          uri: unresolvableXamlUri,
+          languageId: "xaml",
+          version: 1,
+          text: unresolvableXamlText,
+        },
+      },
+    });
+    const status = await buildRequired;
+    if (!String(status.params?.message ?? "").includes("BrokenLib")) {
+      fail(
+        "the status bar must name the reference that could not be resolved: " +
+          JSON.stringify(status.params)
+      );
+    }
+
+    // The toast is the part the developer actually sees, and it travels on its own notification.
+    const notified = buildRequiredNotifications.find((params) =>
+      String(params?.projectPath ?? "").endsWith("UnresolvableRef.csproj")
+    );
+    if (!notified) {
+      fail(
+        "an unresolvable project reference must still send projectBuildRequired: " +
+          JSON.stringify(buildRequiredNotifications)
+      );
+    }
+    if (!(notified.unresolvedAssemblies ?? []).includes("BrokenLib")) {
+      fail(
+        `projectBuildRequired must name the unresolved project: ${JSON.stringify(notified)}`
+      );
+    }
+    console.log(
+      "[ok] unresolvable project reference: projectBuildRequired + build-required status both still reach the wire"
+    );
+  } else {
+    fail(
+      "the unresolvable-reference fixture could not be restored, so the residual build-required " +
+        "leg tested nothing (see the warning above)"
     );
   }
 

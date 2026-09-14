@@ -58,8 +58,8 @@ namespace WinUiXaml.Workspace
             var names = unresolvedAssemblies.Count == 0
                 ? "a referenced project"
                 : string.Join(", ", unresolvedAssemblies);
-            return $"Referenced project output is missing ({names}). " +
-                "Build the solution once to enable project-aware XAML features.";
+            return $"Referenced project output is missing ({names}) and could not be produced " +
+                "from source. Types defined there will not resolve in XAML.";
         }
     }
 
@@ -234,7 +234,7 @@ namespace WinUiXaml.Workspace
                     cancellationToken,
                     graph == null
                         ? null
-                        : (evaluation, _) => SynthesizeMissingReferences(
+                        : (evaluation) => SynthesizeMissingReferences(
                             fullPath, evaluation, graph, properties, cancellationToken));
                 if (RequiresRestore(
                         combined.Evaluation.ProjectAssetsFile,
@@ -341,7 +341,7 @@ namespace WinUiXaml.Workspace
         {
             var fullPath = Path.GetFullPath(projectPath);
             var graph = new ProjectGraphContext(fullPath);
-            return (evaluation, _) => SynthesizeMissingReferences(
+            return (evaluation) => SynthesizeMissingReferences(
                 fullPath, evaluation, graph, properties, cancellationToken);
         }
 
@@ -490,12 +490,12 @@ namespace WinUiXaml.Workspace
                 assemblyName,
                 trees.ToImmutable(),
                 references.ToImmutable(),
-                // A referenced project is consumed as a library regardless of how it builds.
-                new CSharpCompilationOptions(
-                    OutputKind.DynamicallyLinkedLibrary,
-                    allowUnsafe: commandLine.AllowUnsafe,
-                    nullableContextOptions: commandLine.NullableContext));
-        }
+                // Same options the primary project is built with, so a referenced project's
+                // symbols mean what its own compiler settings say they mean. Only the output kind
+                // is forced: a referenced project is consumed as a library regardless of how it
+                // builds.
+                commandLine.CreateCompilationOptions()
+                    .WithOutputKind(OutputKind.DynamicallyLinkedLibrary));        }
 
         /// <summary>
         /// Reads the project's XAML items, restore marker, and graph edges. Evaluation runs no

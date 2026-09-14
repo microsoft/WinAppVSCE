@@ -5,20 +5,21 @@ export const PROJECT_BUILD_ACTIONS = {
 } as const;
 
 /**
- * The WinUI markup compiler resolves project references as assemblies on disk. On a fresh clone
- * those do not exist, it aborts with WMC1006, and no compilation is produced -- so every
- * project-aware feature goes dark at once, including built-in types and diagnostics. Naming the
- * projects is the whole point: the symptom otherwise looks like a broken extension.
+ * The WinUI markup compiler resolves project references as assemblies on disk. The server now
+ * compiles never-built references from source and supplies stand-ins, so this prompt no longer
+ * fires for a merely-unbuilt project -- it means the reference could not be produced from source
+ * either. Framework and package types still resolve, so the message must not claim IntelliSense
+ * is gone; naming the projects is what makes the narrower outage attributable.
  */
 export function buildRequiredMessage(unresolvedAssemblies: readonly string[]): string {
   const named = unresolvedAssemblies.filter((name) => name.trim().length > 0);
   const subject =
     named.length === 0
-      ? "A referenced project has not been built"
-      : `${named.join(", ")} ${named.length === 1 ? "has" : "have"} not been built`;
+      ? "A referenced project could not be resolved"
+      : `${named.join(", ")} could not be resolved`;
   return (
-    `${subject}, so project-aware WinUI XAML IntelliSense is unavailable. ` +
-    "Build the solution once to enable it."
+    `${subject}, so WinUI XAML IntelliSense cannot see types defined there. ` +
+    "Framework and package types still work. Building the solution usually fixes this."
   );
 }
 

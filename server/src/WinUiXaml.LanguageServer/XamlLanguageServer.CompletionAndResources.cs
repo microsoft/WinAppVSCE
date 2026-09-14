@@ -469,14 +469,14 @@ internal sealed partial class XamlLanguageServer
     }
 
     /// <summary>
-    /// The text the status bar shows. It names the projects to build, because "build required"
-    /// alone leaves the developer guessing which of their references is the unbuilt one.
+    /// The text the status bar shows. It names the projects, because "build required" alone
+    /// leaves the developer guessing which of their references is the unresolvable one.
     /// </summary>
     private static string BuildRequiredStatusMessage(
         System.Collections.Immutable.ImmutableArray<string> unresolved) =>
         unresolved.IsDefaultOrEmpty
-            ? "A referenced project has not been built yet."
-            : $"Build required: {string.Join(", ", unresolved)}";
+            ? "A referenced project could not be resolved."
+            : $"Unresolved reference: {string.Join(", ", unresolved)}";
 
     private Task NotifyProjectContextStatusAsync(
         string uri,

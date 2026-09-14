@@ -86,11 +86,37 @@ public sealed class ShadowReferenceStoreTests
             CancellationToken.None);
 
         Assert.NotNull(second);
-        Assert.Equal(first.Directory, second!.Directory);
         // A reference that outlived the project reference that produced it would resolve types
-        // the workspace no longer contains, which is worse than not resolving them at all.
+        // the workspace no longer contains. Each synthesis writes somewhere new, so the design-time
+        // build is pointed only at what this repair produced.
+        Assert.NotEqual(first.Directory, second!.Directory);
         Assert.False(File.Exists(Path.Combine(second.Directory, "Gone.dll")));
         Assert.True(File.Exists(Path.Combine(second.Directory, "Kept.dll")));
+    }
+
+    [Fact]
+    public void ConcurrentSynthesesForOneProjectDoNotShareADirectory()
+    {
+        // Both load stages repair the same project, and two open documents repair it at once. A
+        // single shared directory meant one of them cleared the assemblies while another's
+        // design-time build was reading them -- a failure that only shows up under load, as a
+        // reference the markup compiler suddenly cannot find.
+        var root = Path.Combine(Path.GetTempPath(), "winuixaml-shadow-concurrent", "App.csproj");
+        var directories = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+        System.Threading.Tasks.Parallel.For(0, 8, index =>
+        {
+            var injection = ShadowReferenceStore.Create(
+                root,
+                [CompilationOf($"Lib{index}", $"public class Lib{index} {{ }}")],
+                chainedCustomAfterTargets: null,
+                CancellationToken.None);
+            Assert.NotNull(injection);
+            Assert.True(File.Exists(Path.Combine(injection!.Directory, $"Lib{index}.dll")));
+            directories.Add(injection.Directory);
+        });
+
+        Assert.Equal(8, new HashSet<string>(directories).Count);
     }
 
     [Fact]

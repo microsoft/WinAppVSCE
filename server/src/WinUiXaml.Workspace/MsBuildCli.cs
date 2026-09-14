@@ -129,11 +129,16 @@ namespace WinUiXaml.Workspace
         /// resolve. Returns null when nothing could be produced, which leaves the caller on the
         /// reference-only result.
         /// </summary>
+        /// <remarks>
+        /// The names the markup compiler reported are deliberately not passed in. It abandons its
+        /// schema context at the first assembly it cannot load, so that list is a lower bound on
+        /// what is missing, not the set; repairing only what it named would leave the next one
+        /// unresolved and turn one failed build into several. Every referenced project is
+        /// supplied instead, and the injected targets substitute only the paths that are actually
+        /// absent.
+        /// </remarks>
         /// <param name="evaluation">The failing project's evaluation, including its graph edges.</param>
-        /// <param name="unresolvedAssemblies">Assembly names the markup compiler could not load.</param>
-        internal delegate ShadowReferenceInjection? ShadowReferenceRepair(
-            Evaluation evaluation,
-            IReadOnlyList<string> unresolvedAssemblies);
+        internal delegate ShadowReferenceInjection? ShadowReferenceRepair(Evaluation evaluation);
 
         /// <summary>
         /// Points a design-time build at a directory of stand-in assemblies.
@@ -389,7 +394,7 @@ namespace WinUiXaml.Workspace
                 // costs exactly one MSBuild invocation.
                 if (repair != null && shadow == null)
                 {
-                    var injection = repair(fallback.Evaluation, ex.UnresolvedAssemblies);
+                    var injection = repair(fallback.Evaluation);
                     if (injection != null)
                     {
                         try

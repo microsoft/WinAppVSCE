@@ -124,14 +124,19 @@ namespace WinUiXaml.Workspace
             var path = Path.Combine(directory, name + ".dll");
             try
             {
-                using var stream = new FileStream(
-                    path, FileMode.Create, FileAccess.Write, FileShare.Read);
-                var result = compilation.Emit(
-                    stream,
-                    options: new EmitOptions(metadataOnly: true, includePrivateMembers: false));
-                if (result.Success)
+                // The stream is scoped so it is closed before the failure path runs: deleting a
+                // file that still has an open writer leaves the zero-length stub behind, and a
+                // zero-length .dll is exactly what the injected targets would go on to substitute.
+                using (var stream = new FileStream(
+                    path, FileMode.Create, FileAccess.Write, FileShare.Read))
                 {
-                    return true;
+                    var result = compilation.Emit(
+                        stream,
+                        options: new EmitOptions(metadataOnly: true, includePrivateMembers: false));
+                    if (result.Success)
+                    {
+                        return true;
+                    }
                 }
 
                 // A half-written project is the normal state while editing, so this is expected
@@ -154,39 +159,71 @@ namespace WinUiXaml.Workspace
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // A stale zero-length file is worse than none, but the injected targets only pick
-                // up files that exist, and a failed emit leaves nothing the compiler would accept.
+                // Nothing else reads this directory, so a stub that survives here is inert.
             }
 
             return false;
         }
 
         /// <summary>
-        /// One scratch directory per root project, emptied on each use so a reference can never
-        /// outlive the source that produced it.
+        /// A directory of its own for every synthesis, so no two loads of the same project share
+        /// mutable state and a reference can never outlive the source that produced it.
         /// </summary>
+        /// <remarks>
+        /// A single directory per project was the obvious shape and the wrong one: both load
+        /// stages, and concurrent loads from two open documents, repair the same project, so one
+        /// of them would clear the assemblies while another's design-time build was reading them.
+        /// Writing somewhere new instead removes the contention rather than coping with it, at the
+        /// cost of a sweep for the directories previous repairs left behind.
+        /// </remarks>
         private static string PrepareDirectory(string rootProjectPath)
         {
-            var directory = Path.Combine(
+            var root = Path.Combine(
                 Path.GetTempPath(), "winui-xaml-ls", "refs", Fingerprint(rootProjectPath));
-            if (Directory.Exists(directory))
-            {
-                foreach (var file in Directory.EnumerateFiles(directory))
-                {
-                    try
-                    {
-                        File.Delete(file);
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                    {
-                        // Held by a concurrent design-time build; it will be overwritten below.
-                    }
-                }
-            }
+            Directory.CreateDirectory(root);
+            SweepStaleDirectories(root);
 
+            var directory = Path.Combine(root, Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
             return directory;
         }
+
+        /// <summary>
+        /// Discards synthesis directories old enough that no build can still be reading them.
+        /// </summary>
+        /// <remarks>
+        /// Age is the only signal available: the build that owns a directory belongs to this
+        /// process, but directories also outlive crashes and earlier sessions. The window is far
+        /// longer than any design-time build, and a directory still in use simply fails to delete
+        /// and is swept on a later pass.
+        /// </remarks>
+        private static void SweepStaleDirectories(string root)
+        {
+            var cutoff = DateTime.UtcNow - StaleAfter;
+            try
+            {
+                foreach (var candidate in Directory.EnumerateDirectories(root))
+                {
+                    try
+                    {
+                        if (Directory.GetLastWriteTimeUtc(candidate) < cutoff)
+                        {
+                            Directory.Delete(candidate, recursive: true);
+                        }
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // In use, or already gone. Either way the next sweep can have it.
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Reclaiming disk is never worth failing a repair over.
+            }
+        }
+
+        private static readonly TimeSpan StaleAfter = TimeSpan.FromHours(1);
 
         private static string Fingerprint(string value)
         {

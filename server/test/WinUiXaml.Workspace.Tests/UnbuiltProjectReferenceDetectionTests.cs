@@ -122,7 +122,7 @@ public sealed class UnbuiltProjectReferenceDetectionTests
         Assert.Equal(@"C:\src\App\App.csproj", exception.ProjectPath);
         Assert.Contains("MiddleLib", exception.Message);
         Assert.Contains("SharedLib", exception.Message);
-        Assert.Contains("Build the solution", exception.Message);
+        Assert.Contains("could not be produced", exception.Message);
     }
 
     [Fact]
