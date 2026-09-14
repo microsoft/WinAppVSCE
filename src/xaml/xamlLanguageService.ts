@@ -838,7 +838,7 @@ function notifyProjectBuildRequired(
     showWarningMessage: (message, ...actions) =>
       vscode.window.showWarningMessage(message, ...actions),
     showOutput: () => output?.show(true),
-    buildProject: (projectPath) => runProjectBuild(projectPath),
+    buildProject: (projectPath) => void runProjectBuild(projectPath),
   });
 }
 
@@ -847,20 +847,48 @@ function notifyProjectBuildRequired(
  * output is where a genuine build error will surface, and a task needs no new command contribution
  * or progress UI. Once the outputs exist the server re-resolves on the next request.
  *
+ * The .NET host is resolved the same way restore resolves it, and the same child environment is
+ * carried. Starting a bare `dotnet` would let PATH decide, which is not necessarily the SDK the
+ * language server itself is running against -- so the build the user is prompted to run could
+ * target a different SDK than the one whose output the server is waiting for, or fail outright on
+ * a machine where the extension found .NET somewhere PATH does not name.
+ *
  * The project path is passed as a process argument rather than interpolated into shell text. It
  * originates from the server and is checked against the workspace roots, but a `.csproj` whose
  * path contains `$(...)` or a backtick would still be expanded by PowerShell inside double quotes,
  * and a build the user did not ask for is a poor thing to learn that from. `ProcessExecution`
- * starts `dotnet` directly, so there is no shell to do the expanding.
+ * starts the host directly, so there is no shell to do the expanding.
  */
-function runProjectBuild(projectPath: string): void {
+async function runProjectBuild(projectPath: string): Promise<void> {
+  let dotnet: string;
+  try {
+    const resolution = await requireDotnetHostResolver().resolve();
+    if (resolution.status === "failed") {
+      throw new Error(describeDotnetResolutionFailure(resolution.reason));
+    }
+    dotnet = resolution.dotnetPath;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    log(`Project build could not start: ${detail}`);
+    void vscode.window.showErrorMessage(
+      `WinUI project build could not start: ${detail}`,
+      PROJECT_RESTORE_ACTIONS.showOutput
+    ).then((choice) => {
+      if (choice === PROJECT_RESTORE_ACTIONS.showOutput) {
+        output?.show(true);
+      }
+    });
+    return;
+  }
+
   const task = new vscode.Task(
     { type: "winapp-xaml-build" },
     vscode.TaskScope.Workspace,
     "Build",
     "WinApp",
-    new vscode.ProcessExecution("dotnet", ["build", projectPath], {
+    new vscode.ProcessExecution(dotnet, ["build", projectPath], {
       cwd: path.dirname(projectPath),
+      env: toTaskEnvironment(createDotnetChildEnvironment(dotnet, process.env, log)),
     })
   );
   task.presentationOptions = {
@@ -870,6 +898,20 @@ function runProjectBuild(projectPath: string): void {
   };
 
   void vscode.tasks.executeTask(task);
+}
+
+/**
+ * `ProcessExecution` takes a string map, while a process environment may carry undefined values.
+ * Dropping those matches what spawning with the environment directly would do.
+ */
+function toTaskEnvironment(env: NodeJS.ProcessEnv): { [key: string]: string } {
+  const result: { [key: string]: string } = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
 function isTrustedWorkspaceProject(projectPath: string): boolean {

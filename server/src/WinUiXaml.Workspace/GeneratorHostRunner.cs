@@ -309,9 +309,19 @@ namespace WinUiXaml.Workspace
         {
             using var process = new Process { StartInfo = startInfo };
 
-            // The output is not consumed, but the pipes must still be drained or the child blocks.
+            // stdout is unused -- the helper writes its manifest to the path it was handed -- but
+            // the pipe must still be drained or the child blocks. stderr is forwarded, because the
+            // helper writes the reason a generator or analyzer was skipped, and the symptom --
+            // generated members quietly missing -- is otherwise indistinguishable from the user's
+            // own code being wrong.
             process.OutputDataReceived += static (_, _) => { };
-            process.ErrorDataReceived += static (_, _) => { };
+            process.ErrorDataReceived += static (_, e) =>
+            {
+                if (!string.IsNullOrWhiteSpace(e.Data))
+                {
+                    Console.Error.WriteLine(e.Data);
+                }
+            };
 
             try
             {

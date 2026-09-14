@@ -141,11 +141,27 @@ namespace WinUiXaml.Workspace
         }
 
         /// <summary>
-        /// Memo of each project's declared <c>TargetFrameworks</c>, keyed by the write stamp of
-        /// every file that can declare it.
+        /// Memo of each project's declared <c>TargetFrameworks</c>, keyed by the project path and
+        /// the global properties it was evaluated under, and validated against a write stamp.
         /// </summary>
         private static readonly ConcurrentDictionary<string, (string Stamp, string? Declared)>
             TargetFrameworkMemo = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Drops every memoized target-framework decision.
+        /// </summary>
+        /// <remarks>
+        /// Called when an imported build file changes. The write stamp cannot cover that case on
+        /// its own: a project is free to <c>&lt;Import&gt;</c> an arbitrarily named
+        /// <c>.props</c> file -- <c>build/Common.props</c> is a common repo convention -- and
+        /// MSBuild will not name its import closure when asked. <c>-getProperty:MSBuildAllProjects</c>
+        /// returns the project and a couple of SDK targets, not the file that actually declared
+        /// the property, so there is nothing to stamp. The language server already treats every
+        /// <c>.props</c>/<c>.targets</c> change under a workspace root as structural and drops all
+        /// projects; this hangs the memo on that same signal so it can never outlive the
+        /// compilations it fed.
+        /// </remarks>
+        internal static void ClearTargetFrameworkMemo() => TargetFrameworkMemo.Clear();
 
         /// <summary>
         /// The declared target frameworks, evaluated at most once per edit of the files that can
@@ -154,13 +170,25 @@ namespace WinUiXaml.Workspace
         /// <remarks>
         /// Deciding the framework costs a full evaluation pass, and the project reloads on every
         /// C# save -- but a C# edit cannot change which frameworks a project targets, so re-asking
-        /// is provably repeated work. The stamp covers the project file and the
-        /// <c>Directory.Build.props</c>/<c>.targets</c> chain above it, which is the entire
-        /// surface that can set the property before restore: NuGet has to know the target
-        /// frameworks in order to restore, so a restored package cannot be what introduces them.
+        /// is provably repeated work.
         ///
-        /// A stale entry would silently drop a project, so this is keyed on content stamps rather
-        /// than cleared on notification -- there is no invalidation message to miss.
+        /// Two independent things invalidate the answer, because neither covers the other:
+        /// <list type="bullet">
+        /// <item>the write stamp, which covers the project file and the
+        /// <c>Directory.Build.props</c>/<c>.targets</c> chain above it -- including the part of
+        /// that chain that sits *outside* the workspace roots, where no file-change notification
+        /// ever arrives;</item>
+        /// <item><see cref="ClearTargetFrameworkMemo"/>, which covers an arbitrarily named
+        /// imported <c>.props</c>/<c>.targets</c> file inside a root, which the stamp cannot
+        /// enumerate.</item>
+        /// </list>
+        /// The remaining gap is an arbitrarily named import located outside every workspace root:
+        /// unreachable by either signal, and equally invisible to the rest of the server.
+        ///
+        /// The key carries the global properties as well as the path, because
+        /// <c>TargetFrameworks</c> can be declared under a condition on <c>$(Configuration)</c> or
+        /// <c>$(Platform)</c> -- evaluating under one and answering for another would pin a
+        /// framework the project does not declare.
         /// </remarks>
         internal static string? ReadDeclaredTargetFrameworks(
             string fullPath,
@@ -168,16 +196,39 @@ namespace WinUiXaml.Workspace
             CancellationToken cancellationToken = default)
         {
             fullPath = Path.GetFullPath(fullPath);
+            var key = MemoKey(fullPath, globalProperties);
             var stamp = DeclaringFileStamp(fullPath);
-            if (TargetFrameworkMemo.TryGetValue(fullPath, out var memo) &&
+            if (TargetFrameworkMemo.TryGetValue(key, out var memo) &&
                 string.Equals(memo.Stamp, stamp, StringComparison.Ordinal))
             {
                 return memo.Declared;
             }
 
             var declared = Evaluate(fullPath, globalProperties, cancellationToken).TargetFrameworks;
-            TargetFrameworkMemo[fullPath] = (stamp, declared);
+            TargetFrameworkMemo[key] = (stamp, declared);
             return declared;
+        }
+
+        /// <summary>
+        /// The memo key: the project path plus the global properties it is evaluated under, in a
+        /// stable order so two equivalent dictionaries cannot produce two entries.
+        /// </summary>
+        private static string MemoKey(
+            string fullPath, IReadOnlyDictionary<string, string> globalProperties)
+        {
+            if (globalProperties.Count == 0)
+            {
+                return fullPath;
+            }
+
+            var builder = new StringBuilder(fullPath);
+            foreach (var entry in globalProperties.OrderBy(
+                entry => entry.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                builder.Append('|').Append(entry.Key).Append('=').Append(entry.Value);
+            }
+
+            return builder.ToString();
         }
 
         /// <summary>
@@ -380,12 +431,21 @@ namespace WinUiXaml.Workspace
         private const string TargetFrameworkProperty = "TargetFramework";
 
         /// <summary>
-        /// Picks the inner build to load for a multi-targeted project. Preferring the highest
-        /// modern .NET target approximates what a consuming app resolves to, and it is the target
-        /// most likely to expose the project's full API surface; a <c>netstandard</c> leg is the
-        /// compatibility shim. This is a heuristic, not NuGet's resolution -- but loading one
-        /// reasonable framework is strictly better than the alternative of loading none.
+        /// Picks the inner build to load for a multi-targeted project. Preferring a Windows target,
+        /// then the highest modern .NET version, approximates what a consuming app resolves to, and
+        /// it is the target most likely to expose the project's full API surface; a
+        /// <c>netstandard</c> leg is the compatibility shim. This is a heuristic, not NuGet's
+        /// resolution -- but loading one reasonable framework is strictly better than the
+        /// alternative of loading none.
         /// </summary>
+        /// <remarks>
+        /// Windows outranks version because every project this server loads is consumed by a WinUI
+        /// app, and NuGet's own reducer prefers a matching platform over a nearer version. Ranking
+        /// by version alone made <c>net8.0</c> and <c>net8.0-windows10.0.19041.0</c> tie, so the
+        /// leg declared first won -- and a library whose Windows-only types sit behind
+        /// <c>#if WINDOWS</c> would be compiled without them, leaving its controls unresolvable in
+        /// XAML for no reason the user could see.
+        /// </remarks>
         internal static string? SelectTargetFramework(string? declared)
         {
             if (string.IsNullOrWhiteSpace(declared))
@@ -394,7 +454,7 @@ namespace WinUiXaml.Workspace
             }
 
             string? best = null;
-            var bestRank = (Modern: false, Version: -1);
+            var bestRank = (Modern: false, Windows: false, Version: -1);
             foreach (var raw in declared!.Split(';'))
             {
                 var candidate = raw.Trim();
@@ -405,7 +465,7 @@ namespace WinUiXaml.Workspace
 
                 var rank = RankTargetFramework(candidate);
                 if (best == null ||
-                    (rank.Modern, rank.Version).CompareTo(bestRank) > 0)
+                    (rank.Modern, rank.Windows, rank.Version).CompareTo(bestRank) > 0)
                 {
                     best = candidate;
                     bestRank = rank;
@@ -415,14 +475,14 @@ namespace WinUiXaml.Workspace
             return best;
         }
 
-        private static (bool Modern, int Version) RankTargetFramework(string framework)
+        private static (bool Modern, bool Windows, int Version) RankTargetFramework(string framework)
         {
             // "net9.0" and "net9.0-windows10.0.26100.0" are modern; "netstandard2.0" and "net48"
             // are not. The digits before the first '.' separate them: a modern target always has
             // one, a net48-style target never does.
             if (!framework.StartsWith("net", StringComparison.OrdinalIgnoreCase))
             {
-                return (false, -1);
+                return (false, false, -1);
             }
 
             var rest = framework.Substring(3);
@@ -430,10 +490,15 @@ namespace WinUiXaml.Workspace
             if (dot <= 0 ||
                 !int.TryParse(rest.Substring(0, dot), out var major))
             {
-                return (false, -1);
+                return (false, false, -1);
             }
 
-            return (true, major);
+            // The platform follows the version after a '-': "net9.0-windows10.0.26100.0".
+            var dash = rest.IndexOf('-');
+            var windows = dash >= 0 &&
+                rest.Substring(dash + 1).StartsWith("windows", StringComparison.OrdinalIgnoreCase);
+
+            return (true, windows, major);
         }
 
         private static void AppendEvaluationRequests(List<string> arguments)

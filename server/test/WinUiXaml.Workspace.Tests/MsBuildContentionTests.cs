@@ -114,7 +114,7 @@ public sealed class MsBuildContentionTests
         Assert.Contains("gate.Wait(cancellationToken)", source);
 
         // And nothing may start a process outside the launcher itself.
-        Assert.Equal(1, Regex.Matches(source, @"new Process\b").Count);
+        Assert.Single(Regex.Matches(source, @"new Process\b"));
     }
 
     /// <summary>

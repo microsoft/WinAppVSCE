@@ -213,6 +213,27 @@ writeFileSync(
   "utf8"
 );
 
+// A second page in the same project. The build-required toast fires once per project, so from
+// here on the status bar is the only thing still saying a build is needed -- and this is the
+// document that proves it, because publishing `framework-ready` for it is exactly the regression
+// the durable state was added to remove.
+const buildRequiredSecondXamlPath = join(buildRequiredAppDir, "UnbuiltRefSecondPage.xaml");
+const buildRequiredSecondXamlText = `<Page
+    x:Class="UnbuiltRefApp.UnbuiltRefSecondPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="Second" />
+    </StackPanel>
+</Page>
+`;
+writeFileSync(buildRequiredSecondXamlPath, buildRequiredSecondXamlText, "utf8");
+writeFileSync(
+  join(buildRequiredAppDir, "UnbuiltRefSecondPage.xaml.cs"),
+  "namespace UnbuiltRefApp;\npublic partial class UnbuiltRefSecondPage : Microsoft.UI.Xaml.Controls.Page { public UnbuiltRefSecondPage() { InitializeComponent(); } }\n",
+  "utf8"
+);
+
 // Restore, but never build. Restore is what separates this leg from the restore-required one
 // above: without it the server would stop at the earlier state and this leg would pass while
 // testing nothing. `dotnet restore` does not build project references, so Lib.dll stays absent.
@@ -229,6 +250,7 @@ try {
   );
 }
 const buildRequiredXamlUri = pathToFileURL(buildRequiredXamlPath).href;
+const buildRequiredSecondXamlUri = pathToFileURL(buildRequiredSecondXamlPath).href;
 
 const appXamlText = readFileSync(APP_XAML, "utf8");const accentKeyOffset = appXamlText.indexOf('x:Key="SmokeAccentBrush"');
 if (accentKeyOffset < 0) fail('could not find x:Key="SmokeAccentBrush" in App.xaml');
@@ -1547,6 +1569,86 @@ async function main() {
     }
     console.log(
       "[ok] never-built project reference: projectBuildRequired + build-required status both reach the wire"
+    );
+
+    // The first document proves the payload serializes. It cannot prove the status is *durable*,
+    // because both routes into this state look identical there: the exception route (no context at
+    // all) and the reference-resolution fallback (real IntelliSense, minus the markup compiler's
+    // generated members) each publish `build-required` on the first document. They diverge from the
+    // second document onward -- the toast has already fired once for this project, so the status
+    // bar is now the only thing still saying a build is needed, and the fallback used to publish
+    // `framework-ready` here and quietly claim everything was fine.
+    //
+    // Completion is what separates the two: the fallback resolves framework types, the exception
+    // route has nothing to resolve from. Asserting a durable `build-required` *and* real results
+    // is what makes this leg fail if either half regresses.
+    const secondStatus = waitFor(
+      (message) =>
+        message.method === "winui-xaml/projectContextStatus" &&
+        message.params?.uri === buildRequiredSecondXamlUri &&
+        message.params?.state === "build-required",
+      180000,
+      "durable build-required status on a second document in the same project"
+    );
+    send({
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: {
+          uri: buildRequiredSecondXamlUri,
+          languageId: "xaml",
+          version: 1,
+          text: buildRequiredSecondXamlText,
+        },
+      },
+    });
+    const secondStatusMessage = await secondStatus;
+    if (
+      typeof secondStatusMessage.params.message !== "string" ||
+      secondStatusMessage.params.message.length === 0
+    ) {
+      fail(
+        `durable build-required status carried no message: ${JSON.stringify(
+          secondStatusMessage.params
+        )}`
+      );
+    }
+
+    send({
+      id: 7303,
+      method: "textDocument/completion",
+      params: {
+        textDocument: { uri: buildRequiredSecondXamlUri },
+        position: { line: 5, character: 9 },
+      },
+    });
+    const secondCompletion = await waitFor(
+      responseFor(7303),
+      180000,
+      "completion on the second document of an unbuilt project"
+    );
+    if (secondCompletion.error) {
+      fail(`completion on the unbuilt project errored: ${JSON.stringify(secondCompletion.error)}`);
+    }
+    const secondItems = Array.isArray(secondCompletion.result)
+      ? secondCompletion.result
+      : secondCompletion.result?.items;
+    if (!Array.isArray(secondItems) || secondItems.length === 0) {
+      fail(
+        "the reference-resolution fallback returned no completions, so the build-required status " +
+          "is reporting a total outage rather than the partial one it describes: " +
+          JSON.stringify(secondCompletion.result)
+      );
+    }
+    // A framework type proves the fallback really resolved references, rather than the leg passing
+    // on whatever a contextless document happens to offer.
+    const secondLabels = secondItems.map((item) => String(item.label));
+    if (!secondLabels.includes("TextBlock")) {
+      fail(
+        `the fallback resolved no framework types: ${JSON.stringify(secondLabels.slice(0, 40))}`
+      );
+    }
+    console.log(
+      "[ok] unbuilt project, second document: build-required survives and framework completions still resolve"
     );
   } else {
     console.log(

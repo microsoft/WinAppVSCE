@@ -96,6 +96,23 @@ public sealed class MsBuildCrossTargetingTests
     }
 
     /// <summary>
+    /// Every project this server loads is consumed by a WinUI app, so a Windows leg outranks a
+    /// plain one. Ranking by version alone left these tied, and a tie was resolved by declaration
+    /// order -- an arbitrary choice with a silent cost, because the types a library puts behind
+    /// <c>#if WINDOWS</c> simply do not exist in the plain leg's compilation.
+    /// </summary>
+    [Theory]
+    [InlineData("net8.0;net8.0-windows10.0.19041.0", "net8.0-windows10.0.19041.0")]
+    [InlineData("net8.0-windows10.0.19041.0;net8.0", "net8.0-windows10.0.19041.0")]
+    [InlineData("netstandard2.0;net8.0;net8.0-windows10.0.19041.0", "net8.0-windows10.0.19041.0")]
+    [InlineData("net8.0-windows;net9.0", "net8.0-windows")]
+    [InlineData("net8.0-android;net8.0-windows10.0.19041.0", "net8.0-windows10.0.19041.0")]
+    public void AWindowsTargetOutranksThePlatformNeutralLeg(string declared, string expected)
+    {
+        Assert.Equal(expected, MsBuildCli.SelectTargetFramework(declared));
+    }
+
+    /// <summary>
     /// A single-targeted project reports no <c>TargetFrameworks</c> at all. Returning null there
     /// is what makes the caller rethrow the original failure instead of retrying forever.
     /// </summary>
@@ -130,25 +147,10 @@ public sealed class MsBuildCrossTargetingTests
             // Prove the memo is actually in play without disturbing the stamp: swap in content
             // that evaluates differently, then restore the original length and write time. A
             // stamp-keyed memo must still answer with the first result.
-            var original = new FileInfo(project);
-            var originalWriteTime = original.LastWriteTimeUtc;
-            var originalLength = original.Length;
-            var decoy = """
-                <Project Sdk="Microsoft.NET.Sdk">
-                  <PropertyGroup>
-                    <TargetFramework>net9.0</TargetFramework>
-                  </PropertyGroup>
-                </Project>
-                """;
-            decoy += new string(' ', Math.Max(0, (int)originalLength - decoy.Length));
-            File.WriteAllText(project, decoy);
-            if (new FileInfo(project).Length == originalLength)
-            {
-                File.SetLastWriteTimeUtc(project, originalWriteTime);
-                Assert.Equal(
-                    "netstandard2.0;net9.0",
-                    MsBuildCli.ReadDeclaredTargetFrameworks(project, properties));
-            }
+            WriteDecoyPreservingStamp(project);
+            Assert.Equal(
+                "netstandard2.0;net9.0",
+                MsBuildCli.ReadDeclaredTargetFrameworks(project, properties));
 
             // A same-tick rewrite is the adversarial case: the stamp must still move.
             File.WriteAllText(
@@ -170,6 +172,88 @@ public sealed class MsBuildCrossTargetingTests
     }
 
     /// <summary>
+    /// The write stamp cannot see an arbitrarily named imported <c>.props</c> file, and MSBuild
+    /// will not name its own import closure -- <c>-getProperty:MSBuildAllProjects</c> reports the
+    /// project and a couple of SDK targets, not the file that declared the property. The language
+    /// server already drops every project when an imported build file changes, so the memo hangs
+    /// on that signal too. Without this it could outlive the compilations it fed, and pin a
+    /// framework the project no longer declares.
+    /// </summary>
+    [Fact]
+    public void ClearingTheMemoDefeatsADecisionTheStampCannotSee()
+    {
+        WithCrossTargetedProject((directory, project) =>
+        {
+            var properties = new Dictionary<string, string>();
+
+            Assert.Equal(
+                "netstandard2.0;net9.0",
+                MsBuildCli.ReadDeclaredTargetFrameworks(project, properties));
+
+            WriteDecoyPreservingStamp(project);
+
+            // Still memoized: the stamp is byte-identical, so nothing else would notice.
+            Assert.Equal(
+                "netstandard2.0;net9.0",
+                MsBuildCli.ReadDeclaredTargetFrameworks(project, properties));
+
+            MsBuildCli.ClearTargetFrameworkMemo();
+
+            Assert.True(
+                string.IsNullOrEmpty(MsBuildCli.ReadDeclaredTargetFrameworks(project, properties)),
+                "clearing the memo must force a fresh evaluation");
+        });
+    }
+
+    /// <summary>
+    /// <c>TargetFrameworks</c> can be declared under a condition on <c>$(Configuration)</c>, so a
+    /// memo keyed on the path alone would answer for the wrong build. The stamp is deliberately
+    /// held identical here: only the properties differ, so only the key can tell them apart.
+    /// </summary>
+    [Fact]
+    public void TheMemoDoesNotAnswerAcrossDifferentGlobalProperties()
+    {
+        WithCrossTargetedProject((directory, project) =>
+        {
+            Assert.Equal(
+                "netstandard2.0;net9.0",
+                MsBuildCli.ReadDeclaredTargetFrameworks(project, new Dictionary<string, string>()));
+
+            WriteDecoyPreservingStamp(project);
+
+            var underOtherProperties = MsBuildCli.ReadDeclaredTargetFrameworks(
+                project, new Dictionary<string, string> { ["Configuration"] = "Release" });
+
+            Assert.True(
+                string.IsNullOrEmpty(underOtherProperties),
+                $"a different property set must not reuse the memo, got '{underOtherProperties}'");
+        });
+    }
+
+    /// <summary>
+    /// Replaces the project with content that evaluates differently while leaving the write stamp
+    /// byte-identical, so a stamp-keyed memo cannot notice the change.
+    /// </summary>
+    private static void WriteDecoyPreservingStamp(string project)
+    {
+        var original = new FileInfo(project);
+        var writeTime = original.LastWriteTimeUtc;
+        var length = original.Length;
+        var decoy = """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net9.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """;
+        decoy += new string(' ', Math.Max(0, (int)length - decoy.Length));
+        File.WriteAllText(project, decoy);
+
+        Assert.Equal(length, new FileInfo(project).Length);
+        File.SetLastWriteTimeUtc(project, writeTime);
+    }
+
+    /// <summary>
     /// The end-to-end proof, against a genuinely multi-targeted project built by MSBuild itself.
     /// The unit tests above pin the decision inputs in isolation; only this one fails if the
     /// framework is never actually pinned, which is precisely how the original defect survived.
@@ -179,13 +263,13 @@ public sealed class MsBuildCrossTargetingTests
     {
         WithCrossTargetedProject((directory, project) =>
         {
-            if (!TryRestore(directory))
-            {
-                // Without a restore there is no assets file and the inner build cannot compile
-                // either, so the pin would be measured against the wrong failure. Skipping beats
-                // reporting a pass that tested nothing.
-                return;
-            }
+            // Restore has to succeed for the inner build to compile, so a failure here is not a
+            // reason to stop testing -- it is a reason to say so. Returning early would report a
+            // pass having asserted nothing, which is the same shape of defect as the silent
+            // project drop this file exists to prevent: a precondition that cannot be met reads
+            // exactly like the behaviour working.
+            var (restored, diagnostics) = Restore(directory);
+            Assert.True(restored, $"restoring the cross-targeted fixture failed:{Environment.NewLine}{diagnostics}");
 
             var result = MsBuildCli.EvaluateAndCompile(
                 project, new Dictionary<string, string>());
@@ -230,7 +314,12 @@ public sealed class MsBuildCrossTargetingTests
         }
     }
 
-    private static bool TryRestore(string directory)
+    /// <summary>
+    /// Restores the fixture, returning why it failed rather than only that it did. A caller that
+    /// cannot say why a precondition failed can only choose between a silent pass and an
+    /// unactionable failure.
+    /// </summary>
+    private static (bool Succeeded, string Diagnostics) Restore(string directory)
     {
         try
         {
@@ -247,16 +336,26 @@ public sealed class MsBuildCrossTargetingTests
 
             if (process == null)
             {
-                return false;
+                return (false, "dotnet restore could not be started.");
             }
 
-            process.StandardOutput.ReadToEnd();
-            process.StandardError.ReadToEnd();
-            return process.WaitForExit(milliseconds: 180_000) && process.ExitCode == 0;
+            // Both pipes are read concurrently: reading one to EOF while the child is blocked
+            // writing to the other deadlocks, and this helper sits ahead of the exit wait.
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(milliseconds: 180_000))
+            {
+                return (false, "dotnet restore did not exit within 180 seconds.");
+            }
+
+            var output = string.Concat(stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
+            return process.ExitCode == 0
+                ? (true, output)
+                : (false, $"dotnet restore exited with code {process.ExitCode}:{Environment.NewLine}{output}");
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return false;
+            return (false, ex.ToString());
         }
     }
 

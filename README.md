@@ -219,6 +219,8 @@ The status bar reports project-loading progress for the active XAML document:
 | **WinApp: XAML IntelliSense loading** | Authoritative project metadata is loading; project-aware results are not ready yet. |
 | **WinApp: XAML project loading** | Framework IntelliSense is available while project symbols and diagnostics continue loading. |
 | **WinApp: XAML IntelliSense ready** | Project-aware XAML IntelliSense is ready. This confirmation hides after a few seconds. |
+| **WinApp: restore required for XAML IntelliSense** | The project's NuGet packages have never been restored, so no project metadata can be read. A separate notification offers **Restore Packages**. This status stays until the condition clears. |
+| **WinApp: build required for XAML IntelliSense** | The project, or a project it references, has never been built. Framework and package types still resolve, but members the WinUI markup compiler generates — `InitializeComponent` and the `x:Name` backing fields — do not exist yet. A separate notification offers **Build** once per project. This status stays until the condition clears. |
 | **WinApp: XAML IntelliSense unavailable** | Project IntelliSense failed to load. Select the status to open the **WinUI XAML** output for details. **WinApp: Show Info** offers restart and output actions; when packages are missing, the separate notification offers **Restore Packages**. Runtime and workspace-trust failures provide their own recovery actions in **Show Info**. |
 
 XAML tooling supports these settings:
