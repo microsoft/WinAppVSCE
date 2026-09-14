@@ -722,10 +722,37 @@ async function findBuildOutputFolders(workspacePath: string): Promise<string[] |
 	return outputFolders;
 }
 
+type BuildOutputQuickPickItem = vscode.QuickPickItem & { directory?: string };
+
+/**
+ * Build the QuickPick items for the discovered build output folders, with the
+ * shared "Browse…" entry appended.
+ *
+ * Shared by the single-select ({@link pickBuildOutputFolder}) and multi-select
+ * ({@link pickBuildOutputFolders}) pickers so both present an identical list.
+ */
+function buildOutputFolderItems(
+	workspacePath: string,
+	outputFolders: string[]
+): BuildOutputQuickPickItem[] {
+	const items: BuildOutputQuickPickItem[] = outputFolders.map((folderPath) => ({
+		label: path.relative(workspacePath, folderPath) || '.',
+		detail: folderPath,
+		directory: folderPath
+	}));
+
+	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL });
+
+	return items;
+}
+
 /**
  * Search the workspace for build output folders and let the user pick one via
  * a QuickPick. Falls back to a native folder dialog when none are found; a
  * "Browse…" entry is always appended.
+ *
+ * Single-select. Used by `winapp.run`, which targets exactly one folder. Pack
+ * uses {@link pickBuildOutputFolders} instead so it can produce a bundle.
  *
  * @returns The selected folder path, or `undefined` if cancelled.
  */
@@ -739,17 +766,10 @@ async function pickBuildOutputFolder(workspacePath: string): Promise<string | un
 		return selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
 	}
 
-	const items: Array<vscode.QuickPickItem & { directory?: string }> = outputFolders.map((folderPath) => ({
-		label: path.relative(workspacePath, folderPath) || '.',
-		detail: folderPath,
-		directory: folderPath
-	}));
-
-	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL });
-
-	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select the build output folder containing your app'
-	});
+	const picked = await vscode.window.showQuickPick(
+		buildOutputFolderItems(workspacePath, outputFolders),
+		{ placeHolder: 'Select the build output folder containing your app' }
+	);
 
 	if (!picked) {
 		return undefined;
@@ -760,6 +780,53 @@ async function pickBuildOutputFolder(workspacePath: string): Promise<string | un
 	}
 
 	return picked.directory;
+}
+
+/**
+ * Search the workspace for build output folders and let the user pick one *or
+ * more* via a multi-select QuickPick.
+ *
+ * Selecting two or more folders is how an MSIX **bundle** is produced: the CLI
+ * accepts a variadic `<input-folder>...` argument and switches to bundle output
+ * when given more than one folder (`winapp pack ./publish/x64 ./publish/arm64`).
+ *
+ * "Browse…" keeps the same appearance as every other picker in the extension,
+ * so under multi-select it is simply a checkable row. Ticking it takes
+ * precedence over any other ticked rows and opens the native folder dialog,
+ * which is itself multi-select so browsing can also produce a bundle.
+ *
+ * @returns The selected folder paths (at least one), or `undefined` if cancelled.
+ */
+async function pickBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
+	const outputFolders = await findBuildOutputFolders(workspacePath);
+	if (!outputFolders) {
+		return undefined;
+	}
+
+	if (outputFolders.length === 0) {
+		return selectFolders('Select build output folder(s)', vscode.Uri.file(workspacePath));
+	}
+
+	const picked = await vscode.window.showQuickPick(
+		buildOutputFolderItems(workspacePath, outputFolders),
+		{
+			placeHolder: 'Select build output folder(s) — pick two or more to create an MSIX bundle',
+			canPickMany: true
+		}
+	);
+
+	if (!picked || picked.length === 0) {
+		return undefined;
+	}
+
+	// "Browse…" wins over any other ticked rows: the user asked for the dialog.
+	if (picked.some((item) => item.detail === FOLDER_PICKER_DETAIL)) {
+		return selectFolders('Select build output folder(s)', vscode.Uri.file(workspacePath));
+	}
+
+	return picked
+		.map((item) => item.directory)
+		.filter((directory): directory is string => directory !== undefined);
 }
 
 /**
@@ -809,11 +876,15 @@ function installPackage(artifactPath: string, cwd: string): void {
  * Surface the result of a pack run. On success, show a completion notification
  * naming the produced artifact with Reveal / Sign / Install actions. On
  * failure, direct the user to the WinApp output channel.
+ *
+ * @param inputFolders The folder(s) passed to the CLI. More than one means a
+ *   bundle was requested; the artifact may land under any of them, so each is
+ *   accepted as a containment root.
  */
 async function handlePackCompletion(
 	extensionPath: string,
 	workspacePath: string,
-	inputFolder: string,
+	inputFolders: string[],
 	result: { code: number | null; output: string; cancelled?: boolean }
 ): Promise<void> {
 	const plan = planPackCompletion(result);
@@ -829,7 +900,7 @@ async function handlePackCompletion(
 	if (
 		!fs.existsSync(plan.artifactPath) ||
 		(!isArtifactWithinRoot(plan.artifactPath, workspacePath) &&
-			!isArtifactWithinRoot(plan.artifactPath, inputFolder))
+			!inputFolders.some((folder) => isArtifactWithinRoot(plan.artifactPath, folder)))
 	) {
 		getWinappOutputChannel().show();
 		vscode.window.showErrorMessage('Packaging failed. See the WinApp output channel for details.');
@@ -1021,6 +1092,31 @@ async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<str
 	});
 
 	return result?.[0]?.fsPath;
+}
+
+/**
+ * Prompt user to select one or more folders.
+ *
+ * Used by the pack flow, where selecting multiple build output folders produces
+ * an MSIX bundle. {@link selectFolder} remains the single-select variant.
+ *
+ * @returns The selected folder paths, or `undefined` if the dialog was
+ *   dismissed without a selection.
+ */
+async function selectFolders(title: string, defaultUri?: vscode.Uri): Promise<string[] | undefined> {
+	const result = await vscode.window.showOpenDialog({
+		canSelectFiles: false,
+		canSelectFolders: true,
+		canSelectMany: true,
+		title: title,
+		defaultUri: defaultUri
+	});
+
+	if (!result || result.length === 0) {
+		return undefined;
+	}
+
+	return result.map((uri) => uri.fsPath);
 }
 
 class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
@@ -1518,10 +1614,14 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const inputFolder = await pickBuildOutputFolder(workspacePath);
-			if (!inputFolder) {
+			const inputFolders = await pickBuildOutputFolders(workspacePath);
+			if (!inputFolders || inputFolders.length === 0) {
 				return;
 			}
+
+			// Two or more input folders make the CLI emit an MSIX bundle instead
+			// of a single package.
+			const isBundle = inputFolders.length > 1;
 
 			const generateCert = await vscode.window.showQuickPick(
 				['Yes', 'No'],
@@ -1530,12 +1630,22 @@ export function activate(context: vscode.ExtensionContext) {
 
 			const selfContained = await vscode.window.showQuickPick(
 				['Yes', 'No'],
-				{ placeHolder: 'Bundle Windows App SDK runtime (self-contained)?' }
+				{
+					placeHolder: isBundle
+						? 'Bundle Windows App SDK runtime into each package (self-contained)?'
+						: 'Bundle Windows App SDK runtime (self-contained)?'
+				}
 			);
 
 			// --- Architecture mismatch warning for self-contained packages ---
-			if (selfContained === 'Yes') {
-				const detectedArch = detectArchFromPath(inputFolder);
+			// Only meaningful for a single package: the CLI resolves the runtime
+			// from the *machine's* architecture there, so packaging x64 output on
+			// an arm64 host silently mixes architectures. For bundles the CLI
+			// packs each slice with an explicit per-slice architecture override,
+			// so the runtime always matches its package and the warning would be
+			// misleading.
+			if (selfContained === 'Yes' && !isBundle) {
+				const detectedArch = detectArchFromPath(inputFolders[0]);
 				const machineArch = getMachineArch();
 				const mismatchResult = checkSelfContainedArchMismatch(detectedArch, machineArch);
 				if (mismatchResult.mismatch) {
@@ -1553,7 +1663,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 			// Build the argument array for spawn (shell: false) so paths and flags
 			// are passed literally — no PowerShell parsing/escaping required.
-			const args = ['pack', inputFolder];
+			// Every selected folder is passed positionally; the CLI decides
+			// between .msix and .msixbundle from how many it receives.
+			const args = ['pack', ...inputFolders];
 			if (generateCert === 'Yes') {
 				args.push('--generate-cert', '--install-cert');
 			}
@@ -1565,9 +1677,9 @@ export function activate(context: vscode.ExtensionContext) {
 				extensionPath,
 				args,
 				workspacePath,
-				'Packaging app...'
+				isBundle ? 'Creating MSIX bundle...' : 'Packaging app...'
 			);
-			await handlePackCompletion(extensionPath, workspacePath, inputFolder, result);
+			await handlePackCompletion(extensionPath, workspacePath, inputFolders, result);
 		})
 	);
 
