@@ -694,4 +694,78 @@ describe('loadWinUiTemplates', () => {
 		assert.equal(loaded, undefined);
 		assert.equal(failures.length, 1);
 	});
+
+	// Only "no pack installed" (exit 4) can be fixed by retrying unpinned. Any
+	// other probe failure would fail again identically, but behind an
+	// "Installing the WinUI templates..." progress message promising work the
+	// retry can never do. These pin that the retry stays narrowly scoped.
+
+	it('does not retry when the CLI cannot be run at all', async () => {
+		// spawn failure: no exit code, and the empty output fails to parse.
+		const { adapter, requested, failures } = createAdapter([
+			{
+				cancelled: false,
+				code: null,
+				parsed: { ok: false, error: 'Could not read the template list from the WinApp CLI.' }
+			}
+		]);
+
+		const loaded = await loadWinUiTemplates(adapter);
+
+		assert.equal(loaded, undefined);
+		// One attempt only — a second spawn would fail exactly the same way.
+		assert.deepEqual(requested, ['installed']);
+		assert.equal(failures.length, 1);
+		assert.match(failures[0].message, /Could not read the template list/);
+		assert.equal(failures[0].sdkMissing, false);
+	});
+
+	it('does not retry when the probe succeeds but its output is unreadable', async () => {
+		// Exit 0 with a payload that could not be parsed: the pack question is
+		// settled (the probe worked), so installing a pack is not the answer.
+		const { adapter, requested, failures } = createAdapter([
+			{
+				cancelled: false,
+				code: 0,
+				parsed: { ok: false, error: 'Could not read the template list from the WinApp CLI.' }
+			}
+		]);
+
+		const loaded = await loadWinUiTemplates(adapter);
+
+		assert.equal(loaded, undefined);
+		assert.deepEqual(requested, ['installed']);
+		assert.equal(failures.length, 1);
+	});
+
+	it('does not retry when the probe reports invalid arguments', async () => {
+		const { adapter, requested, failures } = createAdapter([
+			{
+				cancelled: false,
+				code: 2,
+				parsed: { ok: false, error: 'Unrecognized option.' }
+			}
+		]);
+
+		const loaded = await loadWinUiTemplates(adapter);
+
+		assert.equal(loaded, undefined);
+		assert.deepEqual(requested, ['installed']);
+		assert.equal(failures.length, 1);
+		assert.equal(failures[0].message, 'Unrecognized option.');
+	});
+
+	it('falls back to a generic message when a failing probe has no payload', async () => {
+		const { adapter, failures } = createAdapter([
+			{ cancelled: false, code: 5 }
+		]);
+
+		const loaded = await loadWinUiTemplates(adapter);
+
+		assert.equal(loaded, undefined);
+		// describeNewFailure supplies the wording when the CLI said nothing usable.
+		assert.equal(failures.length, 1);
+		assert.equal(failures[0].message, describeNewFailure(5, undefined));
+		assert.equal(failures[0].sdkMissing, false);
+	});
 });

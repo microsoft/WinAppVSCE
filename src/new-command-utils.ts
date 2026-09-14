@@ -476,9 +476,10 @@ export interface TemplateLoadAdapter {
  *
  * The default path probes `--template-version installed` first because the
  * unpinned listing asks the package feed whether a newer pack exists on every
- * run, which costs seconds. The unpinned listing is still the fallback: it
- * covers the first run, where nothing is installed yet and `installed`
- * legitimately fails.
+ * run, which costs seconds. The unpinned listing is still the fallback, but
+ * only for the one failure it can actually fix: the first run, where no pack is
+ * installed yet and the probe reports that specifically. Any other probe
+ * failure is reported as-is rather than retried.
  *
  * @param templateVersion When `'latest'`, installs the newest template pack
  *                        before listing. Omitted on the normal path.
@@ -497,19 +498,23 @@ export async function loadWinUiTemplates(
 		if (local.parsed?.ok && local.code === 0) {
 			return { list: local.parsed.value, freshlyInstalled: false };
 		}
-		if (isSdkMissingExit(local.code)) {
-			// No .NET SDK means the fallback cannot succeed either, and its
-			// "Installing..." progress would imply work that can never happen.
-			// Prefer the CLI's own message: it distinguishes "no SDK found" from
-			// "SDK too old", and names the required version.
+		if (local.code !== NEW_EXIT.packFailed) {
+			// Only "no pack installed" justifies retrying unpinned. Every other
+			// failure — no .NET SDK, an unreadable payload, or the CLI failing to
+			// start at all — would fail again in exactly the same way, except the
+			// retry announces itself as "Installing the WinUI templates...",
+			// promising work it can never do before showing the same error.
+			//
+			// Prefer the CLI's own message where there is one: it distinguishes
+			// "no SDK found" from "SDK too old" and names the required version.
 			const detail = local.parsed && !local.parsed.ok
 				? local.parsed.error
 				: describeNewFailure(local.code, undefined);
-			await adapter.reportFailure(detail, true);
+			await adapter.reportFailure(detail, isSdkMissingExit(local.code));
 			return undefined;
 		}
-		// No pack installed yet: fall through to the unpinned listing, which
-		// installs the latest pack on demand.
+		// Exit 4 from the `installed` probe means no pack is installed yet: fall
+		// through to the unpinned listing, which installs the latest on demand.
 	}
 
 	const result = await adapter.listTemplates(
