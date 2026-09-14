@@ -478,7 +478,8 @@ internal sealed partial class XamlLanguageServer
             ? "A referenced project has not been built yet."
             : $"Build required: {string.Join(", ", unresolved)}";
 
-    private Task NotifyProjectContextStatusAsync(        string uri,
+    private Task NotifyProjectContextStatusAsync(
+        string uri,
         string state,
         string? message = null) =>
         _connection.SendNotificationAsync(

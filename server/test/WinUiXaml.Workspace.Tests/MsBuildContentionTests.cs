@@ -24,7 +24,8 @@ public sealed class MsBuildContentionTests
     [Fact]
     public void TheTwoStagesOfALoadShareOneGate()
     {
-        var directory = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "winuixaml-gate-fixture"));
+        var directory = Path.GetFullPath(Path.Combine(
+            Path.GetTempPath(), "winuixaml-gate-fixture-" + Guid.NewGuid().ToString("N")));
         Directory.CreateDirectory(directory);
         try
         {
@@ -47,7 +48,8 @@ public sealed class MsBuildContentionTests
     [Fact]
     public void UnrelatedProjectsDoNotShareAGate()
     {
-        var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "winuixaml-gate-fixture-2"));
+        var root = Path.GetFullPath(Path.Combine(
+            Path.GetTempPath(), "winuixaml-gate-fixture-" + Guid.NewGuid().ToString("N")));
         var first = Path.Combine(root, "AppOne");
         var second = Path.Combine(root, "AppTwo");
         Directory.CreateDirectory(first);

@@ -36,7 +36,8 @@ namespace WinUiXaml.Workspace
             CSharpCompilationOptions? compilationOptions = null)
         {
             _parseOptions = parseOptions;
-            _compilationOptions = compilationOptions;            References = references;
+            _compilationOptions = compilationOptions;
+            References = references;
             Analyzers = analyzers;
             Sources = sources;
             AnalyzerConfigs = analyzerConfigs;
@@ -57,7 +58,8 @@ namespace WinUiXaml.Workspace
         private readonly CSharpParseOptions? _parseOptions;
         private readonly CSharpCompilationOptions? _compilationOptions;
 
-        public ImmutableArray<string> References { get; }        public ImmutableArray<string> Analyzers { get; }
+        public ImmutableArray<string> References { get; }
+        public ImmutableArray<string> Analyzers { get; }
         public ImmutableArray<string> Sources { get; }
 
         /// <summary>

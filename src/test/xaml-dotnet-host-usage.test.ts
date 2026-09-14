@@ -55,10 +55,18 @@ test("every .NET launch site resolves the host and passes a child environment", 
     ),
   ];
 
+  // Self-calibrating rather than a hardcoded count: every launch the first test discovered must
+  // also appear here with a resolved host and its environment. A new launch site therefore has to
+  // be correct to pass, instead of merely changing an expected number.
+  const launches = [
+    ...body.matchAll(/(?:new vscode\.ProcessExecution|spawn|execFile|spawnSync)\(\s*([^,]+),/g),
+  ];
+
   assert.equal(
     launchSites.length,
-    2,
-    "expected the build and restore launch sites to both resolve a host and build its environment"
+    launches.length,
+    `every .NET launch site must resolve the host and pass its environment; found ` +
+      `${launches.length} launch(es) but only ${launchSites.length} are host-resolved`
   );
 
   for (const site of launchSites) {

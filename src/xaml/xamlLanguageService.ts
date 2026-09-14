@@ -57,6 +57,7 @@ import {
   notifyProjectRestoreRequired as runProjectRestoreNotification,
 } from "./projectRestoreNotification";
 import {
+  PROJECT_BUILD_ACTIONS,
   PROJECT_BUILD_NOTIFICATION,
   notifyProjectBuildRequired as runProjectBuildNotification,
 } from "./projectBuildNotification";
@@ -872,9 +873,9 @@ async function runProjectBuild(projectPath: string): Promise<void> {
     log(`Project build could not start: ${detail}`);
     void vscode.window.showErrorMessage(
       `WinUI project build could not start: ${detail}`,
-      PROJECT_RESTORE_ACTIONS.showOutput
+      PROJECT_BUILD_ACTIONS.showOutput
     ).then((choice) => {
-      if (choice === PROJECT_RESTORE_ACTIONS.showOutput) {
+      if (choice === PROJECT_BUILD_ACTIONS.showOutput) {
         output?.show(true);
       }
     });
@@ -897,7 +898,13 @@ async function runProjectBuild(projectPath: string): Promise<void> {
     clear: true,
   };
 
-  void vscode.tasks.executeTask(task);
+  // A rejected executeTask is the one remaining way this can fail silently: the host is
+  // resolved and the task is well-formed, but VS Code can still decline to start it.
+  void Promise.resolve(vscode.tasks.executeTask(task)).then(undefined, (error: unknown) => {
+    const detail = error instanceof Error ? error.message : String(error);
+    log(`Project build task could not start: ${detail}`);
+    void vscode.window.showErrorMessage(`WinUI project build could not start: ${detail}`);
+  });
 }
 
 /**
