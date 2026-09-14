@@ -18,11 +18,15 @@
  * These tests drive the real `winapp new --list --json`, but only ever the
  * purely local `--template-version installed` path: the suite skips itself
  * unless a WinUI template pack is already on the machine. Without that guard a
- * test run on a clean machine would fall through to the unpinned listing, which
- * installs the pack machine-wide for every tool that uses `dotnet new` — a side
- * effect a test must never cause. The install/fallback decisions that guard is
- * stepping around are covered deterministically in
- * `src/test/new-command-utils.test.ts`, so nothing is lost by skipping.
+ * test run on a clean *developer* machine would fall through to the unpinned
+ * listing, which installs the pack machine-wide for every tool that uses
+ * `dotnet new` — a side effect a test must never cause.
+ *
+ * CI installs the pack explicitly before running E2E (see the "Install WinUI
+ * template pack" step in `.github/workflows/build.yml`), so the guard passes
+ * there and these tests always run in PR validation. The runner is ephemeral,
+ * so installing on it is free of the side effect that makes it unacceptable
+ * locally.
  */
 
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
@@ -30,6 +34,7 @@ import { execFileSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { getWinappCliPath } from '../../winapp-cli-utils';
 
 const VSCODE_EXE =
     process.env.VSCODE_PATH ??
@@ -39,18 +44,6 @@ const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
 const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
     ? []
     : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
-
-/**
- * Resolve the CLI the extension itself would run, mirroring `getWinappCliPath`.
- */
-function resolveCliPath(): string {
-    const arch = os.arch() === 'arm64' ? 'win-arm64' : 'win-x64';
-    const candidates = [
-        path.join(EXTENSION_ROOT, 'bin', arch, 'winapp.exe'),
-        path.join(EXTENSION_ROOT, '..', 'bin', arch, 'winapp.exe')
-    ];
-    return candidates.find((candidate) => fs.existsSync(candidate)) ?? 'winapp';
-}
 
 /**
  * Whether a WinUI template pack is already installed on this machine.
@@ -63,7 +56,7 @@ function resolveCliPath(): string {
 function hasInstalledTemplatePack(): boolean {
     try {
         const output = execFileSync(
-            resolveCliPath(),
+            getWinappCliPath(EXTENSION_ROOT),
             ['new', '--list', '--json', '--template-version', 'installed'],
             { cwd: os.tmpdir(), encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }
         );
