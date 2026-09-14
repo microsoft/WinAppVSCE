@@ -10,16 +10,19 @@ import {
 	isAlreadyExistsError,
 	parseCertErrorMessage,
 	parseCertGenerateResult,
+	parseCertInfoSubject,
 	parseExistingCertificatePath,
 	parseManifestPublisher,
 	publishersMatch,
 	redactPasswordArgs,
 	redactPasswordInOutput,
+	resolveCertPublisherSourceDecision,
 	validatePublisherInput,
 	type CertGenerateFlowAdapter,
 	type CertGenerateOutcome,
 	type CertGenerateResult,
 	type CertIfExists,
+	type CertPublisherSourceAdapter,
 	type OverwriteChoice
 } from '../cert-utils';
 
@@ -244,7 +247,14 @@ describe('validatePublisherInput', () => {
 	test('accepts single and multi-component distinguished names', () => {
 		assert.equal(validatePublisherInput('CN=Contoso'), undefined);
 		assert.equal(validatePublisherInput('CN=Contoso, O=Contoso Ltd, C=US'), undefined);
-		assert.equal(validatePublisherInput('CN=Contoso\\, Inc, C=US'), undefined);
+	});
+
+	test('rejects backslash escapes, which the packaging schema does not accept', () => {
+		// ST_Publisher_2010_v2 has no escape sequences, so a publisher containing
+		// one can never match a manifest. See manifest-validator.test.ts, which
+		// pins the same rule for the manifest editor.
+		assert.ok(validatePublisherInput('CN=Contoso\\, Inc, C=US'));
+		assert.ok(validatePublisherInput('CN=A\\+B'));
 	});
 
 	test('rejects empty input', () => {
@@ -279,6 +289,11 @@ interface FlowCalls {
 	failures: (string | undefined)[];
 	keptExisting: (string | undefined)[];
 	confirmCanReuse: boolean[];
+	inspected: string[];
+	verified: CertGenerateResult[];
+	installSkipped: CertGenerateResult[];
+	/** Order of the delegated calls, so ordering guarantees can be asserted. */
+	sequence: string[];
 }
 
 /**
@@ -289,7 +304,11 @@ interface FlowCalls {
  */
 function createFakeAdapter(
 	outcomes: CertGenerateOutcome[],
-	choice: OverwriteChoice = 'dismiss'
+	choice: OverwriteChoice = 'dismiss',
+	options: {
+		verdict?: 'ok' | 'mismatch' | 'unverified';
+		inspected?: CertGenerateResult;
+	} = {}
 ): { adapter: CertGenerateFlowAdapter; calls: FlowCalls } {
 	const calls: FlowCalls = {
 		generateModes: [],
@@ -297,7 +316,11 @@ function createFakeAdapter(
 		successes: [],
 		failures: [],
 		keptExisting: [],
-		confirmCanReuse: []
+		confirmCanReuse: [],
+		inspected: [],
+		verified: [],
+		installSkipped: [],
+		sequence: []
 	};
 
 	const queue = [...outcomes];
@@ -305,25 +328,45 @@ function createFakeAdapter(
 	const adapter: CertGenerateFlowAdapter = {
 		runGenerate: async (ifExists) => {
 			calls.generateModes.push(ifExists);
+			calls.sequence.push('runGenerate');
 			const next = queue.shift();
 			assert.ok(next, 'runGenerate called more times than the test scripted');
 			return next;
 		},
 		confirmOverwrite: async (_existingPath, canReuse) => {
 			calls.confirmCanReuse.push(canReuse);
+			calls.sequence.push('confirmOverwrite');
 			return choice;
 		},
 		installCertificate: async (certificatePath) => {
 			calls.installed.push(certificatePath);
+			calls.sequence.push('installCertificate');
+		},
+		inspectCertificate: async (certificatePath) => {
+			calls.inspected.push(certificatePath);
+			calls.sequence.push('inspectCertificate');
+			return options.inspected;
+		},
+		verifyPublisher: async (result) => {
+			calls.verified.push(result);
+			calls.sequence.push('verifyPublisher');
+			return options.verdict ?? 'ok';
 		},
 		reportSuccess: async (result, context) => {
 			calls.successes.push({ result, ...context });
+			calls.sequence.push('reportSuccess');
 		},
 		reportFailure: (message) => {
 			calls.failures.push(message);
+			calls.sequence.push('reportFailure');
 		},
 		reportKeptExisting: (existingPath) => {
 			calls.keptExisting.push(existingPath);
+			calls.sequence.push('reportKeptExisting');
+		},
+		reportInstallSkipped: (result) => {
+			calls.installSkipped.push(result);
+			calls.sequence.push('reportInstallSkipped');
 		}
 	};
 
@@ -500,8 +543,59 @@ describe('parseManifestPublisher', () => {
 
 	test('handles a namespace-prefixed Identity element', () => {
 		assert.equal(
-			parseManifestPublisher('<foo:Identity Name="A" Publisher="CN=X" />'),
+			parseManifestPublisher(
+				`<pkg:Package xmlns:pkg="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+  <pkg:Identity Name="A" Publisher="CN=X" Version="1.0.0.0" />
+</pkg:Package>`
+			),
 			'CN=X'
+		);
+	});
+
+	test('ignores a commented-out Identity element', () => {
+		assert.equal(
+			parseManifestPublisher(
+				`<Package>
+  <!-- <Identity Name="Old" Publisher="CN=Stale" /> -->
+  <Identity Name="App" Publisher="CN=Current" />
+</Package>`
+			),
+			'CN=Current'
+		);
+	});
+
+	test('reads a single-quoted Publisher attribute', () => {
+		assert.equal(
+			parseManifestPublisher(`<Package><Identity Name='A' Publisher='CN=Quoted' /></Package>`),
+			'CN=Quoted'
+		);
+	});
+
+	test('decodes XML entities in the publisher', () => {
+		assert.equal(
+			parseManifestPublisher('<Package><Identity Publisher="CN=A &amp; B" /></Package>'),
+			'CN=A & B'
+		);
+	});
+
+	test('ignores Publisher on nested dependency elements', () => {
+		assert.equal(
+			parseManifestPublisher(
+				`<Package>
+  <Identity Name="App" Publisher="CN=Real" />
+  <Dependencies>
+    <PackageDependency Name="Dep" Publisher="CN=SomeoneElse" />
+  </Dependencies>
+</Package>`
+			),
+			'CN=Real'
+		);
+	});
+
+	test('tolerates a leading BOM and CRLF line endings', () => {
+		assert.equal(
+			parseManifestPublisher('\uFEFF<Package>\r\n  <Identity Publisher="CN=Bom" />\r\n</Package>'),
+			'CN=Bom'
 		);
 	});
 
@@ -528,5 +622,204 @@ describe('publishersMatch', () => {
 
 	test('does not treat a prefix as a match', () => {
 		assert.equal(publishersMatch('CN=Contoso', 'CN=Contoso, O=Contoso Ltd'), false);
+	});
+});
+
+describe('parseCertInfoSubject', () => {
+	test('reads the subject from a cert info payload', () => {
+		assert.equal(
+			parseCertInfoSubject(JSON.stringify({ subject: 'CN=Probe', thumbprint: 'AB' })),
+			'CN=Probe'
+		);
+	});
+
+	test('returns undefined for output without a subject', () => {
+		assert.equal(parseCertInfoSubject('{"error":"bad password"}'), undefined);
+		assert.equal(parseCertInfoSubject('not json'), undefined);
+	});
+});
+
+describe('redact-then-classify', () => {
+	// Redaction happens in runWinappCapture before the output is classified, so
+	// no downstream message can contain the password the CLI echoes back. The
+	// exit-0-but-unparsable branch is the one that matters: it routes a SUCCESS
+	// payload into the error path.
+	test('an exit-0 payload without certificatePath never leaks the password', () => {
+		const renamed = JSON.stringify({ certPath: 'C:\\proj\\devcert.pfx', password: 'hunter2' });
+		const outcome = decideCertGenerateOutcome(0, redactPasswordInOutput(renamed));
+
+		assert.equal(outcome.kind, 'failed');
+		assert.ok(outcome.kind === 'failed' && !outcome.message?.includes('hunter2'));
+	});
+
+	test('a failure payload never leaks the password', () => {
+		const failure = JSON.stringify({ error: 'boom', password: 'hunter2' });
+		const outcome = decideCertGenerateOutcome(1, redactPasswordInOutput(failure));
+
+		assert.equal(outcome.kind, 'failed');
+		assert.ok(outcome.kind === 'failed' && !outcome.message?.includes('hunter2'));
+	});
+});
+
+describe('resolveCertPublisherSourceDecision', () => {
+	function adapterFor(
+		manifests: string[] | undefined,
+		overrides: Partial<CertPublisherSourceAdapter> = {}
+	): { adapter: CertPublisherSourceAdapter; calls: string[] } {
+		const calls: string[] = [];
+		const adapter: CertPublisherSourceAdapter = {
+			findManifests: async () => {
+				calls.push('findManifests');
+				return manifests;
+			},
+			pickManifest: async (paths) => {
+				calls.push('pickManifest');
+				return paths[0];
+			},
+			promptPublisher: async () => {
+				calls.push('promptPublisher');
+				return 'Contoso';
+			},
+			...overrides
+		};
+		return { adapter, calls };
+	}
+
+	test('uses the only manifest without prompting', async () => {
+		const { adapter, calls } = adapterFor(['C:\\proj\\Package.appxmanifest']);
+		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter), {
+			kind: 'manifest',
+			manifestPath: 'C:\\proj\\Package.appxmanifest'
+		});
+		assert.deepEqual(calls, ['findManifests']);
+	});
+
+	test('asks which manifest to use when several are found', async () => {
+		const { adapter, calls } = adapterFor(['C:\\a.appxmanifest', 'C:\\b.appxmanifest']);
+		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter), {
+			kind: 'manifest',
+			manifestPath: 'C:\\a.appxmanifest'
+		});
+		assert.deepEqual(calls, ['findManifests', 'pickManifest']);
+	});
+
+	test('prompts for a publisher when there is no manifest', async () => {
+		const { adapter, calls } = adapterFor([]);
+		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter), {
+			kind: 'publisher',
+			publisher: 'Contoso'
+		});
+		assert.deepEqual(calls, ['findManifests', 'promptPublisher']);
+	});
+
+	test('cancelling the manifest search stops the flow', async () => {
+		const { adapter, calls } = adapterFor(undefined);
+		assert.equal(await resolveCertPublisherSourceDecision(adapter), undefined);
+		assert.deepEqual(calls, ['findManifests']);
+	});
+
+	test('dismissing the manifest picker stops the flow', async () => {
+		const { adapter } = adapterFor(['C:\\a.appxmanifest', 'C:\\b.appxmanifest'], {
+			pickManifest: async () => undefined
+		});
+		assert.equal(await resolveCertPublisherSourceDecision(adapter), undefined);
+	});
+
+	test('dismissing or blanking the publisher prompt stops the flow', async () => {
+		const dismissed = adapterFor([], { promptPublisher: async () => undefined });
+		assert.equal(await resolveCertPublisherSourceDecision(dismissed.adapter), undefined);
+
+		const blank = adapterFor([], { promptPublisher: async () => '   ' });
+		assert.equal(await resolveCertPublisherSourceDecision(blank.adapter), undefined);
+	});
+});
+describe('executeCertGenerateFlow publisher verification', () => {
+	test('verifies the publisher before handing off to the elevated install', async () => {
+		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }]);
+		await executeCertGenerateFlow(adapter, true);
+
+		const verifyAt = calls.sequence.indexOf('verifyPublisher');
+		const installAt = calls.sequence.indexOf('installCertificate');
+		assert.ok(verifyAt !== -1 && installAt !== -1);
+		assert.ok(
+			verifyAt < installAt,
+			`verifyPublisher must run before installCertificate, got ${calls.sequence.join(' -> ')}`
+		);
+	});
+
+	test('skips the install when the publisher does not match the manifest', async () => {
+		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }], 'dismiss', {
+			verdict: 'mismatch'
+		});
+		const result = await executeCertGenerateFlow(adapter, true);
+
+		assert.deepEqual(calls.installed, []);
+		assert.equal(calls.installSkipped.length, 1);
+		assert.equal(result.installed, false);
+		assert.equal(result.publisherVerified, 'mismatch');
+		// The certificate still exists, so the path is reported back.
+		assert.equal(result.certificatePath, GENERATED.certificatePath);
+	});
+
+	test('a mismatch without an install request does not report a skipped install', async () => {
+		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }], 'dismiss', {
+			verdict: 'mismatch'
+		});
+		await executeCertGenerateFlow(adapter, false);
+
+		assert.deepEqual(calls.installSkipped, []);
+		assert.equal(calls.successes.length, 1);
+	});
+
+	test('an unverifiable publisher does not block the install', async () => {
+		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }], 'dismiss', {
+			verdict: 'unverified'
+		});
+		const result = await executeCertGenerateFlow(adapter, true);
+
+		assert.deepEqual(calls.installed, [GENERATED.certificatePath]);
+		assert.equal(result.installed, true);
+	});
+
+	test('reuse reads the existing certificate so it can be verified', async () => {
+		const inspected: CertGenerateResult = {
+			certificatePath: EXISTING_PATH,
+			subjectName: 'CN=Existing'
+		};
+		const { adapter, calls } = createFakeAdapter(
+			[{ kind: 'already-exists', existingPath: EXISTING_PATH }],
+			'reuse',
+			{ inspected }
+		);
+		await executeCertGenerateFlow(adapter, false);
+
+		assert.deepEqual(calls.inspected, [EXISTING_PATH]);
+		// Without the inspection the verifier would receive a bare path and skip
+		// the check entirely, which is how a wrong certificate used to get through.
+		assert.equal(calls.verified[0].subjectName, 'CN=Existing');
+	});
+
+	test('reuse still succeeds when the existing certificate cannot be read', async () => {
+		const { adapter, calls } = createFakeAdapter(
+			[{ kind: 'already-exists', existingPath: EXISTING_PATH }],
+			'reuse'
+		);
+		const result = await executeCertGenerateFlow(adapter, false);
+
+		assert.equal(result.certificatePath, EXISTING_PATH);
+		assert.equal(result.created, false);
+		assert.equal(calls.successes.length, 1);
+	});
+
+	test('a mismatched reused certificate is not installed', async () => {
+		const { adapter, calls } = createFakeAdapter(
+			[{ kind: 'already-exists', existingPath: EXISTING_PATH }],
+			'reuse',
+			{ inspected: { certificatePath: EXISTING_PATH, subjectName: 'CN=Wrong' }, verdict: 'mismatch' }
+		);
+		await executeCertGenerateFlow(adapter, true);
+
+		assert.deepEqual(calls.installed, []);
+		assert.equal(calls.installSkipped.length, 1);
 	});
 });

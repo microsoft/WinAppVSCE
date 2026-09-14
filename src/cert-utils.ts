@@ -5,6 +5,8 @@
  * redaction rules can be unit tested directly.
  */
 
+import { parseManifestXml } from './manifest-schema/xml-parser';
+
 /**
  * Glob patterns for app manifests within a project directory.
  *
@@ -156,6 +158,17 @@ export function parseCertGenerateResult(output: string): CertGenerateResult | un
 }
 
 /**
+ * Pull the subject DN out of a `cert info --json` payload.
+ *
+ * `cert info` reports the certificate's identity as `subject`, not `publisher`,
+ * so the reuse path needs its own reader to fill in what `cert generate` would
+ * otherwise have provided.
+ */
+export function parseCertInfoSubject(output: string): string | undefined {
+	return asString(parseJsonObject(output)?.subject);
+}
+
+/**
  * Matches the CLI's "already exists" failure, in both its JSON form
  * (`{"error":"Certificate file already exists: …"}`) and its plain-text form.
  */
@@ -252,15 +265,39 @@ export function decideCertGenerateOutcome(
  * match the package. See microsoft/winappCli#839.
  */
 export function parseManifestPublisher(xml: string): string | undefined {
-	// Match the Identity element's Publisher attribute specifically; other
-	// elements (e.g. PublisherDisplayName) must not be picked up.
-	const identity = /<(?:\w+:)?Identity\b[^>]*>/i.exec(xml);
-	if (!identity) {
+	// Parsed as a DOM rather than pattern-matched. A regex over the raw text
+	// reads commented-out <Identity> elements, misses single-quoted attributes,
+	// and returns entity references undecoded — all of which turn into either a
+	// false mismatch warning or a real one that never fires.
+	let doc;
+	try {
+		// A UTF-8 BOM survives fs.readFile(…, 'utf8') and makes the parser reject
+		// the document, and Visual Studio writes manifests with one.
+		const parsed = parseManifestXml(xml.replace(/^\uFEFF/, ''));
+		if (parsed.errors.length > 0) {
+			return undefined;
+		}
+		doc = parsed.doc;
+	} catch {
 		return undefined;
 	}
 
-	const publisher = /\bPublisher\s*=\s*"([^"]*)"/i.exec(identity[0]);
-	return publisher?.[1]?.trim() || undefined;
+	const root = doc.documentElement;
+	if (!root) {
+		return undefined;
+	}
+
+	// Only a direct child of the package root counts: Publisher also appears on
+	// PackageDependency and ExternalDependency elements deeper in the manifest.
+	for (let node = root.firstChild; node; node = node.nextSibling) {
+		const element = node as { nodeType?: number; localName?: string; getAttribute?: (name: string) => string | null };
+		if (element.nodeType !== 1 || element.localName !== 'Identity') {
+			continue;
+		}
+		return element.getAttribute?.('Publisher')?.trim() || undefined;
+	}
+
+	return undefined;
 }
 
 /**
@@ -296,17 +333,25 @@ export function validatePublisherInput(value: string): string | undefined {
 		return 'Enter a publisher name, for example Contoso or CN=Contoso.';
 	}
 
+	// Backslash escapes are an RFC 2253 feature that the packaging schema's
+	// ST_Publisher_2010_v2 pattern does not accept, so a publisher containing
+	// one can never match a manifest. Rejecting it here keeps this validator
+	// consistent with manifest-validator.ts rather than steering the user
+	// towards a value the manifest editor would flag as an error.
+	if (trimmed.includes('\\')) {
+		return 'Remove the backslash — Windows packaging does not accept escape sequences in a publisher name.';
+	}
+
 	if (!trimmed.includes('=')) {
 		// A bare name is wrapped as CN=<name> by the CLI, so an unescaped comma
 		// would be read as an RDN separator and produce a malformed DN.
 		if (trimmed.includes(',')) {
-			return 'Remove the comma, or enter a full distinguished name and escape it as \\, (for example CN=Contoso\\, Inc).';
+			return 'Remove the comma, or enter a full distinguished name (for example CN=Contoso Inc, O=Contoso).';
 		}
 		return undefined;
 	}
 
-	// Split on commas that are not escaped as "\,".
-	const components = trimmed.split(/(?<!\\),/);
+	const components = trimmed.split(',');
 	for (const component of components) {
 		const part = component.trim();
 		if (!part) {
@@ -357,6 +402,25 @@ export interface CertGenerateFlowAdapter {
 	/** Install the certificate into the machine store (requires elevation). */
 	installCertificate(certificatePath: string): Promise<void>;
 
+	/**
+	 * Read the publisher out of an existing certificate on disk.
+	 *
+	 * Used on the reuse path, where the CLI produced no payload to verify: without
+	 * it, "Use Existing Cert" would skip the publisher check entirely. Returns
+	 * `undefined` when the certificate cannot be read (for example because it uses
+	 * a non-default password).
+	 */
+	inspectCertificate(certificatePath: string): Promise<CertGenerateResult | undefined>;
+
+	/**
+	 * Check the certificate against the manifest it was meant to be derived from.
+	 *
+	 * Runs before any install so the user is never asked to approve UAC for a
+	 * certificate that cannot work. `'unverified'` means the check could not be
+	 * performed, which is not the same as a mismatch and must not block.
+	 */
+	verifyPublisher(result: CertGenerateResult): Promise<'ok' | 'mismatch' | 'unverified'>;
+
 	/** Report the certificate that is now available. */
 	reportSuccess(
 		result: CertGenerateResult,
@@ -368,6 +432,12 @@ export interface CertGenerateFlowAdapter {
 
 	/** Tell the user the existing certificate was left alone and nothing else happened. */
 	reportKeptExisting(existingPath: string | undefined): void;
+
+	/**
+	 * Report that the install was skipped because the certificate does not match
+	 * the manifest. Trusting it would not make the package installable.
+	 */
+	reportInstallSkipped(result: CertGenerateResult): void;
 }
 
 export interface CertGenerateFlowResult {
@@ -379,6 +449,8 @@ export interface CertGenerateFlowResult {
 	installed: boolean;
 	/** Whether the "already exists" warning was shown. */
 	overwritePrompted: boolean;
+	/** Outcome of the manifest-publisher check, when one was reached. */
+	publisherVerified?: 'ok' | 'mismatch' | 'unverified';
 }
 
 /**
@@ -413,7 +485,14 @@ export async function executeCertGenerateFlow(
 		const choice = await adapter.confirmOverwrite(existingPath, existingPath !== undefined);
 
 		if (choice === 'reuse' && existingPath) {
-			outcome = { kind: 'success', result: { certificatePath: existingPath } };
+			// The CLI emitted no payload for a certificate it refused to replace, so
+			// read the publisher back off disk. Otherwise the verification below has
+			// nothing to compare and silently passes a possibly-wrong certificate.
+			const inspected = await adapter.inspectCertificate(existingPath);
+			outcome = {
+				kind: 'success',
+				result: inspected ?? { certificatePath: existingPath }
+			};
 			created = false;
 		} else if (choice === 'overwrite') {
 			outcome = await adapter.runGenerate('overwrite');
@@ -443,6 +522,17 @@ export async function executeCertGenerateFlow(
 	result.certificatePath = outcome.result.certificatePath;
 	result.created = created;
 
+	// Verified before installing, not after. The install hands off to a UAC
+	// window, so discovering a mismatch afterwards means the user has already
+	// approved trusting a certificate that cannot sign their package.
+	const verdict = await adapter.verifyPublisher(outcome.result);
+	result.publisherVerified = verdict;
+
+	if (install && verdict === 'mismatch') {
+		adapter.reportInstallSkipped(outcome.result);
+		return result;
+	}
+
 	if (install) {
 		await adapter.installCertificate(outcome.result.certificatePath);
 		result.installed = true;
@@ -450,7 +540,64 @@ export async function executeCertGenerateFlow(
 
 	// Reported for both branches: the install is handed to another window, so
 	// this is the only place the certificate's location surfaces in VS Code.
-	await adapter.reportSuccess(outcome.result, { created, installing: install });
+	await adapter.reportSuccess(outcome.result, { created, installing: result.installed });
 
 	return result;
+}
+
+// ──────────────────────────────────────────────────────
+// Publisher source selection
+// ──────────────────────────────────────────────────────
+
+/**
+ * Source of the publisher for a generated certificate: either a manifest the
+ * CLI extracts it from, or a name the user typed because there is no manifest.
+ */
+export type CertPublisherSource =
+	| { kind: 'manifest'; manifestPath: string }
+	| { kind: 'publisher'; publisher: string };
+
+export interface CertPublisherSourceAdapter {
+	/** Locate candidate manifests. `undefined` means the search was cancelled. */
+	findManifests(): Promise<string[] | undefined>;
+
+	/** Ask which manifest to use. `undefined` means the user dismissed the picker. */
+	pickManifest(manifestPaths: string[]): Promise<string | undefined>;
+
+	/** Ask for a publisher by hand. `undefined` means the user dismissed the prompt. */
+	promptPublisher(): Promise<string | undefined>;
+}
+
+/**
+ * Decide where the certificate's publisher comes from.
+ *
+ * The certificate's publisher must match the manifest's `Identity/@Publisher`
+ * or the resulting package will not install, so a manifest is always preferred
+ * and passed explicitly via `--manifest`. Relying on the CLI's working-directory
+ * inference instead is unsafe: with no manifest to find it silently falls back
+ * to the current user name, producing a certificate that can never match.
+ *
+ * @returns The resolved source, or `undefined` if the user cancelled.
+ */
+export async function resolveCertPublisherSourceDecision(
+	adapter: CertPublisherSourceAdapter
+): Promise<CertPublisherSource | undefined> {
+	const manifestPaths = await adapter.findManifests();
+
+	if (!manifestPaths) {
+		return undefined;
+	}
+
+	if (manifestPaths.length === 1) {
+		return { kind: 'manifest', manifestPath: manifestPaths[0] };
+	}
+
+	if (manifestPaths.length > 1) {
+		const picked = await adapter.pickManifest(manifestPaths);
+		return picked ? { kind: 'manifest', manifestPath: picked } : undefined;
+	}
+
+	// No manifest: ask rather than letting the CLI fall back to the user name.
+	const publisher = (await adapter.promptPublisher())?.trim();
+	return publisher ? { kind: 'publisher', publisher } : undefined;
 }

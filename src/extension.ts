@@ -41,11 +41,14 @@ import {
 	buildCertGenerateArgs,
 	decideCertGenerateOutcome,
 	executeCertGenerateFlow,
+	parseCertInfoSubject,
 	redactPasswordInOutput,
+	resolveCertPublisherSourceDecision,
 	validatePublisherInput,
 	type CertGenerateFlowAdapter,
 	type CertGenerateResult,
-	type CertIfExists
+	type CertIfExists,
+	type CertPublisherSource
 } from './cert-utils';
 import {
 	detectArchFromPath,
@@ -292,11 +295,13 @@ function getWinappOutputChannel(): vscode.OutputChannel {
  *
  * @param options.cancelMessage Line written to the output channel when the user
  *   cancels. Defaults to the packaging wording.
- * @param options.redact Applied to the echoed command line and to every output
- *   chunk before it reaches the output channel. Commands whose output can
- *   contain secrets (e.g. `cert generate --json`, which echoes the certificate
- *   password) must supply this; the captured output returned to the caller is
- *   left unredacted so it can still be parsed.
+ * @param options.redact Applied to the echoed command line, to every output
+ *   chunk before it reaches the output channel, and to the captured output
+ *   returned to the caller. Commands whose output can contain secrets (e.g.
+ *   `cert generate --json`, which echoes the certificate password) must supply
+ *   this. Redacting the returned value too is deliberate: callers surface that
+ *   string in notifications, and only the secret itself is masked, so the
+ *   payload stays parseable.
  * @returns The process exit code and the full captured output.
  */
 async function runWinappCapture(
@@ -332,7 +337,11 @@ async function runWinappCapture(
 				const finish = (result: { code: number | null; output: string; cancelled?: boolean }) => {
 					if (!settled) {
 						settled = true;
-						resolve(result);
+						// Redact on the way out as well as on the way to the output
+						// channel. Callers interpolate this string into error
+						// notifications, so leaving it raw re-leaks any secret the
+						// redactor exists to mask.
+						resolve({ ...result, output: redact(result.output) });
 					}
 				};
 
@@ -522,7 +531,8 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 async function findWorkspaceArtifactsWithCancellation(
 	workspacePath: string,
 	patterns: string[],
-	token: vscode.CancellationToken
+	token: vscode.CancellationToken,
+	exclude?: string
 ): Promise<string[] | undefined> {
 	const abortController = new AbortController();
 	const cancellation = token.onCancellationRequested(() => abortController.abort());
@@ -536,7 +546,7 @@ async function findWorkspaceArtifactsWithCancellation(
 			async includePattern => {
 				const matches = await vscode.workspace.findFiles(
 					new vscode.RelativePattern(workspacePath, includePattern),
-					null,
+					exclude ?? null,
 					undefined,
 					token
 				);
@@ -551,25 +561,23 @@ async function findWorkspaceArtifactsWithCancellation(
 	}
 }
 
-/** `workspaceState` key holding the publisher last entered by hand. */
-const LAST_PUBLISHER_KEY = 'winapp.cert.lastPublisher';
+/** `workspaceState` key prefix for publishers entered by hand, scoped per project. */
+const LAST_PUBLISHER_KEY_PREFIX = 'winapp.cert.lastPublisher';
 
 /**
- * Source of the publisher for a generated certificate: either a manifest the
- * CLI extracts it from, or a name the user typed because there is no manifest.
- */
-type CertPublisherSource =
-	| { kind: 'manifest'; manifestPath: string }
-	| { kind: 'publisher'; publisher: string };
-
-/**
- * Decide where the certificate's publisher comes from.
+ * Key the remembered publisher by project, not by workspace.
  *
- * The certificate's publisher must match the manifest's `Identity/@Publisher`
- * or the resulting package will not install, so a manifest is always preferred
- * and passed explicitly via `--manifest`. Relying on the CLI's working-directory
- * inference instead is unsafe: with no manifest to find it silently falls back
- * to the current user name, producing a certificate that can never match.
+ * A multi-root or multi-app workspace has one publisher per app; a single
+ * workspace-wide key would pre-fill one app's publisher into another app's
+ * prompt, which is exactly the mismatch this flow exists to prevent.
+ */
+function lastPublisherKey(projectDir: string): string {
+	return `${LAST_PUBLISHER_KEY_PREFIX}:${projectDir.toLowerCase()}`;
+}
+
+/**
+ * Resolve the publisher source, supplying VS Code UI to the decision logic in
+ * `resolveCertPublisherSourceDecision`.
  *
  * @returns The resolved source, or `undefined` if the user cancelled.
  */
@@ -577,62 +585,63 @@ async function resolveCertPublisherSource(
 	context: vscode.ExtensionContext,
 	projectDir: string
 ): Promise<CertPublisherSource | undefined> {
-	const manifestPaths = await vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title: 'Searching for app manifests...', cancellable: true },
-		(_progress, token) => findWorkspaceArtifactsWithCancellation(projectDir, MANIFEST_GLOBS, token)
-	);
+	return resolveCertPublisherSourceDecision({
+		findManifests: () =>
+			Promise.resolve(
+				vscode.window.withProgress(
+					{
+						location: vscode.ProgressLocation.Notification,
+						title: 'Searching for app manifests...',
+						cancellable: true
+					},
+					(_progress, token) =>
+						findWorkspaceArtifactsWithCancellation(
+							projectDir,
+							MANIFEST_GLOBS,
+							token,
+							// Build output contains copies of the manifest; offering them
+							// would let the user pick a stale publisher.
+							BUILD_OUTPUT_EXCLUDE_GLOB
+						)
+				)
+			),
 
-	if (!manifestPaths) {
-		return undefined;
-	}
+		pickManifest: async (manifestPaths) => {
+			const items: vscode.QuickPickItem[] = manifestPaths.map((manifestPath) => {
+				const relDir = path.dirname(path.relative(projectDir, manifestPath));
+				return {
+					label: path.basename(manifestPath),
+					description: relDir === '.' ? '' : relDir,
+					detail: manifestPath
+				};
+			});
 
-	if (manifestPaths.length === 1) {
-		return { kind: 'manifest', manifestPath: manifestPaths[0] };
-	}
+			const picked = await vscode.window.showQuickPick(items, {
+				placeHolder: 'Select the manifest whose publisher the certificate must match'
+			});
 
-	if (manifestPaths.length > 1) {
-		const items: vscode.QuickPickItem[] = manifestPaths.map((manifestPath) => {
-			const relDir = path.dirname(path.relative(projectDir, manifestPath));
-			return {
-				label: path.basename(manifestPath),
-				description: relDir === '.' ? '' : relDir,
-				detail: manifestPath
-			};
-		});
+			return picked?.detail;
+		},
 
-		const picked = await vscode.window.showQuickPick(items, {
-			placeHolder: 'Select the manifest whose publisher the certificate must match'
-		});
+		promptPublisher: async () => {
+			const key = lastPublisherKey(projectDir);
+			const lastPublisher = context.workspaceState.get<string>(key);
+			const publisher = await vscode.window.showInputBox({
+				title: 'Certificate publisher',
+				prompt: `No app manifest was found in ${path.basename(projectDir)}. Enter the publisher for the certificate — it must match your package's Identity/@Publisher.`,
+				placeHolder: 'Contoso or CN=Contoso, O=Contoso Ltd, C=US',
+				value: lastPublisher,
+				ignoreFocusOut: true,
+				validateInput: (value) => validatePublisherInput(value)
+			});
 
-		if (!picked?.detail) {
-			return undefined;
+			const trimmed = publisher?.trim();
+			if (trimmed) {
+				await context.workspaceState.update(key, trimmed);
+			}
+			return trimmed;
 		}
-
-		return { kind: 'manifest', manifestPath: picked.detail };
-	}
-
-	// No manifest: ask rather than letting the CLI fall back to the user name.
-	const lastPublisher = context.workspaceState.get<string>(LAST_PUBLISHER_KEY);
-	const publisher = await vscode.window.showInputBox({
-		title: 'Certificate publisher',
-		prompt: `No app manifest was found in ${path.basename(projectDir)}. Enter the publisher for the certificate — it must match your package's Identity/@Publisher.`,
-		placeHolder: 'Contoso or CN=Contoso, O=Contoso Ltd, C=US',
-		value: lastPublisher,
-		ignoreFocusOut: true,
-		validateInput: (value) => validatePublisherInput(value)
 	});
-
-	if (publisher === undefined) {
-		return undefined;
-	}
-
-	const trimmed = publisher.trim();
-	if (!trimmed) {
-		return undefined;
-	}
-
-	await context.workspaceState.update(LAST_PUBLISHER_KEY, trimmed);
-	return { kind: 'publisher', publisher: trimmed };
 }
 
 /** Build the `cert generate` arguments for a resolved publisher source. */
@@ -675,44 +684,71 @@ async function showCertGenerateSuccess(
 }
 
 /**
- * Warn when the generated certificate does not match the manifest it was
- * supposed to be derived from.
+ * Largest manifest this will read back for verification.
+ *
+ * An app manifest is a few kilobytes; anything far beyond that is not something
+ * worth pulling into the extension host to run a string comparison on.
+ */
+const MAX_MANIFEST_VERIFY_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Check the generated certificate against the manifest it was derived from.
  *
  * `cert generate --manifest` falls back to the current user name when it cannot
  * parse the manifest, and reports success while doing it
  * (microsoft/winappCli#839). Silently handing back such a certificate defeats
  * the entire point of passing `--manifest`, so the mismatch is surfaced.
+ *
+ * @returns `'mismatch'` only when both publishers are known and differ.
+ *   `'unverified'` when the comparison could not be made, which must not be
+ *   treated as a failure.
  */
-async function warnOnPublisherMismatch(
+async function verifyPublisherAgainstManifest(
 	source: CertPublisherSource,
 	result: CertGenerateResult
-): Promise<void> {
+): Promise<{ verdict: 'ok' | 'mismatch' | 'unverified'; expected?: string }> {
 	if (source.kind !== 'manifest') {
-		return;
+		return { verdict: 'unverified' };
 	}
 
 	const actual = result.publisher ?? result.subjectName;
 	if (!actual) {
-		return;
+		return { verdict: 'unverified' };
 	}
 
 	let expected: string | undefined;
 	try {
+		const stat = await fs.promises.stat(source.manifestPath);
+		if (stat.size > MAX_MANIFEST_VERIFY_BYTES) {
+			return { verdict: 'unverified' };
+		}
 		const xml = await fs.promises.readFile(source.manifestPath, 'utf8');
 		expected = parseManifestPublisher(xml);
 	} catch {
 		// The manifest was readable when we globbed it; if it is not now, the
 		// certificate is still valid output and the user has a bigger problem.
-		return;
+		return { verdict: 'unverified' };
 	}
 
-	if (!expected || publishersMatch(expected, actual)) {
-		return;
+	if (!expected) {
+		return { verdict: 'unverified' };
 	}
 
-	vscode.window.showWarningMessage(
-		`The generated certificate's publisher (${actual}) does not match ${path.basename(source.manifestPath)} (${expected}). ` +
-			'Packages signed with it will fail to install. Check that the manifest is valid XML with an Identity/@Publisher attribute.'
+	return { verdict: publishersMatch(expected, actual) ? 'ok' : 'mismatch', expected };
+}
+
+/** Describe a publisher mismatch, naming both sides so the user can act on it. */
+function describePublisherMismatch(
+	source: CertPublisherSource,
+	result: CertGenerateResult,
+	expected: string | undefined
+): string {
+	const actual = result.publisher ?? result.subjectName ?? 'unknown';
+	const manifest = source.kind === 'manifest' ? path.basename(source.manifestPath) : 'the manifest';
+	const expectedText = expected ? ` (${expected})` : '';
+	return (
+		`The certificate's publisher (${actual}) does not match ${manifest}${expectedText}. ` +
+		'Packages signed with it will fail to install. Check that the manifest is valid XML with an Identity/@Publisher attribute.'
 	);
 }
 
@@ -727,6 +763,10 @@ function createCertGenerateFlowAdapter(
 	projectDir: string,
 	source: CertPublisherSource
 ): CertGenerateFlowAdapter {
+	// Captured by verifyPublisher so the skipped-install message can name the
+	// publisher the manifest actually asked for.
+	let lastMismatchExpected: string | undefined;
+
 	return {
 		runGenerate: async (ifExists: CertIfExists) => {
 			const { code, output, cancelled } = await runWinappCapture(
@@ -775,8 +815,39 @@ function createCertGenerateFlowAdapter(
 			);
 		},
 
+		inspectCertificate: async (certificatePath: string) => {
+			// cert info needs the PFX password; the CLI's default is what we
+			// generate with, so a certificate we produced reads back cleanly and
+			// one with a custom password simply stays unverified.
+			const { code, output } = await runWinappCapture(
+				extensionPath,
+				['cert', 'info', certificatePath, '--json'],
+				projectDir,
+				'Reading certificate...',
+				{
+					cancelMessage: 'Reading certificate cancelled.',
+					redact: redactPasswordInOutput
+				}
+			);
+
+			if (code !== 0) {
+				return undefined;
+			}
+
+			const subject = parseCertInfoSubject(output);
+			return subject ? { certificatePath, subjectName: subject } : undefined;
+		},
+
+		verifyPublisher: async (result) => {
+			const { verdict, expected } = await verifyPublisherAgainstManifest(source, result);
+			lastMismatchExpected = expected;
+			if (verdict === 'mismatch') {
+				vscode.window.showWarningMessage(describePublisherMismatch(source, result, expected));
+			}
+			return verdict;
+		},
+
 		reportSuccess: async (result, context) => {
-			await warnOnPublisherMismatch(source, result);
 			await showCertGenerateSuccess(result, context);
 		},
 
@@ -793,6 +864,16 @@ function createCertGenerateFlowAdapter(
 		reportKeptExisting: (existingPath?: string) => {
 			vscode.window.showInformationMessage(
 				`Kept the existing certificate at ${existingPath ?? 'the output path'}. No certificate was generated or installed.`
+			);
+		},
+
+		reportInstallSkipped: (result) => {
+			// The mismatch itself was already reported by verifyPublisher; this
+			// explains the consequence, so the missing UAC prompt is not a mystery.
+			vscode.window.showWarningMessage(
+				`The certificate at ${result.certificatePath} was not installed because its publisher does not match ` +
+					`${source.kind === 'manifest' ? path.basename(source.manifestPath) : 'the manifest'}` +
+					`${lastMismatchExpected ? ` (${lastMismatchExpected})` : ''}. Trusting it would not make the package installable.`
 			);
 		}
 	};

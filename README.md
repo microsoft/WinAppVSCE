@@ -32,7 +32,7 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Generate Manifest** | Generate an `AppxManifest.xml` from a template (packaged or sparse). |
 | **WinApp: Add Manifest Execution Alias** | Add an execution alias to the manifest so the packaged app can be launched from the command line. |
 | **WinApp: Update Manifest Assets** | Auto-generate all required app icon assets from a single source image (PNG, JPG, GIF, or BMP). |
-| **WinApp: Generate Certificate** | Create a development certificate for signing, with an option to also install (trust) it. The publisher is taken from your app manifest so the certificate matches `Identity/@Publisher`; if the project has no manifest, WinApp asks you for the publisher. If a certificate already exists at the output path, a notification offers **Overwrite Existing Cert**. Installing prompts for admin via a UAC window when VS Code isn't elevated. |
+| **WinApp: Generate Certificate** | Create a development certificate for signing, with an option to also install (trust) it. The publisher is taken from your app manifest so the certificate matches `Identity/@Publisher`; if the project has no manifest, WinApp asks you for the publisher. If a certificate already exists at the output path, a notification offers **Overwrite Existing Cert**, plus **Use Existing Cert** when WinApp can identify the existing `.pfx`. Installing prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Install Certificate** | Install (trust) an existing `.pfx` certificate in the machine store. Prompts for admin via a UAC window when VS Code isn't elevated. |
 | **WinApp: Certificate Info** | Display `.pfx` certificate details (subject, thumbprint, expiry) to verify a certificate matches your manifest. |
 | **WinApp: Open Manifest Editor** | Discover workspace manifests, select one (or **Browse…** for another file), and open it in the AppxManifest Editor. |
@@ -54,7 +54,9 @@ When you run a project-context WinApp command — such as **Initialize Project**
 
 Commands that already take an explicit target — such as **Run Application**, **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
-**Certificate publisher resolution:** **Generate Certificate** additionally resolves the publisher for the certificate, because a dev certificate only works if its publisher matches the manifest's `Identity/@Publisher`. The extension searches the resolved project for an app manifest and passes it to the CLI (prompting you to choose when several are found), so the publisher is taken from the manifest automatically. Only when no manifest exists does it ask you to enter a publisher — remembered per workspace and pre-filled on the next run.
+**Certificate publisher resolution:** **Generate Certificate** additionally resolves the publisher for the certificate, because a dev certificate only works if its publisher matches the manifest's `Identity/@Publisher`. The extension searches the resolved project for an app manifest and passes it to the CLI (prompting you to choose when several are found), so the publisher is taken from the manifest automatically. Only when no manifest exists does it ask you to enter a publisher — remembered per project and pre-filled on the next run.
+
+After generating, WinApp re-reads the manifest and compares publishers. If they differ you get a warning, because packages signed with that certificate will fail to install — check that the manifest is valid XML with an `Identity/@Publisher` attribute, or pick the right manifest. When you asked for the certificate to be installed as well, a mismatch **skips the install**: trusting a certificate that cannot match the package would not make it installable.
 
 **Configuration (optional):**
 
