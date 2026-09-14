@@ -252,7 +252,7 @@ Run **WinApp: Create WinUI App** to scaffold a WinUI 3 app from an official Wind
 3. **Asks for a name and a location** — Pick the folder to create the app in; the project lands in `<folder>/<name>`. If that directory already has files, you can use a free name instead (`MyApp2`) or create there anyway.
 4. **Offers to open it** — Open the new project in this window or a new one, add it to your workspace, or just reveal it in File Explorer.
 
-The .NET SDK is required. If it's missing, the command offers a link to the installer.
+The [.NET SDK](https://dotnet.microsoft.com/download) 8.0.100 or later is required — this is the only WinApp command that needs it. If it's missing or older than 8.0.100, the command stops before prompting and offers a link to the installer.
 
 ### Initialize and set up a project
 
