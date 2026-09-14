@@ -151,8 +151,15 @@ namespace WinUiXaml.Workspace
             CancellationToken cancellationToken)
         {
             var fullPath = Path.GetFullPath(projectPath);
+
+            // Referenced projects are compiled from source so their types resolve even when their
+            // output assemblies have never been built. This preserves the behaviour MSBuildWorkspace
+            // gave us via LoadMetadataForReferencedProjects = false. The graph is created up front
+            // because the markup-compiler repair below needs those same compilations, and sharing
+            // it means each project is still built exactly once.
+            var graph = new ProjectGraphContext(fullPath);
             var (evaluation, arguments, unresolvedProjectReferences) =
-                AcquireProjectData(fullPath, properties, cancellationToken);
+                AcquireProjectData(fullPath, properties, cancellationToken, graph);
 
             cancellationToken.ThrowIfCancellationRequested();
             var commandLine = arguments.IsDefaultOrEmpty
@@ -175,10 +182,6 @@ namespace WinUiXaml.Workspace
             var references = ImmutableArray.CreateBuilder<MetadataReference>();
             references.AddRange(commandLine.CreateMetadataReferences());
 
-            // Referenced projects are compiled from source so their types resolve even when their
-            // output assemblies have never been built. This preserves the behaviour MSBuildWorkspace
-            // gave us via LoadMetadataForReferencedProjects = false.
-            var graph = new ProjectGraphContext(fullPath);
             AddProjectReferences(
                 references,
                 graph,
@@ -209,17 +212,30 @@ namespace WinUiXaml.Workspace
         /// invocation and falling back to evaluation alone so an unrestored project still reports
         /// the restore requirement rather than an opaque build failure.
         /// </summary>
+        /// <param name="graph">
+        /// When supplied, unresolvable project references are repaired by emitting the referenced
+        /// projects' compilations as stand-in assemblies rather than asking the user to build.
+        /// Omitted for referenced projects themselves, whose own markup output nothing consumes.
+        /// </param>
         private static (
             MsBuildCli.Evaluation Evaluation,
             ImmutableArray<string> Arguments,
             ImmutableArray<string> UnresolvedProjectReferences) AcquireProjectData(
             string fullPath,
             Dictionary<string, string> properties,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ProjectGraphContext? graph = null)
         {
             try
             {
-                var combined = MsBuildCli.EvaluateAndCompile(fullPath, properties, cancellationToken);
+                var combined = MsBuildCli.EvaluateAndCompile(
+                    fullPath,
+                    properties,
+                    cancellationToken,
+                    graph == null
+                        ? null
+                        : (evaluation, _) => SynthesizeMissingReferences(
+                            fullPath, evaluation, graph, properties, cancellationToken));
                 if (RequiresRestore(
                         combined.Evaluation.ProjectAssetsFile,
                         combined.Evaluation.HasPackageReferences))
@@ -309,14 +325,70 @@ namespace WinUiXaml.Workspace
             public Dictionary<string, Compilation?> Compilations { get; }
         }
 
+        /// <summary>
+        /// Builds the repair that supplies stand-in assemblies for never-built project
+        /// references, over a graph of its own.
+        /// </summary>
+        /// <remarks>
+        /// Exposed so the fast framework-resolution stage repairs the same condition. That stage
+        /// runs first, so leaving it out would let it report a build requirement the full load
+        /// would then have gone on to satisfy.
+        /// </remarks>
+        internal static MsBuildCli.ShadowReferenceRepair CreateReferenceRepair(
+            string projectPath,
+            Dictionary<string, string> properties,
+            CancellationToken cancellationToken)
+        {
+            var fullPath = Path.GetFullPath(projectPath);
+            var graph = new ProjectGraphContext(fullPath);
+            return (evaluation, _) => SynthesizeMissingReferences(
+                fullPath, evaluation, graph, properties, cancellationToken);
+        }
+
+        /// <summary>
+        /// Builds every referenced project from source and writes those compilations where the
+        /// XAML markup compiler can find them.
+        /// </summary>
+        /// <remarks>
+        /// Roslyn needs nothing here -- it consumes the compilations directly -- but the markup
+        /// compiler is a separate process that resolves references off disk, and it abandons code
+        /// generation when one is missing. Supplying the file is what lets a never-built project
+        /// reference still yield <c>InitializeComponent</c> and the <c>x:Name</c> fields, instead
+        /// of asking the user to run a build the editor can substitute for.
+        ///
+        /// The compilations land in <paramref name="context"/>, so the load that follows reuses
+        /// them rather than building the graph a second time.
+        /// </remarks>
+        private static MsBuildCli.ShadowReferenceInjection? SynthesizeMissingReferences(
+            string fullPath,
+            MsBuildCli.Evaluation evaluation,
+            ProjectGraphContext context,
+            Dictionary<string, string> properties,
+            CancellationToken cancellationToken)
+        {
+            var discarded = ImmutableArray.CreateBuilder<MetadataReference>();
+            AddProjectReferences(
+                discarded, context, evaluation.ProjectReferences, properties, cancellationToken);
+
+            var compilations = new List<Compilation>();
+            foreach (var compilation in context.Compilations.Values)
+            {
+                if (compilation != null)
+                {
+                    compilations.Add(compilation);
+                }
+            }
+
+            return ShadowReferenceStore.Create(
+                fullPath, compilations, evaluation.CustomAfterCommonTargets, cancellationToken);        }
+
         private static void AddProjectReferences(
             ImmutableArray<MetadataReference>.Builder references,
             ProjectGraphContext context,
             ImmutableArray<string> projectReferences,
             Dictionary<string, string> properties,
             CancellationToken cancellationToken)
-        {
-            if (projectReferences.IsDefaultOrEmpty)
+        {            if (projectReferences.IsDefaultOrEmpty)
             {
                 return;
             }

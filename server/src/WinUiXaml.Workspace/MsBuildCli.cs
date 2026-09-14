@@ -46,7 +46,8 @@ namespace WinUiXaml.Workspace
                 bool hasPackageReferences,
                 ImmutableArray<string> projectReferences,
                 string? assemblyName,
-                string? targetFrameworks = null)
+                string? targetFrameworks = null,
+                string? customAfterCommonTargets = null)
             {
                 XamlFiles = xamlFiles;
                 ApplicationDefinition = applicationDefinition;
@@ -55,6 +56,7 @@ namespace WinUiXaml.Workspace
                 ProjectReferences = projectReferences;
                 AssemblyName = assemblyName;
                 TargetFrameworks = targetFrameworks;
+                CustomAfterCommonTargets = customAfterCommonTargets;
             }
 
             public ImmutableArray<string> XamlFiles { get; }
@@ -70,6 +72,13 @@ namespace WinUiXaml.Workspace
             /// that makes this an outer build with no <c>Compile</c> target.
             /// </summary>
             public string? TargetFrameworks { get; }
+
+            /// <summary>
+            /// The project's own <c>CustomAfterMicrosoftCommonTargets</c>, if it sets one. The
+            /// shadow-reference repair claims that hook, so it has to re-import whatever the user
+            /// had there or the repair would silently delete part of their build.
+            /// </summary>
+            public string? CustomAfterCommonTargets { get; }
         }
 
         /// <summary>
@@ -104,13 +113,63 @@ namespace WinUiXaml.Workspace
             ImmutableArray<string> UnresolvedProjectReferences) EvaluateAndCompile(
             string projectPath,
             IReadOnlyDictionary<string, string> globalProperties,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            ShadowReferenceRepair? repair = null)
         {
             var fullPath = Path.GetFullPath(projectPath);
             return EvaluateAndCompileCore(
                 fullPath,
                 PinTargetFramework(fullPath, globalProperties, cancellationToken),
-                cancellationToken);
+                cancellationToken,
+                repair);
+        }
+
+        /// <summary>
+        /// Supplies shadow assemblies for referenced projects the markup compiler could not
+        /// resolve. Returns null when nothing could be produced, which leaves the caller on the
+        /// reference-only result.
+        /// </summary>
+        /// <param name="evaluation">The failing project's evaluation, including its graph edges.</param>
+        /// <param name="unresolvedAssemblies">Assembly names the markup compiler could not load.</param>
+        internal delegate ShadowReferenceInjection? ShadowReferenceRepair(
+            Evaluation evaluation,
+            IReadOnlyList<string> unresolvedAssemblies);
+
+        /// <summary>
+        /// Points a design-time build at a directory of stand-in assemblies.
+        /// </summary>
+        /// <remarks>
+        /// The stand-ins deliberately do not live in the referenced project's own output folder.
+        /// Writing there would make MSBuild consider that project built, so the user's next real
+        /// build would skip it and any other tool reading <c>bin</c> would see a file no build
+        /// produced. Redirecting <c>ReferencePath</c> instead keeps the fiction inside this
+        /// process's scratch directory.
+        /// </remarks>
+        internal sealed class ShadowReferenceInjection
+        {
+            public ShadowReferenceInjection(string directory, string targetsFile, string? chainedCustomAfterTargets)
+            {
+                Directory = directory;
+                TargetsFile = targetsFile;
+                ChainedCustomAfterTargets = chainedCustomAfterTargets;
+            }
+
+            public string Directory { get; }
+            public string TargetsFile { get; }
+
+            /// <summary>The value this injection displaces, re-imported by the generated targets.</summary>
+            public string? ChainedCustomAfterTargets { get; }
+
+            internal void AppendTo(List<string> arguments)
+            {
+                arguments.Add($"-p:CustomAfterMicrosoftCommonTargets={TargetsFile}");
+                arguments.Add($"-p:WinUiXamlShadowReferenceDir={Directory}");
+                if (!string.IsNullOrWhiteSpace(ChainedCustomAfterTargets))
+                {
+                    arguments.Add(
+                        $"-p:WinUiXamlChainedCustomAfterTargets={ChainedCustomAfterTargets}");
+                }
+            }
         }
 
         /// <summary>
@@ -281,7 +340,9 @@ namespace WinUiXaml.Workspace
             ImmutableArray<string> UnresolvedProjectReferences) EvaluateAndCompileCore(
             string fullPath,
             IReadOnlyDictionary<string, string> globalProperties,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ShadowReferenceRepair? repair = null,
+            ShadowReferenceInjection? shadow = null)
         {
             var projectPath = fullPath;
             var arguments = new List<string>
@@ -289,7 +350,12 @@ namespace WinUiXaml.Workspace
                 "msbuild",
                 fullPath,
                 "-nologo",
-                "-t:Compile",
+                // ResolveReferences;CoreCompile rather than Compile: MarkupCompilePass1 hangs off
+                // PrepareResourcesDependsOn, which Compile runs first, and it has no
+                // ContinueOnError. Entering at CoreCompile instead reaches the SDK's
+                // DesignTimeMarkupCompilation hook, which is the pass Visual Studio uses and the
+                // only one that tolerates a project that has not been built.
+                "-t:ResolveReferences;CoreCompile",
                 "-p:BuildProjectReferences=false",
                 "-p:ProvideCommandLineArgs=true",
                 "-p:SkipCompilerExecution=true",
@@ -298,6 +364,7 @@ namespace WinUiXaml.Workspace
                 "-p:BuildingInsideVisualStudio=true",
                 "-getItem:CscCommandLineArgs",
             };
+            shadow?.AppendTo(arguments);
             AppendEvaluationRequests(arguments);
             AppendProperties(arguments, globalProperties);
 
@@ -311,9 +378,33 @@ namespace WinUiXaml.Workspace
             {
                 // The markup compiler aborted because a referenced project has never been built.
                 // Reference resolution stops short of it, so it still yields the SDK and package
-                // references on a never-built tree. Degrading to that beats serving nothing; the
-                // unresolved list travels with the result so the build prompt is still raised.
+                // references on a never-built tree, and it also hands back the project graph the
+                // repair needs.
                 var fallback = ResolveReferencesOnly(fullPath, globalProperties, cancellationToken);
+
+                // Repair rather than degrade: the referenced projects are compiled from source
+                // anyway, so emitting those compilations to a scratch directory and pointing the
+                // markup compiler at them produces the same generated code a real build would.
+                // This runs only on the path that is otherwise broken, so a healthy project still
+                // costs exactly one MSBuild invocation.
+                if (repair != null && shadow == null)
+                {
+                    var injection = repair(fallback.Evaluation, ex.UnresolvedAssemblies);
+                    if (injection != null)
+                    {
+                        try
+                        {
+                            return EvaluateAndCompileCore(
+                                fullPath, globalProperties, cancellationToken, repair: null, shadow: injection);
+                        }
+                        catch (ProjectBuildRequiredException)
+                        {
+                            // The shadow assemblies did not satisfy the markup compiler either.
+                            // Fall through to the reference-only result below.
+                        }
+                    }
+                }
+
                 if (fallback.Arguments.IsDefaultOrEmpty)
                 {
                     throw;
@@ -510,6 +601,7 @@ namespace WinUiXaml.Workspace
             arguments.Add("-getProperty:ProjectAssetsFile");
             arguments.Add("-getProperty:AssemblyName");
             arguments.Add("-getProperty:TargetFrameworks");
+            arguments.Add("-getProperty:CustomAfterMicrosoftCommonTargets");
         }
 
         private static Evaluation ReadEvaluation(JsonElement root, string fullProjectPath)
@@ -540,7 +632,8 @@ namespace WinUiXaml.Workspace
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToImmutableArray(),
                 ReadProperty(root, "AssemblyName"),
-                ReadProperty(root, "TargetFrameworks"));
+                ReadProperty(root, "TargetFrameworks"),
+                ReadProperty(root, "CustomAfterMicrosoftCommonTargets"));
         }
 
 

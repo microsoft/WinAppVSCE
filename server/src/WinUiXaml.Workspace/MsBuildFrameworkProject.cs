@@ -56,7 +56,10 @@ namespace WinUiXaml.Workspace
 
             var fullPath = Path.GetFullPath(projectPath);
             var (evaluation, arguments, unresolvedProjectReferences) = MsBuildCli.EvaluateAndCompile(
-                fullPath, properties, cancellationToken);
+                fullPath,
+                properties,
+                cancellationToken,
+                RoslynProjectWorkspace.CreateReferenceRepair(fullPath, properties, cancellationToken));
             if (RoslynProjectWorkspace.RequiresRestore(
                 evaluation.ProjectAssetsFile,
                 evaluation.HasPackageReferences))

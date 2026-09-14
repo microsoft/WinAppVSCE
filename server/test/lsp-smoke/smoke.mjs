@@ -314,6 +314,8 @@ server = spawn(
 let buffer = Buffer.alloc(0);
 const waiters = [];
 const publishedDiagnostics = [];
+const buildRequiredNotifications = [];
+const projectContextStatuses = [];
 
 server.stdout.on("data", (chunk) => {
   buffer = Buffer.concat([buffer, chunk]);
@@ -335,6 +337,12 @@ server.stdout.on("data", (chunk) => {
 function dispatch(msg) {
   if (msg.method === "textDocument/publishDiagnostics") {
     publishedDiagnostics.push(msg.params);
+  }
+  if (msg.method === "winui-xaml/projectBuildRequired") {
+    buildRequiredNotifications.push(msg.params);
+  }
+  if (msg.method === "winui-xaml/projectContextStatus") {
+    projectContextStatuses.push(msg.params);
   }
 
   for (let i = 0; i < waiters.length; i++) {
@@ -1492,28 +1500,21 @@ async function main() {
     "[ok] never-restored project: projectRestoreRequired + restore-required status both reach the wire"
   );
 
-  // 22b) The build-required path, end to end on the wire.
+  // 22b) A never-built project reference, end to end on the wire.
   //
-  // Same gap as the restore-required leg, and the one the status bar's durable state exists for:
-  // `projectBuildRequired` carries an `unresolvedAssemblies` array, a payload shape nothing else
-  // on the wire exercises, and a notification that failed to serialize under the AOT context
-  // would be silently absent -- indistinguishable from a project that resolved fine.
+  // This used to be a durable "the developer must act" state. It no longer is: the referenced
+  // project is compiled from source and emitted to a scratch directory, which is what lets the
+  // out-of-process markup compiler resolve it, so the project loads exactly as if it had been
+  // built. The leg therefore asserts the repair rather than the prompt -- no projectBuildRequired
+  // reaches the wire, no document settles on `build-required`, and completion resolves for real.
   if (buildRequiredFixtureReady) {
-    const buildRequired = waitFor(
-      (message) =>
-        message.method === "winui-xaml/projectBuildRequired" &&
-        typeof message.params?.projectPath === "string" &&
-        message.params.projectPath.toLowerCase() === buildRequiredProject.toLowerCase(),
-      180000,
-      "projectBuildRequired for the never-built project reference"
-    );
-    const buildStatus = waitFor(
+    const firstReady = waitFor(
       (message) =>
         message.method === "winui-xaml/projectContextStatus" &&
         message.params?.uri === buildRequiredXamlUri &&
-        message.params?.state === "build-required",
+        message.params?.state === "ready",
       180000,
-      "build-required project context status"
+      "ready project context status for the never-built project reference"
     );
     send({
       method: "textDocument/didOpen",
@@ -1526,69 +1527,29 @@ async function main() {
         },
       },
     });
-    send({
-      id: 7302,
-      method: "textDocument/completion",
-      params: {
-        textDocument: { uri: buildRequiredXamlUri },
-        position: { line: 4, character: 4 },
-      },
-    });
-    const buildNotification = await buildRequired;
-    const buildStatusMessage = await buildStatus;
-    // The array is the whole point of the notification: it is what lets the client name the
-    // project to build rather than telling the developer only that something is wrong.
-    if (
-      !Array.isArray(buildNotification.params.unresolvedAssemblies) ||
-      buildNotification.params.unresolvedAssemblies.length === 0
-    ) {
+    await firstReady;
+
+    // The notification is the thing a developer actually sees. Asserting its absence is what
+    // makes this leg fail if the repair silently stops running and the prompt comes back.
+    if (buildRequiredNotifications.length > 0) {
       fail(
-        `projectBuildRequired carried no unresolved assemblies: ${JSON.stringify(
-          buildNotification.params
-        )}`
-      );
-    }
-    if (
-      !buildNotification.params.unresolvedAssemblies.some((name) =>
-        String(name).toLowerCase().includes("lib")
-      )
-    ) {
-      fail(
-        `projectBuildRequired named the wrong assemblies: ${JSON.stringify(
-          buildNotification.params.unresolvedAssemblies
-        )}`
-      );
-    }
-    if (
-      typeof buildStatusMessage.params.message !== "string" ||
-      buildStatusMessage.params.message.length === 0
-    ) {
-      fail(
-        `build-required status carried no message: ${JSON.stringify(buildStatusMessage.params)}`
+        "the never-built project reference was repaired, so projectBuildRequired should never " +
+          `have been sent: ${JSON.stringify(buildRequiredNotifications)}`
       );
     }
     console.log(
-      "[ok] never-built project reference: projectBuildRequired + build-required status both reach the wire"
+      "[ok] never-built project reference: repaired to ready, no projectBuildRequired on the wire"
     );
 
-    // The first document proves the payload serializes. It cannot prove the status is *durable*,
-    // because both routes into this state look identical there: the exception route (no context at
-    // all) and the reference-resolution fallback (real IntelliSense, minus the markup compiler's
-    // generated members) each publish `build-required` on the first document. They diverge from the
-    // second document onward -- the toast has already fired once for this project, so the status
-    // bar is now the only thing still saying a build is needed, and the fallback used to publish
-    // `framework-ready` here and quietly claim everything was fine.
-    //
-    // Completion is what separates the two: the fallback resolves framework types, the exception
-    // route has nothing to resolve from. Asserting a durable `build-required` *and* real results
-    // is what makes this leg fail if either half regresses.
-    const secondStatus = waitFor(
+    // A second document in the same project. The repair is cached per load, and this is where a
+    // regression that only repaired the first document would show up.
+    const secondReady = waitFor(
       (message) =>
         message.method === "winui-xaml/projectContextStatus" &&
         message.params?.uri === buildRequiredSecondXamlUri &&
-        message.params?.state === "build-required",
+        message.params?.state === "ready",
       180000,
-      "durable build-required status on a second document in the same project"
+      "ready project context status on a second document in the same project"
     );
     send({
       method: "textDocument/didOpen",
@@ -1601,17 +1562,7 @@ async function main() {
         },
       },
     });
-    const secondStatusMessage = await secondStatus;
-    if (
-      typeof secondStatusMessage.params.message !== "string" ||
-      secondStatusMessage.params.message.length === 0
-    ) {
-      fail(
-        `durable build-required status carried no message: ${JSON.stringify(
-          secondStatusMessage.params
-        )}`
-      );
-    }
+    await secondReady;
 
     send({
       id: 7303,
@@ -1634,25 +1585,31 @@ async function main() {
       : secondCompletion.result?.items;
     if (!Array.isArray(secondItems) || secondItems.length === 0) {
       fail(
-        "the reference-resolution fallback returned no completions, so the build-required status " +
-          "is reporting a total outage rather than the partial one it describes: " +
-          JSON.stringify(secondCompletion.result)
+        "the repaired project returned no completions: " + JSON.stringify(secondCompletion.result)
       );
     }
-    // A framework type proves the fallback really resolved references, rather than the leg passing
-    // on whatever a contextless document happens to offer.
+    // A framework type proves references really resolved, rather than the leg passing on whatever
+    // a contextless document happens to offer.
     const secondLabels = secondItems.map((item) => String(item.label));
     if (!secondLabels.includes("TextBlock")) {
-      fail(
-        `the fallback resolved no framework types: ${JSON.stringify(secondLabels.slice(0, 40))}`
-      );
+      fail(`the repaired project resolved no framework types: ${JSON.stringify(secondLabels.slice(0, 40))}`);
+    }
+    // Nothing in the project may have settled on the old durable state.
+    const stuck = projectContextStatuses.filter(
+      (status) =>
+        (status?.uri === buildRequiredXamlUri || status?.uri === buildRequiredSecondXamlUri) &&
+        status?.state === "build-required"
+    );
+    if (stuck.length > 0) {
+      fail(`a repaired document still reported build-required: ${JSON.stringify(stuck)}`);
     }
     console.log(
-      "[ok] unbuilt project, second document: build-required survives and framework completions still resolve"
+      "[ok] unbuilt project, second document: stays ready and framework completions still resolve"
     );
   } else {
-    console.log(
-      "[skip] build-required leg did not run -- the fixture could not be restored (see the warning above)"
+    fail(
+      "the unbuilt-reference fixture could not be restored, so the never-built-reference leg " +
+        "tested nothing (see the warning above)"
     );
   }
 
