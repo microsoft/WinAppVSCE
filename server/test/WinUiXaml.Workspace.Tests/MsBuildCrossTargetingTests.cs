@@ -10,43 +10,66 @@ namespace WinUiXaml.Workspace.Tests;
 
 /// <summary>
 /// A multi-targeted project's outer build defines no <c>Compile</c> target -- only its inner
-/// builds do -- so the design-time build fails with MSB4057 and the project is dropped from the
-/// graph. The symptom is silent: every type in that project stops resolving in XAML, and the only
-/// trace is one line on stderr. MSBuildWorkspace handled the outer/inner split itself, so this is
-/// a gap the move to the MSBuild CLI opened rather than one it inherited.
+/// builds do -- so a design-time build aimed at the outer build fails with MSB4057 and the project
+/// is dropped from the graph. The symptom is silent: every type in that project stops resolving in
+/// XAML, and the only trace is one line on stderr. MSBuildWorkspace handled the outer/inner split
+/// itself, so this is a gap the move to the MSBuild CLI opened rather than one it inherited.
+///
+/// The framework is therefore *decided* from evaluation rather than discovered by failing: these
+/// tests pin the decision input (<c>TargetFrameworks</c>), the selection, and the end-to-end
+/// result.
 /// </summary>
 public sealed class MsBuildCrossTargetingTests
 {
     /// <summary>
-    /// The verbatim failure from a user's log, against a real netstandard2.0;net9.0 library.
-    /// Quoting it exactly is the point: a recognizer tuned to invented text proves nothing about
-    /// the failure that actually reaches us.
+    /// The evaluation pass is what makes the decision possible, so it has to report the declared
+    /// targets. If this regresses, every cross-targeting project silently loses its inner build
+    /// again -- and evaluation runs no targets, so it answers even for the outer build.
     /// </summary>
     [Fact]
-    public void TheRealWorldOuterBuildFailureIsRecognized()
+    public void EvaluationReportsTheDeclaredTargetFrameworks()
     {
-        const string failure =
-            "MSBuild exited with code 1. C:\\Users\\chiaramooney\\ai-dev-gallery\\AIDevGallery.Utils" +
-            "\\AIDevGallery.Utils.csproj : error MSB4057: The target \"Compile\" does not exist in " +
-            "the project.\n\nBuild failed. Properties, Items, and Target results cannot be " +
-            "obtained. See details in stderr above.";
+        WithCrossTargetedProject((directory, project) =>
+        {
+            var evaluation = MsBuildCli.Evaluate(project, new Dictionary<string, string>());
 
-        Assert.True(MsBuildCli.IsCrossTargetingFailure(failure));
+            Assert.Equal("netstandard2.0;net9.0", evaluation.TargetFrameworks);
+        });
     }
 
     /// <summary>
-    /// The recognizer must not swallow unrelated build failures into the retry path, or a real
-    /// error becomes a second wasted MSBuild invocation and a more confusing message.
+    /// The mirror case: a single-targeted project must report no <c>TargetFrameworks</c>, because
+    /// that emptiness is the signal to leave the build unpinned. If it reported something, every
+    /// ordinary project would be forced down the inner-build path for no reason.
     /// </summary>
-    [Theory]
-    [InlineData("MSBuild exited with code 1. error MSB4018: The \"Csc\" task failed unexpectedly.")]
-    [InlineData("error NETSDK1004: Assets file 'project.assets.json' not found. Run a restore.")]
-    [InlineData("The process cannot access the file 'output.json' because it is being used by another process.")]
-    [InlineData("")]
-    [InlineData(null)]
-    public void UnrelatedFailuresAreNotTreatedAsCrossTargeting(string? failure)
+    [Fact]
+    public void ASingleTargetedProjectReportsNoTargetFrameworks()
     {
-        Assert.False(MsBuildCli.IsCrossTargetingFailure(failure));
+        var directory = Path.Combine(
+            Path.GetTempPath(), "winuixaml-singletarget-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var project = Path.Combine(directory, "SingleTargeted.csproj");
+            File.WriteAllText(
+                project,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net9.0</TargetFramework>
+                  </PropertyGroup>
+                </Project>
+                """);
+
+            var evaluation = MsBuildCli.Evaluate(project, new Dictionary<string, string>());
+
+            Assert.True(string.IsNullOrEmpty(evaluation.TargetFrameworks));
+            Assert.Null(MsBuildCli.SelectTargetFramework(evaluation.TargetFrameworks));
+        }
+        finally
+        {
+            TryDelete(directory);
+        }
     }
 
     /// <summary>
@@ -88,11 +111,36 @@ public sealed class MsBuildCrossTargetingTests
 
     /// <summary>
     /// The end-to-end proof, against a genuinely multi-targeted project built by MSBuild itself.
-    /// The unit tests above pin the two decisions in isolation; only this one fails if the retry
-    /// is never wired up, which is precisely how the original defect survived.
+    /// The unit tests above pin the decision inputs in isolation; only this one fails if the
+    /// framework is never actually pinned, which is precisely how the original defect survived.
     /// </summary>
     [Fact]
     public void AMultiTargetedProjectStillYieldsACommandLine()
+    {
+        WithCrossTargetedProject((directory, project) =>
+        {
+            if (!TryRestore(directory))
+            {
+                // Without a restore there is no assets file and the inner build cannot compile
+                // either, so the pin would be measured against the wrong failure. Skipping beats
+                // reporting a pass that tested nothing.
+                return;
+            }
+
+            var result = MsBuildCli.EvaluateAndCompile(
+                project, new Dictionary<string, string>());
+
+            Assert.False(result.CscCommandLineArgs.IsDefaultOrEmpty);
+            Assert.Contains(result.CscCommandLineArgs, argument =>
+                argument.EndsWith("Widget.cs", StringComparison.OrdinalIgnoreCase));
+        });
+    }
+
+    /// <summary>
+    /// Writes the netstandard2.0;net9.0 library that surfaced this, runs <paramref name="body"/>
+    /// against it, and cleans up.
+    /// </summary>
+    private static void WithCrossTargetedProject(Action<string, string> body)
     {
         var directory = Path.Combine(
             Path.GetTempPath(), "winuixaml-crosstarget-" + Guid.NewGuid().ToString("N"));
@@ -114,20 +162,7 @@ public sealed class MsBuildCrossTargetingTests
                 Path.Combine(directory, "Widget.cs"),
                 "namespace CrossTargeted { public sealed class Widget { } }");
 
-            if (!TryRestore(directory))
-            {
-                // Without a restore there is no assets file and the inner build cannot compile
-                // either, so the retry would be measured against the wrong failure. Skipping beats
-                // reporting a pass that tested nothing.
-                return;
-            }
-
-            var result = MsBuildCli.EvaluateAndCompile(
-                project, new Dictionary<string, string>());
-
-            Assert.False(result.CscCommandLineArgs.IsDefaultOrEmpty);
-            Assert.Contains(result.CscCommandLineArgs, argument =>
-                argument.EndsWith("Widget.cs", StringComparison.OrdinalIgnoreCase));
+            body(directory, project);
         }
         finally
         {

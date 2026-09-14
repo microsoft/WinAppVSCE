@@ -44,7 +44,8 @@ namespace WinUiXaml.Workspace
                 string? projectAssetsFile,
                 bool hasPackageReferences,
                 ImmutableArray<string> projectReferences,
-                string? assemblyName)
+                string? assemblyName,
+                string? targetFrameworks = null)
             {
                 XamlFiles = xamlFiles;
                 ApplicationDefinition = applicationDefinition;
@@ -52,6 +53,7 @@ namespace WinUiXaml.Workspace
                 HasPackageReferences = hasPackageReferences;
                 ProjectReferences = projectReferences;
                 AssemblyName = assemblyName;
+                TargetFrameworks = targetFrameworks;
             }
 
             public ImmutableArray<string> XamlFiles { get; }
@@ -60,6 +62,13 @@ namespace WinUiXaml.Workspace
             public bool HasPackageReferences { get; }
             public ImmutableArray<string> ProjectReferences { get; }
             public string? AssemblyName { get; }
+
+            /// <summary>
+            /// The project's declared <c>TargetFrameworks</c>, semicolon-separated, or null when
+            /// the project targets exactly one framework. Non-null is precisely the condition
+            /// that makes this an outer build with no <c>Compile</c> target.
+            /// </summary>
+            public string? TargetFrameworks { get; }
         }
 
         /// <summary>
@@ -73,15 +82,20 @@ namespace WinUiXaml.Workspace
                 : "dotnet";
 
         /// <summary>
-        /// Single pass that both evaluates the project and runs the design-time build, returning
-        /// the XAML items and the csc command line together.
+        /// Evaluates the project, then runs the design-time build for exactly one target
+        /// framework, returning the XAML items and the csc command line together.
         /// </summary>
         /// <remarks>
-        /// Doing this in one invocation rather than two halves the process launches on the hot
-        /// reload path, which is what keeps a C#-edit refresh comparable to the old in-process
-        /// workspace. It requires a project that can reach the Compile target, so callers fall
-        /// back to <see cref="Evaluate"/> when it fails: evaluation runs no targets and therefore
-        /// still answers for an unrestored project.
+        /// The evaluation pass runs no targets, so it answers for any project state -- unrestored,
+        /// never built, single- or multi-targeted. That is what lets the target framework be
+        /// *decided* rather than discovered by failing: a multi-targeted project's outer build
+        /// defines no <c>Compile</c> target, so asking it to compile dies with MSB4057 and the
+        /// project is dropped, silently costing the user every type in it. Only an inner build has
+        /// that target. Pinning <c>TargetFramework</c> selects one, and pinning it on a project
+        /// that already targets one framework is a no-op -- so a single build shape serves both.
+        ///
+        /// The old MSBuildWorkspace evaluated before selecting an inner build for the same reason,
+        /// which is why nothing above this layer expects to have to.
         /// </remarks>
         internal static (
             Evaluation Evaluation,
@@ -92,31 +106,37 @@ namespace WinUiXaml.Workspace
             CancellationToken cancellationToken = default)
         {
             var fullPath = Path.GetFullPath(projectPath);
-            try
-            {
-                return EvaluateAndCompileCore(fullPath, globalProperties, cancellationToken);
-            }
-            catch (MsBuildUnavailableException ex)
-                when (IsCrossTargetingFailure(ex.Message) &&
-                      !globalProperties.ContainsKey(TargetFrameworkProperty))
-            {
-                // A multi-targeted project's outer build defines no Compile target, so the design
-                // time build dies with MSB4057 and the project is dropped -- silently costing the
-                // user every type in it. Only an inner build has that target, so pick one target
-                // framework and ask for it by name. The old MSBuildWorkspace handled this itself,
-                // which is why nothing above this layer expects to have to.
-                var framework = SelectTargetFramework(
-                    ReadTargetFrameworks(fullPath, globalProperties, cancellationToken));
-                if (framework == null)
-                {
-                    throw;
-                }
+            return EvaluateAndCompileCore(
+                fullPath,
+                PinTargetFramework(fullPath, globalProperties, cancellationToken),
+                cancellationToken);
+        }
 
-                var pinned = globalProperties.ToDictionary(
-                    entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
-                pinned[TargetFrameworkProperty] = framework;
-                return EvaluateAndCompileCore(fullPath, pinned, cancellationToken);
+        /// <summary>
+        /// Resolves the properties the design-time build runs under, selecting one inner build
+        /// when the project cross-targets. A caller that already pinned a framework is left alone.
+        /// </summary>
+        private static IReadOnlyDictionary<string, string> PinTargetFramework(
+            string fullPath,
+            IReadOnlyDictionary<string, string> globalProperties,
+            CancellationToken cancellationToken)
+        {
+            if (globalProperties.ContainsKey(TargetFrameworkProperty))
+            {
+                return globalProperties;
             }
+
+            var framework = SelectTargetFramework(
+                Evaluate(fullPath, globalProperties, cancellationToken).TargetFrameworks);
+            if (framework == null)
+            {
+                return globalProperties;
+            }
+
+            var pinned = globalProperties.ToDictionary(
+                entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
+            pinned[TargetFrameworkProperty] = framework;
+            return pinned;
         }
 
         private static (
@@ -275,59 +295,6 @@ namespace WinUiXaml.Workspace
         private const string TargetFrameworkProperty = "TargetFramework";
 
         /// <summary>
-        /// Whether a failure is the outer build of a multi-targeted project being asked for a
-        /// target only its inner builds define. MSB4057 is an error code rather than prose, so
-        /// this survives a localized MSBuild -- unlike the text-matched checks nearby, which have
-        /// <c>DOTNET_CLI_UI_LANGUAGE=en</c> forced to make them safe.
-        /// </summary>
-        internal static bool IsCrossTargetingFailure(string? detail) =>
-            detail is not null &&
-            detail.Contains("MSB4057", StringComparison.Ordinal);
-
-        /// <summary>
-        /// Reads the declared target frameworks. This runs no targets, which is exactly why it
-        /// answers for the outer build that just refused to compile.
-        /// </summary>
-        private static string? ReadTargetFrameworks(
-            string fullPath,
-            IReadOnlyDictionary<string, string> globalProperties,
-            CancellationToken cancellationToken)
-        {
-            var arguments = new List<string>
-            {
-                "msbuild",
-                fullPath,
-                "-nologo",
-                "-getProperty:TargetFrameworks",
-            };
-            AppendProperties(arguments, globalProperties);
-
-            try
-            {
-                var output = Run(
-                    arguments, Path.GetDirectoryName(fullPath), EvaluateTimeout, cancellationToken);
-
-                // A single -getProperty prints the bare value; MSBuild only switches to JSON once
-                // more than one value is requested. Both shapes are accepted rather than relying
-                // on that, because the difference is undocumented and silently yields null.
-                if (output.IndexOf('{') < 0)
-                {
-                    var value = output.Trim();
-                    return value.Length == 0 ? null : value;
-                }
-
-                using var document = ParseJson(output, fullPath);
-                return ReadProperty(document.RootElement, "TargetFrameworks");
-            }
-            catch (MsBuildUnavailableException)
-            {
-                // Nothing is recoverable from here; the caller rethrows the original failure,
-                // which describes the real problem better than this one would.
-                return null;
-            }
-        }
-
-        /// <summary>
         /// Picks the inner build to load for a multi-targeted project. Preferring the highest
         /// modern .NET target approximates what a consuming app resolves to, and it is the target
         /// most likely to expose the project's full API surface; a <c>netstandard</c> leg is the
@@ -392,6 +359,7 @@ namespace WinUiXaml.Workspace
             arguments.Add("-getItem:ProjectReference");
             arguments.Add("-getProperty:ProjectAssetsFile");
             arguments.Add("-getProperty:AssemblyName");
+            arguments.Add("-getProperty:TargetFrameworks");
         }
 
         private static Evaluation ReadEvaluation(JsonElement root, string fullProjectPath)
@@ -421,54 +389,10 @@ namespace WinUiXaml.Workspace
                 ReadItemPaths(root, "ProjectReference", projectDirectory)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToImmutableArray(),
-                ReadProperty(root, "AssemblyName"));
+                ReadProperty(root, "AssemblyName"),
+                ReadProperty(root, "TargetFrameworks"));
         }
 
-        /// <summary>
-        /// Design-time build that yields the exact csc command line MSBuild would have invoked.
-        /// </summary>
-        /// <remarks>
-        /// <c>-getItem:ReferencePath</c> looks like the obvious request but returns pre-target
-        /// state and comes back empty; only the csc command line reflects the resolved closure.
-        /// <c>SkipCompilerExecution</c> means csc never runs, so this call produces no source
-        /// generator output -- that is <see cref="GeneratorHost"/>'s job.
-        /// </remarks>
-        internal static ImmutableArray<string> GetCscCommandLineArgs(
-            string projectPath,
-            IReadOnlyDictionary<string, string> globalProperties,
-            CancellationToken cancellationToken = default)
-        {
-            var arguments = new List<string>
-            {
-                "msbuild",
-                Path.GetFullPath(projectPath),
-                "-nologo",
-                // Compile, not Build/Rebuild: SkipCompilerExecution means no assembly is produced,
-                // so the output-copy steps in Build fail with MSB3030. Compile stops before them.
-                // It is also verified not to be skipped incrementally, even right after a
-                // successful full build, so the args are always populated.
-                "-t:Compile",
-                // Referenced projects are compiled from source by the caller, which is what keeps
-                // their types resolvable when they have never been built.
-                "-p:BuildProjectReferences=false",
-                "-p:ProvideCommandLineArgs=true",
-                "-p:SkipCompilerExecution=true",
-                "-p:DesignTimeBuild=true",
-                "-p:DesignTimeSilentResolution=true",
-                "-p:BuildingInsideVisualStudio=true",
-                "-getItem:CscCommandLineArgs",
-            };
-            AppendProperties(arguments, globalProperties);
-
-            var output = Run(
-                arguments,
-                Path.GetDirectoryName(Path.GetFullPath(projectPath)),
-                DesignTimeBuildTimeout,
-                cancellationToken,
-                Path.GetFullPath(projectPath));
-            using var document = ParseJson(output, projectPath);
-            return ReadItemIdentities(document.RootElement, "CscCommandLineArgs");
-        }
 
         private static void AppendProperties(
             List<string> arguments,

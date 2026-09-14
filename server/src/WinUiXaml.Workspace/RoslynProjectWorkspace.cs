@@ -245,17 +245,6 @@ namespace WinUiXaml.Workspace
             }
         }
 
-        private static CscCommandLine ParseCommandLine(
-            string fullPath,
-            Dictionary<string, string> properties,
-            CancellationToken cancellationToken)
-        {
-            var arguments = MsBuildCli.GetCscCommandLineArgs(fullPath, properties, cancellationToken);
-            return arguments.IsDefaultOrEmpty
-                ? CscCommandLine.Empty
-                : CscCommandLine.Parse(arguments, Path.GetDirectoryName(fullPath)!);
-        }
-
         private static void AddSourceTrees(
             ImmutableArray<SyntaxTree>.Builder trees,
             ImmutableArray<string> paths,
