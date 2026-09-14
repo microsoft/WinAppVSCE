@@ -32,9 +32,9 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Generate Manifest** | Generate an `AppxManifest.xml` from a template (packaged or sparse). |
 | **WinApp: Add Manifest Execution Alias** | Add an execution alias to the manifest so the packaged app can be launched from the command line. |
 | **WinApp: Update Manifest Assets** | Auto-generate all required app icon assets from a single source image (PNG, JPG, GIF, or BMP). |
-| **WinApp: Generate Certificate** | Create a development certificate for signing, with an option to also install (trust) it. Installing prompts for admin via a UAC window when VS Code isn't elevated. |
-| **WinApp: Install Certificate** | Install (trust) an existing `.pfx` or `.cer` certificate in the machine store. Prompts for admin via a UAC window when VS Code isn't elevated. |
-| **WinApp: Certificate Info** | Display certificate details (subject, thumbprint, expiry) to verify a certificate matches your manifest. |
+| **WinApp: Generate Certificate** | Create a development certificate for signing, with an option to also install (trust) it. The publisher is taken from your app manifest so the certificate matches `Identity/@Publisher`; if the project has no manifest, WinApp asks you for the publisher. If a certificate already exists at the output path, a notification offers **Overwrite Existing Cert**. Installing prompts for admin via a UAC window when VS Code isn't elevated. |
+| **WinApp: Install Certificate** | Install (trust) an existing `.pfx` certificate in the machine store. Prompts for admin via a UAC window when VS Code isn't elevated. |
+| **WinApp: Certificate Info** | Display `.pfx` certificate details (subject, thumbprint, expiry) to verify a certificate matches your manifest. |
 | **WinApp: Open Manifest Editor** | Discover workspace manifests, select one (or **Browse…** for another file), and open it in the AppxManifest Editor. |
 | **WinApp: Sign File** | Sign an MSIX/APPX package, executable, or library with a certificate. |
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |

@@ -34,6 +34,16 @@ import {
 } from './sign-utils';
 import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
+	MANIFEST_GLOBS,
+	buildCertGenerateArgs,
+	decideCertGenerateOutcome,
+	redactPasswordArgs,
+	redactPasswordInOutput,
+	validatePublisherInput,
+	type CertGenerateResult,
+	type CertIfExists
+} from './cert-utils';
+import {
 	detectArchFromPath,
 	getMachineArch,
 	checkSelfContainedArchMismatch,
@@ -276,17 +286,27 @@ function getWinappOutputChannel(): vscode.OutputChannel {
  * command to finish so callers can inspect the output (e.g. the produced
  * package path).
  *
+ * @param options.cancelMessage Line written to the output channel when the user
+ *   cancels. Defaults to the packaging wording.
+ * @param options.redact Applied to the echoed command line and to every output
+ *   chunk before it reaches the output channel. Commands whose output can
+ *   contain secrets (e.g. `cert generate --json`, which echoes the certificate
+ *   password) must supply this; the captured output returned to the caller is
+ *   left unredacted so it can still be parsed.
  * @returns The process exit code and the full captured output.
  */
 async function runWinappCapture(
 	extensionPath: string,
 	args: string[],
 	cwd: string,
-	progressTitle: string
+	progressTitle: string,
+	options: { cancelMessage?: string; redact?: (text: string) => string } = {}
 ): Promise<{ code: number | null; output: string; cancelled?: boolean }> {
 	const cliPath = getWinappCliPath(extensionPath);
 	const outputChannel = getWinappOutputChannel();
-	outputChannel.appendLine(`> winapp ${args.join(' ')}`);
+	const redact = options.redact ?? ((text: string) => text);
+	const cancelMessage = options.cancelMessage ?? 'Packaging cancelled.';
+	outputChannel.appendLine(redact(`> winapp ${args.join(' ')}`));
 
 	return vscode.window.withProgress(
 		{
@@ -317,7 +337,7 @@ async function runWinappCapture(
 						return;
 					}
 					cancelled = true;
-					outputChannel.appendLine('\nPackaging cancelled.');
+					outputChannel.appendLine(`\n${cancelMessage}`);
 					if (child.pid) {
 						// On Windows, winapp pack may spawn helper processes; taskkill /t
 						// terminates the whole tree instead of only the direct child.
@@ -335,20 +355,35 @@ async function runWinappCapture(
 					}
 				});
 
+				// When a redactor is supplied the output is buffered and written once
+				// at the end. Redacting each chunk as it arrives would miss a secret
+				// that happens to straddle a chunk boundary.
+				const streamLive = options.redact === undefined;
+				const flushOutput = () => {
+					if (!streamLive && output) {
+						outputChannel.append(redact(output));
+					}
+				};
+
 				child.stdout!.on('data', (data: Buffer) => {
 					const text = data.toString();
 					output += text;
-					outputChannel.append(text);
+					if (streamLive) {
+						outputChannel.append(text);
+					}
 				});
 
 				child.stderr!.on('data', (data: Buffer) => {
 					const text = data.toString();
 					output += text;
-					outputChannel.append(text);
+					if (streamLive) {
+						outputChannel.append(text);
+					}
 				});
 
 				child.on('error', (err) => {
 					cancellation.dispose();
+					flushOutput();
 					if (cancelled) {
 						finish({ code: null, output, cancelled: true });
 						return;
@@ -359,6 +394,7 @@ async function runWinappCapture(
 
 				child.on('close', (code) => {
 					cancellation.dispose();
+					flushOutput();
 					finish({ code, output, cancelled });
 				});
 			})
@@ -512,6 +548,191 @@ async function findWorkspaceArtifactsWithCancellation(
 		return token.isCancellationRequested ? undefined : paths;
 	} finally {
 		cancellation.dispose();
+	}
+}
+
+/** `workspaceState` key holding the publisher last entered by hand. */
+const LAST_PUBLISHER_KEY = 'winapp.cert.lastPublisher';
+
+/**
+ * Source of the publisher for a generated certificate: either a manifest the
+ * CLI extracts it from, or a name the user typed because there is no manifest.
+ */
+type CertPublisherSource =
+	| { kind: 'manifest'; manifestPath: string }
+	| { kind: 'publisher'; publisher: string };
+
+/**
+ * Decide where the certificate's publisher comes from.
+ *
+ * The certificate's publisher must match the manifest's `Identity/@Publisher`
+ * or the resulting package will not install, so a manifest is always preferred
+ * and passed explicitly via `--manifest`. Relying on the CLI's working-directory
+ * inference instead is unsafe: with no manifest to find it silently falls back
+ * to the current user name, producing a certificate that can never match.
+ *
+ * @returns The resolved source, or `undefined` if the user cancelled.
+ */
+async function resolveCertPublisherSource(
+	context: vscode.ExtensionContext,
+	projectDir: string
+): Promise<CertPublisherSource | undefined> {
+	const manifestPaths = await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: 'Searching for app manifests...', cancellable: true },
+		(_progress, token) => findWorkspaceArtifactsWithCancellation(projectDir, MANIFEST_GLOBS, token)
+	);
+
+	if (!manifestPaths) {
+		return undefined;
+	}
+
+	if (manifestPaths.length === 1) {
+		return { kind: 'manifest', manifestPath: manifestPaths[0] };
+	}
+
+	if (manifestPaths.length > 1) {
+		const items: vscode.QuickPickItem[] = manifestPaths.map((manifestPath) => {
+			const relDir = path.dirname(path.relative(projectDir, manifestPath));
+			return {
+				label: path.basename(manifestPath),
+				description: relDir === '.' ? '' : relDir,
+				detail: manifestPath
+			};
+		});
+
+		const picked = await vscode.window.showQuickPick(items, {
+			placeHolder: 'Select the manifest whose publisher the certificate must match'
+		});
+
+		if (!picked?.detail) {
+			return undefined;
+		}
+
+		return { kind: 'manifest', manifestPath: picked.detail };
+	}
+
+	// No manifest: ask rather than letting the CLI fall back to the user name.
+	const lastPublisher = context.workspaceState.get<string>(LAST_PUBLISHER_KEY);
+	const publisher = await vscode.window.showInputBox({
+		title: 'Certificate publisher',
+		prompt: `No app manifest was found in ${path.basename(projectDir)}. Enter the publisher for the certificate — it must match your package's Identity/@Publisher.`,
+		placeHolder: 'Contoso or CN=Contoso, O=Contoso Ltd, C=US',
+		value: lastPublisher,
+		ignoreFocusOut: true,
+		validateInput: (value) => validatePublisherInput(value)
+	});
+
+	if (publisher === undefined) {
+		return undefined;
+	}
+
+	const trimmed = publisher.trim();
+	if (!trimmed) {
+		return undefined;
+	}
+
+	await context.workspaceState.update(LAST_PUBLISHER_KEY, trimmed);
+	return { kind: 'publisher', publisher: trimmed };
+}
+
+/** Build the `cert generate` arguments for a resolved publisher source. */
+function certGenerateArgsFor(source: CertPublisherSource, ifExists: CertIfExists): string[] {
+	return buildCertGenerateArgs(
+		source.kind === 'manifest'
+			? { manifestPath: source.manifestPath, ifExists }
+			: { publisher: source.publisher, ifExists }
+	);
+}
+
+/**
+ * Report a successful generation, offering to reveal the certificate.
+ *
+ * The publisher is surfaced because a mismatch with the manifest is the most
+ * common reason a dev certificate later fails to sign or install.
+ */
+async function showCertGenerateSuccess(result: CertGenerateResult): Promise<void> {
+	const publisher = result.subjectName ?? result.publisher;
+	const message = publisher
+		? `Certificate created for ${publisher} at ${result.certificatePath}.`
+		: `Certificate created at ${result.certificatePath}.`;
+
+	const action = await vscode.window.showInformationMessage(message, 'Reveal in Explorer');
+	if (action === 'Reveal in Explorer') {
+		await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(result.certificatePath));
+	}
+}
+
+/**
+ * Generate a certificate, handling the "already exists" case by offering to
+ * overwrite.
+ *
+ * Overwriting is offered reactively — the CLI is the authority on whether the
+ * output path is taken, so there is no need to duplicate its path resolution
+ * here. Dismissing the notification keeps the existing certificate.
+ *
+ * @returns The generated certificate, or `undefined` when nothing was created
+ *   (cancelled, declined, or failed — failures are reported to the user).
+ */
+async function generateCertificate(
+	extensionPath: string,
+	projectDir: string,
+	source: CertPublisherSource
+): Promise<CertGenerateResult | undefined> {
+	const run = async (ifExists: CertIfExists) => {
+		const { code, output, cancelled } = await runWinappCapture(
+			extensionPath,
+			certGenerateArgsFor(source, ifExists),
+			projectDir,
+			'Generating certificate...',
+			{
+				cancelMessage: 'Certificate generation cancelled.',
+				// cert generate --json echoes the certificate password back, so the
+				// output must never reach the output channel verbatim.
+				redact: redactPasswordInOutput
+			}
+		);
+		return decideCertGenerateOutcome(code, output, cancelled);
+	};
+
+	const reportFailure = (message?: string) => {
+		const outputChannel = getWinappOutputChannel();
+		outputChannel.show(true);
+		vscode.window.showErrorMessage(
+			message
+				? `Certificate generation failed: ${message}`
+				: 'Certificate generation failed. See the WinApp output channel for details.'
+		);
+	};
+
+	let outcome = await run('error');
+
+	if (outcome.kind === 'already-exists') {
+		const existing = outcome.existingPath ?? 'the output path';
+		const overwrite = await vscode.window.showWarningMessage(
+			`A certificate already exists at ${existing}. Overwriting it invalidates packages already signed with it, and the new certificate must be trusted again.`,
+			'Overwrite Existing Cert'
+		);
+
+		if (overwrite !== 'Overwrite Existing Cert') {
+			return undefined;
+		}
+
+		outcome = await run('overwrite');
+	}
+
+	switch (outcome.kind) {
+		case 'success':
+			return outcome.result;
+		case 'cancelled':
+			return undefined;
+		case 'already-exists':
+			// The overwrite retry hit the same condition, so something other than
+			// our own run is holding the path.
+			reportFailure(`the certificate at ${outcome.existingPath ?? 'the output path'} could not be replaced`);
+			return undefined;
+		default:
+			reportFailure(outcome.message);
+			return undefined;
 	}
 }
 
@@ -1511,15 +1732,33 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			// Installing trusts the certificate in the machine store, which needs
-			// administrator rights. When VS Code isn't elevated we can't install
-			// from the integrated terminal, so run the whole generate+install in a
-			// separate UAC-elevated window instead of failing with "Access denied".
-			if (install === 'Generate and install (requires admin)') {
-				await runWinappCommandElevated(extensionPath, 'cert generate --install', projectDir);
-			} else {
-				await runWinappCommand(extensionPath, 'cert generate', projectDir);
+			const source = await resolveCertPublisherSource(context, projectDir);
+			if (!source) {
+				return;
 			}
+
+			// Generation runs un-elevated so its exit code is visible here: a bad
+			// publisher or an existing certificate can then be reported in VS Code
+			// instead of scrolling past inside a UAC window. Only the install step
+			// needs administrator rights, and it is elevated separately below.
+			const result = await generateCertificate(extensionPath, projectDir, source);
+			if (!result) {
+				return;
+			}
+
+			if (install === 'Generate and install (requires admin)') {
+				// Installing trusts the certificate in the machine store, which needs
+				// administrator rights. VS Code cannot elevate the integrated
+				// terminal, so this runs in a separate UAC-elevated window.
+				await runWinappCommandElevated(
+					extensionPath,
+					`cert install ${escapePowerShellArg(result.certificatePath)}`,
+					projectDir
+				);
+				return;
+			}
+
+			await showCertGenerateSuccess(result);
 		})
 	);
 
@@ -1531,8 +1770,11 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
+			// PFX only: the CLI loads certificates with LoadPkcs12FromFile, so a
+			// .cer is rejected with a raw DER decoding error despite `cert install
+			// --help` advertising CER support.
 			const certPath = await selectFile('Select certificate to install', {
-				'Certificates': ['pfx', 'cer']
+				'Certificates': ['pfx']
 			});
 
 			if (!certPath) {
@@ -1668,8 +1910,9 @@ export function activate(context: vscode.ExtensionContext) {
 	// This command only inspects a certificate file and does not require a workspace.
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.certInfo', async () => {
+			// PFX only — see the note on winapp.certInstall.
 			const certPath = await selectFile('Select certificate file', {
-				'Certificates': ['pfx', 'cer']
+				'Certificates': ['pfx']
 			});
 
 			if (!certPath) {
