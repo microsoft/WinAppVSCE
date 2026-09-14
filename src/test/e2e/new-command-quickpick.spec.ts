@@ -38,23 +38,69 @@ const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
 /** How long the first `winapp new --list` may take, including a pack install. */
 const TEMPLATE_LOAD_TIMEOUT = 120_000;
 
+/** Temp directories to remove once the whole spec finishes. */
+const pendingDirectories = new Set<string>();
+
+/**
+ * Create a temp directory that is swept up after the whole spec finishes.
+ *
+ * Cleanup is deferred rather than done per test because VS Code can still hold
+ * a handle on the workspace (or its user-data dir) for a moment after the
+ * Electron app closes, which makes an immediate delete fail.
+ */
+function makeTempDirectory(prefix: string): string {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    pendingDirectories.add(directory);
+    return directory;
+}
+
+test.afterAll(() => {
+    for (const directory of pendingDirectories) {
+        try {
+            fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        } catch {
+            // A leftover temp directory must never fail an otherwise green run.
+        }
+    }
+    pendingDirectories.clear();
+});
+
 async function launchVSCodeForFolder(folderPath: string): Promise<{ app: ElectronApplication; page: Page }> {
+    // An isolated user-data-dir is required: with a VS Code already running,
+    // a plain --new-window is delegated to that instance and the process we
+    // launched exits immediately, leaving Playwright with no window.
+    const userDataPath = makeTempDirectory('winapp-new-e2e-user-');
+
     const app = await electron.launch({
         executablePath: VSCODE_EXE,
         args: [
             folderPath,
             '--new-window',
+            `--user-data-dir=${userDataPath}`,
             ...EXTENSION_ARGS,
             '--disable-telemetry',
             '--skip-release-notes',
             '--disable-workspace-trust',
         ],
-        timeout: 30_000,
+        timeout: 60_000,
     });
 
     const page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
-    await page.waitForTimeout(6_000);
+    await expect(page.locator('.monaco-workbench')).toBeVisible({ timeout: 60_000 });
+
+    // A fresh user-data-dir always shows the welcome dialog, which would
+    // otherwise swallow the Command Palette keystroke.
+    const welcomeDialog = page.getByRole('dialog', { name: 'Welcome to Visual Studio Code' });
+    const welcomeAppeared = await welcomeDialog.waitFor({ state: 'visible', timeout: 10_000 })
+        .then(() => true, () => false);
+    if (welcomeAppeared) {
+        await welcomeDialog.getByRole('button', { name: 'Close' }).click();
+        await expect(welcomeDialog).toBeHidden({ timeout: 10_000 });
+    }
+
+    // Give the extension host time to activate before driving the palette.
+    await page.waitForTimeout(5_000);
 
     return { app, page };
 }
@@ -83,20 +129,31 @@ function quickInputPlaceholder(page: Page): Promise<string | null> {
 async function openTemplatePicker(page: Page): Promise<void> {
     await runCommandPalette(page, 'WinApp: Create WinUI App');
 
-    const rows = page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
-    await expect(rows.first()).toBeVisible({ timeout: TEMPLATE_LOAD_TIMEOUT });
+    // Poll the placeholder rather than waiting on list rows: the Command Palette
+    // has rows of its own, so a row-visibility wait succeeds instantly while the
+    // palette is still open and the CLI is still being invoked.
+    await expect.poll(
+        () => quickInputPlaceholder(page),
+        { timeout: TEMPLATE_LOAD_TIMEOUT, message: 'template or template-pack QuickPick never appeared' }
+    ).toMatch(/Which WinUI templates|Select a WinUI template/);
 
-    const placeholder = await quickInputPlaceholder(page);
-    if (placeholder?.includes('Which WinUI templates')) {
+    if ((await quickInputPlaceholder(page))?.includes('Which WinUI templates')) {
         // "Use installed templates" is first and pre-selected — no machine change.
         await page.keyboard.press('Enter');
-        await expect(rows.first()).toBeVisible({ timeout: TEMPLATE_LOAD_TIMEOUT });
+        await expect.poll(
+            () => quickInputPlaceholder(page),
+            { timeout: TEMPLATE_LOAD_TIMEOUT, message: 'template QuickPick never appeared' }
+        ).toContain('Select a WinUI template');
     }
 }
 
 test.describe('winapp.new command — template selection', () => {
+    // Launching an isolated VS Code plus a possible template-pack install on
+    // first run comfortably exceeds the default per-test budget.
+    test.describe.configure({ timeout: 240_000 });
+
     test('lists the official WinUI templates with no folder open', async () => {
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-new-e2e-'));
+        const tmpDir = makeTempDirectory('winapp-new-e2e-');
 
         let app: ElectronApplication | undefined;
         try {
@@ -106,29 +163,26 @@ test.describe('winapp.new command — template selection', () => {
 
             await openTemplatePicker(page);
 
-            expect(await quickInputPlaceholder(page)).toContain('Select a WinUI template');
-
             const rows = page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
-            const rowText = (await rows.allTextContents()).join('\n');
+            const rowText = await rows.allTextContents();
 
             // The blank app is the anchor template and sorts first.
-            expect(rowText).toContain('winui');
-            expect((await rows.allTextContents())[0]).toContain('winui');
-            // The pack ships more than one template; the picker shouldn't collapse
-            // to a single entry or silently include item templates only.
-            expect(await rows.count()).toBeGreaterThan(1);
+            expect(rowText[0]).toContain('WinUI Blank App');
+            // The pack ships several templates; the picker shouldn't collapse to
+            // one entry, and every row should be a WinUI template.
+            expect(rowText.length).toBeGreaterThan(1);
+            expect(rowText.every(text => /winui/i.test(text))).toBe(true);
 
             await page.keyboard.press('Escape');
         } finally {
             if (app) {
                 await app.close().catch(() => {});
             }
-            fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
 
     test('prompts for a name and rejects an invalid one inline', async () => {
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-new-e2e-'));
+        const tmpDir = makeTempDirectory('winapp-new-e2e-');
 
         let app: ElectronApplication | undefined;
         try {
@@ -160,12 +214,11 @@ test.describe('winapp.new command — template selection', () => {
             if (app) {
                 await app.close().catch(() => {});
             }
-            fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
 
     test('cancelling the template QuickPick ends the flow', async () => {
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-new-e2e-'));
+        const tmpDir = makeTempDirectory('winapp-new-e2e-');
 
         let app: ElectronApplication | undefined;
         try {
@@ -183,7 +236,6 @@ test.describe('winapp.new command — template selection', () => {
             if (app) {
                 await app.close().catch(() => {});
             }
-            fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
 });
