@@ -15,6 +15,19 @@
  */
 export const MANIFEST_GLOBS = ['**/*.appxmanifest', '**/[Aa]ppx[Mm]anifest.xml'];
 
+/**
+ * File-dialog filter for certificate pickers.
+ *
+ * PFX only, deliberately: the CLI loads certificates with
+ * `X509CertificateLoader.LoadPkcs12FromFile`, so a `.cer` is rejected with a raw
+ * DER decoding error even though `cert install --help` advertises CER support
+ * (microsoft/winappCli#838). Offering `.cer` here only leads users into that
+ * error, so do not re-add it until the CLI actually accepts one.
+ */
+export const CERTIFICATE_DIALOG_FILTER: Record<string, string[]> = {
+	'Certificates': ['pfx']
+};
+
 /** Placeholder substituted for secrets in echoed commands and captured output. */
 export const REDACTED = '***';
 
@@ -172,15 +185,18 @@ export function parseCertErrorMessage(output: string): string | undefined {
 		return fromJson;
 	}
 
-	// Fall back to the first non-empty line that looks like an error, stripping
-	// the CLI's leading status glyphs.
+	// Fall back to the first non-empty line. This runs only after a non-zero
+	// exit, so any output is more useful to the user than the generic "see the
+	// output channel" message. Stripping the CLI's leading status glyph is
+	// normalization, not a match condition: plain-text errors without a glyph
+	// must still be reported.
 	for (const rawLine of output.split(/\r?\n/)) {
 		const line = rawLine.trim();
 		if (!line) {
 			continue;
 		}
 		const cleaned = line.replace(/^(?:\[ERROR\]\s*-\s*|[❌✖✗⚠]\s*)/u, '').trim();
-		if (cleaned && cleaned !== line) {
+		if (cleaned) {
 			return cleaned;
 		}
 	}
@@ -225,6 +241,45 @@ export function decideCertGenerateOutcome(
 	}
 
 	return { kind: 'failed', message: parseCertErrorMessage(output) };
+}
+
+/**
+ * Extract `Identity/@Publisher` from manifest XML.
+ *
+ * Used to verify what the CLI actually produced: `cert generate --manifest`
+ * silently falls back to the current user name when it cannot parse the
+ * manifest (exit 0, no warning), which yields a certificate that can never
+ * match the package. See microsoft/winappCli#839.
+ */
+export function parseManifestPublisher(xml: string): string | undefined {
+	// Match the Identity element's Publisher attribute specifically; other
+	// elements (e.g. PublisherDisplayName) must not be picked up.
+	const identity = /<(?:\w+:)?Identity\b[^>]*>/i.exec(xml);
+	if (!identity) {
+		return undefined;
+	}
+
+	const publisher = /\bPublisher\s*=\s*"([^"]*)"/i.exec(identity[0]);
+	return publisher?.[1]?.trim() || undefined;
+}
+
+/**
+ * Compare two distinguished names for practical equality.
+ *
+ * Comparison ignores case and the optional whitespace around `=` and `,`, so
+ * `CN=Contoso, O=Contoso Ltd` and `cn=Contoso,o=Contoso Ltd` are the same
+ * publisher. It is deliberately not a full RFC 4514 parser: this only needs to
+ * be good enough to catch the CLI having ignored the manifest entirely.
+ */
+export function publishersMatch(a: string, b: string): boolean {
+	const normalize = (value: string) =>
+		value
+			.trim()
+			.replace(/\s*=\s*/g, '=')
+			.replace(/\s*,\s*/g, ',')
+			.toLowerCase();
+
+	return normalize(a) === normalize(b);
 }
 
 /**
@@ -274,4 +329,128 @@ export function validatePublisherInput(value: string): string | undefined {
 	}
 
 	return undefined;
+}
+
+// ──────────────────────────────────────────────────────
+// Certificate generation flow
+//
+// The VS Code wiring (progress, notifications, elevation) lives in
+// extension.ts; this section owns only the decision logic and delegates UI
+// operations through an injectable adapter interface.
+// ──────────────────────────────────────────────────────
+
+/** What the user chose when told a certificate already exists. */
+export type OverwriteChoice = 'overwrite' | 'reuse' | 'dismiss';
+
+export interface CertGenerateFlowAdapter {
+	/** Run `cert generate` with the given `--if-exists` mode and classify the result. */
+	runGenerate(ifExists: CertIfExists): Promise<CertGenerateOutcome>;
+
+	/**
+	 * Warn that a certificate already exists and ask what to do.
+	 *
+	 * `canReuse` is false when the CLI did not tell us where the existing
+	 * certificate is, in which case reusing it cannot be offered.
+	 */
+	confirmOverwrite(existingPath: string | undefined, canReuse: boolean): Promise<OverwriteChoice>;
+
+	/** Install the certificate into the machine store (requires elevation). */
+	installCertificate(certificatePath: string): Promise<void>;
+
+	/** Report the certificate that is now available. */
+	reportSuccess(
+		result: CertGenerateResult,
+		context: { created: boolean; installing: boolean }
+	): Promise<void>;
+
+	/** Report that nothing was produced. */
+	reportFailure(message?: string): void;
+
+	/** Tell the user the existing certificate was left alone and nothing else happened. */
+	reportKeptExisting(existingPath: string | undefined): void;
+}
+
+export interface CertGenerateFlowResult {
+	/** The certificate the user ended up with, if any. */
+	certificatePath: string | undefined;
+	/** False when an existing certificate was reused instead of generated. */
+	created: boolean;
+	/** Whether the elevated install step ran. */
+	installed: boolean;
+	/** Whether the "already exists" warning was shown. */
+	overwritePrompted: boolean;
+}
+
+/**
+ * Run the certificate-generation flow.
+ *
+ * Generation is attempted with `--if-exists error` first so an existing
+ * certificate is surfaced to the user rather than silently replaced. The CLI is
+ * the authority on whether the output path is taken, so the collision is handled
+ * reactively instead of pre-checking the path here.
+ *
+ * @param install Whether the user asked for the certificate to be installed as
+ *   well. The install is a separate elevated step, so generation failures are
+ *   reported in VS Code rather than scrolling past in a UAC window.
+ */
+export async function executeCertGenerateFlow(
+	adapter: CertGenerateFlowAdapter,
+	install: boolean
+): Promise<CertGenerateFlowResult> {
+	const result: CertGenerateFlowResult = {
+		certificatePath: undefined,
+		created: false,
+		installed: false,
+		overwritePrompted: false
+	};
+
+	let outcome = await adapter.runGenerate('error');
+	let created = true;
+
+	if (outcome.kind === 'already-exists') {
+		result.overwritePrompted = true;
+		const existingPath = outcome.existingPath;
+		const choice = await adapter.confirmOverwrite(existingPath, existingPath !== undefined);
+
+		if (choice === 'reuse' && existingPath) {
+			outcome = { kind: 'success', result: { certificatePath: existingPath } };
+			created = false;
+		} else if (choice === 'overwrite') {
+			outcome = await adapter.runGenerate('overwrite');
+		} else {
+			// Dismissing must not look like a silent no-op: the user asked for a
+			// certificate and is getting neither a new one nor an install.
+			adapter.reportKeptExisting(existingPath);
+			return result;
+		}
+	}
+
+	switch (outcome.kind) {
+		case 'cancelled':
+			return result;
+		case 'already-exists':
+			// The overwrite retry hit the same condition, so something other than
+			// our own run is holding the path.
+			adapter.reportFailure(
+				`the certificate at ${outcome.existingPath ?? 'the output path'} could not be replaced`
+			);
+			return result;
+		case 'failed':
+			adapter.reportFailure(outcome.message);
+			return result;
+	}
+
+	result.certificatePath = outcome.result.certificatePath;
+	result.created = created;
+
+	if (install) {
+		await adapter.installCertificate(outcome.result.certificatePath);
+		result.installed = true;
+	}
+
+	// Reported for both branches: the install is handed to another window, so
+	// this is the only place the certificate's location surfaces in VS Code.
+	await adapter.reportSuccess(outcome.result, { created, installing: install });
+
+	return result;
 }

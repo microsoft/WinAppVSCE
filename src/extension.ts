@@ -34,12 +34,16 @@ import {
 } from './sign-utils';
 import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
+	CERTIFICATE_DIALOG_FILTER,
 	MANIFEST_GLOBS,
+	parseManifestPublisher,
+	publishersMatch,
 	buildCertGenerateArgs,
 	decideCertGenerateOutcome,
-	redactPasswordArgs,
+	executeCertGenerateFlow,
 	redactPasswordInOutput,
 	validatePublisherInput,
+	type CertGenerateFlowAdapter,
 	type CertGenerateResult,
 	type CertIfExists
 } from './cert-utils';
@@ -486,9 +490,7 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 	}
 
 	if (certPaths.length === 0) {
-		return selectFile('Select signing certificate', {
-			'Certificates': ['pfx']
-		});
+		return selectFile('Select signing certificate', CERTIFICATE_DIALOG_FILTER);
 	}
 
 	const items: vscode.QuickPickItem[] = certPaths.map((p) => {
@@ -511,9 +513,7 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 	}
 
 	if (picked.detail === 'Open a file picker') {
-		return selectFile('Select signing certificate', {
-			'Certificates': ['pfx']
-		});
+		return selectFile('Select signing certificate', CERTIFICATE_DIALOG_FILTER);
 	}
 
 	return picked.detail;
@@ -645,16 +645,28 @@ function certGenerateArgsFor(source: CertPublisherSource, ifExists: CertIfExists
 }
 
 /**
- * Report a successful generation, offering to reveal the certificate.
+ * Report the outcome, offering to reveal the certificate.
  *
  * The publisher is surfaced because a mismatch with the manifest is the most
  * common reason a dev certificate later fails to sign or install.
+ *
+ * @param created `false` when an existing certificate was reused rather than
+ *   generated, so the message does not claim work that did not happen.
+ * @param installing `true` when an elevated `cert install` was handed off; the
+ *   install runs in a separate window, so its own result is reported there.
  */
-async function showCertGenerateSuccess(result: CertGenerateResult): Promise<void> {
+async function showCertGenerateSuccess(
+	result: CertGenerateResult,
+	{ created, installing }: { created: boolean; installing: boolean }
+): Promise<void> {
 	const publisher = result.subjectName ?? result.publisher;
-	const message = publisher
-		? `Certificate created for ${publisher} at ${result.certificatePath}.`
-		: `Certificate created at ${result.certificatePath}.`;
+	const subject = publisher ? ` for ${publisher}` : '';
+	const lead = created
+		? `Certificate created${subject} at ${result.certificatePath}.`
+		: `Using the existing certificate at ${result.certificatePath}.`;
+	const message = installing
+		? `${lead} Approve the UAC prompt in the elevated window to finish installing it.`
+		: lead;
 
 	const action = await vscode.window.showInformationMessage(message, 'Reveal in Explorer');
 	if (action === 'Reveal in Explorer') {
@@ -663,77 +675,127 @@ async function showCertGenerateSuccess(result: CertGenerateResult): Promise<void
 }
 
 /**
- * Generate a certificate, handling the "already exists" case by offering to
- * overwrite.
+ * Warn when the generated certificate does not match the manifest it was
+ * supposed to be derived from.
  *
- * Overwriting is offered reactively — the CLI is the authority on whether the
- * output path is taken, so there is no need to duplicate its path resolution
- * here. Dismissing the notification keeps the existing certificate.
- *
- * @returns The generated certificate, or `undefined` when nothing was created
- *   (cancelled, declined, or failed — failures are reported to the user).
+ * `cert generate --manifest` falls back to the current user name when it cannot
+ * parse the manifest, and reports success while doing it
+ * (microsoft/winappCli#839). Silently handing back such a certificate defeats
+ * the entire point of passing `--manifest`, so the mismatch is surfaced.
  */
-async function generateCertificate(
+async function warnOnPublisherMismatch(
+	source: CertPublisherSource,
+	result: CertGenerateResult
+): Promise<void> {
+	if (source.kind !== 'manifest') {
+		return;
+	}
+
+	const actual = result.publisher ?? result.subjectName;
+	if (!actual) {
+		return;
+	}
+
+	let expected: string | undefined;
+	try {
+		const xml = await fs.promises.readFile(source.manifestPath, 'utf8');
+		expected = parseManifestPublisher(xml);
+	} catch {
+		// The manifest was readable when we globbed it; if it is not now, the
+		// certificate is still valid output and the user has a bigger problem.
+		return;
+	}
+
+	if (!expected || publishersMatch(expected, actual)) {
+		return;
+	}
+
+	vscode.window.showWarningMessage(
+		`The generated certificate's publisher (${actual}) does not match ${path.basename(source.manifestPath)} (${expected}). ` +
+			'Packages signed with it will fail to install. Check that the manifest is valid XML with an Identity/@Publisher attribute.'
+	);
+}
+
+/**
+ * Build the VS Code adapter for the certificate-generation flow.
+ *
+ * The decision logic lives in `executeCertGenerateFlow` (cert-utils); this only
+ * supplies the UI and process operations it delegates to.
+ */
+function createCertGenerateFlowAdapter(
 	extensionPath: string,
 	projectDir: string,
 	source: CertPublisherSource
-): Promise<CertGenerateResult | undefined> {
-	const run = async (ifExists: CertIfExists) => {
-		const { code, output, cancelled } = await runWinappCapture(
-			extensionPath,
-			certGenerateArgsFor(source, ifExists),
-			projectDir,
-			'Generating certificate...',
-			{
-				cancelMessage: 'Certificate generation cancelled.',
-				// cert generate --json echoes the certificate password back, so the
-				// output must never reach the output channel verbatim.
-				redact: redactPasswordInOutput
+): CertGenerateFlowAdapter {
+	return {
+		runGenerate: async (ifExists: CertIfExists) => {
+			const { code, output, cancelled } = await runWinappCapture(
+				extensionPath,
+				certGenerateArgsFor(source, ifExists),
+				projectDir,
+				'Generating certificate...',
+				{
+					cancelMessage: 'Certificate generation cancelled.',
+					// cert generate --json echoes the certificate password back, so the
+					// output must never reach the output channel verbatim.
+					redact: redactPasswordInOutput
+				}
+			);
+			return decideCertGenerateOutcome(code, output, cancelled);
+		},
+
+		confirmOverwrite: async (existingPath, canReuse) => {
+			const existing = existingPath ?? 'the output path';
+			const actions = canReuse
+				? ['Overwrite Existing Cert', 'Use Existing Cert']
+				: ['Overwrite Existing Cert'];
+
+			const choice = await vscode.window.showWarningMessage(
+				`A certificate already exists at ${existing}. Overwriting it invalidates packages already signed with it, and the new certificate must be trusted again.`,
+				...actions
+			);
+
+			if (choice === 'Overwrite Existing Cert') {
+				return 'overwrite';
 			}
-		);
-		return decideCertGenerateOutcome(code, output, cancelled);
-	};
+			if (choice === 'Use Existing Cert') {
+				return 'reuse';
+			}
+			return 'dismiss';
+		},
 
-	const reportFailure = (message?: string) => {
-		const outputChannel = getWinappOutputChannel();
-		outputChannel.show(true);
-		vscode.window.showErrorMessage(
-			message
-				? `Certificate generation failed: ${message}`
-				: 'Certificate generation failed. See the WinApp output channel for details.'
-		);
-	};
+		installCertificate: async (certificatePath: string) => {
+			// Installing trusts the certificate in the machine store, which needs
+			// administrator rights. VS Code cannot elevate the integrated terminal,
+			// so this runs in a separate UAC-elevated window.
+			await runWinappCommandElevated(
+				extensionPath,
+				`cert install ${escapePowerShellArg(certificatePath)}`,
+				projectDir
+			);
+		},
 
-	let outcome = await run('error');
+		reportSuccess: async (result, context) => {
+			await warnOnPublisherMismatch(source, result);
+			await showCertGenerateSuccess(result, context);
+		},
 
-	if (outcome.kind === 'already-exists') {
-		const existing = outcome.existingPath ?? 'the output path';
-		const overwrite = await vscode.window.showWarningMessage(
-			`A certificate already exists at ${existing}. Overwriting it invalidates packages already signed with it, and the new certificate must be trusted again.`,
-			'Overwrite Existing Cert'
-		);
+		reportFailure: (message?: string) => {
+			const outputChannel = getWinappOutputChannel();
+			outputChannel.show(true);
+			vscode.window.showErrorMessage(
+				message
+					? `Certificate generation failed: ${message}`
+					: 'Certificate generation failed. See the WinApp output channel for details.'
+			);
+		},
 
-		if (overwrite !== 'Overwrite Existing Cert') {
-			return undefined;
+		reportKeptExisting: (existingPath?: string) => {
+			vscode.window.showInformationMessage(
+				`Kept the existing certificate at ${existingPath ?? 'the output path'}. No certificate was generated or installed.`
+			);
 		}
-
-		outcome = await run('overwrite');
-	}
-
-	switch (outcome.kind) {
-		case 'success':
-			return outcome.result;
-		case 'cancelled':
-			return undefined;
-		case 'already-exists':
-			// The overwrite retry hit the same condition, so something other than
-			// our own run is holding the path.
-			reportFailure(`the certificate at ${outcome.existingPath ?? 'the output path'} could not be replaced`);
-			return undefined;
-		default:
-			reportFailure(outcome.message);
-			return undefined;
-	}
+	};
 }
 
 const FOLDER_PICKER_DETAIL = 'Open a folder picker';
@@ -1740,25 +1802,11 @@ export function activate(context: vscode.ExtensionContext) {
 			// Generation runs un-elevated so its exit code is visible here: a bad
 			// publisher or an existing certificate can then be reported in VS Code
 			// instead of scrolling past inside a UAC window. Only the install step
-			// needs administrator rights, and it is elevated separately below.
-			const result = await generateCertificate(extensionPath, projectDir, source);
-			if (!result) {
-				return;
-			}
-
-			if (install === 'Generate and install (requires admin)') {
-				// Installing trusts the certificate in the machine store, which needs
-				// administrator rights. VS Code cannot elevate the integrated
-				// terminal, so this runs in a separate UAC-elevated window.
-				await runWinappCommandElevated(
-					extensionPath,
-					`cert install ${escapePowerShellArg(result.certificatePath)}`,
-					projectDir
-				);
-				return;
-			}
-
-			await showCertGenerateSuccess(result);
+			// needs administrator rights, and it is elevated separately.
+			await executeCertGenerateFlow(
+				createCertGenerateFlowAdapter(extensionPath, projectDir, source),
+				install === 'Generate and install (requires admin)'
+			);
 		})
 	);
 
@@ -1773,9 +1821,7 @@ export function activate(context: vscode.ExtensionContext) {
 			// PFX only: the CLI loads certificates with LoadPkcs12FromFile, so a
 			// .cer is rejected with a raw DER decoding error despite `cert install
 			// --help` advertising CER support.
-			const certPath = await selectFile('Select certificate to install', {
-				'Certificates': ['pfx']
-			});
+			const certPath = await selectFile('Select certificate to install', CERTIFICATE_DIALOG_FILTER);
 
 			if (!certPath) {
 				vscode.window.showErrorMessage('A certificate file is required');
@@ -1911,9 +1957,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.certInfo', async () => {
 			// PFX only — see the note on winapp.certInstall.
-			const certPath = await selectFile('Select certificate file', {
-				'Certificates': ['pfx']
-			});
+			const certPath = await selectFile('Select certificate file', CERTIFICATE_DIALOG_FILTER);
 
 			if (!certPath) {
 				vscode.window.showErrorMessage('A certificate file is required');

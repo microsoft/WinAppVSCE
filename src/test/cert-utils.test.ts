@@ -2,16 +2,25 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+	CERTIFICATE_DIALOG_FILTER,
 	REDACTED,
 	buildCertGenerateArgs,
 	decideCertGenerateOutcome,
+	executeCertGenerateFlow,
 	isAlreadyExistsError,
 	parseCertErrorMessage,
 	parseCertGenerateResult,
 	parseExistingCertificatePath,
+	parseManifestPublisher,
+	publishersMatch,
 	redactPasswordArgs,
 	redactPasswordInOutput,
-	validatePublisherInput
+	validatePublisherInput,
+	type CertGenerateFlowAdapter,
+	type CertGenerateOutcome,
+	type CertGenerateResult,
+	type CertIfExists,
+	type OverwriteChoice
 } from '../cert-utils';
 
 /** A representative `cert generate --json` success payload. */
@@ -170,9 +179,20 @@ describe('parseCertErrorMessage', () => {
 		assert.equal(parseCertErrorMessage('❌ Invalid publisher format'), 'Invalid publisher format');
 	});
 
-	test('returns undefined when there is nothing error-shaped to report', () => {
+	test('reports plain-text errors that carry no status glyph', () => {
+		assert.equal(
+			parseCertErrorMessage('Certificate file already exists: C:\\proj\\devcert.pfx'),
+			'Certificate file already exists: C:\\proj\\devcert.pfx'
+		);
+	});
+
+	test('skips leading blank lines', () => {
+		assert.equal(parseCertErrorMessage('\n\n  \nSomething broke\n'), 'Something broke');
+	});
+
+	test('returns undefined when there is no output to report', () => {
 		assert.equal(parseCertErrorMessage(''), undefined);
-		assert.equal(parseCertErrorMessage('just some output'), undefined);
+		assert.equal(parseCertErrorMessage('   \n\n  '), undefined);
 	});
 });
 
@@ -241,5 +261,272 @@ describe('validatePublisherInput', () => {
 		assert.ok(validatePublisherInput('CN=Contoso, O='));
 		assert.ok(validatePublisherInput('=Contoso'));
 		assert.ok(validatePublisherInput('CN=Contoso,,C=US'));
+	});
+});
+
+const GENERATED: CertGenerateResult = {
+	certificatePath: 'C:\\proj\\devcert.pfx',
+	publisher: 'CN=Contoso',
+	subjectName: 'CN=Contoso'
+};
+
+const EXISTING_PATH = 'C:\\proj\\existing.pfx';
+
+interface FlowCalls {
+	generateModes: CertIfExists[];
+	installed: string[];
+	successes: { result: CertGenerateResult; created: boolean; installing: boolean }[];
+	failures: (string | undefined)[];
+	keptExisting: (string | undefined)[];
+	confirmCanReuse: boolean[];
+}
+
+/**
+ * Build a flow adapter that records every delegated call.
+ *
+ * `outcomes` is consumed one entry per `runGenerate`, so a test can script the
+ * first attempt and the overwrite retry independently.
+ */
+function createFakeAdapter(
+	outcomes: CertGenerateOutcome[],
+	choice: OverwriteChoice = 'dismiss'
+): { adapter: CertGenerateFlowAdapter; calls: FlowCalls } {
+	const calls: FlowCalls = {
+		generateModes: [],
+		installed: [],
+		successes: [],
+		failures: [],
+		keptExisting: [],
+		confirmCanReuse: []
+	};
+
+	const queue = [...outcomes];
+
+	const adapter: CertGenerateFlowAdapter = {
+		runGenerate: async (ifExists) => {
+			calls.generateModes.push(ifExists);
+			const next = queue.shift();
+			assert.ok(next, 'runGenerate called more times than the test scripted');
+			return next;
+		},
+		confirmOverwrite: async (_existingPath, canReuse) => {
+			calls.confirmCanReuse.push(canReuse);
+			return choice;
+		},
+		installCertificate: async (certificatePath) => {
+			calls.installed.push(certificatePath);
+		},
+		reportSuccess: async (result, context) => {
+			calls.successes.push({ result, ...context });
+		},
+		reportFailure: (message) => {
+			calls.failures.push(message);
+		},
+		reportKeptExisting: (existingPath) => {
+			calls.keptExisting.push(existingPath);
+		}
+	};
+
+	return { adapter, calls };
+}
+
+describe('executeCertGenerateFlow', () => {
+	test('generate-only success reports the certificate and installs nothing', async () => {
+		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }]);
+
+		const result = await executeCertGenerateFlow(adapter, false);
+
+		assert.deepEqual(calls.generateModes, ['error']);
+		assert.equal(result.certificatePath, GENERATED.certificatePath);
+		assert.equal(result.created, true);
+		assert.equal(result.installed, false);
+		assert.equal(result.overwritePrompted, false);
+		assert.deepEqual(calls.installed, []);
+		assert.deepEqual(calls.successes, [{ result: GENERATED, created: true, installing: false }]);
+	});
+
+	test('generate-and-install installs and still reports where the cert landed', async () => {
+		const { adapter, calls } = createFakeAdapter([{ kind: 'success', result: GENERATED }]);
+
+		const result = await executeCertGenerateFlow(adapter, true);
+
+		assert.equal(result.installed, true);
+		assert.deepEqual(calls.installed, [GENERATED.certificatePath]);
+		// The install runs in a separate elevated window, so the success
+		// notification is the only in-VS-Code trace of the certificate path.
+		assert.deepEqual(calls.successes, [{ result: GENERATED, created: true, installing: true }]);
+	});
+
+	test('overwrite retries generation with --if-exists overwrite', async () => {
+		const { adapter, calls } = createFakeAdapter(
+			[
+				{ kind: 'already-exists', existingPath: EXISTING_PATH },
+				{ kind: 'success', result: GENERATED }
+			],
+			'overwrite'
+		);
+
+		const result = await executeCertGenerateFlow(adapter, false);
+
+		assert.deepEqual(calls.generateModes, ['error', 'overwrite']);
+		assert.equal(result.overwritePrompted, true);
+		assert.equal(result.created, true);
+		assert.equal(result.certificatePath, GENERATED.certificatePath);
+	});
+
+	test('reusing an existing certificate skips generation but still installs it', async () => {
+		const { adapter, calls } = createFakeAdapter(
+			[{ kind: 'already-exists', existingPath: EXISTING_PATH }],
+			'reuse'
+		);
+
+		const result = await executeCertGenerateFlow(adapter, true);
+
+		// Only the first attempt ran: nothing was regenerated.
+		assert.deepEqual(calls.generateModes, ['error']);
+		assert.equal(result.created, false);
+		assert.equal(result.certificatePath, EXISTING_PATH);
+		// The user asked for an install, so declining to overwrite must not
+		// silently drop the install as well.
+		assert.deepEqual(calls.installed, [EXISTING_PATH]);
+		assert.deepEqual(calls.successes, [
+			{ result: { certificatePath: EXISTING_PATH }, created: false, installing: true }
+		]);
+	});
+
+	test('dismissing the overwrite warning says so instead of failing silently', async () => {
+		const { adapter, calls } = createFakeAdapter(
+			[{ kind: 'already-exists', existingPath: EXISTING_PATH }],
+			'dismiss'
+		);
+
+		const result = await executeCertGenerateFlow(adapter, true);
+
+		assert.equal(result.certificatePath, undefined);
+		assert.equal(result.installed, false);
+		assert.deepEqual(calls.keptExisting, [EXISTING_PATH]);
+		assert.deepEqual(calls.installed, []);
+		assert.deepEqual(calls.successes, []);
+		assert.deepEqual(calls.failures, []);
+	});
+
+	test('reuse is not offered when the CLI did not name the existing certificate', async () => {
+		const { adapter, calls } = createFakeAdapter([{ kind: 'already-exists' }], 'dismiss');
+
+		await executeCertGenerateFlow(adapter, false);
+
+		assert.deepEqual(calls.confirmCanReuse, [false]);
+		assert.deepEqual(calls.keptExisting, [undefined]);
+	});
+
+	test('a reuse choice without a known path does not fabricate one', async () => {
+		const { adapter, calls } = createFakeAdapter([{ kind: 'already-exists' }], 'reuse');
+
+		const result = await executeCertGenerateFlow(adapter, true);
+
+		assert.equal(result.certificatePath, undefined);
+		assert.deepEqual(calls.installed, []);
+		assert.deepEqual(calls.successes, []);
+	});
+
+	test('cancellation is silent — it is the user stopping, not a failure', async () => {
+		const { adapter, calls } = createFakeAdapter([{ kind: 'cancelled' }]);
+
+		const result = await executeCertGenerateFlow(adapter, true);
+
+		assert.equal(result.certificatePath, undefined);
+		assert.deepEqual(calls.failures, []);
+		assert.deepEqual(calls.successes, []);
+		assert.deepEqual(calls.installed, []);
+	});
+
+	test('a failure is reported and never installed', async () => {
+		const { adapter, calls } = createFakeAdapter([
+			{ kind: 'failed', message: 'Invalid publisher' }
+		]);
+
+		const result = await executeCertGenerateFlow(adapter, true);
+
+		assert.equal(result.certificatePath, undefined);
+		assert.deepEqual(calls.failures, ['Invalid publisher']);
+		assert.deepEqual(calls.installed, []);
+	});
+
+	test('an overwrite that still collides is reported rather than retried forever', async () => {
+		const { adapter, calls } = createFakeAdapter(
+			[
+				{ kind: 'already-exists', existingPath: EXISTING_PATH },
+				{ kind: 'already-exists', existingPath: EXISTING_PATH }
+			],
+			'overwrite'
+		);
+
+		const result = await executeCertGenerateFlow(adapter, false);
+
+		assert.deepEqual(calls.generateModes, ['error', 'overwrite']);
+		assert.equal(result.certificatePath, undefined);
+		assert.equal(calls.failures.length, 1);
+		assert.match(calls.failures[0]!, /could not be replaced/);
+		// The warning is shown once; the retry does not re-prompt.
+		assert.equal(calls.confirmCanReuse.length, 1);
+	});
+});
+
+describe('CERTIFICATE_DIALOG_FILTER', () => {
+	test('offers PFX only, because the CLI cannot load a .cer', () => {
+		// Regression guard for microsoft/winappCli#838: cert install/info advertise
+		// CER support their PKCS#12-only implementation does not have, so offering
+		// .cer in the picker walks users into a raw DER decoding error.
+		assert.deepEqual(Object.values(CERTIFICATE_DIALOG_FILTER).flat(), ['pfx']);
+	});
+});
+
+describe('parseManifestPublisher', () => {
+	const MANIFEST = `<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+  <Identity Name="App" Publisher="CN=Contoso, O=Contoso Ltd, C=US" Version="1.0.0.0" />
+  <Properties>
+    <PublisherDisplayName>Contoso Display</PublisherDisplayName>
+  </Properties>
+</Package>`;
+
+	test('reads Identity/@Publisher', () => {
+		assert.equal(parseManifestPublisher(MANIFEST), 'CN=Contoso, O=Contoso Ltd, C=US');
+	});
+
+	test('does not confuse PublisherDisplayName for the publisher', () => {
+		assert.notEqual(parseManifestPublisher(MANIFEST), 'Contoso Display');
+	});
+
+	test('handles a namespace-prefixed Identity element', () => {
+		assert.equal(
+			parseManifestPublisher('<foo:Identity Name="A" Publisher="CN=X" />'),
+			'CN=X'
+		);
+	});
+
+	test('returns undefined when there is no Identity element', () => {
+		assert.equal(parseManifestPublisher('<Package></Package>'), undefined);
+		assert.equal(parseManifestPublisher('not xml at all'), undefined);
+	});
+
+	test('returns undefined when Identity carries no Publisher', () => {
+		assert.equal(parseManifestPublisher('<Identity Name="App" Version="1.0.0.0" />'), undefined);
+	});
+});
+
+describe('publishersMatch', () => {
+	test('ignores case and spacing differences within a distinguished name', () => {
+		assert.equal(publishersMatch('CN=Contoso, O=Contoso Ltd', 'cn=Contoso,o=contoso ltd'), true);
+		assert.equal(publishersMatch('CN = Contoso', 'CN=Contoso'), true);
+	});
+
+	test('detects the CLI silently falling back to the user name', () => {
+		// Regression guard for microsoft/winappCli#839.
+		assert.equal(publishersMatch('CN=Contoso, O=Contoso Ltd, C=US', 'CN=chiaramooney'), false);
+	});
+
+	test('does not treat a prefix as a match', () => {
+		assert.equal(publishersMatch('CN=Contoso', 'CN=Contoso, O=Contoso Ltd'), false);
 	});
 });
