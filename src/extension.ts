@@ -1062,6 +1062,14 @@ async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<str
 let cachedTemplateList: TemplateListResult | undefined;
 
 /**
+ * A template listing plus whether this run had to install the pack.
+ *
+ * `freshlyInstalled` suppresses the installed-versus-latest question: when the
+ * listing just fetched the newest pack, both answers name the same version.
+ */
+type TemplateLoad = { list: TemplateListResult; freshlyInstalled: boolean };
+
+/**
  * Run `winapp new --list --json` and parse the result.
  *
  * This doubles as the prerequisite check for the whole command: `--list`
@@ -1087,7 +1095,7 @@ async function loadWinUiTemplates(
 	extensionPath: string,
 	cwd: string,
 	templateVersion?: 'latest'
-): Promise<TemplateListResult | undefined> {
+): Promise<TemplateLoad | undefined> {
 	if (templateVersion !== 'latest') {
 		const local = await runTemplateList(extensionPath, cwd, 'installed', 'Loading WinUI templates...');
 		if (local.cancelled) {
@@ -1095,12 +1103,17 @@ async function loadWinUiTemplates(
 		}
 		if (local.parsed?.ok && local.code === 0) {
 			cachedTemplateList = local.parsed.value;
-			return local.parsed.value;
+			return { list: local.parsed.value, freshlyInstalled: false };
 		}
 		if (isSdkMissingExit(local.code)) {
 			// No .NET SDK means the fallback cannot succeed either, and its
 			// "Installing..." progress would imply work that can never happen.
-			await showNewFailure('Failed to load the WinUI templates.', true);
+			// Prefer the CLI's own message: it distinguishes "no SDK found" from
+			// "SDK too old", and names the required version.
+			const detail = local.parsed && !local.parsed.ok
+				? local.parsed.error
+				: describeNewFailure(local.code, undefined);
+			await showNewFailure(detail, true);
 			return undefined;
 		}
 		// No pack installed yet: fall through to the unpinned listing, which
@@ -1127,7 +1140,9 @@ async function loadWinUiTemplates(
 	}
 
 	cachedTemplateList = result.parsed.value;
-	return result.parsed.value;
+	// Reaching the unpinned listing on the default path means nothing was
+	// installed and the CLI has just fetched the newest pack.
+	return { list: result.parsed.value, freshlyInstalled: templateVersion !== 'latest' };
 }
 
 /**
@@ -1200,11 +1215,13 @@ async function showNewFailure(message: string, sdkMissing: boolean): Promise<voi
 async function resolveTemplatePack(
 	extensionPath: string,
 	cwd: string,
-	initial: TemplateListResult
+	initial: TemplateListResult,
+	freshlyInstalled: boolean
 ): Promise<TemplateListResult | undefined> {
-	// Nothing installed before this run means --list just installed the latest,
-	// so there is no meaningful choice to offer.
-	if (!initial.templateVersion) {
+	// Nothing installed before this run means the listing just fetched the
+	// latest pack, so "installed" and "latest" are the same thing and the
+	// question would be noise.
+	if (!initial.templateVersion || freshlyInstalled) {
 		return initial;
 	}
 
@@ -1230,7 +1247,7 @@ async function resolveTemplatePack(
 		return initial;
 	}
 
-	return loadWinUiTemplates(extensionPath, cwd, 'latest');
+	return loadWinUiTemplates(extensionPath, cwd, 'latest').then(loaded => loaded?.list);
 }
 
 /**
@@ -1793,12 +1810,19 @@ export function activate(context: vscode.ExtensionContext) {
 			// what a terminal user in that folder would get.
 			const cliCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
 
-			const initialList = cachedTemplateList ?? await loadWinUiTemplates(extensionPath, cliCwd);
-			if (!initialList) {
+			const initialLoad = cachedTemplateList
+				? { list: cachedTemplateList, freshlyInstalled: false }
+				: await loadWinUiTemplates(extensionPath, cliCwd);
+			if (!initialLoad) {
 				return;
 			}
 
-			const templateList = await resolveTemplatePack(extensionPath, cliCwd, initialList);
+			const templateList = await resolveTemplatePack(
+				extensionPath,
+				cliCwd,
+				initialLoad.list,
+				initialLoad.freshlyInstalled
+			);
 			if (!templateList) {
 				return;
 			}
