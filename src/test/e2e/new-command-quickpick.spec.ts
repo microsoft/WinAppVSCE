@@ -15,13 +15,18 @@
  *   Escapes out of the template QuickPick and verifies nothing further happens
  *   (no name prompt, no folder dialog).
  *
- * These tests exercise the real `winapp new --list --json`, which requires the
- * .NET SDK and may install the WinUI template pack on first run — hence the
- * generous timeouts and the tolerance for the template-pack QuickPick that only
- * appears when a pack is already installed.
+ * These tests drive the real `winapp new --list --json`, but only ever the
+ * purely local `--template-version installed` path: the suite skips itself
+ * unless a WinUI template pack is already on the machine. Without that guard a
+ * test run on a clean machine would fall through to the unpinned listing, which
+ * installs the pack machine-wide for every tool that uses `dotnet new` — a side
+ * effect a test must never cause. The install/fallback decisions that guard is
+ * stepping around are covered deterministically in
+ * `src/test/new-command-utils.test.ts`, so nothing is lost by skipping.
  */
 
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { execFileSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -35,7 +40,41 @@ const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
     ? []
     : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
 
-/** How long the first `winapp new --list` may take, including a pack install. */
+/**
+ * Resolve the CLI the extension itself would run, mirroring `getWinappCliPath`.
+ */
+function resolveCliPath(): string {
+    const arch = os.arch() === 'arm64' ? 'win-arm64' : 'win-x64';
+    const candidates = [
+        path.join(EXTENSION_ROOT, 'bin', arch, 'winapp.exe'),
+        path.join(EXTENSION_ROOT, '..', 'bin', arch, 'winapp.exe')
+    ];
+    return candidates.find((candidate) => fs.existsSync(candidate)) ?? 'winapp';
+}
+
+/**
+ * Whether a WinUI template pack is already installed on this machine.
+ *
+ * Probed with `--template-version installed`, which is a purely local query —
+ * it reports what is on disk and never contacts a feed or installs anything.
+ * Run from a temp directory so a `global.json` in the repo can't make a present
+ * SDK look missing.
+ */
+function hasInstalledTemplatePack(): boolean {
+    try {
+        const output = execFileSync(
+            resolveCliPath(),
+            ['new', '--list', '--json', '--template-version', 'installed'],
+            { cwd: os.tmpdir(), encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }
+        );
+        return /"Listed"\s*:\s*true/.test(output);
+    } catch {
+        // Non-zero exit means no pack (or no SDK) — either way, don't install one.
+        return false;
+    }
+}
+
+/** How long the local `winapp new --list` may take. */
 const TEMPLATE_LOAD_TIMEOUT = 120_000;
 
 /** Temp directories to remove once the whole spec finishes. */
@@ -120,11 +159,11 @@ function quickInputPlaceholder(page: Page): Promise<string | null> {
 }
 
 /**
- * Run the command and advance past the template-pack QuickPick if it appears.
+ * Run the command and advance past the template-pack QuickPick.
  *
- * That step is conditional on a pack already being installed on the machine, so
- * the test can't assume either way — it keys off the placeholder and picks the
- * non-destructive "use installed" option, which is pre-selected.
+ * The suite only runs when a pack is installed, so this step is expected — but
+ * it keys off the placeholder rather than assuming, and picks the
+ * non-destructive "use installed" option so the run never changes the machine.
  */
 async function openTemplatePicker(page: Page): Promise<void> {
     await runCommandPalette(page, 'WinApp: Create WinUI App');
@@ -148,9 +187,16 @@ async function openTemplatePicker(page: Page): Promise<void> {
 }
 
 test.describe('winapp.new command — template selection', () => {
-    // Launching an isolated VS Code plus a possible template-pack install on
-    // first run comfortably exceeds the default per-test budget.
+    // Launching an isolated VS Code plus the template listing comfortably
+    // exceeds the default per-test budget.
     test.describe.configure({ timeout: 240_000 });
+
+    // Never let a test run install a template pack machine-wide. The decision
+    // logic behind that install is unit-tested instead.
+    test.skip(
+        () => !hasInstalledTemplatePack(),
+        'No WinUI template pack installed; skipping rather than installing one machine-wide.'
+    );
 
     test('lists the official WinUI templates with no folder open', async () => {
         const tmpDir = makeTempDirectory('winapp-new-e2e-');
