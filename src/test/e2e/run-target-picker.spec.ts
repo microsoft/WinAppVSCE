@@ -1,0 +1,276 @@
+/**
+ * E2E tests for the run-target picker used by `winapp.run`, `winapp.runAdvanced`,
+ * and the `winapp` debug adapter.
+ *
+ * These cover the discovery behavior that unit tests cannot reach, because it
+ * depends on VS Code's own `findFiles` indexing and on real workspace-folder
+ * resolution:
+ *
+ * Test 1 — Projects are discovered and listed:
+ *   A workspace with two .csproj files shows both, plus the build-output search
+ *   and browse entries.
+ *
+ * Test 2 — Solution members are deduplicated:
+ *   A .sln listing a member .csproj shows one entry for the solution, not two.
+ *
+ * Test 3 — Multi-root discovery:
+ *   A .code-workspace with two folders shows projects from *both*, which is the
+ *   multi-root fix — discovery previously only ever saw workspaceFolders[0].
+ *
+ * Test 4 — Advanced command always prompts:
+ *   A workspace with a single project auto-selects for "Run Application" but
+ *   still prompts for "Run Application (Advanced)".
+ *
+ * Every test dismisses the picker with Escape, so the winapp CLI is never
+ * actually invoked and nothing is built, deployed, or registered.
+ */
+
+import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
+
+const VSCODE_EXE =
+    process.env.VSCODE_PATH ??
+    path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
+
+const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
+const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
+    ? []
+    : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+
+const MINIMAL_CSPROJ = `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+`;
+
+/** Temporary VS Code profiles to remove once the suite finishes. */
+const userDataDirs: string[] = [];
+
+test.afterAll(() => {
+    for (const dir of userDataDirs) {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+/** Launch VS Code with the extension loaded, opening a folder or .code-workspace. */
+async function launchVSCode(targetPath: string): Promise<{ app: ElectronApplication; page: Page }> {
+    // Each launch gets its own profile so "recently used" palette entries and
+    // other persisted state cannot leak between tests.
+    const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-e2e-profile-'));
+    userDataDirs.push(userDataPath);
+
+    const app = await electron.launch({
+        executablePath: VSCODE_EXE,
+        args: [
+            targetPath,
+            '--new-window',
+            `--user-data-dir=${userDataPath}`,
+            ...EXTENSION_ARGS,
+            '--disable-telemetry',
+            '--skip-release-notes',
+            '--disable-workspace-trust',
+        ],
+        timeout: 30_000,
+    });
+
+    const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
+    // Allow VS Code to finish initialising & activating extensions
+    await page.waitForTimeout(6_000);
+
+    return { app, page };
+}
+
+async function runCommandPalette(page: Page, commandLabel: string): Promise<void> {
+    await page.keyboard.press('Control+Shift+P');
+    await page.waitForTimeout(1_000);
+    await page.keyboard.type(commandLabel, { delay: 30 });
+    await page.waitForTimeout(1_500);
+    await page.keyboard.press('Enter');
+}
+
+/** Write a project file, creating intermediate directories. */
+function writeProject(root: string, relativePath: string, contents: string = MINIMAL_CSPROJ): string {
+    const fullPath = path.join(root, relativePath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, contents);
+    return fullPath;
+}
+
+/** The rows currently shown in the quick input list. */
+function quickPickRows(page: Page) {
+    return page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
+}
+
+/** The exact placeholder of the run-target picker. */
+// Matching loosely on "to run" is not safe: the command palette's own
+// placeholder is "Type the name of a command to run", so a loose pattern
+// matches the palette and reads its rows instead of the picker's.
+const RUN_TARGET_PLACEHOLDER = /Select the project, solution, or build output folder to run/;
+
+/**
+ * Wait for the run-target picker and return the text of every row.
+ *
+ * The picker is identified by its placeholder, and we wait for that placeholder
+ * rather than for rows: the command palette's own rows are visible the instant
+ * Enter is pressed, so reading rows immediately captures the palette instead of
+ * the picker that replaces it.
+ */
+async function readRunTargetPicker(page: Page): Promise<string[]> {
+    const input = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
+    await expect(input).toHaveAttribute('placeholder', RUN_TARGET_PLACEHOLDER, { timeout: 30_000 });
+
+    const rows = quickPickRows(page);
+    await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+    // Let the list settle so we do not read a partially rendered set of rows.
+    await page.waitForTimeout(750);
+
+    const texts: string[] = [];
+    const count = await rows.count();
+    for (let index = 0; index < count; index += 1) {
+        texts.push((await rows.nth(index).textContent()) ?? '');
+    }
+    return texts;
+}
+
+test.describe('run target picker', () => {
+    test('lists every discovered project in the workspace', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-e2e-'));
+        writeProject(tmpDir, path.join('AppOne', 'AppOne.csproj'));
+        writeProject(tmpDir, path.join('AppTwo', 'AppTwo.csproj'));
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application');
+
+            const rows = await readRunTargetPicker(page);
+            const joined = rows.join('\n');
+
+            expect(joined).toContain('AppOne.csproj');
+            expect(joined).toContain('AppTwo.csproj');
+            // The expensive .exe scan is offered, not performed up front.
+            expect(joined).toContain('Search for build output folders');
+            expect(joined).toContain('Browse for a project or solution');
+            expect(joined).toContain('Browse for a folder');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: both projects listed with search and browse entries');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    test('shows a solution once rather than also listing its member projects', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-sln-e2e-'));
+        writeProject(tmpDir, path.join('AppOne', 'AppOne.csproj'));
+        fs.writeFileSync(
+            path.join(tmpDir, 'MySolution.sln'),
+            'Microsoft Visual Studio Solution File, Format Version 12.00\r\n'
+            + 'Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "AppOne", "AppOne\\AppOne.csproj", '
+            + '"{11111111-2222-3333-4444-555555555555}"\r\nEndProject\r\n'
+        );
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            // Deduplication leaves a single candidate, which "Run Application"
+            // would auto-select and launch. Use the advanced command so the
+            // picker is always shown and the CLI is never invoked.
+            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+
+            const rows = await readRunTargetPicker(page);
+            const joined = rows.join('\n');
+
+            expect(joined).toContain('MySolution.sln');
+            // The member project is reachable through the solution, so listing
+            // it separately would just be a duplicate of the same app.
+            expect(joined).not.toContain('AppOne.csproj');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: solution listed once, member project deduplicated');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    test('discovers projects in every folder of a multi-root workspace', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-multiroot-e2e-'));
+        const frontend = path.join(tmpDir, 'frontend');
+        const backend = path.join(tmpDir, 'backend');
+        writeProject(frontend, path.join('Shell', 'Shell.csproj'));
+        writeProject(backend, path.join('Service', 'Service.csproj'));
+
+        const workspaceFile = path.join(tmpDir, 'combined.code-workspace');
+        fs.writeFileSync(workspaceFile, JSON.stringify({
+            folders: [{ path: 'frontend' }, { path: 'backend' }]
+        }, null, 2));
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(workspaceFile);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application');
+
+            const rows = await readRunTargetPicker(page);
+            const joined = rows.join('\n');
+
+            // The whole point of the multi-root fix: discovery previously only
+            // ever looked at workspaceFolders[0], so Service.csproj was
+            // unreachable from the palette.
+            expect(joined).toContain('Shell.csproj');
+            expect(joined).toContain('Service.csproj');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: projects from both workspace folders listed');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    test('advanced command prompts even when a single project would auto-select', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-advanced-e2e-'));
+        writeProject(tmpDir, path.join('OnlyApp', 'OnlyApp.csproj'));
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+
+            const rows = await readRunTargetPicker(page);
+            expect(rows.join('\n')).toContain('OnlyApp.csproj');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: advanced command prompted for a single candidate');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+});
