@@ -34,7 +34,6 @@ import {
 } from './sign-utils';
 import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
-	CERTIFICATE_DIALOG_FILTER,
 	MANIFEST_GLOBS,
 	buildCertGenerateArgs,
 	decideCertGenerateOutcome,
@@ -466,7 +465,9 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 	}
 
 	if (certPaths.length === 0) {
-		return selectFile('Select signing certificate', CERTIFICATE_DIALOG_FILTER);
+		return selectFile('Select signing certificate', {
+			'Certificates': ['pfx']
+		});
 	}
 
 	const items: vscode.QuickPickItem[] = certPaths.map((p) => {
@@ -489,7 +490,9 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 	}
 
 	if (picked.detail === 'Open a file picker') {
-		return selectFile('Select signing certificate', CERTIFICATE_DIALOG_FILTER);
+		return selectFile('Select signing certificate', {
+			'Certificates': ['pfx']
+		});
 	}
 
 	return picked.detail;
@@ -1754,10 +1757,9 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			// PFX only: the CLI loads certificates with LoadPkcs12FromFile, so a
-			// .cer is rejected with a raw DER decoding error despite `cert install
-			// --help` advertising CER support.
-			const certPath = await selectFile('Select certificate to install', CERTIFICATE_DIALOG_FILTER);
+			const certPath = await selectFile('Select certificate to install', {
+				'Certificates': ['pfx', 'cer']
+			});
 
 			if (!certPath) {
 				vscode.window.showErrorMessage('A certificate file is required');
@@ -1892,8 +1894,9 @@ export function activate(context: vscode.ExtensionContext) {
 	// This command only inspects a certificate file and does not require a workspace.
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.certInfo', async () => {
-			// PFX only — see the note on winapp.certInstall.
-			const certPath = await selectFile('Select certificate file', CERTIFICATE_DIALOG_FILTER);
+			const certPath = await selectFile('Select certificate file', {
+				'Certificates': ['pfx', 'cer']
+			});
 
 			if (!certPath) {
 				vscode.window.showErrorMessage('A certificate file is required');

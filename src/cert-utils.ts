@@ -15,19 +15,6 @@
  */
 export const MANIFEST_GLOBS = ['**/*.appxmanifest', '**/[Aa]ppx[Mm]anifest.xml'];
 
-/**
- * File-dialog filter for certificate pickers.
- *
- * PFX only, deliberately: the CLI loads certificates with
- * `X509CertificateLoader.LoadPkcs12FromFile`, so a `.cer` is rejected with a raw
- * DER decoding error even though `cert install --help` advertises CER support
- * (microsoft/winappCli#838). Offering `.cer` here only leads users into that
- * error, so do not re-add it until the CLI actually accepts one.
- */
-export const CERTIFICATE_DIALOG_FILTER: Record<string, string[]> = {
-	'Certificates': ['pfx']
-};
-
 /** Behaviour when the output certificate file already exists. */
 export type CertIfExists = 'error' | 'overwrite';
 

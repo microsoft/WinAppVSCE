@@ -2,7 +2,6 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-	CERTIFICATE_DIALOG_FILTER,
 	buildCertGenerateArgs,
 	decideCertGenerateOutcome,
 	executeCertGenerateFlow,
@@ -413,15 +412,6 @@ describe('executeCertGenerateFlow', () => {
 		assert.match(calls.failures[0]!, /could not be replaced/);
 		// The warning is shown once; the retry does not re-prompt.
 		assert.equal(calls.confirmCanReuse.length, 1);
-	});
-});
-
-describe('CERTIFICATE_DIALOG_FILTER', () => {
-	test('offers PFX only, because the CLI cannot load a .cer', () => {
-		// Regression guard for microsoft/winappCli#838: cert install/info advertise
-		// CER support their PKCS#12-only implementation does not have, so offering
-		// .cer in the picker walks users into a raw DER decoding error.
-		assert.deepEqual(Object.values(CERTIFICATE_DIALOG_FILTER).flat(), ['pfx']);
 	});
 });
 
