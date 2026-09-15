@@ -53,7 +53,6 @@ import {
 	buildListArgs,
 	buildNewArgs,
 	describeNewFailure,
-	DEFAULT_PROJECT_NAME,
 	isSdkMissingExit,
 	isNonEmptyOutputFailure,
 	NEW_EXIT,
@@ -1502,10 +1501,13 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
+			// Prefill only: the flow always passes --name, so the CLI's own
+			// default never applies and cannot drift from this value.
+			const defaultName = 'WinUIApp';
 			const requestedName = await vscode.window.showInputBox({
 				prompt: 'Name for the new app',
-				value: DEFAULT_PROJECT_NAME,
-				valueSelection: [0, DEFAULT_PROJECT_NAME.length]
+				value: defaultName,
+				valueSelection: [0, defaultName.length]
 			});
 			if (!requestedName) {
 				return;
