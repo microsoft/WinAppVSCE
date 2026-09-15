@@ -7,7 +7,6 @@ import {
 	executeCertGenerateFlow,
 	isAlreadyExistsError,
 	parseCertErrorMessage,
-	parseExistingCertificatePath,
 	resolveCertPublisherSourceDecision,
 	selectCanonicalManifest,
 	validatePublisherInput,
@@ -84,21 +83,17 @@ describe('buildCertGenerateArgs', () => {
 	});
 });
 
-describe('isAlreadyExistsError / parseExistingCertificatePath', () => {
-	test('detects the plain-text form and extracts the path', () => {
+describe('isAlreadyExistsError', () => {
+	test('detects the plain-text form', () => {
 		assert.ok(isAlreadyExistsError(ALREADY_EXISTS_TEXT));
-		assert.equal(parseExistingCertificatePath(ALREADY_EXISTS_TEXT), 'C:\\proj\\devcert.pfx');
 	});
 
-	test('extracts the path when no status glyph precedes it', () => {
-		const output = 'Certificate file already exists: C:\\proj\\devcert.pfx';
-		assert.ok(isAlreadyExistsError(output));
-		assert.equal(parseExistingCertificatePath(output), 'C:\\proj\\devcert.pfx');
+	test('detects it when no status glyph precedes it', () => {
+		assert.ok(isAlreadyExistsError('Certificate file already exists: C:\\proj\\devcert.pfx'));
 	});
 
 	test('does not fire on unrelated failures', () => {
 		assert.equal(isAlreadyExistsError('❌ Invalid publisher'), false);
-		assert.equal(parseExistingCertificatePath('❌ Invalid publisher'), undefined);
 	});
 });
 
@@ -145,9 +140,11 @@ describe('decideCertGenerateOutcome', () => {
 	test('an already-exists failure is reported separately so it can be retried', () => {
 		const outcome = decideCertGenerateOutcome(1, ALREADY_EXISTS_TEXT, EXPECTED_PATH);
 		assert.equal(outcome.kind, 'already-exists');
+		// The blocked file is the one we asked the CLI to write, so it is taken
+		// from the request rather than scraped back out of the error text.
 		assert.equal(
 			outcome.kind === 'already-exists' ? outcome.existingPath : undefined,
-			'C:\\proj\\devcert.pfx'
+			EXPECTED_PATH
 		);
 	});
 
@@ -208,7 +205,7 @@ interface FlowCalls {
 	successes: { certificatePath: string; created: boolean; installing: boolean }[];
 	failures: (string | undefined)[];
 	keptExisting: (string | undefined)[];
-	confirmCanReuse: boolean[];
+	confirmedPaths: string[];
 	/** Order of the delegated calls, so ordering guarantees can be asserted. */
 	sequence: string[];
 }
@@ -229,7 +226,7 @@ function createFakeAdapter(
 		successes: [],
 		failures: [],
 		keptExisting: [],
-		confirmCanReuse: [],
+		confirmedPaths: [],
 		sequence: []
 	};
 
@@ -243,8 +240,8 @@ function createFakeAdapter(
 			assert.ok(next, 'runGenerate called more times than the test scripted');
 			return next;
 		},
-		confirmOverwrite: async (_existingPath, canReuse) => {
-			calls.confirmCanReuse.push(canReuse);
+		confirmOverwrite: async (existingPath) => {
+			calls.confirmedPaths.push(existingPath);
 			calls.sequence.push('confirmOverwrite');
 			return choice;
 		},
@@ -357,23 +354,16 @@ describe('executeCertGenerateFlow', () => {
 		assert.deepEqual(calls.failures, []);
 	});
 
-	test('reuse is not offered when the CLI did not name the existing certificate', async () => {
-		const { adapter, calls } = createFakeAdapter([{ kind: 'already-exists' }], 'dismiss');
+	test('the blocked path is handed to the overwrite prompt', async () => {
+		const { adapter, calls } = createFakeAdapter(
+			[{ kind: 'already-exists', existingPath: EXISTING_PATH }],
+			'dismiss'
+		);
 
 		await executeCertGenerateFlow(adapter, false);
 
-		assert.deepEqual(calls.confirmCanReuse, [false]);
-		assert.deepEqual(calls.keptExisting, [undefined]);
-	});
-
-	test('a reuse choice without a known path does not fabricate one', async () => {
-		const { adapter, calls } = createFakeAdapter([{ kind: 'already-exists' }], 'reuse');
-
-		const result = await executeCertGenerateFlow(adapter, true);
-
-		assert.equal(result.certificatePath, undefined);
-		assert.deepEqual(calls.installed, []);
-		assert.deepEqual(calls.successes, []);
+		assert.deepEqual(calls.confirmedPaths, [EXISTING_PATH]);
+		assert.deepEqual(calls.keptExisting, [EXISTING_PATH]);
 	});
 
 	test('cancellation is silent — it is the user stopping, not a failure', async () => {
@@ -415,7 +405,7 @@ describe('executeCertGenerateFlow', () => {
 		assert.equal(calls.failures.length, 1);
 		assert.match(calls.failures[0]!, /could not be replaced/);
 		// The warning is shown once; the retry does not re-prompt.
-		assert.equal(calls.confirmCanReuse.length, 1);
+		assert.equal(calls.confirmedPaths.length, 1);
 	});
 });
 

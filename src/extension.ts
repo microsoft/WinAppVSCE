@@ -644,15 +644,11 @@ function createCertGenerateFlowAdapter(
 			return decideCertGenerateOutcome(code, output, certificatePath, cancelled);
 		},
 
-		confirmOverwrite: async (existingPath, canReuse) => {
-			const existing = existingPath ?? 'the output path';
-			const actions = canReuse
-				? ['Overwrite Existing Cert', 'Use Existing Cert']
-				: ['Overwrite Existing Cert'];
-
+		confirmOverwrite: async (existingPath) => {
 			const choice = await vscode.window.showWarningMessage(
-				`A certificate already exists at ${existing}. Overwriting it invalidates packages already signed with it, and the new certificate must be trusted again.`,
-				...actions
+				`A certificate already exists at ${existingPath}. Overwriting it invalidates packages already signed with it, and the new certificate must be trusted again.`,
+				'Overwrite Existing Cert',
+				'Use Existing Cert'
 			);
 
 			if (choice === 'Overwrite Existing Cert') {
@@ -689,9 +685,9 @@ function createCertGenerateFlowAdapter(
 			);
 		},
 
-		reportKeptExisting: (existingPath?: string) => {
+		reportKeptExisting: (existingPath: string) => {
 			vscode.window.showInformationMessage(
-				`Kept the existing certificate at ${existingPath ?? 'the output path'}. No certificate was generated or installed.`
+				`Kept the existing certificate at ${existingPath}. No certificate was generated or installed.`
 			);
 		}
 	};

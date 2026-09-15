@@ -56,15 +56,6 @@ export function isAlreadyExistsError(output: string): boolean {
 	return ALREADY_EXISTS_RE.test(output);
 }
 
-/**
- * Pull the certificate path out of an "already exists" message so the user can
- * be told *which* file is about to be overwritten.
- */
-export function parseExistingCertificatePath(output: string): string | undefined {
-	const match = /certificate file already exists:\s*([^"\r\n]+)/i.exec(output);
-	return match?.[1].trim() || undefined;
-}
-
 /** Extract a human-readable error message from CLI output. */
 export function parseCertErrorMessage(output: string): string | undefined {
 	// The first non-empty line. This runs only after a non-zero exit, so any
@@ -88,7 +79,7 @@ export function parseCertErrorMessage(output: string): string | undefined {
 
 export type CertGenerateOutcome =
 	| { kind: 'success'; certificatePath: string }
-	| { kind: 'already-exists'; existingPath?: string }
+	| { kind: 'already-exists'; existingPath: string }
 	| { kind: 'cancelled' }
 	| { kind: 'failed'; message?: string };
 
@@ -101,6 +92,8 @@ export type CertGenerateOutcome =
  * @param expectedPath Where the certificate was asked to be written. The CLI is
  *   run without `--json`, so success is taken from the exit code and the path is
  *   the one the caller specified rather than one parsed back out of the output.
+ *   The same applies to a collision: the file the CLI refused to overwrite is by
+ *   definition the one it was told to write.
  */
 export function decideCertGenerateOutcome(
 	code: number | null,
@@ -117,7 +110,7 @@ export function decideCertGenerateOutcome(
 	}
 
 	if (isAlreadyExistsError(output)) {
-		return { kind: 'already-exists', existingPath: parseExistingCertificatePath(output) };
+		return { kind: 'already-exists', existingPath: expectedPath };
 	}
 
 	return { kind: 'failed', message: parseCertErrorMessage(output) };
@@ -195,13 +188,8 @@ export interface CertGenerateFlowAdapter {
 	/** Run `cert generate` with the given `--if-exists` mode and classify the result. */
 	runGenerate(ifExists: CertIfExists): Promise<CertGenerateOutcome>;
 
-	/**
-	 * Warn that a certificate already exists and ask what to do.
-	 *
-	 * `canReuse` is false when the CLI did not tell us where the existing
-	 * certificate is, in which case reusing it cannot be offered.
-	 */
-	confirmOverwrite(existingPath: string | undefined, canReuse: boolean): Promise<OverwriteChoice>;
+	/** Warn that a certificate already exists and ask what to do. */
+	confirmOverwrite(existingPath: string): Promise<OverwriteChoice>;
 
 	/** Install the certificate into the machine store (requires elevation). */
 	installCertificate(certificatePath: string): Promise<void>;
@@ -216,7 +204,7 @@ export interface CertGenerateFlowAdapter {
 	reportFailure(message?: string): void;
 
 	/** Tell the user the existing certificate was left alone and nothing else happened. */
-	reportKeptExisting(existingPath: string | undefined): void;
+	reportKeptExisting(existingPath: string): void;
 }
 
 export interface CertGenerateFlowResult {
@@ -259,9 +247,9 @@ export async function executeCertGenerateFlow(
 	if (outcome.kind === 'already-exists') {
 		result.overwritePrompted = true;
 		const existingPath = outcome.existingPath;
-		const choice = await adapter.confirmOverwrite(existingPath, existingPath !== undefined);
+		const choice = await adapter.confirmOverwrite(existingPath);
 
-		if (choice === 'reuse' && existingPath) {
+		if (choice === 'reuse') {
 			outcome = { kind: 'success', certificatePath: existingPath };
 			created = false;
 		} else if (choice === 'overwrite') {
@@ -281,7 +269,7 @@ export async function executeCertGenerateFlow(
 			// The overwrite retry hit the same condition, so something other than
 			// our own run is holding the path.
 			adapter.reportFailure(
-				`the certificate at ${outcome.existingPath ?? 'the output path'} could not be replaced`
+				`the certificate at ${outcome.existingPath} could not be replaced`
 			);
 			return result;
 		case 'failed':
