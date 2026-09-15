@@ -10,6 +10,7 @@ import {
 	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
 	decideElevatedWinappCommand,
+	extractJsonObject,
 	resolveWorkingDirectory
 } from './winapp-cli-utils';
 import { detectProjects, deduplicateBuildOutputFolders, BUILD_OUTPUT_EXCLUDE_GLOB, BUILD_OUTPUT_MAX_RESULTS } from './project-detection';
@@ -2018,16 +2019,9 @@ export function activate(context: vscode.ExtensionContext) {
  * Expects a JSON object with a processId (or pid) field.
  */
 function parseProcessIdFromJson(output: string): number | undefined {
-	try {
-		const json = JSON.parse(output.trim());
-		const pid = json.processId ?? json.pid ?? json.ProcessId ?? json.PID;
-		if (typeof pid === 'number' && pid > 0) {
-			return pid;
-		}
-	} catch {
-		// JSON not complete yet or invalid
-	}
-	return undefined;
+	const json = extractJsonObject(output);
+	const pid = json?.processId ?? json?.pid ?? json?.ProcessId ?? json?.PID;
+	return typeof pid === 'number' && pid > 0 ? pid : undefined;
 }
 
 export function deactivate() {

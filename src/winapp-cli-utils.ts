@@ -41,6 +41,37 @@ export function escapePowerShellArg(value: string): string {
 	return `'${value.replace(/'/g, "''")}'`;
 }
 
+/**
+ * Extract the JSON object from `winapp ... --json` output. Progress or warning
+ * text can surround the payload, so anchor on the first `{` and walk back from
+ * the last `}` rather than requiring the output to be JSON and nothing else.
+ *
+ * @returns The parsed object, or `undefined` when the output holds no complete one.
+ */
+export function extractJsonObject(output: string): Record<string, unknown> | undefined {
+	if (!output) {
+		return undefined;
+	}
+
+	const start = output.indexOf('{');
+	if (start < 0) {
+		return undefined;
+	}
+
+	for (let end = output.lastIndexOf('}'); end > start; end = output.lastIndexOf('}', end - 1)) {
+		try {
+			const parsed = JSON.parse(output.slice(start, end + 1));
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+				return parsed as Record<string, unknown>;
+			}
+		} catch {
+			// Not a complete object at this boundary — try the previous '}'.
+		}
+	}
+
+	return undefined;
+}
+
 export function resolveWindowsPowerShellPath(systemRoot: string | undefined): string {
 	return path.join(systemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
