@@ -171,8 +171,11 @@ test.describe('winapp.new command — template selection', () => {
             const rows = page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
             const rowText = await rows.allTextContents();
 
-            // The blank app is the anchor template and sorts first.
+            // The CLI lists the blank app first and the picker preserves that order.
             expect(rowText[0]).toContain('WinUI Blank App');
+            // Each row shows the display name and the CLI's short name, matching
+            // `winapp new --list`, and nothing else.
+            expect(rowText[0]).toContain('(winui)');
             // The pack ships several templates; the picker shouldn't collapse to
             // one entry, and every row should be a WinUI template.
             expect(rowText.length).toBeGreaterThan(1);
