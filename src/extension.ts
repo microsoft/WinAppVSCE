@@ -531,20 +531,6 @@ async function findWorkspaceArtifactsWithCancellation(
 	}
 }
 
-/** `workspaceState` key prefix for publishers entered by hand, scoped per project. */
-const LAST_PUBLISHER_KEY_PREFIX = 'winapp.cert.lastPublisher';
-
-/**
- * Key the remembered publisher by project, not by workspace.
- *
- * A multi-root or multi-app workspace has one publisher per app; a single
- * workspace-wide key would pre-fill one app's publisher into another app's
- * prompt, which is exactly the mismatch this flow exists to prevent.
- */
-function lastPublisherKey(projectDir: string): string {
-	return `${LAST_PUBLISHER_KEY_PREFIX}:${projectDir.toLowerCase()}`;
-}
-
 /**
  * Resolve the publisher source, supplying VS Code UI to the decision logic in
  * `resolveCertPublisherSourceDecision`.
@@ -552,7 +538,6 @@ function lastPublisherKey(projectDir: string): string {
  * @returns The resolved source, or `undefined` if the user cancelled.
  */
 async function resolveCertPublisherSource(
-	context: vscode.ExtensionContext,
 	projectDir: string
 ): Promise<CertPublisherSource | undefined> {
 	return resolveCertPublisherSourceDecision({
@@ -576,22 +561,15 @@ async function resolveCertPublisherSource(
 		},
 
 		promptPublisher: async () => {
-			const key = lastPublisherKey(projectDir);
-			const lastPublisher = context.workspaceState.get<string>(key);
 			const publisher = await vscode.window.showInputBox({
 				title: 'Certificate publisher',
 				prompt: `Enter the publisher for the certificate in ${path.basename(projectDir)} — it must match your package's Identity/@Publisher.`,
 				placeHolder: 'Contoso or CN=Contoso, O=Contoso Ltd, C=US',
-				value: lastPublisher,
 				ignoreFocusOut: true,
 				validateInput: (value) => validatePublisherInput(value)
 			});
 
-			const trimmed = publisher?.trim();
-			if (trimmed) {
-				await context.workspaceState.update(key, trimmed);
-			}
-			return trimmed;
+			return publisher?.trim();
 		}
 	});
 }
@@ -1715,7 +1693,7 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const source = await resolveCertPublisherSource(context, projectDir);
+			const source = await resolveCertPublisherSource(projectDir);
 			if (!source) {
 				return;
 			}
