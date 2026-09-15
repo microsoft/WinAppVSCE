@@ -14,7 +14,6 @@ import {
 	parseTemplateList,
 	resolveScaffoldTarget,
 	sortTemplates,
-	validateProjectName,
 	type NonEmptyTargetChoice,
 	type ScaffoldTargetAdapter,
 	type TemplateListAttempt,
@@ -55,45 +54,6 @@ function template(overrides: Partial<WinUiTemplate> = {}): WinUiTemplate {
 		...overrides
 	};
 }
-
-describe('validateProjectName', () => {
-	it('accepts a simple name', () => {
-		assert.equal(validateProjectName('PhotoViewer'), undefined);
-	});
-
-	it('accepts a name containing dots', () => {
-		assert.equal(validateProjectName('Contoso.PhotoViewer'), undefined);
-	});
-
-	it('rejects empty and whitespace-only names', () => {
-		assert.ok(validateProjectName(''));
-		assert.ok(validateProjectName('   '));
-		assert.ok(validateProjectName(undefined));
-	});
-
-	it('rejects path separators so the scaffold cannot escape the target directory', () => {
-		assert.ok(validateProjectName('..\\Escaped'));
-		assert.ok(validateProjectName('sub/dir'));
-		assert.ok(validateProjectName('sub\\dir'));
-	});
-
-	it('rejects "." and ".."', () => {
-		assert.ok(validateProjectName('.'));
-		assert.ok(validateProjectName('..'));
-	});
-
-	it('leaves CLI-side name rules to the CLI', () => {
-		// These are rejected by `winapp new` with its own wording; the extension
-		// deliberately does not duplicate that validation.
-		for (const name of ['CON', 'MyApp.', '-n', 'a'.repeat(300), 'a<b']) {
-			assert.equal(
-				validateProjectName(name),
-				undefined,
-				`expected "${name}" to be left to the CLI`
-			);
-		}
-	});
-});
 
 describe('ensureAvailableName', () => {
 	const parent = path.join('C:', 'src');
@@ -182,6 +142,27 @@ describe('resolveScaffoldTarget', () => {
 		// The CLI itself tolerates an existing empty directory.
 		assert.deepEqual(target, { name: 'PhotoViewer', force: false });
 		assert.equal(prompts.length, 0);
+	});
+
+	it('never prompts about a directory outside the folder the user picked', async () => {
+		// Names like these join to somewhere else entirely. Offering to overwrite
+		// that directory would be wrong; the CLI rejects the name instead.
+		for (const escaping of ['..', '.', '..\\Escaped', 'sub/dir', 'sub\\dir']) {
+			const outside = path.join(parent, escaping);
+			const { adapter, prompts } = createAdapter(
+				{ [outside]: ['important.txt'] },
+				'create-anyway'
+			);
+
+			const target = await resolveScaffoldTarget(adapter, parent, escaping);
+
+			assert.deepEqual(
+				target,
+				{ name: escaping, force: false },
+				`expected "${escaping}" to be passed through unforced`
+			);
+			assert.equal(prompts.length, 0, `expected no prompt for "${escaping}"`);
+		}
 	});
 
 	it('offers the auto-numbered name for a non-empty target', async () => {
