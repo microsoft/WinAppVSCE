@@ -301,7 +301,7 @@ describe('loadWinUiTemplates', () => {
 	});
 
 	it('falls back to the unpinned listing when no pack is installed', async () => {
-		const { adapter, requested, failures } = createAdapter([noPack(), ok()]);
+		const { adapter, requested, progress, failures } = createAdapter([noPack(), ok()]);
 
 		const loaded = await loadWinUiTemplates(adapter);
 
@@ -309,6 +309,9 @@ describe('loadWinUiTemplates', () => {
 		// so asking "installed or latest?" would be asking the same question twice.
 		assert.deepEqual(loaded, { list: parsedOk.value, freshlyInstalled: true });
 		assert.deepEqual(requested, ['installed', undefined]);
+		// The unpinned listing installs the newest pack, so it must say so: there
+		// is no path that installs anything other than the latest.
+		assert.match(progress[1], /Installing the latest/);
 		assert.equal(failures.length, 0);
 	});
 
@@ -419,8 +422,8 @@ describe('loadWinUiTemplates', () => {
 
 	// Only "no pack installed" (exit 4) can be fixed by retrying unpinned. Any
 	// other probe failure would fail again identically, but behind an
-	// "Installing the WinUI templates..." progress message promising work the
-	// retry can never do. These pin that the retry stays narrowly scoped.
+	// "Installing the latest WinUI templates..." progress message promising work
+	// the retry can never do. These pin that the retry stays narrowly scoped.
 
 	it('does not retry when the CLI cannot be run at all', async () => {
 		// spawn failure: no exit code, and the empty output fails to parse.

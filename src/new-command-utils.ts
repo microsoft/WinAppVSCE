@@ -249,11 +249,11 @@ export async function loadWinUiTemplates(
 		// through to the unpinned listing, which installs the latest on demand.
 	}
 
+	// Both routes here install the newest pack: an explicit 'latest' updates a
+	// stale one, and the unpinned listing fetches on demand when none exists.
 	const result = await adapter.listTemplates(
 		templateVersion,
-		templateVersion === 'latest'
-			? 'Installing the latest WinUI templates...'
-			: 'Installing the WinUI templates...'
+		'Installing the latest WinUI templates...'
 	);
 
 	if (result.cancelled) {
