@@ -18,11 +18,13 @@ internal static class FixtureRestore
 {
     internal static void Run(string projectPath)
     {
-        using var process = Process.Start(new ProcessStartInfo("dotnet", $"restore \"{projectPath}\"")
+        using var process = Process.Start(new ProcessStartInfo("dotnet")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "restore", projectPath },
         });
 
         if (process == null)
@@ -30,16 +32,37 @@ internal static class FixtureRestore
             throw new InvalidOperationException("dotnet restore could not be started.");
         }
 
-        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        // Both pipes are read concurrently and the reads are started before the exit wait.
+        // Draining one to EOF first deadlocks whenever the child blocks writing the other, and
+        // because that read sits ahead of the timeout, the timeout below could never fire.
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+
         if (!process.WaitForExit(180_000))
         {
+            // Without this the fixture leaks a restore that still holds the obj directory, and
+            // every later test against the same fixture fails for a reason that is not its own.
+            TryKill(process);
             throw new InvalidOperationException("dotnet restore did not exit within 180 seconds.");
         }
 
+        var output = string.Concat(stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException(
                 $"restoring '{projectPath}' failed with exit code {process.ExitCode}:{Environment.NewLine}{output}");
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (Exception)
+        {
+            // The process exited between the wait timing out and the kill.
         }
     }
 }

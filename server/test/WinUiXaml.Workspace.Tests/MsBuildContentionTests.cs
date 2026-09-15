@@ -120,6 +120,33 @@ public sealed class MsBuildContentionTests
     }
 
     /// <summary>
+    /// The gate serializes invocations against one project; this flag bounds the processes a
+    /// single invocation is allowed to spawn. Both are needed, and only this one is invisible
+    /// when it regresses: a build without it still produces correct IntelliSense, so no
+    /// behavioural test fails. What changes is cost. A design-time build now builds the project
+    /// references it is given, so a multi-node build fans each call out to worker processes that
+    /// MSBUILDDISABLENODEREUSE=1 forbids recycling; with several projects loading at once the
+    /// suite went from roughly 43 seconds to 15m50s, deterministically. That is a performance
+    /// cliff a reviewer would read straight past, so the flag is pinned here at the source.
+    /// </summary>
+    [Fact]
+    public void EveryInvocationIsLimitedToOneNode()
+    {
+        var source = File.ReadAllText(
+            Path.Combine(WorkspaceSourceDirectory(), "MsBuildCli.cs"));
+
+        // Exactly one node, set exactly once, and never to any other value.
+        Assert.Single(Regex.Matches(source, @"-maxcpucount"));
+        Assert.Contains("startInfo.ArgumentList.Add(\"-maxcpucount:1\");", source);
+
+        // It must be part of the launcher's own setup rather than something a caller passes in,
+        // because a caller that forgot would silently reintroduce the fan-out.
+        var flag = source.IndexOf("-maxcpucount:1", StringComparison.Ordinal);
+        var launcher = Regex.Match(source, @"new Process\b").Index;
+        Assert.True(flag < launcher, "the node limit must be applied before the process is created");
+    }
+
+    /// <summary>
     /// The property the gate exists for, measured rather than inferred: invocations that would
     /// write the same obj directory never overlap. The source-harvest test above proves the gate
     /// is wired in; this proves it actually excludes.
