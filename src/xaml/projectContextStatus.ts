@@ -30,9 +30,9 @@ export function isProjectContextState(
  * these sentences rather than each spelling them out.
  */
 export const PROJECT_CONTEXT_LOADING_MESSAGE =
-  "Loading authoritative project metadata.";
+  "Loading the WinUI and package types for this project.";
 export const PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE =
-  "Framework IntelliSense is available. Project symbols and diagnostics are still loading.";
+  "WinUI and package types are available. Your project's own types, x:Bind members, and diagnostics are still loading.";
 export const PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE =
   "Project IntelliSense failed to load.";
 export const PROJECT_CONTEXT_BUILD_REQUIRED_FALLBACK_MESSAGE =
@@ -176,14 +176,20 @@ export function getProjectContextStatusPresentation(
       };
     case "loading":
       return {
-        text: "$(sync~spin) WinApp: XAML IntelliSense loading",
+        text: "$(sync~spin) WinApp: Loading XAML IntelliSense",
         tooltip: `${PROJECT_CONTEXT_LOADING_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
+    // Names what is already usable before what is still pending. The previous wording ("XAML
+    // project loading") followed "XAML IntelliSense loading" and so read as a lateral move -- or a
+    // regression -- at the one moment the developer gained something: WinUI control and property
+    // completion starts working here, while their own types and x:Bind members do not. Naming only
+    // the pending half meant the bar never said that, and the sentence that did was buried in the
+    // tooltip.
     case "framework-ready":
       return {
-        text: "$(sync~spin) WinApp: XAML project loading",
-        tooltip: PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
+        text: "$(sync~spin) WinApp: WinUI Types Ready \u00b7 Loading Project Symbols and Diagnostics",
+        tooltip: `${PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
     case "ready":

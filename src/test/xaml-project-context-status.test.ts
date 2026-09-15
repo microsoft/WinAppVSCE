@@ -163,9 +163,9 @@ test("shows framework readiness while project symbols continue loading", () => {
 
   assert.deepEqual(selectProjectContextStatus([ready, frameworkReady]), frameworkReady);
   assert.deepEqual(getProjectContextStatusPresentation(frameworkReady), {
-    text: "$(sync~spin) WinApp: XAML project loading",
+    text: "$(sync~spin) WinApp: WinUI Types Ready \u00b7 Loading Project Symbols and Diagnostics",
     tooltip:
-      "Framework IntelliSense is available. Project symbols and diagnostics are still loading.",
+      "WinUI and package types are available. Your project's own types, x:Bind members, and diagnostics are still loading. Click to show the WinUI XAML output.",
     transient: false,
   });
 
@@ -191,9 +191,9 @@ test("presents persistent loading and actionable error status", () => {
       state: "loading",
     }),
     {
-      text: "$(sync~spin) WinApp: XAML IntelliSense loading",
+      text: "$(sync~spin) WinApp: Loading XAML IntelliSense",
       tooltip:
-        "Loading authoritative project metadata. Click to show the WinUI XAML output.",
+        "Loading the WinUI and package types for this project. Click to show the WinUI XAML output.",
       transient: false,
     }
   );
