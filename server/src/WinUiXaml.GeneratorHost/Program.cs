@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reflection;
+using System.Runtime.Loader;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -179,6 +180,44 @@ internal static class Program
         File.WriteAllLines(manifest, files);
     }
 
+    /// <summary>
+    /// Finds the already-loaded assembly that a <see cref="Assembly.LoadFrom(string)"/> call
+    /// collided with, matched on the simple name the file on disk declares.
+    /// </summary>
+    /// <remarks>
+    /// Matching on the simple name rather than the full identity is deliberate: the collision
+    /// happens precisely when the versions differ, so requiring them to agree would never resolve
+    /// anything. The loaded copy is the one every other analyzer in this process is already bound
+    /// to, which makes it the right one to inspect regardless of which version it is.
+    /// </remarks>
+    private static Assembly? TryResolveLoaded(string analyzerPath)
+    {
+        string simpleName;
+        try
+        {
+            simpleName = AssemblyName.GetAssemblyName(analyzerPath).Name ?? string.Empty;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrEmpty(simpleName))
+        {
+            return null;
+        }
+
+        foreach (var candidate in AssemblyLoadContext.Default.Assemblies)
+        {
+            if (string.Equals(candidate.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
     private static List<ISourceGenerator> LoadGenerators(IReadOnlyList<string> analyzers)
     {
         var generators = new List<ISourceGenerator>();
@@ -196,13 +235,28 @@ internal static class Program
             }
             catch (Exception ex)
             {
-                // Skipping quietly costs the user every generated member this analyzer would have
-                // produced, with nothing on the wire or in the log to connect that to a cause.
-                // The neighbouring version-skew path already reports; this one did not.
-                Console.Error.WriteLine(
-                    $"[winui-xaml-genhost] analyzer '{analyzer}' could not be loaded: {ex.Message}. " +
-                    "Generated members from this analyzer will not resolve.");
-                continue;
+                // An analyzer directory ships its dependency closure, and some of those assemblies
+                // are already in the default load context -- either the host's own copy or a
+                // different version supplied by an earlier analyzer. LoadFrom refuses that with
+                // "Assembly with same name is already loaded" rather than handing back the loaded
+                // copy, which is not a failure to load the analyzer so much as a statement that it
+                // is already here. Reporting it as lost generated members is a false alarm when the
+                // assembly is a support library (Microsoft.Bcl.AsyncInterfaces and friends carry no
+                // generators at all), and skipping it is a real loss when it is not -- so resolve
+                // the copy that is loaded and inspect that instead.
+                var loaded = TryResolveLoaded(analyzer);
+                if (loaded is null)
+                {
+                    // Skipping quietly costs the user every generated member this analyzer would
+                    // have produced, with nothing on the wire or in the log to connect that to a
+                    // cause. The neighbouring version-skew path already reports; this one did not.
+                    Console.Error.WriteLine(
+                        $"[winui-xaml-genhost] analyzer '{analyzer}' could not be loaded: {ex.Message}. " +
+                        "Generated members from this analyzer will not resolve.");
+                    continue;
+                }
+
+                assembly = loaded;
             }
 
             Type?[] types;
