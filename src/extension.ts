@@ -881,16 +881,13 @@ async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<str
 // no-workspace command, after winapp.certInfo.
 
 /**
- * Templates from the most recent `--list`, cached for the window.
- * Not persisted: the pack is a machine-wide install that can change outside
- * VS Code, so a longer-lived cache would have no invalidation signal.
- */
-let cachedTemplateList: TemplateListResult | undefined;
-
-/**
- * Run `winapp new --list --json`, caching for the window. Doubles as the
- * prerequisite check: `--list` needs the .NET SDK and installs the pack when
- * absent. Pins `--template-version installed` to avoid an ~8s feed round trip.
+ * Run `winapp new --list --json`. Doubles as the prerequisite check: `--list`
+ * needs the .NET SDK and installs the pack when absent. Pins
+ * `--template-version installed` to avoid an ~8s feed round trip.
+ *
+ * Deliberately not cached: the pack is a machine-wide `dotnet new` install that
+ * can change outside VS Code, and the CLI is the only authority on what is
+ * installed, so a cache would report a stale version and template list.
  */
 async function loadWinUiTemplates(
 	extensionPath: string,
@@ -903,11 +900,7 @@ async function loadWinUiTemplates(
 		reportFailure: (message, sdkMissing) => showNewFailure(message, sdkMissing)
 	};
 
-	const loaded = await loadWinUiTemplatesLogic(adapter, templateVersion);
-	if (loaded) {
-		cachedTemplateList = loaded.list;
-	}
-	return loaded;
+	return loadWinUiTemplatesLogic(adapter, templateVersion);
 }
 
 /**
@@ -1544,9 +1537,7 @@ export function activate(context: vscode.ExtensionContext) {
 			// the destination, so that folder's global.json governs the TFM.
 			const listingCwd = os.tmpdir();
 
-			const initialLoad = cachedTemplateList
-				? { list: cachedTemplateList, freshlyInstalled: false }
-				: await loadWinUiTemplates(extensionPath, listingCwd);
+			const initialLoad = await loadWinUiTemplates(extensionPath, listingCwd);
 			if (!initialLoad) {
 				return;
 			}
