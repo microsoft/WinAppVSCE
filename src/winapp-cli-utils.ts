@@ -41,6 +41,34 @@ export function escapePowerShellArg(value: string): string {
 	return `'${value.replace(/'/g, "''")}'`;
 }
 
+/**
+ * Extract a human-readable error message from winapp CLI output.
+ *
+ * Returns the first non-empty line, which is where every `winapp` command puts
+ * its failure reason. Callers use it to replace the generic "see the output
+ * channel" message with what actually went wrong.
+ *
+ * Stripping the CLI's leading status glyph is normalization, not a match
+ * condition: plain-text errors without a glyph must still be reported.
+ *
+ * @param output Combined stdout/stderr from a command that exited non-zero.
+ * @returns The message, or `undefined` when the command printed nothing usable.
+ */
+export function parseWinappErrorMessage(output: string): string | undefined {
+	for (const rawLine of output.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) {
+			continue;
+		}
+		const cleaned = line.replace(/^(?:\[ERROR\]\s*-\s*|[❌✖✗⚠]\s*)/u, '').trim();
+		if (cleaned) {
+			return cleaned;
+		}
+	}
+
+	return undefined;
+}
+
 export function resolveWindowsPowerShellPath(systemRoot: string | undefined): string {
 	return path.join(systemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }

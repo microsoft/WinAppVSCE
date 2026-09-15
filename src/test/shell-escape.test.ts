@@ -5,7 +5,8 @@ import {
 	buildElevatedTerminalCommand,
 	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
-	decideElevatedWinappCommand
+	decideElevatedWinappCommand,
+	parseWinappErrorMessage
 } from '../winapp-cli-utils';
 
 const launcherPath = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
@@ -174,3 +175,29 @@ describe('decideElevatedWinappCommand', () => {
 	});
 });
 
+
+describe('parseWinappErrorMessage', () => {
+	it('strips the CLI status glyph from plain-text errors', () => {
+		assert.equal(parseWinappErrorMessage('❌ Invalid publisher format'), 'Invalid publisher format');
+	});
+
+	it('strips the bracketed [ERROR] prefix', () => {
+		assert.equal(parseWinappErrorMessage('[ERROR] - Something broke'), 'Something broke');
+	});
+
+	it('reports plain-text errors that carry no status glyph', () => {
+		assert.equal(
+			parseWinappErrorMessage('Certificate file already exists: C:\\proj\\devcert.pfx'),
+			'Certificate file already exists: C:\\proj\\devcert.pfx'
+		);
+	});
+
+	it('skips leading blank lines', () => {
+		assert.equal(parseWinappErrorMessage('\n\n  \nSomething broke\n'), 'Something broke');
+	});
+
+	it('returns undefined when there is no output to report', () => {
+		assert.equal(parseWinappErrorMessage(''), undefined);
+		assert.equal(parseWinappErrorMessage('   \n\n  '), undefined);
+	});
+});

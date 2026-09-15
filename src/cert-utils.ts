@@ -6,6 +6,7 @@
  */
 
 import * as path from 'path';
+import { parseWinappErrorMessage } from './winapp-cli-utils';
 
 /** Behaviour when the output certificate file already exists. */
 export type CertIfExists = 'error' | 'overwrite';
@@ -56,27 +57,6 @@ export function isAlreadyExistsError(output: string): boolean {
 	return ALREADY_EXISTS_RE.test(output);
 }
 
-/** Extract a human-readable error message from CLI output. */
-export function parseCertErrorMessage(output: string): string | undefined {
-	// The first non-empty line. This runs only after a non-zero exit, so any
-	// output is more useful to the user than the generic "see the output
-	// channel" message. Stripping the CLI's leading status glyph is
-	// normalization, not a match condition: plain-text errors without a glyph
-	// must still be reported.
-	for (const rawLine of output.split(/\r?\n/)) {
-		const line = rawLine.trim();
-		if (!line) {
-			continue;
-		}
-		const cleaned = line.replace(/^(?:\[ERROR\]\s*-\s*|[❌✖✗⚠]\s*)/u, '').trim();
-		if (cleaned) {
-			return cleaned;
-		}
-	}
-
-	return undefined;
-}
-
 export type CertGenerateOutcome =
 	| { kind: 'success'; certificatePath: string }
 	| { kind: 'already-exists'; existingPath: string }
@@ -113,7 +93,7 @@ export function decideCertGenerateOutcome(
 		return { kind: 'already-exists', existingPath: expectedPath };
 	}
 
-	return { kind: 'failed', message: parseCertErrorMessage(output) };
+	return { kind: 'failed', message: parseWinappErrorMessage(output) };
 }
 
 /**

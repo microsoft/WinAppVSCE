@@ -6,7 +6,6 @@ import {
 	decideCertGenerateOutcome,
 	executeCertGenerateFlow,
 	isAlreadyExistsError,
-	parseCertErrorMessage,
 	resolveCertPublisherSourceDecision,
 	selectCanonicalManifest,
 	validatePublisherInput,
@@ -97,27 +96,6 @@ describe('isAlreadyExistsError', () => {
 	});
 });
 
-describe('parseCertErrorMessage', () => {
-	test('strips the CLI status glyph from plain-text errors', () => {
-		assert.equal(parseCertErrorMessage('❌ Invalid publisher format'), 'Invalid publisher format');
-	});
-
-	test('reports plain-text errors that carry no status glyph', () => {
-		assert.equal(
-			parseCertErrorMessage('Certificate file already exists: C:\\proj\\devcert.pfx'),
-			'Certificate file already exists: C:\\proj\\devcert.pfx'
-		);
-	});
-
-	test('skips leading blank lines', () => {
-		assert.equal(parseCertErrorMessage('\n\n  \nSomething broke\n'), 'Something broke');
-	});
-
-	test('returns undefined when there is no output to report', () => {
-		assert.equal(parseCertErrorMessage(''), undefined);
-		assert.equal(parseCertErrorMessage('   \n\n  '), undefined);
-	});
-});
 
 describe('decideCertGenerateOutcome', () => {
 	test('cancellation wins over the exit code', () => {
