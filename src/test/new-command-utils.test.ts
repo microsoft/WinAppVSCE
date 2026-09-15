@@ -187,11 +187,9 @@ describe('resolveScaffoldTarget', () => {
 	const parent = path.join('C:', 'src');
 
 	/**
-	 * Build an adapter over a fake directory listing.
-	 *
-	 * `directories` maps an absolute path to the entries it contains, so an
-	 * empty array models an existing-but-empty directory and a missing key
-	 * models a path that does not exist at all.
+	 * Build an adapter over a fake directory listing. `directories` maps a path
+	 * to its entries, so an empty array models an existing-but-empty directory
+	 * and a missing key models a path that doesn't exist.
 	 */
 	function createAdapter(
 		directories: Record<string, string[]>,
@@ -532,11 +530,9 @@ describe('loadWinUiTemplates', () => {
 	const parsedOk = parseTemplateList(LIST_JSON) as { ok: true; value: TemplateListResult };
 
 	/**
-	 * Build an adapter that replays a queue of listing attempts.
-	 *
-	 * Each `listTemplates` call shifts the next queued outcome, so a test states
-	 * exactly what the CLI returns on the first and second attempt without
-	 * spawning anything or touching the installed template pack.
+	 * Build an adapter that replays a queue of listing attempts. Each
+	 * `listTemplates` call shifts the next outcome, so a test states exactly what
+	 * the CLI returns per attempt without spawning anything.
 	 */
 	function createAdapter(attempts: TemplateListAttempt[]) {
 		const requested: ('latest' | 'installed' | undefined)[] = [];

@@ -1,31 +1,7 @@
 /**
- * Scaffold integration tests for `winapp.new` ("WinApp: Create WinUI App").
- *
- * `new-command-quickpick.spec.ts` drives the VS Code UI but stops at the folder
- * picker, because `showOpenDialog` is a native OS dialog that Playwright cannot
- * interact with (the same limit the sign Browse test documents). That left the
- * back half of the command — turning the user's answers into CLI arguments,
- * running the scaffold, parsing the result, and producing a real project on
- * disk — with no automated coverage at all.
- *
- * These tests cover that half directly. They skip the UI and instead exercise
- * the exact functions the command handler calls, in the same order and with the
- * same arguments:
- *
- *     buildNewArgs(...)  ->  real winapp CLI  ->  parseScaffoldResult(...)
- *
- * so a change to the argument list, the CLI's JSON contract, or the parser is
- * caught here rather than by a user. The assertions then check what actually
- * landed on disk, which is the thing the user ultimately cares about.
- *
- * They live in the Playwright suite rather than `npm run test:unit` because
- * they are genuinely slow (a real `dotnet new` plus a NuGet restore) and need
- * the .NET SDK and a WinUI template pack. `test:unit` stays hermetic and fast.
- *
- * Like the QuickPick spec, this suite skips itself unless a template pack is
- * already installed, so it never replaces a developer's pack. CI installs one
- * up front (see `.github/workflows/build.yml`), so it always runs in PR
- * validation.
+ * Scaffold integration tests for `winapp.new`, covering the half the QuickPick
+ * spec can't reach past the native folder dialog: `buildNewArgs` -> real CLI ->
+ * `parseScaffoldResult`, then the files on disk. Skips unless a pack installed.
  */
 
 import { test, expect } from '@playwright/test';
@@ -46,12 +22,9 @@ const CLI_PATH = getWinappCliPath(EXTENSION_ROOT);
 const SCAFFOLD_TIMEOUT = 300_000;
 
 /**
- * Whether a WinUI template pack is already installed on this machine.
- *
- * `--template-version installed` is a purely local query: it reports what is on
- * disk and never contacts a feed or installs anything. Run from a temp
- * directory so a `global.json` in the repo can't make a present SDK look
- * missing.
+ * Whether a WinUI template pack is already installed. `--template-version
+ * installed` is a purely local query. Run from temp so a repo `global.json`
+ * can't make a present SDK look missing.
  */
 function hasInstalledTemplatePack(): boolean {
     try {
@@ -105,22 +78,18 @@ function listFilesRecursively(root: string): string[] {
 }
 
 /**
- * Compare two Windows paths for identity.
- *
- * `os.tmpdir()` reports the 8.3 short form (`CHIARA~1`) while the CLI reports
- * the expanded long form, and `path.resolve` does not reconcile the two.
- * `fs.realpathSync` does, so canonicalize both sides before comparing.
+ * Compare two Windows paths for identity. `os.tmpdir()` reports the 8.3 short
+ * form while the CLI reports the long form, and `path.resolve` won't reconcile
+ * them — `realpathSync` does.
  */
 function canonicalize(target: string): string {
     return fs.realpathSync.native(path.resolve(target)).toLowerCase();
 }
 
 /**
- * Run a scaffold exactly as the command handler does.
- *
- * Mirrors the handler: arguments come from `buildNewArgs`, the working
- * directory is the chosen parent folder, and the pack is pinned to `installed`
- * so the run never reaches a feed or changes which pack is on the machine.
+ * Run a scaffold exactly as the command handler does: args from `buildNewArgs`,
+ * cwd the chosen parent, pack pinned to `installed` so the run never reaches a
+ * feed or changes which pack is on the machine.
  */
 async function runScaffold(
     parentDirectory: string,

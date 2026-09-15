@@ -66,12 +66,8 @@ jobs:
     - name: Install WinUI template pack
       shell: pwsh
       run: |
-        # The winapp.new E2E specs skip themselves unless a WinUI template pack
-        # is already installed, because installing one replaces whatever pack a
-        # developer has (only one version can be installed at a time). A CI
-        # runner is ephemeral, so there is nothing to clobber here — install the
-        # pack up front so those specs actually run in PR validation instead of
-        # silently skipping.
+        # The winapp.new E2E specs skip unless a template pack is installed. A CI
+        # runner is ephemeral, so install one up front and let those specs run.
         $cli = "bin/win-x64/winapp.exe"
         if (-not (Test-Path $cli)) {
           throw "WinApp CLI not found at $cli. Did the 'Download CLI binaries' step run?"

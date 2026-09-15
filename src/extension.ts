@@ -876,39 +876,21 @@ async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<str
 }
 
 // --- winapp new (Create WinUI App) ---------------------------------------
-//
-// Unlike every other project command, `winapp.new` deliberately does not call
-// getWorkspacePath(): scaffolding is most useful with no folder open, and the
-// target is chosen by the user rather than derived from the workspace. It joins
-// winapp.certInfo as the second intentional no-workspace command.
+// Unlike every other project command, this deliberately skips getWorkspacePath():
+// scaffolding is most useful with no folder open. Second intentional
+// no-workspace command, after winapp.certInfo.
 
 /**
- * Templates returned by the most recent `winapp new --list --json`, cached for
- * the lifetime of the extension host so repeat runs skip the CLI round trip.
- *
- * Deliberately not persisted to globalState: the template pack is a machine-wide
- * `dotnet new` install that can change outside VS Code, and a cache that
- * outlives the session would have no invalidation signal.
+ * Templates from the most recent `--list`, cached for the window.
+ * Not persisted: the pack is a machine-wide install that can change outside
+ * VS Code, so a longer-lived cache would have no invalidation signal.
  */
 let cachedTemplateList: TemplateListResult | undefined;
 
 /**
- * Run `winapp new --list --json`, caching the result for the window.
- *
- * This doubles as the prerequisite check for the whole command: `--list`
- * requires the .NET SDK and installs the WinUI template pack when none is
- * present, so a missing SDK or an unreachable NuGet feed surfaces here rather
- * than after the user has answered three prompts.
- *
- * The normal path asks for `--template-version installed`, which is a purely
- * local query. Without it the CLI runs `dotnet new update --check-only` to see
- * whether the installed pack is stale, which contacts the configured NuGet feed
- * on every single invocation (measured at ~8s versus ~1.6s). That check is pure
- * waste here: this command asks the user which pack version they want rather
- * than detecting staleness, so its answer is discarded.
- *
- * The decision logic lives in `new-command-utils` so it can be tested without
- * spawning the CLI; this wrapper supplies the real runner and error reporting.
+ * Run `winapp new --list --json`, caching for the window. Doubles as the
+ * prerequisite check: `--list` needs the .NET SDK and installs the pack when
+ * absent. Pins `--template-version installed` to avoid an ~8s feed round trip.
  */
 async function loadWinUiTemplates(
 	extensionPath: string,
@@ -953,11 +935,9 @@ async function runTemplateList(
 }
 
 /**
- * Show a `winapp new` failure with an actionable follow-up.
- *
- * A missing .NET SDK is the one failure with a specific remedy, so it gets a
- * modal and a link to the installer; everything else points at the output
- * channel, which already holds the CLI's full output.
+ * Show a `winapp new` failure with an actionable follow-up. A missing .NET SDK
+ * is the one failure with a specific remedy, so it gets a modal and an installer
+ * link; everything else points at the output channel.
  */
 async function showNewFailure(message: string, sdkMissing: boolean): Promise<void> {
 	if (sdkMissing) {
@@ -979,18 +959,9 @@ async function showNewFailure(message: string, sdkMissing: boolean): Promise<voi
 }
 
 /**
- * Ask which WinUI template pack to scaffold from, when one is already installed.
- *
- * The CLI's default mode checks the feed and prompts before updating a stale
- * pack, but `--json` forces `--use-defaults`, which means "keep installed
- * templates" — so a JSON caller like this extension would otherwise pin itself
- * to whatever pack is on the machine forever. Rather than detect staleness
- * (which would mean scraping `dotnet new update --check-only`), put the choice
- * to the user and let `--template-version` carry the answer.
- *
- * The "no changes to your machine" option is pre-selected so an accidental
- * Enter can never trigger a machine-wide install — the same caution behind the
- * CLI's deliberately default-less update prompt.
+ * Ask which WinUI template pack to scaffold from. `--json` forces
+ * `--use-defaults`, so a JSON caller would otherwise pin itself to the installed
+ * pack forever. "No changes to your machine" leads, so Enter can't install.
  *
  * @returns The list to use, or `undefined` if the user cancelled.
  */
@@ -1034,11 +1005,9 @@ async function resolveTemplatePack(
 }
 
 /**
- * Let the user pick a WinUI template.
- *
- * Item templates are excluded: they add a file to an *existing* project rather
- * than scaffolding one, so they need a different flow (a target project picker,
- * and no folder-open step afterwards). None ship in the pack today.
+ * Let the user pick a WinUI template. Item templates are excluded: they add a
+ * file to an existing project rather than scaffolding one, so they need a
+ * different flow. None ship in the pack today.
  */
 async function pickWinUiTemplate(templates: WinUiTemplate[]): Promise<WinUiTemplate | undefined> {
 	const projectTemplates = sortTemplates(templates.filter(isProjectTemplate));
@@ -1099,12 +1068,9 @@ async function resolveScaffoldTarget(
 }
 
 /**
- * Offer to open the freshly scaffolded project.
- *
- * When a workspace is already open, reusing the window would tear down the
- * extension host and discard whatever the user was doing, so the non-destructive
- * options lead. With no folder open there is nothing to lose, so the folder is
- * opened in place.
+ * Offer to open the freshly scaffolded project. When a workspace is already
+ * open, reusing the window would tear down the extension host and discard the
+ * user's work, so the non-destructive options lead.
  */
 async function offerToOpenScaffoldedProject(
 	projectPath: string,
@@ -1572,13 +1538,10 @@ export function activate(context: vscode.ExtensionContext) {
 			// from the workspace (or home when nothing is open).
 			const defaultFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
 
-			// Listing runs from a neutral directory instead. The template pack is
-			// machine-wide, so nothing about the listing depends on the workspace —
-			// but a global.json there pinning an unavailable SDK makes `dotnet`
-			// resolve nothing, which the CLI reports as exit 3 ("install the .NET
-			// SDK") even though the SDK is installed and the chosen destination
-			// would scaffold fine. The scaffold itself still runs from the
-			// destination below, so that folder's global.json governs the TFM.
+			// Listing runs from a neutral directory: the pack is machine-wide, and a
+			// global.json here pinning an unavailable SDK would make the CLI report
+			// exit 3 even though the SDK is installed. The scaffold still runs from
+			// the destination, so that folder's global.json governs the TFM.
 			const listingCwd = os.tmpdir();
 
 			const initialLoad = cachedTemplateList
