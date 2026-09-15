@@ -300,17 +300,13 @@ function getWinappOutputChannel(): vscode.OutputChannel {
  * command to finish so callers can inspect the output (e.g. the produced
  * package path).
  *
- * @param cancelMessage Written to the output channel when the user cancels.
- *                      Callers pass an operation-specific message so the log
- *                      reads correctly for commands other than packaging.
  * @returns The process exit code and the full captured output.
  */
 async function runWinappCapture(
 	extensionPath: string,
 	args: string[],
 	cwd: string,
-	progressTitle: string,
-	cancelMessage: string = 'Packaging cancelled.'
+	progressTitle: string
 ): Promise<{ code: number | null; output: string; cancelled?: boolean }> {
 	const cliPath = getWinappCliPath(extensionPath);
 	const outputChannel = getWinappOutputChannel();
@@ -345,7 +341,7 @@ async function runWinappCapture(
 						return;
 					}
 					cancelled = true;
-					outputChannel.appendLine(`\n${cancelMessage}`);
+					outputChannel.appendLine('\nWinApp command cancelled.');
 					if (child.pid) {
 						// On Windows, winapp commands may spawn helper processes (pack's
 						// SDK tools, new's `dotnet new`); taskkill /t terminates the whole
@@ -946,8 +942,7 @@ async function runTemplateList(
 		extensionPath,
 		buildListArgs(templateVersion),
 		cwd,
-		progressMessage,
-		'Loading templates cancelled.'
+		progressMessage
 	);
 
 	if (result.cancelled) {
@@ -1645,8 +1640,7 @@ export function activate(context: vscode.ExtensionContext) {
 					templateVersion: 'installed'
 				}),
 				parentDirectory,
-				`Creating ${target.name}...`,
-				'App creation cancelled.'
+				`Creating ${target.name}...`
 			);
 
 			if (result.cancelled) {
