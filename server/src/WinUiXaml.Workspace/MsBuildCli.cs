@@ -494,6 +494,38 @@ namespace WinUiXaml.Workspace
         }
 
         /// <summary>
+        /// Reference-only acquisition for the framework stage, which needs the SDK and package
+        /// closure but none of the project's own compiled output.
+        /// </summary>
+        /// <remarks>
+        /// The framework stage exists to answer "what types exist in the framework and package
+        /// closure" as early as possible, and <see cref="ResolveReferencesOnly"/> is the CLI
+        /// equivalent of what it ran before this server moved off the in-process BuildManager:
+        /// <c>ResolveReferences</c> alone, with <c>BuildProjectReferences=false</c>.
+        ///
+        /// Routing this stage through <see cref="EvaluateAndCompile"/> instead made it wait for
+        /// <c>CoreCompile</c>, the WinUI markup compiler, and a real build of every
+        /// <c>ProjectReference</c> -- work whose output the stage then discards, because
+        /// referenced-project types come from the full stage compiling them from source. On a
+        /// project whose references include a Roslyn analyzer that cost seconds before any
+        /// completion could be served, for nothing this stage returns.
+        ///
+        /// The target framework is still pinned, because an outer build of a cross-targeting
+        /// project resolves no reference set of its own.
+        /// </remarks>
+        internal static (Evaluation Evaluation, ImmutableArray<string> Arguments) ResolveFrameworkReferences(
+            string projectPath,
+            IReadOnlyDictionary<string, string> globalProperties,
+            CancellationToken cancellationToken = default)
+        {
+            var fullPath = Path.GetFullPath(projectPath);
+            return ResolveReferencesOnly(
+                fullPath,
+                PinTargetFramework(fullPath, globalProperties, cancellationToken),
+                cancellationToken);
+        }
+
+        /// <summary>
         /// The MSBuild property that selects one inner build of a multi-targeted project.
         /// </summary>
         private const string TargetFrameworkProperty = "TargetFramework";

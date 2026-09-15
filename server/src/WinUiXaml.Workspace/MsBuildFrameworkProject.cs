@@ -53,7 +53,7 @@ namespace WinUiXaml.Workspace
                 StringComparer.OrdinalIgnoreCase);
 
             var fullPath = Path.GetFullPath(projectPath);
-            var (evaluation, arguments, unresolvedProjectReferences) = MsBuildCli.EvaluateAndCompile(
+            var (evaluation, arguments) = MsBuildCli.ResolveFrameworkReferences(
                 fullPath,
                 properties,
                 cancellationToken);
@@ -98,7 +98,11 @@ namespace WinUiXaml.Workspace
                 compilation,
                 evaluation.XamlFiles,
                 evaluation.ApplicationDefinition,
-                unresolvedProjectReferences);
+                // This stage does not build project references, so it has nothing to say about
+                // which of them are unbuilt -- the same position the in-process BuildManager
+                // version held. The full stage builds them and reports `build-required` from
+                // what it actually observed, which is the only place the answer is known.
+                ImmutableArray<string>.Empty);
         }
     }
 }

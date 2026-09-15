@@ -392,24 +392,11 @@ internal sealed partial class XamlLanguageServer
         // build condition is resolved only if nothing came up through the fallback. Dropping the
         // latch lets a later outage in this same session (a clean, a branch switch) be reported
         // again rather than silently.
+        // Whether a reference is genuinely unresolvable is only known once something has tried to
+        // build it, and the framework stage deliberately no longer does -- it resolves the SDK and
+        // package closure and stops, which is what keeps it fast. So the build condition is
+        // reported below, off the full resolution, rather than guessed at here.
         _restoreRequiredProjects.Clear(frameworkResolution.ProjectPath);
-
-        // Loaded through the reference-resolution fallback: IntelliSense is real but the markup
-        // compiler never ran, so generated members are missing. Report it -- a partial outage the
-        // user cannot see is worse than a total one they are told about. The latch is deliberately
-        // left set, so this prompts once rather than on every document load.
-        var buildRequired = !frameworkResolution.UnresolvedProjectReferences.IsDefaultOrEmpty;
-        if (buildRequired)
-        {
-            await NotifyProjectBuildRequiredAsync(
-                new ProjectBuildRequiredException(
-                    frameworkResolution.ProjectPath,
-                    frameworkResolution.UnresolvedProjectReferences)).ConfigureAwait(false);
-        }
-        else
-        {
-            _buildRequiredProjects.Clear(frameworkResolution.ProjectPath);
-        }
 
         var frameworkTypeSystem = latestContext?.Stage == XamlProjectStage.Framework
             ? latestContext.TypeSystem
@@ -422,16 +409,7 @@ internal sealed partial class XamlLanguageServer
             XamlProjectStage.Framework);
         if (publishIntermediate(frameworkContext))
         {
-            // The toast fires once per project per session, so on every later document this status
-            // is the only thing still saying a build is needed. Publishing `framework-ready` here
-            // would report a working state while generated members are missing -- a bar that lies
-            // is worse than one that says nothing.
-            await NotifyProjectContextStatusAsync(
-                uri,
-                buildRequired ? "build-required" : "framework-ready",
-                buildRequired
-                    ? BuildRequiredStatusMessage(frameworkResolution.UnresolvedProjectReferences)
-                    : null).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(uri, "framework-ready").ConfigureAwait(false);
         }
 
         XamlResolution? fullResolution;
@@ -460,6 +438,28 @@ internal sealed partial class XamlLanguageServer
                 "error",
                 "The owning project could not be compiled for full XAML IntelliSense.").ConfigureAwait(false);
             return null;
+        }
+
+        // The full stage built the project references, so this is the first point at which an
+        // unresolvable one is a fact rather than a guess. IntelliSense is real either way, but the
+        // markup compiler never ran for the reference, so generated members are missing -- a
+        // partial outage the user cannot see is worse than a total one they are told about. The
+        // latch leaves this prompting once per project per session rather than on every document.
+        if (!fullResolution.UnresolvedProjectReferences.IsDefaultOrEmpty)
+        {
+            await NotifyProjectBuildRequiredAsync(
+                new ProjectBuildRequiredException(
+                    fullResolution.ProjectPath,
+                    fullResolution.UnresolvedProjectReferences)).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(
+                uri,
+                "build-required",
+                BuildRequiredStatusMessage(fullResolution.UnresolvedProjectReferences))
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            _buildRequiredProjects.Clear(fullResolution.ProjectPath);
         }
 
         var fullTypeSystem = _typeSystems.GetValue(
