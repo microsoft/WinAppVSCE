@@ -12,12 +12,6 @@ export const DEFAULT_PROJECT_NAME = 'WinUIApp';
 /** Short name of the template the CLI itself defaults to; sorted first in the picker. */
 export const DEFAULT_TEMPLATE_SHORT_NAME = 'winui';
 
-/**
- * Maximum project name length. Mirrors the CLI's `MaxProjectNameLength`:
- * 255 minus `".csproj".Length`, so the project file fits one path component.
- */
-export const MAX_PROJECT_NAME_LENGTH = 255 - 7;
-
 /** A template entry as returned by `winapp new --list --json`. */
 export interface WinUiTemplate {
 	shortName: string;
@@ -58,22 +52,16 @@ export const NEW_EXIT = {
 	scaffoldFailed: 5
 } as const;
 
-/** Reserved DOS device names, which are invalid regardless of extension. */
-const RESERVED_DEVICE_NAMES = new Set([
-	'CON', 'PRN', 'AUX', 'NUL',
-	'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
-	'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
-]);
-
 /**
- * Characters Windows rejects in a file name. Mirrors .NET's
- * `Path.GetInvalidFileNameChars()`, which is what the CLI validates against.
+ * Characters that would make the extension's own `path.join` of the name
+ * produce a directory other than the one the user picked.
  */
-const INVALID_FILE_NAME_CHARS = /[\u0000-\u001f"<>|:*?\\/]/;
+const PATH_SEPARATORS = /[\\/]/;
 
 /**
- * Validate a project name as the CLI's `IsValidProjectName` does, so the user is
- * corrected in the input box rather than via exit 2.
+ * Check only what the extension needs before it can safely build a path from
+ * the name. Everything else (length, reserved device names, option-shaped
+ * names) is left to the CLI, which reports it with its own wording.
  *
  * @returns An error message to show in the input box, or `undefined` when valid.
  */
@@ -82,33 +70,10 @@ export function validateProjectName(name: string | undefined): string | undefine
 		return 'Enter a name for the app.';
 	}
 
-	if (name.length > MAX_PROJECT_NAME_LENGTH) {
-		return `Name must be ${MAX_PROJECT_NAME_LENGTH} characters or fewer.`;
-	}
-
-	if (name === '.' || name === '..') {
-		return 'Use a simple name without path separators or invalid filename characters.';
-	}
-
-	if (INVALID_FILE_NAME_CHARS.test(name)) {
-		return 'Use a simple name without path separators or invalid filename characters.';
-	}
-
-	// A leading '-' makes the child `dotnet new` parser treat the name as an
-	// option, so the CLI rejects option-shaped names up front.
-	if (name.startsWith('-')) {
-		return 'Name cannot start with "-".';
-	}
-
-	// Windows silently strips trailing dots and spaces, which would produce a
-	// directory whose name doesn't match the project.
-	if (name.endsWith('.') || name.endsWith(' ')) {
-		return 'Name cannot end with a space or period.';
-	}
-
-	const stem = name.includes('.') ? name.slice(0, name.indexOf('.')) : name;
-	if (RESERVED_DEVICE_NAMES.has(stem.toUpperCase())) {
-		return `"${stem}" is a reserved Windows device name. Choose a different name.`;
+	// The name is joined onto the chosen folder to pick the target directory, so
+	// a separator or dot segment would silently scaffold somewhere else.
+	if (PATH_SEPARATORS.test(name) || name === '.' || name === '..') {
+		return 'Use a simple name, without path separators.';
 	}
 
 	return undefined;
@@ -143,12 +108,7 @@ export function ensureAvailableName(
 	}
 
 	for (let suffix = 1; ; suffix++) {
-		const suffixText = `${suffix}`;
-		// Trim the base so the numbered variant still fits the CLI's limit. A name
-		// already at the maximum would otherwise grow past it and come back as an
-		// exit-2 failure, turning the recovery offer into a dead end.
-		const trimmedBase = baseName.slice(0, MAX_PROJECT_NAME_LENGTH - suffixText.length);
-		const candidate = `${trimmedBase}${suffixText}`;
+		const candidate = `${baseName}${suffix}`;
 		if (!isTaken(candidate)) {
 			return candidate;
 		}
