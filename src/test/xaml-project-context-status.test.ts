@@ -250,13 +250,13 @@ test("reports the restore as work in flight while the extension is running it", 
     /restore required/
   );
 
-  // The flag describes the restore only; a build the extension is not running still instructs.
+  // The flag describes the restore only; the build-side state is untouched by it.
   assert.match(
     getProjectContextStatusPresentation(
       { uri: "file:///Fresh.xaml", state: "build-required", message: "build me" },
       { restoreInFlight: true }
     )?.text ?? "",
-    /build required/
+    /failed to build/
   );
 });
 
@@ -308,7 +308,7 @@ test("names the build in the bar itself, and outranks a plain error", () => {
       message: "Build required: App.csproj (unresolved: MiddleLib, SharedLib).",
     }),
     {
-      text: "$(tools) WinApp: build required for XAML IntelliSense",
+      text: "$(tools) WinApp: referenced project failed to build",
       tooltip:
         "Build required: App.csproj (unresolved: MiddleLib, SharedLib). " +
         "Click to show the WinUI XAML output.",
@@ -348,3 +348,4 @@ test("presents ready status briefly and hides idle status", () => {
     undefined
   );
 });
+

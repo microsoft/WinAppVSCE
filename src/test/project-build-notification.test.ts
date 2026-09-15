@@ -50,8 +50,8 @@ describe("buildRequiredMessage", () => {
   it("names the unresolved projects so the failure is self-diagnosing", () => {
     const message = buildRequiredMessage(["MiddleLib", "SharedLib"]);
 
-    assert.match(message, /MiddleLib, SharedLib could not be resolved/);
-    assert.match(message, /Building the solution usually fixes this/);
+    assert.match(message, /MiddleLib, SharedLib could not be built/);
+    assert.match(message, /Build it to see the errors/);
   });
 
   it("scopes the outage to project-defined types, because the rest still resolves", () => {
@@ -60,7 +60,7 @@ describe("buildRequiredMessage", () => {
     // breakage that is not there.
     const message = buildRequiredMessage(["SharedLib"]);
 
-    assert.match(message, /SharedLib could not be resolved/);
+    assert.match(message, /SharedLib could not be built/);
     assert.match(message, /Framework and package types still work/);
     assert.doesNotMatch(message, /IntelliSense is unavailable/);
   });
@@ -68,12 +68,12 @@ describe("buildRequiredMessage", () => {
   it("degrades to a generic subject when the compiler named nothing", () => {
     const message = buildRequiredMessage([]);
 
-    assert.match(message, /A referenced project could not be resolved/);
+    assert.match(message, /A referenced project could not be built/);
     assert.doesNotMatch(message, /undefined/);
   });
 
   it("ignores blank names rather than emitting empty clauses", () => {
-    assert.match(buildRequiredMessage(["", "  "]), /A referenced project could not be resolved/);
+    assert.match(buildRequiredMessage(["", "  "]), /A referenced project could not be built/);
   });
 });
 
@@ -84,7 +84,7 @@ describe("notifyProjectBuildRequired", () => {
     await notifyProjectBuildRequired("C:\\app\\App.csproj", ["SharedLib"], host);
 
     assert.equal(shown.length, 1);
-    assert.match(shown[0].message, /SharedLib could not be resolved/);
+    assert.match(shown[0].message, /SharedLib could not be built/);
     assert.deepEqual(shown[0].actions, [
       PROJECT_BUILD_ACTIONS.build,
       PROJECT_BUILD_ACTIONS.showOutput,
@@ -122,7 +122,7 @@ describe("notifyProjectBuildRequired", () => {
     await notifyProjectBuildRequired("C:\\app\\App.csproj", undefined, host);
 
     assert.equal(shown.length, 1);
-    assert.match(shown[0].message, /A referenced project could not be resolved/);
+    assert.match(shown[0].message, /A referenced project could not be built/);
   });
 
   it("opens the output channel when that action is chosen", async () => {
@@ -146,3 +146,4 @@ describe("notifyProjectBuildRequired", () => {
     assert.equal(PROJECT_BUILD_NOTIFICATION, "winui-xaml/projectBuildRequired");
   });
 });
+

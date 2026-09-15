@@ -5,21 +5,23 @@ export const PROJECT_BUILD_ACTIONS = {
 } as const;
 
 /**
- * The WinUI markup compiler resolves project references as assemblies on disk. The server now
- * compiles never-built references from source and supplies stand-ins, so this prompt no longer
- * fires for a merely-unbuilt project -- it means the reference could not be produced from source
- * either. Framework and package types still resolve, so the message must not claim IntelliSense
- * is gone; naming the projects is what makes the narrower outage attributable.
+ * The WinUI markup compiler resolves project references as assemblies on disk, and the design-time
+ * build now builds those references itself. So this no longer fires for a merely-unbuilt project --
+ * reaching it means the reference's own build failed. Telling the developer to build would send
+ * them to repeat the step that just failed; the useful instruction is to fix that project, and a
+ * build is how its errors reach the Problems panel. Framework and package types still resolve, so
+ * the message must not claim IntelliSense is gone; naming the projects is what makes the narrower
+ * outage attributable.
  */
 export function buildRequiredMessage(unresolvedAssemblies: readonly string[]): string {
   const named = unresolvedAssemblies.filter((name) => name.trim().length > 0);
   const subject =
     named.length === 0
-      ? "A referenced project could not be resolved"
-      : `${named.join(", ")} could not be resolved`;
+      ? "A referenced project could not be built"
+      : `${named.join(", ")} could not be built`;
   return (
     `${subject}, so WinUI XAML IntelliSense cannot see types defined there. ` +
-    "Framework and package types still work. Building the solution usually fixes this."
+    "Framework and package types still work. Build it to see the errors."
   );
 }
 

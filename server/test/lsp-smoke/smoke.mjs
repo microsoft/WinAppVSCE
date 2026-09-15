@@ -1607,7 +1607,7 @@ async function main() {
   // This used to be a durable "the developer must act" state. It no longer is: the referenced
   // project is compiled from source and emitted to a scratch directory, which is what lets the
   // out-of-process markup compiler resolve it, so the project loads exactly as if it had been
-  // built. The leg therefore asserts the repair rather than the prompt -- no projectBuildRequired
+  // built. The leg therefore asserts the reference build rather than the prompt -- no projectBuildRequired
   // reaches the wire, no document settles on `build-required`, and completion resolves for real.
   if (buildRequiredFixtureReady) {
     const firstReady = waitFor(
@@ -1632,19 +1632,19 @@ async function main() {
     await firstReady;
 
     // The notification is the thing a developer actually sees. Asserting its absence is what
-    // makes this leg fail if the repair silently stops running and the prompt comes back.
+    // makes this leg fail if the reference build silently stops running and the prompt comes back.
     if (buildRequiredNotifications.length > 0) {
       fail(
-        "the never-built project reference was repaired, so projectBuildRequired should never " +
+        "the never-built project reference was built, so projectBuildRequired should never " +
           `have been sent: ${JSON.stringify(buildRequiredNotifications)}`
       );
     }
     console.log(
-      "[ok] never-built project reference: repaired to ready, no projectBuildRequired on the wire"
+      "[ok] never-built project reference: built to ready, no projectBuildRequired on the wire"
     );
 
-    // A second document in the same project. The repair is cached per load, and this is where a
-    // regression that only repaired the first document would show up.
+    // A second document in the same project. The reference build is cached per load, and this is where a
+    // regression that only served the first document would show up.
     const secondReady = waitFor(
       (message) =>
         message.method === "winui-xaml/projectContextStatus" &&
@@ -1687,14 +1687,14 @@ async function main() {
       : secondCompletion.result?.items;
     if (!Array.isArray(secondItems) || secondItems.length === 0) {
       fail(
-        "the repaired project returned no completions: " + JSON.stringify(secondCompletion.result)
+        "the project returned no completions: " + JSON.stringify(secondCompletion.result)
       );
     }
     // A framework type proves references really resolved, rather than the leg passing on whatever
     // a contextless document happens to offer.
     const secondLabels = secondItems.map((item) => String(item.label));
     if (!secondLabels.includes("TextBlock")) {
-      fail(`the repaired project resolved no framework types: ${JSON.stringify(secondLabels.slice(0, 40))}`);
+      fail(`the project resolved no framework types: ${JSON.stringify(secondLabels.slice(0, 40))}`);
     }
     // Nothing in the project may have settled on the old durable state.
     const stuck = projectContextStatuses.filter(
@@ -1703,7 +1703,7 @@ async function main() {
         status?.state === "build-required"
     );
     if (stuck.length > 0) {
-      fail(`a repaired document still reported build-required: ${JSON.stringify(stuck)}`);
+      fail(`a built-reference document still reported build-required: ${JSON.stringify(stuck)}`);
     }
     console.log(
       "[ok] unbuilt project, second document: stays ready and framework completions still resolve"
@@ -1717,8 +1717,8 @@ async function main() {
 
   // 22c) The residual case: the reference cannot be produced from source either.
   //
-  // The repair is what removed leg 22b's prompt, so this is the leg that proves the prompt still
-  // exists at all. Without it, a repair that started swallowing `ProjectBuildRequiredException`
+  // The reference build is what removed leg 22b's prompt, so this is the leg that proves the prompt still
+  // exists at all. Without it, a reference build that started swallowing `ProjectBuildRequiredException`
   // would leave the developer with no signal and the whole suite still green.
   if (unresolvableFixtureReady) {
     const buildRequired = waitFor(
