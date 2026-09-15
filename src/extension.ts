@@ -1115,8 +1115,7 @@ async function runTemplateList(
 		extensionPath,
 		buildListArgs(templateVersion),
 		cwd,
-		progressMessage,
-		'Loading templates cancelled.'
+		progressMessage
 	);
 
 	if (result.cancelled) {
