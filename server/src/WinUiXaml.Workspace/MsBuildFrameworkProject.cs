@@ -51,15 +51,12 @@ namespace WinUiXaml.Workspace
                 pair => pair.Key,
                 pair => pair.Value,
                 StringComparer.OrdinalIgnoreCase);
-            properties["BuildingInsideVisualStudio"] = "true";
-            properties["BuildProjectReferences"] = "false";
 
             var fullPath = Path.GetFullPath(projectPath);
             var (evaluation, arguments, unresolvedProjectReferences) = MsBuildCli.EvaluateAndCompile(
                 fullPath,
                 properties,
-                cancellationToken,
-                RoslynProjectWorkspace.CreateReferenceRepair(fullPath, properties, cancellationToken));
+                cancellationToken);
             if (RoslynProjectWorkspace.RequiresRestore(
                 evaluation.ProjectAssetsFile,
                 evaluation.HasPackageReferences))

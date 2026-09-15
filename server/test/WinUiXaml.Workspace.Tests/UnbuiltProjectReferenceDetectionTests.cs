@@ -178,4 +178,51 @@ public sealed class UnbuiltProjectReferenceDetectionTests
         Assert.False(resolution.UnresolvedProjectReferences.IsDefault);
         Assert.Empty(resolution.UnresolvedProjectReferences);
     }
+
+    private const string ReferenceBuildFailureOutput = """
+        C:\src\BrokenLib\Broken.cs(1,21): error CS1519: Invalid token 'this' in a member declaration [C:\src\BrokenLib\BrokenLib.csproj]
+        C:\src\BrokenLib\Broken.cs(2,1): error CS1002: ; expected [C:\src\BrokenLib\BrokenLib.csproj]
+        """;
+
+    [Fact]
+    public void AnErrorAttributedToAReferencedProjectNamesThatProject()
+    {
+        // MSBuild tags each diagnostic with the project that produced it, so an error carrying a
+        // project other than the one requested is a referenced project that failed to build.
+        var names = RoslynProjectWorkspace.ExtractFailedReferencedProjects(
+            ReferenceBuildFailureOutput, @"C:\src\App\App.csproj");
+
+        Assert.Equal(new[] { "BrokenLib" }, names);
+    }
+
+    [Fact]
+    public void ErrorsFromTheRequestedProjectAreNotReportedAsReferenceFailures()
+    {
+        // The user's own compile errors are ordinary diagnostics, not a build prompt.
+        Assert.Empty(RoslynProjectWorkspace.ExtractFailedReferencedProjects(
+            @"C:\src\App\Program.cs(1,1): error CS1002: ; expected [C:\src\App\App.csproj]",
+            @"C:\src\App\App.csproj"));
+    }
+
+    [Fact]
+    public void AMultiTargetedReferenceIsReportedOnce()
+    {
+        // MSBuild tags an inner build as `Lib.csproj::TargetFramework=net9.0`.
+        var names = RoslynProjectWorkspace.ExtractFailedReferencedProjects(
+            """
+            a.cs(1,1): error CS1002: ; expected [C:\src\Lib\Lib.csproj::TargetFramework=net9.0]
+            a.cs(2,1): error CS1002: ; expected [C:\src\Lib\Lib.csproj::TargetFramework=net10.0]
+            """,
+            @"C:\src\App\App.csproj");
+
+        Assert.Equal(new[] { "Lib" }, names);
+    }
+
+    [Fact]
+    public void WarningsFromAReferencedProjectAreNotAReferenceFailure()
+    {
+        Assert.Empty(RoslynProjectWorkspace.ExtractFailedReferencedProjects(
+            @"a.cs(1,1): warning CS0168: unused [C:\src\Lib\Lib.csproj]",
+            @"C:\src\App\App.csproj"));
+    }
 }

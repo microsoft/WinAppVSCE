@@ -113,68 +113,13 @@ namespace WinUiXaml.Workspace
             ImmutableArray<string> UnresolvedProjectReferences) EvaluateAndCompile(
             string projectPath,
             IReadOnlyDictionary<string, string> globalProperties,
-            CancellationToken cancellationToken = default,
-            ShadowReferenceRepair? repair = null)
+            CancellationToken cancellationToken = default)
         {
             var fullPath = Path.GetFullPath(projectPath);
             return EvaluateAndCompileCore(
                 fullPath,
                 PinTargetFramework(fullPath, globalProperties, cancellationToken),
-                cancellationToken,
-                repair);
-        }
-
-        /// <summary>
-        /// Supplies shadow assemblies for referenced projects the markup compiler could not
-        /// resolve. Returns null when nothing could be produced, which leaves the caller on the
-        /// reference-only result.
-        /// </summary>
-        /// <remarks>
-        /// The names the markup compiler reported are deliberately not passed in. It abandons its
-        /// schema context at the first assembly it cannot load, so that list is a lower bound on
-        /// what is missing, not the set; repairing only what it named would leave the next one
-        /// unresolved and turn one failed build into several. Every referenced project is
-        /// supplied instead, and the injected targets substitute only the paths that are actually
-        /// absent.
-        /// </remarks>
-        /// <param name="evaluation">The failing project's evaluation, including its graph edges.</param>
-        internal delegate ShadowReferenceInjection? ShadowReferenceRepair(Evaluation evaluation);
-
-        /// <summary>
-        /// Points a design-time build at a directory of stand-in assemblies.
-        /// </summary>
-        /// <remarks>
-        /// The stand-ins deliberately do not live in the referenced project's own output folder.
-        /// Writing there would make MSBuild consider that project built, so the user's next real
-        /// build would skip it and any other tool reading <c>bin</c> would see a file no build
-        /// produced. Redirecting <c>ReferencePath</c> instead keeps the fiction inside this
-        /// process's scratch directory.
-        /// </remarks>
-        internal sealed class ShadowReferenceInjection
-        {
-            public ShadowReferenceInjection(string directory, string targetsFile, string? chainedCustomAfterTargets)
-            {
-                Directory = directory;
-                TargetsFile = targetsFile;
-                ChainedCustomAfterTargets = chainedCustomAfterTargets;
-            }
-
-            public string Directory { get; }
-            public string TargetsFile { get; }
-
-            /// <summary>The value this injection displaces, re-imported by the generated targets.</summary>
-            public string? ChainedCustomAfterTargets { get; }
-
-            internal void AppendTo(List<string> arguments)
-            {
-                arguments.Add($"-p:CustomAfterMicrosoftCommonTargets={TargetsFile}");
-                arguments.Add($"-p:WinUiXamlShadowReferenceDir={Directory}");
-                if (!string.IsNullOrWhiteSpace(ChainedCustomAfterTargets))
-                {
-                    arguments.Add(
-                        $"-p:WinUiXamlChainedCustomAfterTargets={ChainedCustomAfterTargets}");
-                }
-            }
+                cancellationToken);
         }
 
         /// <summary>
@@ -345,9 +290,7 @@ namespace WinUiXaml.Workspace
             ImmutableArray<string> UnresolvedProjectReferences) EvaluateAndCompileCore(
             string fullPath,
             IReadOnlyDictionary<string, string> globalProperties,
-            CancellationToken cancellationToken,
-            ShadowReferenceRepair? repair = null,
-            ShadowReferenceInjection? shadow = null)
+            CancellationToken cancellationToken)
         {
             var projectPath = fullPath;
             var arguments = new List<string>
@@ -383,7 +326,6 @@ namespace WinUiXaml.Workspace
                 // remove-list, so a referenced project never sees it and is built normally.
                 arguments.Add("-p:WinUiXamlDesignTimeRoot=true");
             }
-            shadow?.AppendTo(arguments);
             AppendEvaluationRequests(arguments);
             AppendProperties(arguments, globalProperties);
 
@@ -395,34 +337,11 @@ namespace WinUiXaml.Workspace
             }
             catch (ProjectBuildRequiredException ex)
             {
-                // The markup compiler aborted because a referenced project has never been built.
-                // Reference resolution stops short of it, so it still yields the SDK and package
-                // references on a never-built tree, and it also hands back the project graph the
-                // repair needs.
+                // A referenced project could not be built, so the markup compiler produced no
+                // generated code. Reference resolution stops short of the markup compiler, so it
+                // still yields the SDK and package references and keeps the rest of the file
+                // navigable while the user fixes the referenced project.
                 var fallback = ResolveReferencesOnly(fullPath, globalProperties, cancellationToken);
-
-                // Repair rather than degrade: the referenced projects are compiled from source
-                // anyway, so emitting those compilations to a scratch directory and pointing the
-                // markup compiler at them produces the same generated code a real build would.
-                // This runs only on the path that is otherwise broken, so a healthy project still
-                // costs exactly one MSBuild invocation.
-                if (repair != null && shadow == null)
-                {
-                    var injection = repair(fallback.Evaluation);
-                    if (injection != null)
-                    {
-                        try
-                        {
-                            return EvaluateAndCompileCore(
-                                fullPath, globalProperties, cancellationToken, repair: null, shadow: injection);
-                        }
-                        catch (ProjectBuildRequiredException)
-                        {
-                            // The shadow assemblies did not satisfy the markup compiler either.
-                            // Fall through to the reference-only result below.
-                        }
-                    }
-                }
 
                 if (fallback.Arguments.IsDefaultOrEmpty)
                 {
@@ -1034,6 +953,12 @@ namespace WinUiXaml.Workspace
                 var diagnosticText = standardError.Length > 0 && !ReferenceEquals(detail, combined)
                     ? detail + Environment.NewLine + combined
                     : detail;
+                if (RoslynProjectWorkspace.ExtractFailedReferencedProjects(diagnosticText, reportedPath)
+                    is { Count: > 0 } failedReferences)
+                {
+                    throw new ProjectBuildRequiredException(reportedPath, failedReferences);
+                }
+
                 if (RoslynProjectWorkspace.IsUnbuiltProjectReferenceFailure(diagnosticText))
                 {
                     throw new ProjectBuildRequiredException(

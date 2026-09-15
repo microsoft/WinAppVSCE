@@ -234,11 +234,7 @@ namespace WinUiXaml.Workspace
                 var combined = MsBuildCli.EvaluateAndCompile(
                     fullPath,
                     properties,
-                    cancellationToken,
-                    graph == null
-                        ? null
-                        : (evaluation) => SynthesizeMissingReferences(
-                            fullPath, evaluation, graph, properties, cancellationToken));
+                    cancellationToken);
                 if (RequiresRestore(
                         combined.Evaluation.ProjectAssetsFile,
                         combined.Evaluation.HasPackageReferences))
@@ -328,62 +324,6 @@ namespace WinUiXaml.Workspace
             public Dictionary<string, Compilation?> Compilations { get; }
         }
 
-        /// <summary>
-        /// Builds the repair that supplies stand-in assemblies for never-built project
-        /// references, over a graph of its own.
-        /// </summary>
-        /// <remarks>
-        /// Exposed so the fast framework-resolution stage repairs the same condition. That stage
-        /// runs first, so leaving it out would let it report a build requirement the full load
-        /// would then have gone on to satisfy.
-        /// </remarks>
-        internal static MsBuildCli.ShadowReferenceRepair CreateReferenceRepair(
-            string projectPath,
-            Dictionary<string, string> properties,
-            CancellationToken cancellationToken)
-        {
-            var fullPath = Path.GetFullPath(projectPath);
-            var graph = new ProjectGraphContext(fullPath);
-            return (evaluation) => SynthesizeMissingReferences(
-                fullPath, evaluation, graph, properties, cancellationToken);
-        }
-
-        /// <summary>
-        /// Builds every referenced project from source and writes those compilations where the
-        /// XAML markup compiler can find them.
-        /// </summary>
-        /// <remarks>
-        /// Roslyn needs nothing here -- it consumes the compilations directly -- but the markup
-        /// compiler is a separate process that resolves references off disk, and it abandons code
-        /// generation when one is missing. Supplying the file is what lets a never-built project
-        /// reference still yield <c>InitializeComponent</c> and the <c>x:Name</c> fields, instead
-        /// of asking the user to run a build the editor can substitute for.
-        ///
-        /// The compilations land in <paramref name="context"/>, so the load that follows reuses
-        /// them rather than building the graph a second time.
-        /// </remarks>
-        private static MsBuildCli.ShadowReferenceInjection? SynthesizeMissingReferences(
-            string fullPath,
-            MsBuildCli.Evaluation evaluation,
-            ProjectGraphContext context,
-            Dictionary<string, string> properties,
-            CancellationToken cancellationToken)
-        {
-            var discarded = ImmutableArray.CreateBuilder<MetadataReference>();
-            AddProjectReferences(
-                discarded, context, evaluation.ProjectReferences, properties, cancellationToken);
-
-            var compilations = new List<Compilation>();
-            foreach (var compilation in context.Compilations.Values)
-            {
-                if (compilation != null)
-                {
-                    compilations.Add(compilation);
-                }
-            }
-
-            return ShadowReferenceStore.Create(
-                fullPath, compilations, evaluation.CustomAfterCommonTargets, cancellationToken);        }
 
         private static void AddProjectReferences(
             ImmutableArray<MetadataReference>.Builder references,
@@ -681,6 +621,72 @@ namespace WinUiXaml.Workspace
              message.Contains("not found", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
+        /// Names the referenced projects whose own build failed.
+        /// </summary>
+        /// <remarks>
+        /// MSBuild tags every diagnostic with the project that produced it --
+        /// <c>... : error CS1002: ; expected [C:\src\Lib\Lib.csproj]</c> -- so an error carrying a
+        /// project other than the one that was requested is, by construction, a referenced project
+        /// that could not be built. That is a structural signal rather than a message match, so it
+        /// survives localization and does not depend on which tool inside the reference failed.
+        ///
+        /// A multi-targeted reference is tagged <c>Lib.csproj::TargetFramework=net9.0</c>; the
+        /// suffix is dropped so the user is told the project once.
+        /// </remarks>
+        internal static IReadOnlyList<string> ExtractFailedReferencedProjects(
+            string message,
+            string requestedProjectPath)
+        {
+            var names = new List<string>();
+            if (string.IsNullOrEmpty(message))
+            {
+                return names;
+            }
+
+            string requested;
+            try
+            {
+                requested = Path.GetFullPath(requestedProjectPath);
+            }
+            catch (ArgumentException)
+            {
+                requested = requestedProjectPath;
+            }
+
+            foreach (Match match in FailedProjectPattern.Matches(message))
+            {
+                var raw = match.Groups["project"].Value.Trim();
+                var separator = raw.IndexOf("::", StringComparison.Ordinal);
+                if (separator >= 0)
+                {
+                    raw = raw.Substring(0, separator);
+                }
+
+                if (raw.Length == 0 || string.Equals(raw, requested, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string name;
+                try
+                {
+                    name = Path.GetFileNameWithoutExtension(raw);
+                }
+                catch (ArgumentException)
+                {
+                    continue;
+                }
+
+                if (name.Length > 0 && !names.Contains(name, StringComparer.OrdinalIgnoreCase))
+                {
+                    names.Add(name);
+                }
+            }
+
+            return names;
+        }
+
+        /// <summary>
         /// WMC1006 is the WinUI markup compiler failing to resolve a project reference's assembly.
         /// It is emitted once per unresolved assembly and aborts the evaluation, so it must be
         /// distinguished from a generic MSBuild failure: the user's fix is a build, not a repair.
@@ -728,6 +734,11 @@ namespace WinUiXaml.Workspace
 
         private static readonly Regex UnresolvedAssemblyPattern = new(
             @"Cannot resolve Assembly or Windows Metadata file '(?<path>[^']*)'",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        // MSBuild appends the producing project in brackets at the end of each diagnostic line.
+        private static readonly Regex FailedProjectPattern = new(
+            @"(?m):\s*error\s+[^\r\n]*\[(?<project>[^\]\r\n]+\.(?:cs|vb|fs|vcx)proj[^\]\r\n]*)\]\s*$",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         /// <summary>Gets the C# compilation for the loaded project.</summary>

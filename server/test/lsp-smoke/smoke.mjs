@@ -252,16 +252,11 @@ try {
 const buildRequiredXamlUri = pathToFileURL(buildRequiredXamlPath).href;
 const buildRequiredSecondXamlUri = pathToFileURL(buildRequiredSecondXamlPath).href;
 
-// The residual case the repair cannot close: a reference that is not merely unbuilt but cannot be
-// produced from source at all, so there is nothing to synthesize. This is now the only way a
-// developer sees the build prompt, and without a fixture for it the repair could start swallowing
-// the failure and every remaining test would still pass.
-//
-// `EnableDefaultCompileItems=false` with `GenerateAssemblyInfo=false` is the smallest honest way
-// to get there: the project evaluates, so it is a real reference the markup compiler expects on
-// disk, but csc is handed no source files at all, so there is no compilation to emit. (Leaving
-// assembly-info generation on is not enough -- the SDK's generated file is a source, and the
-// repair compiles it happily.)
+// The residual case the design-time build cannot close: a reference that is not merely unbuilt but
+// cannot be built at all, because its own source does not compile. The build of the app's
+// references is now part of the normal path, so this is the only way a developer still sees the
+// build prompt -- and without a fixture for it, a regression that swallowed real reference
+// failures would leave every other test passing.
 const unresolvableAppDir = join(buildRequiredRoot, "UnresolvableApp");
 const unresolvableLibDir = join(buildRequiredRoot, "BrokenLib");
 mkdirSync(unresolvableAppDir);
@@ -272,12 +267,14 @@ writeFileSync(
   <PropertyGroup>
     <TargetFramework>${buildRequiredTfm}</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
-    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
   </PropertyGroup>
 </Project>
 `,
+  "utf8"
+);
+writeFileSync(
+  join(unresolvableLibDir, "Broken.cs"),
+  "public class Broken { this is not valid C# }\n",
   "utf8"
 );
 const unresolvableProject = join(unresolvableAppDir, "UnresolvableRef.csproj");
