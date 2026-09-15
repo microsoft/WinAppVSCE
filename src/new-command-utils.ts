@@ -148,31 +148,30 @@ export function formatTemplateTags(tags: string): string {
 }
 
 /**
- * Map a `winapp new` exit code and JSON payload onto a user-facing message. The
- * CLI's own `Error` text is preferred when present: it is already actionable and
- * keeps the extension from tracking the CLI's wording.
+ * Describe a `winapp new` failure using the CLI's own words wherever possible.
+ * The JSON `Error` field is preferred; if the CLI died before emitting one,
+ * whatever it printed is the only diagnostic that exists, so pass that through.
+ *
+ * @param output Raw stdout+stderr, used only when there is no JSON payload.
  */
 export function describeNewFailure(
 	exitCode: number | null,
-	result: ScaffoldResult | undefined
+	result: ScaffoldResult | undefined,
+	output?: string
 ): string {
-	const detail = result?.error;
+	const detail = result?.error?.trim();
 	if (detail) {
 		return detail;
 	}
 
-	switch (exitCode) {
-		case NEW_EXIT.invalidArgs:
-			return 'The WinApp CLI rejected the app name or output directory.';
-		case NEW_EXIT.sdkMissing:
-			return 'The .NET SDK is required to create a WinUI app.';
-		case NEW_EXIT.packFailed:
-			return 'Failed to install the WinUI template pack. Check your network and NuGet feed configuration.';
-		case NEW_EXIT.scaffoldFailed:
-			return 'Failed to scaffold the app.';
-		default:
-			return 'Failed to create the app.';
+	if (!result) {
+		const raw = output?.trim();
+		if (raw) {
+			return raw;
+		}
 	}
+
+	return `The WinApp CLI failed to create the app (exit code ${exitCode ?? 'unknown'}).`;
 }
 
 /** True when the failure is a missing or too-old .NET SDK, which has its own call to action. */

@@ -1507,7 +1507,7 @@ export function activate(context: vscode.ExtensionContext) {
 			if (isNonEmptyOutputFailure(result.code, scaffold)) {
 				const createAnyway = 'Create Anyway';
 				const choice = await vscode.window.showWarningMessage(
-					describeNewFailure(result.code, scaffold),
+					describeNewFailure(result.code, scaffold, result.output),
 					{ modal: true },
 					createAnyway
 				);
@@ -1524,7 +1524,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			if (result.code !== 0 || !scaffold?.created) {
 				await showNewFailure(
-					describeNewFailure(result.code, scaffold),
+					describeNewFailure(result.code, scaffold, result.output),
 					isSdkMissingExit(result.code)
 				);
 				return;
