@@ -904,8 +904,9 @@ async function loadWinUiTemplates(
 }
 
 /**
- * Run one `winapp new --list --json` attempt without reporting failures, so the
- * caller can retry with different arguments before surfacing an error.
+ * Run one `winapp new --list --json` attempt, returning the outcome rather than
+ * reporting it: the first attempt fails routinely when no pack is installed, and
+ * the retry succeeds. {@link loadWinUiTemplates} reports whatever is final.
  */
 async function runTemplateList(
 	extensionPath: string,

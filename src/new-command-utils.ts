@@ -427,7 +427,7 @@ export interface TemplateLoad {
  * installing a pack, matching `SignFlowAdapter` in `sign-utils.ts`.
  */
 export interface TemplateLoadAdapter {
-	/** Run one `winapp new --list --json` attempt without reporting failures. */
+	/** Run one attempt, returning its outcome; the caller decides what to report. */
 	listTemplates(
 		templateVersion: 'latest' | 'installed' | undefined,
 		progressMessage: string
