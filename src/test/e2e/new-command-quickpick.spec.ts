@@ -205,10 +205,9 @@ test.describe('winapp.new command — template selection', () => {
             await expect(input).toBeVisible({ timeout: 20_000 });
             await expect(input).toHaveValue('WinUIApp');
 
-            // The extension deliberately does not re-implement the CLI's name
-            // rules, so even a name the CLI rejects must not be blocked inline.
-            // The message node always holds the prompt, so assert it has not
-            // been replaced by a validation error.
+            // The extension does not re-implement the CLI's name rules, so even a
+            // name the CLI rejects must not be blocked inline. The message node
+            // always holds the prompt, so assert no validation error replaced it.
             await page.keyboard.press('Control+a');
             await page.keyboard.type('bad/name', { delay: 30 });
             await page.waitForTimeout(1_000);
