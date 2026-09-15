@@ -611,7 +611,7 @@ async function resolveCertPublisherSource(
 			}
 			return trimmed;
 		}
-	});
+	}, projectDir);
 }
 
 /** Build the `cert generate` arguments for a resolved publisher source. */

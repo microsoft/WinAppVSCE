@@ -5,6 +5,8 @@
  * unit tested directly.
  */
 
+import * as path from 'path';
+
 /**
  * Glob patterns for app manifests within a project directory.
  *
@@ -336,6 +338,47 @@ export interface CertPublisherSourceAdapter {
 }
 
 /**
+ * Manifest file names that MSBuild treats as a project's primary manifest.
+ *
+ * Variants such as `Package.Store.appxmanifest` are deliberately excluded: they
+ * carry a different `Identity/@Publisher` (the Store-assigned one), so they are
+ * a real choice the user has to make rather than a name to guess at.
+ */
+const CANONICAL_MANIFEST_NAMES = new Set(['package.appxmanifest', 'appxmanifest.xml']);
+
+/** Compare two paths for equality, case-insensitively as Windows does. */
+function pathsEqual(left: string, right: string): boolean {
+	return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+}
+
+/**
+ * Pick the project's primary manifest when that choice is unambiguous.
+ *
+ * Only a canonically named manifest sitting directly in the project directory
+ * qualifies. That is the file MSBuild packages by default, so selecting it
+ * matches what the CLI would have inferred from the working directory — the
+ * prompt would only be asking the user to confirm the obvious.
+ *
+ * Manifests in subdirectories never qualify, which keeps template and
+ * code-generator copies (for example `ProjectGenerator/Template/...`) from being
+ * mistaken for the project's own manifest.
+ *
+ * @returns The manifest to use, or `undefined` when the user should be asked.
+ */
+export function selectCanonicalManifest(
+	manifestPaths: string[],
+	projectDir: string
+): string | undefined {
+	const canonical = manifestPaths.filter(
+		manifestPath =>
+			pathsEqual(path.dirname(manifestPath), projectDir) &&
+			CANONICAL_MANIFEST_NAMES.has(path.basename(manifestPath).toLowerCase())
+	);
+
+	return canonical.length === 1 ? canonical[0] : undefined;
+}
+
+/**
  * Decide where the certificate's publisher comes from.
  *
  * The certificate's publisher must match the manifest's `Identity/@Publisher`
@@ -344,10 +387,14 @@ export interface CertPublisherSourceAdapter {
  * inference instead is unsafe: with no manifest to find it silently falls back
  * to the current user name, producing a certificate that can never match.
  *
+ * @param projectDir The already-resolved project directory. The user has picked
+ *   this by the time we get here, so finding the project's primary manifest
+ *   inside it is not a second question worth asking.
  * @returns The resolved source, or `undefined` if the user cancelled.
  */
 export async function resolveCertPublisherSourceDecision(
-	adapter: CertPublisherSourceAdapter
+	adapter: CertPublisherSourceAdapter,
+	projectDir: string
 ): Promise<CertPublisherSource | undefined> {
 	const manifestPaths = await adapter.findManifests();
 
@@ -360,6 +407,14 @@ export async function resolveCertPublisherSourceDecision(
 	}
 
 	if (manifestPaths.length > 1) {
+		// A project commonly carries more than one manifest (a Store variant, a
+		// template under a generator directory). Ask only when none of them is
+		// clearly the project's primary manifest.
+		const canonical = selectCanonicalManifest(manifestPaths, projectDir);
+		if (canonical) {
+			return { kind: 'manifest', manifestPath: canonical };
+		}
+
 		const picked = await adapter.pickManifest(manifestPaths);
 		return picked ? { kind: 'manifest', manifestPath: picked } : undefined;
 	}

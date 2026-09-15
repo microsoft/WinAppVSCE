@@ -9,6 +9,7 @@ import {
 	parseCertErrorMessage,
 	parseExistingCertificatePath,
 	resolveCertPublisherSourceDecision,
+	selectCanonicalManifest,
 	validatePublisherInput,
 	type CertGenerateFlowAdapter,
 	type CertGenerateOutcome,
@@ -19,6 +20,9 @@ import {
 
 /** Where the CLI writes by default, and therefore the path the flow expects. */
 const EXPECTED_PATH = 'C:\\proj\\devcert.pfx';
+
+/** The already-resolved project directory the publisher search runs against. */
+const PROJECT_DIR = 'C:\\proj';
 
 /** A representative plain-text "already exists" failure. */
 const ALREADY_EXISTS_TEXT =
@@ -441,7 +445,7 @@ describe('resolveCertPublisherSourceDecision', () => {
 
 	test('uses the only manifest without prompting', async () => {
 		const { adapter, calls } = adapterFor(['C:\\proj\\Package.appxmanifest']);
-		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter), {
+		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), {
 			kind: 'manifest',
 			manifestPath: 'C:\\proj\\Package.appxmanifest'
 		});
@@ -450,7 +454,7 @@ describe('resolveCertPublisherSourceDecision', () => {
 
 	test('asks which manifest to use when several are found', async () => {
 		const { adapter, calls } = adapterFor(['C:\\a.appxmanifest', 'C:\\b.appxmanifest']);
-		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter), {
+		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), {
 			kind: 'manifest',
 			manifestPath: 'C:\\a.appxmanifest'
 		});
@@ -459,7 +463,7 @@ describe('resolveCertPublisherSourceDecision', () => {
 
 	test('prompts for a publisher when there is no manifest', async () => {
 		const { adapter, calls } = adapterFor([]);
-		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter), {
+		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), {
 			kind: 'publisher',
 			publisher: 'Contoso'
 		});
@@ -468,7 +472,7 @@ describe('resolveCertPublisherSourceDecision', () => {
 
 	test('cancelling the manifest search stops the flow', async () => {
 		const { adapter, calls } = adapterFor(undefined);
-		assert.equal(await resolveCertPublisherSourceDecision(adapter), undefined);
+		assert.equal(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), undefined);
 		assert.deepEqual(calls, ['findManifests']);
 	});
 
@@ -476,14 +480,68 @@ describe('resolveCertPublisherSourceDecision', () => {
 		const { adapter } = adapterFor(['C:\\a.appxmanifest', 'C:\\b.appxmanifest'], {
 			pickManifest: async () => undefined
 		});
-		assert.equal(await resolveCertPublisherSourceDecision(adapter), undefined);
+		assert.equal(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), undefined);
 	});
 
 	test('dismissing or blanking the publisher prompt stops the flow', async () => {
 		const dismissed = adapterFor([], { promptPublisher: async () => undefined });
-		assert.equal(await resolveCertPublisherSourceDecision(dismissed.adapter), undefined);
+		assert.equal(await resolveCertPublisherSourceDecision(dismissed.adapter, PROJECT_DIR), undefined);
 
 		const blank = adapterFor([], { promptPublisher: async () => '   ' });
-		assert.equal(await resolveCertPublisherSourceDecision(blank.adapter), undefined);
+		assert.equal(await resolveCertPublisherSourceDecision(blank.adapter, PROJECT_DIR), undefined);
+	});
+
+	test('takes the primary manifest without asking when variants sit beside it', async () => {
+		// The real AI Dev Gallery layout: a Store variant next to the primary
+		// manifest, plus a code-generator template further down the tree. The
+		// project directory was already chosen, so none of this is worth a prompt.
+		const { adapter, calls } = adapterFor([
+			'C:\\proj\\ProjectGenerator\\Template\\Package-managed.appxmanifest',
+			'C:\\proj\\Package.appxmanifest',
+			'C:\\proj\\Package.Store.appxmanifest'
+		]);
+
+		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), {
+			kind: 'manifest',
+			manifestPath: 'C:\\proj\\Package.appxmanifest'
+		});
+		assert.deepEqual(calls, ['findManifests']);
+	});
+
+	test('still asks when no manifest in the project directory is canonically named', async () => {
+		// Two equally plausible candidates: guessing here could produce a
+		// certificate whose publisher never matches the package.
+		const { adapter, calls } = adapterFor([
+			'C:\\proj\\Package.Store.appxmanifest',
+			'C:\\proj\\Package.Sideload.appxmanifest'
+		]);
+
+		await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR);
+		assert.deepEqual(calls, ['findManifests', 'pickManifest']);
+	});
+
+	test('does not treat a nested canonical manifest as the project manifest', async () => {
+		// A canonical name in a subdirectory belongs to some other project (or a
+		// template), so it must not silently win over an explicit choice.
+		const { adapter, calls } = adapterFor([
+			'C:\\proj\\sub\\Package.appxmanifest',
+			'C:\\proj\\other\\Package.appxmanifest'
+		]);
+
+		await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR);
+		assert.deepEqual(calls, ['findManifests', 'pickManifest']);
+	});
+});
+
+describe('selectCanonicalManifest', () => {
+	test('accepts AppxManifest.xml regardless of casing', () => {
+		assert.equal(
+			selectCanonicalManifest(['C:\\proj\\appxmanifest.XML', 'C:\\proj\\extra.appxmanifest'], PROJECT_DIR),
+			'C:\\proj\\appxmanifest.XML'
+		);
+	});
+
+	test('returns undefined when the project directory has no canonical manifest', () => {
+		assert.equal(selectCanonicalManifest(['C:\\proj\\Package.Store.appxmanifest'], PROJECT_DIR), undefined);
 	});
 });
