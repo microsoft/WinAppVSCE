@@ -243,7 +243,7 @@ You can also disable just the diagnostic underlines while keeping completions an
 
 ### Create a new WinUI app
 
-Run **WinApp: Create WinUI App** to scaffold a WinUI 3 app from an official Windows App SDK template. It's the only WinApp command that doesn't need a project — run it with no folder open to start something from scratch. The command:
+Run **WinApp: Create WinUI App** to scaffold a WinUI 3 app from an official Windows App SDK template. The command:
 
 1. **Loads the templates** — Fetches the available WinUI templates, installing the template pack on first run. If a pack is already on your machine, you're asked whether to use it or install the latest (a machine-wide change that affects all `dotnet new` tooling).
 2. **Asks for a template** — Choose from a list that includes the blank app, the NavigationView and TabView shells, the MVVM app, a class library, and a unit test project.
