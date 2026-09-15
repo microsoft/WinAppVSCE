@@ -179,15 +179,18 @@ namespace WinUiXaml.Workspace
             var generated = GeneratorHostRunner.Run(fullPath, assemblyName, commandLine, cancellationToken);
             AddSourceTrees(trees, generated, parseOptions, cancellationToken);
 
-            var references = ImmutableArray.CreateBuilder<MetadataReference>();
-            references.AddRange(commandLine.CreateMetadataReferences());
-
+            var projectCompilations = ImmutableArray.CreateBuilder<MetadataReference>();
             AddProjectReferences(
-                references,
+                projectCompilations,
                 graph,
                 evaluation.ProjectReferences,
                 properties,
                 cancellationToken);
+
+            var references = ImmutableArray.CreateBuilder<MetadataReference>();
+            references.AddRange(WithoutSupersededProjectOutputs(
+                commandLine.CreateMetadataReferences(), projectCompilations));
+            references.AddRange(projectCompilations);
 
             var options = commandLine.CreateCompilationOptions();
             var allReferences = references.ToImmutable();
@@ -388,7 +391,8 @@ namespace WinUiXaml.Workspace
             ImmutableArray<string> projectReferences,
             Dictionary<string, string> properties,
             CancellationToken cancellationToken)
-        {            if (projectReferences.IsDefaultOrEmpty)
+        {
+            if (projectReferences.IsDefaultOrEmpty)
             {
                 return;
             }
@@ -449,6 +453,44 @@ namespace WinUiXaml.Workspace
                     context.InProgress.Remove(referencePath);
                 }
             }
+        }
+
+        /// <summary>
+        /// Drops the on-disk assembly for any project reference that is also supplied as a live
+        /// compilation, mirroring Roslyn's own <c>SwapMetadataReferenceForProjectReference</c>.
+        /// </summary>
+        /// <remarks>
+        /// The csc command line names each project reference's output assembly, and the shadow
+        /// reference repair substitutes a stand-in for the ones that were never built. Keeping
+        /// either alongside the compilation built from that project's source puts two assemblies
+        /// with the same identity into one compilation, and which one supplies a symbol is then
+        /// Roslyn's unification order rather than anything this code states. The compilation is
+        /// the copy that tracks the user's edits, so the file is the one that goes -- otherwise a
+        /// stale <c>bin</c> could silently win and freeze IntelliSense at the last build.
+        /// </remarks>
+        private static IEnumerable<MetadataReference> WithoutSupersededProjectOutputs(
+            ImmutableArray<MetadataReference> fromCommandLine,
+            ImmutableArray<MetadataReference>.Builder projectCompilations)
+        {
+            var superseded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var reference in projectCompilations)
+            {
+                if (reference is CompilationReference compilation &&
+                    !string.IsNullOrEmpty(compilation.Compilation.AssemblyName))
+                {
+                    superseded.Add(compilation.Compilation.AssemblyName!);
+                }
+            }
+
+            if (superseded.Count == 0)
+            {
+                return fromCommandLine;
+            }
+
+            return fromCommandLine.Where(reference =>
+                reference is not PortableExecutableReference portable ||
+                string.IsNullOrEmpty(portable.FilePath) ||
+                !superseded.Contains(Path.GetFileNameWithoutExtension(portable.FilePath)));
         }
 
         private static Compilation? BuildReferencedProject(
