@@ -214,6 +214,51 @@ test("presents persistent loading and actionable error status", () => {
   );
 });
 
+test("reports the restore as work in flight while the extension is running it", () => {
+  // The extension restores without being asked, so during that window "restore required" would
+  // tell the developer to run a command the extension is at that moment running.
+  assert.deepEqual(
+    getProjectContextStatusPresentation(
+      {
+        uri: "file:///Fresh.xaml",
+        state: "restore-required",
+        message: "Restore required: App.csproj.",
+      },
+      { restoreInFlight: true }
+    ),
+    {
+      text: "$(sync~spin) WinApp: restoring packages",
+      tooltip:
+        "Restoring the project's packages. Project-aware IntelliSense resumes when it " +
+        "completes. Click to show the WinUI XAML output.",
+      transient: false,
+    }
+  );
+
+  // Once it finishes -- or when the workspace is untrusted and it never starts -- the state is
+  // an outstanding demand again, so the instruction comes back.
+  assert.match(
+    getProjectContextStatusPresentation(
+      {
+        uri: "file:///Fresh.xaml",
+        state: "restore-required",
+        message: "Restore required: App.csproj.",
+      },
+      { restoreInFlight: false }
+    )?.text ?? "",
+    /restore required/
+  );
+
+  // The flag describes the restore only; a build the extension is not running still instructs.
+  assert.match(
+    getProjectContextStatusPresentation(
+      { uri: "file:///Fresh.xaml", state: "build-required", message: "build me" },
+      { restoreInFlight: true }
+    )?.text ?? "",
+    /build required/
+  );
+});
+
 test("names the restore in the bar itself, and outranks the build", () => {
   // A never-restored project is as user-fixable as a never-built one, and reached earlier on a
   // clean clone. Before this state existed it fell through to "XAML IntelliSense unavailable",

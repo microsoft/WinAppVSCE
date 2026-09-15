@@ -39,6 +39,8 @@ export const PROJECT_CONTEXT_BUILD_REQUIRED_FALLBACK_MESSAGE =
   "Build the solution once so referenced projects produce their assemblies.";
 export const PROJECT_CONTEXT_RESTORE_REQUIRED_FALLBACK_MESSAGE =
   "Restore the project's packages so its references resolve.";
+export const PROJECT_CONTEXT_RESTORING_MESSAGE =
+  "Restoring the project's packages. Project-aware IntelliSense resumes when it completes.";
 export const SHOW_XAML_OUTPUT_HINT =
   "Click to show the WinUI XAML output.";
 
@@ -115,8 +117,17 @@ export function selectProjectContextStatus(
   );
 }
 
+/**
+ * Conditions the extension is already acting on, which change what a state means to the reader.
+ */
+export interface ProjectContextStatusContext {
+  /** True while the extension is running `dotnet restore` for the project. */
+  restoreInFlight?: boolean;
+}
+
 export function getProjectContextStatusPresentation(
-  status: ProjectContextStatus
+  status: ProjectContextStatus,
+  context: ProjectContextStatusContext = {}
 ): ProjectContextStatusPresentation | undefined {
   switch (status.state) {
     // The clean-clone case reaches every developer who opens XAML before their first build, so
@@ -133,6 +144,19 @@ export function getProjectContextStatusPresentation(
     // developers looking for a broken extension at the exact moment the fix was one command --
     // the same defect this state's build-side sibling above was added to remove.
     case "restore-required":
+      // The extension restores without being asked, so for as long as that is running the
+      // instruction is not the developer's to act on -- it describes work already in flight.
+      // Reporting it as an outstanding demand is the same conflation the build-side wording
+      // above was written to avoid, and it would also be the only place left where the user is
+      // told to run a command the extension is at that moment running.
+      if (context.restoreInFlight) {
+        return {
+          text: "$(sync~spin) WinApp: restoring packages",
+          tooltip: `${PROJECT_CONTEXT_RESTORING_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
+          transient: false,
+        };
+      }
+
       return {
         text: "$(package) WinApp: restore required for XAML IntelliSense",
         tooltip: `${status.message ?? PROJECT_CONTEXT_RESTORE_REQUIRED_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,

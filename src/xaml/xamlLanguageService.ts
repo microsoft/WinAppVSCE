@@ -113,6 +113,11 @@ function findOpenDocument(documentUri: string): vscode.TextDocument | undefined 
       : candidate.uri.toString() === target.toString()));
 }
 let readyStatusTimer: NodeJS.Timeout | undefined;
+/**
+ * Restores running right now. A count rather than a flag because each project the server reports
+ * gets its own restore, and the status bar shows one line for whichever document is active.
+ */
+let restoresInFlight = 0;
 const projectContextStatuses = new Map<string, ProjectContextStatus>();
 
 // The client does not own caller-supplied watchers.
@@ -933,6 +938,8 @@ function isTrustedWorkspaceProject(projectPath: string): boolean {
 
 async function restoreProject(projectPath: string): Promise<void> {
   log(`Restoring project packages: ${projectPath}`);
+  restoresInFlight += 1;
+  renderProjectContextStatus();
 
   try {
     const resolution = await requireDotnetHostResolver().resolve();
@@ -947,13 +954,7 @@ async function restoreProject(projectPath: string): Promise<void> {
     }
     const dotnet = resolution.dotnetPath;
 
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: "Restoring WinUI project packages",
-      },
-      () => runDotnetRestore(projectPath, dotnet)
-    );
+    await runDotnetRestore(projectPath, dotnet);
     log("Project package restore completed. IntelliSense metadata is reloading.");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -966,6 +967,9 @@ async function restoreProject(projectPath: string): Promise<void> {
         output?.show(true);
       }
     });
+  } finally {
+    restoresInFlight -= 1;
+    renderProjectContextStatus();
   }
 }
 
@@ -1041,7 +1045,9 @@ function renderProjectContextStatus(): void {
   );
   const selected = selectProjectContextStatus(relevantStatuses);
   const presentation = selected
-    ? getProjectContextStatusPresentation(selected)
+    ? getProjectContextStatusPresentation(selected, {
+        restoreInFlight: restoresInFlight > 0,
+      })
     : undefined;
   if (!projectStatusItem || !selected || !presentation) {
     projectStatusItem?.hide();
