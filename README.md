@@ -54,8 +54,6 @@ When you run a project-context WinApp command — such as **Initialize Project**
 
 Commands that already take an explicit target — such as **Run Application**, **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
-**Certificate publisher resolution:** **Generate Certificate** additionally resolves the publisher for the certificate, because a dev certificate only works if its publisher matches the manifest's `Identity/@Publisher`. The extension looks in the resolved project directory for its primary manifest — `Package.appxmanifest` or `AppxManifest.xml` — and passes it to the CLI, so the publisher is taken from the manifest automatically. That is the same file the CLI itself would use; variants such as `Package.Store.appxmanifest`, template copies under a generator directory, and manifests belonging to other projects are deliberately not offered, because their publisher would not match. When the project has no primary manifest, the extension asks you to enter a publisher.
-
 **Configuration (optional):**
 
 To skip automatic scanning, add the `winapp.appDirectories` setting to your workspace:
