@@ -39,7 +39,6 @@ import {
 	executeCertGenerateFlow,
 	resolveCertPublisherSourceDecision,
 	selectCanonicalManifest,
-	validatePublisherInput,
 	type CertGenerateFlowAdapter,
 	type CertIfExists,
 	type CertPublisherSource
@@ -561,12 +560,13 @@ async function resolveCertPublisherSource(
 		},
 
 		promptPublisher: async () => {
+			// The value is passed to the CLI as typed; it owns what a valid
+			// publisher is.
 			const publisher = await vscode.window.showInputBox({
 				title: 'Certificate publisher',
 				prompt: `Enter the publisher for the certificate in ${path.basename(projectDir)} — it must match your package's Identity/@Publisher.`,
 				placeHolder: 'Contoso or CN=Contoso, O=Contoso Ltd, C=US',
-				ignoreFocusOut: true,
-				validateInput: (value) => validatePublisherInput(value)
+				ignoreFocusOut: true
 			});
 
 			return publisher?.trim();

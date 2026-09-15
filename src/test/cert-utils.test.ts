@@ -8,7 +8,6 @@ import {
 	isAlreadyExistsError,
 	resolveCertPublisherSourceDecision,
 	selectCanonicalManifest,
-	validatePublisherInput,
 	type CertGenerateFlowAdapter,
 	type CertGenerateOutcome,
 	type CertIfExists,
@@ -134,42 +133,6 @@ describe('decideCertGenerateOutcome', () => {
 
 	test('a null exit code with no output is a failure', () => {
 		assert.equal(decideCertGenerateOutcome(null, '', EXPECTED_PATH).kind, 'failed');
-	});
-});
-
-describe('validatePublisherInput', () => {
-	test('accepts a bare name, which the CLI wraps as CN=<name>', () => {
-		assert.equal(validatePublisherInput('Contoso'), undefined);
-		assert.equal(validatePublisherInput('  Contoso  '), undefined);
-	});
-
-	test('accepts single and multi-component distinguished names', () => {
-		assert.equal(validatePublisherInput('CN=Contoso'), undefined);
-		assert.equal(validatePublisherInput('CN=Contoso, O=Contoso Ltd, C=US'), undefined);
-	});
-
-	test('rejects backslash escapes, which the packaging schema does not accept', () => {
-		// ST_Publisher_2010_v2 has no escape sequences, so a publisher containing
-		// one can never match a manifest. See manifest-validator.test.ts, which
-		// pins the same rule for the manifest editor.
-		assert.ok(validatePublisherInput('CN=Contoso\\, Inc, C=US'));
-		assert.ok(validatePublisherInput('CN=A\\+B'));
-	});
-
-	test('rejects empty input', () => {
-		assert.ok(validatePublisherInput(''));
-		assert.ok(validatePublisherInput('   '));
-	});
-
-	test('rejects a bare name with an unescaped comma, which would split the DN', () => {
-		assert.ok(validatePublisherInput('Contoso, Inc'));
-	});
-
-	test('rejects DN components that are not KEY=VALUE', () => {
-		assert.ok(validatePublisherInput('CN=Contoso, Ltd'));
-		assert.ok(validatePublisherInput('CN=Contoso, O='));
-		assert.ok(validatePublisherInput('=Contoso'));
-		assert.ok(validatePublisherInput('CN=Contoso,,C=US'));
 	});
 });
 

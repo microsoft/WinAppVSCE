@@ -96,63 +96,6 @@ export function decideCertGenerateOutcome(
 	return { kind: 'failed', message: parseWinappErrorMessage(output) };
 }
 
-/**
- * Validate a publisher entered by hand when the project has no manifest.
- *
- * Accepts either a bare name (the CLI wraps it as `CN=<name>`) or a full
- * distinguished name. Returns an error message for the input box, or
- * `undefined` when the value is acceptable.
- */
-export function validatePublisherInput(value: string): string | undefined {
-	const trimmed = value.trim();
-
-	if (!trimmed) {
-		return 'Enter a publisher name, for example Contoso or CN=Contoso.';
-	}
-
-	// Backslash escapes are an RFC 2253 feature that the packaging schema's
-	// ST_Publisher_2010_v2 pattern does not accept, so a publisher containing
-	// one can never match a manifest. Rejecting it here keeps this validator
-	// consistent with manifest-validator.ts rather than steering the user
-	// towards a value the manifest editor would flag as an error.
-	if (trimmed.includes('\\')) {
-		return 'Remove the backslash — Windows packaging does not accept escape sequences in a publisher name.';
-	}
-
-	if (!trimmed.includes('=')) {
-		// A bare name is wrapped as CN=<name> by the CLI, so an unescaped comma
-		// would be read as an RDN separator and produce a malformed DN.
-		if (trimmed.includes(',')) {
-			return 'Remove the comma, or enter a full distinguished name (for example CN=Contoso Inc, O=Contoso).';
-		}
-		return undefined;
-	}
-
-	const components = trimmed.split(',');
-	for (const component of components) {
-		const part = component.trim();
-		if (!part) {
-			return 'Remove the empty name component — each part of a distinguished name must be KEY=VALUE.';
-		}
-
-		const separator = part.indexOf('=');
-		if (separator === -1) {
-			return `Write "${part}" as KEY=VALUE, for example CN=${part}.`;
-		}
-
-		const key = part.slice(0, separator).trim();
-		const componentValue = part.slice(separator + 1).trim();
-		if (!key) {
-			return 'Add the attribute name before "=", for example CN=Contoso.';
-		}
-		if (!componentValue) {
-			return `Add a value after "${key}=", for example ${key}=Contoso.`;
-		}
-	}
-
-	return undefined;
-}
-
 // ──────────────────────────────────────────────────────
 // Certificate generation flow
 //
