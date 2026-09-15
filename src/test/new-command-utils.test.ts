@@ -144,11 +144,23 @@ describe('describeNewFailure', () => {
 		assert.ok(message.includes('--force'));
 	});
 
-	it('falls back to a per-exit-code message when the CLI reported none', () => {
-		assert.ok(describeNewFailure(3, undefined).includes('.NET SDK'));
-		assert.ok(describeNewFailure(4, undefined).includes('template pack'));
-		assert.ok(describeNewFailure(5, undefined).length > 0);
-		assert.ok(describeNewFailure(null, undefined).length > 0);
+	it('falls back to whatever the CLI printed when there is no JSON payload', () => {
+		const message = describeNewFailure(3, undefined, '  The .NET SDK 8.0 or later is required.\n');
+		assert.equal(message, 'The .NET SDK 8.0 or later is required.');
+	});
+
+	it('does not surface raw output when a payload parsed but carried no error', () => {
+		// The output here is the JSON blob itself, which is not a user-facing message.
+		const message = describeNewFailure(5, { created: false }, '{"Created":false}');
+		assert.equal(message, 'The WinApp CLI failed to create the app (exit code 5).');
+	});
+
+	it('names the exit code when the CLI said nothing at all', () => {
+		assert.equal(
+			describeNewFailure(4, undefined, '   '),
+			'The WinApp CLI failed to create the app (exit code 4).'
+		);
+		assert.ok(describeNewFailure(null, undefined).includes('unknown'));
 	});
 });
 
