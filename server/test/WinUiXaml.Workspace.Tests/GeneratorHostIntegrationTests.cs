@@ -96,6 +96,42 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
             string.Concat(generated.Select(File.ReadAllText)));
     }
 
+    /// <summary>
+    /// M6: the host was told which sources to compile but not how, so it guessed a library with
+    /// unsafe on and nullable <em>disabled</em>. Nullable is the guess that shows: generators
+    /// annotate what they emit from the nullable context -- <c>[ObservableProperty]</c> is the
+    /// common case -- so the guess decided whether a generated property came back as
+    /// <c>string</c> or <c>string?</c>, and that is the type <c>{x:Bind}</c> is checked against.
+    /// The generated members are all present either way, which is what made it hard to see.
+    /// </summary>
+    [Fact]
+    public void Run_CompilesGeneratorsAgainstTheProjectsRealCompilationOptions()
+    {
+        var project = CreateProject("OptionsProbe");
+        var analyzer = CompileCompilationGenerator(
+            project,
+            """
+            var options = (Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions)ctx.Options;
+            spc.AddSource(
+                "Options.g.cs",
+                "// nullable=" + options.NullableContextOptions
+                    + " kind=" + options.OutputKind
+                    + " unsafe=" + options.AllowUnsafe
+                    + System.Environment.NewLine
+                    + "public static class OptionsMarker { }");
+            """);
+
+        // Every one of these differs from the value the host used to hardcode, so a regression
+        // cannot pass by coincidence.
+        var generated = RunHost(project, analyzer, "/nullable:enable", "/target:exe", "/unsafe-");
+
+        Assert.NotEmpty(generated);
+        var text = string.Concat(generated.Select(File.ReadAllText));
+        Assert.Contains("nullable=Enable", text);
+        Assert.Contains("kind=ConsoleApplication", text);
+        Assert.Contains("unsafe=False", text);
+    }
+
     private string CreateProject(string name)
     {
         var directory = Path.Combine(_root, name);
@@ -113,14 +149,19 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
             "is_global = true" + Environment.NewLine + body + Environment.NewLine);
     }
 
-    private ImmutableArray<string> RunHost(string projectDirectory, string analyzerPath)
+    private ImmutableArray<string> RunHost(
+        string projectDirectory,
+        string analyzerPath,
+        params string[] extraArguments)
     {
         var arguments = new List<string>
         {
             "/analyzer:" + analyzerPath,
             "/out:Probe.dll",
-            Path.Combine(projectDirectory, "Program.cs"),
         };
+
+        arguments.AddRange(extraArguments);
+        arguments.Add(Path.Combine(projectDirectory, "Program.cs"));
 
         var globalConfig = Path.Combine(projectDirectory, "generated.globalconfig");
         if (File.Exists(globalConfig))
@@ -145,11 +186,25 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
     }
 
     /// <summary>
+    /// A generator observing the analyzer config, which is where <c>build_property.*</c> arrives.
+    /// </summary>
+    private string CompileGenerator(string projectDirectory, string body) =>
+        EmitGenerator(projectDirectory, "AnalyzerConfigOptionsProvider", body);
+
+    /// <summary>
+    /// Same as <see cref="CompileGenerator"/>, but the generator observes the
+    /// <see cref="Compilation"/> rather than the analyzer config, which is where the compilation
+    /// options the host chose are visible.
+    /// </summary>
+    private string CompileCompilationGenerator(string projectDirectory, string body) =>
+        EmitGenerator(projectDirectory, "CompilationProvider", body);
+
+    /// <summary>
     /// Compiles a generator to a DLL the host can <c>Assembly.LoadFrom</c>. Building it in memory
     /// keeps the suite free of a NuGet restore while still exercising a genuine analyzer
     /// reference, which is what the short-circuit keys on.
     /// </summary>
-    private string CompileGenerator(string projectDirectory, string body)
+    private string EmitGenerator(string projectDirectory, string provider, string body)
     {
         var source = $$"""
             using Microsoft.CodeAnalysis;
@@ -159,7 +214,7 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
             {
                 public void Initialize(IncrementalGeneratorInitializationContext context)
                 {
-                    var options = context.AnalyzerConfigOptionsProvider;
+                    var options = context.{{provider}};
                     context.RegisterSourceOutput(options, static (spc, ctx) =>
                     {
             {{body}}
