@@ -1,14 +1,9 @@
 import * as path from 'path';
 
 /**
- * Pure helpers backing the `winapp.new` command (scaffold a WinUI app from an
- * official Windows App SDK template). These are kept free of the VS Code API so
- * they can be unit-tested directly (see `src/test/new-command-utils.test.ts`);
- * the VS Code-facing wiring lives in `extension.ts`.
- *
- * Several behaviours here intentionally mirror `NewCommand.cs` in
- * microsoft/winappcli. Where that is the case the CLI symbol is named in the
- * doc comment so the two can be kept in step.
+ * Pure helpers backing the `winapp.new` command, kept free of the VS Code API so
+ * they can be unit-tested directly. Several behaviours intentionally mirror
+ * `NewCommand.cs` in microsoft/winappcli; the CLI symbol is named where so.
  */
 
 /** Default project name, matching the CLI's `DefaultNameFor` for project templates. */
@@ -19,8 +14,7 @@ export const DEFAULT_TEMPLATE_SHORT_NAME = 'winui';
 
 /**
  * Maximum project name length. Mirrors the CLI's `MaxProjectNameLength`:
- * 255 minus `".csproj".Length`, so the generated project file still fits within
- * a single path component.
+ * 255 minus `".csproj".Length`, so the project file fits one path component.
  */
 export const MAX_PROJECT_NAME_LENGTH = 255 - 7;
 
@@ -73,19 +67,13 @@ const RESERVED_DEVICE_NAMES = new Set([
 
 /**
  * Characters Windows rejects in a file name. Mirrors .NET's
- * `Path.GetInvalidFileNameChars()` (control characters plus the reserved
- * punctuation), which is what the CLI validates against.
+ * `Path.GetInvalidFileNameChars()`, which is what the CLI validates against.
  */
 const INVALID_FILE_NAME_CHARS = /[\u0000-\u001f"<>|:*?\\/]/;
 
 /**
- * Validate a project name the same way the CLI's `IsValidProjectName` does.
- *
- * The name becomes both the output directory (`./<name>`) and the `dotnet new`
- * project name, so anything that could escape the target directory or produce
- * an unusable project file is rejected. Validating here means the user is
- * corrected in the input box rather than after a round trip that would come
- * back as exit code 2.
+ * Validate a project name as the CLI's `IsValidProjectName` does, so the user is
+ * corrected in the input box rather than via exit 2.
  *
  * @returns An error message to show in the input box, or `undefined` when valid.
  */
@@ -127,15 +115,9 @@ export function validateProjectName(name: string | undefined): string | undefine
 }
 
 /**
- * Returns the first available variant of `baseName` — `Name`, `Name1`, `Name2`,
- * … — where a name is "taken" when a directory of that name already exists in
- * the parent.
- *
- * This ports the CLI's `EnsureAvailableName`. The CLI applies it only to names
- * it defaulted or prompted for; an explicit `--name` (which this extension
- * always passes) is honoured verbatim and collides into an exit-2 failure. So
- * the extension has to do the numbering itself to offer the same recovery a
- * terminal user gets for free.
+ * Returns the first available variant of `baseName` — `Name`, `Name1`, … — where
+ * a name is taken when a directory of that name exists in the parent. Ports the
+ * CLI's `EnsureAvailableName`, which it skips for an explicit `--name`.
  *
  * @param baseName The requested name.
  * @param directoryExists Predicate reporting whether a path is an existing directory.
@@ -175,9 +157,8 @@ export function ensureAvailableName(
 
 /**
  * How the user chose to handle an existing, non-empty target directory.
- *
- * `use-available` takes the auto-numbered name; `create-anyway` keeps the
- * requested name and scaffolds over the existing contents with `--force`.
+ * `use-available` takes the auto-numbered name; `create-anyway` scaffolds over
+ * the existing contents with `--force`.
  */
 export type NonEmptyTargetChoice = 'use-available' | 'create-anyway';
 
@@ -190,10 +171,9 @@ export interface ScaffoldTarget {
 }
 
 /**
- * Everything {@link resolveScaffoldTarget} needs from the outside world.
- *
- * Kept as an interface so the decision logic can be tested without a real file
- * system or VS Code, matching the `SignFlowAdapter` pattern in `sign-utils.ts`.
+ * Everything {@link resolveScaffoldTarget} needs from the outside world. An
+ * interface so the logic is testable without a file system or VS Code, matching
+ * the `SignFlowAdapter` pattern in `sign-utils.ts`.
  */
 export interface ScaffoldTargetAdapter {
 	/** Whether a path exists, as either a file or a directory. */
@@ -210,15 +190,9 @@ export interface ScaffoldTargetAdapter {
 }
 
 /**
- * Decide the final project name and whether `--force` is needed, given a target
- * directory that may already exist.
- *
- * Mirrors the CLI's preflight: an existing but *empty* directory is fine, while
- * a non-empty one is refused unless `--force` is passed. The difference is that
- * the CLI can only report this as an exit-2 failure once the whole invocation
- * is over, whereas checking here lets us also offer the auto-numbered name the
- * CLI gives users who let it pick the name. (`EnsureAvailableName` never runs
- * for an explicit `--name`, which this extension always passes.)
+ * Decide the final project name and whether `--force` is needed. Mirrors the
+ * CLI's preflight, but checking here lets us offer the auto-numbered name
+ * instead of reporting exit 2 after the fact.
  *
  * @returns The resolved name and force flag, or `undefined` if the user cancelled.
  */
@@ -336,12 +310,9 @@ export function parseScaffoldResult(output: string): ScaffoldResult | undefined 
 }
 
 /**
- * Extract the JSON object from captured CLI output.
- *
- * The CLI writes a single JSON object to stdout under `--json`, but progress
- * or warning text can still precede it on stderr, which the capture helper
- * interleaves into the same buffer. Anchoring on the first `{` and parsing to
- * the end tolerates that without needing the CLI to be silent.
+ * Extract the JSON object from captured CLI output. Progress or warning text can
+ * precede the payload on stderr, which the capture helper interleaves into the
+ * same buffer, so anchor on the first `{` rather than requiring silence.
  */
 function extractJsonObject(output: string): Record<string, unknown> | undefined {
 	if (!output) {
@@ -401,11 +372,9 @@ export function formatTemplateTags(tags: string): string {
 }
 
 /**
- * Map a `winapp new` exit code and JSON payload onto a user-facing message.
- *
- * The CLI's own `Error` text is preferred whenever it is present: it is already
- * actionable (e.g. "Use --force to scaffold into it anyway") and keeping it
- * verbatim means the extension doesn't have to track the CLI's wording.
+ * Map a `winapp new` exit code and JSON payload onto a user-facing message. The
+ * CLI's own `Error` text is preferred when present: it is already actionable and
+ * keeps the extension from tracking the CLI's wording.
  */
 export function describeNewFailure(
 	exitCode: number | null,
@@ -444,9 +413,8 @@ export interface TemplateListAttempt {
 
 /**
  * A template listing plus whether this run had to install the pack.
- *
- * `freshlyInstalled` suppresses the installed-versus-latest question: when the
- * listing just fetched the newest pack, both answers name the same version.
+ * `freshlyInstalled` suppresses the installed-versus-latest question, since both
+ * answers would name the same version.
  */
 export interface TemplateLoad {
 	list: TemplateListResult;
@@ -454,11 +422,9 @@ export interface TemplateLoad {
 }
 
 /**
- * Everything {@link loadWinUiTemplates} needs from the outside world.
- *
- * Kept as an interface so the listing state machine can be tested without
- * spawning the CLI or installing a template pack, matching the
- * `SignFlowAdapter` pattern in `sign-utils.ts`.
+ * Everything {@link loadWinUiTemplates} needs from the outside world. An
+ * interface so the state machine is testable without spawning the CLI or
+ * installing a pack, matching `SignFlowAdapter` in `sign-utils.ts`.
  */
 export interface TemplateLoadAdapter {
 	/** Run one `winapp new --list --json` attempt without reporting failures. */
@@ -472,14 +438,9 @@ export interface TemplateLoadAdapter {
 }
 
 /**
- * Load the WinUI template list, installing the pack only when necessary.
- *
- * The default path probes `--template-version installed` first because the
- * unpinned listing asks the package feed whether a newer pack exists on every
- * run, which costs seconds. The unpinned listing is still the fallback, but
- * only for the one failure it can actually fix: the first run, where no pack is
- * installed yet and the probe reports that specifically. Any other probe
- * failure is reported as-is rather than retried.
+ * Load the WinUI template list, installing the pack only when necessary. Probes
+ * `--template-version installed` first, since the unpinned listing hits the feed
+ * on every run. Only exit 4 (no pack) falls through to the unpinned retry.
  *
  * @param templateVersion When `'latest'`, installs the newest template pack
  *                        before listing. Omitted on the normal path.
@@ -499,14 +460,10 @@ export async function loadWinUiTemplates(
 			return { list: local.parsed.value, freshlyInstalled: false };
 		}
 		if (local.code !== NEW_EXIT.packFailed) {
-			// Only "no pack installed" justifies retrying unpinned. Every other
-			// failure — no .NET SDK, an unreadable payload, or the CLI failing to
-			// start at all — would fail again in exactly the same way, except the
-			// retry announces itself as "Installing the WinUI templates...",
-			// promising work it can never do before showing the same error.
-			//
-			// Prefer the CLI's own message where there is one: it distinguishes
-			// "no SDK found" from "SDK too old" and names the required version.
+			// Only "no pack installed" justifies retrying unpinned; anything else
+			// fails identically while the retry misleadingly announces itself as
+			// "Installing the WinUI templates...". Prefer the CLI's own wording,
+			// which distinguishes "no SDK" from "SDK too old".
 			const detail = local.parsed && !local.parsed.ok
 				? local.parsed.error
 				: describeNewFailure(local.code, undefined);
@@ -542,11 +499,9 @@ export async function loadWinUiTemplates(
 }
 
 /**
- * Build the argument list for a `winapp new` scaffold run.
- *
- * `--use-defaults` and `--json` are always passed: the CLI forces
- * `--use-defaults` under `--json` anyway, and passing it explicitly documents
- * that this invocation must never try to prompt in a non-TTY child process.
+ * Build the argument list for a `winapp new` scaffold run. `--use-defaults` and
+ * `--json` are always passed; the CLI forces the former under the latter, and
+ * passing it explicitly documents that this run must never prompt.
  */
 export function buildNewArgs(options: {
 	template: string;

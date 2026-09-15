@@ -1,32 +1,7 @@
 /**
- * E2E tests for the `winapp.new` ("WinApp: Create WinUI App") QuickPick flow.
- *
- * Test 1 — Template QuickPick:
- *   Opens VS Code in an empty workspace, runs "WinApp: Create WinUI App", and
- *   asserts that a template QuickPick appears listing the official WinUI
- *   templates (blank app, NavigationView shell, MVVM, class library, …).
- *
- * Test 2 — Name input:
- *   Selects a template and asserts the name InputBox appears prefilled with the
- *   CLI's default, and that an invalid name is rejected inline rather than
- *   reaching the CLI.
- *
- * Test 3 — Cancel:
- *   Escapes out of the template QuickPick and verifies nothing further happens
- *   (no name prompt, no folder dialog).
- *
- * These tests drive the real `winapp new --list --json`, but only ever the
- * purely local `--template-version installed` path: the suite skips itself
- * unless a WinUI template pack is already on the machine. Without that guard a
- * test run on a clean *developer* machine would fall through to the unpinned
- * listing, which installs the pack machine-wide for every tool that uses
- * `dotnet new` — a side effect a test must never cause.
- *
- * CI installs the pack explicitly before running E2E (see the "Install WinUI
- * template pack" step in `.github/workflows/build.yml`), so the guard passes
- * there and these tests always run in PR validation. The runner is ephemeral,
- * so installing on it is free of the side effect that makes it unacceptable
- * locally.
+ * E2E tests for the `winapp.new` QuickPick flow: template picker, name input,
+ * and cancelling. Skips unless a template pack is already installed, so a run
+ * never installs one machine-wide; CI installs it first (see build.yml).
  */
 
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
@@ -46,12 +21,9 @@ const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
     : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
 
 /**
- * Whether a WinUI template pack is already installed on this machine.
- *
- * Probed with `--template-version installed`, which is a purely local query —
- * it reports what is on disk and never contacts a feed or installs anything.
- * Run from a temp directory so a `global.json` in the repo can't make a present
- * SDK look missing.
+ * Whether a WinUI template pack is already installed. `--template-version
+ * installed` is a purely local query. Run from temp so a repo `global.json`
+ * can't make a present SDK look missing.
  */
 function hasInstalledTemplatePack(): boolean {
     try {
@@ -74,11 +46,9 @@ const TEMPLATE_LOAD_TIMEOUT = 120_000;
 const pendingDirectories = new Set<string>();
 
 /**
- * Create a temp directory that is swept up after the whole spec finishes.
- *
- * Cleanup is deferred rather than done per test because VS Code can still hold
- * a handle on the workspace (or its user-data dir) for a moment after the
- * Electron app closes, which makes an immediate delete fail.
+ * Create a temp directory swept up after the whole spec finishes. Deferred
+ * rather than per-test because VS Code can hold a handle on the workspace for a
+ * moment after the Electron app closes, which makes an immediate delete fail.
  */
 function makeTempDirectory(prefix: string): string {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -152,18 +122,14 @@ function quickInputPlaceholder(page: Page): Promise<string | null> {
 }
 
 /**
- * Run the command and advance past the template-pack QuickPick.
- *
- * The suite only runs when a pack is installed, so this step is expected — but
- * it keys off the placeholder rather than assuming, and picks the
+ * Run the command and advance past the template-pack QuickPick, picking the
  * non-destructive "use installed" option so the run never changes the machine.
  */
 async function openTemplatePicker(page: Page): Promise<void> {
     await runCommandPalette(page, 'WinApp: Create WinUI App');
 
-    // Poll the placeholder rather than waiting on list rows: the Command Palette
-    // has rows of its own, so a row-visibility wait succeeds instantly while the
-    // palette is still open and the CLI is still being invoked.
+    // Poll the placeholder rather than list rows: the Command Palette has rows of
+    // its own, so a row-visibility wait succeeds instantly while it's still open.
     await expect.poll(
         () => quickInputPlaceholder(page),
         { timeout: TEMPLATE_LOAD_TIMEOUT, message: 'template or template-pack QuickPick never appeared' }
