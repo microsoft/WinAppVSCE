@@ -149,6 +149,10 @@ export function getProjectContextStatusPresentation(
       // Reporting it as an outstanding demand is the same conflation the build-side wording
       // above was written to avoid, and it would also be the only place left where the user is
       // told to run a command the extension is at that moment running.
+      //
+      // The instruction is still what a developer needs once the restore *finishes* without
+      // fixing the condition -- a restore that failed leaves the demand outstanding, and the bar
+      // outlives the error notification that reported it.
       if (context.restoreInFlight) {
         return {
           text: "$(sync~spin) WinApp: restoring packages",

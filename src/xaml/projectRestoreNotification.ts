@@ -22,7 +22,9 @@ export interface ProjectRestoreNotificationHost {
  * so the prompt it replaces had exactly one useful answer -- and now that the design-time build
  * builds the project's references, an unrestored reference costs the user the types in it too.
  * `dotnet restore` writes to `obj/`, which is build output rather than anything the user tracks,
- * and consent already exists at a coarser boundary: an untrusted workspace is never restored.
+ * and consent already exists at a coarser boundary: the language server does not start at all in
+ * an untrusted workspace, so this is never reached there. The trust check below is defence in
+ * depth on a security boundary, not the gate the user experiences.
  *
  * That is where the Roslyn C# language server settled (`dotnet_enable_automatic_restore`, on by
  * default) after shipping this same prompt on OmniSharp.

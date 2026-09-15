@@ -235,8 +235,9 @@ test("reports the restore as work in flight while the extension is running it", 
     }
   );
 
-  // Once it finishes -- or when the workspace is untrusted and it never starts -- the state is
-  // an outstanding demand again, so the instruction comes back.
+  // Once it finishes without fixing the condition -- a restore that failed -- the state is an
+  // outstanding demand again, so the instruction comes back. The error notification that reported
+  // the failure is transient; the bar is what the developer still sees a minute later.
   assert.match(
     getProjectContextStatusPresentation(
       {
