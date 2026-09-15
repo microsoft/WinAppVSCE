@@ -421,18 +421,14 @@ describe('executeCertGenerateFlow', () => {
 
 describe('resolveCertPublisherSourceDecision', () => {
 	function adapterFor(
-		manifests: string[] | undefined,
+		manifest: string | undefined,
 		overrides: Partial<CertPublisherSourceAdapter> = {}
 	): { adapter: CertPublisherSourceAdapter; calls: string[] } {
 		const calls: string[] = [];
 		const adapter: CertPublisherSourceAdapter = {
-			findManifests: async () => {
-				calls.push('findManifests');
-				return manifests;
-			},
-			pickManifest: async (paths) => {
-				calls.push('pickManifest');
-				return { kind: 'manifest', manifestPath: paths[0] };
+			findCanonicalManifest: async () => {
+				calls.push('findCanonicalManifest');
+				return manifest;
 			},
 			promptPublisher: async () => {
 				calls.push('promptPublisher');
@@ -443,116 +439,32 @@ describe('resolveCertPublisherSourceDecision', () => {
 		return { adapter, calls };
 	}
 
-	test('uses the only manifest without prompting', async () => {
-		const { adapter, calls } = adapterFor(['C:\\proj\\Package.appxmanifest']);
-		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), {
+	test('uses the project manifest without prompting', async () => {
+		const { adapter, calls } = adapterFor('C:\\proj\\Package.appxmanifest');
+		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter), {
 			kind: 'manifest',
 			manifestPath: 'C:\\proj\\Package.appxmanifest'
 		});
-		assert.deepEqual(calls, ['findManifests']);
+		assert.deepEqual(calls, ['findCanonicalManifest']);
 	});
 
-	test('offers a choice when the only manifest is not the primary one', async () => {
-		// A lone Store variant is not what the CLI would have inferred, so it is
-		// presented rather than silently adopted.
-		const { adapter, calls } = adapterFor(['C:\\proj\\Package.Store.appxmanifest']);
-		await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR);
-		assert.deepEqual(calls, ['findManifests', 'pickManifest']);
-	});
-
-	test('falls back to the publisher prompt when the picker is refused', async () => {
-		// The escape hatch: none of the candidates is the right manifest, so the
-		// user types a publisher instead of being forced to cancel.
-		const { adapter, calls } = adapterFor(
-			['C:\\proj\\Package.Store.appxmanifest', 'C:\\proj\\gen\\Template.appxmanifest'],
-			{ pickManifest: async () => ({ kind: 'manual' }) }
-		);
-
-		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), {
-			kind: 'publisher',
-			publisher: 'Contoso'
-		});
-		assert.deepEqual(calls, ['findManifests', 'promptPublisher']);
-	});
-
-	test('asks which manifest to use when several are found', async () => {
-		const { adapter, calls } = adapterFor(['C:\\a.appxmanifest', 'C:\\b.appxmanifest']);
-		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), {
-			kind: 'manifest',
-			manifestPath: 'C:\\a.appxmanifest'
-		});
-		assert.deepEqual(calls, ['findManifests', 'pickManifest']);
-	});
-
-	test('prompts for a publisher when there is no manifest', async () => {
-		const { adapter, calls } = adapterFor([]);
-		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), {
-			kind: 'publisher',
-			publisher: 'Contoso'
-		});
-		assert.deepEqual(calls, ['findManifests', 'promptPublisher']);
-	});
-
-	test('cancelling the manifest search stops the flow', async () => {
+	test('prompts for a publisher when the project has no manifest', async () => {
+		// Never substitute another manifest here: the CLI would have found nothing
+		// either, and a variant's publisher would not match the package.
 		const { adapter, calls } = adapterFor(undefined);
-		assert.equal(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), undefined);
-		assert.deepEqual(calls, ['findManifests']);
-	});
-
-	test('dismissing the manifest picker stops the flow', async () => {
-		const { adapter } = adapterFor(['C:\\a.appxmanifest', 'C:\\b.appxmanifest'], {
-			pickManifest: async () => undefined
+		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter), {
+			kind: 'publisher',
+			publisher: 'Contoso'
 		});
-		assert.equal(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), undefined);
+		assert.deepEqual(calls, ['findCanonicalManifest', 'promptPublisher']);
 	});
 
 	test('dismissing or blanking the publisher prompt stops the flow', async () => {
-		const dismissed = adapterFor([], { promptPublisher: async () => undefined });
-		assert.equal(await resolveCertPublisherSourceDecision(dismissed.adapter, PROJECT_DIR), undefined);
+		const dismissed = adapterFor(undefined, { promptPublisher: async () => undefined });
+		assert.equal(await resolveCertPublisherSourceDecision(dismissed.adapter), undefined);
 
-		const blank = adapterFor([], { promptPublisher: async () => '   ' });
-		assert.equal(await resolveCertPublisherSourceDecision(blank.adapter, PROJECT_DIR), undefined);
-	});
-
-	test('takes the primary manifest without asking when variants sit beside it', async () => {
-		// The real AI Dev Gallery layout: a Store variant next to the primary
-		// manifest, plus a code-generator template further down the tree. The
-		// project directory was already chosen, so none of this is worth a prompt.
-		const { adapter, calls } = adapterFor([
-			'C:\\proj\\ProjectGenerator\\Template\\Package-managed.appxmanifest',
-			'C:\\proj\\Package.appxmanifest',
-			'C:\\proj\\Package.Store.appxmanifest'
-		]);
-
-		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), {
-			kind: 'manifest',
-			manifestPath: 'C:\\proj\\Package.appxmanifest'
-		});
-		assert.deepEqual(calls, ['findManifests']);
-	});
-
-	test('still asks when no manifest in the project directory is canonically named', async () => {
-		// Two equally plausible candidates: guessing here could produce a
-		// certificate whose publisher never matches the package.
-		const { adapter, calls } = adapterFor([
-			'C:\\proj\\Package.Store.appxmanifest',
-			'C:\\proj\\Package.Sideload.appxmanifest'
-		]);
-
-		await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR);
-		assert.deepEqual(calls, ['findManifests', 'pickManifest']);
-	});
-
-	test('does not treat a nested canonical manifest as the project manifest', async () => {
-		// A canonical name in a subdirectory belongs to some other project (or a
-		// template), so it must not silently win over an explicit choice.
-		const { adapter, calls } = adapterFor([
-			'C:\\proj\\sub\\Package.appxmanifest',
-			'C:\\proj\\other\\Package.appxmanifest'
-		]);
-
-		await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR);
-		assert.deepEqual(calls, ['findManifests', 'pickManifest']);
+		const blank = adapterFor(undefined, { promptPublisher: async () => '   ' });
+		assert.equal(await resolveCertPublisherSourceDecision(blank.adapter), undefined);
 	});
 });
 
@@ -566,5 +478,38 @@ describe('selectCanonicalManifest', () => {
 
 	test('returns undefined when the project directory has no canonical manifest', () => {
 		assert.equal(selectCanonicalManifest(['C:\\proj\\Package.Store.appxmanifest'], PROJECT_DIR), undefined);
+	});
+
+	test('takes the primary manifest when variants sit beside it', () => {
+		// The real AI Dev Gallery layout: a Store variant next to the primary
+		// manifest. Only the canonical name is the one the CLI would have used.
+		assert.equal(
+			selectCanonicalManifest(
+				['C:\\proj\\Package.appxmanifest', 'C:\\proj\\Package.Store.appxmanifest'],
+				PROJECT_DIR
+			),
+			'C:\\proj\\Package.appxmanifest'
+		);
+	});
+
+	test('ignores a canonical manifest in a subdirectory', () => {
+		// A canonical name below the project directory belongs to some other
+		// project or a code-generator template, so it must not be adopted.
+		assert.equal(
+			selectCanonicalManifest(['C:\\proj\\ProjectGenerator\\Template\\Package.appxmanifest'], PROJECT_DIR),
+			undefined
+		);
+	});
+
+	test('returns undefined when two canonical manifests are ambiguous', () => {
+		// Guessing between them could produce a certificate whose publisher never
+		// matches the package, so the caller falls back to asking.
+		assert.equal(
+			selectCanonicalManifest(
+				['C:\\proj\\Package.appxmanifest', 'C:\\proj\\AppxManifest.xml'],
+				PROJECT_DIR
+			),
+			undefined
+		);
 	});
 });

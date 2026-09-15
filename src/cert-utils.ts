@@ -7,16 +7,6 @@
 
 import * as path from 'path';
 
-/**
- * Glob patterns for app manifests within a project directory.
- *
- * `AppxManifest.xml` is matched with a character class rather than a plain
- * lowercase name because `vscode.workspace.findFiles` is case-sensitive on
- * non-Windows hosts and the file is conventionally written `AppxManifest.xml`
- * or `Package.appxmanifest`.
- */
-export const MANIFEST_GLOBS = ['**/*.appxmanifest', '**/[Aa]ppx[Mm]anifest.xml'];
-
 /** Behaviour when the output certificate file already exists. */
 export type CertIfExists = 'error' | 'overwrite';
 
@@ -327,27 +317,17 @@ export type CertPublisherSource =
 	| { kind: 'publisher'; publisher: string };
 
 export interface CertPublisherSourceAdapter {
-	/** Locate candidate manifests. `undefined` means the search was cancelled. */
-	findManifests(): Promise<string[] | undefined>;
-
-	/** Ask which manifest to use. `undefined` means the user dismissed the picker. */
-	pickManifest(manifestPaths: string[]): Promise<PickManifestResult | undefined>;
+	/**
+	 * Locate the project's primary manifest, or `undefined` when it has none.
+	 *
+	 * Only the manifest the CLI itself would use qualifies; see
+	 * `selectCanonicalManifest`.
+	 */
+	findCanonicalManifest(): Promise<string | undefined>;
 
 	/** Ask for a publisher by hand. `undefined` means the user dismissed the prompt. */
 	promptPublisher(): Promise<string | undefined>;
 }
-
-/**
- * What the manifest picker came back with.
- *
- * `manual` is the escape hatch: none of the discovered manifests is the one the
- * user wants, so they type a publisher instead. Without it, a project whose
- * manifests are all variants or templates would offer no way forward except
- * cancelling.
- */
-export type PickManifestResult =
-	| { kind: 'manifest'; manifestPath: string }
-	| { kind: 'manual' };
 
 /**
  * Manifest file names that MSBuild treats as a project's primary manifest.
@@ -394,45 +374,25 @@ export function selectCanonicalManifest(
  * Decide where the certificate's publisher comes from.
  *
  * The certificate's publisher must match the manifest's `Identity/@Publisher`
- * or the resulting package will not install, so a manifest is always preferred
- * and passed explicitly via `--manifest`. Relying on the CLI's working-directory
- * inference instead is unsafe: with no manifest to find it silently falls back
- * to the current user name, producing a certificate that can never match.
+ * or the resulting package will not install, so the project's primary manifest
+ * is preferred and passed explicitly via `--manifest`. Relying on the CLI's
+ * working-directory inference instead is unsafe: with no manifest to find it
+ * silently falls back to the current user name, producing a certificate that
+ * can never match.
  *
- * @param projectDir The already-resolved project directory. The user has picked
- *   this by the time we get here, so finding the project's primary manifest
- *   inside it is not a second question worth asking.
+ * When the project has no primary manifest the user is asked for a publisher
+ * outright. No other manifest is offered as a substitute -- a Store variant, a
+ * generator template, or a sibling project's manifest carries a different
+ * publisher, and the CLI would not have considered any of them either.
+ *
  * @returns The resolved source, or `undefined` if the user cancelled.
  */
 export async function resolveCertPublisherSourceDecision(
-	adapter: CertPublisherSourceAdapter,
-	projectDir: string
+	adapter: CertPublisherSourceAdapter
 ): Promise<CertPublisherSource | undefined> {
-	const manifestPaths = await adapter.findManifests();
-
-	if (!manifestPaths) {
-		return undefined;
-	}
-
-	if (manifestPaths.length > 0) {
-		// Skip the question only for the project's primary manifest, which is the
-		// same file the CLI would have inferred from the working directory. Any
-		// other candidate -- a Store variant, a generator template, a manifest
-		// belonging to a sibling project -- is a real choice, so it is offered
-		// rather than assumed, even when it is the only one found.
-		const canonical = selectCanonicalManifest(manifestPaths, projectDir);
-		if (canonical) {
-			return { kind: 'manifest', manifestPath: canonical };
-		}
-
-		const picked = await adapter.pickManifest(manifestPaths);
-		if (!picked) {
-			return undefined;
-		}
-		if (picked.kind === 'manifest') {
-			return { kind: 'manifest', manifestPath: picked.manifestPath };
-		}
-		// Fall through: the user rejected every candidate and wants to type one.
+	const manifestPath = await adapter.findCanonicalManifest();
+	if (manifestPath) {
+		return { kind: 'manifest', manifestPath };
 	}
 
 	// No usable manifest: ask rather than letting the CLI fall back to the user

@@ -34,11 +34,11 @@ import {
 } from './sign-utils';
 import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
-	MANIFEST_GLOBS,
 	buildCertGenerateArgs,
 	decideCertGenerateOutcome,
 	executeCertGenerateFlow,
 	resolveCertPublisherSourceDecision,
+	selectCanonicalManifest,
 	validatePublisherInput,
 	type CertGenerateFlowAdapter,
 	type CertIfExists,
@@ -556,55 +556,23 @@ async function resolveCertPublisherSource(
 	projectDir: string
 ): Promise<CertPublisherSource | undefined> {
 	return resolveCertPublisherSourceDecision({
-		findManifests: () =>
-			Promise.resolve(
-				vscode.window.withProgress(
-					{
-						location: vscode.ProgressLocation.Notification,
-						title: 'Searching for app manifests...',
-						cancellable: true
-					},
-					(_progress, token) =>
-						findWorkspaceArtifactsWithCancellation(
-							projectDir,
-							MANIFEST_GLOBS,
-							token,
-							// Build output contains copies of the manifest; offering them
-							// would let the user pick a stale publisher.
-							BUILD_OUTPUT_EXCLUDE_GLOB
-						)
-				)
-			),
-
-		pickManifest: async (manifestPaths) => {
-			const MANUAL_ENTRY = 'manual';
-			const items: vscode.QuickPickItem[] = manifestPaths.map((manifestPath) => {
-				const relDir = path.dirname(path.relative(projectDir, manifestPath));
-				return {
-					label: path.basename(manifestPath),
-					description: relDir === '.' ? '' : relDir,
-					detail: manifestPath
-				};
-			});
-
-			// None of the candidates may be the right one -- they can be Store
-			// variants, generator templates, or another project's manifest -- so
-			// there has to be a way out other than cancelling the command.
-			items.push({
-				label: '$(edit) Enter a publisher name instead...',
-				detail: MANUAL_ENTRY
-			});
-
-			const picked = await vscode.window.showQuickPick(items, {
-				placeHolder: 'Select the manifest whose publisher the certificate must match'
-			});
-
-			if (!picked) {
+		findCanonicalManifest: async () => {
+			// A plain directory read, not a workspace glob: the CLI only ever looks
+			// for its manifest beside the project file, so recursing would surface
+			// templates and sibling projects it would never have used.
+			let entries: fs.Dirent[];
+			try {
+				entries = await fs.promises.readdir(projectDir, { withFileTypes: true });
+			} catch {
 				return undefined;
 			}
-			return picked.detail === MANUAL_ENTRY
-				? { kind: 'manual' }
-				: { kind: 'manifest', manifestPath: picked.detail as string };
+
+			return selectCanonicalManifest(
+				entries
+					.filter(entry => entry.isFile())
+					.map(entry => path.join(projectDir, entry.name)),
+				projectDir
+			);
 		},
 
 		promptPublisher: async () => {
@@ -625,7 +593,7 @@ async function resolveCertPublisherSource(
 			}
 			return trimmed;
 		}
-	}, projectDir);
+	});
 }
 
 /** Build the `cert generate` arguments for a resolved publisher source. */
