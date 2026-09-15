@@ -331,11 +331,23 @@ export interface CertPublisherSourceAdapter {
 	findManifests(): Promise<string[] | undefined>;
 
 	/** Ask which manifest to use. `undefined` means the user dismissed the picker. */
-	pickManifest(manifestPaths: string[]): Promise<string | undefined>;
+	pickManifest(manifestPaths: string[]): Promise<PickManifestResult | undefined>;
 
 	/** Ask for a publisher by hand. `undefined` means the user dismissed the prompt. */
 	promptPublisher(): Promise<string | undefined>;
 }
+
+/**
+ * What the manifest picker came back with.
+ *
+ * `manual` is the escape hatch: none of the discovered manifests is the one the
+ * user wants, so they type a publisher instead. Without it, a project whose
+ * manifests are all variants or templates would offer no way forward except
+ * cancelling.
+ */
+export type PickManifestResult =
+	| { kind: 'manifest'; manifestPath: string }
+	| { kind: 'manual' };
 
 /**
  * Manifest file names that MSBuild treats as a project's primary manifest.
@@ -402,24 +414,29 @@ export async function resolveCertPublisherSourceDecision(
 		return undefined;
 	}
 
-	if (manifestPaths.length === 1) {
-		return { kind: 'manifest', manifestPath: manifestPaths[0] };
-	}
-
-	if (manifestPaths.length > 1) {
-		// A project commonly carries more than one manifest (a Store variant, a
-		// template under a generator directory). Ask only when none of them is
-		// clearly the project's primary manifest.
+	if (manifestPaths.length > 0) {
+		// Skip the question only for the project's primary manifest, which is the
+		// same file the CLI would have inferred from the working directory. Any
+		// other candidate -- a Store variant, a generator template, a manifest
+		// belonging to a sibling project -- is a real choice, so it is offered
+		// rather than assumed, even when it is the only one found.
 		const canonical = selectCanonicalManifest(manifestPaths, projectDir);
 		if (canonical) {
 			return { kind: 'manifest', manifestPath: canonical };
 		}
 
 		const picked = await adapter.pickManifest(manifestPaths);
-		return picked ? { kind: 'manifest', manifestPath: picked } : undefined;
+		if (!picked) {
+			return undefined;
+		}
+		if (picked.kind === 'manifest') {
+			return { kind: 'manifest', manifestPath: picked.manifestPath };
+		}
+		// Fall through: the user rejected every candidate and wants to type one.
 	}
 
-	// No manifest: ask rather than letting the CLI fall back to the user name.
+	// No usable manifest: ask rather than letting the CLI fall back to the user
+	// name, which would silently produce a certificate that matches nothing.
 	const publisher = (await adapter.promptPublisher())?.trim();
 	return publisher ? { kind: 'publisher', publisher } : undefined;
 }

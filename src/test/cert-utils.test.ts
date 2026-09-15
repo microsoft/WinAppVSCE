@@ -432,7 +432,7 @@ describe('resolveCertPublisherSourceDecision', () => {
 			},
 			pickManifest: async (paths) => {
 				calls.push('pickManifest');
-				return paths[0];
+				return { kind: 'manifest', manifestPath: paths[0] };
 			},
 			promptPublisher: async () => {
 				calls.push('promptPublisher');
@@ -450,6 +450,29 @@ describe('resolveCertPublisherSourceDecision', () => {
 			manifestPath: 'C:\\proj\\Package.appxmanifest'
 		});
 		assert.deepEqual(calls, ['findManifests']);
+	});
+
+	test('offers a choice when the only manifest is not the primary one', async () => {
+		// A lone Store variant is not what the CLI would have inferred, so it is
+		// presented rather than silently adopted.
+		const { adapter, calls } = adapterFor(['C:\\proj\\Package.Store.appxmanifest']);
+		await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR);
+		assert.deepEqual(calls, ['findManifests', 'pickManifest']);
+	});
+
+	test('falls back to the publisher prompt when the picker is refused', async () => {
+		// The escape hatch: none of the candidates is the right manifest, so the
+		// user types a publisher instead of being forced to cancel.
+		const { adapter, calls } = adapterFor(
+			['C:\\proj\\Package.Store.appxmanifest', 'C:\\proj\\gen\\Template.appxmanifest'],
+			{ pickManifest: async () => ({ kind: 'manual' }) }
+		);
+
+		assert.deepEqual(await resolveCertPublisherSourceDecision(adapter, PROJECT_DIR), {
+			kind: 'publisher',
+			publisher: 'Contoso'
+		});
+		assert.deepEqual(calls, ['findManifests', 'promptPublisher']);
 	});
 
 	test('asks which manifest to use when several are found', async () => {

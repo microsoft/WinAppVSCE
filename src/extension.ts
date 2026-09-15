@@ -577,6 +577,7 @@ async function resolveCertPublisherSource(
 			),
 
 		pickManifest: async (manifestPaths) => {
+			const MANUAL_ENTRY = 'manual';
 			const items: vscode.QuickPickItem[] = manifestPaths.map((manifestPath) => {
 				const relDir = path.dirname(path.relative(projectDir, manifestPath));
 				return {
@@ -586,11 +587,24 @@ async function resolveCertPublisherSource(
 				};
 			});
 
+			// None of the candidates may be the right one -- they can be Store
+			// variants, generator templates, or another project's manifest -- so
+			// there has to be a way out other than cancelling the command.
+			items.push({
+				label: '$(edit) Enter a publisher name instead...',
+				detail: MANUAL_ENTRY
+			});
+
 			const picked = await vscode.window.showQuickPick(items, {
 				placeHolder: 'Select the manifest whose publisher the certificate must match'
 			});
 
-			return picked?.detail;
+			if (!picked) {
+				return undefined;
+			}
+			return picked.detail === MANUAL_ENTRY
+				? { kind: 'manual' }
+				: { kind: 'manifest', manifestPath: picked.detail as string };
 		},
 
 		promptPublisher: async () => {
@@ -598,7 +612,7 @@ async function resolveCertPublisherSource(
 			const lastPublisher = context.workspaceState.get<string>(key);
 			const publisher = await vscode.window.showInputBox({
 				title: 'Certificate publisher',
-				prompt: `No app manifest was found in ${path.basename(projectDir)}. Enter the publisher for the certificate — it must match your package's Identity/@Publisher.`,
+				prompt: `Enter the publisher for the certificate in ${path.basename(projectDir)} — it must match your package's Identity/@Publisher.`,
 				placeHolder: 'Contoso or CN=Contoso, O=Contoso Ltd, C=US',
 				value: lastPublisher,
 				ignoreFocusOut: true,
