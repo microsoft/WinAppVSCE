@@ -6,9 +6,6 @@ import { extractJsonObject } from './winapp-cli-utils';
  * `NewCommand.cs` in microsoft/winappcli; the CLI symbol is named where so.
  */
 
-/** Default project name, matching the CLI's `DefaultNameFor` for project templates. */
-export const DEFAULT_PROJECT_NAME = 'WinUIApp';
-
 /** A template entry as returned by `winapp new --list --json`. */
 export interface WinUiTemplate {
 	shortName: string;
