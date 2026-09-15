@@ -186,7 +186,7 @@ test.describe('winapp.new command — template selection', () => {
         }
     });
 
-    test('prompts for a name and rejects an invalid one inline', async () => {
+    test('prompts for a name and leaves validation to the CLI', async () => {
         const tmpDir = makeTempDirectory('winapp-new-e2e-');
 
         let app: ElectronApplication | undefined;
@@ -202,17 +202,16 @@ test.describe('winapp.new command — template selection', () => {
             await expect(input).toBeVisible({ timeout: 20_000 });
             await expect(input).toHaveValue('WinUIApp');
 
-            // A name with a path separator can never produce a valid project.
+            // The extension deliberately does not re-implement the CLI's name
+            // rules, so even a name the CLI rejects must not be blocked inline.
+            // The message node always holds the prompt, so assert it has not
+            // been replaced by a validation error.
             await page.keyboard.press('Control+a');
             await page.keyboard.type('bad/name', { delay: 30 });
+            await page.waitForTimeout(1_000);
             await expect(
                 page.locator('.quick-input-widget .quick-input-message')
-            ).toBeVisible({ timeout: 10_000 });
-
-            // Enter must not advance while the name is invalid.
-            await page.keyboard.press('Enter');
-            await page.waitForTimeout(1_000);
-            await expect(input).toBeVisible();
+            ).toContainText('Name for the new app');
 
             await page.keyboard.press('Escape');
         } finally {

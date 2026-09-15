@@ -55,7 +55,6 @@ import {
 	describeNewFailure,
 	DEFAULT_PROJECT_NAME,
 	formatTemplateTags,
-	isProjectTemplate,
 	isSdkMissingExit,
 	isNonEmptyOutputFailure,
 	loadWinUiTemplates as loadWinUiTemplatesCore,
@@ -997,19 +996,9 @@ async function resolveTemplatePack(
 	return latest?.list;
 }
 
-/**
- * Let the user pick a WinUI template. Item templates are excluded: they add a
- * file to an existing project rather than scaffolding one, so they need a
- * different flow. None ship in the pack today.
- */
+/** Let the user pick a WinUI template from the installed pack. */
 async function pickWinUiTemplate(templates: WinUiTemplate[]): Promise<WinUiTemplate | undefined> {
-	const projectTemplates = sortTemplates(templates.filter(isProjectTemplate));
-	if (projectTemplates.length === 0) {
-		vscode.window.showErrorMessage('No WinUI project templates are available.');
-		return undefined;
-	}
-
-	const items = projectTemplates.map((template) => ({
+	const items = sortTemplates(templates).map((template) => ({
 		label: template.displayName,
 		description: template.shortName,
 		detail: formatTemplateTags(template.tags),

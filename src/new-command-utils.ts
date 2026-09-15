@@ -17,8 +17,6 @@ export interface WinUiTemplate {
 	shortName: string;
 	aliases: string[];
 	displayName: string;
-	/** `"project"` or `"item"`. */
-	type: string;
 	tags: string;
 }
 
@@ -104,7 +102,6 @@ export function parseTemplateList(
 			displayName: typeof entry.DisplayName === 'string' && entry.DisplayName.length > 0
 				? entry.DisplayName
 				: shortName,
-			type: typeof entry.Type === 'string' ? entry.Type : '',
 			tags: typeof entry.Tags === 'string' ? entry.Tags : ''
 		});
 	}
@@ -139,11 +136,6 @@ export function parseScaffoldResult(output: string): ScaffoldResult | undefined 
 		error: typeof json.Error === 'string' && json.Error.trim().length > 0 ? json.Error.trim() : undefined,
 		templateVersion: typeof json.TemplateVersion === 'string' ? json.TemplateVersion : undefined
 	};
-}
-
-/** True when the template scaffolds a whole project (rather than a file into one). */
-export function isProjectTemplate(template: WinUiTemplate): boolean {
-	return !template.type || template.type.toLowerCase() !== 'item';
 }
 
 /**

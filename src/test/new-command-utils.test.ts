@@ -6,7 +6,6 @@ import {
 	describeNewFailure,
 	formatTemplateTags,
 	isNonEmptyOutputFailure,
-	isProjectTemplate,
 	isSdkMissingExit,
 	loadWinUiTemplates,
 	parseScaffoldResult,
@@ -45,7 +44,6 @@ function template(overrides: Partial<WinUiTemplate> = {}): WinUiTemplate {
 		shortName: 'winui',
 		aliases: [],
 		displayName: 'WinUI Blank App',
-		type: 'project',
 		tags: 'Windows/WinUI/Desktop/XAML',
 		...overrides
 	};
@@ -155,21 +153,6 @@ describe('sortTemplates', () => {
 		];
 		sortTemplates(input);
 		assert.equal(input[0].shortName, 'winui-lib');
-	});
-});
-
-describe('isProjectTemplate', () => {
-	it('treats project templates as projects', () => {
-		assert.equal(isProjectTemplate(template({ type: 'project' })), true);
-	});
-
-	it('treats item templates as non-projects', () => {
-		assert.equal(isProjectTemplate(template({ type: 'item' })), false);
-		assert.equal(isProjectTemplate(template({ type: 'Item' })), false);
-	});
-
-	it('treats an unknown type as a project so templates are never silently hidden', () => {
-		assert.equal(isProjectTemplate(template({ type: '' })), true);
 	});
 });
 
