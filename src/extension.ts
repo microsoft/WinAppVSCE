@@ -872,20 +872,13 @@ async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<str
 }
 
 // --- winapp new (Create WinUI App) ---------------------------------------
-// Unlike every other project command, this deliberately skips getWorkspacePath():
-// scaffolding is most useful with no folder open. Second intentional
-// no-workspace command, after winapp.certInfo.
+// Deliberately skips getWorkspacePath(): scaffolding is most useful with no
+// folder open. Second intentional no-workspace command, after winapp.certInfo.
 
 /**
- * Load the WinUI template list, installing the pack only when necessary. Doubles
- * as the prerequisite check: `--list` needs the .NET SDK and installs the pack
- * when absent. Probes `--template-version installed` first, since the unpinned
- * listing costs an ~8s feed round trip; only exit 4 (no pack) falls through to
- * the unpinned retry.
- *
- * Deliberately not cached: the pack is a machine-wide `dotnet new` install that
- * can change outside VS Code, and the CLI is the only authority on what is
- * installed, so a cache would report a stale version and template list.
+ * Load the WinUI template list, installing the pack only when necessary. Probes
+ * `--template-version installed` first to skip an ~8s feed round trip; only exit
+ * 4 (no pack) retries unpinned. Never cached: the pack changes outside VS Code.
  *
  * @param templateVersion When `'latest'`, installs the newest template pack
  *                        before listing. Omitted on the normal path.
@@ -914,8 +907,7 @@ async function loadWinUiTemplates(
 		if (local.code !== NEW_EXIT.packFailed) {
 			// Only "no pack installed" justifies retrying unpinned; anything else
 			// fails identically behind a progress message promising an install the
-			// retry can never do. Prefer the CLI's own wording, which distinguishes
-			// "no SDK" from "SDK too old".
+			// retry can never do. The CLI distinguishes "no SDK" from "SDK too old".
 			const detail = local.parsed && !local.parsed.ok
 				? local.parsed.error
 				: describeNewFailure(local.code, undefined);
@@ -1485,10 +1477,9 @@ export function activate(context: vscode.ExtensionContext) {
 			// from the workspace (or home when nothing is open).
 			const defaultFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
 
-			// Listing runs from a neutral directory: the pack is machine-wide, and a
-			// global.json here pinning an unavailable SDK would make the CLI report
-			// exit 3 even though the SDK is installed. The scaffold still runs from
-			// the destination, so that folder's global.json governs the TFM.
+			// Listing runs from a neutral directory: a global.json here pinning an
+			// unavailable SDK would make the CLI report exit 3 even though the SDK
+			// is installed. The scaffold still runs from the destination.
 			const listingCwd = os.tmpdir();
 
 			const initialLoad = await loadWinUiTemplates(extensionPath, listingCwd);
