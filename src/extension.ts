@@ -56,12 +56,12 @@ import {
 	DEFAULT_PROJECT_NAME,
 	isSdkMissingExit,
 	isNonEmptyOutputFailure,
-	loadWinUiTemplates as loadWinUiTemplatesCore,
+	NEW_EXIT,
 	parseScaffoldResult,
 	parseTemplateList,
+	type TemplateListAttempt,
 	type TemplateListResult,
 	type TemplateLoad,
-	type TemplateLoadAdapter,
 	type WinUiTemplate
 } from './new-command-utils';
 import {
@@ -877,26 +877,79 @@ async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<str
 // no-workspace command, after winapp.certInfo.
 
 /**
- * Run `winapp new --list --json`. Doubles as the prerequisite check: `--list`
- * needs the .NET SDK and installs the pack when absent. Pins
- * `--template-version installed` to avoid an ~8s feed round trip.
+ * Load the WinUI template list, installing the pack only when necessary. Doubles
+ * as the prerequisite check: `--list` needs the .NET SDK and installs the pack
+ * when absent. Probes `--template-version installed` first, since the unpinned
+ * listing costs an ~8s feed round trip; only exit 4 (no pack) falls through to
+ * the unpinned retry.
  *
  * Deliberately not cached: the pack is a machine-wide `dotnet new` install that
  * can change outside VS Code, and the CLI is the only authority on what is
  * installed, so a cache would report a stale version and template list.
+ *
+ * @param templateVersion When `'latest'`, installs the newest template pack
+ *                        before listing. Omitted on the normal path.
+ * @returns The parsed list, or `undefined` when the run failed or was cancelled
+ *          (the failure has already been reported to the user).
  */
 async function loadWinUiTemplates(
 	extensionPath: string,
 	cwd: string,
 	templateVersion?: 'latest'
 ): Promise<TemplateLoad | undefined> {
-	const adapter: TemplateLoadAdapter = {
-		listTemplates: (version, progressMessage) =>
-			runTemplateList(extensionPath, cwd, version, progressMessage),
-		reportFailure: (message, sdkMissing) => showNewFailure(message, sdkMissing)
-	};
+	if (templateVersion !== 'latest') {
+		const local = await runTemplateList(
+			extensionPath,
+			cwd,
+			'installed',
+			'Loading WinUI templates...'
+		);
 
-	return loadWinUiTemplatesCore(adapter, templateVersion);
+		if (local.cancelled) {
+			return undefined;
+		}
+		if (local.parsed?.ok && local.code === 0) {
+			return { list: local.parsed.value, freshlyInstalled: false };
+		}
+		if (local.code !== NEW_EXIT.packFailed) {
+			// Only "no pack installed" justifies retrying unpinned; anything else
+			// fails identically behind a progress message promising an install the
+			// retry can never do. Prefer the CLI's own wording, which distinguishes
+			// "no SDK" from "SDK too old".
+			const detail = local.parsed && !local.parsed.ok
+				? local.parsed.error
+				: describeNewFailure(local.code, undefined);
+			await showNewFailure(detail, isSdkMissingExit(local.code));
+			return undefined;
+		}
+		// Exit 4 from the `installed` probe means no pack is installed yet: fall
+		// through to the unpinned listing, which installs the latest on demand.
+	}
+
+	// Both routes here install the newest pack: an explicit 'latest' updates a
+	// stale one, and the unpinned listing fetches on demand when none exists.
+	const result = await runTemplateList(
+		extensionPath,
+		cwd,
+		templateVersion,
+		'Installing the latest WinUI templates...'
+	);
+
+	if (result.cancelled) {
+		return undefined;
+	}
+
+	if (!result.parsed?.ok || result.code !== 0) {
+		const message = result.parsed && !result.parsed.ok
+			? result.parsed.error
+			: 'Failed to load the WinUI templates.';
+		await showNewFailure(message, isSdkMissingExit(result.code));
+		return undefined;
+	}
+
+	// Reaching the unpinned listing on the default path means nothing was
+	// installed and the CLI has just fetched the newest pack.
+	return { list: result.parsed.value, freshlyInstalled: templateVersion !== 'latest' };
 }
 
 /**
@@ -909,7 +962,7 @@ async function runTemplateList(
 	cwd: string,
 	templateVersion: 'latest' | 'installed' | undefined,
 	progressMessage: string
-): Promise<{ cancelled: boolean; code: number | null; parsed?: ReturnType<typeof parseTemplateList> }> {
+): Promise<TemplateListAttempt> {
 	const result = await runWinappCapture(
 		extensionPath,
 		buildListArgs(templateVersion),
