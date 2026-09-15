@@ -10,11 +10,9 @@ import {
 	loadWinUiTemplates,
 	parseScaffoldResult,
 	parseTemplateList,
-	sortTemplates,
 	type TemplateListAttempt,
 	type TemplateListResult,
-	type TemplateLoadAdapter,
-	type WinUiTemplate
+	type TemplateLoadAdapter
 } from '../new-command-utils';
 
 /** A realistic `winapp new --list --json` payload (winappcli 0.6.1). */
@@ -38,16 +36,6 @@ const LIST_JSON = JSON.stringify({
 		}
 	]
 });
-
-function template(overrides: Partial<WinUiTemplate> = {}): WinUiTemplate {
-	return {
-		shortName: 'winui',
-		aliases: [],
-		displayName: 'WinUI Blank App',
-		tags: 'Windows/WinUI/Desktop/XAML',
-		...overrides
-	};
-}
 
 describe('parseTemplateList', () => {
 	it('parses a list payload', () => {
@@ -133,26 +121,6 @@ describe('parseScaffoldResult', () => {
 
 	it('returns undefined when there is no JSON payload', () => {
 		assert.equal(parseScaffoldResult('crashed before writing output'), undefined);
-	});
-});
-
-describe('sortTemplates', () => {
-	it('puts the CLI default template first, then sorts by display name', () => {
-		const sorted = sortTemplates([
-			template({ shortName: 'winui-navview', displayName: 'WinUI NavigationView App' }),
-			template({ shortName: 'winui-lib', displayName: 'WinUI Class Library' }),
-			template({ shortName: 'winui', displayName: 'WinUI Blank App' })
-		]);
-		assert.deepEqual(sorted.map((t) => t.shortName), ['winui', 'winui-lib', 'winui-navview']);
-	});
-
-	it('does not mutate the input', () => {
-		const input = [
-			template({ shortName: 'winui-lib', displayName: 'WinUI Class Library' }),
-			template({ shortName: 'winui', displayName: 'WinUI Blank App' })
-		];
-		sortTemplates(input);
-		assert.equal(input[0].shortName, 'winui-lib');
 	});
 });
 

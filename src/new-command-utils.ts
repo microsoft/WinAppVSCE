@@ -9,9 +9,6 @@ import { extractJsonObject } from './winapp-cli-utils';
 /** Default project name, matching the CLI's `DefaultNameFor` for project templates. */
 export const DEFAULT_PROJECT_NAME = 'WinUIApp';
 
-/** Short name of the template the CLI itself defaults to; sorted first in the picker. */
-export const DEFAULT_TEMPLATE_SHORT_NAME = 'winui';
-
 /** A template entry as returned by `winapp new --list --json`. */
 export interface WinUiTemplate {
 	shortName: string;
@@ -136,21 +133,6 @@ export function parseScaffoldResult(output: string): ScaffoldResult | undefined 
 		error: typeof json.Error === 'string' && json.Error.trim().length > 0 ? json.Error.trim() : undefined,
 		templateVersion: typeof json.TemplateVersion === 'string' ? json.TemplateVersion : undefined
 	};
-}
-
-/**
- * Order templates for the picker: the CLI's own default first, then the rest
- * alphabetically by display name so the list is stable between runs.
- */
-export function sortTemplates(templates: WinUiTemplate[]): WinUiTemplate[] {
-	return [...templates].sort((a, b) => {
-		const aIsDefault = a.shortName === DEFAULT_TEMPLATE_SHORT_NAME;
-		const bIsDefault = b.shortName === DEFAULT_TEMPLATE_SHORT_NAME;
-		if (aIsDefault !== bIsDefault) {
-			return aIsDefault ? -1 : 1;
-		}
-		return a.displayName.localeCompare(b.displayName);
-	});
 }
 
 /**
