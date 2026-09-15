@@ -70,7 +70,6 @@ import {
 	loadWinUiTemplates as loadWinUiTemplatesCore,
 	parseScaffoldResult,
 	parseTemplateList,
-	sortTemplates,
 	type TemplateListResult,
 	type TemplateLoad,
 	type TemplateLoadAdapter,
@@ -1171,7 +1170,7 @@ async function resolveTemplatePack(
 
 /** Let the user pick a WinUI template from the installed pack. */
 async function pickWinUiTemplate(templates: WinUiTemplate[]): Promise<WinUiTemplate | undefined> {
-	const items = sortTemplates(templates).map((template) => ({
+	const items = templates.map((template) => ({
 		label: template.displayName,
 		description: template.shortName,
 		detail: formatTemplateTags(template.tags),
