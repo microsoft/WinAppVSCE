@@ -1065,55 +1065,6 @@ async function resolveScaffoldTarget(
 	return resolveScaffoldTargetCore(adapter, parentDirectory, requestedName);
 }
 
-/**
- * Offer to open the freshly scaffolded project. When a workspace is already
- * open, reusing the window would tear down the extension host and discard the
- * user's work, so the non-destructive options lead.
- */
-async function offerToOpenScaffoldedProject(
-	projectPath: string,
-	projectName: string
-): Promise<void> {
-	const hasWorkspace = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
-	const projectUri = vscode.Uri.file(projectPath);
-
-	const openFolder = 'Open Folder';
-	const openInNewWindow = 'Open in New Window';
-	const addToWorkspace = 'Add to Workspace';
-	const reveal = 'Reveal in Explorer';
-
-	const actions = hasWorkspace
-		? [openInNewWindow, addToWorkspace, reveal]
-		: [openFolder, reveal];
-
-	const choice = await vscode.window.showInformationMessage(
-		`Created ${projectName} at ${projectPath}`,
-		...actions
-	);
-
-	if (choice === reveal) {
-		await vscode.commands.executeCommand('revealFileInOS', projectUri);
-		return;
-	}
-
-	if (choice === addToWorkspace) {
-		vscode.workspace.updateWorkspaceFolders(
-			vscode.workspace.workspaceFolders?.length ?? 0,
-			null,
-			{ uri: projectUri }
-		);
-		return;
-	}
-
-	if (choice === openFolder || choice === openInNewWindow) {
-		await vscode.commands.executeCommand(
-			'vscode.openFolder',
-			projectUri,
-			{ forceNewWindow: choice === openInNewWindow }
-		);
-	}
-}
-
 class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
 	private extensionPath: string;
 
@@ -1615,9 +1566,8 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			await offerToOpenScaffoldedProject(
-				scaffold.projectPath ?? outputDirectory,
-				scaffold.name ?? target.name
+			vscode.window.showInformationMessage(
+				`Created ${scaffold.name ?? target.name} at ${scaffold.projectPath ?? outputDirectory}`
 			);
 		})
 	);
