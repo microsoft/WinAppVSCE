@@ -47,7 +47,7 @@ namespace WinUiXaml.Workspace
                 ImmutableArray<string> projectReferences,
                 string? assemblyName,
                 string? targetFrameworks = null,
-                string? customAfterCommonTargets = null)
+                string? customAfterCSharpTargets = null)
             {
                 XamlFiles = xamlFiles;
                 ApplicationDefinition = applicationDefinition;
@@ -56,7 +56,7 @@ namespace WinUiXaml.Workspace
                 ProjectReferences = projectReferences;
                 AssemblyName = assemblyName;
                 TargetFrameworks = targetFrameworks;
-                CustomAfterCommonTargets = customAfterCommonTargets;
+                CustomAfterCSharpTargets = customAfterCSharpTargets;
             }
 
             public ImmutableArray<string> XamlFiles { get; }
@@ -74,11 +74,16 @@ namespace WinUiXaml.Workspace
             public string? TargetFrameworks { get; }
 
             /// <summary>
-            /// The project's own <c>CustomAfterMicrosoftCommonTargets</c>, if it sets one. The
-            /// shadow-reference repair claims that hook, so it has to re-import whatever the user
-            /// had there or the repair would silently delete part of their build.
+            /// The project's own <c>CustomAfterMicrosoftCSharpTargets</c>, if it sets one. The
+            /// design-time build claims that hook for its own targets file, and a global property
+            /// cannot be overridden by the project that declared it -- so without re-importing
+            /// this the user's targets would simply not run, and nothing would say so.
             /// </summary>
-            public string? CustomAfterCommonTargets { get; }
+            /// <remarks>
+            /// Read in the evaluation-only pass, which is the only pass where the answer is still
+            /// the project's: by the time the design-time build runs, the property is ours.
+            /// </remarks>
+            public string? CustomAfterCSharpTargets { get; }
         }
 
         /// <summary>
@@ -119,6 +124,7 @@ namespace WinUiXaml.Workspace
             return EvaluateAndCompileCore(
                 fullPath,
                 PinTargetFramework(fullPath, globalProperties, cancellationToken),
+                ReadUserAfterCSharpTargets(fullPath, globalProperties, cancellationToken),
                 cancellationToken);
         }
 
@@ -153,7 +159,7 @@ namespace WinUiXaml.Workspace
         /// Memo of each project's declared <c>TargetFrameworks</c>, keyed by the project path and
         /// the global properties it was evaluated under, and validated against a write stamp.
         /// </summary>
-        private static readonly ConcurrentDictionary<string, (string Stamp, string? Declared)>
+        private static readonly ConcurrentDictionary<string, (string Stamp, string? Declared, string? UserAfterCSharpTargets)>
             TargetFrameworkMemo = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
@@ -202,7 +208,28 @@ namespace WinUiXaml.Workspace
         internal static string? ReadDeclaredTargetFrameworks(
             string fullPath,
             IReadOnlyDictionary<string, string> globalProperties,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default) =>
+            ReadEvaluationMemo(fullPath, globalProperties, cancellationToken).Declared;
+
+        /// <summary>
+        /// The project's own <c>CustomAfterMicrosoftCSharpTargets</c>, so the design-time build can
+        /// re-import it from the targets file that displaces it.
+        /// </summary>
+        /// <remarks>
+        /// Shares the evaluation memo with the target-framework read rather than running its own
+        /// pass. On the ordinary path that read has already happened, so this costs nothing; the
+        /// question is answered by the same evaluation either way.
+        /// </remarks>
+        internal static string? ReadUserAfterCSharpTargets(
+            string fullPath,
+            IReadOnlyDictionary<string, string> globalProperties,
+            CancellationToken cancellationToken = default) =>
+            ReadEvaluationMemo(fullPath, globalProperties, cancellationToken).UserAfterCSharpTargets;
+
+        private static (string? Declared, string? UserAfterCSharpTargets) ReadEvaluationMemo(
+            string fullPath,
+            IReadOnlyDictionary<string, string> globalProperties,
+            CancellationToken cancellationToken)
         {
             fullPath = Path.GetFullPath(fullPath);
             var key = MemoKey(fullPath, globalProperties);
@@ -210,12 +237,13 @@ namespace WinUiXaml.Workspace
             if (TargetFrameworkMemo.TryGetValue(key, out var memo) &&
                 string.Equals(memo.Stamp, stamp, StringComparison.Ordinal))
             {
-                return memo.Declared;
+                return (memo.Declared, memo.UserAfterCSharpTargets);
             }
 
-            var declared = Evaluate(fullPath, globalProperties, cancellationToken).TargetFrameworks;
-            TargetFrameworkMemo[key] = (stamp, declared);
-            return declared;
+            var evaluation = Evaluate(fullPath, globalProperties, cancellationToken);
+            TargetFrameworkMemo[key] =
+                (stamp, evaluation.TargetFrameworks, evaluation.CustomAfterCSharpTargets);
+            return (evaluation.TargetFrameworks, evaluation.CustomAfterCSharpTargets);
         }
 
         /// <summary>
@@ -290,6 +318,7 @@ namespace WinUiXaml.Workspace
             ImmutableArray<string> UnresolvedProjectReferences) EvaluateAndCompileCore(
             string fullPath,
             IReadOnlyDictionary<string, string> globalProperties,
+            string? userAfterCSharpTargets,
             CancellationToken cancellationToken)
         {
             var projectPath = fullPath;
@@ -321,6 +350,16 @@ namespace WinUiXaml.Workspace
             if (designTimeTargets != null)
             {
                 arguments.Add($"-p:CustomAfterMicrosoftCSharpTargets={designTimeTargets}");
+
+                // Displacing the hook is not the same as taking it away. A global property cannot
+                // be overridden by the project that set it, so the user's own after-targets would
+                // simply stop running here -- silently, and only inside the design-time build,
+                // which is the hardest place to notice it. The targets file re-imports whatever
+                // was there.
+                if (!string.IsNullOrWhiteSpace(userAfterCSharpTargets))
+                {
+                    arguments.Add($"-p:WinUiXamlUserAfterCSharpTargets={userAfterCSharpTargets}");
+                }
 
                 // Marks this project as the one being analysed. It is listed in the targets file's
                 // remove-list, so a referenced project never sees it and is built normally.
@@ -539,7 +578,7 @@ namespace WinUiXaml.Workspace
             arguments.Add("-getProperty:ProjectAssetsFile");
             arguments.Add("-getProperty:AssemblyName");
             arguments.Add("-getProperty:TargetFrameworks");
-            arguments.Add("-getProperty:CustomAfterMicrosoftCommonTargets");
+            arguments.Add("-getProperty:CustomAfterMicrosoftCSharpTargets");
         }
 
         private static Evaluation ReadEvaluation(JsonElement root, string fullProjectPath)
@@ -571,7 +610,7 @@ namespace WinUiXaml.Workspace
                     .ToImmutableArray(),
                 ReadProperty(root, "AssemblyName"),
                 ReadProperty(root, "TargetFrameworks"),
-                ReadProperty(root, "CustomAfterMicrosoftCommonTargets"));
+                ReadProperty(root, "CustomAfterMicrosoftCSharpTargets"));
         }
 
 
@@ -902,6 +941,64 @@ namespace WinUiXaml.Workspace
             // win from parallelism and a great deal to lose from oversubscription.
             startInfo.ArgumentList.Add("-maxcpucount:1");
 
+            var (exitCode, combined, standardError) = RunProcess(startInfo, timeout, cancellationToken);
+
+            if (exitCode != 0)
+            {
+                var detail = standardError.Length > 0 ? standardError : combined;
+                // The client only prompts for a path it can recognize as a project, so reporting
+                // the working directory here silently dropped the prompt.
+                var reportedPath = projectPath ?? workingDirectory ?? string.Empty;
+                if (RoslynProjectWorkspace.IsMissingRestoreFailure(detail))
+                {
+                    throw new ProjectRestoreRequiredException(reportedPath);
+                }
+
+                // The markup compiler writes WMC1006 to stdout, so a non-empty stderr from an
+                // unrelated warning would otherwise hide it and turn an actionable "build once"
+                // into a generic MSBuild failure.
+                var diagnosticText = standardError.Length > 0 && !ReferenceEquals(detail, combined)
+                    ? detail + Environment.NewLine + combined
+                    : detail;
+                if (RoslynProjectWorkspace.ExtractFailedReferencedProjects(diagnosticText, reportedPath)
+                    is { Count: > 0 } failedReferences)
+                {
+                    throw new ProjectBuildRequiredException(reportedPath, failedReferences);
+                }
+
+                if (RoslynProjectWorkspace.IsUnbuiltProjectReferenceFailure(diagnosticText))
+                {
+                    throw new ProjectBuildRequiredException(
+                        reportedPath,
+                        RoslynProjectWorkspace.ExtractUnresolvedAssemblies(diagnosticText));
+                }
+
+                throw new MsBuildUnavailableException(
+                    $"MSBuild exited with code {exitCode}. {Truncate(detail)}");
+            }
+
+            return combined;
+        }
+
+        /// <summary>
+        /// Starts a child, drains both pipes, and waits for it under a timeout and a cancellation
+        /// token. Returns its exit code and output; throws <see cref="MsBuildUnavailableException"/>
+        /// when it could not be started or did not finish in time.
+        /// </summary>
+        /// <remarks>
+        /// Split out from the MSBuild-specific interpretation above so the process mechanics can be
+        /// tested without an SDK, a project, or a build. The three failures worth pinning -- a
+        /// child that outlives its timeout, a cancelled wait, and a child that floods a pipe -- all
+        /// end in a language server that appears to hang, and none of them can be reproduced
+        /// reliably by driving a real design-time build.
+        ///
+        /// The pipes are drained by the event-based readers rather than <c>ReadToEnd</c>: reading
+        /// one to EOF while the child is blocked writing the other deadlocks, and that read would
+        /// sit ahead of the wait, making the hang unbounded rather than capped.
+        /// </remarks>
+        internal static (int ExitCode, string StandardOutput, string StandardError) RunProcess(
+            ProcessStartInfo startInfo, TimeSpan timeout, CancellationToken cancellationToken)
+        {
             using var process = new Process { StartInfo = startInfo };
             var standardOutput = new StringBuilder();
             var standardError = new StringBuilder();
@@ -935,42 +1032,7 @@ namespace WinUiXaml.Workspace
             process.WaitForExit();
             cancellationToken.ThrowIfCancellationRequested();
 
-            var combined = standardOutput.ToString();
-            if (process.ExitCode != 0)
-            {
-                var detail = standardError.Length > 0 ? standardError.ToString() : combined;
-                // The client only prompts for a path it can recognize as a project, so reporting
-                // the working directory here silently dropped the prompt.
-                var reportedPath = projectPath ?? workingDirectory ?? string.Empty;
-                if (RoslynProjectWorkspace.IsMissingRestoreFailure(detail))
-                {
-                    throw new ProjectRestoreRequiredException(reportedPath);
-                }
-
-                // The markup compiler writes WMC1006 to stdout, so a non-empty stderr from an
-                // unrelated warning would otherwise hide it and turn an actionable "build once"
-                // into a generic MSBuild failure.
-                var diagnosticText = standardError.Length > 0 && !ReferenceEquals(detail, combined)
-                    ? detail + Environment.NewLine + combined
-                    : detail;
-                if (RoslynProjectWorkspace.ExtractFailedReferencedProjects(diagnosticText, reportedPath)
-                    is { Count: > 0 } failedReferences)
-                {
-                    throw new ProjectBuildRequiredException(reportedPath, failedReferences);
-                }
-
-                if (RoslynProjectWorkspace.IsUnbuiltProjectReferenceFailure(diagnosticText))
-                {
-                    throw new ProjectBuildRequiredException(
-                        reportedPath,
-                        RoslynProjectWorkspace.ExtractUnresolvedAssemblies(diagnosticText));
-                }
-
-                throw new MsBuildUnavailableException(
-                    $"MSBuild exited with code {process.ExitCode}. {Truncate(detail)}");
-            }
-
-            return combined;
+            return (process.ExitCode, standardOutput.ToString(), standardError.ToString());
         }
 
         private static void TryKill(Process process)

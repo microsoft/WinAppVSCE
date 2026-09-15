@@ -89,17 +89,16 @@ namespace WinUiXaml.Workspace
                 Path.GetTempPath(),
                 $"winuixaml-genreq-{Guid.NewGuid():N}.json");
 
+            ReclaimStaleOutput();
+
             try
             {
                 var manifest = Path.Combine(outputDirectory, "generated-files.txt");
 
-                // The manifest is the runner's only proof the host finished. A manifest left over
-                // from an earlier run would otherwise be read as this run's output, so a host that
-                // dies before it can clear its own directory would look like success and feed
-                // stale generated members into IntelliSense. Clearing it first makes its presence
-                // afterwards mean "this invocation wrote it".
-                TryDeleteManifest(manifest);
-
+                // No stale manifest is possible: the directory is unique to this invocation, so
+                // the file's presence afterwards already means "this run wrote it". An earlier
+                // version shared one directory per project and had to clear the manifest first to
+                // get that guarantee, which held only against the runs it could see.
                 File.WriteAllText(requestPath, BuildRequest(assemblyName, outputDirectory, commandLine));
                 var run = Invoke(host, requestPath, cancellationToken);
                 if (!run.Succeeded)
@@ -147,41 +146,103 @@ namespace WinUiXaml.Workspace
         }
 
         /// <summary>
-        /// Removes a previous run's completion marker. Failure is not fatal on its own: the host
-        /// clears the whole directory, and a manifest it cannot overwrite would fail the run.
-        /// </summary>
-        private static void TryDeleteManifest(string manifest)
-        {
-            try
-            {
-                if (File.Exists(manifest))
-                {
-                    File.Delete(manifest);
-                }
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-
-        /// <summary>
         /// Keys the output directory on the project path so concurrently loaded projects cannot
-        /// overwrite one another's generated files.
+        /// overwrite one another's generated files, and gives every invocation its own leaf so two
+        /// runs for the *same* project cannot either.
         /// </summary>
+        /// <remarks>
+        /// The per-invocation leaf is not defensive programming. One project reached twice
+        /// concurrently is ordinary: two roots that share a library each build that library in
+        /// their own graph, and those graphs are loaded independently. Both runs would then target
+        /// one directory, and the host clears that directory on entry -- so the second run's clear
+        /// lands between the first run's manifest read and its file reads, and the files vanish.
+        /// The reader tolerates that (it skips paths that no longer exist), which is what makes it
+        /// dangerous: the symptom is not an error, it is a project that quietly forgets its
+        /// generated members until something else invalidates it.
+        ///
+        /// A lock would close the in-process case and miss the one that motivates this: two VS
+        /// Code windows are two server processes sharing one <c>%TEMP%</c>. Separate directories
+        /// need no agreement between them.
+        /// </remarks>
         private static string OutputDirectoryFor(string projectPath)
         {
             var full = Path.GetFullPath(projectPath);
             byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(full.ToLowerInvariant()));
             var name = Convert.ToHexString(hash, 0, 8);
             return Path.Combine(
-                Path.GetTempPath(),
-                "winuixaml-generated",
-                $"{Path.GetFileNameWithoutExtension(full)}-{name}");
+                GeneratedRoot,
+                $"{Path.GetFileNameWithoutExtension(full)}-{name}",
+                Guid.NewGuid().ToString("N"));
         }
 
+        private static string GeneratedRoot => Path.Combine(Path.GetTempPath(), "winuixaml-generated");
+
+        /// <summary>How long an invocation's output directory is assumed to still be in use.</summary>
+        /// <remarks>
+        /// Generously past the host's own five-minute timeout. The files are read by the caller
+        /// after <see cref="Run"/> returns, so reclaiming on age rather than on completion is what
+        /// keeps a sweep from deleting a directory whose trees are still being parsed.
+        /// </remarks>
+        private static readonly TimeSpan ReclaimAfter = TimeSpan.FromHours(1);
+
+        private static int _sweepStarted;
+
+        /// <summary>
+        /// Deletes invocation directories left behind by earlier runs, once per process.
+        /// </summary>
+        /// <remarks>
+        /// Per-invocation directories do not clean themselves up: the process that would delete one
+        /// is the process that may have been killed. Without a sweep the cost of the fix above is
+        /// an unbounded pile of generated C# under <c>%TEMP%</c>, which is a worse defect than the
+        /// race it removes. Failure here is ignored -- a directory that cannot be deleted is
+        /// someone else's open handle, and it will be swept by a later session.
+        /// </remarks>
+        private static void ReclaimStaleOutput()
+        {
+            if (Interlocked.Exchange(ref _sweepStarted, 1) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                if (!Directory.Exists(GeneratedRoot))
+                {
+                    return;
+                }
+
+                var cutoff = DateTime.UtcNow - ReclaimAfter;
+                foreach (var project in Directory.EnumerateDirectories(GeneratedRoot))
+                {
+                    foreach (var invocation in Directory.EnumerateDirectories(project))
+                    {
+                        try
+                        {
+                            if (Directory.GetLastWriteTimeUtc(invocation) < cutoff)
+                            {
+                                Directory.Delete(invocation, recursive: true);
+                            }
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                        {
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+
+        /// <remarks>
+        /// Every field here is one the server already parsed out of the csc command line. Sending
+        /// only the file lists left the host to guess the rest, and its guesses disagreed with the
+        /// compilation the server builds from the same command line: nullable disabled where the
+        /// project enables it, and a library where the project is an application. Generators read
+        /// both. <c>[ObservableProperty]</c> annotates what it emits from the nullable context, so
+        /// the guess decided whether a generated property came back as <c>string</c> or
+        /// <c>string?</c> -- and that is the type <c>{x:Bind}</c> is then checked against.
+        /// </remarks>
         private static string BuildRequest(
             string assemblyName,
             string outputDirectory,
@@ -198,12 +259,30 @@ namespace WinUiXaml.Workspace
                     writer.WriteString("languageVersion", commandLine.LanguageVersion);
                 }
 
+                writer.WriteString("outputKind", commandLine.OutputKind.ToString());
+                writer.WriteBoolean("allowUnsafe", commandLine.AllowUnsafe);
+                writer.WriteString("nullableContext", commandLine.NullableContext.ToString());
+
                 WriteArray(writer, "references", commandLine.References);
                 WriteArray(writer, "analyzers", commandLine.Analyzers);
                 WriteArray(writer, "sources", commandLine.Sources);
                 WriteArray(writer, "analyzerConfigs", commandLine.AnalyzerConfigs);
                 WriteArray(writer, "additionalFiles", commandLine.AdditionalFiles);
                 WriteArray(writer, "preprocessorSymbols", commandLine.PreprocessorSymbols);
+
+                // Reference-level modifiers travel beside the paths rather than reshaping the
+                // 'references' array, so a host reading only the paths still works.
+                writer.WriteStartObject("referenceAliases");
+                foreach (var pair in commandLine.ReferenceAliases)
+                {
+                    WriteArray(writer, pair.Key, pair.Value);
+                }
+
+                writer.WriteEndObject();
+                WriteArray(
+                    writer,
+                    "embeddedInteropReferences",
+                    commandLine.EmbeddedInteropReferences.ToImmutableArray());
                 writer.WriteEndObject();
             }
 

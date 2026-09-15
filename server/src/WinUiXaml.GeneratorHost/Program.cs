@@ -54,6 +54,9 @@ internal static class Program
         var analyzerConfigs = ReadArray(root, "analyzerConfigs");
         var additionalFilePaths = ReadArray(root, "additionalFiles");
         var preprocessorSymbols = ReadArray(root, "preprocessorSymbols");
+        var referenceAliases = ReadAliasMap(root, "referenceAliases");
+        var embeddedInterop = new HashSet<string>(
+            ReadArray(root, "embeddedInteropReferences"), StringComparer.OrdinalIgnoreCase);
 
         // A stale directory would otherwise leak members that the current sources no longer declare.
         if (Directory.Exists(outputDirectory))
@@ -81,17 +84,34 @@ internal static class Program
         var metadataReferences = new List<MetadataReference>(references.Count);
         foreach (var reference in references)
         {
-            if (File.Exists(reference))
+            if (!File.Exists(reference))
             {
-                metadataReferences.Add(MetadataReference.CreateFromFile(reference));
+                continue;
             }
+
+            // extern alias and embedded interop types are properties of the reference, not of the
+            // compilation: a source file that says 'extern alias Foo;' does not compile without
+            // them, and a generator reading such a compilation sees errors rather than symbols.
+            var aliases = referenceAliases.TryGetValue(reference, out var found)
+                ? found
+                : ImmutableArray<string>.Empty;
+            metadataReferences.Add(MetadataReference.CreateFromFile(
+                reference,
+                new MetadataReferenceProperties(
+                    MetadataImageKind.Assembly, aliases, embeddedInterop.Contains(reference))));
         }
 
+        // The request carries what the project's csc command line said. Defaults are used only for
+        // a request that predates these fields; guessing them is what made the host's view of the
+        // sources disagree with the server's over the same command line.
         var compilation = CSharpCompilation.Create(
             assemblyName,
             trees,
             metadataReferences,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
+            new CSharpCompilationOptions(
+                ReadOutputKind(root, "outputKind"),
+                allowUnsafe: ReadBoolean(root, "allowUnsafe", defaultValue: true),
+                nullableContextOptions: ReadNullableContext(root, "nullableContext")));
 
         var generators = LoadGenerators(analyzers);
         if (generators.Count == 0)
@@ -280,6 +300,51 @@ internal static class Program
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    /// <summary>Reads the per-reference <c>extern alias</c> names the command line declared.</summary>
+    private static Dictionary<string, ImmutableArray<string>> ReadAliasMap(
+        JsonElement root, string name)
+    {
+        var result = new Dictionary<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
+        if (!root.TryGetProperty(name, out var map) || map.ValueKind != JsonValueKind.Object)
+        {
+            return result;
+        }
+
+        foreach (var property in map.EnumerateObject())
+        {
+            var aliases = ReadArray(map, property.Name);
+            if (aliases.Count > 0)
+            {
+                result[property.Name] = aliases.ToImmutableArray();
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Reads an enum the request names by its Roslyn member name. An unrecognized value falls back
+    /// rather than failing the run: losing generated members over one unknown token would be a
+    /// worse trade than compiling with the default.
+    /// </summary>
+    private static OutputKind ReadOutputKind(JsonElement root, string name) =>
+        ReadString(root, name) is { Length: > 0 } text &&
+        Enum.TryParse<OutputKind>(text, ignoreCase: true, out var parsed)
+            ? parsed
+            : OutputKind.DynamicallyLinkedLibrary;
+
+    private static NullableContextOptions ReadNullableContext(JsonElement root, string name) =>
+        ReadString(root, name) is { Length: > 0 } text &&
+        Enum.TryParse<NullableContextOptions>(text, ignoreCase: true, out var parsed)
+            ? parsed
+            : NullableContextOptions.Disable;
+
+    private static bool ReadBoolean(JsonElement root, string name, bool defaultValue) =>
+        root.TryGetProperty(name, out var value) &&
+        value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? value.GetBoolean()
+            : defaultValue;
 
     private static List<string> ReadArray(JsonElement root, string name)
     {

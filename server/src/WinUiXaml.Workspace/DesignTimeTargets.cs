@@ -45,7 +45,7 @@ namespace WinUiXaml.Workspace
         private const string Contents = """
 <Project>
   <PropertyGroup>
-    <_GlobalPropertiesToRemoveFromProjectReferences>$(_GlobalPropertiesToRemoveFromProjectReferences);SkipCompilerExecution;ProvideCommandLineArgs;DesignTimeBuild;DesignTimeSilentResolution;WinUiXamlDesignTimeRoot</_GlobalPropertiesToRemoveFromProjectReferences>
+    <_GlobalPropertiesToRemoveFromProjectReferences>$(_GlobalPropertiesToRemoveFromProjectReferences);SkipCompilerExecution;ProvideCommandLineArgs;DesignTimeBuild;DesignTimeSilentResolution;WinUiXamlDesignTimeRoot;WinUiXamlUserAfterCSharpTargets</_GlobalPropertiesToRemoveFromProjectReferences>
 
     <!--
       A WinUI app is built for a concrete platform (x64/arm64) while the libraries it references
@@ -60,6 +60,15 @@ namespace WinUiXaml.Workspace
   <PropertyGroup Condition="'$(WinUiXamlDesignTimeRoot)' == 'true'">
     <NonExistentFile>__NonExistentSubDir__\__NonExistentFile__</NonExistentFile>
   </PropertyGroup>
+
+  <!--
+    The project's own CustomAfterMicrosoftCSharpTargets, displaced by this file. Re-imported here
+    so claiming the hook does not silently drop the user's targets from the design-time build.
+    The remove-list above keeps it from flowing into referenced project builds, which import
+    their own.
+  -->
+  <Import Project="$(WinUiXamlUserAfterCSharpTargets)"
+          Condition="'$(WinUiXamlUserAfterCSharpTargets)' != '' and Exists('$(WinUiXamlUserAfterCSharpTargets)')" />
 
   <Target Name="WinUiXamlDesignTimeMarkup"
           BeforeTargets="CoreCompile"

@@ -363,12 +363,18 @@ namespace WinUiXaml.Workspace
                     continue;
                 }
 
+                // Recorded before the build is attempted, not after it succeeds. This set is the
+                // project's invalidation graph (ContainsProject), so a reference left out of it is
+                // a reference whose edits never evict the cache. Omitting the failures inverted
+                // the behaviour exactly where it mattered: fixing the broken project is the one
+                // edit guaranteed to change the answer, and it was the one edit that did not.
+                context.KnownProjects.Add(referencePath);
+
                 try
                 {
                     var referenced = BuildReferencedProject(
                         referencePath, context, properties, cancellationToken);
                     context.Compilations[referencePath] = referenced;
-                    context.KnownProjects.Add(referencePath);
                     if (referenced != null)
                     {
                         references.Add(referenced.ToMetadataReference());
