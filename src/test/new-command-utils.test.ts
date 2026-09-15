@@ -4,7 +4,6 @@ import {
 	buildListArgs,
 	buildNewArgs,
 	describeNewFailure,
-	formatTemplateTags,
 	isNonEmptyOutputFailure,
 	isSdkMissingExit,
 	loadWinUiTemplates,
@@ -121,17 +120,6 @@ describe('parseScaffoldResult', () => {
 
 	it('returns undefined when there is no JSON payload', () => {
 		assert.equal(parseScaffoldResult('crashed before writing output'), undefined);
-	});
-});
-
-describe('formatTemplateTags', () => {
-	it('renders slash-delimited tags as a readable detail line', () => {
-		assert.equal(formatTemplateTags('Windows/WinUI/Desktop/XAML'), 'Windows · WinUI · Desktop · XAML');
-	});
-
-	it('tolerates empty and padded segments', () => {
-		assert.equal(formatTemplateTags('Windows// WinUI '), 'Windows · WinUI');
-		assert.equal(formatTemplateTags(''), '');
 	});
 });
 

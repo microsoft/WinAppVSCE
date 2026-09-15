@@ -64,7 +64,6 @@ import {
 	buildNewArgs,
 	describeNewFailure,
 	DEFAULT_PROJECT_NAME,
-	formatTemplateTags,
 	isSdkMissingExit,
 	isNonEmptyOutputFailure,
 	loadWinUiTemplates as loadWinUiTemplatesCore,
@@ -1172,15 +1171,13 @@ async function resolveTemplatePack(
 async function pickWinUiTemplate(templates: WinUiTemplate[]): Promise<WinUiTemplate | undefined> {
 	const items = templates.map((template) => ({
 		label: template.displayName,
-		description: template.shortName,
-		detail: formatTemplateTags(template.tags),
+		description: `(${template.shortName})`,
 		template
 	}));
 
 	const picked = await vscode.window.showQuickPick(items, {
 		placeHolder: 'Select a WinUI template',
-		matchOnDescription: true,
-		matchOnDetail: true
+		matchOnDescription: true
 	});
 
 	return picked?.template;

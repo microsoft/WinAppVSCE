@@ -14,7 +14,6 @@ export interface WinUiTemplate {
 	shortName: string;
 	aliases: string[];
 	displayName: string;
-	tags: string;
 }
 
 /** Parsed payload of a successful `winapp new --list --json` run. */
@@ -98,8 +97,7 @@ export function parseTemplateList(
 				: [],
 			displayName: typeof entry.DisplayName === 'string' && entry.DisplayName.length > 0
 				? entry.DisplayName
-				: shortName,
-			tags: typeof entry.Tags === 'string' ? entry.Tags : ''
+				: shortName
 		});
 	}
 
@@ -133,18 +131,6 @@ export function parseScaffoldResult(output: string): ScaffoldResult | undefined 
 		error: typeof json.Error === 'string' && json.Error.trim().length > 0 ? json.Error.trim() : undefined,
 		templateVersion: typeof json.TemplateVersion === 'string' ? json.TemplateVersion : undefined
 	};
-}
-
-/**
- * Render a template's `Tags` value (a slash-delimited string such as
- * `Windows/WinUI/Desktop/XAML`) for the picker's detail line.
- */
-export function formatTemplateTags(tags: string): string {
-	return tags
-		.split('/')
-		.map((tag) => tag.trim())
-		.filter((tag) => tag.length > 0)
-		.join(' · ');
 }
 
 /**
