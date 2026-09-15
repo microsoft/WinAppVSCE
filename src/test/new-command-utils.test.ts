@@ -10,7 +10,6 @@ import {
 	isProjectTemplate,
 	isSdkMissingExit,
 	loadWinUiTemplates,
-	MAX_PROJECT_NAME_LENGTH,
 	parseScaffoldResult,
 	parseTemplateList,
 	resolveScaffoldTarget,
@@ -62,7 +61,7 @@ describe('validateProjectName', () => {
 		assert.equal(validateProjectName('PhotoViewer'), undefined);
 	});
 
-	it('accepts a name containing dots that is not a reserved device', () => {
+	it('accepts a name containing dots', () => {
 		assert.equal(validateProjectName('Contoso.PhotoViewer'), undefined);
 	});
 
@@ -83,38 +82,16 @@ describe('validateProjectName', () => {
 		assert.ok(validateProjectName('..'));
 	});
 
-	it('rejects other invalid filename characters', () => {
-		for (const name of ['a<b', 'a>b', 'a:b', 'a"b', 'a|b', 'a?b', 'a*b']) {
-			assert.ok(validateProjectName(name), `expected "${name}" to be rejected`);
+	it('leaves CLI-side name rules to the CLI', () => {
+		// These are rejected by `winapp new` with its own wording; the extension
+		// deliberately does not duplicate that validation.
+		for (const name of ['CON', 'MyApp.', '-n', 'a'.repeat(300), 'a<b']) {
+			assert.equal(
+				validateProjectName(name),
+				undefined,
+				`expected "${name}" to be left to the CLI`
+			);
 		}
-	});
-
-	it('rejects option-shaped names that dotnet new would parse as a flag', () => {
-		assert.ok(validateProjectName('--force'));
-		assert.ok(validateProjectName('-n'));
-	});
-
-	it('rejects trailing dots and spaces, which Windows silently strips', () => {
-		assert.ok(validateProjectName('MyApp.'));
-		assert.ok(validateProjectName('MyApp '));
-	});
-
-	it('rejects reserved device names regardless of extension', () => {
-		assert.ok(validateProjectName('CON'));
-		assert.ok(validateProjectName('con'));
-		assert.ok(validateProjectName('CON.txt'));
-		assert.ok(validateProjectName('LPT1'));
-		assert.ok(validateProjectName('NUL.anything'));
-	});
-
-	it('does not reject names that merely start with a reserved prefix', () => {
-		assert.equal(validateProjectName('Console'), undefined);
-		assert.equal(validateProjectName('Contoso'), undefined);
-	});
-
-	it('enforces the maximum length that leaves room for ".csproj"', () => {
-		assert.equal(validateProjectName('a'.repeat(MAX_PROJECT_NAME_LENGTH)), undefined);
-		assert.ok(validateProjectName('a'.repeat(MAX_PROJECT_NAME_LENGTH + 1)));
 	});
 });
 
@@ -152,34 +129,6 @@ describe('ensureAvailableName', () => {
 			}),
 			'PhotoViewer'
 		);
-	});
-
-	it('keeps a numbered variant of a max-length name within the limit', () => {
-		const baseName = 'a'.repeat(MAX_PROJECT_NAME_LENGTH);
-		const taken = new Set([path.join(parent, baseName)]);
-
-		const available = ensureAvailableName(baseName, parent, (p) => taken.has(p));
-
-		// The numbered variant has to stay valid, or the recovery offer hands the
-		// user a name the CLI rejects with exit 2.
-		assert.equal(available.length, MAX_PROJECT_NAME_LENGTH);
-		assert.equal(validateProjectName(available), undefined);
-		assert.ok(available.endsWith('1'));
-	});
-
-	it('keeps a numbered variant within the limit past single digits', () => {
-		const baseName = 'a'.repeat(MAX_PROJECT_NAME_LENGTH);
-		const taken = new Set(
-			[baseName, `${baseName.slice(0, MAX_PROJECT_NAME_LENGTH - 1)}1`].map((name) =>
-				path.join(parent, name)
-			)
-		);
-
-		const available = ensureAvailableName(baseName, parent, (p) => taken.has(p));
-
-		assert.equal(available.length, MAX_PROJECT_NAME_LENGTH);
-		assert.equal(validateProjectName(available), undefined);
-		assert.ok(available.endsWith('2'));
 	});
 });
 
