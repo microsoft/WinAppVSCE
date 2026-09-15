@@ -61,7 +61,6 @@ import {
 	parseTemplateList,
 	resolveScaffoldTarget as resolveScaffoldTargetCore,
 	sortTemplates,
-	validateProjectName,
 	type ScaffoldTargetAdapter,
 	type TemplateListResult,
 	type TemplateLoad,
@@ -1516,8 +1515,7 @@ export function activate(context: vscode.ExtensionContext) {
 			const requestedName = await vscode.window.showInputBox({
 				prompt: 'Name for the new app',
 				value: DEFAULT_PROJECT_NAME,
-				valueSelection: [0, DEFAULT_PROJECT_NAME.length],
-				validateInput: validateProjectName
+				valueSelection: [0, DEFAULT_PROJECT_NAME.length]
 			});
 			if (!requestedName) {
 				return;

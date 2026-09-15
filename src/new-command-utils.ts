@@ -53,33 +53,6 @@ export const NEW_EXIT = {
 } as const;
 
 /**
- * Characters that would make the extension's own `path.join` of the name
- * produce a directory other than the one the user picked.
- */
-const PATH_SEPARATORS = /[\\/]/;
-
-/**
- * Check only what the extension needs before it can safely build a path from
- * the name. Everything else (length, reserved device names, option-shaped
- * names) is left to the CLI, which reports it with its own wording.
- *
- * @returns An error message to show in the input box, or `undefined` when valid.
- */
-export function validateProjectName(name: string | undefined): string | undefined {
-	if (name === undefined || name.trim().length === 0) {
-		return 'Enter a name for the app.';
-	}
-
-	// The name is joined onto the chosen folder to pick the target directory, so
-	// a separator or dot segment would silently scaffold somewhere else.
-	if (PATH_SEPARATORS.test(name) || name === '.' || name === '..') {
-		return 'Use a simple name, without path separators.';
-	}
-
-	return undefined;
-}
-
-/**
  * Returns the first available variant of `baseName` — `Name`, `Name1`, … — where
  * a name is taken when a directory of that name exists in the parent. Ports the
  * CLI's `EnsureAvailableName`, which it skips for an explicit `--name`.
@@ -162,6 +135,13 @@ export async function resolveScaffoldTarget(
 	requestedName: string
 ): Promise<ScaffoldTarget | undefined> {
 	const targetDirectory = path.join(parentDirectory, requestedName);
+
+	// A name containing separators or dot segments joins to somewhere outside the
+	// folder the user picked. Don't inspect or offer to overwrite that directory;
+	// hand it to the CLI, which rejects such names.
+	if (path.dirname(targetDirectory) !== path.resolve(parentDirectory)) {
+		return { name: requestedName, force: false };
+	}
 
 	let targetIsNonEmpty: boolean;
 	try {
