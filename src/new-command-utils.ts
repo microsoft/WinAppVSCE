@@ -53,123 +53,15 @@ export const NEW_EXIT = {
 } as const;
 
 /**
- * Returns the first available variant of `baseName` — `Name`, `Name1`, … — where
- * a name is taken when a directory of that name exists in the parent. Ports the
- * CLI's `EnsureAvailableName`, which it skips for an explicit `--name`.
- *
- * @param baseName The requested name.
- * @param directoryExists Predicate reporting whether a path is an existing directory.
- * @param parentDirectory Directory the project directory would be created in.
+ * True when the CLI refused because the output directory already has files in
+ * it, which is the one failure the user can retry with `--force`.
  */
-export function ensureAvailableName(
-	baseName: string,
-	parentDirectory: string,
-	directoryExists: (candidatePath: string) => boolean
-): string {
-	const isTaken = (candidate: string): boolean => {
-		try {
-			return directoryExists(path.join(parentDirectory, candidate));
-		} catch {
-			// If the parent can't be inspected, don't block on numbering — let the
-			// scaffold surface any real conflict as a structured error instead.
-			return false;
-		}
-	};
-
-	if (!isTaken(baseName)) {
-		return baseName;
-	}
-
-	for (let suffix = 1; ; suffix++) {
-		const candidate = `${baseName}${suffix}`;
-		if (!isTaken(candidate)) {
-			return candidate;
-		}
-	}
-}
-
-/**
- * How the user chose to handle an existing, non-empty target directory.
- * `use-available` takes the auto-numbered name; `create-anyway` scaffolds over
- * the existing contents with `--force`.
- */
-export type NonEmptyTargetChoice = 'use-available' | 'create-anyway';
-
-/** The resolved scaffold target. */
-export interface ScaffoldTarget {
-	/** Final project name to pass as `--name`. */
-	name: string;
-	/** Whether `--force` is needed to scaffold into a non-empty directory. */
-	force: boolean;
-}
-
-/**
- * Everything {@link resolveScaffoldTarget} needs from the outside world. An
- * interface so the logic is testable without a file system or VS Code, matching
- * the `SignFlowAdapter` pattern in `sign-utils.ts`.
- */
-export interface ScaffoldTargetAdapter {
-	/** Whether a path exists, as either a file or a directory. */
-	pathExists(candidatePath: string): boolean;
-
-	/** Entry names in a directory. May throw when the directory can't be read. */
-	readDirectory(directoryPath: string): string[];
-
-	/** Ask how to handle an existing, non-empty target directory. */
-	confirmNonEmptyTarget(
-		targetDirectory: string,
-		availableName: string
-	): Promise<NonEmptyTargetChoice | undefined>;
-}
-
-/**
- * Decide the final project name and whether `--force` is needed. Mirrors the
- * CLI's preflight, but checking here lets us offer the auto-numbered name
- * instead of reporting exit 2 after the fact.
- *
- * @returns The resolved name and force flag, or `undefined` if the user cancelled.
- */
-export async function resolveScaffoldTarget(
-	adapter: ScaffoldTargetAdapter,
-	parentDirectory: string,
-	requestedName: string
-): Promise<ScaffoldTarget | undefined> {
-	const targetDirectory = path.join(parentDirectory, requestedName);
-
-	// A name containing separators or dot segments joins to somewhere outside the
-	// folder the user picked. Don't inspect or offer to overwrite that directory;
-	// hand it to the CLI, which rejects such names.
-	if (path.dirname(targetDirectory) !== path.resolve(parentDirectory)) {
-		return { name: requestedName, force: false };
-	}
-
-	let targetIsNonEmpty: boolean;
-	try {
-		targetIsNonEmpty = adapter.pathExists(targetDirectory)
-			&& adapter.readDirectory(targetDirectory).length > 0;
-	} catch {
-		// Can't inspect the folder (locked, protected). Don't block here — let the
-		// CLI surface it as a structured error with a real reason.
-		return { name: requestedName, force: false };
-	}
-
-	if (!targetIsNonEmpty) {
-		return { name: requestedName, force: false };
-	}
-
-	const availableName = ensureAvailableName(requestedName, parentDirectory, (candidate) =>
-		adapter.pathExists(candidate)
-	);
-
-	const choice = await adapter.confirmNonEmptyTarget(targetDirectory, availableName);
-
-	if (choice === 'use-available') {
-		return { name: availableName, force: false };
-	}
-	if (choice === 'create-anyway') {
-		return { name: requestedName, force: true };
-	}
-	return undefined;
+export function isNonEmptyOutputFailure(
+	exitCode: number | null,
+	result: ScaffoldResult | undefined
+): boolean {
+	return exitCode === NEW_EXIT.invalidArgs
+		&& (result?.error?.includes('--force') ?? false);
 }
 
 /**

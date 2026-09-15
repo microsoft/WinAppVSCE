@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { promisify } from 'util';
 import { getWinappCliPath } from '../../winapp-cli-utils';
-import { buildNewArgs, parseScaffoldResult, NEW_EXIT } from '../../new-command-utils';
+import { buildNewArgs, parseScaffoldResult, isNonEmptyOutputFailure, NEW_EXIT } from '../../new-command-utils';
 
 const execFileAsync = promisify(execFile);
 
@@ -180,10 +180,9 @@ test.describe('winapp.new command — scaffolding', () => {
     });
 
     test('refuses to scaffold over an existing project without --force', async () => {
-        // Pins the CLI contract the non-empty-target prompt is built on: with an
-        // explicit --name the CLI does not auto-number around a collision, it
-        // fails with "invalid args". If that ever became a silent overwrite, the
-        // extension would destroy user files, so assert it directly.
+        // Pins the CLI contract the --force retry offer is built on: an explicit
+        // --name fails with "invalid args" rather than overwriting. If that ever
+        // became a silent overwrite, the extension would destroy user files.
         const parentDirectory = makeTempDirectory('winapp-scaffold-e2e-');
         const projectName = 'CollisionApp';
         const outputDirectory = path.join(parentDirectory, projectName);
@@ -204,6 +203,10 @@ test.describe('winapp.new command — scaffolding', () => {
 
         const scaffold = parseScaffoldResult(result.output);
         expect(scaffold?.created).not.toBe(true);
+
+        // The extension offers a --force retry based on this failure, so pin the
+        // match against real CLI output rather than a hand-written fixture.
+        expect(isNonEmptyOutputFailure(result.code, scaffold)).toBe(true);
 
         // The user's file must still be there, untouched.
         expect(fs.existsSync(sentinelPath)).toBe(true);

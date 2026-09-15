@@ -249,7 +249,7 @@ Run **WinApp: Create WinUI App** to scaffold a WinUI 3 app from an official Wind
 
 1. **Loads the templates** — Fetches the available WinUI templates, installing the template pack on first run. If a pack is already on your machine, you're asked whether to use it or install the latest (a machine-wide change that affects all `dotnet new` tooling).
 2. **Asks for a template** — Choose from a list that includes the blank app, the NavigationView and TabView shells, the MVVM app, a class library, and a unit test project.
-3. **Asks for a name and a location** — Pick the folder to create the app in; the project lands in `<folder>/<name>`. If that directory already has files, you can use a free name instead (`MyApp2`) or create there anyway.
+3. **Asks for a name and a location** — Pick the folder to create the app in; the project lands in `<folder>/<name>`. If the CLI reports that the directory already has files, you're offered the chance to create there anyway.
 4. **Confirms where it landed** — A notification names the new app and its full path.
 
 The [.NET SDK](https://dotnet.microsoft.com/download) 8.0.100 or later is required — this is the only WinApp command that needs it. If it's missing or older than 8.0.100, the command stops before prompting and offers a link to the installer.
