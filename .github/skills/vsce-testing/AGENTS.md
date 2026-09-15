@@ -153,12 +153,16 @@ Answers (ordered, one per prompt the command raises):
 
 **`winapp.certGenerate` prompt sequence** (it is no longer a single Yes/No):
 1. Install QuickPick — "Generate only" vs "Generate and install (requires admin)" → `@{accept=$true}`.
-2. Manifest QuickPick — raised **only when the project holds several manifests and none is
+2. Manifest QuickPick — raised whenever the workspace holds one or more manifests but **none is
    canonically named** (`Package.appxmanifest` / `AppxManifest.xml` directly in the project
    directory). A normal project auto-selects its primary manifest → prompt does not appear.
-3. Publisher `showInputBox` — raised **only when the workspace has no manifest at all**. This is a
-   free-text prompt and therefore **not auto-answerable**: drive certGenerate in a workspace that
-   contains a manifest so the publisher is taken from it and this prompt never appears.
+   The list always ends with an escape-hatch item, `$(edit) Enter a publisher name instead...`,
+   which skips the manifest and falls through to prompt 3. Selecting a manifest is
+   `@{accept=$true}`; reaching the escape hatch needs explicit navigation to the last item.
+3. Publisher `showInputBox` — raised when the workspace has **no manifest at all**, or when the
+   escape hatch in prompt 2 was chosen. This is a free-text prompt and therefore
+   **not auto-answerable**: drive certGenerate in a workspace that contains a canonically named
+   manifest so the publisher is taken from it and neither prompt 2 nor 3 appears.
 4. Overwrite warning — raised when the certificate already exists. Its actions
    ("Overwrite Existing Cert" / "Use Existing Cert") are notification buttons, which **UIA does not
    expose**; only the aria-live label text is readable. Delete the stale `.pfx` first for a clean run.
