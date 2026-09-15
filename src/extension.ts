@@ -286,20 +286,16 @@ function getWinappOutputChannel(): vscode.OutputChannel {
  * command to finish so callers can inspect the output (e.g. the produced
  * package path).
  *
- * @param options.cancelMessage Line written to the output channel when the user
- *   cancels. Defaults to the packaging wording.
  * @returns The process exit code and the full captured output.
  */
 async function runWinappCapture(
 	extensionPath: string,
 	args: string[],
 	cwd: string,
-	progressTitle: string,
-	options: { cancelMessage?: string } = {}
+	progressTitle: string
 ): Promise<{ code: number | null; output: string; cancelled?: boolean }> {
 	const cliPath = getWinappCliPath(extensionPath);
 	const outputChannel = getWinappOutputChannel();
-	const cancelMessage = options.cancelMessage ?? 'Packaging cancelled.';
 	outputChannel.appendLine(`> winapp ${args.join(' ')}`);
 
 	return vscode.window.withProgress(
@@ -331,7 +327,7 @@ async function runWinappCapture(
 						return;
 					}
 					cancelled = true;
-					outputChannel.appendLine(`\n${cancelMessage}`);
+					outputChannel.appendLine('\nCancelled.');
 					if (child.pid) {
 						// On Windows, winapp pack may spawn helper processes; taskkill /t
 						// terminates the whole tree instead of only the direct child.
@@ -638,8 +634,7 @@ function createCertGenerateFlowAdapter(
 				extensionPath,
 				certGenerateArgsFor(source, ifExists),
 				projectDir,
-				'Generating certificate...',
-				{ cancelMessage: 'Certificate generation cancelled.' }
+				'Generating certificate...'
 			);
 			return decideCertGenerateOutcome(code, output, certificatePath, cancelled);
 		},
