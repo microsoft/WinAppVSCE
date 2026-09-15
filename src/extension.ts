@@ -66,10 +66,10 @@ import {
 	formatTemplateTags,
 	isProjectTemplate,
 	isSdkMissingExit,
-	loadWinUiTemplates as loadWinUiTemplatesLogic,
+	loadWinUiTemplates as loadWinUiTemplatesCore,
 	parseScaffoldResult,
 	parseTemplateList,
-	resolveScaffoldTarget as resolveScaffoldTargetLogic,
+	resolveScaffoldTarget as resolveScaffoldTargetCore,
 	sortTemplates,
 	validateProjectName,
 	type ScaffoldTargetAdapter,
@@ -1073,7 +1073,7 @@ async function loadWinUiTemplates(
 		reportFailure: (message, sdkMissing) => showNewFailure(message, sdkMissing)
 	};
 
-	return loadWinUiTemplatesLogic(adapter, templateVersion);
+	return loadWinUiTemplatesCore(adapter, templateVersion);
 }
 
 /**
@@ -1200,8 +1200,12 @@ async function pickWinUiTemplate(templates: WinUiTemplate[]): Promise<WinUiTempl
 }
 
 /**
- * Wire the real file system and VS Code prompts into
- * {@link resolveScaffoldTargetLogic}.
+ * Decides the final project name and whether `--force` is needed, given the
+ * folder the user picked and the name they typed. Prompts when the target
+ * directory already has files in it. Returns undefined if cancelled.
+ *
+ * The decision logic lives in `new-command-utils.ts`; this wrapper supplies the
+ * VS Code-backed dependencies (file system, modal warning).
  */
 async function resolveScaffoldTarget(
 	parentDirectory: string,
@@ -1231,7 +1235,7 @@ async function resolveScaffoldTarget(
 		}
 	};
 
-	return resolveScaffoldTargetLogic(adapter, parentDirectory, requestedName);
+	return resolveScaffoldTargetCore(adapter, parentDirectory, requestedName);
 }
 
 /**
