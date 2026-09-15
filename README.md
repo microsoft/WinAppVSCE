@@ -297,7 +297,7 @@ The winapp CLI (and this extension) works with any Windows app framework:
 - Visual Studio Code 1.109.0 or later
 - The [.NET SDK](https://dotnet.microsoft.com/download) 8.0.100 or later — only for **WinApp: Create WinUI App**, which delegates scaffolding to `dotnet new`
 
-The winapp CLI is bundled with the extension — no separate installation required. It's a native binary that needs no .NET runtime of its own, which is why only the scaffolding command requires the SDK. **WinApp: Run Application** launches a build output folder directly and never invokes `dotnet` (though your app may still need the .NET and Windows App SDK runtimes it was built against).
+The winapp CLI is bundled with the extension — no separate installation required.
 
 For debugging, install the debugger extension that matches your app's language (see [Supported debuggers](#integrated-debugging) above).
 
