@@ -93,6 +93,8 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
             """);
         await File.WriteAllTextAsync(xamlPath, "<Page />");
 
+        FixtureRestore.Run(appProject);
+
         Assert.False(File.Exists(Path.Combine(
             controlsDirectory, "bin", "Debug", "net10.0", "Controls.dll")));
 
@@ -131,9 +133,9 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
         // App references both Middle and Shared; Middle also references Shared. The graph walk
         // used one set as both "visited" and "cycle guard", so whichever branch reached Shared
         // first claimed it and the sibling edge was skipped -- leaving App with no reference to
-        // Shared at all. App's own /reference:Shared.dll cannot cover for that, because
-        // BuildProjectReferences=false means Shared.dll may never have been produced, so the
-        // failure appears only for users who have not built.
+        // Shared at all. The design-time build's own /reference:Shared.dll cannot cover for that,
+        // because the reference is compiled from source and that source compilation is what the
+        // sibling edge carries.
         var sharedDirectory = Path.Combine(_root, "Shared");
         var middleDirectory = Path.Combine(_root, "Middle");
         var appDirectory = Path.Combine(_root, "App");
@@ -190,6 +192,8 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
 
         Assert.False(File.Exists(Path.Combine(
             sharedDirectory, "bin", "Debug", "net10.0", "Shared.dll")));
+
+        FixtureRestore.Run(appProject);
 
         using var workspace = await RoslynProjectWorkspace.LoadProjectAsync(appProject);
         var compilation = await workspace.GetCompilationAsync();
@@ -268,6 +272,8 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
             }
             """);
         await File.WriteAllTextAsync(xamlPath, "<Page />");
+
+        FixtureRestore.Run(appProject);
 
         using var resolver = new XamlProjectResolver();
 

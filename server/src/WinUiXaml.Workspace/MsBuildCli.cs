@@ -357,18 +357,32 @@ namespace WinUiXaml.Workspace
                 "-nologo",
                 // ResolveReferences;CoreCompile rather than Compile: MarkupCompilePass1 hangs off
                 // PrepareResourcesDependsOn, which Compile runs first, and it has no
-                // ContinueOnError. Entering at CoreCompile instead reaches the SDK's
-                // DesignTimeMarkupCompilation hook, which is the pass Visual Studio uses and the
-                // only one that tolerates a project that has not been built.
+                // ContinueOnError. Entering at CoreCompile instead lets DesignTimeTargets run the
+                // DesignTimeMarkupCompilation pass, which is the one Visual Studio uses.
                 "-t:ResolveReferences;CoreCompile",
-                "-p:BuildProjectReferences=false",
+
+                // Design-time builds default this to false (Microsoft.Common.CurrentVersion
+                // .targets L375). Asking for it explicitly is what lets a never-built
+                // ProjectReference be built here instead of failing the markup compiler with
+                // WMC1006; DesignTimeTargets strips the design-time properties on the way down so
+                // the reference gets an ordinary build.
+                "-p:BuildProjectReferences=true",
                 "-p:ProvideCommandLineArgs=true",
                 "-p:SkipCompilerExecution=true",
                 "-p:DesignTimeBuild=true",
                 "-p:DesignTimeSilentResolution=true",
-                "-p:BuildingInsideVisualStudio=true",
                 "-getItem:CscCommandLineArgs",
             };
+
+            var designTimeTargets = DesignTimeTargets.Resolve();
+            if (designTimeTargets != null)
+            {
+                arguments.Add($"-p:CustomAfterMicrosoftCSharpTargets={designTimeTargets}");
+
+                // Marks this project as the one being analysed. It is listed in the targets file's
+                // remove-list, so a referenced project never sees it and is built normally.
+                arguments.Add("-p:WinUiXamlDesignTimeRoot=true");
+            }
             shadow?.AppendTo(arguments);
             AppendEvaluationRequests(arguments);
             AppendProperties(arguments, globalProperties);
@@ -961,6 +975,13 @@ namespace WinUiXaml.Workspace
             // the project's obj directory and makes later invalidations flaky.
             startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
             startInfo.Environment["DOTNET_CLI_UI_LANGUAGE"] = "en";
+
+            // One node per invocation. Now that a design-time build builds the project references
+            // it is given, a multi-node build would fan each call out to a set of worker processes
+            // that node reuse is not allowed to recycle, and several concurrent loads turn that
+            // into a process storm. The work here is a handful of projects, so there is little to
+            // win from parallelism and a great deal to lose from oversubscription.
+            startInfo.ArgumentList.Add("-maxcpucount:1");
 
             using var process = new Process { StartInfo = startInfo };
             var standardOutput = new StringBuilder();

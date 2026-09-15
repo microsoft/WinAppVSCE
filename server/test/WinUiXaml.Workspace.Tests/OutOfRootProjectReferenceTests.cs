@@ -58,6 +58,8 @@ public sealed class OutOfRootProjectReferenceTests
             """;
         File.WriteAllText(xamlPath, xamlText);
 
+        FixtureRestore.Run(appProject);
+
         try
         {
             var resolver = new XamlProjectResolver();
