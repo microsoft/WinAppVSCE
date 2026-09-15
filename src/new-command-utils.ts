@@ -1,4 +1,4 @@
-import * as path from 'path';
+import { extractJsonObject } from './winapp-cli-utils';
 
 /**
  * Pure helpers backing the `winapp.new` command, kept free of the VS Code API so
@@ -139,36 +139,6 @@ export function parseScaffoldResult(output: string): ScaffoldResult | undefined 
 		error: typeof json.Error === 'string' && json.Error.trim().length > 0 ? json.Error.trim() : undefined,
 		templateVersion: typeof json.TemplateVersion === 'string' ? json.TemplateVersion : undefined
 	};
-}
-
-/**
- * Extract the JSON object from captured CLI output. Progress or warning text can
- * precede the payload on stderr, which the capture helper interleaves into the
- * same buffer, so anchor on the first `{` rather than requiring silence.
- */
-function extractJsonObject(output: string): Record<string, unknown> | undefined {
-	if (!output) {
-		return undefined;
-	}
-
-	const start = output.indexOf('{');
-	if (start < 0) {
-		return undefined;
-	}
-
-	// Walk back from the end so trailing output after the payload is ignored too.
-	for (let end = output.lastIndexOf('}'); end > start; end = output.lastIndexOf('}', end - 1)) {
-		try {
-			const parsed = JSON.parse(output.slice(start, end + 1));
-			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-				return parsed as Record<string, unknown>;
-			}
-		} catch {
-			// Not a complete object at this boundary — try the previous '}'.
-		}
-	}
-
-	return undefined;
 }
 
 /** True when the template scaffolds a whole project (rather than a file into one). */
