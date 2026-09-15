@@ -64,8 +64,9 @@ function offsetToPosition(text, offset) {
 if (!existsSync(APP_XAML)) fail(`fixture not found: ${APP_XAML}`);
 
 // A project that has never been restored. The restore-required path could not be exercised from
-// the outside: a real editor session auto-restores on open, so the state cannot be held long
-// enough to observe. Here there is no editor, nothing runs restore, and the state is stable.
+// the outside: in a real editor session the extension restores as soon as the server reports this,
+// so the state cannot be held long enough to observe. Here there is no editor, nothing runs
+// restore, and the state is stable.
 //
 // The package is deliberately one that cannot resolve, so no ambient NuGet cache can accidentally
 // satisfy it and turn this into a project that merely loads slowly.

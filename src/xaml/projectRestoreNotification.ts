@@ -1,32 +1,32 @@
 export const PROJECT_RESTORE_NOTIFICATION = "winui-xaml/projectRestoreRequired";
 export const PROJECT_RESTORE_ACTIONS = {
-  restore: "Restore Packages",
   showOutput: "Show Output",
 } as const;
-
-export const PROJECT_RESTORE_MESSAGE =
-  "WinUI XAML project packages are not restored, so project-aware IntelliSense is unavailable.";
 
 export type ProjectRestoreAction =
   (typeof PROJECT_RESTORE_ACTIONS)[keyof typeof PROJECT_RESTORE_ACTIONS];
 
 /**
- * As with the build prompt, the server owns the once-per-condition decision and clears its latch
- * when the project loads. A second client-side latch would silently swallow the re-armed
- * notification, so there isn't one.
+ * The server owns the once-per-condition decision and clears its latch when the project loads. A
+ * second client-side latch would silently swallow the re-armed notification, so there isn't one.
  */
 export interface ProjectRestoreNotificationHost {
   isTrustedWorkspaceProject(projectPath: string): boolean;
-  showInformationMessage(
-    message: string,
-    ...actions: ProjectRestoreAction[]
-  ): Thenable<string | undefined>;
-  showOutput(): void;
   restoreProject(projectPath: string): Thenable<unknown>;
 }
 
 /**
- * Prompts to restore a project whose packages the server reported as missing, then runs the choice.
+ * Restores a project whose packages the server reported as missing.
+ *
+ * This runs without asking. A project that has never been restored yields no IntelliSense at all,
+ * so the prompt it replaces had exactly one useful answer -- and now that the design-time build
+ * builds the project's references, an unrestored reference costs the user the types in it too.
+ * `dotnet restore` writes to `obj/`, which is build output rather than anything the user tracks,
+ * and consent already exists at a coarser boundary: an untrusted workspace is never restored.
+ *
+ * That is where the Roslyn C# language server settled (`dotnet_enable_automatic_restore`, on by
+ * default) after shipping this same prompt on OmniSharp.
+ *
  * Silently ignores projects that are absent or outside a trusted workspace.
  */
 export async function notifyProjectRestoreRequired(
@@ -37,15 +37,5 @@ export async function notifyProjectRestoreRequired(
     return;
   }
 
-  const choice = await host.showInformationMessage(
-    PROJECT_RESTORE_MESSAGE,
-    PROJECT_RESTORE_ACTIONS.restore,
-    PROJECT_RESTORE_ACTIONS.showOutput,
-  );
-
-  if (choice === PROJECT_RESTORE_ACTIONS.showOutput) {
-    host.showOutput();
-  } else if (choice === PROJECT_RESTORE_ACTIONS.restore) {
-    await host.restoreProject(projectPath);
-  }
+  await host.restoreProject(projectPath);
 }

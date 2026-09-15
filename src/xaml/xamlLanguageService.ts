@@ -823,9 +823,6 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
 function notifyProjectRestoreRequired(projectPath: string | undefined): void {
   void runProjectRestoreNotification(projectPath, {
     isTrustedWorkspaceProject,
-    showInformationMessage: (message, ...actions) =>
-      vscode.window.showInformationMessage(message, ...actions),
-    showOutput: () => output?.show(true),
     restoreProject,
   });
 }
@@ -935,7 +932,6 @@ function isTrustedWorkspaceProject(projectPath: string): boolean {
 }
 
 async function restoreProject(projectPath: string): Promise<void> {
-  output?.show(true);
   log(`Restoring project packages: ${projectPath}`);
 
   try {
@@ -959,9 +955,6 @@ async function restoreProject(projectPath: string): Promise<void> {
       () => runDotnetRestore(projectPath, dotnet)
     );
     log("Project package restore completed. IntelliSense metadata is reloading.");
-    void vscode.window.showInformationMessage(
-      "WinUI project packages restored. XAML IntelliSense is reloading."
-    );
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     log(`Project package restore failed: ${detail}`);
