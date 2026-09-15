@@ -1,21 +1,17 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import * as path from 'path';
 import {
 	buildListArgs,
 	buildNewArgs,
 	describeNewFailure,
-	ensureAvailableName,
 	formatTemplateTags,
+	isNonEmptyOutputFailure,
 	isProjectTemplate,
 	isSdkMissingExit,
 	loadWinUiTemplates,
 	parseScaffoldResult,
 	parseTemplateList,
-	resolveScaffoldTarget,
 	sortTemplates,
-	type NonEmptyTargetChoice,
-	type ScaffoldTargetAdapter,
 	type TemplateListAttempt,
 	type TemplateListResult,
 	type TemplateLoadAdapter,
@@ -54,200 +50,6 @@ function template(overrides: Partial<WinUiTemplate> = {}): WinUiTemplate {
 		...overrides
 	};
 }
-
-describe('ensureAvailableName', () => {
-	const parent = path.join('C:', 'src');
-
-	it('returns the base name when nothing is taken', () => {
-		assert.equal(ensureAvailableName('PhotoViewer', parent, () => false), 'PhotoViewer');
-	});
-
-	it('numbers past a taken name', () => {
-		const taken = new Set([path.join(parent, 'PhotoViewer')]);
-		assert.equal(
-			ensureAvailableName('PhotoViewer', parent, (p) => taken.has(p)),
-			'PhotoViewer1'
-		);
-	});
-
-	it('keeps numbering until a free variant is found', () => {
-		const taken = new Set([
-			path.join(parent, 'WinUIApp'),
-			path.join(parent, 'WinUIApp1'),
-			path.join(parent, 'WinUIApp2')
-		]);
-		assert.equal(
-			ensureAvailableName('WinUIApp', parent, (p) => taken.has(p)),
-			'WinUIApp3'
-		);
-	});
-
-	it('falls back to the base name when the parent cannot be inspected', () => {
-		assert.equal(
-			ensureAvailableName('PhotoViewer', parent, () => {
-				throw new Error('EACCES');
-			}),
-			'PhotoViewer'
-		);
-	});
-});
-
-describe('resolveScaffoldTarget', () => {
-	const parent = path.join('C:', 'src');
-
-	/**
-	 * Build an adapter over a fake directory listing. `directories` maps a path
-	 * to its entries, so an empty array models an existing-but-empty directory
-	 * and a missing key models a path that doesn't exist.
-	 */
-	function createAdapter(
-		directories: Record<string, string[]>,
-		choice?: NonEmptyTargetChoice,
-		options?: { readThrows?: boolean }
-	) {
-		const prompts: { targetDirectory: string; availableName: string }[] = [];
-		const adapter: ScaffoldTargetAdapter = {
-			pathExists: (candidatePath) => candidatePath in directories,
-			readDirectory: (directoryPath) => {
-				if (options?.readThrows) {
-					throw new Error('EACCES');
-				}
-				return directories[directoryPath] ?? [];
-			},
-			confirmNonEmptyTarget: async (targetDirectory, availableName) => {
-				prompts.push({ targetDirectory, availableName });
-				return choice;
-			}
-		};
-		return { adapter, prompts };
-	}
-
-	it('uses the requested name when the target does not exist', async () => {
-		const { adapter, prompts } = createAdapter({});
-
-		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
-
-		assert.deepEqual(target, { name: 'PhotoViewer', force: false });
-		// An absent directory is not a conflict, so the user is never asked.
-		assert.equal(prompts.length, 0);
-	});
-
-	it('uses the requested name when the target exists but is empty', async () => {
-		const { adapter, prompts } = createAdapter({
-			[path.join(parent, 'PhotoViewer')]: []
-		});
-
-		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
-
-		// The CLI itself tolerates an existing empty directory.
-		assert.deepEqual(target, { name: 'PhotoViewer', force: false });
-		assert.equal(prompts.length, 0);
-	});
-
-	it('never prompts about a directory outside the folder the user picked', async () => {
-		// Names like these join to somewhere else entirely. Offering to overwrite
-		// that directory would be wrong; the CLI rejects the name instead.
-		for (const escaping of ['..', '.', '..\\Escaped', 'sub/dir', 'sub\\dir']) {
-			const outside = path.join(parent, escaping);
-			const { adapter, prompts } = createAdapter(
-				{ [outside]: ['important.txt'] },
-				'create-anyway'
-			);
-
-			const target = await resolveScaffoldTarget(adapter, parent, escaping);
-
-			assert.deepEqual(
-				target,
-				{ name: escaping, force: false },
-				`expected "${escaping}" to be passed through unforced`
-			);
-			assert.equal(prompts.length, 0, `expected no prompt for "${escaping}"`);
-		}
-	});
-
-	it('offers the auto-numbered name for a non-empty target', async () => {
-		const { adapter, prompts } = createAdapter(
-			{ [path.join(parent, 'PhotoViewer')]: ['App.xaml'] },
-			'use-available'
-		);
-
-		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
-
-		assert.deepEqual(target, { name: 'PhotoViewer1', force: false });
-		assert.equal(prompts.length, 1);
-		assert.equal(prompts[0].availableName, 'PhotoViewer1');
-		assert.equal(prompts[0].targetDirectory, path.join(parent, 'PhotoViewer'));
-	});
-
-	it('passes force when the user chooses to create anyway', async () => {
-		const { adapter } = createAdapter(
-			{ [path.join(parent, 'PhotoViewer')]: ['App.xaml'] },
-			'create-anyway'
-		);
-
-		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
-
-		// --force overwrites the user's files, so it must only ever come from an
-		// explicit choice.
-		assert.deepEqual(target, { name: 'PhotoViewer', force: true });
-	});
-
-	it('returns undefined when the user dismisses the conflict prompt', async () => {
-		const { adapter } = createAdapter(
-			{ [path.join(parent, 'PhotoViewer')]: ['App.xaml'] },
-			undefined
-		);
-
-		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
-
-		assert.equal(target, undefined);
-	});
-
-	it('never forces when the conflict prompt is dismissed', async () => {
-		const { adapter } = createAdapter(
-			{ [path.join(parent, 'PhotoViewer')]: ['App.xaml'] },
-			undefined
-		);
-
-		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
-
-		// Guards the destructive path specifically: cancelling must not fall
-		// through to a forced scaffold.
-		assert.notEqual(target?.force, true);
-	});
-
-	it('skips numbering past directories that are already taken', async () => {
-		const { adapter, prompts } = createAdapter(
-			{
-				[path.join(parent, 'PhotoViewer')]: ['App.xaml'],
-				[path.join(parent, 'PhotoViewer1')]: ['App.xaml'],
-				[path.join(parent, 'PhotoViewer2')]: []
-			},
-			'use-available'
-		);
-
-		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
-
-		// PhotoViewer2 exists, so it is taken even though it is empty.
-		assert.equal(target?.name, 'PhotoViewer3');
-		assert.equal(prompts[0].availableName, 'PhotoViewer3');
-	});
-
-	it('proceeds without forcing when the target cannot be inspected', async () => {
-		const { adapter, prompts } = createAdapter(
-			{ [path.join(parent, 'PhotoViewer')]: ['App.xaml'] },
-			'create-anyway',
-			{ readThrows: true }
-		);
-
-		const target = await resolveScaffoldTarget(adapter, parent, 'PhotoViewer');
-
-		// An unreadable directory defers to the CLI's structured error rather
-		// than prompting on a guess.
-		assert.deepEqual(target, { name: 'PhotoViewer', force: false });
-		assert.equal(prompts.length, 0);
-	});
-});
 
 describe('parseTemplateList', () => {
 	it('parses a list payload', () => {
@@ -404,6 +206,37 @@ describe('isSdkMissingExit', () => {
 		assert.equal(isSdkMissingExit(3), true);
 		assert.equal(isSdkMissingExit(2), false);
 		assert.equal(isSdkMissingExit(null), false);
+	});
+});
+
+describe('isNonEmptyOutputFailure', () => {
+	// Verbatim from winappcli 0.6.1 for a non-empty --output.
+	const nonEmpty = {
+		created: false,
+		error: "Output directory 'C:\\src\\App' is not empty. Use --force to scaffold into it anyway."
+	};
+
+	it('identifies the one failure a --force retry can fix', () => {
+		assert.equal(isNonEmptyOutputFailure(2, nonEmpty), true);
+	});
+
+	it('does not offer a retry for other invalid-argument failures', () => {
+		// An invalid name is exit 2 as well, but --force will never fix it.
+		assert.equal(
+			isNonEmptyOutputFailure(2, {
+				created: false,
+				error: "Invalid name 'CON'. Use a simple name without path separators or invalid filename characters."
+			}),
+			false
+		);
+	});
+
+	it('does not offer a retry for other exit codes or a missing payload', () => {
+		assert.equal(isNonEmptyOutputFailure(3, nonEmpty), false);
+		assert.equal(isNonEmptyOutputFailure(5, nonEmpty), false);
+		assert.equal(isNonEmptyOutputFailure(2, undefined), false);
+		assert.equal(isNonEmptyOutputFailure(2, { created: false }), false);
+		assert.equal(isNonEmptyOutputFailure(null, nonEmpty), false);
 	});
 });
 

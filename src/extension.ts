@@ -56,12 +56,11 @@ import {
 	formatTemplateTags,
 	isProjectTemplate,
 	isSdkMissingExit,
+	isNonEmptyOutputFailure,
 	loadWinUiTemplates as loadWinUiTemplatesCore,
 	parseScaffoldResult,
 	parseTemplateList,
-	resolveScaffoldTarget as resolveScaffoldTargetCore,
 	sortTemplates,
-	type ScaffoldTargetAdapter,
 	type TemplateListResult,
 	type TemplateLoad,
 	type TemplateLoadAdapter,
@@ -1025,45 +1024,6 @@ async function pickWinUiTemplate(templates: WinUiTemplate[]): Promise<WinUiTempl
 	return picked?.template;
 }
 
-/**
- * Decides the final project name and whether `--force` is needed, given the
- * folder the user picked and the name they typed. Prompts when the target
- * directory already has files in it. Returns undefined if cancelled.
- *
- * The decision logic lives in `new-command-utils.ts`; this wrapper supplies the
- * VS Code-backed dependencies (file system, modal warning).
- */
-async function resolveScaffoldTarget(
-	parentDirectory: string,
-	requestedName: string
-): Promise<{ name: string; force: boolean } | undefined> {
-	const adapter: ScaffoldTargetAdapter = {
-		pathExists: (candidatePath) => fs.existsSync(candidatePath),
-		readDirectory: (directoryPath) => fs.readdirSync(directoryPath),
-		confirmNonEmptyTarget: async (targetDirectory, availableName) => {
-			const useAvailable = `Use ${availableName}`;
-			const createAnyway = 'Create Anyway';
-
-			const choice = await vscode.window.showWarningMessage(
-				`${targetDirectory} already contains files. Creating the app here may overwrite them.`,
-				{ modal: true },
-				useAvailable,
-				createAnyway
-			);
-
-			if (choice === useAvailable) {
-				return 'use-available';
-			}
-			if (choice === createAnyway) {
-				return 'create-anyway';
-			}
-			return undefined;
-		}
-	};
-
-	return resolveScaffoldTargetCore(adapter, parentDirectory, requestedName);
-}
-
 class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
 	private extensionPath: string;
 
@@ -1529,33 +1489,50 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const target = await resolveScaffoldTarget(parentDirectory, requestedName);
-			if (!target) {
-				return;
-			}
+			const outputDirectory = path.join(parentDirectory, requestedName);
+			const scaffoldOnce = async (force: boolean) =>
+				runWinappCapture(
+					extensionPath,
+					buildNewArgs({
+						template: template.shortName,
+						name: requestedName,
+						output: outputDirectory,
+						force,
+						// The pack the user chose is already installed by the listing
+						// step, so pin to it rather than letting the scaffold re-check
+						// the feed (and potentially pull a newer pack mid-flow).
+						templateVersion: 'installed'
+					}),
+					parentDirectory,
+					`Creating ${requestedName}...`
+				);
 
-			const outputDirectory = path.join(parentDirectory, target.name);
-			const result = await runWinappCapture(
-				extensionPath,
-				buildNewArgs({
-					template: template.shortName,
-					name: target.name,
-					output: outputDirectory,
-					force: target.force,
-					// The pack the user chose is already installed by the listing
-					// step, so pin to it rather than letting the scaffold re-check
-					// the feed (and potentially pull a newer pack mid-flow).
-					templateVersion: 'installed'
-				}),
-				parentDirectory,
-				`Creating ${target.name}...`
-			);
-
+			let result = await scaffoldOnce(false);
 			if (result.cancelled) {
 				return;
 			}
+			let scaffold = parseScaffoldResult(result.output);
 
-			const scaffold = parseScaffoldResult(result.output);
+			// The CLI refuses a non-empty output directory without writing anything
+			// and says to use --force. That's the one failure worth offering a retry.
+			if (isNonEmptyOutputFailure(result.code, scaffold)) {
+				const createAnyway = 'Create Anyway';
+				const choice = await vscode.window.showWarningMessage(
+					describeNewFailure(result.code, scaffold),
+					{ modal: true },
+					createAnyway
+				);
+				if (choice !== createAnyway) {
+					return;
+				}
+
+				result = await scaffoldOnce(true);
+				if (result.cancelled) {
+					return;
+				}
+				scaffold = parseScaffoldResult(result.output);
+			}
+
 			if (result.code !== 0 || !scaffold?.created) {
 				await showNewFailure(
 					describeNewFailure(result.code, scaffold),
@@ -1565,7 +1542,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			vscode.window.showInformationMessage(
-				`Created ${scaffold.name ?? target.name} at ${scaffold.projectPath ?? outputDirectory}`
+				`Created ${scaffold.name ?? requestedName} at ${scaffold.projectPath ?? outputDirectory}`
 			);
 		})
 	);
