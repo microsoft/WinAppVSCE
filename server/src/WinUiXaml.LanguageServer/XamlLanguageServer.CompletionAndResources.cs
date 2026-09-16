@@ -460,7 +460,6 @@ internal sealed partial class XamlLanguageServer
         return new XamlProjectContext(fullResolution, fullTypeSystem, XamlProjectStage.Full);
     }
 
-    /// <summary>Status text that names unresolvable references instead of leaving "build required" ambiguous.</summary>
     private static string BuildRequiredStatusMessage(
         System.Collections.Immutable.ImmutableArray<string> unresolved) =>
         unresolved.IsDefaultOrEmpty
