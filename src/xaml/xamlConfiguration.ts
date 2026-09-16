@@ -12,6 +12,7 @@ import {
   XamlStatusAction,
 } from "./xamlConstants";
 import {
+  PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE,
   PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
   PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE,
@@ -83,6 +84,19 @@ export function getXamlStatus(
   }
 
   if (running) {
+    // The download link is the only action that fixes this; restart applies the SDK once installed.
+    if (projectContext?.state === "dotnet-sdk-required") {
+      return {
+        message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${
+          projectContext.message ?? PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE
+        }`,
+        actions: [
+          XAML_STATUS_ACTIONS.installDotnet,
+          XAML_STATUS_ACTIONS.restartServer,
+          XAML_STATUS_ACTIONS.showOutput,
+        ],
+      };
+    }
     if (projectContext?.state === "error") {
       return {
         message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${

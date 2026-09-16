@@ -13,6 +13,7 @@ export const PROJECT_CONTEXT_STATES = [
   "reference-build-failed",
   "packages-not-restored",
   "generators-unavailable",
+  "dotnet-sdk-required",
   "idle",
 ] as const;
 
@@ -42,6 +43,9 @@ export const PROJECT_CONTEXT_PACKAGES_NOT_RESTORED_FALLBACK_MESSAGE =
   "Restore the project's packages so its references resolve.";
 export const PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE =
   "Source generators could not run, so generated members are missing.";
+export const PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE =
+  "Install the .NET 10 SDK to get project-aware XAML IntelliSense for this C# project. " +
+  "XAML formatting, folding, outline, and closing-tag completion work without it.";
 export const PROJECT_CONTEXT_RESTORING_MESSAGE =
   "Restoring the project's packages. Project-aware IntelliSense resumes when it completes.";
 export const SHOW_XAML_OUTPUT_HINT =
@@ -78,6 +82,7 @@ const DURABLE_STATES: readonly ProjectContextState[] = [
   "reference-build-failed",
   "packages-not-restored",
   "generators-unavailable",
+  "dotnet-sdk-required",
 ];
 
 /** Decides whether incoming status replaces current; suppresses transient reload `loading` over durable states while still accepting real recovery states immediately. */
@@ -99,6 +104,9 @@ export function selectProjectContextStatus(
 ): ProjectContextStatus | undefined {
   const values = [...statuses];
   return (
+    // A missing SDK blocks restore and build alike, so it outranks both: telling the developer to
+    // restore names a step that cannot run.
+    values.find((status) => status.state === "dotnet-sdk-required") ??
     // Restore precedes build: an unrestored project cannot be built, so when both conditions are
     // present, naming the build is telling the developer to do the step that will fail.
     values.find((status) => status.state === "packages-not-restored") ??
@@ -124,6 +132,14 @@ export function getProjectContextStatusPresentation(
   context: ProjectContextStatusContext = {}
 ): ProjectContextStatusPresentation | undefined {
   switch (status.state) {
+    // Only a project the server tried to load reaches this state, so the prompt lands on C#
+    // projects and never on a C++ project that needs no .NET.
+    case "dotnet-sdk-required":
+      return {
+        text: "$(cloud-download) WinApp: .NET SDK Required for XAML IntelliSense",
+        tooltip: `${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
+        transient: false,
+      };
     // The reference build was attempted and failed, so the useful thing to say is what broke, not
     // to ask for a build that just failed or a generic "unavailable" that implicates the extension.
     case "reference-build-failed":

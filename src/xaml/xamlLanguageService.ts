@@ -659,11 +659,16 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     return;
   }
 
+  // The Native AOT server is a self-contained executable, so .NET is a requirement of the
+  // project-aware features rather than of startup. Only a contributor-supplied framework-dependent
+  // .dll has to run under `dotnet` and therefore still gates on resolution.
+  const isNativeServer = serverPath.toLowerCase().endsWith(".exe");
+
   const resolution =
     process.env.WINUI_XAML_FORCE_NO_DOTNET === "1"
       ? ({ status: "failed", reason: "runtime-not-found" } as const)
       : await requireDotnetHostResolver().resolve();
-  if (resolution.status === "failed") {
+  if (resolution.status === "failed" && !isNativeServer) {
     const installToolUnavailable = resolution.reason === "install-tool-unavailable";
     notifyDegraded(
       describeDotnetResolutionFailure(resolution.reason),
@@ -673,26 +678,33 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     );
     return;
   }
-  const dotnet = resolution.dotnetPath;
 
-  // The Native AOT server launches directly, not through `dotnet <dll>`.
-  // The resolved .NET host is still required for the child environment.
-  // That keeps out-of-process MSBuild evaluation and the generator host on the user's resolved SDK.
-  const isNativeServer = serverPath.toLowerCase().endsWith(".exe");
+  // Pinning DOTNET_HOST_PATH keeps MSBuild and the generator host on the .NET the extension
+  // resolved. Without a resolution the server falls back to `dotnet` on PATH, and reports the
+  // SDK as missing only once a project actually needs it.
+  let dotnet: string | undefined;
+  if (resolution.status === "failed") {
+    log(
+      `Starting language server without a resolved .NET host: ${describeDotnetResolutionFailure(resolution.reason)} ` +
+        "Project-independent XAML features are unaffected."
+    );
+  } else {
+    dotnet = resolution.dotnetPath;
+  }
 
   log(
     isNativeServer
-      ? `Starting language server: ${serverPath} (native, dotnet host: ${dotnet})`
+      ? `Starting language server: ${serverPath} (native, dotnet host: ${dotnet ?? "unresolved"})`
       : `Starting language server: ${dotnet} ${serverPath}`
   );
 
   const executable: Executable = {
-    command: isNativeServer ? serverPath : dotnet,
+    command: isNativeServer ? serverPath : dotnet!,
     args: isNativeServer ? [] : [serverPath],
     transport: TransportKind.stdio,
     options: {
       cwd: path.dirname(serverPath),
-      env: createDotnetChildEnvironment(dotnet, process.env, log),
+      env: dotnet ? createDotnetChildEnvironment(dotnet, process.env, log) : process.env,
     },
   };
 

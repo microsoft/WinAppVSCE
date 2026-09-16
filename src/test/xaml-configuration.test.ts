@@ -11,6 +11,7 @@ import {
   shouldRestartXamlLanguageServer,
 } from "../xaml/xamlConfiguration";
 import {
+  PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE,
   PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
   PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE,
@@ -152,6 +153,18 @@ test("Show Info names the degraded conditions instead of reporting a healthy ser
     {
       message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE}`,
       actions: ["Restart Language Server", "Show Output"],
+    }
+  );
+
+  // The server runs without .NET, so this reaches Show Info while the server is healthy. Only the
+  // download link fixes it, and the restart is what applies the SDK once it is installed.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, false, {
+      state: "dotnet-sdk-required",
+    }),
+    {
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE}`,
+      actions: ["Install .NET", "Restart Language Server", "Show Output"],
     }
   );
 });

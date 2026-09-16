@@ -210,13 +210,13 @@ The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, 
 | **Semantic tokens** | Richer, type-aware colorization layered on top of the TextMate grammar. |
 | **Code actions** | Press **Ctrl+.** to import and qualify unresolved types, add or correct namespace declarations, insert `x:DataType`, repair names, attributes, values, bindings, and Setter properties, remove invalid extra content, or generate event handlers. Prompted fixes are applied only when the document still matches the diagnostic. If the code-behind has pending edits, save it first when prompted, then retry handler generation so edits use current source positions. |
 
-The language server starts automatically when you open a `.xaml` file, and it still requires an installed .NET 10 runtime, plus the .NET 10 SDK for project-aware features.
+The language server starts automatically when you open a `.xaml` file, and it starts whether or not .NET is installed. .NET is a requirement of the project-aware features, not of the editor.
 
-Native AOT changes *how the server starts*, not *whether .NET is needed*. The server itself is a native executable, so it no longer waits for a .NET runtime to be acquired before it can launch — that is what makes IntelliSense come up quickly. But every project-aware feature is derived from your real project, and reaching it means leaving the native process: MSBuild evaluation and package restore run through the `dotnet` CLI, which is part of the SDK, and source generators run in a framework-dependent host (`WinUiXaml.GeneratorHost.dll`), which needs the runtime. Without .NET there is no type system to complete against, so WinApp does not start the server at all and XAML editing stays syntax-only.
+Native AOT changes *what needs .NET*, not just how the server starts. The server is a self-contained native executable with the runtime linked in, so it launches with no .NET on the machine. What leaves the native process is everything derived from your real project: MSBuild evaluation and package restore run through the `dotnet` CLI, which ships in the SDK, and source generators run in a framework-dependent host (`WinUiXaml.GeneratorHost.dll`), which needs the runtime. Source generators cannot be part of the native binary because running them means loading your project's analyzer assemblies at runtime, which Native AOT has no loader for.
 
-Project context is read from `.csproj`, so a C++/WinRT project gets the language-independent XAML features — formatting, folding, outline, close-tag completion, document links — but not type-aware completion, `x:Bind` checking, or navigation.
+So the .NET requirement follows your project language. A C++/WinRT project needs no .NET at all: project context is read from `.csproj`, so those projects get the language-independent XAML features — formatting, folding, outline, close-tag completion, document links, syntax diagnostics — and never invoke MSBuild or the generator host. A C# project needs the .NET 10 SDK for type-aware completion, `x:Bind` checking, and navigation; without it the server still runs and the status bar reports **WinApp: .NET SDK Required for XAML IntelliSense** with an install link.
 
-If a compatible runtime is not found, WinApp offers to open the official .NET download page or dismiss the prompt; it never installs a runtime automatically. Project-aware features derive their type and resource capabilities from your project's WinUI SDK metadata rather than substituting a bundled framework catalog. Use **WinApp: Show Info** to check the server status and **WinApp: Restart Language Server** to restart it.
+WinApp never installs a runtime or SDK automatically; it offers the official .NET download page. Project-aware features derive their type and resource capabilities from your project's WinUI SDK metadata rather than substituting a bundled framework catalog. Use **WinApp: Show Info** to check the server status and **WinApp: Restart Language Server** to restart it.
 
 The status bar reports project-loading progress for the active XAML document:
 
@@ -230,9 +230,9 @@ The status bar reports project-loading progress for the active XAML document:
 | **WinApp: Referenced Project Failed to Build** | A project the workspace references could not be built, so the types it defines are unavailable and the WinUI markup compiler could not generate `InitializeComponent` or the `x:Name` backing fields. Framework and package types still resolve. A separate notification offers **Build** once per project, which surfaces that project's compiler errors. This status stays until the condition clears. |
 | **WinApp: Generated Members Unavailable** | The out-of-process source-generator host could not run, so generated members such as `[ObservableProperty]` properties are missing from completion and `{x:Bind}`. Every other symbol still resolves. **WinApp: Show Info** offers restart and output actions. |
 | **WinApp: XAML IntelliSense Unavailable** | Project IntelliSense failed to load. Select the status to open the **WinUI XAML** output for details. **WinApp: Show Info** offers restart and output actions. Runtime and workspace-trust failures provide their own recovery actions in **Show Info**. |
-| **XAML: .NET 10 required** | No compatible .NET runtime was found, so the server did not start. Select the status for install and restart options. |
+| **WinApp: .NET SDK Required for XAML IntelliSense** | A C# project was opened on a machine with no usable `dotnet`, so MSBuild could not evaluate it. Language-independent XAML editing keeps working. **WinApp: Show Info** offers **Install .NET**, restart, and output actions. This status stays until the condition clears. |
 
-The first three are the normal startup sequence and are what you will see on a healthy project. The rest appear only when their condition is true — an unrestored project, a reference that fails to build, a generator host that could not run, or a missing runtime — so a project that builds cleanly never shows them.
+The first three are the normal startup sequence and are what you will see on a healthy project. The rest appear only when their condition is true — an unrestored project, a reference that fails to build, a generator host that could not run, or a C# project with no .NET SDK — so a project that builds cleanly never shows them.
 
 XAML tooling supports these settings:
 
@@ -249,7 +249,7 @@ To read a project the language server runs a design-time build with `dotnet msbu
 - **A reference that fails to build is reported, not worked around.** If a referenced project has real compiler errors, the design-time build cannot produce its assembly, and the types it defines stay unavailable. The status bar reports *referenced project failed to build* and a notification offers **Build** so you can see the errors. Framework and package types continue to resolve in the meantime.
 
 #### When the language server cannot start
-XAML editing degrades to **syntax highlighting only** rather than failing outright. Everything else in the extension keeps working. This happens when the workspace is not trusted, no .NET 10 runtime is available, the .NET Install Tool cannot supply one, or the server itself fails to start. WinApp shows a one-time notification naming the cause with the relevant recovery action, and **WinApp: Show Info** repeats it on demand.
+XAML editing degrades to **syntax highlighting only** rather than failing outright. Everything else in the extension keeps working. This happens when the workspace is not trusted, the host platform is not Windows on x64 or ARM64, or the server itself fails to start. A missing .NET SDK is no longer one of these causes: the server starts anyway and reports the condition per project. WinApp shows a one-time notification naming the cause with the relevant recovery action, and **WinApp: Show Info** repeats it on demand.
 
 #### What works at each loading stage
 
@@ -398,7 +398,7 @@ The winapp CLI (and this extension) works with any Windows app framework:
 
 - Windows 10 or later
 - Visual Studio Code 1.109.0 or later
-- An installed .NET 10 runtime, with the .NET 10 SDK on `PATH` for project-aware features, for any project language. The XAML language server is a Native AOT executable and needs no runtime to launch, but it reaches your project's types through the `dotnet` CLI and a framework-dependent source-generator host, so without .NET it does not start and XAML editing stays syntax-only. The extension does not install or bundle .NET.
+- The .NET 10 SDK, for project-aware XAML IntelliSense in C# projects only. The XAML language server is a self-contained Native AOT executable and starts with no .NET installed, so C++/WinRT projects and language-independent XAML editing need nothing. C# projects reach their types through `dotnet msbuild` and a framework-dependent source-generator host, which the SDK provides. The extension does not install or bundle .NET.
 
 The winapp CLI is bundled with the extension: no separate installation required.
 

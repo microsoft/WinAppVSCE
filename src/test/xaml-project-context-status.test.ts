@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {
+  PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE,
   PROJECT_CONTEXT_STATES,
   PROJECT_CONTEXT_STATUS_NOTIFICATION,
   ProjectContextStatus,
@@ -367,6 +368,61 @@ test("names a generator outage, ranks it under the fixable states, and survives 
   );
 
   assert.equal(isProjectContextState("generators-unavailable"), true);
+});
+
+// The server starts without .NET now, so a C# project can reach a state no other status covers:
+// everything project-aware is unavailable and no amount of restoring or building fixes it, so it
+// has to outrank the states that suggest those actions.
+test("names a missing SDK, outranks restore and build, and survives a reload", () => {
+  // The server's own message names the failed process; the actionable sentence is the one the
+  // developer can follow, so the presentation states it rather than echoing the failure.
+  assert.deepEqual(
+    getProjectContextStatusPresentation({
+      uri: "file:///Sdk.xaml",
+      state: "dotnet-sdk-required",
+      message: "Project-aware XAML features require the .NET SDK.",
+    }),
+    {
+      text: "$(cloud-download) WinApp: .NET SDK Required for XAML IntelliSense",
+      tooltip: `${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE} Click to show the WinUI XAML output.`,
+      transient: false,
+    }
+  );
+
+  for (const competing of [
+    "packages-not-restored",
+    "reference-build-failed",
+    "generators-unavailable",
+    "error",
+  ] as const) {
+    assert.equal(
+      selectProjectContextStatus([
+        { uri: "file:///A.xaml", state: competing },
+        { uri: "file:///A.xaml", state: "dotnet-sdk-required" },
+      ])?.state,
+      "dotnet-sdk-required",
+      `dotnet-sdk-required must outrank ${competing}`
+    );
+  }
+
+  assert.equal(
+    shouldReplaceProjectContextStatus(
+      { uri: "file:///A.xaml", state: "dotnet-sdk-required" },
+      { uri: "file:///A.xaml", state: "loading" }
+    ),
+    false
+  );
+
+  // Installing the SDK and restarting has to clear it, or the instruction outlives the fix.
+  assert.equal(
+    shouldReplaceProjectContextStatus(
+      { uri: "file:///A.xaml", state: "dotnet-sdk-required" },
+      { uri: "file:///A.xaml", state: "ready" }
+    ),
+    true
+  );
+
+  assert.equal(isProjectContextState("dotnet-sdk-required"), true);
 });
 
 test("presents ready status briefly and hides idle status", () => {

@@ -351,7 +351,10 @@ internal sealed partial class XamlLanguageServer
         catch (MsBuildUnavailableException ex)
         {
             await NotifyMsBuildUnavailableAsync(ex).ConfigureAwait(false);
-            await NotifyProjectContextStatusAsync(uri, "error", ex.Message).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(
+                uri,
+                ex.HostMissing ? "dotnet-sdk-required" : "error",
+                ex.Message).ConfigureAwait(false);
             return null;
         }
         catch (ProjectRestoreRequiredException ex)

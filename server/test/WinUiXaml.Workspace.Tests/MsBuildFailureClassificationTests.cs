@@ -1,3 +1,7 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
 using WinUiXaml.Workspace;
 using Xunit;
 
@@ -62,6 +66,26 @@ namespace WinUiXaml.Workspace.Tests
             var unavailable = Assert.IsType<MsBuildUnavailableException>(failure);
             Assert.Contains("exited with code 7", unavailable.Message);
             Assert.Contains("MSB1234", unavailable.Message);
+            Assert.False(unavailable.HostMissing);
+        }
+
+        /// <summary>The server now starts without .NET, so "no dotnet on this machine" is a state the user reaches by opening a C# project rather than an impossible one. It has to be distinguishable from a build that ran and failed, because only the former is fixed by installing the SDK.</summary>
+        [Fact]
+        public void AbsentDotnetHost_IsReportedAsHostMissing()
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = Path.Combine(Path.GetTempPath(), "winui-xaml-no-such-dotnet.exe"),
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+
+            var failure = Assert.Throws<MsBuildUnavailableException>(
+                () => MsBuildCli.RunProcess(startInfo, TimeSpan.FromSeconds(30), CancellationToken.None));
+
+            Assert.True(failure.HostMissing);
+            Assert.Contains(".NET SDK", failure.Message);
         }
     }
 }

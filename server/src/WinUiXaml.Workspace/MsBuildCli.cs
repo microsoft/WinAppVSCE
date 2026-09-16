@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -15,10 +16,14 @@ namespace WinUiXaml.Workspace
 {
     public sealed class MsBuildUnavailableException : InvalidOperationException
     {
-        public MsBuildUnavailableException(string message, Exception? innerException = null)
+        public MsBuildUnavailableException(string message, Exception? innerException = null, bool hostMissing = false)
             : base(message, innerException)
         {
+            HostMissing = hostMissing;
         }
+
+        /// <summary>True when the failure is an absent <c>dotnet</c> host rather than a build error, which is the case the user can fix by installing the SDK.</summary>
+        public bool HostMissing { get; }
     }
 
     /// <summary>Acquires MSBuild data by shelling out to <c>dotnet msbuild</c>, avoiding MSBuildLocator so Native AOT and trimming stay safe.</summary>
@@ -27,6 +32,13 @@ namespace WinUiXaml.Workspace
         /// <summary>MSBuild evaluation is cheap; a design-time build is not. Keep them separate.</summary>
         private static readonly TimeSpan EvaluateTimeout = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan DesignTimeBuildTimeout = TimeSpan.FromMinutes(10);
+
+        /// <summary>ERROR_FILE_NOT_FOUND, which is how a missing <c>dotnet</c> host surfaces from <see cref="Process.Start()"/>.</summary>
+        private const int FileNotFoundNativeErrorCode = 2;
+
+        /// <summary>Test seam: the server starts without .NET, so simulating its absence has to suppress the PATH fallback too.</summary>
+        private static bool HostForcedMissing =>
+            Environment.GetEnvironmentVariable("WINUI_XAML_FORCE_NO_DOTNET") == "1";
 
         internal readonly struct Evaluation
         {
@@ -828,6 +840,14 @@ namespace WinUiXaml.Workspace
             process.OutputDataReceived += (_, e) => { if (e.Data != null) { standardOutput.AppendLine(e.Data); } };
             process.ErrorDataReceived += (_, e) => { if (e.Data != null) { standardError.AppendLine(e.Data); } };
 
+            if (HostForcedMissing)
+            {
+                throw new MsBuildUnavailableException(
+                    "Project-aware XAML features require the .NET SDK. " +
+                    $"Failed to start '{startInfo.FileName} msbuild'.",
+                    hostMissing: true);
+            }
+
             try
             {
                 process.Start();
@@ -837,7 +857,8 @@ namespace WinUiXaml.Workspace
                 throw new MsBuildUnavailableException(
                     "Project-aware XAML features require the .NET SDK. " +
                     $"Failed to start '{startInfo.FileName} msbuild'.",
-                    ex);
+                    ex,
+                    hostMissing: ex is Win32Exception { NativeErrorCode: FileNotFoundNativeErrorCode });
             }
 
             process.BeginOutputReadLine();
