@@ -13,11 +13,11 @@ import {
   shouldReplaceProjectContextStatus,
 } from "../xaml/projectContextStatus";
 
-test("a starting reload does not erase a build-required the developer has not fixed", () => {
+test("a starting reload does not erase a reference-build-failed the developer has not fixed", () => {
   // Every save restarts the load, so an unbuilt project re-sends `loading` indefinitely.
   const current: ProjectContextStatus = {
     uri: "file:///a.xaml",
-    state: "build-required",
+    state: "reference-build-failed",
     message: "PlainLib has not been built",
   };
   assert.equal(
@@ -42,7 +42,7 @@ test("recovery after a real build still lands immediately", () => {
   // strictly worse than the flapping this fixes.
   const current: ProjectContextStatus = {
     uri: "file:///a.xaml",
-    state: "build-required",
+    state: "reference-build-failed",
   };
   for (const state of PROJECT_CONTEXT_STATES.filter((s) => s !== "loading")) {
     assert.equal(
@@ -51,7 +51,7 @@ test("recovery after a real build still lands immediately", () => {
         state,
       }),
       true,
-      `${state} must replace build-required`
+      `${state} must replace reference-build-failed`
     );
   }
 });
@@ -107,7 +107,7 @@ test("every state the server can emit is one the client knows", () => {
       "The call shape probably changed and this test is no longer reading anything."
   );
   assert.ok(emitted.includes("restore-required"));
-  assert.ok(emitted.includes("build-required"));
+  assert.ok(emitted.includes("reference-build-failed"));
 
   const unknown = [...new Set(emitted)].filter(
     (state) => !PROJECT_CONTEXT_STATES.includes(state as never)
@@ -245,7 +245,7 @@ test("reports the restore as work in flight while the extension is running it", 
   // The flag describes the restore only; the build-side state is untouched by it.
   assert.match(
     getProjectContextStatusPresentation(
-      { uri: "file:///Fresh.xaml", state: "build-required", message: "build me" },
+      { uri: "file:///Fresh.xaml", state: "reference-build-failed", message: "build me" },
       { restoreInFlight: true }
     )?.text ?? "",
     /failed to build/
@@ -273,7 +273,7 @@ test("names the restore in the bar itself, and outranks the build", () => {
   // point the developer at the step that fails second.
   assert.equal(
     selectProjectContextStatus([
-      { uri: "file:///A.xaml", state: "build-required", message: "build me" },
+      { uri: "file:///A.xaml", state: "reference-build-failed", message: "build me" },
       { uri: "file:///A.xaml", state: "restore-required", message: "restore me" },
     ])?.state,
     "restore-required"
@@ -296,7 +296,7 @@ test("names the build in the bar itself, and outranks a plain error", () => {
   assert.deepEqual(
     getProjectContextStatusPresentation({
       uri: "file:///Diamond.xaml",
-      state: "build-required",
+      state: "reference-build-failed",
       message: "Build required: App.csproj (unresolved: MiddleLib, SharedLib).",
     }),
     {
@@ -312,12 +312,12 @@ test("names the build in the bar itself, and outranks a plain error", () => {
   assert.equal(
     selectProjectContextStatus([
       { uri: "file:///A.xaml", state: "error", message: "boom" },
-      { uri: "file:///A.xaml", state: "build-required", message: "build me" },
+      { uri: "file:///A.xaml", state: "reference-build-failed", message: "build me" },
     ])?.state,
-    "build-required"
+    "reference-build-failed"
   );
 
-  assert.equal(isProjectContextState("build-required"), true);
+  assert.equal(isProjectContextState("reference-build-failed"), true);
 });
 
 test("presents ready status briefly and hides idle status", () => {

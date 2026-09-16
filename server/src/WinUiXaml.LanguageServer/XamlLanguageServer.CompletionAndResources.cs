@@ -364,7 +364,7 @@ internal sealed partial class XamlLanguageServer
         catch (ProjectBuildRequiredException ex)
         {
             await NotifyProjectBuildRequiredAsync(ex).ConfigureAwait(false);
-            await NotifyProjectContextStatusAsync(uri, "build-required", ex.Message)
+            await NotifyProjectContextStatusAsync(uri, "reference-build-failed", ex.Message)
                 .ConfigureAwait(false);
             return null;
         }
@@ -445,8 +445,8 @@ internal sealed partial class XamlLanguageServer
                     fullResolution.UnresolvedProjectReferences)).ConfigureAwait(false);
             await NotifyProjectContextStatusAsync(
                 uri,
-                "build-required",
-                BuildRequiredStatusMessage(fullResolution.UnresolvedProjectReferences))
+                "reference-build-failed",
+                ReferenceBuildFailedStatusMessage(fullResolution.UnresolvedProjectReferences))
                 .ConfigureAwait(false);
         }
         else
@@ -460,7 +460,7 @@ internal sealed partial class XamlLanguageServer
         return new XamlProjectContext(fullResolution, fullTypeSystem, XamlProjectStage.Full);
     }
 
-    private static string BuildRequiredStatusMessage(
+    private static string ReferenceBuildFailedStatusMessage(
         System.Collections.Immutable.ImmutableArray<string> unresolved) =>
         unresolved.IsDefaultOrEmpty
             ? "A referenced project could not be resolved."
@@ -937,9 +937,9 @@ internal sealed partial class XamlLanguageServer
                 await NotifyProjectContextStatusAsync(
                     uri,
                     !unresolved.IsDefaultOrEmpty
-                        ? "build-required"
+                        ? "reference-build-failed"
                         : context.Stage == XamlProjectStage.Full ? "ready" : "framework-ready",
-                    unresolved.IsDefaultOrEmpty ? null : BuildRequiredStatusMessage(unresolved))
+                    unresolved.IsDefaultOrEmpty ? null : ReferenceBuildFailedStatusMessage(unresolved))
                     .ConfigureAwait(false);
             }
         });

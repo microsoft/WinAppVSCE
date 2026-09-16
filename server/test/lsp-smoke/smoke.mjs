@@ -202,7 +202,7 @@ writeFileSync(
   "utf8"
 );
 
-// Second page in the same project: the build-required toast fires once per project, so only the status bar still says a build is needed.
+// Second page in the same project: the reference-build-failed toast fires once per project, so only the status bar still says a build is needed.
 // Publishing `framework-ready` here is exactly the regression the durable state was added to remove.
 const buildRequiredSecondXamlPath = join(buildRequiredAppDir, "UnbuiltRefSecondPage.xaml");
 const buildRequiredSecondXamlText = `<Page
@@ -232,7 +232,7 @@ try {
   buildRequiredFixtureReady = true;
 } catch (err) {
   console.error(
-    `[warn] could not restore the unbuilt-reference fixture, skipping the build-required leg: ${err.message}`
+    `[warn] could not restore the unbuilt-reference fixture, skipping the reference-build-failed leg: ${err.message}`
   );
 }
 const buildRequiredXamlUri = pathToFileURL(buildRequiredXamlPath).href;
@@ -1578,7 +1578,7 @@ async function main() {
 
   // 22b) Never-built project reference, end to end: it now compiles from source into scratch output for the markup compiler.
   // The project should load as if already built, so assert the reference build rather than the old prompt.
-  // No projectBuildRequired reaches the wire, no document settles on `build-required`, and completion resolves for real.
+  // No projectBuildRequired reaches the wire, no document settles on `reference-build-failed`, and completion resolves for real.
   if (buildRequiredFixtureReady) {
     const firstReady = waitFor(
       (message) =>
@@ -1670,10 +1670,10 @@ async function main() {
     const stuck = projectContextStatuses.filter(
       (status) =>
         (status?.uri === buildRequiredXamlUri || status?.uri === buildRequiredSecondXamlUri) &&
-        status?.state === "build-required"
+        status?.state === "reference-build-failed"
     );
     if (stuck.length > 0) {
-      fail(`a built-reference document still reported build-required: ${JSON.stringify(stuck)}`);
+      fail(`a built-reference document still reported reference-build-failed: ${JSON.stringify(stuck)}`);
     }
     console.log(
       "[ok] unbuilt project, second document: stays ready and framework completions still resolve"
@@ -1693,9 +1693,9 @@ async function main() {
       (message) =>
         message.method === "winui-xaml/projectContextStatus" &&
         message.params?.uri === unresolvableXamlUri &&
-        message.params?.state === "build-required",
+        message.params?.state === "reference-build-failed",
       180000,
-      "build-required project context status for an unresolvable project reference"
+      "reference-build-failed project context status for an unresolvable project reference"
     );
     send({
       method: "textDocument/didOpen",
@@ -1732,11 +1732,11 @@ async function main() {
       );
     }
     console.log(
-      "[ok] unresolvable project reference: projectBuildRequired + build-required status both still reach the wire"
+      "[ok] unresolvable project reference: projectBuildRequired + reference-build-failed status both still reach the wire"
     );
   } else {
     fail(
-      "the unresolvable-reference fixture could not be restored, so the residual build-required " +
+      "the unresolvable-reference fixture could not be restored, so the residual reference-build-failed " +
         "leg tested nothing (see the warning above)"
     );
   }

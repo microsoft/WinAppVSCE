@@ -7,7 +7,7 @@ namespace WinUiXaml.LanguageServer.Tests;
 
 // Notifications serialize by runtime type under Native AOT, with no reflection fallback and no reply path.
 // Registered-type round trips miss the sent-but-unregistered defect; source-based coverage asks whether we registered what we send.
-// Without this, a build-required prompt lost to NotSupportedException looks like a project that built fine.
+// Without this, a reference-build-failed prompt lost to NotSupportedException looks like a project that built fine.
 public class NotificationWireTests
 {
     /// <summary>Reads the framed payload of every message written to an output stream.</summary>
@@ -84,11 +84,11 @@ public class NotificationWireTests
             new ProjectContextStatusParams
             {
                 Uri = "file:///a.xaml",
-                State = "build-required",
+                State = "reference-build-failed",
                 Message = "PlainLib has not been built",
             },
             "state",
-            "build-required"
+            "reference-build-failed"
         },
         {
             "textDocument/publishDiagnostics",
