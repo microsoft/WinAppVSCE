@@ -11,7 +11,7 @@ Thanks for your interest in contributing to the WinApp VS Code Extension.
 - **Visual Studio C++ build tools (MSVC / `link.exe`)** — required to publish the Native AOT server locally. `dotnet publish` invokes the ILC native linker, which fails with `MSB3073` (`link.exe exited with code 123`) when the C++ toolchain is missing or `vswhere.exe` is not resolvable. Install the "Desktop development with C++" workload in Visual Studio or the standalone Build Tools. If the toolchain is installed and the failure text still reports `'vswhere.exe' is not recognized`, add `C:\Program Files (x86)\Microsoft Visual Studio\Installer` to `PATH` and publish from a developer command prompt matching the target architecture (`vcvarsarm64.bat` for `win-arm64`).
 - [WinApp CLI](https://github.com/microsoft/WinAppCli) (for syncing manifest schemas)
 
-> Native AOT removes the runtime dependency for the server executable only — it launches as a native binary. Users of the packaged extension still need an installed .NET 10 runtime, because the source-generator host (`WinUiXaml.GeneratorHost.dll`) runs out of process on `dotnet` and project evaluation goes through the `dotnet` CLI. The extension never installs or bundles a runtime.
+> Native AOT removes the .NET dependency for anything the server does in process — it is a self-contained native binary and starts with no .NET installed. Users of the packaged extension need the .NET 10 SDK only for project-aware IntelliSense in C# projects, because project evaluation goes through `dotnet msbuild` and the source-generator host (`WinUiXaml.GeneratorHost.dll`) runs out of process on `dotnet`. C++/WinRT projects need no .NET at all. The extension never installs or bundles .NET.
 
 ## Setup
 
