@@ -3,25 +3,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-/**
- * Auto-restore runs without being asked, which is what makes its failure path worth pinning: the
- * user did not start it, so the only evidence it ran at all is what it leaves behind. Two things
- * have to survive a failure.
- *
- * The first is the in-flight count. It drives the status bar -- `restoreInFlight` chooses between
- * "restoring packages" and the "restore required" instruction -- so a count that leaks on the
- * failure path pins the bar to a spinner for the rest of the session and permanently suppresses
- * the one message that tells the user what to do. The restore that failed is exactly the restore
- * whose demand is still outstanding.
- *
- * The second is the notification. A restore the user never requested, failing silently into the
- * output channel, is indistinguishable from an extension that does nothing.
- *
- * These are source-level assertions for the same reason as `xaml-dotnet-host-usage.test.ts`:
- * `restoreProject` is module-private, and reaching it behaviourally means standing up activation,
- * a language client and a real `dotnet` child. The defect being pinned is structural -- an
- * accounting update that is not on every path -- and structure is visible in the source.
- */
+// Auto-restore failure must leave two signals because the user did not start it and otherwise only sees its aftermath.
+// First: in-flight count is decremented so the bar leaves "restoring" and shows the still-outstanding restore-required instruction.
+// Second: the failure is notified; source-level assertions are enough because the private restore path's required accounting/notification structure is visible here.
 const source = readFileSync(
   path.join(__dirname, "..", "..", "src", "xaml", "xamlLanguageService.ts"),
   "utf8"

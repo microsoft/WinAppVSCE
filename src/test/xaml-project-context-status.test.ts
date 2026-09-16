@@ -76,17 +76,9 @@ test("a reload replaces any state that is not a durable fact about the project",
   }
 });
 
-/**
- * The server sends the state as a bare string and the client narrows it with
- * `isProjectContextState`, so a state the server emits but this list does not know is *dropped* --
- * the status bar shows nothing at all rather than showing something wrong.
- *
- * Nothing in either language's test suite covers that seam: the server's states are string
- * literals inside a private method, and the client's tests only ever feed it states it already
- * knows. A server-side state added without its client counterpart therefore compiles, ships, and
- * silently displays nothing. This reads the literals back out of the C# source so that mismatch
- * fails the build instead.
- */
+// The server sends states as bare strings and the client narrows with `isProjectContextState`; unknown states are dropped, so the bar shows nothing.
+// Neither suite covers this seam because server states are private literals and client tests normally feed known states.
+// Read C# literals back so a server-side state added without a client counterpart fails the build.
 test("every state the server can emit is one the client knows", () => {
   const source = readFileSync(
     path.join(

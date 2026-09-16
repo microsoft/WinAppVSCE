@@ -8,14 +8,7 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace WinUiXaml.Workspace
 {
-    /// <summary>
-    /// The parsed form of the csc command line MSBuild would have invoked for a project.
-    /// </summary>
-    /// <remarks>
-    /// This replaces what <c>MSBuildWorkspace</c> used to compute in-process. It is the complete
-    /// description of the compilation: the resolved reference closure, every source file
-    /// (including the XAML compiler's <c>.g.cs</c> output), and the options that change binding.
-    /// </remarks>
+    /// <summary>The csc command line MSBuild would invoke, including references, sources, generated XAML output, and binding-affecting options.</summary>
     internal sealed class CscCommandLine
     {
         private CscCommandLine(
@@ -63,14 +56,8 @@ namespace WinUiXaml.Workspace
         public ImmutableArray<string> Sources { get; }
 
         /// <summary>
-        /// The <c>.editorconfig</c> and generated <c>.GlobalConfig</c> files csc was given.
+        /// The <c>.editorconfig</c> and generated <c>.GlobalConfig</c> files csc was given, including MSBuild <c>build_property.*</c> values generators need to avoid silently wrong output.
         /// </summary>
-        /// <remarks>
-        /// MSBuild writes <c>build_property.*</c> values -- <c>RootNamespace</c>,
-        /// <c>ProjectDir</c>, <c>TargetFramework</c> and the rest -- into a generated global
-        /// config. A generator that reads them produces different output when they are absent, so
-        /// dropping these switches makes generated members silently wrong rather than missing.
-        /// </remarks>
         public ImmutableArray<string> AnalyzerConfigs { get; }
 
         /// <summary>Files passed as <c>/additionalfile:</c>, which generators read as inputs.</summary>
@@ -80,15 +67,8 @@ namespace WinUiXaml.Workspace
         public ImmutableDictionary<string, ImmutableArray<string>> ReferenceAliases { get; }
 
         /// <summary>
-        /// References csc was told to embed rather than link, via <c>/link:</c>.
+        /// References csc embeds via <c>/link:</c>; preserving MSBuild <c>EmbedInteropTypes</c> is required so COM/WinRT PIA types keep resolving in XAML.
         /// </summary>
-        /// <remarks>
-        /// This is the csc spelling of MSBuild's <c>EmbedInteropTypes</c> metadata, which the
-        /// pre-AOT <c>MsBuildFrameworkProject</c> read directly off the <c>ReferencePath</c> item.
-        /// Dropping it does not just lose an option: an embedded-interop reference carries no
-        /// runtime identity of its own, so every COM/WinRT PIA type resolves as if the assembly
-        /// were absent, and XAML that binds to those types silently stops resolving.
-        /// </remarks>
         public ImmutableHashSet<string> EmbeddedInteropReferences { get; }
 
         public string? LanguageVersion { get; }
@@ -112,14 +92,8 @@ namespace WinUiXaml.Workspace
             NullableContextOptions.Disable,
             null);
 
-        /// <summary>
-        /// Parses raw csc switches into a compilation description.
-        /// </summary>
-        /// <param name="projectDirectory">
-        /// csc is invoked with the project directory as its working directory, so its paths are
-        /// project-relative. Resolving against anything else makes <c>File.Exists</c> silently
-        /// drop most sources and produces a compilation that is missing types.
-        /// </param>
+        /// <summary>Parses raw csc switches into a compilation description.</summary>
+        /// <param name="projectDirectory">The csc working directory; resolving paths elsewhere silently drops project-relative sources and types.</param>
         public static CscCommandLine Parse(
             IEnumerable<string> arguments,
             string projectDirectory)
@@ -132,12 +106,9 @@ namespace WinUiXaml.Workspace
                     : Path.GetFullPath(Path.Combine(projectDirectory, trimmed));
             }
 
-            // Roslyn's own parser rather than a hand-rolled switch table. It is the code csc runs,
-            // so spellings we would otherwise have to enumerate -- +/- boolean forms, extern
-            // aliases, /langversion values, /nullable modes -- are correct by construction instead
-            // of by having thought of them. It lives in Microsoft.CodeAnalysis.CSharp, which this
-            // project already references; only Microsoft.CodeAnalysis.Workspaces is excluded under
-            // Native AOT, so nothing here is blocked by it.
+            // Roslyn's own parser is csc's parser, so +/- booleans, extern aliases, /langversion,
+            // and /nullable are correct by construction. This uses Microsoft.CodeAnalysis.CSharp,
+            // not the Workspaces layer excluded by Native AOT.
             var parsed = CSharpCommandLineParser.Default.Parse(
                 arguments.Where(argument => !string.IsNullOrWhiteSpace(argument))
                     .SelectMany(argument => ExpandMultiAliasReference(argument.Trim())),
@@ -173,11 +144,9 @@ namespace WinUiXaml.Workspace
             }
 
             var parseOptions = parsed.ParseOptions;
-            // csc only parses doc comments when /doc is passed, and MSBuild omits it unless the
-            // project generates an XML file -- but quick info for the user's own members is read
-            // straight off these syntax trees. Left at None, every summary on their own types
-            // silently disappears while framework prose keeps working, which looks like a docs
-            // problem rather than a parse option.
+            // csc parses doc comments only with /doc, but quick info for user members reads these
+            // syntax trees directly. Force parsing so user summaries do not disappear while
+            // framework prose still works.
             if (parseOptions.DocumentationMode == DocumentationMode.None)
             {
                 parseOptions = parseOptions.WithDocumentationMode(DocumentationMode.Parse);
@@ -211,14 +180,8 @@ namespace WinUiXaml.Workspace
         }
 
         /// <summary>
-        /// Splits <c>/reference:Alpha,Beta=path</c> into one switch per alias.
+        /// Splits <c>/reference:Alpha,Beta=path</c> into one switch per alias so Roslyn's csc parser keeps the reference instead of rejecting the comma form.
         /// </summary>
-        /// <remarks>
-        /// csc itself takes a single alias per switch, so Roslyn's parser rejects the comma form
-        /// outright and drops the reference -- which would remove the assembly from the
-        /// compilation, not just its aliases. Expanding first keeps the tolerance the hand-rolled
-        /// parser had without giving up the real parser everywhere else.
-        /// </remarks>
         private static IEnumerable<string> ExpandMultiAliasReference(string argument)
         {
             if (argument.Length == 0 || (argument[0] != '/' && argument[0] != '-'))
@@ -261,17 +224,8 @@ namespace WinUiXaml.Workspace
         private static bool LooksLikeDriveLetter(string text, int equalsIndex) =>
             equalsIndex == 1 && text.Length > 2 && (text[2] == '\\' || text[2] == '/');
 
-        /// <summary>Materializes the reference closure, honouring any extern aliases.</summary>
-        /// <summary>Builds the metadata references for the compilation.</summary>
-        /// <param name="includeDocumentation">
-        /// Whether references carry their sibling XML documentation. This is not a preference: it
-        /// reproduces the two-stage behaviour of the MSBuildWorkspace design this replaced. The
-        /// framework stage built references without documentation, and the authoritative stage got
-        /// it implicitly from MSBuildWorkspace. Supplying it in both places populates Documentation
-        /// on completion items the moment a file opens, which makes VS Code open its details pane
-        /// beside the suggestion list far earlier than it used to -- a visible UI change unrelated
-        /// to Native AOT.
-        /// </param>
+        /// <summary>Materializes metadata references for the compilation, honouring extern aliases.</summary>
+        /// <param name="includeDocumentation">Whether sibling XML docs are attached; false preserves the framework stage's old no-doc behavior and avoids changing completion UI timing.</param>
         public ImmutableArray<MetadataReference> CreateMetadataReferences(
             bool includeDocumentation = true)
         {
@@ -302,15 +256,7 @@ namespace WinUiXaml.Workspace
             return builder.ToImmutable();
         }
 
-        /// <summary>
-        /// Attaches the sibling XML documentation file so quick info and completion items carry
-        /// their &lt;summary&gt; prose.
-        /// </summary>
-        /// <remarks>
-        /// MSBuildWorkspace did this implicitly for the authoritative compilation, which is why the
-        /// smoke test asserts completion documentation. It did not do it for the framework stage, so
-        /// callers there must opt out.
-        /// </remarks>
+        /// <summary>Attaches sibling XML docs for quick info/completion, while letting framework-stage callers opt out to match prior behavior.</summary>
         private static DocumentationProvider? CreateDocumentationProvider(string referencePath)
         {
             try

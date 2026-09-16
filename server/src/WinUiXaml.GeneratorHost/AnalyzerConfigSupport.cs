@@ -48,16 +48,7 @@ internal sealed class DictionaryAnalyzerConfigOptions : AnalyzerConfigOptions
     public override IEnumerable<string> Keys => _options.Keys;
 }
 
-/// <summary>
-/// Supplies generators with the <c>build_property.*</c> and <c>.editorconfig</c> values csc would
-/// have given them.
-/// </summary>
-/// <remarks>
-/// Roslyn's own provider is internal, so the driver defaults to an empty one. A generator that
-/// reads <c>build_property.RootNamespace</c> then silently emits a differently-named namespace
-/// than the real build produces -- generated members resolve, but to the wrong names, which is
-/// harder to spot than them being absent.
-/// </remarks>
+/// <summary>Supplies generators with csc's build_property.* and .editorconfig values, avoiding wrong namespaces from Roslyn's otherwise-empty provider.</summary>
 internal sealed class ParsedAnalyzerConfigOptionsProvider : AnalyzerConfigOptionsProvider
 {
     private readonly AnalyzerConfigSet _configSet;
@@ -94,11 +85,7 @@ internal sealed class ParsedAnalyzerConfigOptionsProvider : AnalyzerConfigOption
 
 internal static class AnalyzerConfigOptionsProviderFactory
 {
-    /// <summary>
-    /// Builds a provider from the <c>/analyzerconfig:</c> files csc was given, falling back to an
-    /// empty provider so a malformed config degrades to today's behaviour instead of failing the
-    /// whole generator run.
-    /// </summary>
+    /// <summary>Builds a provider from csc's /analyzerconfig files, falling back to empty options for malformed configs.</summary>
     public static AnalyzerConfigOptionsProvider Create(IReadOnlyList<string> configPaths)
     {
         var configs = ImmutableArray.CreateBuilder<AnalyzerConfig>();

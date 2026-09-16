@@ -7,18 +7,7 @@ using Xunit;
 
 namespace WinUiXaml.Workspace.Tests
 {
-    /// <summary>
-    /// Covers the MSBuild child-process boundary: the timeout, the cancellation registration and
-    /// the pipe draining that sit between a design-time build and the rest of the server.
-    /// </summary>
-    /// <remarks>
-    /// Every failure here presents to the user as a language server that has stopped answering,
-    /// with nothing in the log to say why -- the same symptom for a hung build, an ignored
-    /// cancellation and a deadlocked pipe. None of the three can be provoked reliably by driving a
-    /// real design-time build: they depend on how the child behaves, not on what the project
-    /// contains. Driving <see cref="MsBuildCli.RunProcess"/> with a child that misbehaves on
-    /// purpose is what makes them testable at all.
-    /// </remarks>
+    /// <summary>Covers the MSBuild child-process boundary: the timeout, the cancellation registration and the pipe draining that sit between a design-time build and the rest of the server. Every failure here presents to the user as a language server that has stopped answering, with nothing in the log to say why -- the same symptom for a hung build, an ignored cancellation and a deadlocked pipe. None of the three can be provoked reliably by driving a real design-time build: they depend on how the child behaves, not on what the project contains. Driving <see cref="MsBuildCli.RunProcess"/> with a child that misbehaves on purpose is what makes them testable at all.</summary>
     public class MsBuildProcessTests
     {
         /// <summary>Enough to overrun the pipe buffer many times over.</summary>
@@ -42,10 +31,7 @@ namespace WinUiXaml.Workspace.Tests
             return startInfo;
         }
 
-        /// <summary>
-        /// Fails the test rather than hanging the run when the call under test never returns, which
-        /// is the exact symptom being guarded against.
-        /// </summary>
+        /// <summary>Fails the test rather than hanging the run when the call under test never returns, which is the exact symptom being guarded against.</summary>
         private static async Task<T> CompleteWithin<T>(Task<T> run, TimeSpan budget, string because)
         {
             var finished = await Task.WhenAny(run, Task.Delay(budget)).ConfigureAwait(false);
@@ -53,11 +39,7 @@ namespace WinUiXaml.Workspace.Tests
             return await run.ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// A build that never finishes must be capped, and the reason must survive into the
-        /// message -- a design-time build has a ten-minute budget, so the difference between "still
-        /// working" and "wedged" is not something a user can tell by waiting.
-        /// </summary>
+        /// <summary>A build that never finishes must be capped, and the reason must survive into the message -- a design-time build has a ten-minute budget, so the difference between "still working" and "wedged" is not something a user can tell by waiting.</summary>
         [Fact]
         public async Task RunProcess_WhenChildOutlivesTimeout_Throws()
         {
@@ -75,11 +57,7 @@ namespace WinUiXaml.Workspace.Tests
             Assert.Contains("did not complete within", unavailable.Message);
         }
 
-        /// <summary>
-        /// Cancellation has to be armed before the wait, not after it. A load cancelled by the user
-        /// closing the document leaves the child running otherwise, and MSBUILDDISABLENODEREUSE
-        /// means nothing will reap it.
-        /// </summary>
+        /// <summary>Cancellation has to be armed before the wait, not after it. A load cancelled by the user closing the document leaves the child running otherwise, and MSBUILDDISABLENODEREUSE means nothing will reap it.</summary>
         [Fact]
         public async Task RunProcess_WhenCancelled_StopsWaitingOnTheChild()
         {
@@ -103,11 +81,7 @@ namespace WinUiXaml.Workspace.Tests
                 $"Unexpected exception after cancellation: {failure}");
         }
 
-        /// <summary>
-        /// A verbose build must not wedge the load. MSBuild is routinely noisy -- restore output,
-        /// warnings from every project in the graph -- and a reader that drains one pipe to EOF
-        /// before touching the other deadlocks as soon as the child fills the one being ignored.
-        /// </summary>
+        /// <summary>A verbose build must not wedge the load. MSBuild is routinely noisy -- restore output, warnings from every project in the graph -- and a reader that drains one pipe to EOF before touching the other deadlocks as soon as the child fills the one being ignored.</summary>
         [Fact]
         public async Task RunProcess_ChildFloodingStderr_StillCompletes()
         {
@@ -126,11 +100,7 @@ namespace WinUiXaml.Workspace.Tests
             Assert.NotEmpty(result.StandardError);
         }
 
-        /// <summary>
-        /// The exit code and both streams are the raw material every MSBuild failure is classified
-        /// from -- restore-required, build-required, or an unexplained failure. Flattening any of
-        /// them here would lose the distinction before the classifier ever sees it.
-        /// </summary>
+        /// <summary>The exit code and both streams are the raw material every MSBuild failure is classified from -- restore-required, build-required, or an unexplained failure. Flattening any of them here would lose the distinction before the classifier ever sees it.</summary>
         [Fact]
         public async Task RunProcess_ReportsExitCodeAndBothStreams()
         {

@@ -388,14 +388,9 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        // The project loaded, so any previously reported restore condition is resolved, and the
-        // build condition is resolved only if nothing came up through the fallback. Dropping the
-        // latch lets a later outage in this same session (a clean, a branch switch) be reported
-        // again rather than silently.
-        // Whether a reference is genuinely unresolvable is only known once something has tried to
-        // build it, and the framework stage deliberately no longer does -- it resolves the SDK and
-        // package closure and stops, which is what keeps it fast. So the build condition is
-        // reported below, off the full resolution, rather than guessed at here.
+        // Project load clears restore prompts; build prompts are decided only after full resolution.
+        // The framework stage stays fast by resolving SDK/package closure without building references,
+        // so only the full stage can prove a reference is unresolvable.
         _restoreRequiredProjects.Clear(frameworkResolution.ProjectPath);
 
         var frameworkTypeSystem = latestContext?.Stage == XamlProjectStage.Framework
@@ -440,11 +435,8 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        // The full stage built the project references, so this is the first point at which an
-        // unresolvable one is a fact rather than a guess. IntelliSense is real either way, but the
-        // markup compiler never ran for the reference, so generated members are missing -- a
-        // partial outage the user cannot see is worse than a total one they are told about. The
-        // latch leaves this prompting once per project per session rather than on every document.
+        // Full resolution proves unresolvable references. IntelliSense still works, but generated
+        // members are missing, so prompt once per project instead of leaving a silent partial outage.
         if (!fullResolution.UnresolvedProjectReferences.IsDefaultOrEmpty)
         {
             await NotifyProjectBuildRequiredAsync(
@@ -468,10 +460,7 @@ internal sealed partial class XamlLanguageServer
         return new XamlProjectContext(fullResolution, fullTypeSystem, XamlProjectStage.Full);
     }
 
-    /// <summary>
-    /// The text the status bar shows. It names the projects, because "build required" alone
-    /// leaves the developer guessing which of their references is the unresolvable one.
-    /// </summary>
+    /// <summary>Status text that names unresolvable references instead of leaving "build required" ambiguous.</summary>
     private static string BuildRequiredStatusMessage(
         System.Collections.Immutable.ImmutableArray<string> unresolved) =>
         unresolved.IsDefaultOrEmpty
@@ -570,11 +559,7 @@ internal sealed partial class XamlLanguageServer
             : Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Surfaces the clean-clone case. Without this the markup compiler's WMC1006 abort produced no
-    /// compilation and therefore no completions, no hovers, and no diagnostics, with nothing in the
-    /// UI to say why -- indistinguishable from the extension being broken.
-    /// </summary>
+    /// <summary>Surfaces clean-clone WMC1006 failures that otherwise yield no completions, hovers, diagnostics, or UI clue.</summary>
     private Task NotifyProjectBuildRequiredAsync(ProjectBuildRequiredException exception)
     {
         Console.Error.WriteLine(

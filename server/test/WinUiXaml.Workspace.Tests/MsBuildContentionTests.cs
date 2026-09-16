@@ -8,19 +8,10 @@ using Xunit;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>
-/// Two MSBuild invocations against one project race on that project's obj directory. The WinUI
-/// markup compiler writes output.json from the Compile target chain, and a load runs two stages
-/// against the same csproj: the fast framework resolve and the authoritative one. The in-process
-/// BuildManager this replaced serialized them implicitly; shelling out to the SDK does not.
-/// </summary>
+/// <summary>Two MSBuild invocations against one project race on that project's obj directory. The WinUI markup compiler writes output.json from the Compile target chain, and a load runs two stages against the same csproj: the fast framework resolve and the authoritative one. The in-process BuildManager this replaced serialized them implicitly; shelling out to the SDK does not.</summary>
 public sealed class MsBuildContentionTests
 {
-    /// <summary>
-    /// The two stages disagree about how they identify a project -- one passes the csproj path and
-    /// a working directory, the other only a working directory. Keys derived from those two forms
-    /// have to land on the same gate or the gate excludes nothing.
-    /// </summary>
+    /// <summary>The two stages disagree about how they identify a project -- one passes the csproj path and a working directory, the other only a working directory. Keys derived from those two forms have to land on the same gate or the gate excludes nothing.</summary>
     [Fact]
     public void TheTwoStagesOfALoadShareOneGate()
     {
@@ -66,11 +57,7 @@ public sealed class MsBuildContentionTests
         }
     }
 
-    /// <summary>
-    /// Verbatim from a real failure. The gate only covers this process, so contention with a build
-    /// running in a terminal or another extension still reaches the retry, and the retry only
-    /// helps if this exact text is recognized.
-    /// </summary>
+    /// <summary>Verbatim from a real failure. The gate only covers this process, so contention with a build running in a terminal or another extension still reaches the retry, and the retry only helps if this exact text is recognized.</summary>
     [Fact]
     public void TheRealWorldContentionFailureIsRecognized()
     {
@@ -85,10 +72,7 @@ public sealed class MsBuildContentionTests
         Assert.True(MsBuildCli.IsProjectFileInUseFailure(detail));
     }
 
-    /// <summary>
-    /// A retry is only correct for transient contention. Retrying a genuine build failure would
-    /// quadruple the time a user waits to be told something they could have been told at once.
-    /// </summary>
+    /// <summary>A retry is only correct for transient contention. Retrying a genuine build failure would quadruple the time a user waits to be told something they could have been told at once.</summary>
     [Theory]
     [InlineData("MSBuild exited with code 1. error CS1002: ; expected")]
     [InlineData("error MSB3073: The command exited with code 123.")]
@@ -99,12 +83,7 @@ public sealed class MsBuildContentionTests
         Assert.False(MsBuildCli.IsProjectFileInUseFailure(detail));
     }
 
-    /// <summary>
-    /// The gate lives in the single private helper every invocation funnels through. A new caller
-    /// that reaches the process launcher directly would bypass it silently, so the arrangement is
-    /// pinned at the source rather than inferred: exactly one method may start the process, and
-    /// the method that guards it must be the one that calls it.
-    /// </summary>
+    /// <summary>The gate lives in the single private helper every invocation funnels through. A new caller that reaches the process launcher directly would bypass it silently, so the arrangement is pinned at the source rather than inferred: exactly one method may start the process, and the method that guards it must be the one that calls it.</summary>
     [Fact]
     public void EveryInvocationGoesThroughTheGate()
     {
@@ -119,16 +98,7 @@ public sealed class MsBuildContentionTests
         Assert.Single(Regex.Matches(source, @"new Process\b"));
     }
 
-    /// <summary>
-    /// The gate serializes invocations against one project; this flag bounds the processes a
-    /// single invocation is allowed to spawn. Both are needed, and only this one is invisible
-    /// when it regresses: a build without it still produces correct IntelliSense, so no
-    /// behavioural test fails. What changes is cost. A design-time build now builds the project
-    /// references it is given, so a multi-node build fans each call out to worker processes that
-    /// MSBUILDDISABLENODEREUSE=1 forbids recycling; with several projects loading at once the
-    /// suite went from roughly 43 seconds to 15m50s, deterministically. That is a performance
-    /// cliff a reviewer would read straight past, so the flag is pinned here at the source.
-    /// </summary>
+    /// <summary>The gate serializes invocations against one project; this flag bounds the processes a single invocation is allowed to spawn. Both are needed, and only this one is invisible when it regresses: a build without it still produces correct IntelliSense, so no behavioural test fails. What changes is cost. A design-time build now builds the project references it is given, so a multi-node build fans each call out to worker processes that MSBUILDDISABLENODEREUSE=1 forbids recycling; with several projects loading at once the suite went from roughly 43 seconds to 15m50s, deterministically. That is a performance cliff a reviewer would read straight past, so the flag is pinned here at the source.</summary>
     [Fact]
     public void EveryInvocationIsLimitedToOneNode()
     {
@@ -146,11 +116,7 @@ public sealed class MsBuildContentionTests
         Assert.True(flag < launcher, "the node limit must be applied before the process is created");
     }
 
-    /// <summary>
-    /// The property the gate exists for, measured rather than inferred: invocations that would
-    /// write the same obj directory never overlap. The source-harvest test above proves the gate
-    /// is wired in; this proves it actually excludes.
-    /// </summary>
+    /// <summary>The property the gate exists for, measured rather than inferred: invocations that would write the same obj directory never overlap. The source-harvest test above proves the gate is wired in; this proves it actually excludes.</summary>
     [Fact]
     public void InvocationsAgainstOneProjectNeverOverlap()
     {
@@ -182,12 +148,7 @@ public sealed class MsBuildContentionTests
         Assert.Equal(1, peak);
     }
 
-    /// <summary>
-    /// The other half of the contract. A gate that serialized every project would turn a solution
-    /// load into a queue, and the exclusion test above would pass just as happily -- so the
-    /// negative has to be measured too. Each side refuses to finish until it has seen the other
-    /// inside, which cannot happen if they share a gate.
-    /// </summary>
+    /// <summary>The other half of the contract. A gate that serialized every project would turn a solution load into a queue, and the exclusion test above would pass just as happily -- so the negative has to be measured too. Each side refuses to finish until it has seen the other inside, which cannot happen if they share a gate.</summary>
     [Fact]
     public async Task UnrelatedProjectsStillLoadInParallel()
     {
@@ -223,10 +184,7 @@ public sealed class MsBuildContentionTests
         Assert.True(results[1]);
     }
 
-    /// <summary>
-    /// A body that throws must not strand the gate; the next invocation for that project would
-    /// block forever, which presents as the language server hanging rather than failing.
-    /// </summary>
+    /// <summary>A body that throws must not strand the gate; the next invocation for that project would block forever, which presents as the language server hanging rather than failing.</summary>
     [Fact]
     public async Task AFailedInvocationReleasesTheGate()
     {
@@ -247,12 +205,7 @@ public sealed class MsBuildContentionTests
         Assert.True(await second);
     }
 
-    /// <summary>
-    /// The key must be a pure function of the two arguments. An earlier version probed
-    /// <c>Directory.Exists</c>, so a project whose directory had not been created yet keyed
-    /// differently from the same project a moment later -- the gate silently stopped excluding
-    /// while every key-equality test still passed.
-    /// </summary>
+    /// <summary>The key must be a pure function of the two arguments. An earlier version probed <c>Directory.Exists</c>, so a project whose directory had not been created yet keyed differently from the same project a moment later -- the gate silently stopped excluding while every key-equality test still passed.</summary>
     [Fact]
     public void TheGateKeyDoesNotDependOnWhetherThePathExists()
     {

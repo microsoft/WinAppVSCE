@@ -5,22 +5,9 @@ using WinUiXaml.LanguageServer.Lsp;
 
 namespace WinUiXaml.LanguageServer.Tests;
 
-// The two tests already covering serialization stop short of the thing that actually breaks under
-// Native AOT.
-//
-// JsonRpcConnection.WriteValue serializes by *runtime* type:
-//
-//     JsonSerializer.Serialize(writer, value, value.GetType(), LspJsonContext.Default);
-//
-// With JsonSerializerIsReflectionEnabledByDefault=false there is no fallback, so a payload type
-// that nobody registered does not degrade -- it throws, and the notification is never delivered.
-// Proving every *registered* type round-trips says nothing about that, because the defect is a
-// type which is sent but absent from the context. The question is not "does what we registered
-// work" but "did we register what we send", and only the source can answer it.
-//
-// Notifications are also the one direction with no reply, so nothing downstream notices a
-// serializer that threw. A build-required prompt that never reaches the client is indistinguishable
-// from a project that built fine.
+// Notifications serialize by runtime type under Native AOT, with no reflection fallback and no reply path.
+// Registered-type round trips miss the sent-but-unregistered defect; source-based coverage asks whether we registered what we send.
+// Without this, a build-required prompt lost to NotSupportedException looks like a project that built fine.
 public class NotificationWireTests
 {
     /// <summary>Reads the framed payload of every message written to an output stream.</summary>
@@ -143,10 +130,8 @@ public class NotificationWireTests
     [Fact]
     public async Task ANotificationWithAnUnregisteredPayloadFailsLoudly()
     {
-        // The floor under the test above: it only means something if an unregistered payload would
-        // actually have failed. The exception type is asserted rather than "any throw", because a
-        // test that accepts any failure would still pass if the connection broke for an unrelated
-        // reason -- and would then stop being evidence about registration at all.
+        // Floor for the test above: assert the registration-specific exception, not any throw,
+        // so an unrelated connection failure cannot masquerade as evidence.
         var error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await using var input = new MemoryStream();

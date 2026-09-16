@@ -1084,10 +1084,8 @@ internal static partial class CompletionProvider
                 ("*,*", $"Two equal star-sized {dimension}"));
         }
 
-        // Thickness is deliberately not completed. Unlike the other literal types here, its values
-        // are not drawn from a fixed set -- "0", "0,0" and "0,0,0,0" are only arity examples, and
-        // the author has to replace the digits in every case. Offering them puts a list in front of
-        // a number nobody wants, so thickness attributes are left free-form.
+        // Thickness is deliberately not completed: its examples only show arity, and every digit
+        // would still need replacement, so showing them blocks the free-form number the author wants.
         if (XamlValueConverter.IsFontFamily(valueType, typeSystem))
         {
             return CompleteLiteralValues(

@@ -2,18 +2,7 @@ using System.Diagnostics;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>
-/// Restores a fixture before it is loaded.
-/// </summary>
-/// <remarks>
-/// A design-time build now builds the project references it is given rather than assuming someone
-/// else already did, and a project that has never been restored cannot be built -- MSBuild stops
-/// with NETSDK1004. That is the correct answer for a real workspace, where the server turns it into
-/// a restore prompt, but a fixture written inline in a test has no restore behind it.
-///
-/// Restoring the root is enough: NuGet walks <c>ProjectReference</c> edges, so one call covers the
-/// whole graph. These fixtures declare no packages, so nothing is downloaded.
-/// </remarks>
+/// <summary>Restores a fixture before it is loaded. A design-time build now builds the project references it is given rather than assuming someone else already did, and a project that has never been restored cannot be built -- MSBuild stops with NETSDK1004. That is the correct answer for a real workspace, where the server turns it into a restore prompt, but a fixture written inline in a test has no restore behind it. Restoring the root is enough: NuGet walks <c>ProjectReference</c> edges, so one call covers the whole graph. These fixtures declare no packages, so nothing is downloaded.</summary>
 internal static class FixtureRestore
 {
     internal static void Run(string projectPath)

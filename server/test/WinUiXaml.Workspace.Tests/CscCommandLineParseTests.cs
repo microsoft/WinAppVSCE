@@ -4,16 +4,7 @@ using WinUiXaml.Workspace;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>
-/// Covers the csc command-line parser that defines the compilation the language server reasons
-/// about.
-/// </summary>
-/// <remarks>
-/// A switch silently dropped here does not fail loudly: the compilation is still built, just with
-/// the wrong nullability, the wrong preprocessor symbols, or a missing reference. Types then
-/// resolve differently from the real build, and the resulting IntelliSense is wrong rather than
-/// absent -- the same class of failure as dropping the analyzer configs.
-/// </remarks>
+/// <summary>Covers the csc command-line parser that defines the compilation the language server reasons about. A switch silently dropped here does not fail loudly: the compilation is still built, just with the wrong nullability, the wrong preprocessor symbols, or a missing reference. Types then resolve differently from the real build, and the resulting IntelliSense is wrong rather than absent -- the same class of failure as dropping the analyzer configs.</summary>
 public class CscCommandLineParseTests
 {
     private const string ProjectDirectory = @"C:\proj";
@@ -120,11 +111,7 @@ public class CscCommandLineParseTests
         Assert.Equal(new[] { "Alpha", "Beta" }, parsed.ReferenceAliases[path]);
     }
 
-    /// <summary>
-    /// A rooted Windows path contains '=' at no index, but the guard keys on index 1, which is
-    /// where the ':' of a drive letter sits. Getting this wrong turns every rooted reference into
-    /// an alias named after its drive.
-    /// </summary>
+    /// <summary>A rooted Windows path contains '=' at no index, but the guard keys on index 1, which is where the ':' of a drive letter sits. Getting this wrong turns every rooted reference into an alias named after its drive.</summary>
     [Fact]
     public void Parse_TreatsADriveLetterAsAPathNotAnAlias()
     {
@@ -167,12 +154,7 @@ public class CscCommandLineParseTests
         Assert.Equal(LanguageVersion.Preview, parsed.CreateParseOptions().LanguageVersion);
     }
 
-    /// <summary>
-    /// csc parses doc comments only under /doc, which MSBuild omits unless the project emits an
-    /// XML file -- but quick info for the user's own members is read off these syntax trees, so
-    /// DocumentationMode.None makes every summary on their types vanish while framework prose
-    /// keeps working. That reads as a documentation problem, not a parse option.
-    /// </summary>
+    /// <summary>csc parses doc comments only under /doc, which MSBuild omits unless the project emits an XML file -- but quick info for the user's own members is read off these syntax trees, so DocumentationMode.None makes every summary on their types vanish while framework prose keeps working. That reads as a documentation problem, not a parse option.</summary>
     [Fact]
     public void Parse_KeepsDocCommentsEvenWithoutTheDocSwitch()
     {

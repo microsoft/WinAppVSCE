@@ -8,18 +8,7 @@ using WinUiXaml.Workspace;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>
-/// Pins which compilation stage carries XML documentation.
-/// </summary>
-/// <remarks>
-/// This is invisible in the completion code -- <c>CompletionProvider</c> is byte-identical to the
-/// base branch -- because it changes the data feeding the provider rather than the provider itself.
-/// The base design got documentation implicitly from MSBuildWorkspace for the authoritative
-/// compilation and never had it on the framework stage. Replacing MSBuildWorkspace for Native AOT
-/// routed both stages through one code path, which silently gave the framework stage documentation
-/// too, and that is what makes VS Code open its details pane beside the suggestion list as soon as a
-/// file opens.
-/// </remarks>
+/// <summary>Pins which compilation stage carries XML documentation. This is invisible in the completion code -- <c>CompletionProvider</c> is byte-identical to the base branch -- because it changes the data feeding the provider rather than the provider itself. The base design got documentation implicitly from MSBuildWorkspace for the authoritative compilation and never had it on the framework stage. Replacing MSBuildWorkspace for Native AOT routed both stages through one code path, which silently gave the framework stage documentation too, and that is what makes VS Code open its details pane beside the suggestion list as soon as a file opens.</summary>
 public class CscCommandLineDocumentationTests
 {
     [Fact]

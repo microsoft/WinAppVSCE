@@ -8,11 +8,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>WinUiXaml.LanguageServer</AssemblyName>
     <RootNamespace>WinUiXaml.LanguageServer</RootNamespace>
-    <!-- Native AOT. This must be set here rather than on the command line: command-line properties
-         propagate to project references, and WinUiXaml.Xaml targets netstandard2.0, which fails
-         with NETSDK1207. The RuntimeIdentifier is passed with -r at publish time (that one is safe
-         to propagate). PublishAot also implies JsonSerializerIsReflectionEnabledByDefault=false,
-         which is why the LSP layer uses a source-generated JsonSerializerContext. -->
+    <!-- Set here, not on the command line: command-line properties propagate to project references, and
+         WinUiXaml.Xaml targets netstandard2.0, which fails with NETSDK1207. PublishAot also implies
+         JsonSerializerIsReflectionEnabledByDefault=false, hence the source-generated JsonSerializerContext. -->
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>false</InvariantGlobalization>
     <!-- Report every trim/AOT warning individually instead of one rolled-up warning per assembly. -->
@@ -29,25 +27,18 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The generator host is a small framework-dependent helper: source generators are analyzer
-         assemblies loaded with Assembly.LoadFrom, which Native AOT cannot do. Building it here
-         keeps it in lockstep with the server, but ReferenceOutputAssembly is off because the
-         server never links against it: it launches it as a child process. -->
+    <!-- Source generators are analyzer assemblies loaded with Assembly.LoadFrom, which Native AOT cannot
+         do, so the host stays a separate framework-dependent helper. Built here to keep it in lockstep;
+         ReferenceOutputAssembly is off because the server launches it as a child process, never links it. -->
     <ProjectReference Include="..\WinUiXaml.GeneratorHost\WinUiXaml.GeneratorHost.csproj"
                       ReferenceOutputAssembly="false"
                       SkipGetTargetFrameworkProperties="true"
                       Private="false" />
   </ItemGroup>
 
-  <!--
-    Deploy the helper beside the server's *build* output in the layout HostAssemblyPath probes.
-    Without this it is only present in the packaged bundle, so running the server from bin (which
-    is what the XAML smoke suite does) silently degraded every project to "no generated members".
-    That blind spot is why a deadlock in the helper shipped past a green suite.
-
-    This copies to $(OutDir), not $(PublishDir), so it does not add managed files to the Native
-    AOT publish output; ensure-server-bundle.mjs stages the shipped copy separately.
-  -->
+  <!-- Deploy the helper beside the server's *build* output, where HostAssemblyPath probes. Without it,
+       running from bin (what the XAML smoke suite does) silently degrades every project to "no generated
+       members", the blind spot that let a helper deadlock ship past a green suite. $(OutDir), not $(PublishDir). -->
   <Target Name="CopyGeneratorHostBesideServer" AfterTargets="Build">
     <ItemGroup>
       <_HostPayload Include="$(MSBuildThisFileDirectory)..\WinUiXaml.GeneratorHost\bin\$(Configuration)\net10.0\**\*.*" />

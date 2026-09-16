@@ -24,10 +24,7 @@ internal sealed class JsonRpcConnection
     private const string ContentLengthHeader = "Content-Length:";
 
     /// <summary>
-    /// Framing limits. The only writer on this pipe is the extension host, so these do not defend
-    /// against a hostile peer. They turn a malformed frame into an immediate, logged protocol error
-    /// instead of an unbounded allocation or a read loop that never terminates, which is what a
-    /// truncated or half-written frame from a crashing client would otherwise produce.
+    /// Framing limits for trusted extension-host pipes: malformed or truncated frames become logged protocol errors instead of unbounded allocations or endless reads.
     /// </summary>
     private const int MaxContentLength = 32 * 1024 * 1024;
     private const int MaxHeaderLineLength = 8 * 1024;
@@ -43,11 +40,9 @@ internal sealed class JsonRpcConnection
 
     public JsonRpcConnection(Stream input, Stream output)
     {
-        // Headers have no length prefix, so they are parsed a byte at a time. Over an unbuffered
-        // pipe that is one syscall per header byte -- on the order of a hundred per message,
-        // against a client that sends one per keystroke. Only non-seekable streams are wrapped:
-        // those are the real stdio pipes, whereas a seekable stream is an in-memory test double
-        // whose owner may still be writing to it, and read-ahead there would be surprising.
+        // Headers have no length prefix, so unbuffered pipes cost one syscall per byte.
+        // Wrap only non-seekable stdio pipes; seekable streams are test doubles where read-ahead
+        // could consume data the owner still expects to write.
         _input = input.CanSeek ? input : new BufferedStream(input, InputBufferSize);
         _output = output;
     }
@@ -210,17 +205,8 @@ internal sealed class JsonRpcConnection
     }
 
     /// <summary>
-    /// Normalizes a JSON-RPC id into a cancellation-table key.
+    /// Normalizes JSON-RPC ids so numeric ids and their string spelling share a cancellation key; raw tokens would drop common stringified cancels.
     /// </summary>
-    /// <remarks>
-    /// <c>JsonElement.GetRawText</c> returns the literal source token, so a peer that sends a
-    /// request id as <c>1</c> and then cancels it as <c>"1"</c> -- or writes <c>1.0</c>, or pads
-    /// the token -- produces a different string and the cancellation is dropped in silence, which
-    /// surfaces as a request that keeps running after the client gave up on it. Numbers and their
-    /// string spelling deliberately collapse to the same key: a peer using both forms as distinct
-    /// concurrent ids would already be violating JSON-RPC, whereas a peer that stringifies is
-    /// common enough to be worth tolerating.
-    /// </remarks>
     private static string RequestKey(JsonElement id) => id.ValueKind switch
     {
         JsonValueKind.Number when id.TryGetInt64(out var number) =>
@@ -335,11 +321,7 @@ internal sealed class JsonRpcConnection
         }
     }
 
-    /// <summary>
-    /// Writes a JSON-RPC frame. The envelope is written directly so the only serialized values
-    /// are the payloads themselves, each resolved by runtime type through the source-generated
-    /// <see cref="LspJsonContext"/> rather than System.Text.Json's reflection fallback.
-    /// </summary>
+    /// <summary>Writes a JSON-RPC frame, resolving payload runtime types through LspJsonContext instead of reflection fallback.</summary>
     private async Task WriteMessageAsync(Action<Utf8JsonWriter> writeBody)
     {
         var buffer = new ArrayBufferWriter<byte>();

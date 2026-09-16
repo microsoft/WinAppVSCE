@@ -21,16 +21,7 @@ namespace WinUiXaml.Workspace
         }
     }
 
-    /// <summary>
-    /// Acquires MSBuild data by invoking the user's installed .NET SDK as a child process.
-    /// </summary>
-    /// <remarks>
-    /// The server used to load <c>Microsoft.Build</c> in-process through MSBuildLocator, which
-    /// requires a runtime assembly loader and therefore cannot work under Native AOT. Shelling out
-    /// to <c>dotnet msbuild</c> is AOT-safe, and it is the same acquisition strategy the extension
-    /// already uses for <c>dotnet restore</c>. All parsing goes through <see cref="JsonDocument"/>
-    /// rather than the reflection-based serializer so it survives trimming.
-    /// </remarks>
+    /// <summary>Acquires MSBuild data by shelling out to <c>dotnet msbuild</c>, avoiding MSBuildLocator so Native AOT and trimming stay safe.</summary>
     internal static class MsBuildCli
     {
         /// <summary>MSBuild evaluation is cheap; a design-time build is not. Keep them separate.</summary>
@@ -66,52 +57,21 @@ namespace WinUiXaml.Workspace
             public ImmutableArray<string> ProjectReferences { get; }
             public string? AssemblyName { get; }
 
-            /// <summary>
-            /// The project's declared <c>TargetFrameworks</c>, semicolon-separated, or null when
-            /// the project targets exactly one framework. Non-null is precisely the condition
-            /// that makes this an outer build with no <c>Compile</c> target.
-            /// </summary>
+            /// <summary>The project's semicolon-separated <c>TargetFrameworks</c>, or null for a single framework; non-null means an outer build with no <c>Compile</c> target.</summary>
             public string? TargetFrameworks { get; }
 
-            /// <summary>
-            /// The project's own <c>CustomAfterMicrosoftCSharpTargets</c>, if it sets one. The
-            /// design-time build claims that hook for its own targets file, and a global property
-            /// cannot be overridden by the project that declared it -- so without re-importing
-            /// this the user's targets would simply not run, and nothing would say so.
-            /// </summary>
-            /// <remarks>
-            /// Read in the evaluation-only pass, which is the only pass where the answer is still
-            /// the project's: by the time the design-time build runs, the property is ours.
-            /// </remarks>
+            /// <summary>The project's <c>CustomAfterMicrosoftCSharpTargets</c>, read during evaluation so the design-time build can claim the hook and re-import the user's targets.</summary>
             public string? CustomAfterCSharpTargets { get; }
         }
 
-        /// <summary>
-        /// The host used to run MSBuild. The extension sets DOTNET_HOST_PATH on the server's
-        /// environment, so preferring it keeps the server on exactly the SDK the user resolved.
-        /// </summary>
+        /// <summary>The MSBuild host; preferring DOTNET_HOST_PATH keeps the server on the SDK the extension resolved.</summary>
         internal static string DotnetPath =>
             Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") is { Length: > 0 } host &&
             File.Exists(host)
                 ? host
                 : "dotnet";
 
-        /// <summary>
-        /// Evaluates the project, then runs the design-time build for exactly one target
-        /// framework, returning the XAML items and the csc command line together.
-        /// </summary>
-        /// <remarks>
-        /// The evaluation pass runs no targets, so it answers for any project state -- unrestored,
-        /// never built, single- or multi-targeted. That is what lets the target framework be
-        /// *decided* rather than discovered by failing: a multi-targeted project's outer build
-        /// defines no <c>Compile</c> target, so asking it to compile dies with MSB4057 and the
-        /// project is dropped, silently costing the user every type in it. Only an inner build has
-        /// that target. Pinning <c>TargetFramework</c> selects one, and pinning it on a project
-        /// that already targets one framework is a no-op -- so a single build shape serves both.
-        ///
-        /// The old MSBuildWorkspace evaluated before selecting an inner build for the same reason,
-        /// which is why nothing above this layer expects to have to.
-        /// </remarks>
+        /// <summary>Evaluates without targets to pick an inner build when needed, then design-time-builds one framework for XAML items and csc args; this avoids MSB4057 from outer builds while preserving single-target projects.</summary>
         internal static (
             Evaluation Evaluation,
             ImmutableArray<string> CscCommandLineArgs,
@@ -128,10 +88,7 @@ namespace WinUiXaml.Workspace
                 cancellationToken);
         }
 
-        /// <summary>
-        /// Resolves the properties the design-time build runs under, selecting one inner build
-        /// when the project cross-targets. A caller that already pinned a framework is left alone.
-        /// </summary>
+        /// <summary>Resolves design-time-build properties, selecting one inner build for cross-targeting projects unless the caller already pinned a framework.</summary>
         private static IReadOnlyDictionary<string, string> PinTargetFramework(
             string fullPath,
             IReadOnlyDictionary<string, string> globalProperties,
@@ -155,71 +112,21 @@ namespace WinUiXaml.Workspace
             return pinned;
         }
 
-        /// <summary>
-        /// Memo of each project's declared <c>TargetFrameworks</c>, keyed by the project path and
-        /// the global properties it was evaluated under, and validated against a write stamp.
-        /// </summary>
+        /// <summary>Memo of declared <c>TargetFrameworks</c>, keyed by project path and global properties, and validated against a write stamp.</summary>
         private static readonly ConcurrentDictionary<string, (string Stamp, string? Declared, string? UserAfterCSharpTargets)>
             TargetFrameworkMemo = new(StringComparer.OrdinalIgnoreCase);
 
-        /// <summary>
-        /// Drops every memoized target-framework decision.
-        /// </summary>
-        /// <remarks>
-        /// Called when an imported build file changes. The write stamp cannot cover that case on
-        /// its own: a project is free to <c>&lt;Import&gt;</c> an arbitrarily named
-        /// <c>.props</c> file -- <c>build/Common.props</c> is a common repo convention -- and
-        /// MSBuild will not name its import closure when asked. <c>-getProperty:MSBuildAllProjects</c>
-        /// returns the project and a couple of SDK targets, not the file that actually declared
-        /// the property, so there is nothing to stamp. The language server already treats every
-        /// <c>.props</c>/<c>.targets</c> change under a workspace root as structural and drops all
-        /// projects; this hangs the memo on that same signal so it can never outlive the
-        /// compilations it fed.
-        /// </remarks>
+        /// <summary>Drops target-framework decisions when any imported <c>.props</c>/<c>.targets</c> under a root changes, covering imports MSBuild does not expose to the write stamp.</summary>
         internal static void ClearTargetFrameworkMemo() => TargetFrameworkMemo.Clear();
 
-        /// <summary>
-        /// The declared target frameworks, evaluated at most once per edit of the files that can
-        /// declare them.
-        /// </summary>
-        /// <remarks>
-        /// Deciding the framework costs a full evaluation pass, and the project reloads on every
-        /// C# save -- but a C# edit cannot change which frameworks a project targets, so re-asking
-        /// is provably repeated work.
-        ///
-        /// Two independent things invalidate the answer, because neither covers the other:
-        /// <list type="bullet">
-        /// <item>the write stamp, which covers the project file and the
-        /// <c>Directory.Build.props</c>/<c>.targets</c> chain above it -- including the part of
-        /// that chain that sits *outside* the workspace roots, where no file-change notification
-        /// ever arrives;</item>
-        /// <item><see cref="ClearTargetFrameworkMemo"/>, which covers an arbitrarily named
-        /// imported <c>.props</c>/<c>.targets</c> file inside a root, which the stamp cannot
-        /// enumerate.</item>
-        /// </list>
-        /// The remaining gap is an arbitrarily named import located outside every workspace root:
-        /// unreachable by either signal, and equally invisible to the rest of the server.
-        ///
-        /// The key carries the global properties as well as the path, because
-        /// <c>TargetFrameworks</c> can be declared under a condition on <c>$(Configuration)</c> or
-        /// <c>$(Platform)</c> -- evaluating under one and answering for another would pin a
-        /// framework the project does not declare.
-        /// </remarks>
+        /// <summary>Reads declared target frameworks from a memo keyed by path and global properties; invalidated by project/Directory.Build stamps and root-local imported build-file changes, avoiding repeated evaluation on C# saves while admitting only out-of-root arbitrary imports remain invisible.</summary>
         internal static string? ReadDeclaredTargetFrameworks(
             string fullPath,
             IReadOnlyDictionary<string, string> globalProperties,
             CancellationToken cancellationToken = default) =>
             ReadEvaluationMemo(fullPath, globalProperties, cancellationToken).Declared;
 
-        /// <summary>
-        /// The project's own <c>CustomAfterMicrosoftCSharpTargets</c>, so the design-time build can
-        /// re-import it from the targets file that displaces it.
-        /// </summary>
-        /// <remarks>
-        /// Shares the evaluation memo with the target-framework read rather than running its own
-        /// pass. On the ordinary path that read has already happened, so this costs nothing; the
-        /// question is answered by the same evaluation either way.
-        /// </remarks>
+        /// <summary>Reads the user's <c>CustomAfterMicrosoftCSharpTargets</c> from the shared evaluation memo so the displacing targets file can re-import it at no extra cost.</summary>
         internal static string? ReadUserAfterCSharpTargets(
             string fullPath,
             IReadOnlyDictionary<string, string> globalProperties,
@@ -246,10 +153,7 @@ namespace WinUiXaml.Workspace
             return (evaluation.TargetFrameworks, evaluation.CustomAfterCSharpTargets);
         }
 
-        /// <summary>
-        /// The memo key: the project path plus the global properties it is evaluated under, in a
-        /// stable order so two equivalent dictionaries cannot produce two entries.
-        /// </summary>
+        /// <summary>The memo key: project path plus global properties in stable order so equivalent dictionaries share one entry.</summary>
         private static string MemoKey(
             string fullPath, IReadOnlyDictionary<string, string> globalProperties)
         {
@@ -268,11 +172,7 @@ namespace WinUiXaml.Workspace
             return builder.ToString();
         }
 
-        /// <summary>
-        /// A stamp over the project file and every <c>Directory.Build.props</c>/<c>.targets</c>
-        /// above it. A file that does not exist contributes a marker, so creating one later is
-        /// itself a change.
-        /// </summary>
+        /// <summary>A stamp over the project and all ancestor <c>Directory.Build.props</c>/<c>.targets</c>; missing files contribute markers so creation is a change.</summary>
         private static string DeclaringFileStamp(string fullPath)
         {
             var builder = new StringBuilder();
@@ -327,17 +227,14 @@ namespace WinUiXaml.Workspace
                 "msbuild",
                 fullPath,
                 "-nologo",
-                // ResolveReferences;CoreCompile rather than Compile: MarkupCompilePass1 hangs off
-                // PrepareResourcesDependsOn, which Compile runs first, and it has no
-                // ContinueOnError. Entering at CoreCompile instead lets DesignTimeTargets run the
-                // DesignTimeMarkupCompilation pass, which is the one Visual Studio uses.
+                // ResolveReferences;CoreCompile avoids Compile running MarkupCompilePass1 first with no
+                // ContinueOnError; entering at CoreCompile lets DesignTimeTargets run Visual
+                // Studio's DesignTimeMarkupCompilation pass.
                 "-t:ResolveReferences;CoreCompile",
 
-                // Design-time builds default this to false (Microsoft.Common.CurrentVersion
-                // .targets L375). Asking for it explicitly is what lets a never-built
-                // ProjectReference be built here instead of failing the markup compiler with
-                // WMC1006; DesignTimeTargets strips the design-time properties on the way down so
-                // the reference gets an ordinary build.
+                // Design-time builds default this to false (Microsoft.Common.CurrentVersion.targets
+                // L375). Setting it lets never-built ProjectReferences build normally instead of
+                // failing the markup compiler with WMC1006.
                 "-p:BuildProjectReferences=true",
                 "-p:ProvideCommandLineArgs=true",
                 "-p:SkipCompilerExecution=true",
@@ -351,11 +248,9 @@ namespace WinUiXaml.Workspace
             {
                 arguments.Add($"-p:CustomAfterMicrosoftCSharpTargets={designTimeTargets}");
 
-                // Displacing the hook is not the same as taking it away. A global property cannot
-                // be overridden by the project that set it, so the user's own after-targets would
-                // simply stop running here -- silently, and only inside the design-time build,
-                // which is the hardest place to notice it. The targets file re-imports whatever
-                // was there.
+                // Displacing the hook is not taking it away: a global property cannot be overridden
+                // by the project that set it, so the targets file re-imports the user's
+                // after-targets instead of silently dropping them only in design-time builds.
                 if (!string.IsNullOrWhiteSpace(userAfterCSharpTargets))
                 {
                     arguments.Add($"-p:WinUiXamlUserAfterCSharpTargets={userAfterCSharpTargets}");
@@ -376,10 +271,9 @@ namespace WinUiXaml.Workspace
             }
             catch (ProjectBuildRequiredException ex)
             {
-                // A referenced project could not be built, so the markup compiler produced no
-                // generated code. Reference resolution stops short of the markup compiler, so it
-                // still yields the SDK and package references and keeps the rest of the file
-                // navigable while the user fixes the referenced project.
+                // A referenced project could not be built, so markup generated no code.
+                // Reference resolution stops before markup compilation, preserving SDK/package
+                // references and keeping the rest navigable while the reference is fixed.
                 var fallback = ResolveReferencesOnly(fullPath, globalProperties, cancellationToken);
 
                 if (fallback.Arguments.IsDefaultOrEmpty)
@@ -400,11 +294,7 @@ namespace WinUiXaml.Workspace
                 ImmutableArray<string>.Empty);
         }
 
-        /// <summary>
-        /// Evaluation-only pass: reads XAML items, the restore marker, and the project graph edges.
-        /// This runs no targets, so it succeeds even when the project has never been restored,
-        /// which is what lets <see cref="RoslynProjectWorkspace.RequiresRestore"/> answer first.
-        /// </summary>
+        /// <summary>Evaluation-only pass for XAML items, restore markers, and graph edges; running no targets lets <see cref="RoslynProjectWorkspace.RequiresRestore"/> answer first.</summary>
         internal static Evaluation Evaluate(
             string projectPath,
             IReadOnlyDictionary<string, string> globalProperties,
@@ -425,22 +315,7 @@ namespace WinUiXaml.Workspace
             return ReadEvaluation(document.RootElement, fullPath);
         }
 
-        /// <summary>
-        /// Reference-resolution pass used when the full design-time compile aborts because a
-        /// referenced project has never been built.
-        /// </summary>
-        /// <remarks>
-        /// The WinUI markup compiler (MarkupCompilePass1) runs ahead of CoreCompile and hard-fails
-        /// with WMC1006 when a <c>ProjectReference</c>'s output assembly is missing, which takes
-        /// the whole compile down and leaves <c>CscCommandLineArgs</c> empty. <c>ResolveReferences</c>
-        /// stops short of the markup compiler, so it still resolves the SDK and package references
-        /// on a never-built tree. The result is shaped into csc-style arguments so the existing
-        /// <see cref="CscCommandLine"/> parser consumes it unchanged.
-        ///
-        /// What this cannot recover is the markup compiler's generated output (InitializeComponent
-        /// and the x:Name backing fields), so the caller still reports that a build is required --
-        /// this degrades the outage to a partial loss instead of serving nothing.
-        /// </remarks>
+        /// <summary>Resolves SDK/package references after full design-time compile fails on an unbuilt <c>ProjectReference</c>; it shapes csc-style args for <see cref="CscCommandLine"/> but cannot recover markup-generated members, so callers still report that a build is required.</summary>
         internal static (Evaluation Evaluation, ImmutableArray<string> Arguments) ResolveReferencesOnly(
             string projectPath,
             IReadOnlyDictionary<string, string> globalProperties,
@@ -493,26 +368,7 @@ namespace WinUiXaml.Workspace
             return (evaluation, synthesized.ToImmutable());
         }
 
-        /// <summary>
-        /// Reference-only acquisition for the framework stage, which needs the SDK and package
-        /// closure but none of the project's own compiled output.
-        /// </summary>
-        /// <remarks>
-        /// The framework stage exists to answer "what types exist in the framework and package
-        /// closure" as early as possible, and <see cref="ResolveReferencesOnly"/> is the CLI
-        /// equivalent of what it ran before this server moved off the in-process BuildManager:
-        /// <c>ResolveReferences</c> alone, with <c>BuildProjectReferences=false</c>.
-        ///
-        /// Routing this stage through <see cref="EvaluateAndCompile"/> instead made it wait for
-        /// <c>CoreCompile</c>, the WinUI markup compiler, and a real build of every
-        /// <c>ProjectReference</c> -- work whose output the stage then discards, because
-        /// referenced-project types come from the full stage compiling them from source. On a
-        /// project whose references include a Roslyn analyzer that cost seconds before any
-        /// completion could be served, for nothing this stage returns.
-        ///
-        /// The target framework is still pinned, because an outer build of a cross-targeting
-        /// project resolves no reference set of its own.
-        /// </remarks>
+        /// <summary>Reference-only framework acquisition uses <see cref="ResolveReferencesOnly"/> with a pinned target framework, avoiding <see cref="EvaluateAndCompile"/> work it would discard: CoreCompile, markup compilation, analyzers, and real <c>ProjectReference</c> builds.</summary>
         internal static (Evaluation Evaluation, ImmutableArray<string> Arguments) ResolveFrameworkReferences(
             string projectPath,
             IReadOnlyDictionary<string, string> globalProperties,
@@ -530,22 +386,7 @@ namespace WinUiXaml.Workspace
         /// </summary>
         private const string TargetFrameworkProperty = "TargetFramework";
 
-        /// <summary>
-        /// Picks the inner build to load for a multi-targeted project. Preferring a Windows target,
-        /// then the highest modern .NET version, approximates what a consuming app resolves to, and
-        /// it is the target most likely to expose the project's full API surface; a
-        /// <c>netstandard</c> leg is the compatibility shim. This is a heuristic, not NuGet's
-        /// resolution -- but loading one reasonable framework is strictly better than the
-        /// alternative of loading none.
-        /// </summary>
-        /// <remarks>
-        /// Windows outranks version because every project this server loads is consumed by a WinUI
-        /// app, and NuGet's own reducer prefers a matching platform over a nearer version. Ranking
-        /// by version alone made <c>net8.0</c> and <c>net8.0-windows10.0.19041.0</c> tie, so the
-        /// leg declared first won -- and a library whose Windows-only types sit behind
-        /// <c>#if WINDOWS</c> would be compiled without them, leaving its controls unresolvable in
-        /// XAML for no reason the user could see.
-        /// </remarks>
+        /// <summary>Picks one inner build by preferring Windows, then the highest modern .NET version; Windows outranks version so WinUI consumers see platform-only APIs instead of silently compiling a non-Windows leg.</summary>
         internal static string? SelectTargetFramework(string? declared)
         {
             if (string.IsNullOrWhiteSpace(declared))
@@ -661,17 +502,7 @@ namespace WinUiXaml.Workspace
             }
         }
 
-        /// <summary>
-        /// Extracts the <c>-getItem</c>/<c>-getProperty</c> JSON payload from MSBuild's stdout.
-        /// </summary>
-        /// <remarks>
-        /// Anchoring on the first <c>{</c> is not safe: MSBuild interleaves diagnostics ahead of
-        /// the payload, and a warning containing a brace either desynchronizes the parse or --
-        /// worse -- parses cleanly against a fragment and yields an empty result, which silently
-        /// produces a compilation with no sources instead of an error. Each candidate offset is
-        /// therefore tried in turn and accepted only if it parses <em>and</em> carries a key the
-        /// request actually asked for.
-        /// </remarks>
+        /// <summary>Extracts MSBuild's JSON payload by trying each brace offset until it parses and contains requested keys, avoiding diagnostics with braces becoming empty compilations.</summary>
         private static JsonDocument ParseJson(string output, string projectPath)
         {
             JsonException? lastFailure = null;
@@ -706,10 +537,7 @@ namespace WinUiXaml.Workspace
                 lastFailure);
         }
 
-        /// <summary>
-        /// MSBuild answers <c>-getItem</c>/<c>-getProperty</c> with an object holding these keys,
-        /// so their presence distinguishes the payload from a brace inside a diagnostic message.
-        /// </summary>
+        /// <summary>MSBuild <c>-getItem</c>/<c>-getProperty</c> payloads carry these keys, distinguishing them from braces in diagnostics.</summary>
         private static bool LooksLikeMsBuildResult(JsonElement root) =>
             root.ValueKind == JsonValueKind.Object &&
             (root.TryGetProperty("Items", out _) ||
@@ -839,22 +667,7 @@ namespace WinUiXaml.Workspace
             });
         }
 
-        /// <summary>
-        /// Runs <paramref name="body"/> with exclusive access to one project's intermediate output
-        /// directory.
-        /// </summary>
-        /// <remarks>
-        /// Two MSBuild invocations against one project race on that project's obj directory -- the
-        /// WinUI markup compiler writes output.json from the Compile target chain, so the loser
-        /// dies with "being used by another process". Both stages of a load (the fast framework
-        /// resolve and the authoritative one) target the same csproj, and the in-process
-        /// BuildManager this replaced serialized them for free. Shelling out does not, so the gate
-        /// has to be explicit.
-        ///
-        /// This is a separate method so the exclusion itself can be tested. Driving it through a
-        /// real build would need a project that actually contends, and a fixture that does not
-        /// contend produces a test that passes whether or not the gate is there at all.
-        /// </remarks>
+        /// <summary>Runs <paramref name="body"/> with exclusive access to a project's obj directory, serializing same-project MSBuild calls so markup output contention is testable without a real contending build.</summary>
         internal static T RunGated<T>(
             string? projectPath,
             string? workingDirectory,
@@ -881,18 +694,7 @@ namespace WinUiXaml.Workspace
 
         private const int ObjContentionRetries = 3;
 
-        /// <summary>
-        /// The directory an invocation writes its intermediate output under. Keying on the
-        /// directory rather than the project file matters: callers are inconsistent about
-        /// supplying <c>projectPath</c>, and two invocations that disagree about the key would not
-        /// exclude each other -- which is the whole point. Keying per directory rather than
-        /// globally still lets unrelated projects load in parallel, since they own different obj
-        /// trees.
-        ///
-        /// The two forms are told apart by which argument was supplied, never by probing the disk.
-        /// An earlier version asked <c>Directory.Exists</c>, which made the key depend on whether
-        /// the path happened to exist yet -- so the same project could take two different gates.
-        /// </summary>
+        /// <summary>Keys gates by intermediate-output owner directory, not project file or disk probes, so callers with different argument forms still exclude each other while unrelated projects run in parallel.</summary>
         internal static string ProjectGateKey(string? projectPath, string? workingDirectory)
         {
             try
@@ -931,11 +733,7 @@ namespace WinUiXaml.Workspace
                         : Environment.CurrentDirectory;
         }
 
-        /// <summary>
-        /// Whether a failure is another process holding a file this build needed, which is worth
-        /// retrying. MSBuild reports it as plain text, and the invocation forces
-        /// <c>DOTNET_CLI_UI_LANGUAGE=en</c>, so matching the English phrasing is sound here.
-        /// </summary>
+        /// <summary>Whether MSBuild reported an English file-in-use failure worth retrying; calls force <c>DOTNET_CLI_UI_LANGUAGE=en</c>.</summary>
         internal static bool IsProjectFileInUseFailure(string? detail) =>
             detail is not null &&
             detail.Contains("being used by another process", StringComparison.OrdinalIgnoreCase);
@@ -966,11 +764,9 @@ namespace WinUiXaml.Workspace
             startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
             startInfo.Environment["DOTNET_CLI_UI_LANGUAGE"] = "en";
 
-            // One node per invocation. Now that a design-time build builds the project references
-            // it is given, a multi-node build would fan each call out to a set of worker processes
-            // that node reuse is not allowed to recycle, and several concurrent loads turn that
-            // into a process storm. The work here is a handful of projects, so there is little to
-            // win from parallelism and a great deal to lose from oversubscription.
+            // One node per invocation: design-time builds now build ProjectReferences, so multi-node
+            // calls plus disabled node reuse can create process storms under concurrent loads, with
+            // little parallelism to win for these small project sets.
             startInfo.ArgumentList.Add("-maxcpucount:1");
 
             var (exitCode, combined, standardError) = RunProcess(startInfo, timeout, cancellationToken);
@@ -1012,22 +808,7 @@ namespace WinUiXaml.Workspace
             return combined;
         }
 
-        /// <summary>
-        /// Starts a child, drains both pipes, and waits for it under a timeout and a cancellation
-        /// token. Returns its exit code and output; throws <see cref="MsBuildUnavailableException"/>
-        /// when it could not be started or did not finish in time.
-        /// </summary>
-        /// <remarks>
-        /// Split out from the MSBuild-specific interpretation above so the process mechanics can be
-        /// tested without an SDK, a project, or a build. The three failures worth pinning -- a
-        /// child that outlives its timeout, a cancelled wait, and a child that floods a pipe -- all
-        /// end in a language server that appears to hang, and none of them can be reproduced
-        /// reliably by driving a real design-time build.
-        ///
-        /// The pipes are drained by the event-based readers rather than <c>ReadToEnd</c>: reading
-        /// one to EOF while the child is blocked writing the other deadlocks, and that read would
-        /// sit ahead of the wait, making the hang unbounded rather than capped.
-        /// </remarks>
+        /// <summary>Runs a child with event-drained pipes, timeout, and cancellation; split out to test hang cases without a real build and avoid <c>ReadToEnd</c> deadlocks.</summary>
         internal static (int ExitCode, string StandardOutput, string StandardError) RunProcess(
             ProcessStartInfo startInfo, TimeSpan timeout, CancellationToken cancellationToken)
         {

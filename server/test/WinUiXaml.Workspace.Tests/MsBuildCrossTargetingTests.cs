@@ -8,24 +8,10 @@ using Xunit;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>
-/// A multi-targeted project's outer build defines no <c>Compile</c> target -- only its inner
-/// builds do -- so a design-time build aimed at the outer build fails with MSB4057 and the project
-/// is dropped from the graph. The symptom is silent: every type in that project stops resolving in
-/// XAML, and the only trace is one line on stderr. MSBuildWorkspace handled the outer/inner split
-/// itself, so this is a gap the move to the MSBuild CLI opened rather than one it inherited.
-///
-/// The framework is therefore *decided* from evaluation rather than discovered by failing: these
-/// tests pin the decision input (<c>TargetFrameworks</c>), the selection, and the end-to-end
-/// result.
-/// </summary>
+/// <summary>A multi-targeted project's outer build defines no <c>Compile</c> target -- only its inner builds do -- so a design-time build aimed at the outer build fails with MSB4057 and the project is dropped from the graph. The symptom is silent: every type in that project stops resolving in XAML, and the only trace is one line on stderr. MSBuildWorkspace handled the outer/inner split itself, so this is a gap the move to the MSBuild CLI opened rather than one it inherited. The framework is therefore *decided* from evaluation rather than discovered by failing: these tests pin the decision input (<c>TargetFrameworks</c>), the selection, and the end-to-end result.</summary>
 public sealed class MsBuildCrossTargetingTests
 {
-    /// <summary>
-    /// The evaluation pass is what makes the decision possible, so it has to report the declared
-    /// targets. If this regresses, every cross-targeting project silently loses its inner build
-    /// again -- and evaluation runs no targets, so it answers even for the outer build.
-    /// </summary>
+    /// <summary>The evaluation pass is what makes the decision possible, so it has to report the declared targets. If this regresses, every cross-targeting project silently loses its inner build again -- and evaluation runs no targets, so it answers even for the outer build.</summary>
     [Fact]
     public void EvaluationReportsTheDeclaredTargetFrameworks()
     {
@@ -37,11 +23,7 @@ public sealed class MsBuildCrossTargetingTests
         });
     }
 
-    /// <summary>
-    /// The mirror case: a single-targeted project must report no <c>TargetFrameworks</c>, because
-    /// that emptiness is the signal to leave the build unpinned. If it reported something, every
-    /// ordinary project would be forced down the inner-build path for no reason.
-    /// </summary>
+    /// <summary>The mirror case: a single-targeted project must report no <c>TargetFrameworks</c>, because that emptiness is the signal to leave the build unpinned. If it reported something, every ordinary project would be forced down the inner-build path for no reason.</summary>
     [Fact]
     public void ASingleTargetedProjectReportsNoTargetFrameworks()
     {
@@ -72,11 +54,7 @@ public sealed class MsBuildCrossTargetingTests
         }
     }
 
-    /// <summary>
-    /// The exact target list from the project that surfaced this, in its declared order. The
-    /// netstandard leg is the compatibility shim; the modern one carries the full API surface and
-    /// is what a net9.0 app resolves to.
-    /// </summary>
+    /// <summary>The exact target list from the project that surfaced this, in its declared order. The netstandard leg is the compatibility shim; the modern one carries the full API surface and is what a net9.0 app resolves to.</summary>
     [Fact]
     public void TheModernTargetIsPreferredOverTheCompatibilityShim()
     {
@@ -95,12 +73,7 @@ public sealed class MsBuildCrossTargetingTests
         Assert.Equal(expected, MsBuildCli.SelectTargetFramework(declared));
     }
 
-    /// <summary>
-    /// Every project this server loads is consumed by a WinUI app, so a Windows leg outranks a
-    /// plain one. Ranking by version alone left these tied, and a tie was resolved by declaration
-    /// order -- an arbitrary choice with a silent cost, because the types a library puts behind
-    /// <c>#if WINDOWS</c> simply do not exist in the plain leg's compilation.
-    /// </summary>
+    /// <summary>Every project this server loads is consumed by a WinUI app, so a Windows leg outranks a plain one. Ranking by version alone left these tied, and a tie was resolved by declaration order -- an arbitrary choice with a silent cost, because the types a library puts behind <c>#if WINDOWS</c> simply do not exist in the plain leg's compilation.</summary>
     [Theory]
     [InlineData("net8.0;net8.0-windows10.0.19041.0", "net8.0-windows10.0.19041.0")]
     [InlineData("net8.0-windows10.0.19041.0;net8.0", "net8.0-windows10.0.19041.0")]
@@ -112,10 +85,7 @@ public sealed class MsBuildCrossTargetingTests
         Assert.Equal(expected, MsBuildCli.SelectTargetFramework(declared));
     }
 
-    /// <summary>
-    /// A single-targeted project reports no <c>TargetFrameworks</c> at all. Returning null there
-    /// is what makes the caller rethrow the original failure instead of retrying forever.
-    /// </summary>
+    /// <summary>A single-targeted project reports no <c>TargetFrameworks</c> at all. Returning null there is what makes the caller rethrow the original failure instead of retrying forever.</summary>
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -126,13 +96,7 @@ public sealed class MsBuildCrossTargetingTests
         Assert.Null(MsBuildCli.SelectTargetFramework(declared));
     }
 
-    /// <summary>
-    /// Deciding the framework costs an evaluation pass on a path that reruns on every C# save, so
-    /// the answer is memoized. The risk that buys is a stale pin: a project edited from multi- to
-    /// single-target (or the reverse) must not keep the old decision, because that silently drops
-    /// it again -- the exact defect this file exists to prevent. Rewriting the project must
-    /// therefore change the answer.
-    /// </summary>
+    /// <summary>Deciding the framework costs an evaluation pass on a path that reruns on every C# save, so the answer is memoized. The risk that buys is a stale pin: a project edited from multi- to single-target (or the reverse) must not keep the old decision, because that silently drops it again -- the exact defect this file exists to prevent. Rewriting the project must therefore change the answer.</summary>
     [Fact]
     public void EditingTheProjectFileDefeatsTheMemoizedDecision()
     {
@@ -171,14 +135,7 @@ public sealed class MsBuildCrossTargetingTests
         });
     }
 
-    /// <summary>
-    /// The write stamp cannot see an arbitrarily named imported <c>.props</c> file, and MSBuild
-    /// will not name its own import closure -- <c>-getProperty:MSBuildAllProjects</c> reports the
-    /// project and a couple of SDK targets, not the file that declared the property. The language
-    /// server already drops every project when an imported build file changes, so the memo hangs
-    /// on that signal too. Without this it could outlive the compilations it fed, and pin a
-    /// framework the project no longer declares.
-    /// </summary>
+    /// <summary>The write stamp cannot see an arbitrarily named imported <c>.props</c> file, and MSBuild will not name its own import closure -- <c>-getProperty:MSBuildAllProjects</c> reports the project and a couple of SDK targets, not the file that declared the property. The language server already drops every project when an imported build file changes, so the memo hangs on that signal too. Without this it could outlive the compilations it fed, and pin a framework the project no longer declares.</summary>
     [Fact]
     public void ClearingTheMemoDefeatsADecisionTheStampCannotSee()
     {
@@ -205,11 +162,7 @@ public sealed class MsBuildCrossTargetingTests
         });
     }
 
-    /// <summary>
-    /// <c>TargetFrameworks</c> can be declared under a condition on <c>$(Configuration)</c>, so a
-    /// memo keyed on the path alone would answer for the wrong build. The stamp is deliberately
-    /// held identical here: only the properties differ, so only the key can tell them apart.
-    /// </summary>
+    /// <summary><c>TargetFrameworks</c> can be declared under a condition on <c>$(Configuration)</c>, so a memo keyed on the path alone would answer for the wrong build. The stamp is deliberately held identical here: only the properties differ, so only the key can tell them apart.</summary>
     [Fact]
     public void TheMemoDoesNotAnswerAcrossDifferentGlobalProperties()
     {
@@ -230,10 +183,7 @@ public sealed class MsBuildCrossTargetingTests
         });
     }
 
-    /// <summary>
-    /// Replaces the project with content that evaluates differently while leaving the write stamp
-    /// byte-identical, so a stamp-keyed memo cannot notice the change.
-    /// </summary>
+    /// <summary>Replaces the project with content that evaluates differently while leaving the write stamp byte-identical, so a stamp-keyed memo cannot notice the change.</summary>
     private static void WriteDecoyPreservingStamp(string project)
     {
         var original = new FileInfo(project);
@@ -253,21 +203,13 @@ public sealed class MsBuildCrossTargetingTests
         File.SetLastWriteTimeUtc(project, writeTime);
     }
 
-    /// <summary>
-    /// The end-to-end proof, against a genuinely multi-targeted project built by MSBuild itself.
-    /// The unit tests above pin the decision inputs in isolation; only this one fails if the
-    /// framework is never actually pinned, which is precisely how the original defect survived.
-    /// </summary>
+    /// <summary>The end-to-end proof, against a genuinely multi-targeted project built by MSBuild itself. The unit tests above pin the decision inputs in isolation; only this one fails if the framework is never actually pinned, which is precisely how the original defect survived.</summary>
     [Fact]
     public void AMultiTargetedProjectStillYieldsACommandLine()
     {
         WithCrossTargetedProject((directory, project) =>
         {
-            // Restore has to succeed for the inner build to compile, so a failure here is not a
-            // reason to stop testing -- it is a reason to say so. Returning early would report a
-            // pass having asserted nothing, which is the same shape of defect as the silent
-            // project drop this file exists to prevent: a precondition that cannot be met reads
-            // exactly like the behaviour working.
+            // Restore must succeed for the inner build; failing loudly avoids a false pass with no assertions, the same silent-precondition shape as the project drop this test prevents.
             var (restored, diagnostics) = Restore(directory);
             Assert.True(restored, $"restoring the cross-targeted fixture failed:{Environment.NewLine}{diagnostics}");
 
@@ -280,10 +222,7 @@ public sealed class MsBuildCrossTargetingTests
         });
     }
 
-    /// <summary>
-    /// Writes the netstandard2.0;net9.0 library that surfaced this, runs <paramref name="body"/>
-    /// against it, and cleans up.
-    /// </summary>
+    /// <summary>Writes the netstandard2.0;net9.0 library that surfaced this, runs <paramref name="body"/> against it, and cleans up.</summary>
     private static void WithCrossTargetedProject(Action<string, string> body)
     {
         var directory = Path.Combine(
@@ -314,11 +253,7 @@ public sealed class MsBuildCrossTargetingTests
         }
     }
 
-    /// <summary>
-    /// Restores the fixture, returning why it failed rather than only that it did. A caller that
-    /// cannot say why a precondition failed can only choose between a silent pass and an
-    /// unactionable failure.
-    /// </summary>
+    /// <summary>Restores the fixture, returning why it failed rather than only that it did. A caller that cannot say why a precondition failed can only choose between a silent pass and an unactionable failure.</summary>
     private static (bool Succeeded, string Diagnostics) Restore(string directory)
     {
         try

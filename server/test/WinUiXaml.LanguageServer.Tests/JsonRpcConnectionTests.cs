@@ -31,10 +31,8 @@ public class JsonRpcConnectionTests
     [Fact]
     public async Task CancelNotificationMatchesARequestIdSpelledDifferently()
     {
-        // JSON-RPC requires the cancel to carry the same id as the request, but peers that round
-        // the id through a string send "1" for a request made with 1. Keying the cancellation
-        // table on the raw JSON token made those two spellings different keys, so the cancel was
-        // dropped in silence and the request ran on after the client had given up on it.
+        // Peers often stringify ids when cancelling; keying on the raw JSON token made 1 and "1"
+        // differ, dropping the cancel and letting abandoned requests run on.
         var request = Frame("""{"jsonrpc":"2.0","id":1,"method":"slow"}""");
         var cancel = Frame("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":"1"}}""");
         await using var input = new MemoryStream(request.Concat(cancel).ToArray());

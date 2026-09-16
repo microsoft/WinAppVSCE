@@ -172,11 +172,7 @@ public sealed class AttributeCompletionTests
     }
 
     /// <summary>
-    /// Thickness values are arity examples rather than a fixed set -- every one of "0", "0,0" and
-    /// "0,0,0,0" still has to have its digits replaced -- so the attribute is left free-form. The
-    /// FontFamily case in the theory above is the control: it shares this code path and still
-    /// completes, so an empty list here means thickness specifically opted out rather than literal
-    /// completion breaking wholesale.
+    /// Thickness is left free-form because its arity examples still need digit replacement; FontFamily proves literal completion still works on this path.
     /// </summary>
     [Fact]
     public void ThicknessValuesAreLeftFreeForm()

@@ -2,17 +2,7 @@ using WinUiXaml.Workspace;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>
-/// A peer report raised the possibility that opening the app folder rather than the solution root
-/// -- which puts a referenced sibling project outside the allowed root -- silently yields a
-/// successful but empty project context. That would be a total outage the server never reports,
-/// which is the exact failure mode the build-required prompt exists to eliminate, so it is worth a
-/// standing test rather than a source reading.
-///
-/// The allowed root is a trust boundary on which documents the server will touch, and it bounds the
-/// upward walk that finds the owning project. It deliberately does not bound MSBuild evaluation of
-/// that project: a reference is part of the project the user already trusted us to load.
-/// </summary>
+/// <summary>A peer report raised the possibility that opening the app folder rather than the solution root -- which puts a referenced sibling project outside the allowed root -- silently yields a successful but empty project context. That would be a total outage the server never reports, which is the exact failure mode the build-required prompt exists to eliminate, so it is worth a standing test rather than a source reading. The allowed root is a trust boundary on which documents the server will touch, and it bounds the upward walk that finds the owning project. It deliberately does not bound MSBuild evaluation of that project: a reference is part of the project the user already trusted us to load.</summary>
 public sealed class OutOfRootProjectReferenceTests
 {
     [Fact]
@@ -128,13 +118,7 @@ public sealed class OutOfRootProjectReferenceTests
         }
     }
 
-    /// <summary>
-    /// Cleanup must never be able to fail the test that already finished. MSBuild can still hold a
-    /// handle on the reference output it just built, and on Windows that surfaces as an
-    /// access-denied delete -- most likely under the parallel load of a full suite run, which is
-    /// exactly when a spurious failure is hardest to attribute. A throw here would also mask the
-    /// real assertion result, so a leaked temp directory is strictly the better outcome.
-    /// </summary>
+    /// <summary>Cleanup must never be able to fail the test that already finished. MSBuild can still hold a handle on the reference output it just built, and on Windows that surfaces as an access-denied delete -- most likely under the parallel load of a full suite run, which is exactly when a spurious failure is hardest to attribute. A throw here would also mask the real assertion result, so a leaked temp directory is strictly the better outcome.</summary>
     private static void TryDelete(string directory)
     {
         for (var attempt = 0; attempt < 3; attempt++)

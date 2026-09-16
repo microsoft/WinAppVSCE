@@ -8,16 +8,7 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace WinUiXaml.GeneratorHost;
 
-/// <summary>
-/// Runs a project's source generators out-of-process and writes their output to disk so the
-/// Native AOT language server can parse it as ordinary source.
-/// </summary>
-/// <remarks>
-/// The server cannot host generators itself: <c>AnalyzerFileReference</c> ultimately needs
-/// <c>Assembly.LoadFrom</c>, and Native AOT has no assembly loader. Everything else the server
-/// needs from Roslyn -- parsing, binding, symbol display -- is AOT-clean, so only this narrow
-/// step is delegated.
-/// </remarks>
+/// <summary>Runs source generators out-of-process so the Native AOT language server can parse generated output without Assembly.LoadFrom.</summary>
 internal static class Program
 {
     private static int Main(string[] args)
@@ -170,26 +161,14 @@ internal static class Program
         return builder.ToImmutable();
     }
 
-    /// <summary>
-    /// The manifest is the completion signal. Its presence tells the server the run finished,
-    /// so a half-written directory from a killed process is never mistaken for a result.
-    /// </summary>
+    /// <summary>The manifest is the completion signal, preventing half-written output from looking complete.</summary>
     private static void WriteManifest(string outputDirectory, IReadOnlyCollection<string> files)
     {
         var manifest = Path.Combine(outputDirectory, "generated-files.txt");
         File.WriteAllLines(manifest, files);
     }
 
-    /// <summary>
-    /// Finds the already-loaded assembly that a <see cref="Assembly.LoadFrom(string)"/> call
-    /// collided with, matched on the simple name the file on disk declares.
-    /// </summary>
-    /// <remarks>
-    /// Matching on the simple name rather than the full identity is deliberate: the collision
-    /// happens precisely when the versions differ, so requiring them to agree would never resolve
-    /// anything. The loaded copy is the one every other analyzer in this process is already bound
-    /// to, which makes it the right one to inspect regardless of which version it is.
-    /// </remarks>
+    /// <summary>Finds the already-loaded assembly LoadFrom collided with by simple name, since version skew is the collision and the loaded copy is what analyzers bind to.</summary>
     private static Assembly? TryResolveLoaded(string analyzerPath)
     {
         string simpleName;
@@ -235,21 +214,13 @@ internal static class Program
             }
             catch (Exception ex)
             {
-                // An analyzer directory ships its dependency closure, and some of those assemblies
-                // are already in the default load context -- either the host's own copy or a
-                // different version supplied by an earlier analyzer. LoadFrom refuses that with
-                // "Assembly with same name is already loaded" rather than handing back the loaded
-                // copy, which is not a failure to load the analyzer so much as a statement that it
-                // is already here. Reporting it as lost generated members is a false alarm when the
-                // assembly is a support library (Microsoft.Bcl.AsyncInterfaces and friends carry no
-                // generators at all), and skipping it is a real loss when it is not -- so resolve
-                // the copy that is loaded and inspect that instead.
+                // Analyzer directories ship dependencies that may already be loaded by the host or another analyzer.
+                // LoadFrom reports that as a same-name collision, so inspect the loaded copy instead of losing real
+                // generators or warning on generator-free support libraries.
                 var loaded = TryResolveLoaded(analyzer);
                 if (loaded is null)
                 {
-                    // Skipping quietly costs the user every generated member this analyzer would
-                    // have produced, with nothing on the wire or in the log to connect that to a
-                    // cause. The neighbouring version-skew path already reports; this one did not.
+                    // Skipping quietly loses every generated member from this analyzer with no wire or log clue.
                     Console.Error.WriteLine(
                         $"[winui-xaml-genhost] analyzer '{analyzer}' could not be loaded: {ex.Message}. " +
                         "Generated members from this analyzer will not resolve.");
@@ -305,10 +276,7 @@ internal static class Program
                 }
                 catch (Exception ex)
                 {
-                    // A generator that cannot be constructed is skipped rather than failing the
-                    // whole run; the remaining generators still produce usable members. The reason
-                    // is reported because the symptom is a type that stops resolving, which looks
-                    // nothing like a generator that failed to load.
+                    // Keep usable generators when one cannot construct, but report why because the symptom is missing members.
                     Console.Error.WriteLine(
                         $"[winui-xaml-genhost] generator '{type.FullName}' in '{analyzer}' could not be created: {ex.Message}");
                 }
@@ -318,16 +286,7 @@ internal static class Program
         return generators;
     }
 
-    /// <summary>
-    /// Reports a generator the host can see but cannot use.
-    /// </summary>
-    /// <remarks>
-    /// <c>Assembly.LoadFrom</c> does not unify Roslyn's identity, so a generator compiled against
-    /// a different <c>Microsoft.CodeAnalysis</c> version implements an <c>IIncrementalGenerator</c>
-    /// that is a different type from the host's. The interface check then fails even though the
-    /// type is plainly a generator, and the run continues with it quietly missing -- the same class
-    /// of version-skew failure MSBuildLocator existed to prevent.
-    /// </remarks>
+    /// <summary>Reports a visible generator skipped because LoadFrom did not unify Roslyn identities, making its generator interface differ from the host's.</summary>
     private static void WarnOnRoslynVersionMismatch(Type type, string analyzer)
     {
         foreach (var contract in type.GetInterfaces())
@@ -377,11 +336,7 @@ internal static class Program
         return result;
     }
 
-    /// <summary>
-    /// Reads an enum the request names by its Roslyn member name. An unrecognized value falls back
-    /// rather than failing the run: losing generated members over one unknown token would be a
-    /// worse trade than compiling with the default.
-    /// </summary>
+    /// <summary>Reads a Roslyn enum name from the request, falling back instead of losing generated members over one unknown token.</summary>
     private static OutputKind ReadOutputKind(JsonElement root, string name) =>
         ReadString(root, name) is { Length: > 0 } text &&
         Enum.TryParse<OutputKind>(text, ignoreCase: true, out var parsed)

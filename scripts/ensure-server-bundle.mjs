@@ -41,11 +41,9 @@ if (unsupported.length > 0) {
 
 const GENERATOR_HOST_DIR = "generator-host";
 
-// The generator host is the one framework-dependent piece: source generators are analyzer
-// assemblies loaded with Assembly.LoadFrom, which Native AOT cannot do. It is architecture
-// neutral, so a single copy is shared by both server binaries.
-// In artifact mode the bundle must be complete for every shipping architecture. In source mode
-// only what was asked for is required, so a developer can build just their own architecture.
+// The generator host stays framework-dependent because source-generator analyzers use Assembly.LoadFrom, which Native AOT cannot do.
+// It is architecture-neutral, so both server binaries share one copy.
+// Artifact mode requires every shipping architecture; source mode only requires requested RIDs so developers can build their own.
 const requiredRids = bundleMode === "artifact" ? SUPPORTED_RIDS : rids;
 const requiredRelativeFiles = [
   ...requiredRids.map((rid) => path.join(rid, "WinUiXaml.LanguageServer.exe")),
@@ -163,10 +161,9 @@ function publish(label, args) {
   }
   if (result.status !== 0) {
     console.error(`[ensure-server-bundle] dotnet publish failed for ${label}.`);
-    // The most common local failure is ILC not finding the MSVC linker, which surfaces as an
-    // MSB3073 'link.exe exited with code 123' well after code generation succeeded. Keep both
-    // hints under that condition -- publish fails for plenty of unrelated reasons (disk space,
-    // restore, a compile error), and asserting a toolchain cause for those misdirects triage.
+    // The common local failure is ILC missing the MSVC linker, surfacing as MSB3073 after codegen.
+    // Keep both hints under that condition only.
+    // Publish can also fail from disk space, restore, or compile errors, where a toolchain claim misdirects triage.
     const crossNote =
       label === hostRid
         ? ""

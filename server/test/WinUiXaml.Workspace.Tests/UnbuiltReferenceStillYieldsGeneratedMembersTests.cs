@@ -5,17 +5,7 @@ using Xunit;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>
-/// Pins the payoff of the reference repair, which nothing else asserts.
-/// </summary>
-/// <remarks>
-/// The repair exists so a never-built <c>ProjectReference</c> still lets the XAML markup compiler
-/// run, and the markup compiler is what writes <c>.g.i.cs</c> -- <c>InitializeComponent</c> and one
-/// field per <c>x:Name</c>. Every other test around this covers either the failure string or the
-/// reported status, so the whole mechanism could be removed and they would all still pass while
-/// the feature it was built for silently disappeared. This asserts the generated members
-/// themselves, on a project whose reference is genuinely absent from disk.
-/// </remarks>
+/// <summary>Pins the payoff of the reference repair, which nothing else asserts. The repair exists so a never-built <c>ProjectReference</c> still lets the XAML markup compiler run, and the markup compiler is what writes <c>.g.i.cs</c> -- <c>InitializeComponent</c> and one field per <c>x:Name</c>. Every other test around this covers either the failure string or the reported status, so the whole mechanism could be removed and they would all still pass while the feature it was built for silently disappeared. This asserts the generated members themselves, on a project whose reference is genuinely absent from disk.</summary>
 public sealed class UnbuiltReferenceStillYieldsGeneratedMembersTests : IDisposable
 {
     private readonly string _root =

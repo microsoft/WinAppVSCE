@@ -113,10 +113,7 @@ function findOpenDocument(documentUri: string): vscode.TextDocument | undefined 
       : candidate.uri.toString() === target.toString()));
 }
 let readyStatusTimer: NodeJS.Timeout | undefined;
-/**
- * Restores running right now. A count rather than a flag because each project the server reports
- * gets its own restore, and the status bar shows one line for whichever document is active.
- */
+/** Restores currently running; counted per reported project because the status bar shows whichever document is active. */
 let restoresInFlight = 0;
 const projectContextStatuses = new Map<string, ProjectContextStatus>();
 
@@ -634,11 +631,9 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     return;
   }
 
-  // The shipped server is a Windows-only native binary. On any other host the .exe is still
-  // present in the VSIX, so path resolution succeeds and spawn fails with ENOEXEC -- a "failed to
-  // start" error that gives the user no hint their platform is simply unsupported. An explicit
-  // WINUI_XAML_SERVER_PATH override bypasses the gate: that path is how a contributor points at a
-  // framework-dependent .dll, which does run cross-platform under the dotnet host.
+  // The shipped server is a Windows-only native binary; elsewhere the .exe exists but spawn fails with ENOEXEC.
+  // Gate explicitly so users see unsupported-platform wording, not a generic failed-to-start error.
+  // WINUI_XAML_SERVER_PATH bypasses this for contributor framework-dependent .dlls that run under dotnet cross-platform.
   if (!process.env.WINUI_XAML_SERVER_PATH && !serverRidFor(process.platform, process.arch)) {
     notifyDegraded(
       `WinUI XAML language support requires Windows on x64 or ARM64 (this host is ${process.platform}-${process.arch}). ` +
@@ -678,10 +673,9 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
   }
   const dotnet = resolution.dotnetPath;
 
-  // The server ships as a Native AOT executable, so it is launched directly rather than through
-  // `dotnet <dll>`. The resolved .NET host is still required: it is handed to the child
-  // environment so the out-of-process MSBuild evaluation and generator host run on exactly the
-  // SDK the user resolved.
+  // The Native AOT server launches directly, not through `dotnet <dll>`.
+  // The resolved .NET host is still required for the child environment.
+  // That keeps out-of-process MSBuild evaluation and the generator host on the user's resolved SDK.
   const isNativeServer = serverPath.toLowerCase().endsWith(".exe");
 
   log(
@@ -845,23 +839,9 @@ function notifyProjectBuildRequired(
   });
 }
 
-/**
- * Builds in a visible task terminal rather than silently: the build is the user's own action, its
- * output is where a genuine build error will surface, and a task needs no new command contribution
- * or progress UI. Once the outputs exist the server re-resolves on the next request.
- *
- * The .NET host is resolved the same way restore resolves it, and the same child environment is
- * carried. Starting a bare `dotnet` would let PATH decide, which is not necessarily the SDK the
- * language server itself is running against -- so the build the user is prompted to run could
- * target a different SDK than the one whose output the server is waiting for, or fail outright on
- * a machine where the extension found .NET somewhere PATH does not name.
- *
- * The project path is passed as a process argument rather than interpolated into shell text. It
- * originates from the server and is checked against the workspace roots, but a `.csproj` whose
- * path contains `$(...)` or a backtick would still be expanded by PowerShell inside double quotes,
- * and a build the user did not ask for is a poor thing to learn that from. `ProcessExecution`
- * starts the host directly, so there is no shell to do the expanding.
- */
+// Builds in a visible task terminal: it is the user's action, build errors surface there, and existing outputs let the server re-resolve on next request.
+// Resolve .NET like restore and carry the same child environment so the prompted build targets the SDK the server is waiting for, not whatever PATH names.
+// Pass the project as a ProcessExecution argument, not shell text, so PowerShell cannot expand `$(...)` or backticks in a server-reported path.
 async function runProjectBuild(projectPath: string): Promise<void> {
   let dotnet: string;
   try {
@@ -909,10 +889,7 @@ async function runProjectBuild(projectPath: string): Promise<void> {
   });
 }
 
-/**
- * `ProcessExecution` takes a string map, while a process environment may carry undefined values.
- * Dropping those matches what spawning with the environment directly would do.
- */
+/** Converts a process env to ProcessExecution's string map, dropping undefined values like direct spawn would. */
 function toTaskEnvironment(env: NodeJS.ProcessEnv): { [key: string]: string } {
   const result: { [key: string]: string } = {};
   for (const [key, value] of Object.entries(env)) {
@@ -1176,10 +1153,7 @@ function resolveServerPath(context: vscode.ExtensionContext): string | undefined
   );
 }
 
-/**
- * The Native AOT server is architecture-specific, so the VSIX carries one executable per
- * architecture under dist/server/win-<arch>/, mirroring how the winapp CLI ships in bin/win-<arch>/.
- */
+/** Returns the architecture-specific Native AOT server executable carried under dist/server/win-<arch>/. */
 function bundledServer(context: vscode.ExtensionContext): string {
   return path.join(context.extensionPath, "dist", "server", serverRid(), "WinUiXaml.LanguageServer.exe");
 }

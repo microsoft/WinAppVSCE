@@ -1,10 +1,4 @@
-/**
- * Picks the Native AOT server binary that matches the host.
- *
- * Kept free of `vscode` so it is directly testable: CI runs x64, so a regression that always
- * returned `win-x64` would leave ARM64 users silently running the emulated binary without failing
- * any suite.
- */
+/** Picks the host-matching Native AOT server binary; kept free of `vscode` so tests catch ARM64 regressions on x64 CI. */
 export function serverRidFor(platform: string, arch: string): string | undefined {
   if (platform !== "win32") {
     return undefined;

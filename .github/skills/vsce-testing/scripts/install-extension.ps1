@@ -40,11 +40,9 @@ if (-not $SkipBuild) {
     Write-Step "SkipBuild set - using existing artifacts"
 }
 
-# Selecting "the newest .vsix" silently couples this harness to anything that writes to the repo's
-# artifacts directory -- including another session packaging a build while a test round is running.
-# That produced a real near-miss: a newly packaged VSIX landed in artifacts mid-round and became the
-# install target, which would have published one build's behaviour under another build's name. A
-# silent upgrade is indistinguishable from the build you meant to test, so pin it or assert it.
+# Selecting "the newest .vsix" couples this harness to anything writing artifacts, including another session packaging mid-test.
+# A real near-miss installed a newly packaged VSIX mid-round, publishing one build's behaviour under another build's name.
+# A silent upgrade is indistinguishable from the intended build, so pin it or assert it.
 if ($Vsix) {
     if (-not (Test-Path $Vsix)) { throw "Specified -Vsix not found: $Vsix" }
     $vsixFile = Get-Item $Vsix

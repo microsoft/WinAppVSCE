@@ -55,10 +55,7 @@ namespace WinUiXaml.Workspace
         public string? ApplicationDefinitionPath { get; }
 
         /// <summary>
-        /// Referenced assemblies that had never been built when this project loaded. Non-empty
-        /// means the project came up through the reference-resolution fallback: types resolve, but
-        /// the markup compiler never ran, so generated members are absent and the user should be
-        /// told to build.
+        /// Referenced assemblies missing at load; non-empty means fallback restored type resolution, but markup output and generated members still require a build.
         /// </summary>
         public ImmutableArray<string> UnresolvedProjectReferences { get; }
 

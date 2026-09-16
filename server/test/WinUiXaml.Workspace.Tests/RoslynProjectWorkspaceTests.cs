@@ -130,12 +130,7 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
     [Fact]
     public async Task DiamondProjectReferenceIsAvailableToEveryProjectThatDeclaresIt()
     {
-        // App references both Middle and Shared; Middle also references Shared. The graph walk
-        // used one set as both "visited" and "cycle guard", so whichever branch reached Shared
-        // first claimed it and the sibling edge was skipped -- leaving App with no reference to
-        // Shared at all. The design-time build's own /reference:Shared.dll cannot cover for that,
-        // because the reference is compiled from source and that source compilation is what the
-        // sibling edge carries.
+        // App and Middle both reference Shared; the old graph walk reused "visited" as the cycle guard, so the first branch to Shared hid the sibling edge App needs for source compilation.
         var sharedDirectory = Path.Combine(_root, "Shared");
         var middleDirectory = Path.Combine(_root, "Middle");
         var appDirectory = Path.Combine(_root, "App");

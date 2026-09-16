@@ -46,10 +46,9 @@ describe("notifyProjectRestoreRequired", () => {
     assert.deepEqual(calls.restored, [project]);
   });
 
-  // D5: this previously asserted "prompts only once", which encoded the defect -- the client
-  // swallowed the server's re-armed notification, so a second outage for the same project was
-  // silent. The server latches per condition and clears on a successful load; if it sends, it
-  // means to.
+  // D5: the old "prompts only once" assertion encoded the defect by swallowing a re-armed server notification.
+  // The server latches per condition and clears on successful load.
+  // If it sends again, it means to.
   it("restores again when the server reports the project a second time", async () => {
     const { calls, host } = createHost();
 

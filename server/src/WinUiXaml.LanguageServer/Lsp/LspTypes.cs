@@ -6,9 +6,8 @@ namespace WinUiXaml.LanguageServer.Lsp;
 /// <summary>Shared JSON options for the LSP wire format (camelCase, omit nulls).</summary>
 internal static class LspJson
 {
-    // Resolving through the source-generated context (rather than the reflection default)
-    // keeps every serialization path in the process trim- and AOT-safe. A type that is not
-    // declared on LspJsonContext will throw instead of silently falling back to reflection.
+    // Source-generated resolution keeps serialization trim- and AOT-safe; undeclared types throw
+    // instead of silently falling back to reflection.
     public static readonly JsonSerializerOptions Options = new()
     {
         TypeInfoResolver = LspJsonContext.Default,
@@ -32,10 +31,7 @@ internal sealed class ProjectRestoreRequiredParams
     [JsonPropertyName("projectPath")] public string? ProjectPath { get; set; }
 }
 
-/// <summary>
-/// Tells the client a referenced project has never been built, which the XAML markup compiler
-/// treats as fatal. Carries the project names so the prompt can say what to build.
-/// </summary>
+/// <summary>Tells the client a referenced project has never been built and names what to build.</summary>
 internal sealed class ProjectBuildRequiredParams
 {
     [JsonPropertyName("projectPath")] public string? ProjectPath { get; set; }

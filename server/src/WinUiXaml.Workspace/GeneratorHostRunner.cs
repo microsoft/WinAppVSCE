@@ -10,16 +10,7 @@ using System.Threading;
 
 namespace WinUiXaml.Workspace
 {
-    /// <summary>
-    /// Drives <c>WinUiXaml.GeneratorHost</c> so the AOT server can see source-generated members.
-    /// </summary>
-    /// <remarks>
-    /// Refreshing generator output is deliberately separate from acquiring the csc command line.
-    /// The design-time build that yields the command line runs with
-    /// <c>SkipCompilerExecution=true</c>, so csc never runs and no generator output exists; and a
-    /// C# edit invalidates the generated members while leaving the command line valid. Splitting
-    /// them lets the common case -- a saved <c>.cs</c> file -- re-run only the generators.
-    /// </remarks>
+    /// <summary>Runs <c>WinUiXaml.GeneratorHost</c> separately from command-line acquisition so saved C# edits refresh generated members without a full design-time build.</summary>
     internal static class GeneratorHostRunner
     {
         private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(5);
@@ -57,15 +48,8 @@ namespace WinUiXaml.Workspace
         }
 
         /// <summary>
-        /// Runs the project's generators and returns the files they produced. Returns an empty
-        /// array when the project has no generators, or when the helper is unavailable -- the
-        /// server still works in that case, it just cannot see generated members.
+        /// Runs project generators; missing generators or helper failures return no files, log the reason, and let the server continue without generated members.
         /// </summary>
-        /// <remarks>
-        /// Every failure here degrades to "generated members do not resolve", which looks
-        /// identical to a project that simply has no generators. Each failure is logged with its
-        /// reason so the user is not left with IntelliSense that has silently forgotten a type.
-        /// </remarks>
         internal static ImmutableArray<string> Run(
             string projectPath,
             string assemblyName,
@@ -95,10 +79,9 @@ namespace WinUiXaml.Workspace
             {
                 var manifest = Path.Combine(outputDirectory, "generated-files.txt");
 
-                // No stale manifest is possible: the directory is unique to this invocation, so
-                // the file's presence afterwards already means "this run wrote it". An earlier
-                // version shared one directory per project and had to clear the manifest first to
-                // get that guarantee, which held only against the runs it could see.
+                // The directory is unique to this invocation, so a manifest's presence means this
+                // run wrote it; the old shared-directory design had to clear first and could only
+                // guard against runs it could see.
                 File.WriteAllText(requestPath, BuildRequest(assemblyName, outputDirectory, commandLine));
                 var run = Invoke(host, requestPath, cancellationToken);
                 if (!run.Succeeded)
@@ -146,24 +129,8 @@ namespace WinUiXaml.Workspace
         }
 
         /// <summary>
-        /// Keys the output directory on the project path so concurrently loaded projects cannot
-        /// overwrite one another's generated files, and gives every invocation its own leaf so two
-        /// runs for the *same* project cannot either.
+        /// Uses a project-keyed directory plus a per-invocation leaf so concurrent loads, including separate VS Code server processes sharing <c>%TEMP%</c>, cannot clear each other's generated files.
         /// </summary>
-        /// <remarks>
-        /// The per-invocation leaf is not defensive programming. One project reached twice
-        /// concurrently is ordinary: two roots that share a library each build that library in
-        /// their own graph, and those graphs are loaded independently. Both runs would then target
-        /// one directory, and the host clears that directory on entry -- so the second run's clear
-        /// lands between the first run's manifest read and its file reads, and the files vanish.
-        /// The reader tolerates that (it skips paths that no longer exist), which is what makes it
-        /// dangerous: the symptom is not an error, it is a project that quietly forgets its
-        /// generated members until something else invalidates it.
-        ///
-        /// A lock would close the in-process case and miss the one that motivates this: two VS
-        /// Code windows are two server processes sharing one <c>%TEMP%</c>. Separate directories
-        /// need no agreement between them.
-        /// </remarks>
         private static string OutputDirectoryFor(string projectPath)
         {
             var full = Path.GetFullPath(projectPath);
@@ -177,26 +144,14 @@ namespace WinUiXaml.Workspace
 
         private static string GeneratedRoot => Path.Combine(Path.GetTempPath(), "winuixaml-generated");
 
-        /// <summary>How long an invocation's output directory is assumed to still be in use.</summary>
-        /// <remarks>
-        /// Generously past the host's own five-minute timeout. The files are read by the caller
-        /// after <see cref="Run"/> returns, so reclaiming on age rather than on completion is what
-        /// keeps a sweep from deleting a directory whose trees are still being parsed.
-        /// </remarks>
+        /// <summary>How long output is kept so post-<see cref="Run"/> source parsing cannot race cleanup.</summary>
         private static readonly TimeSpan ReclaimAfter = TimeSpan.FromHours(1);
 
         private static int _sweepStarted;
 
         /// <summary>
-        /// Deletes invocation directories left behind by earlier runs, once per process.
+        /// Sweeps old per-invocation output once per process so killed hosts do not leave unbounded generated C# under <c>%TEMP%</c>; locked directories are retried later.
         /// </summary>
-        /// <remarks>
-        /// Per-invocation directories do not clean themselves up: the process that would delete one
-        /// is the process that may have been killed. Without a sweep the cost of the fix above is
-        /// an unbounded pile of generated C# under <c>%TEMP%</c>, which is a worse defect than the
-        /// race it removes. Failure here is ignored -- a directory that cannot be deleted is
-        /// someone else's open handle, and it will be swept by a later session.
-        /// </remarks>
         private static void ReclaimStaleOutput()
         {
             if (Interlocked.Exchange(ref _sweepStarted, 1) != 0)
@@ -234,15 +189,9 @@ namespace WinUiXaml.Workspace
             }
         }
 
-        /// <remarks>
-        /// Every field here is one the server already parsed out of the csc command line. Sending
-        /// only the file lists left the host to guess the rest, and its guesses disagreed with the
-        /// compilation the server builds from the same command line: nullable disabled where the
-        /// project enables it, and a library where the project is an application. Generators read
-        /// both. <c>[ObservableProperty]</c> annotates what it emits from the nullable context, so
-        /// the guess decided whether a generated property came back as <c>string</c> or
-        /// <c>string?</c> -- and that is the type <c>{x:Bind}</c> is then checked against.
-        /// </remarks>
+        /// <summary>
+        /// Sends every csc-derived option generators observe, including output kind and nullable context, so generated members match the compilation <c>{x:Bind}</c> checks.
+        /// </summary>
         private static string BuildRequest(
             string assemblyName,
             string outputDirectory,
@@ -306,14 +255,7 @@ namespace WinUiXaml.Workspace
             writer.WriteEndArray();
         }
 
-        /// <summary>
-        /// Reports a generator-host failure and degrades to "no generated files".
-        /// </summary>
-        /// <remarks>
-        /// Logged rather than surfaced as a diagnostic because the failure is project-wide, not
-        /// tied to any span in a XAML file. Writing to stderr matches the rest of the server and
-        /// is picked up by <c>WINUI_XAML_LOG</c>.
-        /// </remarks>
+        /// <summary>Reports a project-wide generator-host failure to stderr/<c>WINUI_XAML_LOG</c> and degrades to no generated files.</summary>
         private static ImmutableArray<string> Unavailable(string projectPath, string reason)
         {
             Console.Error.WriteLine(
@@ -339,13 +281,7 @@ namespace WinUiXaml.Workspace
             return RunProcess(startInfo, Timeout, cancellationToken);
         }
 
-        /// <summary>Why a generator-host invocation did not produce a manifest.</summary>
-        /// <remarks>
-        /// A crash, a hang and a cancelled request are three different support paths, and an
-        /// operator reading a user's log cannot act on them the same way: a non-zero exit is a
-        /// defect to escalate, a timeout is usually load, and a cancellation is routine. Collapsing
-        /// them into one sentence threw that away at the only point it was known.
-        /// </remarks>
+        /// <summary>Why no manifest was produced, preserving distinct support paths for crashes, timeouts, and cancellations.</summary>
         internal enum HostRunOutcome
         {
             Succeeded,
@@ -371,16 +307,9 @@ namespace WinUiXaml.Workspace
             };
         }
 
-        /// <summary>Runs a child process to completion, draining both pipes asynchronously.</summary>
-        /// <remarks>
-        /// Reading the pipes sequentially with <c>ReadToEnd</c> deadlocks: a generator that fills
-        /// the stderr buffer blocks writing while this process is still blocked on stdout, so the
-        /// child never exits and stdout never reaches EOF. That read also sits ahead of the timeout
-        /// and the cancellation registration, which makes the hang unbounded rather than capped --
-        /// and because <see cref="RoslynProjectWorkspace"/> waits on this call, the project never
-        /// finishes loading and the server serves nothing at all for it. Async draining with an
-        /// armed timeout is the shape <see cref="MsBuildCli"/> already uses.
-        /// </remarks>
+        /// <summary>
+        /// Runs a child process with async pipe draining, timeout, and cancellation so stderr backpressure cannot deadlock project loading.
+        /// </summary>
         internal static HostRunResult RunProcess(
             ProcessStartInfo startInfo,
             TimeSpan timeout,
@@ -388,11 +317,9 @@ namespace WinUiXaml.Workspace
         {
             using var process = new Process { StartInfo = startInfo };
 
-            // stdout is unused -- the helper writes its manifest to the path it was handed -- but
-            // the pipe must still be drained or the child blocks. stderr is forwarded, because the
-            // helper writes the reason a generator or analyzer was skipped, and the symptom --
-            // generated members quietly missing -- is otherwise indistinguishable from the user's
-            // own code being wrong.
+            // stdout is unused but must be drained or the child blocks. stderr is forwarded because
+            // skipped generators/analyzers otherwise look the same as the user's own missing
+            // generated members.
             process.OutputDataReceived += static (_, _) => { };
             process.ErrorDataReceived += static (_, e) =>
             {

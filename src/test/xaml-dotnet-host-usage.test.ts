@@ -3,18 +3,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-/**
- * The extension never launches a .NET tool by name. `dotnet` is frequently absent from the PATH
- * a VS Code window inherits -- notably when the SDK was installed after the session started, or
- * when it lives somewhere only a login shell knows about -- so a bare `"dotnet"` argv[0] fails
- * with a message that names neither the extension nor the missing SDK.
- *
- * These are source-level assertions rather than behavioural ones because the launch sites are
- * module-private and each one builds a `vscode.Task` or a child process that a unit test cannot
- * observe without standing up the whole activation path. The defect being pinned is a missing
- * call, and a missing call is visible in the source. This is the same shape as the
- * `EveryInvocationGoesThroughTheGate` harvest on the server side.
- */
+// The extension never launches a .NET tool by name; VS Code's PATH often lacks a newly installed or shell-only SDK.
+// Bare `dotnet` would fail without naming the extension or SDK, so every launch site must use the resolver.
+// Source-level assertions fit because private launch sites build vscode.Task/child processes and the defect is a missing call.
 const source = readFileSync(
   path.join(__dirname, "..", "..", "src", "xaml", "xamlLanguageService.ts"),
   "utf8"

@@ -4,14 +4,9 @@ using WinUiXaml.LanguageServer.Lsp;
 
 namespace WinUiXaml.LanguageServer.Tests;
 
-// The server serializes every outgoing payload by its runtime type through LspJsonContext
-// (JsonRpcConnection.WriteValue). Native AOT implies JsonSerializerIsReflectionEnabledByDefault=false,
-// so a payload the context has no metadata for does not degrade -- it throws NotSupportedException
-// mid-response, which surfaces to the client as a JSON-RPC error on whatever request was in flight.
-//
-// Because the wire signature is object?, the compiler cannot catch an unregistered payload: it is a
-// runtime failure on whichever code path happens to emit that message, which may be a rare error
-// branch that no other test exercises. These tests turn that into a build-time failure instead.
+// Outgoing payloads serialize by runtime type through LspJsonContext; Native AOT has no reflection fallback.
+// Because the wire signature is object?, unregistered payloads fail only on the runtime branch that emits them.
+// These tests turn those rare NotSupportedException wire failures into build-time failures.
 public class LspJsonContextCoverageTests
 {
     [Fact]
@@ -51,15 +46,8 @@ public class LspJsonContextCoverageTests
     }
 
     /// <summary>
-    /// A handler returning <c>List&lt;T&gt;</c> or <c>T[]</c> serializes by that closed generic
-    /// type, not by <c>T</c> -- registering only the element type is not enough.
+    /// Verifies collection results are registered as closed generics, since List&lt;CompletionItem&gt; can pass DTO/anonymous guards yet still throw on the wire.
     /// </summary>
-    /// <remarks>
-    /// The two tests above cannot see this: a <c>List&lt;CompletionItem&gt;</c> carries no
-    /// <c>[JsonPropertyName]</c> of its own and is not an anonymous type, so it passes both while
-    /// still throwing on the wire. That is exactly how <c>window/showMessage</c> shipped broken
-    /// past 2,000 green tests.
-    /// </remarks>
     [Fact]
     public void EveryCollectionOfAWirePayloadIsRegisteredAsAClosedGeneric()
     {
@@ -96,11 +84,7 @@ public class LspJsonContextCoverageTests
     }
 
     /// <summary>
-    /// The reflection guards above prove a payload type is registered; they do not prove it can
-    /// actually be written. A collection-valued property is where that gap bites -- registering
-    /// the owner does not by itself guarantee metadata for the closed generic it holds -- so the
-    /// build-required payload is serialized here for real, with reflection unavailable exactly as
-    /// it is under Native AOT.
+    /// Serializes the build-required payload for real, proving registered owner metadata also covers its collection-valued property under Native AOT.
     /// </summary>
     [Fact]
     public void ProjectBuildRequiredPayloadSerializesWithoutReflection()
@@ -131,16 +115,8 @@ public class LspJsonContextCoverageTests
     }
 
     /// <summary>
-    /// Registration is not writability. The guards above ask whether the context has metadata for
-    /// a type; this one asks the only question that matters on the wire -- does writing it throw --
-    /// for every payload the server can construct, rather than for the one payload someone
-    /// remembered to sample.
+    /// Writes every constructible payload, with collections populated, because registration alone does not prove element metadata works on the wire.
     /// </summary>
-    /// <remarks>
-    /// Collection-valued properties are populated because an empty or null collection can serialize
-    /// without ever needing its element metadata, which would let exactly the
-    /// <c>window/showMessage</c> defect pass a test that looks exhaustive.
-    /// </remarks>
     [Fact]
     public void EveryConstructibleWirePayloadActuallySerializes()
     {
@@ -238,11 +214,8 @@ public class LspJsonContextCoverageTests
         };
     }
 
-    // A wire payload is any concrete DTO declared in the Lsp namespace. This deliberately does
-    // NOT require [JsonPropertyName]: the context sets PropertyNamingPolicy = CamelCase, so a DTO
-    // can serialize correctly with no attributes at all. Requiring the attribute made exactly
-    // those types invisible to every guard here -- the same shape as the window/showMessage
-    // defect, but with the detector switched off.
+    // A wire payload is any concrete Lsp DTO, not just types with JsonPropertyName: camelCase policy
+    // lets unattributed DTOs serialize, and filtering them out would hide window/showMessage-shaped defects.
     private static bool IsWirePayload(Type type) =>
         type is { IsClass: true, IsAbstract: false, IsGenericTypeDefinition: false } &&
         type.Namespace == "WinUiXaml.LanguageServer.Lsp" &&

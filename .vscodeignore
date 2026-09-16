@@ -24,12 +24,9 @@ test-results/**
 playwright.config.ts
 PR_REVIEW.md
 EDITOR_SUPPORT.md
-# WinUI XAML language service:
-#   - exclude the C# server sources + build output and the test harness/fixtures
-#   - the published server (dist/server, produced by `bundle:server`) is NOT excluded and ships in the VSIX
-#   - trim debug symbols and XML doc comments
-#   - the Native AOT server executables (one per architecture) and the framework-dependent
-#     generator host ship without a .NET runtime
+# WinUI XAML language service: exclude the C# server sources, build output, and test fixtures.
+# The published server (dist/server, from `bundle:server`) DOES ship -- Native AOT executables per
+# architecture plus the framework-dependent generator host, with no .NET runtime. Symbols/docs trimmed.
 server/**
 test/**
 .vscode-test.mjs

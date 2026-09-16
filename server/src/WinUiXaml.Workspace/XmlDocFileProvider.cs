@@ -10,14 +10,8 @@ using Microsoft.CodeAnalysis;
 namespace WinUiXaml.Workspace
 {
     /// <summary>
-    /// Supplies XML documentation for metadata references.
+    /// Supplies XML documentation without <c>Microsoft.CodeAnalysis.Workspaces</c>, whose MEF composition fails under Native AOT trimming; otherwise symbols resolve but quick-info prose disappears.
     /// </summary>
-    /// <remarks>
-    /// Roslyn ships <c>XmlDocumentationProvider</c>, but only in
-    /// <c>Microsoft.CodeAnalysis.Workspaces</c>, which cannot be used under Native AOT because its
-    /// MEF composition fails once trimmed. This is the equivalent built on the compiler layer
-    /// alone. Without it every symbol still resolves but all quick-info prose disappears.
-    /// </remarks>
     internal sealed class XmlDocFileProvider : DocumentationProvider
     {
         private static readonly ConcurrentDictionary<string, XmlDocFileProvider> Cache =
@@ -32,11 +26,7 @@ namespace WinUiXaml.Workspace
             _path = path;
         }
 
-        /// <summary>
-        /// Returns a provider for <paramref name="path"/>, shared across projects and reloads.
-        /// Reference sets run to a couple of hundred assemblies and are re-resolved on every
-        /// project reload, so parsing each file more than once is worth avoiding.
-        /// </summary>
+        /// <summary>Returns a cached provider for <paramref name="path"/> so reloads do not reparse hundreds of reference docs.</summary>
         internal static XmlDocFileProvider GetOrCreate(string path) =>
             Cache.GetOrAdd(Path.GetFullPath(path), fullPath => new XmlDocFileProvider(fullPath));
 

@@ -70,24 +70,13 @@ export function getRelevantProjectContextStatuses(
   return values.filter((status) => status.uri === activeDocumentUri);
 }
 
-/**
- * States that describe the project on disk rather than an operation in flight. They stay true
- * until the developer acts, so a reload starting is not evidence they stopped being true.
- */
+/** Durable project-on-disk states; a reload starting does not prove the developer-fixed condition stopped being true. */
 const DURABLE_STATES: readonly ProjectContextState[] = [
   "build-required",
   "restore-required",
 ];
 
-/**
- * Decides whether an incoming status replaces the one already held for that document.
- *
- * Every save restarts the project load, which re-sends `loading` before failing the same way
- * again -- so on an unbuilt project the bar would drop its instruction and spin on each
- * keystroke-plus-save, which is precisely the clean-clone case the instruction exists for.
- * A load that genuinely resolves ends in `ready` / `framework-ready` / `error`, none of which
- * are suppressed here, so recovery after a real build still lands immediately.
- */
+/** Decides whether incoming status replaces current; suppresses transient reload `loading` over durable states while still accepting real recovery states immediately. */
 export function shouldReplaceProjectContextStatus(
   current: ProjectContextStatus | undefined,
   incoming: ProjectContextStatus
@@ -130,31 +119,22 @@ export function getProjectContextStatusPresentation(
   context: ProjectContextStatusContext = {}
 ): ProjectContextStatusPresentation | undefined {
   switch (status.state) {
-    // Names the condition rather than the remedy. This was written for the clean-clone case,
-    // where the fix really was one build -- but the design-time build now builds the project's
-    // references itself, so reaching this state means one of them failed to build. "build
-    // required" would send the developer to repeat the step that just failed, and the generic
-    // "unavailable" would send them looking for a broken extension.
+    // Name the condition, not the old remedy: design-time build now builds project references itself.
+    // Reaching this means a reference failed to build, so "build required" would ask users to repeat the failed step.
+    // Generic "unavailable" would instead send them hunting for a broken extension.
     case "build-required":
       return {
         text: "$(tools) WinApp: referenced project failed to build",
         tooltip: `${status.message ?? PROJECT_CONTEXT_BUILD_REQUIRED_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
-    // A never-restored project is as user-fixable as a never-built one, and on a clean clone it is
-    // the condition reached *first*. Falling back to the generic "unavailable" wording here sent
-    // developers looking for a broken extension at the exact moment the fix was one command --
-    // the same defect this state's build-side sibling above was added to remove.
+    // A never-restored project is user-fixable and, on a clean clone, the first condition reached.
+    // Generic "unavailable" sent developers hunting for a broken extension when the fix was one command.
+    // This mirrors the build-side sibling above.
     case "restore-required":
-      // The extension restores without being asked, so for as long as that is running the
-      // instruction is not the developer's to act on -- it describes work already in flight.
-      // Reporting it as an outstanding demand is the same conflation the build-side wording
-      // above was written to avoid, and it would also be the only place left where the user is
-      // told to run a command the extension is at that moment running.
-      //
-      // The instruction is still what a developer needs once the restore *finishes* without
-      // fixing the condition -- a restore that failed leaves the demand outstanding, and the bar
-      // outlives the error notification that reported it.
+      // Auto-restore is already running, so the instruction is not the developer's to act on yet.
+      // Calling it outstanding would repeat the build-side conflation and tell users to run a command the extension is running.
+      // Once restore finishes without fixing the condition, the instruction is still needed and outlives the error notification.
       if (context.restoreInFlight) {
         return {
           text: "$(sync~spin) WinApp: restoring packages",
@@ -180,12 +160,9 @@ export function getProjectContextStatusPresentation(
         tooltip: `${PROJECT_CONTEXT_LOADING_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
-    // Names what is already usable before what is still pending. The previous wording ("XAML
-    // project loading") followed "XAML IntelliSense loading" and so read as a lateral move -- or a
-    // regression -- at the one moment the developer gained something: WinUI control and property
-    // completion starts working here, while their own types and x:Bind members do not. Naming only
-    // the pending half meant the bar never said that, and the sentence that did was buried in the
-    // tooltip.
+    // Name what is usable before what is pending: WinUI controls/properties now complete, but app types and x:Bind do not.
+    // The old "XAML project loading" sounded lateral or regressive right when capability improved.
+    // If only the pending half is named, the status bar hides the useful part in the tooltip.
     case "framework-ready":
       return {
         text: "$(sync~spin) WinApp: WinUI Types Ready \u00b7 Loading Project Symbols and Diagnostics",

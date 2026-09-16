@@ -4,11 +4,7 @@ using WinUiXaml.Workspace;
 
 namespace WinUiXaml.Workspace.Tests
 {
-    /// <summary>
-    /// Hermetic tests for the pure project-discovery logic of <see cref="XamlProjectResolver"/>.
-    /// These build a throwaway directory tree on disk and never load MSBuild, so they run fast and
-    /// with no dependency on an installed SDK or the WinUI fixture.
-    /// </summary>
+    /// <summary>Hermetic tests for the pure project-discovery logic of <see cref="XamlProjectResolver"/>. These build a throwaway directory tree on disk and never load MSBuild, so they run fast and with no dependency on an installed SDK or the WinUI fixture.</summary>
     public sealed class FindOwningProjectTests : IDisposable
     {
         private readonly string _root;
@@ -40,11 +36,7 @@ namespace WinUiXaml.Workspace.Tests
         [Fact]
         public void MissingLeafDirectoryStillResolvesTheAncestorProject()
         {
-            // The server keeps serving a document whose directory disappears underneath it --
-            // a branch switch, a rename, or a network share blinking. GetFiles throws
-            // DirectoryNotFoundException on that leaf, and letting it escape abandoned the walk
-            // before it reached the ancestor that actually owns the project, so the document
-            // stayed project-less until it was reopened.
+            // A served document's leaf directory can disappear after branch switches, renames, or network blips; GetFiles must not abort before finding the ancestor project.
             var proj = Touch("App", "App.csproj");
             var xaml = Touch("App", "Views", "Gone", "Deep.xaml");
             Directory.Delete(Path.Combine(_root, "App", "Views", "Gone"), recursive: true);

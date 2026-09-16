@@ -25,17 +25,8 @@ namespace WinUiXaml.Workspace
     }
 
     /// <summary>
-    /// A referenced project's assembly does not exist yet, so the XAML markup compiler aborts the
-    /// design-time evaluation before <c>CoreCompile</c> runs and no compilation is produced at all.
+    /// Clean-clone failure where missing referenced assemblies make WinUI markup abort before <c>CoreCompile</c>; naming them turns silent total outage into a build-required diagnostic.
     /// </summary>
-    /// <remarks>
-    /// This is the clean-clone path. <c>BuildProjectReferences=false</c> keeps evaluation fast and
-    /// lets referenced projects be compiled from source, but the WinUI markup compiler resolves
-    /// project references as assemblies on disk and hard-fails with WMC1006 when they are missing.
-    /// The result is a total outage -- not merely the referenced types, but built-in framework
-    /// types, page members, and every diagnostic -- and before this exception existed it reached
-    /// the user as silence. Naming the unbuilt projects turns that into a self-diagnosing failure.
-    /// </remarks>
     public sealed class ProjectBuildRequiredException : InvalidOperationException
     {
         public ProjectBuildRequiredException(
@@ -64,17 +55,8 @@ namespace WinUiXaml.Workspace
     }
 
     /// <summary>
-    /// The Host B spine: loads a real project (including WinUI 3 apps) and exposes its Compilation
-    /// and symbols.
+    /// Host B spine: loads real projects via out-of-process MSBuild data and direct <c>CSharpCompilation.Create</c>, avoiding Workspaces APIs that fail under Native AOT while preserving behavior.
     /// </summary>
-    /// <remarks>
-    /// This used to be a Roslyn <c>MSBuildWorkspace</c>. That design cannot run under Native AOT
-    /// for two independent reasons: <c>MSBuildLocator</c> resolves <c>Microsoft.Build</c> from the
-    /// user's SDK at runtime, and <c>MefHostServices.DefaultHost</c> -- which every Workspaces API
-    /// initializes -- fails composition once trimmed. Both are avoided by acquiring MSBuild data
-    /// out-of-process (<see cref="MsBuildCli"/>) and building the compilation directly with
-    /// <c>CSharpCompilation.Create</c>, which is AOT-clean. The observable surface is unchanged.
-    /// </remarks>
     public sealed class RoslynProjectWorkspace : IDisposable
     {
         private readonly ImmutableHashSet<string> _projectPaths;
@@ -113,10 +95,7 @@ namespace WinUiXaml.Workspace
         public string? ApplicationDefinitionPath { get; }
 
         /// <summary>
-        /// Non-empty when the project loaded through the reference-resolution fallback because
-        /// these referenced assemblies had never been built. IntelliSense is serving real types,
-        /// but the markup compiler never ran, so generated members are missing and the user should
-        /// still be told to build.
+        /// Non-empty after reference-resolution fallback: IntelliSense has real types, but markup/compiler generated members still require a build.
         /// </summary>
         public ImmutableArray<string> UnresolvedProjectReferences { get; }
 
@@ -152,11 +131,9 @@ namespace WinUiXaml.Workspace
         {
             var fullPath = Path.GetFullPath(projectPath);
 
-            // Referenced projects are compiled from source so their types resolve even when their
-            // output assemblies have never been built. This preserves the behaviour MSBuildWorkspace
-            // gave us via LoadMetadataForReferencedProjects = false. The graph is created up front
-            // because the markup-compiler repair below needs those same compilations, and sharing
-            // it means each project is still built exactly once.
+            // Referenced projects compile from source so types resolve before outputs exist,
+            // matching MSBuildWorkspace's LoadMetadataForReferencedProjects=false; the shared graph
+            // also feeds markup-compiler repair and builds each project once.
             var graph = new ProjectGraphContext(fullPath);
             var (evaluation, arguments, unresolvedProjectReferences) =
                 AcquireProjectData(fullPath, properties, cancellationToken, graph);
@@ -210,16 +187,8 @@ namespace WinUiXaml.Workspace
                 unresolvedProjectReferences);
         }
 
-        /// <summary>
-        /// Acquires evaluation data and the csc command line, preferring a single MSBuild
-        /// invocation and falling back to evaluation alone so an unrestored project still reports
-        /// the restore requirement rather than an opaque build failure.
-        /// </summary>
-        /// <param name="graph">
-        /// When supplied, unresolvable project references are repaired by emitting the referenced
-        /// projects' compilations as stand-in assemblies rather than asking the user to build.
-        /// Omitted for referenced projects themselves, whose own markup output nothing consumes.
-        /// </param>
+        /// <summary>Acquires evaluation and csc args in one MSBuild call, falling back to evaluation so unrestored projects report restore-required instead of opaque build failure.</summary>
+        /// <param name="graph">When supplied, repairs unresolved project references with stand-in compilations; omitted for referenced projects whose markup output is unused.</param>
         private static (
             MsBuildCli.Evaluation Evaluation,
             ImmutableArray<string> Arguments,
@@ -294,17 +263,8 @@ namespace WinUiXaml.Workspace
         }
 
         /// <summary>
-        /// Walks the project-reference graph once, reusing each project's compilation.
+        /// Walks project references once with separate cycle and cache sets, so diamond graphs reuse C without skipping it when <c>BuildProjectReferences=false</c> leaves no C.dll fallback.
         /// </summary>
-        /// <remarks>
-        /// The "visited" set cannot double as the cycle guard. In a diamond (A references B and C,
-        /// B also references C) whichever branch reached C first would mark it visited, and the
-        /// sibling branch would skip it entirely -- so A would not reference C at all. A's own
-        /// <c>/reference:C.dll</c> cannot cover for that, because <c>BuildProjectReferences=false</c>
-        /// means C.dll may never have been produced, which makes the failure depend on whether the
-        /// user happens to have built. Cycle detection therefore tracks only the projects currently
-        /// being loaded, while a separate cache lets a project be referenced from many places.
-        /// </remarks>
         private sealed class ProjectGraphContext
         {
             public ProjectGraphContext(string rootPath)
@@ -363,11 +323,9 @@ namespace WinUiXaml.Workspace
                     continue;
                 }
 
-                // Recorded before the build is attempted, not after it succeeds. This set is the
-                // project's invalidation graph (ContainsProject), so a reference left out of it is
-                // a reference whose edits never evict the cache. Omitting the failures inverted
-                // the behaviour exactly where it mattered: fixing the broken project is the one
-                // edit guaranteed to change the answer, and it was the one edit that did not.
+                // Record before build: this is the invalidation graph, so even failed references
+                // must evict the cache when edited; fixing the broken project is the edit most
+                // likely to change the answer.
                 context.KnownProjects.Add(referencePath);
 
                 try
@@ -386,10 +344,8 @@ namespace WinUiXaml.Workspace
                 }
                 catch (Exception ex)
                 {
-                    // A referenced project that cannot be evaluated must not fail the whole load;
-                    // the primary project still provides useful IntelliSense without it. The
-                    // reason is logged because the symptom -- types from that project silently
-                    // failing to resolve -- is otherwise indistinguishable from a code error.
+                    // A bad referenced project must not fail the primary load; log the reason so
+                    // missing types from that project are not mistaken for ordinary code errors.
                     context.Compilations[referencePath] = null;
                     Console.Error.WriteLine(
                         $"[winui-xaml-ls] referenced project '{referencePath}' was skipped: {ex.Message}");
@@ -402,18 +358,8 @@ namespace WinUiXaml.Workspace
         }
 
         /// <summary>
-        /// Drops the on-disk assembly for any project reference that is also supplied as a live
-        /// compilation, mirroring Roslyn's own <c>SwapMetadataReferenceForProjectReference</c>.
+        /// Drops on-disk project-reference assemblies when a live compilation exists, matching Roslyn swap behavior so stale <c>bin</c> outputs cannot beat edit-tracking source compilations.
         /// </summary>
-        /// <remarks>
-        /// The csc command line names each project reference's output assembly, and the shadow
-        /// reference repair substitutes a stand-in for the ones that were never built. Keeping
-        /// either alongside the compilation built from that project's source puts two assemblies
-        /// with the same identity into one compilation, and which one supplies a symbol is then
-        /// Roslyn's unification order rather than anything this code states. The compilation is
-        /// the copy that tracks the user's edits, so the file is the one that goes -- otherwise a
-        /// stale <c>bin</c> could silently win and freeze IntelliSense at the last build.
-        /// </remarks>
         private static IEnumerable<MetadataReference> WithoutSupersededProjectOutputs(
             ImmutableArray<MetadataReference> fromCommandLine,
             ImmutableArray<MetadataReference>.Builder projectCompilations)
@@ -478,17 +424,12 @@ namespace WinUiXaml.Workspace
                 assemblyName,
                 trees.ToImmutable(),
                 references.ToImmutable(),
-                // Same options the primary project is built with, so a referenced project's
-                // symbols mean what its own compiler settings say they mean. Only the output kind
-                // is forced: a referenced project is consumed as a library regardless of how it
-                // builds.
+                // Keep the referenced project's compiler settings so its symbols mean what its own
+                // build says; force only output kind because references are consumed as libraries.
                 commandLine.CreateCompilationOptions()
                     .WithOutputKind(OutputKind.DynamicallyLinkedLibrary));        }
 
-        /// <summary>
-        /// Reads the project's XAML items, restore marker, and graph edges. Evaluation runs no
-        /// targets, so this answers even for a project that has never been restored.
-        /// </summary>
+        /// <summary>Reads XAML items, restore markers, and graph edges without running targets, even before restore.</summary>
         internal static (
             ImmutableArray<string> Files,
             string? ApplicationDefinition,
@@ -627,18 +568,8 @@ namespace WinUiXaml.Workspace
              message.Contains("not found", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
-        /// Names the referenced projects whose own build failed.
+        /// Names referenced projects whose own build failed by reading MSBuild's bracketed project tag, a localized-safe structural signal with multi-target suffixes removed.
         /// </summary>
-        /// <remarks>
-        /// MSBuild tags every diagnostic with the project that produced it --
-        /// <c>... : error CS1002: ; expected [C:\src\Lib\Lib.csproj]</c> -- so an error carrying a
-        /// project other than the one that was requested is, by construction, a referenced project
-        /// that could not be built. That is a structural signal rather than a message match, so it
-        /// survives localization and does not depend on which tool inside the reference failed.
-        ///
-        /// A multi-targeted reference is tagged <c>Lib.csproj::TargetFramework=net9.0</c>; the
-        /// suffix is dropped so the user is told the project once.
-        /// </remarks>
         internal static IReadOnlyList<string> ExtractFailedReferencedProjects(
             string message,
             string requestedProjectPath)
@@ -692,21 +623,14 @@ namespace WinUiXaml.Workspace
             return names;
         }
 
-        /// <summary>
-        /// WMC1006 is the WinUI markup compiler failing to resolve a project reference's assembly.
-        /// It is emitted once per unresolved assembly and aborts the evaluation, so it must be
-        /// distinguished from a generic MSBuild failure: the user's fix is a build, not a repair.
-        /// </summary>
+        /// <summary>Detects WMC1006 missing project-reference assemblies, where the fix is a build rather than a generic MSBuild repair.</summary>
         internal static bool IsUnbuiltProjectReferenceFailure(string message) =>
             message.Contains("WMC1006", StringComparison.OrdinalIgnoreCase) ||
             message.Contains(
                 "Cannot resolve Assembly or Windows Metadata file",
                 StringComparison.OrdinalIgnoreCase);
 
-        /// <summary>
-        /// Pulls the assembly paths out of the WMC1006 lines so the user is told which projects to
-        /// build. The compiler quotes the full path; the file name is what matches a project name.
-        /// </summary>
+        /// <summary>Pulls quoted WMC1006 assembly paths and reports file names as project names to build.</summary>
         internal static IReadOnlyList<string> ExtractUnresolvedAssemblies(string message)
         {
             var names = new List<string>();
@@ -754,11 +678,7 @@ namespace WinUiXaml.Workspace
         internal bool ContainsProject(string projectPath) =>
             _projectPaths.Contains(Path.GetFullPath(projectPath));
 
-        /// <summary>
-        /// Creates a source-free compilation over the exact references selected by MSBuild.
-        /// This makes framework metadata available without waiting for project sources and
-        /// source generators to compile.
-        /// </summary>
+        /// <summary>Creates a source-free compilation over MSBuild-selected references so framework metadata is available before sources and generators compile.</summary>
         public Compilation GetFrameworkCompilation() =>
             CSharpCompilation.Create(
                 AssemblyName,

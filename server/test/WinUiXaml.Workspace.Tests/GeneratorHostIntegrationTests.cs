@@ -7,16 +7,7 @@ using WinUiXaml.Workspace;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>
-/// Drives the real out-of-process generator host with a real source generator.
-/// </summary>
-/// <remarks>
-/// No fixture in the repo referenced a source generator, so
-/// <see cref="GeneratorHostRunner"/>'s analyzer short-circuit skipped the entire out-of-proc path
-/// in every other test. That gap is why a deadlock in the host's output draining shipped past a
-/// green suite. These tests compile a generator in memory -- no NuGet restore, no
-/// <c>dotnet build</c> -- and run it through the same subprocess the product uses.
-/// </remarks>
+/// <summary>Drives the real out-of-process generator host with a real source generator. No fixture in the repo referenced a source generator, so <see cref="GeneratorHostRunner"/>'s analyzer short-circuit skipped the entire out-of-proc path in every other test. That gap is why a deadlock in the host's output draining shipped past a green suite. These tests compile a generator in memory -- no NuGet restore, no <c>dotnet build</c> -- and run it through the same subprocess the product uses.</summary>
 public sealed class GeneratorHostIntegrationTests : IDisposable
 {
     private readonly string _root = Path.Combine(
@@ -41,11 +32,7 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
         }
     }
 
-    /// <summary>
-    /// M3: MSBuild passes <c>build_property.*</c> to generators through a generated global
-    /// analyzer config. Dropping it does not make generated members disappear -- they resolve to
-    /// the wrong names, which is far harder to notice.
-    /// </summary>
+    /// <summary>M3: MSBuild passes <c>build_property.*</c> to generators through a generated global analyzer config. Dropping it does not make generated members disappear -- they resolve to the wrong names, which is far harder to notice.</summary>
     [Fact]
     public void Run_PassesBuildPropertiesFromAnalyzerConfigToGenerators()
     {
@@ -68,11 +55,7 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
         Assert.DoesNotContain("MISSING", text);
     }
 
-    /// <summary>
-    /// H1: a generator writing enough to stderr used to fill the pipe buffer and deadlock the
-    /// host forever, which blocked project load entirely -- even hand-written members stopped
-    /// resolving. The volume is the only variable between this test and the quiet case.
-    /// </summary>
+    /// <summary>H1: a generator writing enough to stderr used to fill the pipe buffer and deadlock the host forever, which blocked project load entirely -- even hand-written members stopped resolving. The volume is the only variable between this test and the quiet case.</summary>
     [Fact]
     public void Run_WithGeneratorFloodingStandardError_StillReturnsGeneratedFiles()
     {
@@ -96,14 +79,7 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
             string.Concat(generated.Select(File.ReadAllText)));
     }
 
-    /// <summary>
-    /// M6: the host was told which sources to compile but not how, so it guessed a library with
-    /// unsafe on and nullable <em>disabled</em>. Nullable is the guess that shows: generators
-    /// annotate what they emit from the nullable context -- <c>[ObservableProperty]</c> is the
-    /// common case -- so the guess decided whether a generated property came back as
-    /// <c>string</c> or <c>string?</c>, and that is the type <c>{x:Bind}</c> is checked against.
-    /// The generated members are all present either way, which is what made it hard to see.
-    /// </summary>
+    /// <summary>M6: the host was told which sources to compile but not how, so it guessed a library with unsafe on and nullable <em>disabled</em>. Nullable is the guess that shows: generators annotate what they emit from the nullable context -- <c>[ObservableProperty]</c> is the common case -- so the guess decided whether a generated property came back as <c>string</c> or <c>string?</c>, and that is the type <c>{x:Bind}</c> is checked against. The generated members are all present either way, which is what made it hard to see.</summary>
     [Fact]
     public void Run_CompilesGeneratorsAgainstTheProjectsRealCompilationOptions()
     {
@@ -191,19 +167,11 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
     private string CompileGenerator(string projectDirectory, string body) =>
         EmitGenerator(projectDirectory, "AnalyzerConfigOptionsProvider", body);
 
-    /// <summary>
-    /// Same as <see cref="CompileGenerator"/>, but the generator observes the
-    /// <see cref="Compilation"/> rather than the analyzer config, which is where the compilation
-    /// options the host chose are visible.
-    /// </summary>
+    /// <summary>Same as <see cref="CompileGenerator"/>, but the generator observes the <see cref="Compilation"/> rather than the analyzer config, which is where the compilation options the host chose are visible.</summary>
     private string CompileCompilationGenerator(string projectDirectory, string body) =>
         EmitGenerator(projectDirectory, "CompilationProvider", body);
 
-    /// <summary>
-    /// Compiles a generator to a DLL the host can <c>Assembly.LoadFrom</c>. Building it in memory
-    /// keeps the suite free of a NuGet restore while still exercising a genuine analyzer
-    /// reference, which is what the short-circuit keys on.
-    /// </summary>
+    /// <summary>Compiles a generator to a DLL the host can <c>Assembly.LoadFrom</c>. Building it in memory keeps the suite free of a NuGet restore while still exercising a genuine analyzer reference, which is what the short-circuit keys on.</summary>
     private string EmitGenerator(string projectDirectory, string provider, string body)
     {
         var source = $$"""
@@ -241,10 +209,7 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
         return path;
     }
 
-    /// <summary>
-    /// Uses this test process's own loaded assemblies as references so the generator compiles
-    /// against exactly the Roslyn version the host will load it into.
-    /// </summary>
+    /// <summary>Uses this test process's own loaded assemblies as references so the generator compiles against exactly the Roslyn version the host will load it into.</summary>
     private static IReadOnlyList<string> ReferencePaths()
     {
         var trusted = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;

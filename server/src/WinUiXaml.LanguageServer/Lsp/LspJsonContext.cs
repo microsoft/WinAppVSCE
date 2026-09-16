@@ -1,16 +1,9 @@
 using System.Text.Json.Serialization;
 
 namespace WinUiXaml.LanguageServer.Lsp;
-// Source-generated metadata for every type that crosses the JSON-RPC wire.
-//
-// The server's serialization entry points (JsonRpcConnection.WriteMessageAsync and the
-// Deserialize helpers) resolve through this context by runtime type rather than through
-// System.Text.Json's reflection fallback. That removes the reflection-based startup cost
-// and is what lets the process run with JsonSerializerIsReflectionEnabledByDefault=false.
-//
-// A result type that reaches the wire without a [JsonSerializable] entry here throws
-// NotSupportedException at serialization time. Register the exact runtime type, including
-// the closed generic for collection results (List<Location>, not IList<Location>).
+// Source-generated metadata for every JSON-RPC wire type; Native AOT has no reflection fallback.
+// Serialization resolves by exact runtime type, so unregistered results throw NotSupportedException at runtime.
+// Register closed collection types too (List<Location>, not IList<Location>).
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,

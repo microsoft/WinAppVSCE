@@ -4,15 +4,9 @@ export const PROJECT_BUILD_ACTIONS = {
   showOutput: "Show Output",
 } as const;
 
-/**
- * The WinUI markup compiler resolves project references as assemblies on disk, and the design-time
- * build now builds those references itself. So this no longer fires for a merely-unbuilt project --
- * reaching it means the reference's own build failed. Telling the developer to build would send
- * them to repeat the step that just failed; the useful instruction is to fix that project, and a
- * build is how its errors reach the Problems panel. Framework and package types still resolve, so
- * the message must not claim IntelliSense is gone; naming the projects is what makes the narrower
- * outage attributable.
- */
+// The markup compiler needs referenced assemblies on disk; design-time build now builds them, so this fires only when that build failed.
+// Telling users to build would repeat the failed step; tell them to fix the project and build for Problems output.
+// Framework/package types still resolve, so name the narrower outage and the projects involved.
 export function buildRequiredMessage(unresolvedAssemblies: readonly string[]): string {
   const named = unresolvedAssemblies.filter((name) => name.trim().length > 0);
   const subject =
@@ -28,12 +22,9 @@ export function buildRequiredMessage(unresolvedAssemblies: readonly string[]): s
 export type ProjectBuildAction =
   (typeof PROJECT_BUILD_ACTIONS)[keyof typeof PROJECT_BUILD_ACTIONS];
 
-/**
- * The server owns the once-per-condition decision: it latches per project and clears the latch when * the project loads, so a second outage is reported again. The client deliberately does NOT keep a
- * second latch -- one did exist, and because nothing ever cleared it the server's re-arm could not
- * reach the user. Two owners for one decision meant the server-side test passed while the toast
- * stayed silent. If a notification arrives, it is meant to be shown.
- */
+// The server owns the once-per-condition latch and clears it when the project loads.
+// A client latch once swallowed re-armed server notifications, letting tests pass while the toast stayed silent.
+// If a notification arrives, it is meant to be shown.
 export interface ProjectBuildNotificationHost {
   isTrustedWorkspaceProject(projectPath: string): boolean;
   showWarningMessage(
@@ -45,10 +36,7 @@ export interface ProjectBuildNotificationHost {
   buildProject(projectPath: string): void;
 }
 
-/**
- * Prompts for a project whose referenced output the server reported as missing. Silently ignores
- * projects that are absent or outside a trusted workspace; repetition is the server's call.
- */
+/** Prompts for missing referenced output; ignores absent/untrusted projects, and repetition is the server's call. */
 export async function notifyProjectBuildRequired(
   projectPath: string | undefined,
   unresolvedAssemblies: readonly string[] | undefined,

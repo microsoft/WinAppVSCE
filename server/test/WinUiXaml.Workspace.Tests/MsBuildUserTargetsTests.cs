@@ -6,31 +6,10 @@ using Xunit;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>
-/// The design-time build reaches its own targets through the <c>CustomAfterMicrosoftCSharpTargets</c>
-/// hook, passed as an MSBuild *global* property. A global property cannot be overridden by the
-/// project that declares it, so a project using that same hook -- the documented way for a repo to
-/// inject its own targets, and how several SDKs and source generators ship -- had its value
-/// silently discarded for the whole design-time build.
-///
-/// The symptom is not an error. The project loads, compiles and resolves, but without whatever the
-/// user's targets contributed: generated sources go missing, added <c>Compile</c> items never
-/// appear, and the types they declare stop resolving in XAML with nothing to explain why. Only the
-/// design-time build is affected, so a normal <c>dotnet build</c> of the same project works
-/// perfectly -- which makes it look like the language server is wrong about the project rather than
-/// about the hook.
-///
-/// The fix reads the user's value during the evaluation-only pass -- the only pass where the answer
-/// is still theirs, because no global property has been set yet -- and re-imports it from our own
-/// targets file. These tests pin both halves: that the value is recovered, and that it takes effect.
-/// </summary>
+/// <summary>The design-time build reaches its own targets through the <c>CustomAfterMicrosoftCSharpTargets</c> hook, passed as an MSBuild *global* property. A global property cannot be overridden by the project that declares it, so a project using that same hook -- the documented way for a repo to inject its own targets, and how several SDKs and source generators ship -- had its value silently discarded for the whole design-time build. The symptom is not an error. The project loads, compiles and resolves, but without whatever the user's targets contributed: generated sources go missing, added <c>Compile</c> items never appear, and the types they declare stop resolving in XAML with nothing to explain why. Only the design-time build is affected, so a normal <c>dotnet build</c> of the same project works perfectly -- which makes it look like the language server is wrong about the project rather than about the hook. The fix reads the user's value during the evaluation-only pass -- the only pass where the answer is still theirs, because no global property has been set yet -- and re-imports it from our own targets file. These tests pin both halves: that the value is recovered, and that it takes effect.</summary>
 public sealed class MsBuildUserTargetsTests
 {
-    /// <summary>
-    /// The recovery step. Evaluation runs without the global property, so it still sees the
-    /// project's own value; if this regresses there is nothing left to re-import and the
-    /// end-to-end test below has no way to pass.
-    /// </summary>
+    /// <summary>The recovery step. Evaluation runs without the global property, so it still sees the project's own value; if this regresses there is nothing left to re-import and the end-to-end test below has no way to pass.</summary>
     [Fact]
     public void EvaluationRecoversTheProjectsOwnAfterTargetsHook()
     {
@@ -42,12 +21,7 @@ public sealed class MsBuildUserTargetsTests
         });
     }
 
-    /// <summary>
-    /// The end-to-end proof. The user's targets add a <c>Compile</c> item, so if they are dropped
-    /// the source is simply absent from the compiler command line -- exactly the silent shape of
-    /// the original defect. Asserting on the recovered property alone would pass even if the
-    /// re-import were deleted.
-    /// </summary>
+    /// <summary>The end-to-end proof. The user's targets add a <c>Compile</c> item, so if they are dropped the source is simply absent from the compiler command line -- exactly the silent shape of the original defect. Asserting on the recovered property alone would pass even if the re-import were deleted.</summary>
     [Fact]
     public void TheProjectsOwnAfterTargetsStillRunInADesignTimeBuild()
     {
@@ -63,10 +37,7 @@ public sealed class MsBuildUserTargetsTests
         });
     }
 
-    /// <summary>
-    /// Writes a project that points <c>CustomAfterMicrosoftCSharpTargets</c> at a targets file
-    /// contributing an extra source, runs <paramref name="body"/> against it, and cleans up.
-    /// </summary>
+    /// <summary>Writes a project that points <c>CustomAfterMicrosoftCSharpTargets</c> at a targets file contributing an extra source, runs <paramref name="body"/> against it, and cleans up.</summary>
     private static void WithProjectUsingTheHook(Action<string, string, string> body)
     {
         var directory = Path.Combine(

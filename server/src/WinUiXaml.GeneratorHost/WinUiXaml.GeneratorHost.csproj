@@ -8,12 +8,8 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>WinUiXaml.GeneratorHost</AssemblyName>
     <RootNamespace>WinUiXaml.GeneratorHost</RootNamespace>
-    <!--
-      This helper exists precisely because running source generators requires loading analyzer
-      assemblies at runtime, which Native AOT cannot do. It therefore stays framework-dependent
-      and runs on the SDK the extension already resolves for the user. Keep it apphost-free so
-      it stays architecture-neutral, exactly like the server bundle used to be.
-    -->
+    <!-- Framework-dependent by necessity: running source generators means loading analyzer assemblies
+         at runtime, which Native AOT cannot do. Apphost-free keeps it architecture-neutral. -->
     <UseAppHost>false</UseAppHost>
     <IsPackable>false</IsPackable>
     <!-- Localized Roslyn resources add ~5 MB to the VSIX for diagnostics we never surface. -->

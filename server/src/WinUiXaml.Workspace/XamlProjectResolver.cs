@@ -87,13 +87,9 @@ namespace WinUiXaml.Workspace
 
             for (var dir = directory; dir != null; dir = dir.Parent)
             {
-                // A directory that cannot be listed must not end the walk. The nearest owning
-                // project usually lives in an ancestor, and that ancestor is still readable when
-                // a leaf has just been renamed, deleted, or momentarily lost on a network share.
-                // Letting the exception escape threw away the project context for the file
-                // entirely, turning a transient filesystem hiccup into a document that stays
-                // project-less until it is reopened. DirectoryNotFoundException is an IOException,
-                // so the two clauses below cover the missing-leaf case as well.
+                // A directory-listing failure must not end the walk: the owning project usually
+                // lives in a still-readable ancestor, and DirectoryNotFoundException is covered by
+                // IOException for missing/renamed leaves.
                 FileInfo[] candidates;
                 try
                 {

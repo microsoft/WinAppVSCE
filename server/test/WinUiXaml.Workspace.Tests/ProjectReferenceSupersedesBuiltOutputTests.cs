@@ -4,12 +4,7 @@ using Xunit;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>
-/// A project reference is supplied to the compilation twice: the csc command line names its
-/// output assembly, and the graph adds a compilation built from its source. Two assemblies with
-/// one identity means Roslyn picks a winner by its own unification order, so the on-disk copy has
-/// to be removed rather than trusted to lose.
-/// </summary>
+/// <summary>A project reference is supplied to the compilation twice: the csc command line names its output assembly, and the graph adds a compilation built from its source. Two assemblies with one identity means Roslyn picks a winner by its own unification order, so the on-disk copy has to be removed rather than trusted to lose.</summary>
 public sealed class ProjectReferenceSupersedesBuiltOutputTests : IDisposable
 {
     private readonly string _root =

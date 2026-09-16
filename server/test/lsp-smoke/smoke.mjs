@@ -63,16 +63,9 @@ function offsetToPosition(text, offset) {
 
 if (!existsSync(APP_XAML)) fail(`fixture not found: ${APP_XAML}`);
 
-// A project that has never been restored. The restore-required path could not be exercised from
-// the outside: in a real editor session the extension restores as soon as the server reports this,
-// so the state cannot be held long enough to observe. Here there is no editor, nothing runs
-// restore, and the state is stable.
-//
-// The package is deliberately one that cannot resolve, so no ambient NuGet cache can accidentally
-// satisfy it and turn this into a project that merely loads slowly.
-// tmpdir() can hand back an 8.3 short path (CHIARA~1) while the server reports the long form, so
-// normalize here -- a comparison that can never match is indistinguishable from a missing
-// notification, and this leg exists precisely to tell those apart.
+// Never-restored project: stable restore-required path, impossible in a real editor because the extension auto-restores as soon as the server reports it.
+// The package cannot resolve, so ambient NuGet caches cannot mask it as merely slow.
+// Normalize tmpdir paths because short temp paths versus long server paths would make notifications look missing.
 const unrestoredRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "winui-xaml-unrestored-")));
 const unrestoredProject = join(unrestoredRoot, "Unrestored.csproj");
 writeFileSync(
@@ -100,14 +93,9 @@ process.once("exit", () => {
     // A leaked temp directory must not turn a real pass into a failure.
   }
 });
-// A project whose ProjectReference has never been built. This is the other durable "the developer
-// must act" state, and like restore-required it cannot be held still in a real editor: the first
-// build resolves it permanently. The reference is left unbuilt here and nothing ever builds it.
-//
-// The markup compiler is what detects this (WMC1006), so the fixture has to be a real WinUI
-// project. Package versions are read from the checked-in fixture rather than written literally --
-// a version this machine has never restored would send this leg to the network, and a restore
-// failure would read exactly like a project that resolved fine.
+// Never-built ProjectReference: stable developer-must-act state that a real editor build would resolve permanently.
+// WMC1006 comes from the markup compiler, so this must be a real WinUI project.
+// Reuse checked-in package versions so restore doesn't hit the network and fail like a resolved project.
 const buildRequiredRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "winui-xaml-unbuilt-")));
 const buildRequiredAppDir = join(buildRequiredRoot, "App");
 const buildRequiredLibDir = join(buildRequiredRoot, "Lib");
@@ -214,10 +202,8 @@ writeFileSync(
   "utf8"
 );
 
-// A second page in the same project. The build-required toast fires once per project, so from
-// here on the status bar is the only thing still saying a build is needed -- and this is the
-// document that proves it, because publishing `framework-ready` for it is exactly the regression
-// the durable state was added to remove.
+// Second page in the same project: the build-required toast fires once per project, so only the status bar still says a build is needed.
+// Publishing `framework-ready` here is exactly the regression the durable state was added to remove.
 const buildRequiredSecondXamlPath = join(buildRequiredAppDir, "UnbuiltRefSecondPage.xaml");
 const buildRequiredSecondXamlText = `<Page
     x:Class="UnbuiltRefApp.UnbuiltRefSecondPage"
@@ -235,9 +221,8 @@ writeFileSync(
   "utf8"
 );
 
-// Restore, but never build. Restore is what separates this leg from the restore-required one
-// above: without it the server would stop at the earlier state and this leg would pass while
-// testing nothing. `dotnet restore` does not build project references, so Lib.dll stays absent.
+// Restore, but never build: without restore the server would stop earlier and this leg would test nothing.
+// `dotnet restore` does not build project references, so Lib.dll stays absent.
 let buildRequiredFixtureReady = false;
 try {
   execFileSync("dotnet", ["restore", buildRequiredProject], {
@@ -253,11 +238,9 @@ try {
 const buildRequiredXamlUri = pathToFileURL(buildRequiredXamlPath).href;
 const buildRequiredSecondXamlUri = pathToFileURL(buildRequiredSecondXamlPath).href;
 
-// The residual case the design-time build cannot close: a reference that is not merely unbuilt but
-// cannot be built at all, because its own source does not compile. The build of the app's
-// references is now part of the normal path, so this is the only way a developer still sees the
-// build prompt -- and without a fixture for it, a regression that swallowed real reference
-// failures would leave every other test passing.
+// Residual case: a reference that is not merely unbuilt but cannot be built because its own source does not compile.
+// App reference builds are now normal, so this is the remaining path where a developer sees the build prompt.
+// Without this fixture, swallowing real reference failures would leave every other test passing.
 const unresolvableAppDir = join(buildRequiredRoot, "UnresolvableApp");
 const unresolvableLibDir = join(buildRequiredRoot, "BrokenLib");
 mkdirSync(unresolvableAppDir);
@@ -480,11 +463,8 @@ const responseFor = (id) => (m) => m.id === id && (m.result !== undefined || m.e
 const notification = (method) => (m) => m.method === method;
 
 async function main() {
-  // 1) initialize Pass the fixture directory as the sole trusted workspace root so the server performs project discovery / MSBuild evaluation for the in-root fixture (matching the real client, which sends its workspace folders as initializationOptions.allowedRoots).
-  //
-  // The never-restored project below gets its own root rather than living under the fixture: an
-  // SDK-style project globs **/*.cs, so a nested project directory would be swept into the
-  // fixture's own compile items and could break unrelated legs of this test.
+  // 1) initialize. Pass the fixture dir as the trusted root so discovery/MSBuild evaluation matches the real client's allowedRoots.
+  // Keep the never-restored project outside the fixture: SDK-style projects glob **/*.cs, so nesting could pollute fixture compile items.
   const allowedRoots = [dirname(XAML), unrestoredRoot, buildRequiredRoot];
   send({
     id: 1,
@@ -789,10 +769,9 @@ async function main() {
   await reloadLoadingPromise;
   await reloadReadyPromise;
 
-  // The reload barrier can release on a load that a still-pending re-evaluation immediately
-  // supersedes, leaving a brief window where the context is loading again. Each response must
-  // still be fast (the server never blocks on a project load), so poll on a wall-clock budget
-  // rather than asserting a single instant.
+  // The reload barrier can release on a load immediately superseded by pending re-evaluation, briefly returning to loading.
+  // Each response must still be fast because the server never blocks on project load.
+  // Poll on a wall-clock budget rather than asserting a single instant.
   const authoritativeDeadline = performance.now() + 15000;
   let authoritativeText = "";
   let authoritativeMs = 0;
@@ -1536,14 +1515,9 @@ async function main() {
   }
   console.log("[ok] didClose cancels pending diagnostics, evicts context, and prevents stale publication");
 
-  // 22) The restore-required path, end to end on the wire.
-  //
-  // Two separate things were previously unproven here, and unit coverage could reach neither:
-  // that the server turns ProjectRestoreRequiredException into a notification at all, and that
-  // the payload can be serialized under the AOT context. Serialization has no fallback with
-  // JsonSerializerIsReflectionEnabledByDefault=false (set in this Debug build too, so this leg is
-  // not weaker than the shipped one), and a notification has no reply -- so a payload that failed
-  // to serialize would be silently absent, exactly like a project that restored fine.
+  // 22) Restore-required path, end to end on the wire: proves ProjectRestoreRequiredException becomes a notification.
+  // It also proves the payload serializes under the AOT context with JsonSerializerIsReflectionEnabledByDefault=false.
+  // A notification has no reply, so serialization failure would be silently absent like a project that restored fine.
   const restoreRequired = waitFor(
     (message) =>
       message.method === "winui-xaml/projectRestoreRequired" &&
@@ -1602,13 +1576,9 @@ async function main() {
     "[ok] never-restored project: projectRestoreRequired + restore-required status both reach the wire"
   );
 
-  // 22b) A never-built project reference, end to end on the wire.
-  //
-  // This used to be a durable "the developer must act" state. It no longer is: the referenced
-  // project is compiled from source and emitted to a scratch directory, which is what lets the
-  // out-of-process markup compiler resolve it, so the project loads exactly as if it had been
-  // built. The leg therefore asserts the reference build rather than the prompt -- no projectBuildRequired
-  // reaches the wire, no document settles on `build-required`, and completion resolves for real.
+  // 22b) Never-built project reference, end to end: it now compiles from source into scratch output for the markup compiler.
+  // The project should load as if already built, so assert the reference build rather than the old prompt.
+  // No projectBuildRequired reaches the wire, no document settles on `build-required`, and completion resolves for real.
   if (buildRequiredFixtureReady) {
     const firstReady = waitFor(
       (message) =>
@@ -1715,11 +1685,9 @@ async function main() {
     );
   }
 
-  // 22c) The residual case: the reference cannot be produced from source either.
-  //
-  // The reference build is what removed leg 22b's prompt, so this is the leg that proves the prompt still
-  // exists at all. Without it, a reference build that started swallowing `ProjectBuildRequiredException`
-  // would leave the developer with no signal and the whole suite still green.
+  // 22c) Residual case: the reference cannot be produced from source either.
+  // Because the reference build removed leg 22b's prompt, this proves the prompt still exists at all.
+  // Otherwise swallowing `ProjectBuildRequiredException` would leave the developer with no signal and the suite green.
   if (unresolvableFixtureReady) {
     const buildRequired = waitFor(
       (message) =>

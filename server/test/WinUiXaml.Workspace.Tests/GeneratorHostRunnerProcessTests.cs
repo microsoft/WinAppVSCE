@@ -8,10 +8,7 @@ using Xunit;
 
 namespace WinUiXaml.Workspace.Tests
 {
-    /// <summary>
-    /// Covers the generator-host child-process boundary, which drives source generators
-    /// out-of-process because Native AOT cannot load analyzer assemblies.
-    /// </summary>
+    /// <summary>Covers the generator-host child-process boundary, which drives source generators out-of-process because Native AOT cannot load analyzer assemblies.</summary>
     public class GeneratorHostRunnerProcessTests
     {
         /// <summary>Enough to overrun the pipe buffer several times over.</summary>
@@ -35,10 +32,7 @@ namespace WinUiXaml.Workspace.Tests
             return startInfo;
         }
 
-        /// <summary>
-        /// Fails the test rather than hanging the run when the call under test never returns,
-        /// which is the exact symptom being guarded against.
-        /// </summary>
+        /// <summary>Fails the test rather than hanging the run when the call under test never returns, which is the exact symptom being guarded against.</summary>
         private static async Task<T> CompleteWithin<T>(Task<T> run, TimeSpan budget, string because)
         {
             var finished = await Task.WhenAny(run, Task.Delay(budget)).ConfigureAwait(false);
@@ -46,13 +40,7 @@ namespace WinUiXaml.Workspace.Tests
             return await run.ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// A generator that logs heavily must not wedge project load. Draining the pipes
-        /// sequentially deadlocks here: the child blocks filling stderr while this process waits
-        /// on stdout, so the child never exits and stdout never reaches EOF. That hang is
-        /// unbounded, and because project load awaits this call the server then serves nothing
-        /// at all for the project -- not merely the generated members.
-        /// </summary>
+        /// <summary>A generator that logs heavily must not wedge project load. Draining the pipes sequentially deadlocks here: the child blocks filling stderr while this process waits on stdout, so the child never exits and stdout never reaches EOF. That hang is unbounded, and because project load awaits this call the server then serves nothing at all for the project -- not merely the generated members.</summary>
         [Fact]
         public async Task RunProcess_ChildFloodingStderr_StillCompletes()
         {
@@ -70,10 +58,7 @@ namespace WinUiXaml.Workspace.Tests
             Assert.Equal(GeneratorHostRunner.HostRunOutcome.Succeeded, succeeded.Outcome);
         }
 
-        /// <summary>
-        /// Cancellation must be armed before the wait, not after the pipes are drained, or a
-        /// wedged generator cannot be interrupted.
-        /// </summary>
+        /// <summary>Cancellation must be armed before the wait, not after the pipes are drained, or a wedged generator cannot be interrupted.</summary>
         [Fact]
         public async Task RunProcess_WhenCancelled_StopsWaitingOnTheChild()
         {
@@ -127,10 +112,7 @@ namespace WinUiXaml.Workspace.Tests
             Assert.Equal(3, succeeded.ExitCode);
             Assert.Contains("exited with code 3", succeeded.Describe());
         }
-        /// <summary>
-        /// A project with no analyzers is not a failure, so it must stay silent -- otherwise the
-        /// log fills with noise for the common case and the real failures stop standing out.
-        /// </summary>
+        /// <summary>A project with no analyzers is not a failure, so it must stay silent -- otherwise the log fills with noise for the common case and the real failures stop standing out.</summary>
         [Fact]
         public void Run_WithoutAnalyzers_ReportsNothing()
         {
@@ -146,11 +128,7 @@ namespace WinUiXaml.Workspace.Tests
             Assert.Equal(string.Empty, stderr);
         }
 
-        /// <summary>
-        /// Every generator-host failure degrades to "generated members do not resolve", which is
-        /// indistinguishable from a project that has no generators. Without a logged reason the
-        /// user just sees IntelliSense forget a type, with nothing to diagnose.
-        /// </summary>
+        /// <summary>Every generator-host failure degrades to "generated members do not resolve", which is indistinguishable from a project that has no generators. Without a logged reason the user just sees IntelliSense forget a type, with nothing to diagnose.</summary>
         [Fact]
         public void Run_WhenHostIsMissing_ReportsTheReason()
         {

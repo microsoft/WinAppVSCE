@@ -9,16 +9,7 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace WinUiXaml.Workspace
 {
-    /// <summary>
-    /// Resolves the compiler reference set without parsing project sources or running source
-    /// generators.
-    /// </summary>
-    /// <remarks>
-    /// This is the fast first stage behind <c>ResolveFrameworkAsync</c>: it answers "what types
-    /// exist in the framework and package closure" long before the full compilation is ready.
-    /// It previously drove MSBuild's <c>BuildManager</c> in-process; it now reuses the same
-    /// out-of-process acquisition as the full load, and simply stops before touching sources.
-    /// </remarks>
+    /// <summary>Fast first-stage reference resolver for <c>ResolveFrameworkAsync</c>, using out-of-process MSBuild data without parsing sources or running generators.</summary>
     internal sealed class MsBuildFrameworkProject
     {
         private const string WinUiSentinel = "Microsoft.UI.Xaml.Controls.Button";
@@ -70,10 +61,8 @@ namespace WinUiXaml.Workspace
             }
 
             var commandLine = CscCommandLine.Parse(arguments, Path.GetDirectoryName(fullPath)!);
-            // No documentation at this stage. The framework compilation exists to answer as early
-            // as possible, and the base branch built its references without documentation here;
-            // adding it makes completion items carry prose the moment a file opens, which is a
-            // visible change in what the editor shows.
+            // No documentation at this stage: the base branch omitted it here, and adding it makes
+            // completion prose appear as soon as a file opens, visibly changing editor behavior.
             var references = commandLine.CreateMetadataReferences(includeDocumentation: false);
             if (references.IsDefaultOrEmpty)
             {
@@ -98,10 +87,8 @@ namespace WinUiXaml.Workspace
                 compilation,
                 evaluation.XamlFiles,
                 evaluation.ApplicationDefinition,
-                // This stage does not build project references, so it has nothing to say about
-                // which of them are unbuilt -- the same position the in-process BuildManager
-                // version held. The full stage builds them and reports `build-required` from
-                // what it actually observed, which is the only place the answer is known.
+                // This stage does not build project references, so only the full stage can report
+                // build-required from what it actually observed.
                 ImmutableArray<string>.Empty);
         }
     }

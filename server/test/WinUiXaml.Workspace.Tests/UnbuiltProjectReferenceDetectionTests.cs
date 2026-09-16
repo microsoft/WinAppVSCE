@@ -2,13 +2,7 @@ using WinUiXaml.Workspace;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>
-/// D3: on a fresh clone the referenced projects have never been built, so the WinUI markup compiler
-/// aborts with WMC1006 and MSBuild exits non-zero before CoreCompile runs. No compilation is
-/// produced, which takes out completions, hovers and diagnostics together -- including framework
-/// types that have nothing to do with the referenced project. Detecting this specific failure is
-/// what lets the server say "build once" instead of serving silence.
-/// </summary>
+/// <summary>D3: on a fresh clone the referenced projects have never been built, so the WinUI markup compiler aborts with WMC1006 and MSBuild exits non-zero before CoreCompile runs. No compilation is produced, which takes out completions, hovers and diagnostics together -- including framework types that have nothing to do with the referenced project. Detecting this specific failure is what lets the server say "build once" instead of serving silence.</summary>
 public sealed class UnbuiltProjectReferenceDetectionTests
 {
     private const string Wmc1006Output = """
@@ -76,11 +70,7 @@ public sealed class UnbuiltProjectReferenceDetectionTests
         Assert.Empty(RoslynProjectWorkspace.ExtractUnresolvedAssemblies("no matches here"));
     }
 
-    // Peer-suggested corner of the detection matrix: one referenced project is built and a sibling
-    // is not. The compiler only emits WMC1006 for what it could not resolve, so the prompt must
-    // name the missing sibling alone -- telling a user to build a project that is already built
-    // sends them to fix something that is not broken, which is the failure mode the prompt exists
-    // to avoid.
+    // Peer-suggested corner: one reference is built and a sibling is not; WMC1006 names only unresolved assemblies, so the prompt must not send users to rebuild what already works.
     [Fact]
     public void APartiallyBuiltSolutionNamesOnlyTheUnbuiltSibling()
     {
@@ -95,10 +85,7 @@ public sealed class UnbuiltProjectReferenceDetectionTests
         Assert.DoesNotContain("MiddleLib", names);
     }
 
-    // The detector's true negative: a ProjectReference carrying ReferenceOutputAssembly="false"
-    // produces no assembly by design, so nothing is unresolved and the build succeeds. Every other
-    // case in this matrix makes the detector fire; this one must not, or the server would demand a
-    // build for a solution that is already correct.
+    // True negative: ReferenceOutputAssembly="false" intentionally emits no assembly and succeeds, so this case must not make the server demand a needless build.
     [Fact]
     public void AReferenceThatProducesNoAssemblyDoesNotDemandABuild()
     {
