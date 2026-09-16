@@ -111,7 +111,7 @@ export function getApplicationsScript(): string {
                 // Build add extension dropdown
                 let addExtDropdown = '<div class="custom-dropdown add-ext-dropdown">' +
                     '<button class="custom-dropdown-btn add-ext-btn">+ Add Extension</button>' +
-                    '<div class="custom-dropdown-menu add-ext-menu">';
+                    '<div class="custom-dropdown-menu add-ext-menu" data-app-index="' + idx + '">';
                 extensionTemplates.forEach(t => {
                     addExtDropdown += '<div class="custom-dropdown-item add-ext-item" data-app-index="' + idx + '" data-xml="' + escapeHtml(t.xml) + '">' + escapeHtml(t.label) + '</div>';
                 });
@@ -360,6 +360,7 @@ export function getApplicationsScript(): string {
                         const subtab = tab.getAttribute('data-subtab');
                         const appIdx = tab.getAttribute('data-app-idx');
                         activeAppSubTabs[appIdx] = subtab;
+                        saveUiState();
                         card.querySelectorAll('.app-sub-tab').forEach(t => t.classList.remove('active'));
                         card.querySelectorAll('.app-sub-content').forEach(c => c.classList.remove('active'));
                         tab.classList.add('active');
@@ -400,21 +401,35 @@ export function getApplicationsScript(): string {
                     });
                 });
 
-                // Bind editable extension field inputs
-                card.querySelectorAll('input[data-ext-field]').forEach(inp => {
-                    let extDebounce = null;
+                // Bind editable extension field inputs. These go through the shared debounce queue
+                // so a save flushes them and a parse error discards them, same as every other field.
+                card.querySelectorAll('input[data-ext-field]').forEach((inp, inpOrdinal) => {
+                    const appIndex = parseInt(inp.getAttribute('data-app-index'), 10);
+                    const extIndex = parseInt(inp.getAttribute('data-ext-index'), 10);
+                    const fieldPath = inp.getAttribute('data-ext-field');
+                    // The ordinal keeps the key unique: an extension can render two inputs with the
+                    // same field path (e.g. two <Host> elements both bound to Host.Name).
+                    const key = 'ext:' + appIndex + ':' + extIndex + ':' + fieldPath + ':' + inpOrdinal;
+                    const describe = () => ({
+                        kind: 'extField',
+                        appIndex: appIndex,
+                        extIndex: extIndex,
+                        fieldPath: fieldPath,
+                        value: inp.value,
+                        isTextContent: inp.hasAttribute('data-ext-text-content')
+                    });
                     inp.addEventListener('input', () => {
-                        clearTimeout(extDebounce);
-                        extDebounce = setTimeout(() => {
+                        queueDebouncedChange(key, describe, () => {
+                            const c = describe();
                             vscode.postMessage({
                                 type: 'updateExtensionField',
-                                appIndex: parseInt(inp.getAttribute('data-app-index'), 10),
-                                extIndex: parseInt(inp.getAttribute('data-ext-index'), 10),
-                                fieldPath: inp.getAttribute('data-ext-field'),
-                                value: inp.value,
-                                isTextContent: inp.hasAttribute('data-ext-text-content')
+                                appIndex: c.appIndex,
+                                extIndex: c.extIndex,
+                                fieldPath: c.fieldPath,
+                                value: c.value,
+                                isTextContent: c.isTextContent
                             });
-                        }, 300);
+                        });
                     });
                 });
 

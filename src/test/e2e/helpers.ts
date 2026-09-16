@@ -33,6 +33,7 @@ export interface VSCodeTestContext {
     app: ElectronApplication;
     page: Page;
     workspacePath: string;
+    profilePath: string;
 }
 
 /**
@@ -53,26 +54,47 @@ export function createTempWorkspace(fixtureName: string): string {
  */
 export async function launchVSCode(workspacePath: string): Promise<VSCodeTestContext> {
     const manifestPath = path.join(workspacePath, 'AppxManifest.xml');
-    const app = await electron.launch({
-        executablePath: VSCODE_EXE,
-        args: [
-            workspacePath,
-            manifestPath,
-            '--new-window',
-            ...EXTENSION_ARGS,
-            '--disable-telemetry',
-            '--skip-release-notes',
-            '--disable-workspace-trust',
-        ],
-        timeout: 30_000,
-    });
+    // VS Code is single-instance per profile: without a dedicated user-data-dir the
+    // launched process forwards its arguments to any VS Code already running on the
+    // machine and immediately exits, which closes Playwright's Electron handle.
+    const profilePath = fs.mkdtempSync(path.join(os.tmpdir(), 'manifest-e2e-profile-'));
+    let app;
+    try {
+        app = await electron.launch({
+            executablePath: VSCODE_EXE,
+            args: [
+                workspacePath,
+                manifestPath,
+                '--new-window',
+                ...EXTENSION_ARGS,
+                `--user-data-dir=${path.join(profilePath, 'user-data')}`,
+                `--extensions-dir=${path.join(profilePath, 'extensions')}`,
+                '--disable-telemetry',
+                '--disable-updates',
+                '--skip-welcome',
+                '--skip-release-notes',
+                '--disable-workspace-trust',
+            ],
+            timeout: 60_000,
+        });
 
-    const page = await app.firstWindow();
-    // Wait for VS Code to settle
-    await page.waitForLoadState('domcontentloaded');
-    await page.waitForTimeout(5_000);
+        const page = await app.firstWindow();
+        // Wait for VS Code to settle
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(5_000);
 
-    return { app, page, workspacePath };
+        return { app, page, workspacePath, profilePath };
+    } catch (err) {
+        // Nothing owns the profile dir until a context is returned, so clean it up here
+        // rather than leaving one behind on every failed launch.
+        try {
+            await app?.close();
+        } catch { /* best-effort */ }
+        try {
+            fs.rmSync(profilePath, { recursive: true, force: true });
+        } catch { /* best-effort */ }
+        throw err;
+    }
 }
 
 /**
@@ -128,6 +150,9 @@ export async function teardown(ctx: VSCodeTestContext): Promise<void> {
     } catch { /* already closed */ }
     try {
         fs.rmSync(ctx.workspacePath, { recursive: true, force: true });
+    } catch { /* best-effort */ }
+    try {
+        fs.rmSync(ctx.profilePath, { recursive: true, force: true });
     } catch { /* best-effort */ }
 }
 

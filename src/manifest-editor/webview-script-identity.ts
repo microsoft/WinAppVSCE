@@ -22,6 +22,7 @@ export function getIdentityScript(): string {
                     group.classList.remove('hidden-optional');
                     addBtn.classList.add('hidden-optional');
                     userOpenedOptionalFields.add(targetId);
+                    saveUiState();
                     // Set default value and trigger change
                     const defaultVal = addBtn.getAttribute('data-default') || '';
                     const input = group.querySelector('input[data-section]');
@@ -70,6 +71,7 @@ export function getIdentityScript(): string {
                 if (group) {
                     group.classList.add('hidden-optional');
                     userOpenedOptionalFields.delete(targetId);
+                    saveUiState();
                     // Find the corresponding add button
                     const addBtnForGroup = document.querySelector('.btn-add-field[data-target="' + targetId + '"]');
                     if (addBtnForGroup) addBtnForGroup.classList.remove('hidden-optional');
