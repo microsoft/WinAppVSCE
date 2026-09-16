@@ -123,7 +123,7 @@ export function getProjectContextStatusPresentation(
     // to ask for a build that just failed or a generic "unavailable" that implicates the extension.
     case "reference-build-failed":
       return {
-        text: "$(tools) WinApp: referenced project failed to build",
+        text: "$(tools) WinApp: Referenced Project Failed to Build",
         tooltip: `${status.message ?? PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
@@ -132,20 +132,20 @@ export function getProjectContextStatusPresentation(
     case "packages-not-restored":
       if (context.restoreInFlight) {
         return {
-          text: "$(sync~spin) WinApp: restoring packages",
+          text: "$(sync~spin) WinApp: Restoring Packages",
           tooltip: `${PROJECT_CONTEXT_RESTORING_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
           transient: false,
         };
       }
 
       return {
-        text: "$(package) WinApp: restore required for XAML IntelliSense",
+        text: "$(package) WinApp: Restore Required for XAML IntelliSense",
         tooltip: `${status.message ?? PROJECT_CONTEXT_PACKAGES_NOT_RESTORED_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
     case "error":
       return {
-        text: "$(warning) WinApp: XAML IntelliSense unavailable",
+        text: "$(warning) WinApp: XAML IntelliSense Unavailable",
         tooltip: `${status.message ?? PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
@@ -165,7 +165,7 @@ export function getProjectContextStatusPresentation(
       };
     case "ready":
       return {
-        text: "$(check) WinApp: XAML IntelliSense ready",
+        text: "$(check) WinApp: XAML IntelliSense Ready",
         tooltip: "Project-aware XAML IntelliSense is ready.",
         transient: true,
       };

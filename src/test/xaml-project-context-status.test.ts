@@ -198,7 +198,7 @@ test("presents persistent loading and actionable error status", () => {
       message: "The owning project could not be compiled.",
     }),
     {
-      text: "$(warning) WinApp: XAML IntelliSense unavailable",
+      text: "$(warning) WinApp: XAML IntelliSense Unavailable",
       tooltip:
         "The owning project could not be compiled. Click to show the WinUI XAML output.",
       transient: false,
@@ -219,7 +219,7 @@ test("reports the restore as work in flight while the extension is running it", 
       { restoreInFlight: true }
     ),
     {
-      text: "$(sync~spin) WinApp: restoring packages",
+      text: "$(sync~spin) WinApp: Restoring Packages",
       tooltip:
         "Restoring the project's packages. Project-aware IntelliSense resumes when it " +
         "completes. Click to show the WinUI XAML output.",
@@ -239,7 +239,7 @@ test("reports the restore as work in flight while the extension is running it", 
       },
       { restoreInFlight: false }
     )?.text ?? "",
-    /restore required/
+    /Restore Required/
   );
 
   // The flag describes the restore only; the build-side state is untouched by it.
@@ -248,7 +248,7 @@ test("reports the restore as work in flight while the extension is running it", 
       { uri: "file:///Fresh.xaml", state: "reference-build-failed", message: "build me" },
       { restoreInFlight: true }
     )?.text ?? "",
-    /failed to build/
+    /Failed to Build/
   );
 });
 
@@ -263,7 +263,7 @@ test("names the restore in the bar itself, and outranks the build", () => {
       message: "Restore required: App.csproj.",
     }),
     {
-      text: "$(package) WinApp: restore required for XAML IntelliSense",
+      text: "$(package) WinApp: Restore Required for XAML IntelliSense",
       tooltip: "Restore required: App.csproj. Click to show the WinUI XAML output.",
       transient: false,
     }
@@ -300,7 +300,7 @@ test("names the build in the bar itself, and outranks a plain error", () => {
       message: "Build required: App.csproj (unresolved: MiddleLib, SharedLib).",
     }),
     {
-      text: "$(tools) WinApp: referenced project failed to build",
+      text: "$(tools) WinApp: Referenced Project Failed to Build",
       tooltip:
         "Build required: App.csproj (unresolved: MiddleLib, SharedLib). " +
         "Click to show the WinUI XAML output.",
@@ -327,7 +327,7 @@ test("presents ready status briefly and hides idle status", () => {
       state: "ready",
     }),
     {
-      text: "$(check) WinApp: XAML IntelliSense ready",
+      text: "$(check) WinApp: XAML IntelliSense Ready",
       tooltip: "Project-aware XAML IntelliSense is ready.",
       transient: true,
     }
