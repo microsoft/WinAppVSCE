@@ -558,7 +558,6 @@ internal sealed partial class XamlLanguageServer
             : Task.CompletedTask;
     }
 
-    /// <summary>Surfaces clean-clone WMC1006 failures that otherwise yield no completions, hovers, diagnostics, or UI clue.</summary>
     private Task NotifyProjectBuildRequiredAsync(ProjectBuildRequiredException exception)
     {
         Console.Error.WriteLine(
