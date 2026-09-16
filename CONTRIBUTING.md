@@ -142,6 +142,33 @@ round trip written directly on System.Text.Json, and 7.0 MB once the server's re
 linked in. Revisit if a System.Text.Json build of the LSP
 protocol types reaches the feed, which would make replacing both halves worthwhile in one change.
 
+### The transport migration was built and then reverted
+
+The full migration exists and compiles: a `[JsonRpcContract, GenerateShape]` interface over all 29
+methods, `AddLocalRpcTarget(RpcTargetMetadata.FromShape<T>(), ...)`, and the handlers bound by
+explicit interface implementation. It published Native AOT for `win-arm64` with no always-throw
+methods and one new IL2026 warning, and 895 server tests passed. It was reverted because the XAML
+smoke suite — the only check that drives real LSP traffic over stdio — regressed: project loading
+stalls, and the failure point moves when timing changes, so it is a genuine concurrency defect and
+not a test artifact. The same suite passes on the commit before the migration. The patch is kept
+out of tree rather than landed half-working.
+
+Three wire-level details cost the most to find, and any future attempt needs all three:
+
+- LSP sends `params` as one object, but StreamJsonRpc splats it into named arguments and then
+  reports the method as missing. Every method carrying params needs
+  `[JsonRpcMethod(..., UseSingleObjectParameterDeserialization = true)]`.
+- `NotifyAsync(method, payload)` sends `params` as a one-element **array**. Server-to-client
+  notifications must use `NotifyWithParameterObjectAsync`. Nothing throws when this is wrong;
+  `NotificationWireTests` is what catches it.
+- `StreamJsonRpc.RequestId` gets no `JsonTypeInfo` from the source generator, and
+  `[JsonSerializable(typeof(RequestId))]` does not supply one. Without a hand-written
+  `JsonConverter<RequestId>` registered through `TypeInfoResolverChain`, `$/cancelRequest` fails to
+  serialize and cancelled requests hang silently.
+
+Ruled out as causes of the stall: blocking notification handlers do not stall the reader loop, and
+`Task<object?>` returns — which the server relies on for LSP unions — work under AOT.
+
 ## Pull requests
 
 - Follow the checklist in [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md).
