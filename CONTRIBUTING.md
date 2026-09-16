@@ -7,9 +7,11 @@ Thanks for your interest in contributing to the WinApp VS Code Extension.
 - Node.js 24
 - Visual Studio Code
 - PowerShell 7 or Windows PowerShell for the build scripts
-- The [.NET 10 SDK](https://dotnet.microsoft.com/download) — required to build, test, and locally publish the WinUI XAML language server (`server/`). Packaged extension users need an installed .NET 10 runtime at run time for the out-of-process generator host (`WinUiXaml.GeneratorHost.dll`) and for `dotnet`-based project evaluation; the server executable itself is Native AOT and does not need the runtime to launch. The extension never installs or bundles that runtime. The unit tests (`npm run test:unit`) do not need the SDK, but the server tests, the XAML integration/smoke suites, and local packaging do.
+- The [.NET 10 SDK](https://dotnet.microsoft.com/download) — required to build, test, and locally publish the WinUI XAML language server (`server/`). The unit tests (`npm run test:unit`) do not need the SDK, but the server tests, the XAML integration/smoke suites, and local packaging do.
 - **Visual Studio C++ build tools (MSVC / `link.exe`)** — required to publish the Native AOT server locally. `dotnet publish` invokes the ILC native linker, which fails with `MSB3073` (`link.exe exited with code 123`) when the C++ toolchain is missing or `vswhere.exe` is not resolvable. Install the "Desktop development with C++" workload in Visual Studio or the standalone Build Tools.
 - [WinApp CLI](https://github.com/microsoft/WinAppCli) (for syncing manifest schemas)
+
+> Native AOT removes the runtime dependency for the server executable only — it launches as a native binary. Users of the packaged extension still need an installed .NET 10 runtime, because the source-generator host (`WinUiXaml.GeneratorHost.dll`) runs out of process on `dotnet` and project evaluation goes through the `dotnet` CLI. The extension never installs or bundles a runtime.
 
 ## Setup
 
