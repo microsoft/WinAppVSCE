@@ -696,9 +696,9 @@ async function main() {
     '<Project><ItemGroup><Compile Remove="SmokePage.xaml.cs" /></ItemGroup></Project>',
     "utf8"
   );
-  // The blocking F12 below used to double as this section's reload barrier. Definition is now
-  // non-blocking (issue #220), so synchronize on the same status notification the real client uses.
-  // Registered before the change is sent so the reload's notification cannot be missed.
+  // Definition is non-blocking (issue #220), so synchronize on the same status notification the
+  // real client uses. Registered before the change is sent so the reload's notification cannot be
+  // missed.
   //
   // Matching a bare `state === "ready"` is not enough. The obj/bin watched-file check just above can
   // still emit a trailing `ready` for the context that is already loaded, and dispatch resolves the
@@ -745,11 +745,9 @@ async function main() {
     fail(`post-invalidation hover should be suppressed while reloading: ${JSON.stringify(fallbackResponse.result)}`);
   }
 
-  // The load-bearing regression check for non-blocking F12 (issue #220). Unlike the cold check at
-  // startup -- where an intermediate framework context may already have been published, letting even
-  // the old blocking code answer quickly -- the cache is provably empty here (the hover above was
-  // suppressed) and the reload takes seconds. So the old blocking implementation would stall for
-  // seconds before answering, and only the non-blocking one can come back inside the budget.
+  // The load-bearing regression check for non-blocking F12 (issue #220). The cache is provably
+  // empty here (the hover above was suppressed) and the reload takes seconds, so only a
+  // non-blocking definition can answer inside the budget.
   const reloadDefinitionStarted = performance.now();
   send({
     id: 701,
@@ -1576,9 +1574,9 @@ async function main() {
     "[ok] never-restored project: projectRestoreRequired + packages-not-restored status both reach the wire"
   );
 
-  // 22b) Never-built project reference, end to end: it now compiles from source into scratch output for the markup compiler.
-  // The project should load as if already built, so assert the reference build rather than the old prompt.
-  // No projectBuildRequired reaches the wire, no document settles on `reference-build-failed`, and completion resolves for real.
+  // 22b) Never-built project reference, end to end: it compiles from source into scratch output for
+  // the markup compiler, so the project loads as if already built. No projectBuildRequired reaches
+  // the wire, no document settles on `reference-build-failed`, and completion resolves for real.
   if (buildRequiredFixtureReady) {
     const firstReady = waitFor(
       (message) =>
@@ -1666,7 +1664,7 @@ async function main() {
     if (!secondLabels.includes("TextBlock")) {
       fail(`the project resolved no framework types: ${JSON.stringify(secondLabels.slice(0, 40))}`);
     }
-    // Nothing in the project may have settled on the old durable state.
+    // No document in the project may settle on the durable failure state.
     const stuck = projectContextStatuses.filter(
       (status) =>
         (status?.uri === buildRequiredXamlUri || status?.uri === buildRequiredSecondXamlUri) &&
@@ -1747,7 +1745,7 @@ async function main() {
 
   // Assert the process actually terminates rather than sending `exit` and walking away. A server
   // that answers `shutdown` but never exits leaves an orphaned dotnet process behind every time the
-  // editor closes, which the old fixed 200 ms timeout would have reported as a pass.
+  // editor closes, so wait on the real exit event instead of a fixed timeout.
   const exited = new Promise((resolveExit) => server.once("exit", (code) => resolveExit(code)));
   send({ method: "exit", params: null });
   const exitCode = await Promise.race([

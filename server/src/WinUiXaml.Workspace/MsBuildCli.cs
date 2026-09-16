@@ -774,8 +774,8 @@ namespace WinUiXaml.Workspace
             if (exitCode != 0)
             {
                 var detail = standardError.Length > 0 ? standardError : combined;
-                // The client only prompts for a path it can recognize as a project, so reporting
-                // the working directory here silently dropped the prompt.
+                // The client only prompts for a path it can recognize as a project, so prefer the
+                // project path over the working directory.
                 var reportedPath = projectPath ?? workingDirectory ?? string.Empty;
                 if (RoslynProjectWorkspace.IsMissingRestoreFailure(detail))
                 {

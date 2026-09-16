@@ -119,22 +119,20 @@ export function getProjectContextStatusPresentation(
   context: ProjectContextStatusContext = {}
 ): ProjectContextStatusPresentation | undefined {
   switch (status.state) {
-    // Name the condition, not the old remedy: design-time build now builds project references itself.
-    // Reaching this means a reference failed to build, so "build required" would ask users to repeat the failed step.
-    // Generic "unavailable" would instead send them hunting for a broken extension.
+    // The reference build was attempted and failed, so the useful thing to say is what broke, not
+    // to ask for a build that just failed or a generic "unavailable" that implicates the extension.
     case "reference-build-failed":
       return {
         text: "$(tools) WinApp: referenced project failed to build",
         tooltip: `${status.message ?? PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
-    // A never-restored project is user-fixable and, on a clean clone, the first condition reached.
-    // Generic "unavailable" sent developers hunting for a broken extension when the fix was one command.
-    // This mirrors the build-side sibling above.
+    // Missing packages are user-fixable in one command, so name that rather than a generic
+    // "unavailable" that implicates the extension. Mirrors the build-side sibling above.
     case "packages-not-restored":
-      // Auto-restore is already running, so the instruction is not the developer's to act on yet.
-      // Calling it outstanding would repeat the build-side conflation and tell users to run a command the extension is running.
-      // Once restore finishes without fixing the condition, the instruction is still needed and outlives the error notification.
+      // While auto-restore runs the remedy is not the developer's to act on, so report progress.
+      // The instruction below survives a restore that finishes without fixing the condition, and
+      // outlives the error notification.
       if (context.restoreInFlight) {
         return {
           text: "$(sync~spin) WinApp: restoring packages",
@@ -160,9 +158,8 @@ export function getProjectContextStatusPresentation(
         tooltip: `${PROJECT_CONTEXT_LOADING_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
-    // Name what is usable before what is pending: WinUI controls/properties now complete, but app types and x:Bind do not.
-    // The old "XAML project loading" sounded lateral or regressive right when capability improved.
-    // If only the pending half is named, the status bar hides the useful part in the tooltip.
+    // Name what is usable before what is pending: WinUI controls and properties complete here, app
+    // types and x:Bind do not. Naming only the pending half buries the useful part in the tooltip.
     case "framework-ready":
       return {
         text: "$(sync~spin) WinApp: WinUI Types Ready \u00b7 Loading Project Symbols and Diagnostics",

@@ -254,8 +254,8 @@ test("reports the restore as work in flight while the extension is running it", 
 
 test("names the restore in the bar itself, and outranks the build", () => {
   // A never-restored project is as user-fixable as a never-built one, and reached earlier on a
-  // clean clone. Before this state existed it fell through to "XAML IntelliSense unavailable",
-  // which describes a broken extension rather than a one-command fix.
+  // clean clone, so it gets its own bar text rather than "XAML IntelliSense unavailable", which
+  // describes a broken extension rather than a one-command fix.
   assert.deepEqual(
     getProjectContextStatusPresentation({
       uri: "file:///Fresh.xaml",

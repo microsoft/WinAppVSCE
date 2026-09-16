@@ -55,7 +55,7 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
         Assert.DoesNotContain("MISSING", text);
     }
 
-    /// <summary>H1: a generator writing enough to stderr used to fill the pipe buffer and deadlock the host forever, which blocked project load entirely -- even hand-written members stopped resolving. The volume is the only variable between this test and the quiet case.</summary>
+    /// <summary>H1: a generator writing enough to stderr must not fill the pipe buffer and deadlock the host, which would block project load entirely -- even hand-written members would stop resolving. The volume is the only variable between this test and the quiet case.</summary>
     [Fact]
     public void Run_WithGeneratorFloodingStandardError_StillReturnsGeneratedFiles()
     {
@@ -97,8 +97,8 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
                     + "public static class OptionsMarker { }");
             """);
 
-        // Every one of these differs from the value the host used to hardcode, so a regression
-        // cannot pass by coincidence.
+        // Every one of these differs from the host's default, so a regression cannot pass by
+        // coincidence.
         var generated = RunHost(project, analyzer, "/nullable:enable", "/target:exe", "/unsafe-");
 
         Assert.NotEmpty(generated);

@@ -130,7 +130,7 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
     [Fact]
     public async Task DiamondProjectReferenceIsAvailableToEveryProjectThatDeclaresIt()
     {
-        // App and Middle both reference Shared; the old graph walk reused "visited" as the cycle guard, so the first branch to Shared hid the sibling edge App needs for source compilation.
+        // App and Middle both reference Shared, so the graph walk must keep the sibling edge App needs for source compilation rather than let the first branch to Shared hide it.
         var sharedDirectory = Path.Combine(_root, "Shared");
         var middleDirectory = Path.Combine(_root, "Middle");
         var appDirectory = Path.Combine(_root, "App");

@@ -80,8 +80,7 @@ namespace WinUiXaml.Workspace
                 var manifest = Path.Combine(outputDirectory, "generated-files.txt");
 
                 // The directory is unique to this invocation, so a manifest's presence means this
-                // run wrote it; the old shared-directory design had to clear first and could only
-                // guard against runs it could see.
+                // run wrote it.
                 File.WriteAllText(requestPath, BuildRequest(assemblyName, outputDirectory, commandLine));
                 var run = Invoke(host, requestPath, cancellationToken);
                 if (!run.Succeeded)

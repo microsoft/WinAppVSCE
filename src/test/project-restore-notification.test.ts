@@ -46,9 +46,8 @@ describe("notifyProjectRestoreRequired", () => {
     assert.deepEqual(calls.restored, [project]);
   });
 
-  // D5: the old "prompts only once" assertion encoded the defect by swallowing a re-armed server notification.
-  // The server latches per condition and clears on successful load.
-  // If it sends again, it means to.
+  // D5: the server latches per condition and clears it on a successful load.
+  // If it sends again, it means to, so the client must restore again.
   it("restores again when the server reports the project a second time", async () => {
     const { calls, host } = createHost();
 
