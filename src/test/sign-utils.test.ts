@@ -6,9 +6,14 @@ import * as path from 'node:path';
 import { glob } from 'glob';
 import {
 	findWorkspaceArtifacts as findWorkspaceArtifactsCore,
+	findWorkspaceArtifactsByTier,
 	buildSignCommand,
+	createWorkspaceFileFinder,
 	CERTIFICATE_GLOBS,
-	EXECUTABLE_GLOBS
+	EXECUTABLE_GLOBS,
+	MAX_QUICKPICK_RESULTS,
+	SIGNABLE_ARTIFACT_TIERS,
+	type WorkspaceFileSearch
 } from '../sign-utils';
 import { ARTIFACT_GLOBS } from '../artifact-types';
 
@@ -34,13 +39,15 @@ const tempDirs: string[] = [];
 function findWorkspaceArtifacts(
 	workspacePath: string,
 	patterns: string[] = ARTIFACT_GLOBS,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	limit?: number
 ): Promise<string[]> {
 	return findWorkspaceArtifactsCore(
 		workspacePath,
 		includePattern => glob(includePattern, { cwd: workspacePath, absolute: true, nodir: true }),
 		patterns,
-		signal
+		signal,
+		limit
 	);
 }
 
@@ -175,6 +182,134 @@ describe('findWorkspaceArtifacts', () => {
 		assert.equal(receivedPattern, `{${ARTIFACT_GLOBS.join(',')}}`);
 	});
 
+	it('bounds discovery without asking the finder to apply excludes', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		let received: WorkspaceFileSearch | undefined;
+
+		await findWorkspaceArtifactsCore(
+			tempDir,
+			async (_includePattern, search) => {
+				received = search;
+				return [];
+			},
+			ARTIFACT_GLOBS,
+			undefined,
+			MAX_QUICKPICK_RESULTS
+		);
+
+		// Excludes are applied after the search: passing one to the VS Code
+		// finder would also re-enable the user's `files.exclude` setting.
+		assert.deepEqual(Object.keys(received ?? {}).sort(), ['maxResults', 'signal']);
+		assert.ok(received?.maxResults !== undefined);
+		assert.ok(received.maxResults > MAX_QUICKPICK_RESULTS);
+		assert.ok(received.maxResults <= MAX_QUICKPICK_RESULTS * 4);
+	});
+
+	it('returns nothing for a zero or negative limit', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		createFile(path.join(tempDir, 'pkg.msix'));
+		let calls = 0;
+		const countingFinder = async () => {
+			calls++;
+			return [path.join(tempDir, 'pkg.msix')];
+		};
+
+		for (const limit of [0, -1]) {
+			const results = await findWorkspaceArtifactsCore(
+				tempDir,
+				countingFinder,
+				ARTIFACT_GLOBS,
+				undefined,
+				limit
+			);
+			// A non-positive cap must mean "nothing", never an unbounded walk.
+			assert.deepEqual(results, []);
+		}
+
+		assert.equal(calls, 0);
+	});
+
+	it('never issues an unbounded search, even when ignored paths saturate the pool', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const ignored = Array.from({ length: 8 }, (_, index) =>
+			path.join(tempDir, 'node_modules', 'pkg', `dep${index}.msix`));
+		for (const filePath of ignored) {
+			createFile(filePath);
+		}
+		const requestedLimits: Array<number | undefined> = [];
+
+		// Every match is ignored, so the pool is saturated and yields nothing.
+		// Discovery must accept that and stop rather than widen the search:
+		// "Browse…" is the escape hatch, not a full workspace walk.
+		const results = await findWorkspaceArtifactsCore(
+			tempDir,
+			async (_includePattern, search) => {
+				requestedLimits.push(search.maxResults);
+				return ignored.slice(0, search.maxResults);
+			},
+			ARTIFACT_GLOBS,
+			undefined,
+			2
+		);
+
+		assert.deepEqual(requestedLimits, [8]);
+		assert.ok(requestedLimits.every((cap) => typeof cap === 'number'));
+		assert.deepEqual(results, []);
+	});
+
+	it('searches once per call', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const real = path.join(tempDir, 'real.msix');
+		createFile(real);
+		let calls = 0;
+
+		const results = await findWorkspaceArtifactsCore(
+			tempDir,
+			async () => {
+				calls++;
+				return [real];
+			},
+			ARTIFACT_GLOBS,
+			undefined,
+			2
+		);
+
+		assert.equal(calls, 1);
+		assert.deepEqual(results, [real]);
+	});
+
+	it('returns only the newest results up to the limit', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const base = Date.now();
+		for (let i = 0; i < 5; i++) {
+			createFile(path.join(tempDir, `pkg${i}.msix`), base + i * 1000);
+		}
+
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS, undefined, 3);
+
+		assert.deepEqual(
+			results.map(filePath => path.basename(filePath)),
+			['pkg4.msix', 'pkg3.msix', 'pkg2.msix']
+		);
+	});
+
+	it('defaults to the QuickPick result limit', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		for (let i = 0; i < MAX_QUICKPICK_RESULTS + 4; i++) {
+			createFile(path.join(tempDir, `pkg${i}.msix`), Date.now() + i * 1000);
+		}
+
+		const results = await findWorkspaceArtifacts(tempDir, ARTIFACT_GLOBS);
+
+		assert.equal(results.length, MAX_QUICKPICK_RESULTS);
+	});
+
 	it('does not start discovery when already aborted', async () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
@@ -202,8 +337,8 @@ describe('findWorkspaceArtifacts', () => {
 		const controller = new AbortController();
 		const search = findWorkspaceArtifactsCore(
 			tempDir,
-			(_includePattern, signal) => new Promise((_resolve, reject) => {
-				signal?.addEventListener('abort', () => {
+			(_includePattern, search) => new Promise((_resolve, reject) => {
+				search.signal?.addEventListener('abort', () => {
 					reject(Object.assign(new Error('Cancelled'), { name: 'Canceled' }));
 				}, { once: true });
 			}),
@@ -259,6 +394,168 @@ describe('findWorkspaceArtifacts', () => {
 			),
 			/search failed/
 		);
+	});
+});
+
+describe('createWorkspaceFileFinder', () => {
+	it('never passes an exclude pattern to the underlying finder', async () => {
+		const excludes: unknown[] = [];
+		const finder = createWorkspaceFileFinder(
+			includePattern => includePattern,
+			async (_include, exclude, _maxResults) => {
+				excludes.push(exclude);
+				return ['C:\\ws\\AppPackages\\App.msix'];
+			},
+			uri => uri
+		);
+
+		await finder('**/*.msix', { maxResults: 40 });
+		await finder('**/*.exe', { maxResults: 12 });
+
+		// A glob here would make VS Code also apply the user's `files.exclude`,
+		// which hides their own package output and empties the sign picker.
+		assert.deepEqual(excludes, [null, null]);
+	});
+
+	it('forwards the include pattern and result cap, and maps matches to paths', async () => {
+		const calls: Array<{ include: string; maxResults: number | undefined }> = [];
+		const finder = createWorkspaceFileFinder(
+			includePattern => `rel:${includePattern}`,
+			async (include, _exclude, maxResults) => {
+				calls.push({ include, maxResults });
+				return [{ fsPath: 'C:\\ws\\App.msix' }];
+			},
+			uri => uri.fsPath
+		);
+
+		const results = await finder('**/*.msix', { maxResults: 40 });
+
+		assert.deepEqual(calls, [{ include: 'rel:**/*.msix', maxResults: 40 }]);
+		assert.deepEqual(results, ['C:\\ws\\App.msix']);
+	});
+});
+
+describe('findWorkspaceArtifactsByTier', () => {
+	function findByTier(
+		workspacePath: string,
+		tiers: string[][] = SIGNABLE_ARTIFACT_TIERS,
+		signal?: AbortSignal,
+		limit?: number
+	): Promise<string[]> {
+		return findWorkspaceArtifactsByTier(
+			workspacePath,
+			includePattern => glob(includePattern, { cwd: workspacePath, absolute: true, nodir: true }),
+			tiers,
+			signal,
+			limit
+		);
+	}
+
+	it('ranks MSIX packages above APPX packages and executables', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const old = Date.now() - 60_000;
+		createFile(path.join(tempDir, 'pkg.msix'), old);
+		// Newer, but lower-priority tiers must still rank below the MSIX.
+		createFile(path.join(tempDir, 'legacy.appx'), Date.now());
+		createFile(path.join(tempDir, 'app.exe'), Date.now());
+
+		const results = await findByTier(tempDir);
+
+		assert.deepEqual(
+			results.map(filePath => path.basename(filePath)),
+			['pkg.msix', 'legacy.appx', 'app.exe']
+		);
+	});
+
+	it('does not search lower tiers once the limit is reached', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const searched: string[] = [];
+
+		const results = await findWorkspaceArtifactsByTier(
+			tempDir,
+			async includePattern => {
+				searched.push(includePattern);
+				return [path.join(tempDir, 'a.msix'), path.join(tempDir, 'b.msix')];
+			},
+			SIGNABLE_ARTIFACT_TIERS,
+			undefined,
+			2
+		);
+
+		assert.equal(searched.length, 1);
+		assert.equal(results.length, 2);
+	});
+
+	it('falls through to lower tiers when higher tiers leave slots open', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		createFile(path.join(tempDir, 'app.exe'));
+		createFile(path.join(tempDir, 'app.dll'));
+
+		const results = await findByTier(tempDir);
+
+		assert.deepEqual(
+			results.map(filePath => path.basename(filePath)).sort(),
+			['app.dll', 'app.exe']
+		);
+	});
+
+	it('shrinks the per-tier limit by what earlier tiers already found', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const requestedLimits: Array<number | undefined> = [];
+
+		await findWorkspaceArtifactsByTier(
+			tempDir,
+			async (includePattern, search) => {
+				requestedLimits.push(search.maxResults);
+				return includePattern.includes('msix') ? [path.join(tempDir, 'a.msix')] : [];
+			},
+			SIGNABLE_ARTIFACT_TIERS,
+			undefined,
+			4
+		);
+
+		// Tier 1 asks for 4 slots' worth, later tiers only for the remaining 3.
+		assert.equal(requestedLimits.length, 3);
+		assert.ok(requestedLimits[0]! > requestedLimits[1]!);
+		assert.equal(requestedLimits[1], requestedLimits[2]);
+	});
+
+	it('de-duplicates files matched by more than one tier', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const duplicate = path.join(tempDir, 'a.msix');
+
+		const results = await findWorkspaceArtifactsByTier(
+			tempDir,
+			async () => [duplicate],
+			[['**/*.msix'], ['**/*.msix']],
+			undefined,
+			5
+		);
+
+		assert.deepEqual(results, [duplicate]);
+	});
+
+	it('returns nothing when cancelled mid-search', async () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+		const controller = new AbortController();
+
+		const results = await findWorkspaceArtifactsByTier(
+			tempDir,
+			async () => {
+				controller.abort();
+				return [path.join(tempDir, 'a.msix')];
+			},
+			SIGNABLE_ARTIFACT_TIERS,
+			controller.signal
+		);
+
+		assert.deepEqual(results, []);
 	});
 });
 

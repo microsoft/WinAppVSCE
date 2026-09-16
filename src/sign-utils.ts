@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { escapePowerShellArg } from './winapp-cli-utils';
-import { ARTIFACT_GLOBS } from './artifact-types';
+import { ARTIFACT_EXTENSIONS, ARTIFACT_GLOBS } from './artifact-types';
 
 /** Glob patterns for PFX certificate files within a workspace. */
 export const CERTIFICATE_GLOBS = ['**/*.pfx'];
@@ -9,12 +9,75 @@ export const CERTIFICATE_GLOBS = ['**/*.pfx'];
 /** Glob patterns for executable files that can be signed. */
 export const EXECUTABLE_GLOBS = ['**/*.exe', '**/*.dll'];
 
+/**
+ * Package extensions the QuickPick surfaces first. Everything else in
+ * {@link ARTIFACT_EXTENSIONS} falls into the tier below, so a new artifact
+ * type stays discoverable without edits here.
+ */
+const PRIMARY_PACKAGE_EXTENSIONS: ReadonlySet<string> = new Set(['msix', 'msixbundle']);
+
+const toGlobs = (extensions: readonly string[]): string[] => extensions.map((ext) => `**/*.${ext}`);
+
+/**
+ * Signable globs in QuickPick priority order: MSIX packages, other package
+ * types, then loose executables. Lower tiers are searched only when higher
+ * ones leave slots unfilled.
+ */
+export const SIGNABLE_ARTIFACT_TIERS: string[][] = [
+	toGlobs(ARTIFACT_EXTENSIONS.filter((ext) => PRIMARY_PACKAGE_EXTENSIONS.has(ext))),
+	toGlobs(ARTIFACT_EXTENSIONS.filter((ext) => !PRIMARY_PACKAGE_EXTENSIONS.has(ext))),
+	EXECUTABLE_GLOBS
+];
+
 const SIGNABLE_ARTIFACT_IGNORES = new Set(['node_modules', '.git']);
+
+/** Maximum number of discovered files offered in a QuickPick before "Browse…". */
+export const MAX_QUICKPICK_RESULTS = 10;
+
+/**
+ * Candidates to collect per remaining slot. A "Browse…" entry always backs the
+ * QuickPick, so a small overshoot keeps newest-first ordering meaningful
+ * without paying for a full workspace walk.
+ */
+const CANDIDATE_POOL_MULTIPLIER = 4;
+
+export interface WorkspaceFileSearch {
+	/** Upper bound on matches to collect. Always set — discovery stays bounded. */
+	maxResults: number;
+	signal?: AbortSignal;
+}
 
 export type WorkspaceFileFinder = (
 	includePattern: string,
-	signal?: AbortSignal
+	search: WorkspaceFileSearch
 ) => Promise<string[]>;
+
+/**
+ * The subset of `vscode.workspace.findFiles` that artifact discovery uses.
+ * `exclude` is typed `null` rather than `GlobPattern | null` on purpose — see
+ * {@link createWorkspaceFileFinder}.
+ */
+export type FindFilesApi<TPattern, TUri> = (
+	include: TPattern,
+	exclude: null,
+	maxResults: number
+) => Thenable<TUri[]>;
+
+/**
+ * Adapt a `findFiles`-shaped API into a {@link WorkspaceFileFinder}. `exclude`
+ * is pinned to `null`: any pattern makes VS Code *also* apply `files.exclude`,
+ * emptying the picker for anyone hiding their package output folder.
+ */
+export function createWorkspaceFileFinder<TPattern, TUri>(
+	toPattern: (includePattern: string) => TPattern,
+	findFiles: FindFilesApi<TPattern, TUri>,
+	toPath: (uri: TUri) => string
+): WorkspaceFileFinder {
+	return async (includePattern, search) => {
+		const matches = await findFiles(toPattern(includePattern), null, search.maxResults);
+		return matches.map(toPath);
+	};
+}
 
 /**
  * Build the CLI argument string for `winapp sign`.
@@ -27,40 +90,32 @@ export function buildSignCommand(filePath: string, certPath: string): string {
 }
 
 /**
- * Find files matching the given glob patterns within a workspace root.
- *
- * Results are sorted by modification time (newest first) so the most recently
- * packaged artifact appears at the top of the QuickPick.
+ * Find files matching `patterns`, bounded to `limit * CANDIDATE_POOL_MULTIPLIER`
+ * matches and returning at most `limit`, newest first. `node_modules`/`.git` are
+ * filtered after the search — passing an exclude glob would apply `files.exclude`.
  */
 export async function findWorkspaceArtifacts(
 	workspacePath: string,
 	findFiles: WorkspaceFileFinder,
 	patterns: string[] = ARTIFACT_GLOBS,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	limit: number = MAX_QUICKPICK_RESULTS
 ): Promise<string[]> {
-	if (signal?.aborted) {
+	if (signal?.aborted || limit <= 0) {
 		return [];
 	}
 
 	const includePattern = patterns.length === 1 ? patterns[0] : `{${patterns.join(',')}}`;
-	let results: string[];
-	try {
-		results = await findFiles(includePattern, signal);
-	} catch (error) {
-		if (signal?.aborted && isCancellationError(error)) {
-			return [];
-		}
-		throw error;
-	}
+	const poolSize = limit * CANDIDATE_POOL_MULTIPLIER;
+
+	const results = await search(includePattern, poolSize);
+	const candidates = results.filter((filePath) => !isIgnoredWorkspacePath(workspacePath, filePath));
 
 	// Sort by mtime descending (newest first); if stat fails, push to end.
 	const withStats: Array<{ path: string; mtime: number }> = [];
-	for (const filePath of results) {
+	for (const filePath of candidates) {
 		if (signal?.aborted) {
 			return [];
-		}
-		if (isIgnoredWorkspacePath(workspacePath, filePath)) {
-			continue;
 		}
 		try {
 			const stat = await fs.promises.stat(filePath);
@@ -71,7 +126,63 @@ export async function findWorkspaceArtifacts(
 	}
 
 	withStats.sort((a, b) => b.mtime - a.mtime);
-	return withStats.map((s) => s.path);
+	return withStats.map((s) => s.path).slice(0, limit);
+
+	// `maxResults` is required, so discovery can never fall back to an unbounded walk.
+	async function search(include: string, maxResults: number): Promise<string[]> {
+		if (signal?.aborted) {
+			return [];
+		}
+		try {
+			return await findFiles(include, { maxResults, signal });
+		} catch (error) {
+			if (signal?.aborted && isCancellationError(error)) {
+				return [];
+			}
+			throw error;
+		}
+	}
+}
+
+/**
+ * Search `tiers` in priority order, stopping once `limit` files are found. Each
+ * tier sorts newest-first independently, so higher-priority types always rank
+ * above lower-priority ones regardless of mtime.
+ */
+export async function findWorkspaceArtifactsByTier(
+	workspacePath: string,
+	findFiles: WorkspaceFileFinder,
+	tiers: string[][],
+	signal?: AbortSignal,
+	limit: number = MAX_QUICKPICK_RESULTS
+): Promise<string[]> {
+	const collected: string[] = [];
+	const seen = new Set<string>();
+
+	for (const patterns of tiers) {
+		if (signal?.aborted || collected.length >= limit) {
+			break;
+		}
+
+		const tierResults = await findWorkspaceArtifacts(
+			workspacePath,
+			findFiles,
+			patterns,
+			signal,
+			limit - collected.length
+		);
+
+		for (const filePath of tierResults) {
+			const key = process.platform === 'win32' ? filePath.toLowerCase() : filePath;
+			if (seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+			collected.push(filePath);
+		}
+	}
+
+	return signal?.aborted ? [] : collected.slice(0, limit);
 }
 
 function isIgnoredWorkspacePath(workspacePath: string, filePath: string): boolean {
