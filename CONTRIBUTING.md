@@ -112,10 +112,28 @@ a client notification, a server-to-client `textDocument/publishDiagnostics`, and
 cancellation.
 
 **The LSP type packages are the real blocker.** `Microsoft.VisualStudio.LanguageServer.Protocol`
-tops out at 17.2.8 on our feed: it targets `netstandard2.0`, its only non-BCL assembly reference is
-`Newtonsoft.Json`, and its wire names come from 225 `[JsonProperty]` attributes plus 19 Newtonsoft
-`[JsonConverter]`s that System.Text.Json does not honor. `Microsoft.CommonLanguageServerProtocol.Framework`
-inherits the same problem through `StreamJsonRpc` 2.21.10 and `Newtonsoft.Json` 13.0.3.
+tops out at 17.2.8 on our feed, and an explicit reference to a newer version fails `NU1102` rather
+than pulling from upstream. That version predates the package's move to System.Text.Json: it
+targets `netstandard2.0` and its only non-BCL assembly reference is `Newtonsoft.Json`.
+`Microsoft.CommonLanguageServerProtocol.Framework` inherits the same problem through
+`StreamJsonRpc` 2.21.10 and `Newtonsoft.Json` 13.0.3.
+
+Adopting 17.2.8 under Native AOT therefore means owning a Newtonsoft-to-System.Text.Json shim.
+Measured scope, should this be revisited:
+
+- Wire names are recoverable cheaply. Of 393 `[DataMember]` properties, 383 are the camelCase of
+  the property name, so a naming policy plus 10 hardcoded overrides covers all of them.
+- `SumType` unions are not. 27 properties span 24 distinct union shapes, each needing an explicitly
+  registered converter, because a `JsonConverterFactory` would rely on `MakeGenericType`.
+- Several enums serialize as LSP strings rather than numbers, and `DocumentUri`,
+  `ParameterInformation`, `StrictPrimitive`, and `TextDocumentSync` all have Newtonsoft converters
+  to reimplement.
+
+A probe confirmed the cheap half works and the rest does not: source-generated types emitted
+correct `"label"` and `"sortText"` names, but `MarkupKind` came out as `"kind":1` instead of
+`"markdown"`. That is the shape of the risk. Wire-format mistakes fail silently rather than
+throwing, so the shim would need to be right across all 184 public types, not just the ones the
+server uses today.
 
 So adopting `StreamJsonRpc` would replace 365 lines of transport but leave the larger 666-line
 `LspTypes.cs` hand-maintained. Native AOT trims unused assemblies, so the cost is not the package
