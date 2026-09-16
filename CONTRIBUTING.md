@@ -101,6 +101,15 @@ library's [Native AOT guidance](https://github.com/microsoft/vs-streamjsonrpc/bl
 - Use `SystemTextJsonFormatter` with `JsonSerializerOptions.TypeInfoResolver` pointed at a
   `JsonSerializerContext`. Its constructor carries a blanket `[RequiresDynamicCode]`, which the
   official sample suppresses once the source-generated resolver is supplied.
+- Supply `JsonTypeInfo` for `StreamJsonRpc.RequestId` as well. The documented recipe does not
+  mention it, and without it `$/cancelRequest` fails to serialize, so cancelled LSP requests hang
+  until the client gives up. A converter plus a small `IJsonTypeInfoResolver` returning
+  `JsonMetadataServices.CreateValueInfo<RequestId>` fixes it.
+
+Verified against the server's real `LspTypes.cs` and `LspJsonContext.cs`: a `win-arm64` Native AOT
+binary built from them publishes with zero warnings and passes `initialize`, `textDocument/hover`,
+a client notification, a server-to-client `textDocument/publishDiagnostics`, and request
+cancellation.
 
 **The LSP type packages are the real blocker.** `Microsoft.VisualStudio.LanguageServer.Protocol`
 tops out at 17.2.8 on our feed: it targets `netstandard2.0`, its only non-BCL assembly reference is
@@ -111,7 +120,8 @@ inherits the same problem through `StreamJsonRpc` 2.21.10 and `Newtonsoft.Json` 
 So adopting `StreamJsonRpc` would replace 365 lines of transport but leave the larger 666-line
 `LspTypes.cs` hand-maintained. Native AOT trims unused assemblies, so the cost is not the package
 count but the linked output: an equivalent probe measured 5.4 MB against 2.29 MB for the same
-round trip written directly on System.Text.Json. Revisit if a System.Text.Json build of the LSP
+round trip written directly on System.Text.Json, and 7.0 MB once the server's real LSP types were
+linked in. Revisit if a System.Text.Json build of the LSP
 protocol types reaches the feed, which would make replacing both halves worthwhile in one change.
 
 ## Pull requests
