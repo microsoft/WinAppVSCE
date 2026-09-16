@@ -187,7 +187,7 @@ namespace WinUiXaml.Workspace
                 unresolvedProjectReferences);
         }
 
-        /// <summary>Acquires evaluation and csc args in one MSBuild call, falling back to evaluation so unrestored projects report restore-required instead of opaque build failure.</summary>
+        /// <summary>Acquires evaluation and csc args in one MSBuild call, falling back to evaluation so unrestored projects report packages-not-restored instead of opaque build failure.</summary>
         /// <param name="graph">When supplied, repairs unresolved project references with stand-in compilations; omitted for referenced projects whose markup output is unused.</param>
         private static (
             MsBuildCli.Evaluation Evaluation,

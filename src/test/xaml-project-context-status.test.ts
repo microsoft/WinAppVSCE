@@ -29,7 +29,7 @@ test("a starting reload does not erase a reference-build-failed the developer ha
   );
   assert.equal(
     shouldReplaceProjectContextStatus(
-      { uri: "file:///a.xaml", state: "restore-required" },
+      { uri: "file:///a.xaml", state: "packages-not-restored" },
       { uri: "file:///a.xaml", state: "loading" }
     ),
     false
@@ -106,7 +106,7 @@ test("every state the server can emit is one the client knows", () => {
     `Expected to find the server's status literals, found ${emitted.length}. ` +
       "The call shape probably changed and this test is no longer reading anything."
   );
-  assert.ok(emitted.includes("restore-required"));
+  assert.ok(emitted.includes("packages-not-restored"));
   assert.ok(emitted.includes("reference-build-failed"));
 
   const unknown = [...new Set(emitted)].filter(
@@ -213,7 +213,7 @@ test("reports the restore as work in flight while the extension is running it", 
     getProjectContextStatusPresentation(
       {
         uri: "file:///Fresh.xaml",
-        state: "restore-required",
+        state: "packages-not-restored",
         message: "Restore required: App.csproj.",
       },
       { restoreInFlight: true }
@@ -234,7 +234,7 @@ test("reports the restore as work in flight while the extension is running it", 
     getProjectContextStatusPresentation(
       {
         uri: "file:///Fresh.xaml",
-        state: "restore-required",
+        state: "packages-not-restored",
         message: "Restore required: App.csproj.",
       },
       { restoreInFlight: false }
@@ -259,7 +259,7 @@ test("names the restore in the bar itself, and outranks the build", () => {
   assert.deepEqual(
     getProjectContextStatusPresentation({
       uri: "file:///Fresh.xaml",
-      state: "restore-required",
+      state: "packages-not-restored",
       message: "Restore required: App.csproj.",
     }),
     {
@@ -274,22 +274,22 @@ test("names the restore in the bar itself, and outranks the build", () => {
   assert.equal(
     selectProjectContextStatus([
       { uri: "file:///A.xaml", state: "reference-build-failed", message: "build me" },
-      { uri: "file:///A.xaml", state: "restore-required", message: "restore me" },
+      { uri: "file:///A.xaml", state: "packages-not-restored", message: "restore me" },
     ])?.state,
-    "restore-required"
+    "packages-not-restored"
   );
 
   assert.equal(
     selectProjectContextStatus([
       { uri: "file:///A.xaml", state: "error", message: "boom" },
-      { uri: "file:///A.xaml", state: "restore-required", message: "restore me" },
+      { uri: "file:///A.xaml", state: "packages-not-restored", message: "restore me" },
     ])?.state,
-    "restore-required"
+    "packages-not-restored"
   );
 
   // The client narrows the server's notification payload, so a state the server emits but this
   // list does not know is dropped and nothing reaches the bar at all.
-  assert.equal(isProjectContextState("restore-required"), true);
+  assert.equal(isProjectContextState("packages-not-restored"), true);
 });
 
 test("names the build in the bar itself, and outranks a plain error", () => {

@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 // Auto-restore failure must leave two signals because the user did not start it and otherwise only sees its aftermath.
-// First: in-flight count is decremented so the bar leaves "restoring" and shows the still-outstanding restore-required instruction.
+// First: in-flight count is decremented so the bar leaves "restoring" and shows the still-outstanding packages-not-restored instruction.
 // Second: the failure is notified; source-level assertions are enough because the private restore path's required accounting/notification structure is visible here.
 const source = readFileSync(
   path.join(__dirname, "..", "..", "src", "xaml", "xamlLanguageService.ts"),

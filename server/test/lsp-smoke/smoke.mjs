@@ -63,7 +63,7 @@ function offsetToPosition(text, offset) {
 
 if (!existsSync(APP_XAML)) fail(`fixture not found: ${APP_XAML}`);
 
-// Never-restored project: stable restore-required path, impossible in a real editor because the extension auto-restores as soon as the server reports it.
+// Never-restored project: stable packages-not-restored path, impossible in a real editor because the extension auto-restores as soon as the server reports it.
 // The package cannot resolve, so ambient NuGet caches cannot mask it as merely slow.
 // Normalize tmpdir paths because short temp paths versus long server paths would make notifications look missing.
 const unrestoredRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "winui-xaml-unrestored-")));
@@ -1515,7 +1515,7 @@ async function main() {
   }
   console.log("[ok] didClose cancels pending diagnostics, evicts context, and prevents stale publication");
 
-  // 22) Restore-required path, end to end on the wire: proves ProjectRestoreRequiredException becomes a notification.
+  // 22) packages-not-restored path, end to end on the wire: proves ProjectRestoreRequiredException becomes a notification.
   // It also proves the payload serializes under the AOT context with JsonSerializerIsReflectionEnabledByDefault=false.
   // A notification has no reply, so serialization failure would be silently absent like a project that restored fine.
   const restoreRequired = waitFor(
@@ -1530,9 +1530,9 @@ async function main() {
     (message) =>
       message.method === "winui-xaml/projectContextStatus" &&
       message.params?.uri === unrestoredXamlUri &&
-      message.params?.state === "restore-required",
+      message.params?.state === "packages-not-restored",
     90000,
-    "restore-required project context status"
+    "packages-not-restored project context status"
   );
   send({
     method: "textDocument/didOpen",
@@ -1564,7 +1564,7 @@ async function main() {
     restoreStatusMessage.params.message.length === 0
   ) {
     fail(
-      `restore-required status carried no message: ${JSON.stringify(restoreStatusMessage.params)}`
+      `packages-not-restored status carried no message: ${JSON.stringify(restoreStatusMessage.params)}`
     );
   }
   if (!restoreNotification.params.projectPath.endsWith("Unrestored.csproj")) {
@@ -1573,7 +1573,7 @@ async function main() {
     );
   }
   console.log(
-    "[ok] never-restored project: projectRestoreRequired + restore-required status both reach the wire"
+    "[ok] never-restored project: projectRestoreRequired + packages-not-restored status both reach the wire"
   );
 
   // 22b) Never-built project reference, end to end: it now compiles from source into scratch output for the markup compiler.

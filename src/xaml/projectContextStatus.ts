@@ -11,7 +11,7 @@ export const PROJECT_CONTEXT_STATES = [
   "ready",
   "error",
   "reference-build-failed",
-  "restore-required",
+  "packages-not-restored",
   "idle",
 ] as const;
 
@@ -37,7 +37,7 @@ export const PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE =
   "Project IntelliSense failed to load.";
 export const PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE =
   "A referenced project could not be built, so the types it defines are unavailable.";
-export const PROJECT_CONTEXT_RESTORE_REQUIRED_FALLBACK_MESSAGE =
+export const PROJECT_CONTEXT_PACKAGES_NOT_RESTORED_FALLBACK_MESSAGE =
   "Restore the project's packages so its references resolve.";
 export const PROJECT_CONTEXT_RESTORING_MESSAGE =
   "Restoring the project's packages. Project-aware IntelliSense resumes when it completes.";
@@ -73,7 +73,7 @@ export function getRelevantProjectContextStatuses(
 /** Durable project-on-disk states; a reload starting does not prove the developer-fixed condition stopped being true. */
 const DURABLE_STATES: readonly ProjectContextState[] = [
   "reference-build-failed",
-  "restore-required",
+  "packages-not-restored",
 ];
 
 /** Decides whether incoming status replaces current; suppresses transient reload `loading` over durable states while still accepting real recovery states immediately. */
@@ -97,7 +97,7 @@ export function selectProjectContextStatus(
   return (
     // Restore precedes build: an unrestored project cannot be built, so when both conditions are
     // present, naming the build is telling the developer to do the step that will fail.
-    values.find((status) => status.state === "restore-required") ??
+    values.find((status) => status.state === "packages-not-restored") ??
     values.find((status) => status.state === "reference-build-failed") ??
     values.find((status) => status.state === "error") ??
     values.find((status) => status.state === "loading") ??
@@ -131,7 +131,7 @@ export function getProjectContextStatusPresentation(
     // A never-restored project is user-fixable and, on a clean clone, the first condition reached.
     // Generic "unavailable" sent developers hunting for a broken extension when the fix was one command.
     // This mirrors the build-side sibling above.
-    case "restore-required":
+    case "packages-not-restored":
       // Auto-restore is already running, so the instruction is not the developer's to act on yet.
       // Calling it outstanding would repeat the build-side conflation and tell users to run a command the extension is running.
       // Once restore finishes without fixing the condition, the instruction is still needed and outlives the error notification.
@@ -145,7 +145,7 @@ export function getProjectContextStatusPresentation(
 
       return {
         text: "$(package) WinApp: restore required for XAML IntelliSense",
-        tooltip: `${status.message ?? PROJECT_CONTEXT_RESTORE_REQUIRED_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
+        tooltip: `${status.message ?? PROJECT_CONTEXT_PACKAGES_NOT_RESTORED_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
     case "error":
