@@ -84,6 +84,26 @@ $vsix = Get-ChildItem artifacts\winapp-*.vsix | Sort-Object LastWriteTime -Desce
 code --install-extension $vsix.FullName
 ```
 
+## Language server dependencies
+
+The server hand-rolls its JSON-RPC transport (`Lsp/JsonRpcConnection.cs`) and its LSP type
+definitions (`Lsp/LspTypes.cs`) instead of taking `StreamJsonRpc` or
+`Microsoft.VisualStudio.LanguageServer.Protocol`. That is a Native AOT requirement, not a
+preference, and it was re-measured against the packages actually available on our feed:
+
+| Option | Measured blocker |
+| --- | --- |
+| `StreamJsonRpc` 2.25.29 (newest on feed) | Both APIs a server must call are AOT-unsafe: `SystemTextJsonFormatter..ctor` and `JsonRpc.AddLocalRpcTarget` each carry `[RequiresDynamicCode]` and `[RequiresUnreferencedCode]`. |
+| `Microsoft.VisualStudio.LanguageServer.Protocol` 17.2.8 (newest on feed) | `netstandard2.0`, and its only non-BCL assembly reference is `Newtonsoft.Json`. Wire names come from 225 `[JsonProperty]` attributes and 19 Newtonsoft `[JsonConverter]`s that System.Text.Json does not honor. |
+| `Microsoft.CommonLanguageServerProtocol.Framework` 5.0.0-preview | Depends on `StreamJsonRpc` 2.21.10 and `Newtonsoft.Json` 13.0.3, so it inherits both problems. |
+
+The AOT-hardened StreamJsonRpc line is 3.x, which introduces `[JsonRpcContract]` and
+source-generated proxies. Our feed carries 102 `StreamJsonRpc` versions and none of them are 3.x.
+
+Revisit this when either StreamJsonRpc 3.x or a System.Text.Json build of the LSP protocol types
+reaches the feed. Until then, adopting any of the three would add `Newtonsoft.Json` plus ten
+transitive packages to a binary whose startup cost is the feature.
+
 ## Pull requests
 
 - Follow the checklist in [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md).
