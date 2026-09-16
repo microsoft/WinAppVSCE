@@ -130,9 +130,6 @@ export function getProjectContextStatusPresentation(
     // Missing packages are user-fixable in one command, so name that rather than a generic
     // "unavailable" that implicates the extension. Mirrors the build-side sibling above.
     case "packages-not-restored":
-      // While auto-restore runs the remedy is not the developer's to act on, so report progress.
-      // The instruction below survives a restore that finishes without fixing the condition, and
-      // outlives the error notification.
       if (context.restoreInFlight) {
         return {
           text: "$(sync~spin) WinApp: restoring packages",
