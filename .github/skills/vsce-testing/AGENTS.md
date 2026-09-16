@@ -123,9 +123,10 @@ modal is up. `Confirm-VSCodeEditor` handles that; if you act manually, call `Cle
   cheaply search for the open file's tab basename (stored in `$ctx.EditorFile`).
 - **`code --reuse-window --goto` MUST include `--user-data-dir=$ctx.Udd`** or it targets the default
   profile, not our drive instance.
-- **Extension commands run fire-and-forget in an integrated terminal** (`terminal.sendText`).
-  `executeCommand` returns before the CLI finishes — **poll for the effect** (e.g. `devcert.pfx`), do
-  not check immediately.
+- **Most extension commands run fire-and-forget in an integrated terminal** (`terminal.sendText`).
+  `executeCommand` returns before the CLI finishes — **poll for the effect**, do not check
+  immediately. Exception: `winapp.certGenerate` spawns the CLI directly and awaits its exit code, so
+  its notifications appear without polling.
 - **`command 'winapp.certGenerate' not found`** means the winapp extension isn't loaded in that
   instance → fix the `--extensions-dir` (step 2 above), it's not a code bug.
 - **Process-kill safety:** only `Stop-Process -Id <PID>` for OUR instances (match `drive-udd-*` /
@@ -149,6 +150,18 @@ Answers (ordered, one per prompt the command raises):
   sign, certInstall). Targets the `File name:` edit field and clicks `Open`.
 - Free-text `showInputBox` prompts (e.g. cert password) **cannot** be auto-answered — avoid or accept
   defaults.
+
+**`winapp.certGenerate` prompt sequence** (it is no longer a single Yes/No):
+1. Install QuickPick — "Generate only" vs "Generate and install (requires admin)" → `@{accept=$true}`.
+2. Publisher `showInputBox` — raised when the resolved project directory holds **no canonically
+   named manifest** (`Package.appxmanifest` / `AppxManifest.xml` directly in that directory). A
+   normal project has one, so the publisher comes from it and this prompt does not appear. There is
+   no manifest picker: nothing else is offered as a substitute. This is a free-text prompt and
+   therefore **not auto-answerable**: drive certGenerate against a project that contains a
+   canonically named manifest so the prompt never appears.
+3. Overwrite warning — raised when the certificate already exists. Its actions
+   ("Overwrite Existing Cert" / "Use Existing Cert") are notification buttons, which **UIA does not
+   expose**; only the aria-live label text is readable. Delete the stale `.pfx` first for a clean run.
 
 Command arguments are passed with `-Arguments`; queue/script JSON uses `args`. Descriptors with
 `kind: activeDocumentUri`, `fileUri`, or `position` resolve to the corresponding VS Code API object.
