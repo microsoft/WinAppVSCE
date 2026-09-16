@@ -15,7 +15,8 @@ namespace WinUiXaml.Workspace
             ImmutableArray<IAssemblySymbol> referencedAssemblies,
             ImmutableArray<string> xamlFiles,
             string? applicationDefinitionPath,
-            ImmutableArray<string> unresolvedProjectReferences = default)
+            ImmutableArray<string> unresolvedProjectReferences = default,
+            string? generatorFailure = null)
         {
             XamlPath = xamlPath;
             ProjectPath = projectPath;
@@ -25,6 +26,7 @@ namespace WinUiXaml.Workspace
             ReferencedAssemblies = referencedAssemblies;
             XamlFiles = xamlFiles;
             ApplicationDefinitionPath = applicationDefinitionPath;
+            GeneratorFailure = generatorFailure;
             UnresolvedProjectReferences = unresolvedProjectReferences.IsDefault
                 ? ImmutableArray<string>.Empty
                 : unresolvedProjectReferences;
@@ -60,6 +62,11 @@ namespace WinUiXaml.Workspace
         public ImmutableArray<string> UnresolvedProjectReferences { get; }
 
         /// <summary>
+        /// Non-null when the generator host could not run, so <c>{x:Bind}</c> and completion are missing generated members even though every other symbol resolved.
+        /// </summary>
+        public string? GeneratorFailure { get; }
+
+        /// <summary>
         /// Rebinds the document's in-memory <c>x:Class</c> against the same immutable project
         /// compilation. This avoids rebuilding project-wide XAML metadata for an XML-only edit.
         /// </summary>
@@ -73,6 +80,7 @@ namespace WinUiXaml.Workspace
                 ReferencedAssemblies,
                 XamlFiles,
                 ApplicationDefinitionPath,
-                UnresolvedProjectReferences);
+                UnresolvedProjectReferences,
+                GeneratorFailure);
     }
 }

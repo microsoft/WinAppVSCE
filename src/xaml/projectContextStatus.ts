@@ -12,6 +12,7 @@ export const PROJECT_CONTEXT_STATES = [
   "error",
   "reference-build-failed",
   "packages-not-restored",
+  "generators-unavailable",
   "idle",
 ] as const;
 
@@ -39,6 +40,8 @@ export const PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE =
   "A referenced project could not be built, so the types it defines are unavailable.";
 export const PROJECT_CONTEXT_PACKAGES_NOT_RESTORED_FALLBACK_MESSAGE =
   "Restore the project's packages so its references resolve.";
+export const PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE =
+  "Source generators could not run, so generated members are missing.";
 export const PROJECT_CONTEXT_RESTORING_MESSAGE =
   "Restoring the project's packages. Project-aware IntelliSense resumes when it completes.";
 export const SHOW_XAML_OUTPUT_HINT =
@@ -74,6 +77,7 @@ export function getRelevantProjectContextStatuses(
 const DURABLE_STATES: readonly ProjectContextState[] = [
   "reference-build-failed",
   "packages-not-restored",
+  "generators-unavailable",
 ];
 
 /** Decides whether incoming status replaces current; suppresses transient reload `loading` over durable states while still accepting real recovery states immediately. */
@@ -99,6 +103,7 @@ export function selectProjectContextStatus(
     // present, naming the build is telling the developer to do the step that will fail.
     values.find((status) => status.state === "packages-not-restored") ??
     values.find((status) => status.state === "reference-build-failed") ??
+    values.find((status) => status.state === "generators-unavailable") ??
     values.find((status) => status.state === "error") ??
     values.find((status) => status.state === "loading") ??
     values.find((status) => status.state === "framework-ready") ??
@@ -141,6 +146,14 @@ export function getProjectContextStatusPresentation(
       return {
         text: "$(package) WinApp: Restore Required for XAML IntelliSense",
         tooltip: `${status.message ?? PROJECT_CONTEXT_PACKAGES_NOT_RESTORED_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
+        transient: false,
+      };
+    // Nothing the developer can build or restore fixes this, so the wording points at the
+    // extension's own helper rather than asking for an action that cannot help.
+    case "generators-unavailable":
+      return {
+        text: "$(warning) WinApp: Generated Members Unavailable",
+        tooltip: `${status.message ?? PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
         transient: false,
       };
     case "error":

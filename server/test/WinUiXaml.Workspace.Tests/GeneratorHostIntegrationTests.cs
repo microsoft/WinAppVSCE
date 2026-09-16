@@ -108,6 +108,31 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
         Assert.Contains("unsafe=False", text);
     }
 
+    /// <summary>Generators that read <c>AdditionalFiles</c> produce different members depending on file contents, so a request that carries the paths but loses the text degrades to members that silently disagree with the project's own build.</summary>
+    [Fact]
+    public void Run_PassesAdditionalFileContentsToGenerators()
+    {
+        var project = CreateProject("AdditionalProbe");
+        var analyzer = CompileAdditionalTextGenerator(
+            project,
+            """
+            var text = ctx.GetText()?.ToString().Trim() ?? "MISSING";
+            spc.AddSource(
+                System.IO.Path.GetFileNameWithoutExtension(ctx.Path) + ".g.cs",
+                "namespace " + text + " { public static class AdditionalMarker { } }");
+            """);
+
+        var additionalFile = Path.Combine(project, "Probe.txt");
+        File.WriteAllText(additionalFile, "Resolved.From.AdditionalFile");
+
+        var generated = RunHost(project, analyzer, "/additionalfile:" + additionalFile);
+
+        Assert.NotEmpty(generated);
+        var text = string.Concat(generated.Select(File.ReadAllText));
+        Assert.Contains("namespace Resolved.From.AdditionalFile", text);
+        Assert.DoesNotContain("MISSING", text);
+    }
+
     private string CreateProject(string name)
     {
         var directory = Path.Combine(_root, name);
@@ -158,7 +183,7 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
             Path.Combine(projectDirectory, "Probe.csproj"),
             "Probe",
             commandLine,
-            cts.Token);
+            cts.Token).Files;
     }
 
     /// <summary>
@@ -172,6 +197,10 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
         EmitGenerator(projectDirectory, "CompilationProvider", body);
 
     /// <summary>Compiles a generator to a DLL the host can <c>Assembly.LoadFrom</c>. Building it in memory keeps the suite free of a NuGet restore while still exercising a genuine analyzer reference, which is what the short-circuit keys on.</summary>
+    /// <summary>Same as <see cref="CompileGenerator"/>, but the generator observes <c>AdditionalFiles</c>, which arrive as their own request field rather than through the compilation or the analyzer config.</summary>
+    private string CompileAdditionalTextGenerator(string projectDirectory, string body) =>
+        EmitGenerator(projectDirectory, "AdditionalTextsProvider", body);
+
     private string EmitGenerator(string projectDirectory, string provider, string body)
     {
         var source = $$"""

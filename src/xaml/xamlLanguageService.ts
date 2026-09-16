@@ -431,6 +431,8 @@ function showXamlInfo(): void {
     vscode.workspace.textDocuments.some((document) => document.languageId === "xaml"),
     lastDegradedCause === "dotnet",
     projectContext
+      ? { ...projectContext, restoreInFlight: restoresInFlight > 0 }
+      : undefined
   );
   void vscode.window
     .showInformationMessage<XamlStatusAction>(status.message, ...status.actions)
@@ -882,10 +884,37 @@ async function runProjectBuild(projectPath: string): Promise<void> {
 
   // A rejected executeTask is the one remaining way this can fail silently: the host is
   // resolved and the task is well-formed, but VS Code can still decline to start it.
-  void Promise.resolve(vscode.tasks.executeTask(task)).then(undefined, (error: unknown) => {
-    const detail = error instanceof Error ? error.message : String(error);
-    log(`Project build task could not start: ${detail}`);
-    void vscode.window.showErrorMessage(`WinUI project build could not start: ${detail}`);
+  void Promise.resolve(vscode.tasks.executeTask(task)).then(
+    (execution) => watchProjectBuildCompletion(execution, projectPath),
+    (error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      log(`Project build task could not start: ${detail}`);
+      void vscode.window.showErrorMessage(`WinUI project build could not start: ${detail}`);
+    }
+  );
+}
+
+// A successful build writes only under bin/obj, which the server ignores, so nothing would tell it
+// the references it reported as unbuilt now exist. Naming the project file is the same signal a
+// .csproj edit sends, and it is what clears the build-required status without a restart.
+function watchProjectBuildCompletion(
+  execution: vscode.TaskExecution,
+  projectPath: string
+): void {
+  const subscription = vscode.tasks.onDidEndTaskProcess((event) => {
+    if (event.execution !== execution) {
+      return;
+    }
+
+    subscription.dispose();
+    if (event.exitCode !== 0) {
+      return;
+    }
+
+    log(`Project build completed: ${projectPath}. Reloading project metadata.`);
+    void client?.sendNotification("workspace/didChangeWatchedFiles", {
+      changes: [{ uri: vscode.Uri.file(projectPath).toString(), type: 2 }],
+    });
   });
 }
 

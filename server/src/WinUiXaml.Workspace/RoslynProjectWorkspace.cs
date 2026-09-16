@@ -69,7 +69,8 @@ namespace WinUiXaml.Workspace
             ImmutableHashSet<string> projectPaths,
             ImmutableArray<string> xamlFiles,
             string? applicationDefinitionPath,
-            ImmutableArray<string> unresolvedProjectReferences)
+            ImmutableArray<string> unresolvedProjectReferences,
+            string? generatorFailure = null)
         {
             Compilation = compilation;
             MetadataReferences = metadataReferences;
@@ -78,6 +79,7 @@ namespace WinUiXaml.Workspace
             _projectPaths = projectPaths;
             XamlFiles = xamlFiles;
             ApplicationDefinitionPath = applicationDefinitionPath;
+            GeneratorFailure = generatorFailure;
             UnresolvedProjectReferences = unresolvedProjectReferences.IsDefault
                 ? ImmutableArray<string>.Empty
                 : unresolvedProjectReferences;
@@ -98,6 +100,11 @@ namespace WinUiXaml.Workspace
         /// Non-empty after reference-resolution fallback: IntelliSense has real types, but markup/compiler generated members still require a build.
         /// </summary>
         public ImmutableArray<string> UnresolvedProjectReferences { get; }
+
+        /// <summary>
+        /// Non-null when the out-of-process generator host could not run, meaning generated members such as <c>[ObservableProperty]</c> are absent from an otherwise healthy compilation.
+        /// </summary>
+        public string? GeneratorFailure { get; }
 
         /// <summary>Loads a single project by path.</summary>
         public static Task<RoslynProjectWorkspace> LoadProjectAsync(
@@ -154,7 +161,8 @@ namespace WinUiXaml.Workspace
             // assemblies. Their output is parsed here as ordinary source, which is what keeps
             // {x:Bind} accurate against generated members such as [ObservableProperty].
             var generated = GeneratorHostRunner.Run(fullPath, assemblyName, commandLine, cancellationToken);
-            AddSourceTrees(trees, generated, parseOptions, cancellationToken);
+            graph.RecordGeneratorFailure(fullPath, generated.FailureReason);
+            AddSourceTrees(trees, generated.Files, parseOptions, cancellationToken);
 
             var projectCompilations = ImmutableArray.CreateBuilder<MetadataReference>();
             AddProjectReferences(
@@ -184,7 +192,8 @@ namespace WinUiXaml.Workspace
                 assemblyName,
                 graph.KnownProjects.ToImmutable(),                evaluation.XamlFiles,
                 evaluation.ApplicationDefinition,
-                unresolvedProjectReferences);
+                unresolvedProjectReferences,
+                graph.GeneratorFailure);
         }
 
         /// <summary>Acquires evaluation and csc args in one MSBuild call, falling back to evaluation so unrestored projects report packages-not-restored instead of opaque build failure.</summary>
@@ -282,6 +291,21 @@ namespace WinUiXaml.Workspace
 
             /// <summary>Every project already built, including those that produced nothing.</summary>
             public Dictionary<string, Compilation?> Compilations { get; }
+
+            /// <summary>
+            /// The first generator-host outage anywhere in the graph. Missing generated members look like ordinary missing code, so the reason has to reach the client.
+            /// </summary>
+            public string? GeneratorFailure { get; private set; }
+
+            public void RecordGeneratorFailure(string projectPath, string? reason)
+            {
+                if (reason == null || GeneratorFailure != null)
+                {
+                    return;
+                }
+
+                GeneratorFailure = $"{Path.GetFileName(projectPath)}: {reason}";
+            }
         }
 
 
@@ -409,16 +433,21 @@ namespace WinUiXaml.Workspace
             var parseOptions = commandLine.CreateParseOptions();
             var trees = ImmutableArray.CreateBuilder<SyntaxTree>();
             AddSourceTrees(trees, commandLine.Sources, parseOptions, cancellationToken);
-            AddSourceTrees(
-                trees,
-                GeneratorHostRunner.Run(projectPath, assemblyName, commandLine, cancellationToken),
-                parseOptions,
-                cancellationToken);
+            var generated = GeneratorHostRunner.Run(
+                projectPath, assemblyName, commandLine, cancellationToken);
+            context.RecordGeneratorFailure(projectPath, generated.FailureReason);
+            AddSourceTrees(trees, generated.Files, parseOptions, cancellationToken);
 
-            var references = ImmutableArray.CreateBuilder<MetadataReference>();
-            references.AddRange(commandLine.CreateMetadataReferences());
+            var projectCompilations = ImmutableArray.CreateBuilder<MetadataReference>();
             AddProjectReferences(
-                references, context, evaluation.ProjectReferences, properties, cancellationToken);
+                projectCompilations, context, evaluation.ProjectReferences, properties, cancellationToken);
+
+            // Same superseding rule as the root project: a live compilation must win over the
+            // referenced project's own stale bin output, or both bind and the symbols disagree.
+            var references = ImmutableArray.CreateBuilder<MetadataReference>();
+            references.AddRange(WithoutSupersededProjectOutputs(
+                commandLine.CreateMetadataReferences(), projectCompilations));
+            references.AddRange(projectCompilations);
 
             return CSharpCompilation.Create(
                 assemblyName,

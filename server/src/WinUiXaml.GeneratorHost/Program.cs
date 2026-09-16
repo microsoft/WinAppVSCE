@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
+using WinUiXaml.GeneratorProtocol;
 
 namespace WinUiXaml.GeneratorHost;
 
@@ -36,19 +37,20 @@ internal static class Program
         using var document = JsonDocument.Parse(File.ReadAllText(requestPath));
         var root = document.RootElement;
 
-        var assemblyName = ReadString(root, "assemblyName") ?? "WinUiXaml.Project";
-        var outputDirectory = ReadString(root, "outputDirectory")
+        var assemblyName = ReadString(root, GeneratorRequestFields.AssemblyName) ?? "WinUiXaml.Project";
+        var outputDirectory = ReadString(root, GeneratorRequestFields.OutputDirectory)
             ?? throw new InvalidOperationException("Request is missing 'outputDirectory'.");
-        var languageVersion = ReadString(root, "languageVersion");
-        var references = ReadArray(root, "references");
-        var analyzers = ReadArray(root, "analyzers");
-        var sources = ReadArray(root, "sources");
-        var analyzerConfigs = ReadArray(root, "analyzerConfigs");
-        var additionalFilePaths = ReadArray(root, "additionalFiles");
-        var preprocessorSymbols = ReadArray(root, "preprocessorSymbols");
-        var referenceAliases = ReadAliasMap(root, "referenceAliases");
+        var languageVersion = ReadString(root, GeneratorRequestFields.LanguageVersion);
+        var references = ReadArray(root, GeneratorRequestFields.References);
+        var analyzers = ReadArray(root, GeneratorRequestFields.Analyzers);
+        var sources = ReadArray(root, GeneratorRequestFields.Sources);
+        var analyzerConfigs = ReadArray(root, GeneratorRequestFields.AnalyzerConfigs);
+        var additionalFilePaths = ReadArray(root, GeneratorRequestFields.AdditionalFiles);
+        var preprocessorSymbols = ReadArray(root, GeneratorRequestFields.PreprocessorSymbols);
+        var referenceAliases = ReadAliasMap(root, GeneratorRequestFields.ReferenceAliases);
         var embeddedInterop = new HashSet<string>(
-            ReadArray(root, "embeddedInteropReferences"), StringComparer.OrdinalIgnoreCase);
+            ReadArray(root, GeneratorRequestFields.EmbeddedInteropReferences),
+            StringComparer.OrdinalIgnoreCase);
 
         // A stale directory would otherwise leak members that the current sources no longer declare.
         if (Directory.Exists(outputDirectory))
@@ -101,9 +103,10 @@ internal static class Program
             trees,
             metadataReferences,
             new CSharpCompilationOptions(
-                ReadOutputKind(root, "outputKind"),
-                allowUnsafe: ReadBoolean(root, "allowUnsafe", defaultValue: true),
-                nullableContextOptions: ReadNullableContext(root, "nullableContext")));
+                ReadOutputKind(root, GeneratorRequestFields.OutputKind),
+                allowUnsafe: ReadBoolean(root, GeneratorRequestFields.AllowUnsafe, defaultValue: true),
+                nullableContextOptions: ReadNullableContext(
+                    root, GeneratorRequestFields.NullableContext)));
 
         var generators = LoadGenerators(analyzers);
         if (generators.Count == 0)

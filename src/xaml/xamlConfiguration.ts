@@ -14,7 +14,11 @@ import {
 import {
   PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
+  PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_LOADING_MESSAGE,
+  PROJECT_CONTEXT_PACKAGES_NOT_RESTORED_FALLBACK_MESSAGE,
+  PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE,
+  PROJECT_CONTEXT_RESTORING_MESSAGE,
   ProjectContextState,
 } from "./projectContextStatus";
 
@@ -46,6 +50,8 @@ export interface XamlStatus {
 export interface XamlProjectContextSummary {
   state: ProjectContextState;
   message?: string;
+  /** True while the extension is running `dotnet restore`, which changes what the developer should do next. */
+  restoreInFlight?: boolean;
 }
 
 export const DOTNET_REQUIRED_STATUS = {
@@ -81,6 +87,39 @@ export function getXamlStatus(
       return {
         message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${
           projectContext.message ?? PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE
+        }`,
+        actions: [
+          XAML_STATUS_ACTIONS.restartServer,
+          XAML_STATUS_ACTIONS.showOutput,
+        ],
+      };
+    }
+    if (projectContext?.state === "packages-not-restored") {
+      return {
+        message: projectContext.restoreInFlight
+          ? `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_RESTORING_MESSAGE}`
+          : `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${
+              projectContext.message ??
+              PROJECT_CONTEXT_PACKAGES_NOT_RESTORED_FALLBACK_MESSAGE
+            }`,
+        actions: [XAML_STATUS_ACTIONS.showOutput],
+      };
+    }
+    if (projectContext?.state === "reference-build-failed") {
+      return {
+        message: `${XAML_STATUS_PREFIX} ${
+          projectContext.message ??
+          PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE
+        }`,
+        actions: [XAML_STATUS_ACTIONS.showOutput],
+      };
+    }
+    // Restarting is the one action that can help: the helper is resolved when the server starts.
+    if (projectContext?.state === "generators-unavailable") {
+      return {
+        message: `${XAML_STATUS_PREFIX} ${
+          projectContext.message ??
+          PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE
         }`,
         actions: [
           XAML_STATUS_ACTIONS.restartServer,

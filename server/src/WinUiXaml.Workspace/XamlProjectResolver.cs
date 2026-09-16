@@ -167,7 +167,8 @@ namespace WinUiXaml.Workspace
                 referencedAssemblies,
                 workspace.XamlFiles,
                 workspace.ApplicationDefinitionPath,
-                workspace.UnresolvedProjectReferences);
+                workspace.UnresolvedProjectReferences,
+                workspace.GeneratorFailure);
         }
 
         /// <summary>

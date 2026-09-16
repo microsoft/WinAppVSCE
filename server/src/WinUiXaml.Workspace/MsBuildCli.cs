@@ -773,39 +773,49 @@ namespace WinUiXaml.Workspace
 
             if (exitCode != 0)
             {
-                var detail = standardError.Length > 0 ? standardError : combined;
                 // The client only prompts for a path it can recognize as a project, so prefer the
                 // project path over the working directory.
-                var reportedPath = projectPath ?? workingDirectory ?? string.Empty;
-                if (RoslynProjectWorkspace.IsMissingRestoreFailure(detail))
-                {
-                    throw new ProjectRestoreRequiredException(reportedPath);
-                }
-
-                // The markup compiler writes WMC1006 to stdout, so a non-empty stderr from an
-                // unrelated warning would otherwise hide it and turn an actionable "build once"
-                // into a generic MSBuild failure.
-                var diagnosticText = standardError.Length > 0 && !ReferenceEquals(detail, combined)
-                    ? detail + Environment.NewLine + combined
-                    : detail;
-                if (RoslynProjectWorkspace.ExtractFailedReferencedProjects(diagnosticText, reportedPath)
-                    is { Count: > 0 } failedReferences)
-                {
-                    throw new ProjectBuildRequiredException(reportedPath, failedReferences);
-                }
-
-                if (RoslynProjectWorkspace.IsUnbuiltProjectReferenceFailure(diagnosticText))
-                {
-                    throw new ProjectBuildRequiredException(
-                        reportedPath,
-                        RoslynProjectWorkspace.ExtractUnresolvedAssemblies(diagnosticText));
-                }
-
-                throw new MsBuildUnavailableException(
-                    $"MSBuild exited with code {exitCode}. {Truncate(detail)}");
+                throw ClassifyFailure(
+                    exitCode, combined, standardError, projectPath ?? workingDirectory ?? string.Empty);
             }
 
             return combined;
+        }
+
+        /// <summary>Maps a failed MSBuild invocation onto the action the user can take -- restore, build once, or nothing. Separated from the child-process call so each mapping is testable from the output that produces it rather than from a build engineered to fail that way.</summary>
+        internal static Exception ClassifyFailure(
+            int exitCode,
+            string combined,
+            string standardError,
+            string reportedPath)
+        {
+            var detail = standardError.Length > 0 ? standardError : combined;
+            if (RoslynProjectWorkspace.IsMissingRestoreFailure(detail))
+            {
+                return new ProjectRestoreRequiredException(reportedPath);
+            }
+
+            // The markup compiler writes WMC1006 to stdout, so a non-empty stderr from an
+            // unrelated warning would otherwise hide it and turn an actionable "build once"
+            // into a generic MSBuild failure.
+            var diagnosticText = standardError.Length > 0 && !ReferenceEquals(detail, combined)
+                ? detail + Environment.NewLine + combined
+                : detail;
+            if (RoslynProjectWorkspace.ExtractFailedReferencedProjects(diagnosticText, reportedPath)
+                is { Count: > 0 } failedReferences)
+            {
+                return new ProjectBuildRequiredException(reportedPath, failedReferences);
+            }
+
+            if (RoslynProjectWorkspace.IsUnbuiltProjectReferenceFailure(diagnosticText))
+            {
+                return new ProjectBuildRequiredException(
+                    reportedPath,
+                    RoslynProjectWorkspace.ExtractUnresolvedAssemblies(diagnosticText));
+            }
+
+            return new MsBuildUnavailableException(
+                $"MSBuild exited with code {exitCode}. {Truncate(detail)}");
         }
 
         /// <summary>Runs a child with event-drained pipes, timeout, and cancellation; split out to test hang cases without a real build and avoid <c>ReadToEnd</c> deadlocks.</summary>

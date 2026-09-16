@@ -26,6 +26,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Shared\GeneratorRequestFields.cs" Link="GeneratorRequestFields.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="WinUiXaml.Workspace.Tests" />
   </ItemGroup>
 

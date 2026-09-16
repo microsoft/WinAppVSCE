@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using WinUiXaml.GeneratorProtocol;
 
 namespace WinUiXaml.Workspace
 {
@@ -48,9 +49,23 @@ namespace WinUiXaml.Workspace
         }
 
         /// <summary>
-        /// Runs project generators; missing generators or helper failures return no files, log the reason, and let the server continue without generated members.
+        /// Generated files plus the reason the helper produced none, so a project with no generators is distinguishable from one whose generators could not run.
         /// </summary>
-        internal static ImmutableArray<string> Run(
+        internal readonly record struct GeneratorRunResult(
+            ImmutableArray<string> Files,
+            string? FailureReason)
+        {
+            internal static GeneratorRunResult Nothing { get; } =
+                new(ImmutableArray<string>.Empty, null);
+
+            internal static GeneratorRunResult Produced(ImmutableArray<string> files) =>
+                new(files, null);
+        }
+
+        /// <summary>
+        /// Runs project generators; helper failures return no files and the reason, so callers can report the outage instead of silently losing generated members.
+        /// </summary>
+        internal static GeneratorRunResult Run(
             string projectPath,
             string assemblyName,
             CscCommandLine commandLine,
@@ -59,7 +74,7 @@ namespace WinUiXaml.Workspace
             // Not a failure: the project has nothing to generate.
             if (commandLine.Analyzers.IsDefaultOrEmpty)
             {
-                return ImmutableArray<string>.Empty;
+                return GeneratorRunResult.Nothing;
             }
 
             var host = HostAssemblyPath;
@@ -102,7 +117,7 @@ namespace WinUiXaml.Workspace
                     }
                 }
 
-                return builder.ToImmutable();
+                return GeneratorRunResult.Produced(builder.ToImmutable());
             }
             catch (IOException ex)
             {
@@ -200,27 +215,29 @@ namespace WinUiXaml.Workspace
             using (var writer = new Utf8JsonWriter(buffer))
             {
                 writer.WriteStartObject();
-                writer.WriteString("assemblyName", assemblyName);
-                writer.WriteString("outputDirectory", outputDirectory);
+                writer.WriteString(GeneratorRequestFields.AssemblyName, assemblyName);
+                writer.WriteString(GeneratorRequestFields.OutputDirectory, outputDirectory);
                 if (commandLine.LanguageVersion != null)
                 {
-                    writer.WriteString("languageVersion", commandLine.LanguageVersion);
+                    writer.WriteString(GeneratorRequestFields.LanguageVersion, commandLine.LanguageVersion);
                 }
 
-                writer.WriteString("outputKind", commandLine.OutputKind.ToString());
-                writer.WriteBoolean("allowUnsafe", commandLine.AllowUnsafe);
-                writer.WriteString("nullableContext", commandLine.NullableContext.ToString());
+                writer.WriteString(GeneratorRequestFields.OutputKind, commandLine.OutputKind.ToString());
+                writer.WriteBoolean(GeneratorRequestFields.AllowUnsafe, commandLine.AllowUnsafe);
+                writer.WriteString(
+                    GeneratorRequestFields.NullableContext, commandLine.NullableContext.ToString());
 
-                WriteArray(writer, "references", commandLine.References);
-                WriteArray(writer, "analyzers", commandLine.Analyzers);
-                WriteArray(writer, "sources", commandLine.Sources);
-                WriteArray(writer, "analyzerConfigs", commandLine.AnalyzerConfigs);
-                WriteArray(writer, "additionalFiles", commandLine.AdditionalFiles);
-                WriteArray(writer, "preprocessorSymbols", commandLine.PreprocessorSymbols);
+                WriteArray(writer, GeneratorRequestFields.References, commandLine.References);
+                WriteArray(writer, GeneratorRequestFields.Analyzers, commandLine.Analyzers);
+                WriteArray(writer, GeneratorRequestFields.Sources, commandLine.Sources);
+                WriteArray(writer, GeneratorRequestFields.AnalyzerConfigs, commandLine.AnalyzerConfigs);
+                WriteArray(writer, GeneratorRequestFields.AdditionalFiles, commandLine.AdditionalFiles);
+                WriteArray(
+                    writer, GeneratorRequestFields.PreprocessorSymbols, commandLine.PreprocessorSymbols);
 
                 // Reference-level modifiers travel beside the paths rather than reshaping the
                 // 'references' array, so a host reading only the paths still works.
-                writer.WriteStartObject("referenceAliases");
+                writer.WriteStartObject(GeneratorRequestFields.ReferenceAliases);
                 foreach (var pair in commandLine.ReferenceAliases)
                 {
                     WriteArray(writer, pair.Key, pair.Value);
@@ -229,7 +246,7 @@ namespace WinUiXaml.Workspace
                 writer.WriteEndObject();
                 WriteArray(
                     writer,
-                    "embeddedInteropReferences",
+                    GeneratorRequestFields.EmbeddedInteropReferences,
                     commandLine.EmbeddedInteropReferences.ToImmutableArray());
                 writer.WriteEndObject();
             }
@@ -254,13 +271,13 @@ namespace WinUiXaml.Workspace
             writer.WriteEndArray();
         }
 
-        /// <summary>Reports a project-wide generator-host failure to stderr/<c>WINUI_XAML_LOG</c> and degrades to no generated files.</summary>
-        private static ImmutableArray<string> Unavailable(string projectPath, string reason)
+        /// <summary>Reports a project-wide generator-host failure to stderr/<c>WINUI_XAML_LOG</c> and carries the reason so the caller can surface the outage.</summary>
+        private static GeneratorRunResult Unavailable(string projectPath, string reason)
         {
             Console.Error.WriteLine(
                 $"[winui-xaml-ls] generator host unavailable for '{projectPath}': {reason}. " +
                 "Source-generated members will not resolve for this project.");
-            return ImmutableArray<string>.Empty;
+            return new GeneratorRunResult(ImmutableArray<string>.Empty, reason);
         }
 
         private static HostRunResult Invoke(string host, string requestPath, CancellationToken cancellationToken)

@@ -118,14 +118,19 @@ namespace WinUiXaml.Workspace.Tests
         {
             var commandLine = CscCommandLine.Parse(new[] { "/out:App.dll" }, Path.GetTempPath());
 
+            GeneratorHostRunner.GeneratorRunResult result = default;
             var stderr = CaptureStandardError(() =>
-                GeneratorHostRunner.Run(
+                result = GeneratorHostRunner.Run(
                     Path.Combine(Path.GetTempPath(), "App.csproj"),
                     "App",
                     commandLine,
                     CancellationToken.None));
 
             Assert.Equal(string.Empty, stderr);
+
+            // No generators is not an outage: reporting one here would put a permanent warning on
+            // every project that simply has nothing to generate.
+            Assert.Null(result.FailureReason);
         }
 
         /// <summary>Every generator-host failure degrades to "generated members do not resolve", which is indistinguishable from a project that has no generators. Without a logged reason the user just sees IntelliSense forget a type, with nothing to diagnose.</summary>
@@ -142,8 +147,9 @@ namespace WinUiXaml.Workspace.Tests
                 var commandLine = CscCommandLine.Parse(
                     new[] { "/out:App.dll", "/analyzer:SomeGenerator.dll" }, Path.GetTempPath());
 
+                GeneratorHostRunner.GeneratorRunResult result = default;
                 var stderr = CaptureStandardError(() =>
-                    GeneratorHostRunner.Run(
+                    result = GeneratorHostRunner.Run(
                         Path.Combine(Path.GetTempPath(), "App.csproj"),
                         "App",
                         commandLine,
@@ -151,6 +157,11 @@ namespace WinUiXaml.Workspace.Tests
 
                 Assert.Contains("generator host unavailable", stderr);
                 Assert.Contains("will not resolve", stderr);
+
+                // stderr alone reaches no one: the reason has to travel with the empty result so the
+                // server can report the outage instead of publishing a healthy "ready".
+                Assert.NotNull(result.FailureReason);
+                Assert.Empty(result.Files);
             }
             finally
             {

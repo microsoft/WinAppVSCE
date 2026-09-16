@@ -13,7 +13,10 @@ import {
 import {
   PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
+  PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_LOADING_MESSAGE,
+  PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE,
+  PROJECT_CONTEXT_RESTORING_MESSAGE,
 } from "../xaml/projectContextStatus";
 import {
   XAML_INTELLISENSE_UNAVAILABLE_PREFIX,
@@ -100,6 +103,57 @@ test("reports disabled, running, and degraded XAML status actions", () => {
       `${XAML_STATUS_PREFIX} ready; the language server starts when a XAML file is opened.`,
     actions: [],
   });
+});
+
+// Each of these used to reach the "language server running" line, which told the user everything
+// was fine while the condition the status bar was reporting went unmentioned in the one place they
+// opened to find out what was wrong.
+test("Show Info names the degraded conditions instead of reporting a healthy server", () => {
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, false, {
+      state: "packages-not-restored",
+      message: "Restore the project's packages.",
+    }),
+    {
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} Restore the project's packages.`,
+      actions: ["Show Output"],
+    }
+  );
+
+  // Auto-restore is already running, so asking for the same work would be instructions the user
+  // cannot act on.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, false, {
+      state: "packages-not-restored",
+      message: "Restore the project's packages.",
+      restoreInFlight: true,
+    }),
+    {
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_RESTORING_MESSAGE}`,
+      actions: ["Show Output"],
+    }
+  );
+
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, false, {
+      state: "reference-build-failed",
+    }),
+    {
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE}`,
+      actions: ["Show Output"],
+    }
+  );
+
+  // No build or restore reaches the helper, so restarting is the only offer that can change it.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, false, {
+      state: "generators-unavailable",
+    }),
+    {
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE}`,
+      actions: ["Restart Language Server", "Show Output"],
+    }
+  );
 });
 
 test("maps every XAML status action to its recovery effect", () => {

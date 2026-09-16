@@ -45,9 +45,13 @@ try {
         $_.FullName.StartsWith('extension/dist/server/', [System.StringComparison]::OrdinalIgnoreCase)
     }) {
         $name = ($entry.FullName -split '/')[-1]
-        # The server executable is the one expected apphost; any other is a stale launcher.
+        # The server executable belongs at its two published RID paths and nowhere else; a copy
+        # anywhere else is a stale launcher that would ship alongside the real ones.
         $isUnexpectedAppHost = $name -imatch '^WinUiXaml\..*\.exe$' -and
-            $name -ine 'WinUiXaml.LanguageServer.exe'
+            $entry.FullName -notin @(
+                'extension/dist/server/win-x64/WinUiXaml.LanguageServer.exe',
+                'extension/dist/server/win-arm64/WinUiXaml.LanguageServer.exe'
+            )
         if (($forbiddenNames -icontains $name) -or $isUnexpectedAppHost) {
             throw "VSIX must not bundle a .NET apphost or runtime file: $($entry.FullName)"
         }

@@ -452,6 +452,16 @@ internal sealed partial class XamlLanguageServer
         else
         {
             _buildRequiredProjects.Clear(fullResolution.ProjectPath);
+
+            // The compilation is healthy apart from generated members, so nothing else reports this.
+            // Left unpublished it reads as ordinary missing code in the user's own project.
+            if (fullResolution.GeneratorFailure is { } generatorFailure)
+            {
+                await NotifyProjectContextStatusAsync(
+                    uri,
+                    "generators-unavailable",
+                    GeneratorsUnavailableStatusMessage(generatorFailure)).ConfigureAwait(false);
+            }
         }
 
         var fullTypeSystem = _typeSystems.GetValue(
@@ -465,6 +475,28 @@ internal sealed partial class XamlLanguageServer
         unresolved.IsDefaultOrEmpty
             ? "A referenced project could not be resolved."
             : $"Unresolved reference: {string.Join(", ", unresolved)}";
+
+    private static string GeneratorsUnavailableStatusMessage(string reason) =>
+        $"Source generators could not run ({reason}), so generated members are missing.";
+
+    /// <summary>
+    /// The state a loaded context reports. A degraded condition outranks the stage, so a republish cannot overwrite a standing instruction with a working state.
+    /// </summary>
+    private static (string State, string? Message) ProjectContextStatusFor(XamlProjectContext context)
+    {
+        var unresolved = context.Resolution.UnresolvedProjectReferences;
+        if (!unresolved.IsDefaultOrEmpty)
+        {
+            return ("reference-build-failed", ReferenceBuildFailedStatusMessage(unresolved));
+        }
+
+        if (context.Resolution.GeneratorFailure is { } generatorFailure)
+        {
+            return ("generators-unavailable", GeneratorsUnavailableStatusMessage(generatorFailure));
+        }
+
+        return (context.Stage == XamlProjectStage.Full ? "ready" : "framework-ready", null);
+    }
 
     private Task NotifyProjectContextStatusAsync(
         string uri,
@@ -931,16 +963,8 @@ internal sealed partial class XamlLanguageServer
             var context = await GetOrStartContext(uri).ConfigureAwait(false);
             if (context is not null)
             {
-                // Same rule as the first publish: an unbuilt reference outranks the stage, or this
-                // republish would quietly overwrite the build instruction with a working state.
-                var unresolved = context.Resolution.UnresolvedProjectReferences;
-                await NotifyProjectContextStatusAsync(
-                    uri,
-                    !unresolved.IsDefaultOrEmpty
-                        ? "reference-build-failed"
-                        : context.Stage == XamlProjectStage.Full ? "ready" : "framework-ready",
-                    unresolved.IsDefaultOrEmpty ? null : ReferenceBuildFailedStatusMessage(unresolved))
-                    .ConfigureAwait(false);
+                var (state, message) = ProjectContextStatusFor(context);
+                await NotifyProjectContextStatusAsync(uri, state, message).ConfigureAwait(false);
             }
         });
     }

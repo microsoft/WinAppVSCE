@@ -320,6 +320,55 @@ test("names the build in the bar itself, and outranks a plain error", () => {
   assert.equal(isProjectContextState("reference-build-failed"), true);
 });
 
+// A generator-host outage leaves hand-written members resolving and only the generated ones
+// missing, which reads as a partly-working project rather than a broken one -- so it has to be
+// named explicitly or it is never attributed to the extension's own helper.
+test("names a generator outage, ranks it under the fixable states, and survives a reload", () => {
+  assert.deepEqual(
+    getProjectContextStatusPresentation({
+      uri: "file:///Gen.xaml",
+      state: "generators-unavailable",
+      message: "App.csproj: generator host is missing.",
+    }),
+    {
+      text: "$(warning) WinApp: Generated Members Unavailable",
+      tooltip:
+        "App.csproj: generator host is missing. Click to show the WinUI XAML output.",
+      transient: false,
+    }
+  );
+
+  // Restore and build are both actions the developer can take; this one is not, so it must not
+  // displace them when several conditions are present at once.
+  assert.equal(
+    selectProjectContextStatus([
+      { uri: "file:///A.xaml", state: "generators-unavailable", message: "no host" },
+      { uri: "file:///A.xaml", state: "reference-build-failed", message: "build me" },
+    ])?.state,
+    "reference-build-failed"
+  );
+
+  assert.equal(
+    selectProjectContextStatus([
+      { uri: "file:///A.xaml", state: "error", message: "boom" },
+      { uri: "file:///A.xaml", state: "generators-unavailable", message: "no host" },
+    ])?.state,
+    "generators-unavailable"
+  );
+
+  // Nothing about a reload starting makes the helper appear, so a transient loading must not
+  // erase it.
+  assert.equal(
+    shouldReplaceProjectContextStatus(
+      { uri: "file:///A.xaml", state: "generators-unavailable" },
+      { uri: "file:///A.xaml", state: "loading" }
+    ),
+    false
+  );
+
+  assert.equal(isProjectContextState("generators-unavailable"), true);
+});
+
 test("presents ready status briefly and hides idle status", () => {
   assert.deepEqual(
     getProjectContextStatusPresentation({
