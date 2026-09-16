@@ -8,7 +8,7 @@ Thanks for your interest in contributing to the WinApp VS Code Extension.
 - Visual Studio Code
 - PowerShell 7 or Windows PowerShell for the build scripts
 - The [.NET 10 SDK](https://dotnet.microsoft.com/download) — required to build, test, and locally publish the WinUI XAML language server (`server/`). The unit tests (`npm run test:unit`) do not need the SDK, but the server tests, the XAML integration/smoke suites, and local packaging do.
-- **Visual Studio C++ build tools (MSVC / `link.exe`)** — required to publish the Native AOT server locally. `dotnet publish` invokes the ILC native linker, which fails with `MSB3073` (`link.exe exited with code 123`) when the C++ toolchain is missing or `vswhere.exe` is not resolvable. Install the "Desktop development with C++" workload in Visual Studio or the standalone Build Tools.
+- **Visual Studio C++ build tools (MSVC / `link.exe`)** — required to publish the Native AOT server locally. `dotnet publish` invokes the ILC native linker, which fails with `MSB3073` (`link.exe exited with code 123`) when the C++ toolchain is missing or `vswhere.exe` is not resolvable. Install the "Desktop development with C++" workload in Visual Studio or the standalone Build Tools. If the toolchain is installed and the failure text still reports `'vswhere.exe' is not recognized`, add `C:\Program Files (x86)\Microsoft Visual Studio\Installer` to `PATH` and publish from a developer command prompt matching the target architecture (`vcvarsarm64.bat` for `win-arm64`).
 - [WinApp CLI](https://github.com/microsoft/WinAppCli) (for syncing manifest schemas)
 
 > Native AOT removes the runtime dependency for the server executable only — it launches as a native binary. Users of the packaged extension still need an installed .NET 10 runtime, because the source-generator host (`WinUiXaml.GeneratorHost.dll`) runs out of process on `dotnet` and project evaluation goes through the `dotnet` CLI. The extension never installs or bundles a runtime.
@@ -109,9 +109,10 @@ tops out at 17.2.8 on our feed: it targets `netstandard2.0`, its only non-BCL as
 inherits the same problem through `StreamJsonRpc` 2.21.10 and `Newtonsoft.Json` 13.0.3.
 
 So adopting `StreamJsonRpc` would replace 365 lines of transport but leave the larger 666-line
-`LspTypes.cs` hand-maintained, while adding `Newtonsoft.Json` and its transitive packages. Revisit
-if a System.Text.Json build of the LSP protocol types reaches the feed, which would make replacing
-both halves worthwhile in one change.
+`LspTypes.cs` hand-maintained. Native AOT trims unused assemblies, so the cost is not the package
+count but the linked output: an equivalent probe measured 5.4 MB against 2.29 MB for the same
+round trip written directly on System.Text.Json. Revisit if a System.Text.Json build of the LSP
+protocol types reaches the feed, which would make replacing both halves worthwhile in one change.
 
 ## Pull requests
 
