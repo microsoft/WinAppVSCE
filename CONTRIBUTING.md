@@ -87,22 +87,31 @@ code --install-extension $vsix.FullName
 ## Language server dependencies
 
 The server hand-rolls its JSON-RPC transport (`Lsp/JsonRpcConnection.cs`) and its LSP type
-definitions (`Lsp/LspTypes.cs`) instead of taking `StreamJsonRpc` or
-`Microsoft.VisualStudio.LanguageServer.Protocol`. That is a Native AOT requirement, not a
-preference, and it was re-measured against the packages actually available on our feed:
+definitions (`Lsp/LspTypes.cs`). Only the second of those is forced by Native AOT.
 
-| Option | Measured blocker |
-| --- | --- |
-| `StreamJsonRpc` 2.25.29 (newest on feed) | Both APIs a server must call are AOT-unsafe: `SystemTextJsonFormatter..ctor` and `JsonRpc.AddLocalRpcTarget` each carry `[RequiresDynamicCode]` and `[RequiresUnreferencedCode]`. |
-| `Microsoft.VisualStudio.LanguageServer.Protocol` 17.2.8 (newest on feed) | `netstandard2.0`, and its only non-BCL assembly reference is `Newtonsoft.Json`. Wire names come from 225 `[JsonProperty]` attributes and 19 Newtonsoft `[JsonConverter]`s that System.Text.Json does not honor. |
-| `Microsoft.CommonLanguageServerProtocol.Framework` 5.0.0-preview | Depends on `StreamJsonRpc` 2.21.10 and `Newtonsoft.Json` 13.0.3, so it inherits both problems. |
+**`StreamJsonRpc` is Native AOT capable** and could replace the transport. This was verified by
+publishing a `win-arm64` Native AOT binary against `StreamJsonRpc` 2.25.29 that completes a typed
+request/response round trip with zero `IL2xxx`/`IL3xxx` warnings. It requires the recipe in the
+library's [Native AOT guidance](https://github.com/microsoft/vs-streamjsonrpc/blob/main/docfx/docs/nativeAOT.md):
 
-The AOT-hardened StreamJsonRpc line is 3.x, which introduces `[JsonRpcContract]` and
-source-generated proxies. Our feed carries 102 `StreamJsonRpc` versions and none of them are 3.x.
+- Set `EnableStreamJsonRpcInterceptors` to `true` so proxies are source generated.
+- Mark contracts `[JsonRpcContract]` and `[GenerateShape]`, and register targets with the
+  `AddLocalRpcTarget(RpcTargetMetadata, object, JsonRpcTargetOptions)` overload. The
+  `AddLocalRpcTarget(object)` overload is reflection based and is not AOT safe.
+- Use `SystemTextJsonFormatter` with `JsonSerializerOptions.TypeInfoResolver` pointed at a
+  `JsonSerializerContext`. Its constructor carries a blanket `[RequiresDynamicCode]`, which the
+  official sample suppresses once the source-generated resolver is supplied.
 
-Revisit this when either StreamJsonRpc 3.x or a System.Text.Json build of the LSP protocol types
-reaches the feed. Until then, adopting any of the three would add `Newtonsoft.Json` plus ten
-transitive packages to a binary whose startup cost is the feature.
+**The LSP type packages are the real blocker.** `Microsoft.VisualStudio.LanguageServer.Protocol`
+tops out at 17.2.8 on our feed: it targets `netstandard2.0`, its only non-BCL assembly reference is
+`Newtonsoft.Json`, and its wire names come from 225 `[JsonProperty]` attributes plus 19 Newtonsoft
+`[JsonConverter]`s that System.Text.Json does not honor. `Microsoft.CommonLanguageServerProtocol.Framework`
+inherits the same problem through `StreamJsonRpc` 2.21.10 and `Newtonsoft.Json` 13.0.3.
+
+So adopting `StreamJsonRpc` would replace 365 lines of transport but leave the larger 666-line
+`LspTypes.cs` hand-maintained, while adding `Newtonsoft.Json` and its transitive packages. Revisit
+if a System.Text.Json build of the LSP protocol types reaches the feed, which would make replacing
+both halves worthwhile in one change.
 
 ## Pull requests
 
