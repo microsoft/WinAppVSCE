@@ -1,21 +1,14 @@
 import {
 	test,
 	expect,
-	_electron as electron,
 	type ElectronApplication,
 	type Page
 } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { launchVSCodeApp, dismissWelcomeDialog } from './helpers';
 
-const VSCODE_EXE =
-	process.env.VSCODE_PATH ??
-	path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
-const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
-const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-	? []
-	: [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
 const pendingApps = new Set<ElectronApplication>();
 const pendingDirectories = new Set<string>();
 
@@ -54,13 +47,7 @@ async function waitForReadyWorkbench(page: Page): Promise<void> {
 	await expect(page.locator('.monaco-workbench')).toBeVisible({ timeout: 20_000 });
 	await expect(page.locator('.tab.active')).toContainText('README.txt', { timeout: 20_000 });
 
-	const welcomeDialog = page.getByRole('dialog', { name: 'Welcome to Visual Studio Code' });
-	const welcomeAppeared = await welcomeDialog.waitFor({ state: 'visible', timeout: 5_000 })
-		.then(() => true, () => false);
-	if (welcomeAppeared) {
-		await welcomeDialog.getByRole('button', { name: 'Close' }).click();
-		await expect(welcomeDialog).toBeHidden({ timeout: 5_000 });
-	}
+	await dismissWelcomeDialog(page);
 	await expect(page.getByRole('dialog').filter({ visible: true })).toHaveCount(0, { timeout: 5_000 });
 
 	await page.keyboard.press('Control+Shift+D');
@@ -72,8 +59,6 @@ async function waitForReadyWorkbench(page: Page): Promise<void> {
 test('invalid inputFolder offers to open its debug configuration', async () => {
 	const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), 'input-folder-e2e-'));
 	pendingDirectories.add(workspacePath);
-	const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'input-folder-e2e-user-'));
-	pendingDirectories.add(userDataPath);
 	const vscodePath = path.join(workspacePath, '.vscode');
 	const launchJsonPath = path.join(vscodePath, 'launch.json');
 	const readmePath = path.join(workspacePath, 'README.txt');
@@ -92,24 +77,13 @@ test('invalid inputFolder offers to open its debug configuration', async () => {
 		}]
 	}, null, 2));
 
-	const app = await electron.launch({
-		executablePath: VSCODE_EXE,
-		args: [
-			workspacePath,
-			readmePath,
-			'--new-window',
-			`--user-data-dir=${userDataPath}`,
-			...EXTENSION_ARGS,
-			'--disable-telemetry',
-			'--skip-release-notes',
-			'--disable-workspace-trust'
-		],
-		timeout: 30_000
-	});
-	pendingApps.add(app);
+	const launched = await launchVSCodeApp([workspacePath, readmePath]);
+	pendingApps.add(launched.app);
+	for (const dir of launched.profileDirs) {
+		pendingDirectories.add(dir);
+	}
 
-	const page = await app.firstWindow();
-	await page.waitForLoadState('domcontentloaded');
+	const page = launched.page;
 	await waitForReadyWorkbench(page);
 
 	const notification = page.locator('.notification-toast')
