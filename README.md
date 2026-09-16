@@ -210,7 +210,11 @@ The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, 
 | **Semantic tokens** | Richer, type-aware colorization layered on top of the TextMate grammar. |
 | **Code actions** | Press **Ctrl+.** to import and qualify unresolved types, add or correct namespace declarations, insert `x:DataType`, repair names, attributes, values, bindings, and Setter properties, remove invalid extra content, or generate event handlers. Prompted fixes are applied only when the document still matches the diagnostic. If the code-behind has pending edits, save it first when prompted, then retry handler generation so edits use current source positions. |
 
-The Native AOT language server starts automatically when you open a `.xaml` file. It still requires an installed .NET 10 runtime because project evaluation and source generators run out of process on `dotnet` — the server itself is native, but the packaged generator host is framework-dependent and MSBuild is invoked through the `dotnet` CLI. If a compatible runtime is not found, WinApp offers to open the official .NET download page or dismiss the prompt; it never installs a runtime automatically. Project-aware features derive their type and resource capabilities from your project's WinUI SDK metadata rather than substituting a bundled framework catalog. Use **WinApp: Show Info** to check the server status and **WinApp: Restart Language Server** to restart it.
+The language server starts automatically when you open a `.xaml` file, and it still requires an installed .NET 10 runtime.
+
+Native AOT changes *how the server starts*, not *whether .NET is needed*. The server itself is a native executable, so it no longer waits for a .NET runtime to be acquired before it can launch — that is what makes IntelliSense come up quickly. But every project-aware feature is derived from your real project, and reaching it means leaving the native process: MSBuild evaluation runs through the `dotnet` CLI, and source generators run in a framework-dependent host (`WinUiXaml.GeneratorHost.dll`). Without a runtime there is no type system to complete against, so WinApp does not start the server at all and XAML editing stays syntax-only. This applies equally to C++/WinRT and C# projects.
+
+If a compatible runtime is not found, WinApp offers to open the official .NET download page or dismiss the prompt; it never installs a runtime automatically. Project-aware features derive their type and resource capabilities from your project's WinUI SDK metadata rather than substituting a bundled framework catalog. Use **WinApp: Show Info** to check the server status and **WinApp: Restart Language Server** to restart it.
 
 The status bar reports project-loading progress for the active XAML document:
 
@@ -388,7 +392,7 @@ The winapp CLI (and this extension) works with any Windows app framework:
 
 - Windows 10 or later
 - Visual Studio Code 1.109.0 or later
-- The WinUI XAML language server ships as a Native AOT executable and does not itself need a .NET runtime, but its out-of-process source-generator host is framework-dependent and its project evaluation runs the `dotnet` CLI, so an installed .NET 10 runtime — with the .NET 10 SDK on `PATH` for project-aware features — is still required. The extension does not install or bundle .NET.
+- An installed .NET 10 runtime, with the .NET 10 SDK on `PATH` for project-aware features, for any project language. The XAML language server is a Native AOT executable and needs no runtime to launch, but it reaches your project's types through the `dotnet` CLI and a framework-dependent source-generator host, so without .NET it does not start and XAML editing stays syntax-only. The extension does not install or bundle .NET.
 
 The winapp CLI is bundled with the extension: no separate installation required.
 
