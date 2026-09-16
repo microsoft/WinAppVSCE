@@ -233,7 +233,7 @@ extends:
               errorActionPreference: 'stop'
               script: |
                 dotnet restore "$(System.DefaultWorkingDirectory)\test\fixtures\xaml\fixture\SmokeFixture.csproj" -p:Platform=x64
-                node "$(System.DefaultWorkingDirectory)\scripts\test-framework-dependent-server.mjs"
+                node "$(System.DefaultWorkingDirectory)\scripts\test-bundled-server.mjs"
           - task: PowerShell@2
             displayName: Create temporary .npmrc for Build
             inputs:

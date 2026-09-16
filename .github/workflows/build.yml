@@ -65,7 +65,7 @@ jobs:
     - name: Run packaged Native AOT XAML LSP smoke test
       env:
         WINUI_XAML_SERVER_PATH: ${{ github.workspace }}\dist\server\win-x64\WinUiXaml.LanguageServer.exe
-      run: npm run test:xaml-framework-dependent
+      run: npm run test:xaml-bundled
 
     - name: Run XAML integration tests
       env:

@@ -53,11 +53,11 @@ The WinUI XAML language service has its own suites, which **require the .NET 10 
 npm run test:server      # .NET xUnit tests for the language server
 npm run test:xaml-smoke  # stdio LSP smoke test
 npm run bundle:server
-npm run test:xaml-framework-dependent # smoke the published Native AOT server binary end-to-end
+npm run test:xaml-bundled # smoke the published Native AOT server binary end-to-end
 npm test                 # VS Code integration tests (drives the real extension + server)
 ```
 
-`npm test` runs a `pretest` step that compiles, lints, builds the language server, and restores the test fixture — so it needs the .NET SDK. `test:xaml-framework-dependent` runs the already-published Native AOT server executable end-to-end; the .NET 10 runtime is still required so the server can spawn the out-of-process source-generator host. On a machine without the SDK, run `npm run test:unit` instead; build-dependent suites fail fast with a clear "dotnet not found" error rather than silently skipping.
+`npm test` runs a `pretest` step that compiles, lints, builds the language server, and restores the test fixture — so it needs the .NET SDK. `test:xaml-bundled` runs the already-published Native AOT server executable end-to-end; the .NET 10 runtime is still required so the server can spawn the out-of-process source-generator host. On a machine without the SDK, run `npm run test:unit` instead; build-dependent suites fail fast with a clear "dotnet not found" error rather than silently skipping.
 
 ## Package
 

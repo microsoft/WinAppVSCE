@@ -333,7 +333,7 @@
     "bundle:server": "node scripts/ensure-server-bundle.mjs",
     "restore:fixture": "dotnet restore test/fixtures/xaml/fixture/SmokeFixture.csproj",
     "test:xaml-smoke": "npm run build:server:debug && npm run restore:fixture && node server/test/lsp-smoke/smoke.mjs",
-    "test:xaml-framework-dependent": "node scripts/test-framework-dependent-server.mjs",
+    "test:xaml-bundled": "node scripts/test-bundled-server.mjs",
     "clean": "node -e \"require('fs').rmSync('bin', {recursive: true, force: true}); require('fs').rmSync('out', {recursive: true, force: true}); require('fs').rmSync('dist', {recursive: true, force: true});\"",
     "download-cli": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1\"",
     "download-cli:latest": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1 -Tag latest\"",
