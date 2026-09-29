@@ -1,0 +1,142 @@
+{
+  "_comment": "Generated from `winapp --cli-schema` (subcommands.run). Regenerate when targeting a new CLI version; see run-options.test.ts.",
+  "cliVersion": "0.6.1",
+  "command": "run",
+  "arguments": [
+    "input",
+    "app-args"
+  ],
+  "options": {
+    "--arch": {
+      "valueType": "System.String",
+      "takesValue": true,
+      "repeatable": false
+    },
+    "--args": {
+      "valueType": "System.String",
+      "takesValue": true,
+      "repeatable": false
+    },
+    "--clean": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false
+    },
+    "--configuration": {
+      "valueType": "System.String",
+      "takesValue": true,
+      "repeatable": false,
+      "aliases": [
+        "-c"
+      ]
+    },
+    "--debug-output": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false
+    },
+    "--detach": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false
+    },
+    "--executable": {
+      "valueType": "System.String",
+      "takesValue": true,
+      "repeatable": false,
+      "aliases": [
+        "--exe"
+      ]
+    },
+    "--framework": {
+      "valueType": "System.String",
+      "takesValue": true,
+      "repeatable": false,
+      "aliases": [
+        "-f"
+      ]
+    },
+    "--json": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false
+    },
+    "--manifest": {
+      "valueType": "System.IO.FileInfo",
+      "takesValue": true,
+      "repeatable": false
+    },
+    "--no-build": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false
+    },
+    "--no-launch": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false
+    },
+    "--no-restore": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false
+    },
+    "--output-appx-directory": {
+      "valueType": "System.IO.DirectoryInfo",
+      "takesValue": true,
+      "repeatable": false
+    },
+    "--project": {
+      "valueType": "System.String",
+      "takesValue": true,
+      "repeatable": false
+    },
+    "--property": {
+      "valueType": "System.String[]",
+      "takesValue": true,
+      "repeatable": true,
+      "aliases": [
+        "-p"
+      ]
+    },
+    "--quiet": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false,
+      "aliases": [
+        "-q"
+      ]
+    },
+    "--runtime": {
+      "valueType": "System.String",
+      "takesValue": true,
+      "repeatable": false,
+      "aliases": [
+        "-r"
+      ]
+    },
+    "--symbols": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false
+    },
+    "--unregister-on-exit": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false
+    },
+    "--verbose": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false,
+      "aliases": [
+        "-v"
+      ]
+    },
+    "--with-alias": {
+      "valueType": "System.Boolean",
+      "takesValue": false,
+      "repeatable": false
+    }
+  }
+}
