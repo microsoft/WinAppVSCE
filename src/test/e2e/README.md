@@ -13,11 +13,17 @@ cd src/winapp-VSC
 # Install dependencies (first time only)
 npm install
 
-# Run the full E2E suite
+# Download the AppxManifest XSD schemas (first time only).
+# Without these the editor's validation throws before the form is populated,
+# and specs fail with confusing "element not found" errors.
+npm run sync-schemas
+
+# Run the full E2E suite. The `pretest:e2e` hook verifies schemas/ and installs the
+# Chromium build that webview-state.spec.ts renders the webview document in.
 npm run test:e2e
 ```
 
-> **Prerequisites** – VS Code must be installed at the default location and all other VS Code windows must be closed before running (Playwright needs exclusive access to the Electron process).
+> **Prerequisites** – VS Code must be installed at the default location. Each run creates its own throwaway VS Code profile (`--user-data-dir` / `--extensions-dir`), so other VS Code windows can stay open.
 
 > **`@playwright/test` version** – pinned with a caret range starting at `1.61.1` (not `1.62.1`) because the approved package feed does not mirror a stable `1.62.1` for `@playwright/test`/`playwright`/`playwright-core` (only prereleases). `^1.61.1` still resolves through that feed and picks up newer compatible stable releases (e.g. `1.62.0`) as they land, without requiring a version the feed can't serve.
 
@@ -46,7 +52,42 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (130 tests)
+## Test inventory (150 tests)
+
+### `webview-state.spec.ts` — 15 tests
+
+Renders the generated webview document directly in Chromium (with a stubbed `acquireVsCodeApi`), so
+UI-state behaviour can be verified without launching VS Code. Regression coverage for #192.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | external updates preserve the active tab, app sub-tab and scroll position | A force-update from the extension keeps the selected tab, per-app sub-tab and scroll offset |
+| 2 | a parse error is shown as an overlay without discarding the editor or its state | `parseError` shows the in-place overlay, leaves the editor document intact, and `update` clears it |
+| 3 | UI state is restored after the webview document is rebuilt | State persisted via `vscode.setState()` restores the tab, sub-tab and scroll offset in a fresh script context |
+| 4 | a saved tab that is hidden on the first update is restored once it becomes available | Restoration stays pending while the saved tab is hidden, instead of being consumed and lost |
+| 5 | the parse-error overlay is modal, so the form behind it is inert | The overlay exposes "Open in Text Editor" and inerts/hides the form behind it until recovery, handing `aria-hidden` back to the tab system afterwards |
+| 6 | the overlay never moves focus, whether or not the webview is focused | The XML usually breaks while the user types in the text editor, so neither showing nor clearing the overlay may pull the caret into the webview |
+| 7 | a parse error discards input still sitting in the debounce | In-flight webview input is dropped when the XML stops parsing, so the extension is never asked to rewrite unparseable XML |
+| 8 | an external document change discards input still sitting in the debounce | Queued input typed against the pre-edit text is dropped as soon as the document changes, so it can't replay over the newer text-editor edit |
+| 9 | a save flushes extension-field input still sitting in the debounce | Extension-field edits share the common debounce queue, so Ctrl+S captures them like any other field |
+| 10 | two extension inputs sharing a field path queue independently | Two `<Host>` inputs bound to the same `data-ext-field` get distinct debounce keys, so neither keystroke silently replaces the other |
+| 11 | a background re-render keeps an open dropdown open | A force-update landing while a dropdown menu is open reopens it, so the item the user is about to click is still there |
+| 12 | a parse error discards extension-field input still sitting in the debounce | The same queue means extension-field edits are also dropped when the XML stops parsing |
+| 13 | Tab stays inside the parse-error dialog while it is open | Tab/Shift+Tab cycle between the dialog and its button instead of escaping the modal |
+| 14 | a saved tab that never becomes available leaves a valid fallback selected | Endless restore retries don't strand an invalid selection or override a manual tab change |
+| 15 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
+
+### `external-edit-state.spec.ts` — 4 tests
+
+Full VS Code coverage for #192: edits made to the manifest outside the webview must not reset the
+visual editor. Launches its own VS Code instance.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | keeps the selected tab, app sub-tab and scroll position across an external edit that breaks the XML mid-way | Transiently-invalid XML (as produced by typing an element in the text editor) doesn't reset the editor |
+| 2 | exactly one top-level tab button is marked active after an external edit | Tab button/panel selection stays in sync |
+| 3 | shows an in-place overlay — not a rebuilt document — while the XML is invalid | Invalid XML shows the overlay, and recovering restores the previous view |
+| 4 | saving while the XML is unparseable stores the raw text instead of rewriting the document | The save-flush guard resolves with no edits when the document can't be parsed, so Ctrl+S persists the user's raw text and never hangs |
 
 ### `sign-quickpick.spec.ts` — 6 tests
 
@@ -82,10 +123,10 @@ Validates that the custom editor launches correctly, all tabs render, and global
 | 5 | can switch to Dependencies tab | Tab switching to Dependencies works |
 | 6 | can switch to Resources tab | Tab switching to Resources works |
 | 7 | can switch to Applications tab | Tab switching to Applications works |
-| 8 | can switch to Capabilities tab | Tab switching to Capabilities works |
-| 9 | can switch back to Identity tab | Returning to Identity works and it becomes selected |
-| 10 | View XML button is visible | View XML button exists with the expected label |
-| 11 | info banner with feedback link is visible | Info banner and GitHub feedback link are present |
+| 16 | can switch to Capabilities tab | Tab switching to Capabilities works |
+| 16 | can switch back to Identity tab | Returning to Identity works and it becomes selected |
+| 16 | View XML button is visible | View XML button exists with the expected label |
+| 16 | info banner with feedback link is visible | Info banner and GitHub feedback link are present |
 
 ### `identity-tab.spec.ts` — 18 tests
 
@@ -100,14 +141,14 @@ Validates all Identity tab fields, validation rules, processor architecture, Res
 | 5 | editing version field updates the XML document | Version edits persist to XML |
 | 6 | clearing name shows validation error | Empty name triggers validation/error styling |
 | 7 | entering valid name clears validation error | Valid name removes the error state |
-| 8 | invalid version format shows validation error | Bad version format is rejected |
-| 9 | valid version clears error | Valid version removes the error state |
-| 10 | processor architecture custom select displays current value | Processor architecture select renders a current value |
-| 11 | can change processor architecture | Selecting x64 writes `ProcessorArchitecture="x64"` to XML |
-| 12 | add Resource ID button is visible | Optional Resource ID add button is present |
-| 13 | clicking Add Resource ID shows the field | Clicking Add Resource ID reveals the field group |
-| 14 | entering a Resource ID updates the XML | ResourceId edits persist to XML |
-| 15 | Phone Identity section is visible | PhoneIdentity section appears when present in the fixture |
+| 16 | invalid version format shows validation error | Bad version format is rejected |
+| 16 | valid version clears error | Valid version removes the error state |
+| 16 | processor architecture custom select displays current value | Processor architecture select renders a current value |
+| 16 | can change processor architecture | Selecting x64 writes `ProcessorArchitecture="x64"` to XML |
+| 16 | add Resource ID button is visible | Optional Resource ID add button is present |
+| 16 | clicking Add Resource ID shows the field | Clicking Add Resource ID reveals the field group |
+| 16 | entering a Resource ID updates the XML | ResourceId edits persist to XML |
+| 16 | Phone Identity section is visible | PhoneIdentity section appears when present in the fixture |
 | 16 | Phone Identity fields are populated | Phone Product ID and Publisher ID populate from the manifest |
 | 17 | editing Phone Identity updates the XML | Phone Product ID edits persist to XML |
 | 18 | remove Phone Identity button removes the section | Removing PhoneIdentity deletes it from XML |
@@ -125,9 +166,9 @@ Validates Properties tab fields, validation, logo browse button, and package typ
 | 5 | editing publisher display name updates the XML | PublisherDisplayName edits persist to XML |
 | 6 | editing logo path updates the XML | Logo edits persist to XML |
 | 7 | clearing display name shows validation error | Empty DisplayName triggers validation |
-| 8 | clearing publisher display name shows validation error | Empty PublisherDisplayName triggers validation |
-| 9 | restoring values clears errors | Restoring both values clears error states |
-| 10 | package type selector is visible | Package type dropdown is rendered |
+| 16 | clearing publisher display name shows validation error | Empty PublisherDisplayName triggers validation |
+| 16 | restoring values clears errors | Restoring both values clears error states |
+| 16 | package type selector is visible | Package type dropdown is rendered |
 
 ### `dependencies-tab.spec.ts` — 16 tests
 
@@ -142,14 +183,14 @@ Validates target device families, package dependencies, and all dependency sub-t
 | 5 | can edit target device family minVersion | MinVersion edits persist to XML |
 | 6 | can remove a target device family | Removing a family decreases the list count |
 | 7 | add package dependency button is visible | Package dependency add control exists |
-| 8 | can add a package dependency | Adding a dependency increases the list count |
-| 9 | can edit package dependency name | Package dependency name edits persist to XML |
-| 10 | can remove a package dependency | Removing a dependency decreases the list count |
-| 11 | add main package dependency button is visible | Main package dependency add control exists |
-| 12 | add driver constraint button is visible | Driver constraint add control exists |
-| 13 | add OS package dependency button is visible | OS package dependency add control exists |
-| 14 | add host runtime dependency button is visible | Host runtime dependency add control exists |
-| 15 | add external dependency button is visible | External dependency add control exists |
+| 16 | can add a package dependency | Adding a dependency increases the list count |
+| 16 | can edit package dependency name | Package dependency name edits persist to XML |
+| 16 | can remove a package dependency | Removing a dependency decreases the list count |
+| 16 | add main package dependency button is visible | Main package dependency add control exists |
+| 16 | add driver constraint button is visible | Driver constraint add control exists |
+| 16 | add OS package dependency button is visible | OS package dependency add control exists |
+| 16 | add host runtime dependency button is visible | Host runtime dependency add control exists |
+| 16 | add external dependency button is visible | External dependency add control exists |
 | 16 | can add and remove a main package dependency | Main package dependency round-trip works |
 
 ### `resources-tab.spec.ts` — 6 tests
@@ -178,14 +219,14 @@ Validates application cards, sub-tabs (Info, Extensions, Visual Assets), extensi
 | 5 | app executable field is populated | Executable field is populated |
 | 6 | editing app id updates the XML | App ID edits persist to XML |
 | 7 | editing app executable updates the XML | Executable edits persist to XML |
-| 8 | can switch to Extensions sub-tab | Extensions sub-tab becomes visible |
-| 9 | existing extensions are shown | Extension items render if present |
-| 10 | can add a Protocol Activation extension and fill its fields | Adding extension via dropdown works, filling Name field persists to XML |
-| 11 | can remove the newly added extension | Removing an extension decreases the count |
-| 12 | can switch to Visual Assets sub-tab | Visual Assets sub-tab becomes visible |
-| 13 | visual asset fields are present | Visual asset inputs are rendered |
-| 14 | can add a Splash Screen visual asset via dropdown | Adding optional Splash Screen asset via dropdown works and persists to XML |
-| 15 | add application button is visible | Add application button exists |
+| 16 | can switch to Extensions sub-tab | Extensions sub-tab becomes visible |
+| 16 | existing extensions are shown | Extension items render if present |
+| 16 | can add a Protocol Activation extension and fill its fields | Adding extension via dropdown works, filling Name field persists to XML |
+| 16 | can remove the newly added extension | Removing an extension decreases the count |
+| 16 | can switch to Visual Assets sub-tab | Visual Assets sub-tab becomes visible |
+| 16 | visual asset fields are present | Visual asset inputs are rendered |
+| 16 | can add a Splash Screen visual asset via dropdown | Adding optional Splash Screen asset via dropdown works and persists to XML |
+| 16 | add application button is visible | Add application button exists |
 | 16 | can add a new application | Adding an app increases card count |
 | 17 | can remove the newly added application | Removing an app decreases card count |
 | 18 | browse executable button is visible | Executable browse button exists |
@@ -203,23 +244,24 @@ Validates all four capability categories, checkbox toggling, hover descriptions,
 | 5 | runFullTrust capability is checked (from fixture) | Restricted `runFullTrust` capability is preselected |
 | 6 | can check internetClient capability | Toggling internetClient on updates UI and XML |
 | 7 | can uncheck internetClient capability | Toggling internetClient off updates UI and XML |
-| 8 | can toggle a device capability | Device capability can be checked and unchecked |
-| 9 | description panel exists | Capability description panel is present |
-| 10 | hovering a capability shows description | Hovering populates description text |
-| 11 | custom capability input is visible | Custom capability input and add button are present |
-| 12 | adding empty custom capability shows error | Empty submission shows a required error |
-| 13 | adding invalid format custom capability shows error | Invalid format is rejected |
-| 14 | typing in input clears validation error | Typing clears the custom capability error |
-| 15 | adding valid custom capability succeeds | Valid custom capability is accepted and written to XML |
+| 16 | can toggle a device capability | Device capability can be checked and unchecked |
+| 16 | description panel exists | Capability description panel is present |
+| 16 | hovering a capability shows description | Hovering populates description text |
+| 16 | custom capability input is visible | Custom capability input and add button are present |
+| 16 | adding empty custom capability shows error | Empty submission shows a required error |
+| 16 | adding invalid format custom capability shows error | Invalid format is rejected |
+| 16 | typing in input clears validation error | Typing clears the custom capability error |
+| 16 | adding valid custom capability succeeds | Valid custom capability is accepted and written to XML |
 | 16 | custom capability appears in the custom capabilities list | New custom capability appears in the list |
 
-### `parse-error.spec.ts` — 1 test
+### `parse-error.spec.ts` — 2 tests
 
 Validates error handling for malformed manifests. This spec launches its own VS Code instance with broken XML.
 
 | # | Test | Validates |
 |---|------|-----------|
-| 1 | shows error view for malformed XML | Malformed manifest XML opens the error view with expected message and "Open in Text Editor" action |
+| 1 | shows the parse-error overlay for malformed XML | Malformed manifest XML raises the shared parse-error overlay with its message and "Open in Text Editor" action |
+| 2 | recovers into the editor once the XML is fixed | Repairing the file on disk clears the overlay and populates the form |
 
 ### `open-manifest-editor-command.spec.ts` — 2 tests
 
@@ -243,7 +285,7 @@ Validates the editor against the push-notifications-sample fixture, covering ide
 | 5 | application has extensions | Extension elements are present in the application |
 | 6 | internetClient capability is checked | internetClient is enabled in the fixture |
 | 7 | runFullTrust restricted capability is checked | Restricted `rescap:runFullTrust` is enabled in the fixture |
-| 8 | editing identity name persists to XML | Editing the name writes back to XML |
+| 16 | editing identity name persists to XML | Editing the name writes back to XML |
 
 ### `background-task-fixture.spec.ts` — 17 tests
 
@@ -258,14 +300,14 @@ Validates the editor against the background-task-sample fixture, which exercises
 | 5 | has two target device families | Exactly two target device families exist |
 | 6 | first device family is Windows.Universal | First target family is Windows.Universal |
 | 7 | second device family is Windows.Desktop | Second target family is Windows.Desktop |
-| 8 | main package dependencies are present | Main package dependencies exist |
-| 9 | driver constraints are present | Driver constraints exist |
-| 10 | OS package dependencies are present | OS package dependencies exist |
-| 11 | host runtime dependencies are present | Host runtime dependencies exist |
-| 12 | external dependencies are present | External dependencies exist |
-| 13 | resources section has no items (empty Resources element) | Resources list is empty |
-| 14 | application card is present | App card exists with ID `App` |
-| 15 | runFullTrust restricted capability is checked | Restricted `rescap:runFullTrust` is enabled |
+| 16 | main package dependencies are present | Main package dependencies exist |
+| 16 | driver constraints are present | Driver constraints exist |
+| 16 | OS package dependencies are present | OS package dependencies exist |
+| 16 | host runtime dependencies are present | Host runtime dependencies exist |
+| 16 | external dependencies are present | External dependencies exist |
+| 16 | resources section has no items (empty Resources element) | Resources list is empty |
+| 16 | application card is present | App card exists with ID `App` |
+| 16 | runFullTrust restricted capability is checked | Restricted `rescap:runFullTrust` is enabled |
 | 16 | custom capability is listed | Custom capabilities are rendered |
 | 17 | editing display name persists to XML | DisplayName edits write back to XML |
 
@@ -278,4 +320,4 @@ These tests occasionally fail on the first attempt but pass on retry (Playwright
 | Test | Reason |
 |------|--------|
 | `background-task-fixture.spec.ts` › identity fields are populated correctly | Timing — editor may not have fully reloaded after fixture swap |
-| `parse-error.spec.ts` › shows error view for malformed XML | Launches its own VS Code instance — sensitive to startup timing |
+| `parse-error.spec.ts` › both tests | Shared `beforeAll` launches its own VS Code instance — sensitive to startup timing, so a slow launch fails both tests |

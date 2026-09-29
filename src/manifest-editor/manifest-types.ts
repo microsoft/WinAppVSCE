@@ -213,7 +213,12 @@ export type WebviewToExtensionMessage =
     | { type: 'removePhoneIdentity' }
     | { type: 'packageTypeChanged'; value: string }
     | { type: 'ready' }
-    | { type: 'changesFlushed'; changes: Array<{ section: string; field: string; value: string; index: number }>; nonce?: string };
+    | { type: 'changesFlushed'; changes: FlushedChange[]; nonce?: string };
+
+/** A single edit flushed out of the webview's debounce queue when the document is saved. */
+export type FlushedChange =
+    | { kind?: 'field'; section: string; field: string; value: string; index: number }
+    | { kind: 'extField'; appIndex: number; extIndex: number; fieldPath: string; value: string; isTextContent?: boolean };
 
 /** Known capabilities organized by category for the checklist UI. */
 export const KNOWN_CAPABILITIES = {
