@@ -82,6 +82,32 @@ Covers run-target discovery for `winapp.run` / `winapp.runAdvanced`, which depen
 
 > When matching the picker, assert on the full placeholder. The command palette's own placeholder is "Type the name of a command **to run**", so a loose `/to run/` match silently reads the palette's rows instead of the picker's.
 
+### `live-run.spec.ts` — 2 tests (opt-in)
+
+The only tests that actually execute the CLI. Everything else stops at the argument vector: the unit tests assert `buildRunArgs` emits what was intended, `run-cli-contract.test.ts` checks those flags against the CLI's schema, and `run-target-picker.spec.ts` escapes out before anything runs. These scaffold a real WinUI app with `dotnet new winui` and drive a full build, deploy, and launch through the command palette.
+
+This also covers the only unverified layer in the palette path: `runWinappRun` joins the argv with `escapePowerShellArg` and sends it to a PowerShell terminal, so the arguments are re-parsed by a shell between the array under test and the process that runs.
+
+**Opt-in**, because unlike the rest of the suite it mutates the machine — registering an MSIX package and launching a GUI app — and takes minutes:
+
+```powershell
+$env:E2E_LIVE_RUN=1; npx playwright test live-run
+```
+
+It skips with a diagnostic when the .NET SDK, WinUI templates, or the winapp CLI are unavailable. Assertions read the OS (`Get-AppxPackage`, `Get-Process`) rather than terminal text, so they verify what happened rather than what was printed.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | builds, deploys, and launches a WinUI project | A single `.csproj` auto-selects, builds, registers in development mode, and the process starts |
+| 2 | applies the configuration setting to a project-mode build | `winapp.run.configuration: Release` reaches the CLI — a Release build appears and the Debug default does not |
+
+Notes for anyone changing this spec:
+
+- Launch with `--disable-extensions`. C# Dev Kit otherwise recognises the scaffolded project, opens an announcement tab that steals focus from the palette, and builds the project itself, which corrupts the build-output assertions. The extension under test still loads via `--extensionDevelopmentPath`.
+- Seed `User/settings.json` in the temp profile. A fresh profile opens the Welcome tab and focuses the chat input, and either swallows the palette shortcut; no CLI flag covers this.
+- `terminal.integrated.gpuAcceleration: "off"` is required for the failure diagnostic. xterm renders to a canvas when accelerated, so `.xterm-rows` is empty and the diagnostic reports "no terminal was opened" even when one is open — actively misleading.
+- Each scaffold generates a **new GUID package identity**, so a leaked package cannot be overwritten by a later run; it accumulates. Cleanup waits for deregistration before deleting, since deployment holds handles on the loose layout under `bin`.
+
 ### `editor-launch.spec.ts` — 11 tests
 
 Validates that the custom editor launches correctly, all tabs render, and global UI elements are present.
