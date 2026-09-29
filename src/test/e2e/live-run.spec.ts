@@ -53,9 +53,33 @@ const VSCODE_EXE =
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
 
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
+
+/**
+ * Extensions that interfere with this test and must not load.
+ *
+ * C# Dev Kit recognises a scaffolded .csproj, opens an announcement tab that
+ * steals focus from the command palette, and builds the project itself — which
+ * both breaks the interaction and pollutes the build output this test inspects.
+ */
+const INTERFERING_EXTENSIONS = [
+    'ms-dotnettools.csdevkit',
+    'ms-dotnettools.csharp',
+    'ms-dotnettools.vscode-dotnet-runtime',
+];
+
+/**
+ * Isolate the extension under test from the other installed extensions.
+ *
+ * `--disable-extensions` is the blunt way to do this and is correct when the
+ * extension under test is loaded from disk, because `--extensionDevelopmentPath`
+ * is exempt from it. It cannot be used when the *installed* build is the thing
+ * under test, since the flag would disable that build too and the commands
+ * would simply not exist. That case has to name the interfering extensions
+ * individually instead.
+ */
 const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-    ? []
-    : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+    ? INTERFERING_EXTENSIONS.flatMap((id) => ['--disable-extension', id])
+    : ['--disable-extensions', `--extensionDevelopmentPath=${EXTENSION_ROOT}`];
 
 /** A build, deploy, and launch takes far longer than the suite's default. */
 const LIVE_RUN_TIMEOUT_MS = 8 * 60 * 1000;
@@ -401,13 +425,6 @@ async function launchVSCode(targetPath: string): Promise<{ app: ElectronApplicat
             targetPath,
             '--new-window',
             `--user-data-dir=${userDataPath}`,
-            // Other installed extensions are not inert here. C# Dev Kit
-            // recognises the scaffolded .csproj, opens an announcement tab that
-            // steals focus from the command palette, and builds the project
-            // itself — which both breaks the interaction and pollutes the build
-            // output this test inspects. The extension under development still
-            // loads, since --extensionDevelopmentPath is exempt.
-            '--disable-extensions',
             ...EXTENSION_ARGS,
             '--disable-telemetry',
             '--skip-release-notes',
