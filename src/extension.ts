@@ -7,6 +7,7 @@ import {
 	getWinappCliPath,
 	WINAPP_CLI_CALLER_VALUE,
 	escapePowerShellArg,
+	formatPowerShellArgs,
 	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
 	decideElevatedWinappCommand,
@@ -47,6 +48,17 @@ import {
 	isArtifactWithinRoot,
 	planPackCompletion
 } from './pack-result';
+import {
+	isSparseManifestXml,
+	isIdentityOnlyInput,
+	getPackInputRoot,
+	buildSparseInitArgs,
+	buildEmbedIdentityArgs,
+	embedRewritesBinary,
+	defaultSparseOutputDir,
+	getSparseManifestPath,
+	type PackInput
+} from './sparse-flow';
 import {
 	findWorkspaceArtifacts,
 	buildSignCommand,
@@ -136,6 +148,9 @@ function withTruncationHint(placeholder: string, resultCount: number): string {
 		? `${placeholder} (showing ${MAX_QUICKPICK_RESULTS} most recent — use Browse… for others)`
 		: placeholder;
 }
+
+/** Detail marker identifying the "Browse…" row in file QuickPicks. */
+const FILE_PICKER_DETAIL = 'Open a file picker';
 
 /**
  * Output channel for debugger-related activity (e.g. auto-installed extensions),
@@ -394,6 +409,66 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 }
 
 /**
+ * Search the workspace for executables and let the user pick one via a
+ * QuickPick, with a "Browse…" escape and a direct file-dialog fallback when
+ * none are found.
+ *
+ * Shared by the sparse-identity and embed-identity commands, which both act on
+ * an existing built executable rather than on a project directory.
+ *
+ * @param title Title for both the QuickPick and the fallback dialog.
+ * @param extraGlobs Additional patterns to include (e.g. side-by-side manifests).
+ * @param extraFilters Additional file-dialog filters matching `extraGlobs`.
+ */
+async function pickExecutableTarget(
+	workspacePath: string,
+	title: string,
+	extraGlobs: string[] = [],
+	extraFilters: { [name: string]: string[] } = {}
+): Promise<string | undefined> {
+	const dialogFilters = { 'Executables': ['exe'], ...extraFilters, 'All files': ['*'] };
+
+	const candidatePaths = await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: 'Searching for executables...', cancellable: true },
+		(_progress, token) =>
+			findWorkspaceArtifactsWithCancellation(workspacePath, ['**/*.exe', ...extraGlobs], token)
+	);
+
+	if (!candidatePaths) {
+		return undefined;
+	}
+
+	if (candidatePaths.length === 0) {
+		return selectFile(title, dialogFilters);
+	}
+
+	const items: vscode.QuickPickItem[] = candidatePaths
+		.slice(0, MAX_SIGNABLE_FILES)
+		.map((p) => {
+			const relDir = path.dirname(path.relative(workspacePath, p));
+			return {
+				label: path.basename(p),
+				description: relDir === '.' ? '' : relDir,
+				detail: p
+			};
+		});
+
+	items.push({ label: '$(folder-opened) Browse…', detail: FILE_PICKER_DETAIL });
+
+	const picked = await vscode.window.showQuickPick(items, { placeHolder: title });
+
+	if (!picked) {
+		return undefined;
+	}
+
+	if (picked.detail === FILE_PICKER_DETAIL) {
+		return selectFile(title, dialogFilters);
+	}
+
+	return picked.detail;
+}
+
+/**
  * Search the workspace for PFX certificate files and let the user pick one
  * via a QuickPick. Discovery is capped to the newest certificates. Falls back
  * to a native file dialog when none are found;
@@ -629,6 +704,242 @@ function createCertGenerateFlowAdapter(
 	};
 }
 
+/** Detail markers distinguishing the two "Browse…" rows in the pack picker. */
+const SPARSE_MANIFEST_PICKER_DETAIL = 'Open a manifest picker';
+
+/** Upper bound on manifests read while looking for sparse ones. */
+const MAX_SCANNED_MANIFESTS = 20;
+
+/**
+ * Search the workspace for sparse (identity-only) manifests.
+ *
+ * Candidates are located with the same patterns the manifest editor uses, then
+ * each is *read* and tested for `AllowExternalContent`. Detection is
+ * content-based rather than path-based because a `sparse/` directory is only
+ * the CLI's default output location, not a guarantee — and a sparse manifest
+ * may legitimately live anywhere.
+ *
+ * @returns Paths of discovered sparse manifests, or `undefined` if cancelled.
+ */
+async function findSparseManifests(
+	workspacePath: string,
+	token: vscode.CancellationToken
+): Promise<string[] | undefined> {
+	const matches = (await Promise.all(
+		MANIFEST_SELECTOR.map(selector =>
+			vscode.workspace.findFiles(
+				new vscode.RelativePattern(workspacePath, selector.pattern as string),
+				BUILD_OUTPUT_EXCLUDE_GLOB,
+				MAX_SCANNED_MANIFESTS,
+				token
+			)
+		)
+	)).flat();
+
+	if (token.isCancellationRequested) {
+		return undefined;
+	}
+
+	const seen = new Set<string>();
+	const sparsePaths: string[] = [];
+	for (const uri of matches) {
+		if (token.isCancellationRequested) {
+			return undefined;
+		}
+		const key = uri.fsPath.toLowerCase();
+		if (seen.has(key)) {
+			continue;
+		}
+		seen.add(key);
+
+		try {
+			const bytes = await vscode.workspace.fs.readFile(uri);
+			if (isSparseManifestXml(Buffer.from(bytes).toString('utf8'))) {
+				sparsePaths.push(uri.fsPath);
+			}
+		} catch {
+			// Unreadable or deleted between discovery and read — skip it rather
+			// than failing the whole picker.
+		}
+	}
+
+	return sparsePaths.sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Let the user choose what to pack: a build output folder (a full package
+ * layout) or a sparse `appxmanifest.xml` (an identity-only package).
+ *
+ * Both kinds are offered in one QuickPick, folders first, since `winapp pack`
+ * accepts either. The "Browse…" escape splits into two explicit rows because a
+ * single one would be ambiguous once the command takes both a folder and a
+ * file.
+ *
+ * Deliberately separate from {@link pickBuildOutputFolder}, which stays
+ * single-purpose for `winapp.run` and the debug flow.
+ *
+ * @returns The selected input, or `undefined` if cancelled.
+ */
+async function pickPackInput(workspacePath: string): Promise<PackInput | undefined> {
+	let cancelled = false;
+	const discovered = await vscode.window.withProgress(
+		{
+			location: vscode.ProgressLocation.Notification,
+			title: 'Searching for build output folders and sparse manifests...',
+			cancellable: true
+		},
+		async (_progress, token) => {
+			token.onCancellationRequested(() => { cancelled = true; });
+
+			const exeMatches = await vscode.workspace.findFiles(
+				new vscode.RelativePattern(workspacePath, '**/*.exe'),
+				BUILD_OUTPUT_EXCLUDE_GLOB,
+				BUILD_OUTPUT_MAX_RESULTS,
+				token
+			);
+			if (token.isCancellationRequested) {
+				return undefined;
+			}
+
+			const folders = deduplicateBuildOutputFolders(
+				exeMatches.map(m => m.fsPath),
+				workspacePath
+			);
+
+			const sparseManifests = await findSparseManifests(workspacePath, token);
+			if (!sparseManifests) {
+				return undefined;
+			}
+
+			return { folders, sparseManifests };
+		}
+	);
+
+	if (cancelled || !discovered) {
+		return undefined;
+	}
+
+	const { folders, sparseManifests } = discovered;
+
+	// Nothing discovered at all — go straight to the folder dialog, matching
+	// the existing behaviour of the folder-only picker.
+	if (folders.length === 0 && sparseManifests.length === 0) {
+		const folder = await selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
+		return folder ? { kind: 'folder', path: folder } : undefined;
+	}
+
+	type PackInputItem = vscode.QuickPickItem & { input?: PackInput };
+
+	const items: PackInputItem[] = folders.map(folderPath => ({
+		label: path.relative(workspacePath, folderPath) || '.',
+		detail: folderPath,
+		input: { kind: 'folder', path: folderPath }
+	}));
+
+	for (const manifestPath of sparseManifests) {
+		items.push({
+			label: `$(file-code) ${path.basename(manifestPath)}`,
+			description: 'sparse identity-only',
+			detail: manifestPath,
+			input: { kind: 'sparseManifest', path: manifestPath }
+		});
+	}
+
+	items.push({ label: '$(folder-opened) Browse for folder…', detail: FOLDER_PICKER_DETAIL });
+	items.push({ label: '$(file-code) Browse for sparse manifest…', detail: SPARSE_MANIFEST_PICKER_DETAIL });
+
+	const picked = await vscode.window.showQuickPick(items, {
+		placeHolder: 'Select the build output folder or sparse manifest to package'
+	});
+
+	if (!picked) {
+		return undefined;
+	}
+
+	if (picked.detail === FOLDER_PICKER_DETAIL) {
+		const folder = await selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
+		return folder ? { kind: 'folder', path: folder } : undefined;
+	}
+
+	if (picked.detail === SPARSE_MANIFEST_PICKER_DETAIL) {
+		const manifest = await selectFile('Select sparse manifest', {
+			'App manifests': ['xml', 'appxmanifest']
+		});
+		if (!manifest) {
+			return undefined;
+		}
+		if (!(await isSparseManifestFile(manifest))) {
+			vscode.window.showWarningMessage(
+				'That manifest is not a sparse identity manifest. ' +
+				'It must declare <uap10:AllowExternalContent>true</uap10:AllowExternalContent> — ' +
+				'generate one with WinApp: Create Sparse Identity Manifest.'
+			);
+			return undefined;
+		}
+		return { kind: 'sparseManifest', path: manifest };
+	}
+
+	return picked.input;
+}
+
+/** Read a manifest from disk and report whether it is a sparse identity manifest. */
+async function isSparseManifestFile(manifestPath: string): Promise<boolean> {
+	try {
+		const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(manifestPath));
+		return isSparseManifestXml(Buffer.from(bytes).toString('utf8'));
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Walk up from `filePath` to find the nearest enclosing directory that looks
+ * like a project root, stopping at the workspace root.
+ *
+ * Used to anchor sparse init's output directory so that in a monorepo the
+ * generated `sparse/` folder lands beside the project owning the executable
+ * rather than at the workspace root. Returns `undefined` when no project
+ * marker is found, in which case the caller falls back to the workspace root.
+ *
+ * This is a cheap synchronous lookup for a *default* — it deliberately does
+ * not run the full project detection scan, since these commands act on an
+ * explicit executable rather than on a resolved project.
+ */
+function findProjectRootForFile(workspacePath: string, filePath: string): string | undefined {
+	const resolvedWorkspace = path.resolve(workspacePath);
+	let dir = path.dirname(path.resolve(filePath));
+
+	while (dir.startsWith(resolvedWorkspace) && dir !== resolvedWorkspace) {
+		try {
+			const entries = fs.readdirSync(dir);
+			const hasProjectMarker = entries.some(entry => {
+				const lower = entry.toLowerCase();
+				return (
+					lower.endsWith('.csproj') ||
+					lower.endsWith('.vcxproj') ||
+					lower === 'cargo.toml' ||
+					lower === 'package.json' ||
+					lower === 'cmakelists.txt' ||
+					lower === 'pubspec.yaml'
+				);
+			});
+			if (hasProjectMarker) {
+				return dir;
+			}
+		} catch {
+			// Unreadable directory — keep walking up.
+		}
+
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			break;
+		}
+		dir = parent;
+	}
+
+	return undefined;
+}
+
 /**
  * Run the code-signing flow for an MSIX/executable. Prompts for the file to
  * sign (unless one is supplied) and the signing certificate, then invokes
@@ -680,8 +991,8 @@ function installPackage(artifactPath: string, cwd: string): void {
 async function handlePackCompletion(
 	extensionPath: string,
 	workspacePath: string,
-	inputFolder: string,
-	result: { code: number | null; output: string; cancelled?: boolean }
+	inputRoot: string,
+	result: { code: number | null; output: string; cancelled?: boolean; identityOnly?: boolean }
 ): Promise<void> {
 	const plan = planPackCompletion(result);
 	switch (plan.kind) {
@@ -696,19 +1007,14 @@ async function handlePackCompletion(
 	if (
 		!fs.existsSync(plan.artifactPath) ||
 		(!isArtifactWithinRoot(plan.artifactPath, workspacePath) &&
-			!isArtifactWithinRoot(plan.artifactPath, inputFolder))
+			!isArtifactWithinRoot(plan.artifactPath, inputRoot))
 	) {
 		getWinappOutputChannel().show();
 		vscode.window.showErrorMessage('Packaging failed. See the WinApp output channel for details.');
 		return;
 	}
 
-	const choice = await vscode.window.showInformationMessage(
-		plan.message,
-		PACK_ACTIONS.reveal,
-		PACK_ACTIONS.sign,
-		PACK_ACTIONS.install
-	);
+	const choice = await vscode.window.showInformationMessage(plan.message, ...plan.actions);
 
 	switch (getPackNotificationAction(choice)) {
 		case 'reveal':
@@ -1362,7 +1668,97 @@ export function activate(context: vscode.ExtensionContext) {
 		})
 	);
 
-	// Register winapp.restore command
+	// Register winapp.initSparse command
+	context.subscriptions.push(
+		vscode.commands.registerCommand('winapp.initSparse', async () => {
+			const workspacePath = getWorkspacePath();
+			if (!workspacePath) {
+				return;
+			}
+
+			// Sparse init acts on an existing built executable and writes to an
+			// explicit --output-dir, so it deliberately skips project detection.
+			const exePath = await pickExecutableTarget(
+				workspacePath,
+				'Select the executable to grant package identity'
+			);
+			if (!exePath) {
+				return;
+			}
+
+			const outputDir = defaultSparseOutputDir(workspacePath, findProjectRootForFile(workspacePath, exePath));
+
+			// The CLI refuses to replace an existing manifest, so ask first
+			// rather than letting the run fail.
+			let force = false;
+			if (fs.existsSync(getSparseManifestPath(outputDir))) {
+				const relative = path.relative(workspacePath, outputDir) || outputDir;
+				const proceed = await vscode.window.showWarningMessage(
+					`A sparse manifest already exists in ${relative}. Overwrite it and its generated assets?`,
+					{ modal: true },
+					'Overwrite'
+				);
+				if (proceed !== 'Overwrite') {
+					return;
+				}
+				force = true;
+			}
+
+			const args = buildSparseInitArgs({ exePath, outputDir, force });
+			await runWinappCommand(
+				extensionPath,
+				formatPowerShellArgs(args),
+				workspacePath
+			);
+		})
+	);
+
+	// Register winapp.embedIdentity command
+	context.subscriptions.push(
+		vscode.commands.registerCommand('winapp.embedIdentity', async () => {
+			const workspacePath = getWorkspacePath();
+			if (!workspacePath) {
+				return;
+			}
+
+			// Side-by-side manifests are included, but a generic **/*.xml scan is
+			// deliberately avoided — far too noisy in a real repo. An .xml target
+			// stays reachable through Browse….
+			const target = await pickExecutableTarget(
+				workspacePath,
+				'Select the executable or side-by-side manifest',
+				['**/*.manifest'],
+				{ 'Side-by-side manifests': ['manifest', 'xml'] }
+			);
+			if (!target) {
+				return;
+			}
+
+			// EXE mode rewrites the binary in place with mt.exe, which
+			// invalidates any existing Authenticode signature. Confirm before
+			// running rather than warning afterwards: runWinappCommand returns as
+			// soon as the terminal is handed the command, so a later message
+			// would arrive after the binary had already been modified.
+			if (embedRewritesBinary(target)) {
+				const proceed = await vscode.window.showWarningMessage(
+					`Embedding identity rewrites ${path.basename(target)} with mt.exe, which invalidates any ` +
+					'existing Authenticode signature. Re-sign it with "WinApp: Sign File" before distributing.',
+					{ modal: true },
+					'Continue'
+				);
+				if (proceed !== 'Continue') {
+					return;
+				}
+			}
+
+			const args = buildEmbedIdentityArgs({ target });
+			await runWinappCommand(
+				extensionPath,
+				formatPowerShellArgs(args),
+				workspacePath
+			);
+		})
+	);
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.restore', async () => {
 			const workspacePath = getWorkspacePath();
@@ -1414,42 +1810,50 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const inputFolder = await pickBuildOutputFolder(workspacePath);
-			if (!inputFolder) {
+			const input = await pickPackInput(workspacePath);
+			if (!input) {
 				return;
 			}
+
+			const identityOnly = isIdentityOnlyInput(input);
 
 			const generateCert = await vscode.window.showQuickPick(
 				['Yes', 'No'],
 				{ placeHolder: 'Generate and install a development certificate?' }
 			);
 
-			const selfContained = await vscode.window.showQuickPick(
-				['Yes', 'No'],
-				{ placeHolder: 'Bundle Windows App SDK runtime (self-contained)?' }
-			);
+			// An identity-only package contains no binaries: it has no
+			// architecture and no Windows App SDK runtime to bundle, so both the
+			// self-contained prompt and the architecture check are meaningless.
+			let selfContained: string | undefined;
+			if (!identityOnly) {
+				selfContained = await vscode.window.showQuickPick(
+					['Yes', 'No'],
+					{ placeHolder: 'Bundle Windows App SDK runtime (self-contained)?' }
+				);
 
-			// --- Architecture mismatch warning for self-contained packages ---
-			if (selfContained === 'Yes') {
-				const detectedArch = detectArchFromPath(inputFolder);
-				const machineArch = getMachineArch();
-				const mismatchResult = checkSelfContainedArchMismatch(detectedArch, machineArch);
-				if (mismatchResult.mismatch) {
-					const warning = buildArchMismatchWarning(mismatchResult.buildArch, mismatchResult.machineArch);
-					const proceed = await vscode.window.showWarningMessage(
-						warning,
-						{ modal: true },
-						'Continue anyway'
-					);
-					if (proceed !== 'Continue anyway') {
-						return;
+				// --- Architecture mismatch warning for self-contained packages ---
+				if (selfContained === 'Yes') {
+					const detectedArch = detectArchFromPath(input.path);
+					const machineArch = getMachineArch();
+					const mismatchResult = checkSelfContainedArchMismatch(detectedArch, machineArch);
+					if (mismatchResult.mismatch) {
+						const warning = buildArchMismatchWarning(mismatchResult.buildArch, mismatchResult.machineArch);
+						const proceed = await vscode.window.showWarningMessage(
+							warning,
+							{ modal: true },
+							'Continue anyway'
+						);
+						if (proceed !== 'Continue anyway') {
+							return;
+						}
 					}
 				}
 			}
 
 			// Build the argument array for spawn (shell: false) so paths and flags
 			// are passed literally — no PowerShell parsing/escaping required.
-			const args = ['pack', inputFolder];
+			const args = ['pack', input.path];
 			if (generateCert === 'Yes') {
 				args.push('--generate-cert', '--install-cert');
 			}
@@ -1461,9 +1865,14 @@ export function activate(context: vscode.ExtensionContext) {
 				extensionPath,
 				args,
 				workspacePath,
-				'Packaging app...'
+				identityOnly ? 'Creating identity package...' : 'Packaging app...'
 			);
-			await handlePackCompletion(extensionPath, workspacePath, inputFolder, result);
+			await handlePackCompletion(
+				extensionPath,
+				workspacePath,
+				getPackInputRoot(input),
+				{ ...result, identityOnly }
+			);
 		})
 	);
 

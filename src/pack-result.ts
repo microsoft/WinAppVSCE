@@ -20,21 +20,58 @@ export type PackNotificationAction = 'reveal' | 'sign' | 'install' | 'none';
 export type PackCompletionPlan =
 	| { kind: 'cancelled' }
 	| { kind: 'error'; message: string }
-	| { kind: 'success'; artifactPath: string; appName: string | undefined; message: string };
+	| {
+			kind: 'success';
+			artifactPath: string;
+			appName: string | undefined;
+			message: string;
+			actions: PackActionLabel[];
+	  };
 
 /**
- * Marker the CLI prints immediately before the packaged artifact path.
- * The path may follow on the same line or wrap onto subsequent lines, so the
- * parser tolerates both layouts.
+ * Markers the CLI prints immediately before the produced artifact path. The
+ * wording varies by output kind — a full package, and an identity-only
+ * (sparse) package built from a manifest file:
+ *
+ *   📦 Package:           C:\out\MyApp_1.0.0_x64.msix
+ *   📦 Identity package:  C:\out\MyApp.identity.msix
+ *
+ * All known spellings must be recognised: an unmatched marker makes
+ * {@link parsePackagedArtifactPath} return `undefined`, which
+ * {@link planPackCompletion} reports as a *failure* even though the CLI
+ * succeeded.
+ *
+ * Ordered longest-first so a marker that contains another as a suffix cannot
+ * be partially matched.
  */
-const PACKAGE_MARKER = '📦 Package:';
+const PACKAGE_MARKERS = ['📦 Identity package:', '📦 Package:'] as const;
+
+/**
+ * Locate the end offset of whichever package marker appears in `line`.
+ *
+ * @returns The index just past the marker, or `-1` when none is present.
+ */
+function findMarkerEnd(line: string): number {
+	for (const marker of PACKAGE_MARKERS) {
+		const index = line.indexOf(marker);
+		if (index >= 0) {
+			return index + marker.length;
+		}
+	}
+	return -1;
+}
+
+/** Whether a line carries any of the recognised package markers. */
+function hasPackageMarker(line: string): boolean {
+	return findMarkerEnd(line) >= 0;
+}
 
 function stripMarkers(line: string): string {
-	// Remove the leading "📦 Package:" marker if present, plus surrounding
+	// Remove the leading package marker if present, plus surrounding
 	// whitespace, so what remains is the (possibly empty) path fragment.
-	const markerIndex = line.indexOf(PACKAGE_MARKER);
-	if (markerIndex >= 0) {
-		return line.slice(markerIndex + PACKAGE_MARKER.length).trim();
+	const markerEnd = findMarkerEnd(line);
+	if (markerEnd >= 0) {
+		return line.slice(markerEnd).trim();
 	}
 	return line.trim();
 }
@@ -47,7 +84,7 @@ function looksLikeArtifactPath(candidate: string): boolean {
  * Extract the absolute path of the artifact produced by `winapp package` from
  * its captured stdout.
  *
- * The CLI prints the path after a "📦 Package:" marker, but Spectre.Console
+ * The CLI prints the path after a package marker, but Spectre.Console
  * wrapping frequently pushes the path onto the line *after* the marker, e.g.:
  *
  * ```
@@ -57,8 +94,8 @@ function looksLikeArtifactPath(candidate: string): boolean {
  * ```
  *
  * Strategy:
- * Prefer the text attached to (or following) the "📦 Package:" marker,
- * concatenating consecutive lines to handle Spectre.Console wrapping.
+ * Prefer the text attached to (or following) the marker, concatenating
+ * consecutive lines to handle Spectre.Console wrapping.
  *
  * @param output Combined stdout (and optionally stderr) captured from the CLI.
  * @returns The trimmed artifact path, or `undefined` if none was found.
@@ -66,9 +103,9 @@ function looksLikeArtifactPath(candidate: string): boolean {
 export function parsePackagedArtifactPath(output: string): string | undefined {
 	const lines = output.split(/\r?\n/).map((line) => line.replace(/\r$/, ''));
 
-	// 1. Anchor on the "📦 Package:" marker.
+	// 1. Anchor on the package marker.
 	for (let i = 0; i < lines.length; i++) {
-		if (!lines[i].includes(PACKAGE_MARKER)) {
+		if (!hasPackageMarker(lines[i])) {
 			continue;
 		}
 
@@ -143,6 +180,7 @@ export function planPackCompletion(result: {
 	code: number | null;
 	output: string;
 	cancelled?: boolean;
+	identityOnly?: boolean;
 }): PackCompletionPlan {
 	if (result.cancelled) {
 		return { kind: 'cancelled' };
@@ -161,8 +199,28 @@ export function planPackCompletion(result: {
 		kind: 'success',
 		artifactPath,
 		appName,
-		message: buildPackSuccessMessage(artifactPath, appName)
+		message: buildPackSuccessMessage(artifactPath, appName),
+		actions: getPackActions(result.identityOnly === true)
 	};
+}
+
+/**
+ * Choose the action buttons offered on the completion notification.
+ *
+ * **Install is withheld for identity-only (sparse) packages.** Such a package
+ * carries no binaries and no assets: Windows resolves both from the *external
+ * location* at runtime. Registering it therefore requires
+ * `Add-AppxPackage -ExternalLocation <install-dir>` with the app's assets
+ * already deployed there, which the extension's plain
+ * `Add-AppxPackage -Path <msix>` does not do — offering Install would either
+ * fail outright or register a broken layout missing every logo the manifest
+ * references. Registration for a sparse package is the installer's job.
+ */
+function getPackActions(identityOnly: boolean): PackActionLabel[] {
+	if (identityOnly) {
+		return [PACK_ACTIONS.reveal, PACK_ACTIONS.sign];
+	}
+	return [PACK_ACTIONS.reveal, PACK_ACTIONS.sign, PACK_ACTIONS.install];
 }
 
 /**

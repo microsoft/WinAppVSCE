@@ -155,6 +155,22 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 	}
 }
 
+/**
+ * Join CLI tokens into a PowerShell command line, quoting only the tokens that
+ * need it.
+ *
+ * Subcommands and option names (`init`, `--sparse`) are emitted bare so the
+ * result matches the hand-built command strings used elsewhere in the
+ * extension; anything else — notably paths, which routinely contain spaces —
+ * is single-quoted. Quoting every token would also work, but produces command
+ * lines that read poorly in the terminal the user is watching.
+ */
+export function formatPowerShellArgs(args: readonly string[]): string {
+	return args
+		.map(arg => (/^-{0,2}[A-Za-z0-9][A-Za-z0-9-]*$/.test(arg) ? arg : escapePowerShellArg(arg)))
+		.join(' ');
+}
+
 export function resolveWindowsPowerShellPath(systemRoot: string | undefined): string {
 	return path.join(systemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }

@@ -24,6 +24,8 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 |---------|-------------|
 | **WinApp: Create WinUI App** | Scaffold a new WinUI 3 app from an official Windows App SDK template. Pick a template, name it, and choose where it goes. Works with no folder open. Requires the .NET SDK. |
 | **WinApp: Initialize Project** | Set up a new project with the Windows SDK and/or Windows App SDK. Prompts for SDK channel (stable, preview, experimental, or none). |
+| **WinApp: Create Sparse Identity Manifest** | Generate an identity-only `appxmanifest.xml` for an existing executable, without installing SDKs or restructuring the project. Step 1 of the sparse packaging workflow. |
+| **WinApp: Embed Identity into Executable** | Embed a generated sparse identity into an executable (or write it to a side-by-side `.manifest`). Step 3 of the sparse packaging workflow. |
 | **WinApp: Restore Packages** | Restore project packages and dependencies. |
 | **WinApp: Update Packages** | Update packages and dependencies to the latest versions. |
 | **WinApp: Run Application** | Build and run your app as a loose-layout packaged application with full package identity, which is great for testing APIs that require identity. Select a project (`.csproj`), a solution (`.sln`/`.slnx`), or an already-built output folder. |
@@ -54,7 +56,7 @@ When you run a project-context WinApp command — such as **Initialize Project**
 2. **Project at workspace root** — If a recognized project exists at the root, commands run there immediately.
 3. **Automatic scan** — Searches the workspace for compatible projects and prompts if multiple are found.
 
-Commands that already take an explicit target — such as **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
+Commands that already take an explicit target — such as **Create MSIX Package** (input folder), **Create Sparse Identity Manifest** and **Embed Identity into Executable** (executable pickers), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
 **Run Application and F5** use their own target discovery rather than the project detection above. They auto-discover runnable `.csproj` and `.sln` files for .NET apps and prompt only if several are found. If none is found, they fall back to discovering build output folders. You can always pick something that wasn't listed with **Browse…**, which then asks whether you want a project or solution file or a build output folder. Running a build output folder needs a `Package.appxmanifest` (or `AppxManifest.xml`) in it. Run **WinApp: Generate Manifest** if you don't have one.
 
@@ -306,7 +308,21 @@ Use **WinApp: Generate Manifest** to create an `Package.appxmanifest` from a tem
 
 ### Package and sign
 
-Use **WinApp: Create MSIX Package** to package your application. If you choose **self-contained** packaging and the selected build output path appears to target a different architecture than your machine, WinApp shows a warning before continuing so you can avoid bundling the wrong Windows App SDK runtime. When packaging finishes, a completion notification names the built `.msix` and offers three actions: **Reveal in Explorer** (open the package in File Explorer), **Sign** (sign the just-built package), and **Install** (sideload it via `Add-AppxPackage`). Use **WinApp: Sign File** to sign MSIX/APPX packages, `.exe` files, and `.dll` files with a `.pfx` certificate.
+Use **WinApp: Create MSIX Package** to package your application. The picker offers both build output folders and any sparse identity manifests found in the workspace. If you choose **self-contained** packaging and the selected build output path appears to target a different architecture than your machine, WinApp shows a warning before continuing so you can avoid bundling the wrong Windows App SDK runtime. When packaging finishes, a completion notification names the built `.msix` and offers three actions: **Reveal in Explorer** (open the package in File Explorer), **Sign** (sign the just-built package), and **Install** (sideload it via `Add-AppxPackage`). Use **WinApp: Sign File** to sign MSIX/APPX packages, `.exe` files, and `.dll` files with a `.pfx` certificate.
+
+> **Note:** Identity-only (sparse) packages are not offered an **Install** action. They contain no payload, so sideloading one would register an app whose executable lives outside the package.
+
+### Give an existing app package identity (sparse packaging)
+
+Sparse packaging grants package identity to an app that already builds and ships as a plain desktop executable — no project restructuring, no SDK install, and no change to how the app is deployed. The app keeps running from its normal install location; only a small identity package is registered alongside it.
+
+Run these three commands in order:
+
+1. **WinApp: Create Sparse Identity Manifest** — pick the executable you want to grant identity to. WinApp generates an identity-only `appxmanifest.xml` plus placeholder `Assets/` in a `sparse/` folder beside the project. Package name, publisher, and version are inferred from the executable's file version info; open the generated manifest in the **AppxManifest Editor** if you want to change them. If a manifest is already there, WinApp asks before overwriting it.
+2. **WinApp: Create MSIX Package** — select the generated `sparse/appxmanifest.xml` instead of a build output folder. This produces a `.identity.msix`. Sign it with **WinApp: Sign File** (or let the pack step generate a development certificate).
+3. **WinApp: Embed Identity into Executable** — point at the same executable. WinApp records the package identity so Windows will associate the running process with the registered package.
+
+> **Important:** Embedding identity into an `.exe` rewrites the binary in place, which invalidates any existing Authenticode signature. WinApp asks for confirmation before doing this. Sign the executable *after* embedding, not before. Choosing a side-by-side `.manifest` target instead leaves the binary untouched.
 
 ### Access Windows SDK tools
 
