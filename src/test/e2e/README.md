@@ -106,7 +106,8 @@ Notes for anyone changing this spec:
 - Launch with `--disable-extensions`. C# Dev Kit otherwise recognises the scaffolded project, opens an announcement tab that steals focus from the palette, and builds the project itself, which corrupts the build-output assertions. The extension under test still loads via `--extensionDevelopmentPath`.
 - Seed `User/settings.json` in the temp profile. A fresh profile opens the Welcome tab and focuses the chat input, and either swallows the palette shortcut; no CLI flag covers this.
 - `terminal.integrated.gpuAcceleration: "off"` is required for the failure diagnostic. xterm renders to a canvas when accelerated, so `.xterm-rows` is empty and the diagnostic reports "no terminal was opened" even when one is open — actively misleading.
-- Each scaffold generates a **new GUID package identity**, so a leaked package cannot be overwritten by a later run; it accumulates. Cleanup waits for deregistration before deleting, since deployment holds handles on the loose layout under `bin`.
+- Each scaffold generates a **new GUID package identity**, so a leaked package cannot be overwritten by a later run; it accumulates. Cleanup kills the app and waits for it to exit, waits for deregistration, then deletes — in that order, because each step holds handles the next one needs released.
+- Cleanup is **verified, not best-effort**. If the run cannot remove its own app, package, or directory, `afterAll` throws and names what survived, so a leak fails the suite rather than printing a warning nobody reads. Residue from *earlier* runs is swept too, but only warns: a crashed run can leave VS Code holding its profile directory, which the current run cannot remove and is not responsible for.
 
 ### `editor-launch.spec.ts` — 11 tests
 

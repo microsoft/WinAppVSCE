@@ -106,11 +106,24 @@ function isProcessRunning(processName: string): boolean {
     return Number(result ?? '0') > 0;
 }
 
+/**
+ * Terminates the app and waits for it to actually exit.
+ *
+ * `Stop-Process` returns before the process has gone, and until it does the app
+ * still holds handles on its own build output, so deleting the directory fails.
+ */
 function killProcess(processName: string): void {
     tryPs(
         `Get-Process -Name '${processName}' -ErrorAction SilentlyContinue `
         + `| ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }`
     );
+
+    for (let attempt = 1; attempt <= 15; attempt += 1) {
+        if (!isProcessRunning(processName)) {
+            return;
+        }
+        sleepSync(1_000);
+    }
 }
 
 // ──────────────────────────────────────────────────────
@@ -191,38 +204,131 @@ function scaffoldWinUiApp(prefix: string): ScaffoldedApp {
     return app;
 }
 
+/** Prefix shared by every temp directory this spec creates. */
+const TEMP_PREFIX = 'live-run-';
+
 /** Blocks the current thread; usable from synchronous teardown. */
 function sleepSync(ms: number): void {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function cleanUp(app: ScaffoldedApp): void {
-    killProcess(app.appName);
-    removeRegisteredPackage(app.identityName);
+/**
+ * Temp directories from this spec that no live test is tracking — the residue
+ * of a run that crashed or was interrupted before its cleanup ran.
+ *
+ * Directories belonging to the current run are excluded, so this can never
+ * delete a workspace a test is still using.
+ */
+function findOrphanedScaffolds(): string[] {
+    const active = new Set([
+        ...scaffolded.map(app => path.resolve(app.tempRoot)),
+        ...userDataDirs.map(dir => path.resolve(dir)),
+    ]);
 
-    // Deployment keeps handles on the loose layout inside the project's bin
-    // directory, and those outlive the Remove-AppxPackage call. Deleting before
-    // the package is really gone fails, leaving ~15MB of build output per run
-    // to accumulate silently, so wait for deregistration first.
-    for (let attempt = 1; attempt <= 10; attempt += 1) {
+    let entries: fs.Dirent[];
+    try {
+        entries = fs.readdirSync(os.tmpdir(), { withFileTypes: true });
+    } catch {
+        return [];
+    }
+
+    return entries
+        .filter(entry => entry.isDirectory() && entry.name.startsWith(TEMP_PREFIX))
+        .map(entry => path.resolve(path.join(os.tmpdir(), entry.name)))
+        .filter(dir => !active.has(dir));
+}
+
+/**
+ * Unregisters any package deployed from an orphaned scaffold, and stops the app
+ * if it is still running.
+ *
+ * Deleting the directory alone is not enough: a crashed run can leave a
+ * registered package behind, and because every scaffold generates a fresh GUID
+ * identity, nothing will ever replace it.
+ */
+function reclaimOrphanedScaffold(orphanDir: string): void {
+    let projectDirs: fs.Dirent[];
+    try {
+        projectDirs = fs.readdirSync(orphanDir, { withFileTypes: true });
+    } catch {
+        return;
+    }
+
+    for (const entry of projectDirs) {
+        if (!entry.isDirectory()) {
+            continue;
+        }
+
+        // The project directory is named after the app, which is also the
+        // process name.
+        killProcess(entry.name);
+
+        const manifestPath = path.join(orphanDir, entry.name, 'Package.appxmanifest');
+        try {
+            const manifest = fs.readFileSync(manifestPath, 'utf8');
+            const identityName = /<Identity[^>]*?\bName\s*=\s*"([^"]+)"/s.exec(manifest)?.[1];
+            if (identityName) {
+                removeRegisteredPackage(identityName);
+            }
+        } catch {
+            // No manifest here (e.g. a profile directory); nothing to unregister.
+        }
+    }
+}
+
+/**
+ * Removes everything a test created: the running app, the registered package,
+ * and the scaffolded project on disk.
+ *
+ * Returns what could not be removed, so a leak becomes a reported failure
+ * rather than a warning nobody reads. Each scaffold gets a fresh GUID identity
+ * and a fresh temp directory, so anything left behind is never reused — it just
+ * accumulates until someone notices the disk.
+ */
+function cleanUp(app: ScaffoldedApp): string[] {
+    const leaks: string[] = [];
+
+    // Order matters: the app must exit before its package can be removed
+    // cleanly, and the package must be deregistered before the loose layout
+    // under bin/ releases its handles.
+    killProcess(app.appName);
+    if (isProcessRunning(app.appName)) {
+        leaks.push(`process ${app.appName} is still running`);
+    }
+
+    removeRegisteredPackage(app.identityName);
+    for (let attempt = 1; attempt <= 15; attempt += 1) {
         if (findRegisteredPackage(app.identityName) === undefined) {
             break;
         }
         sleepSync(1_000);
     }
-
-    for (let attempt = 1; attempt <= 10; attempt += 1) {
-        try {
-            fs.rmSync(app.tempRoot, { recursive: true, force: true });
-            return;
-        } catch {
-            if (attempt === 10) {
-                console.warn(`⚠️  Could not remove ${app.tempRoot}; remove it manually.`);
-                return;
-            }
-            sleepSync(2_000);
-        }
+    if (findRegisteredPackage(app.identityName) !== undefined) {
+        leaks.push(`package ${app.identityName} is still registered`);
     }
+
+    if (!removeDirectory(app.tempRoot)) {
+        leaks.push(`directory ${app.tempRoot} could not be removed`);
+    }
+
+    return leaks;
+}
+
+/** Deletes a directory, retrying while Windows releases lingering handles. */
+function removeDirectory(target: string): boolean {
+    for (let attempt = 1; attempt <= 15; attempt += 1) {
+        try {
+            fs.rmSync(target, { recursive: true, force: true });
+            if (!fs.existsSync(target)) {
+                return true;
+            }
+        } catch {
+            // Retry below; deployment handles are released asynchronously.
+        }
+        sleepSync(2_000);
+    }
+
+    return !fs.existsSync(target);
 }
 
 /** Recursively finds the built executable under a given build configuration. */
@@ -432,12 +538,52 @@ async function waitFor(
 // Tests
 // ──────────────────────────────────────────────────────
 
+/**
+ * Final backstop, covering what the per-test `finally` blocks cannot: a test
+ * that crashed, timed out, or was interrupted before its own cleanup ran.
+ *
+ * Resources this run created are a hard failure — the run owns them, and
+ * leaving real packages and processes on the machine is the worst outcome.
+ *
+ * Residue from *earlier* runs is only swept on a best-effort basis. A killed
+ * run can leave VS Code still running and holding its profile directory, which
+ * the current run cannot remove and is not responsible for; failing here would
+ * report a stale crash as a failure of whatever ran next.
+ */
 test.afterAll(() => {
+    const leaks: string[] = [];
+
     for (const app of scaffolded) {
-        cleanUp(app);
+        leaks.push(...cleanUp(app));
     }
+
     for (const dir of userDataDirs) {
-        fs.rmSync(dir, { recursive: true, force: true });
+        if (!removeDirectory(dir)) {
+            leaks.push(`VS Code profile ${dir} could not be removed`);
+        }
+    }
+
+    const stranded: string[] = [];
+    for (const orphan of findOrphanedScaffolds()) {
+        reclaimOrphanedScaffold(orphan);
+        if (removeDirectory(orphan)) {
+            console.log(`🧹 Removed an orphaned scaffold from an earlier run: ${orphan}`);
+        } else {
+            stranded.push(orphan);
+        }
+    }
+
+    if (stranded.length > 0) {
+        console.warn(
+            `⚠️  Residue from an earlier run could not be removed (usually a VS Code `
+            + `instance from a crashed run still holding its profile):\n  - ${stranded.join('\n  - ')}`
+        );
+    }
+
+    if (leaks.length > 0) {
+        throw new Error(
+            `The live run test leaked resources that must be cleaned up manually:\n  - ${leaks.join('\n  - ')}`
+        );
     }
 });
 
