@@ -5,7 +5,7 @@
  * reusable actions (tab switching, field edits, button clicks, etc.).
  */
 
-import { _electron as electron, type ElectronApplication, type Page, type FrameLocator } from '@playwright/test';
+import { _electron as electron, expect, type ElectronApplication, type Page, type FrameLocator } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -33,6 +33,157 @@ export interface VSCodeTestContext {
     app: ElectronApplication;
     page: Page;
     workspacePath: string;
+    /** Isolated profile directories created for this launch; removed on teardown. */
+    profileDirs: string[];
+}
+
+export interface LaunchedVSCode {
+    app: ElectronApplication;
+    page: Page;
+    /** Isolated profile directories created for this launch; removed on teardown. */
+    profileDirs: string[];
+}
+
+/**
+ * Creates the isolated profile directories every launch must use.
+ *
+ * Without `--user-data-dir`, a `Code.exe` started while the developer already has
+ * VS Code running delegates its window to that existing instance and exits
+ * immediately. Playwright's `app.firstWindow()` then never resolves and the
+ * launch times out, which is why nearly the whole suite failed on dev machines.
+ * An isolated user-data dir forces a genuinely separate instance. The matching
+ * `--extensions-dir` keeps the developer's installed extensions out of the run.
+ */
+function createProfileDirs(): { userDataDir: string; extensionsDir: string; profileDirs: string[] } {
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-e2e-user-'));
+    const extensionsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'winapp-e2e-ext-'));
+    return { userDataDir, extensionsDir, profileDirs: [userDataDir, extensionsDir] };
+}
+
+/**
+ * Dismisses the Welcome / Trust modal that a brand-new profile shows on first
+ * start. That dialog holds keyboard focus and swallows the first `Ctrl+Shift+P`,
+ * so it must be closed before any keyboard interaction. Tolerant by design: it
+ * is a no-op when no dialog appears.
+ */
+export async function dismissWelcomeDialog(page: Page): Promise<void> {
+    const welcomeDialog = page.getByRole('dialog', { name: /Welcome to Visual Studio Code/i });
+    const welcomeAppeared = await welcomeDialog
+        .waitFor({ state: 'visible', timeout: 5_000 })
+        .then(() => true, () => false);
+
+    if (welcomeAppeared) {
+        const closeButton = welcomeDialog.getByRole('button', { name: 'Close' });
+        const clicked = await closeButton.click({ timeout: 2_000 }).then(() => true, () => false);
+        if (!clicked) {
+            await page.keyboard.press('Escape');
+        }
+        await welcomeDialog.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => { /* already gone */ });
+    }
+
+    // Any other modal (workspace trust, release notes prompt, …) — Escape it away.
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const remaining = await page.getByRole('dialog').filter({ visible: true }).count().catch(() => 0);
+        if (remaining === 0) {
+            return;
+        }
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(500);
+    }
+}
+
+/**
+ * Launches an isolated VS Code instance with the extension under test loaded.
+ * `openTargets` are the folder/file paths passed on the command line.
+ *
+ * This is the single launch path for the whole E2E suite — every spec should go
+ * through it so the isolation and welcome-dialog handling stay in one place.
+ */
+export async function launchVSCodeApp(openTargets: string[]): Promise<LaunchedVSCode> {
+    const { userDataDir, extensionsDir, profileDirs } = createProfileDirs();
+
+    const app = await electron.launch({
+        executablePath: VSCODE_EXE,
+        args: [
+            ...openTargets,
+            '--new-window',
+            `--user-data-dir=${userDataDir}`,
+            `--extensions-dir=${extensionsDir}`,
+            ...EXTENSION_ARGS,
+            '--disable-telemetry',
+            '--skip-release-notes',
+            '--disable-workspace-trust',
+        ],
+        timeout: 60_000,
+    });
+
+    const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
+    await page.locator('.monaco-workbench').waitFor({ state: 'visible', timeout: 30_000 });
+    await dismissWelcomeDialog(page);
+
+    return { app, page, profileDirs };
+}
+
+/**
+ * Waits for a quick-input row matching `itemLabel` to be listed. Used instead of
+ * a fixed sleep before pressing Enter: on a cold isolated profile the extension
+ * can take several seconds to activate, and a blind Enter would otherwise run
+ * the wrong entry (or nothing at all).
+ */
+export async function waitForQuickInputItem(page: Page, itemLabel: string, timeout = 30_000): Promise<void> {
+    await page
+        .locator('.quick-input-widget .quick-input-list .monaco-list-row')
+        .filter({ hasText: itemLabel })
+        .first()
+        .waitFor({ state: 'visible', timeout });
+}
+
+/** Opens the Command Palette, filters to `commandLabel`, and runs it. */
+export async function runCommand(page: Page, commandLabel: string): Promise<void> {
+    const paletteInput = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
+
+    // The palette keystroke can be dropped while VS Code is still settling.
+    for (let attempt = 0; attempt < 5; attempt++) {
+        await page.keyboard.press('Control+Shift+P');
+        const opened = await paletteInput
+            .waitFor({ state: 'visible', timeout: 3_000 })
+            .then(() => true, () => false);
+        if (opened) {
+            break;
+        }
+        await page.waitForTimeout(1_000);
+    }
+    await paletteInput.waitFor({ state: 'visible', timeout: 5_000 });
+
+    await page.keyboard.type(commandLabel, { delay: 30 });
+    await waitForQuickInputItem(page, commandLabel);
+    await page.keyboard.press('Enter');
+
+    // Do not return while the palette is still on screen: the quick-input widget
+    // is reused by whatever the command shows next, so a caller that inspects it
+    // too early reads the dismissing palette instead of the command's own UI.
+    await expect
+        .poll(async () => {
+            const visible = await paletteInput.isVisible().catch(() => false);
+            if (!visible) {
+                return '';
+            }
+            return (await paletteInput.getAttribute('placeholder').catch(() => '')) ?? '';
+        }, { timeout: 15_000 })
+        .not.toContain('Type the name of a command to run');
+}
+
+/** Closes a launched VS Code instance and removes its isolated profile directories. */
+export async function closeVSCodeApp(launched: { app: ElectronApplication; profileDirs: string[] }): Promise<void> {
+    try {
+        await launched.app.close();
+    } catch { /* already closed */ }
+    for (const dir of launched.profileDirs) {
+        try {
+            fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+        } catch { /* best-effort */ }
+    }
 }
 
 /**
@@ -53,26 +204,12 @@ export function createTempWorkspace(fixtureName: string): string {
  */
 export async function launchVSCode(workspacePath: string): Promise<VSCodeTestContext> {
     const manifestPath = path.join(workspacePath, 'AppxManifest.xml');
-    const app = await electron.launch({
-        executablePath: VSCODE_EXE,
-        args: [
-            workspacePath,
-            manifestPath,
-            '--new-window',
-            ...EXTENSION_ARGS,
-            '--disable-telemetry',
-            '--skip-release-notes',
-            '--disable-workspace-trust',
-        ],
-        timeout: 30_000,
-    });
+    const launched = await launchVSCodeApp([workspacePath, manifestPath]);
 
-    const page = await app.firstWindow();
-    // Wait for VS Code to settle
-    await page.waitForLoadState('domcontentloaded');
-    await page.waitForTimeout(5_000);
+    // Wait for VS Code to settle and extensions to activate.
+    await launched.page.waitForTimeout(5_000);
 
-    return { app, page, workspacePath };
+    return { ...launched, workspacePath };
 }
 
 /**
@@ -82,16 +219,12 @@ export async function launchVSCode(workspacePath: string): Promise<VSCodeTestCon
 export async function openManifestEditor(page: Page): Promise<FrameLocator> {
     // The file is already open from launch args.
     // Reopen with the custom editor via Command Palette.
-    await page.keyboard.press('Control+Shift+P');
-    await page.waitForTimeout(1_000);
-    await page.keyboard.type('View: Reopen Editor With...', { delay: 30 });
-    await page.waitForTimeout(1_500);
-    await page.keyboard.press('Enter');
+    await runCommand(page, 'View: Reopen Editor With...');
     await page.waitForTimeout(2_000);
 
     // Now the editor picker appears — select "AppxManifest Editor"
     await page.keyboard.type('AppxManifest Editor', { delay: 30 });
-    await page.waitForTimeout(1_000);
+    await waitForQuickInputItem(page, 'AppxManifest Editor');
     await page.keyboard.press('Enter');
     await page.waitForTimeout(5_000);
 
@@ -123,9 +256,7 @@ export async function getWebviewFrame(page: Page): Promise<FrameLocator> {
  * Cleans up: closes VS Code and removes the temporary workspace.
  */
 export async function teardown(ctx: VSCodeTestContext): Promise<void> {
-    try {
-        await ctx.app.close();
-    } catch { /* already closed */ }
+    await closeVSCodeApp(ctx);
     try {
         fs.rmSync(ctx.workspacePath, { recursive: true, force: true });
     } catch { /* best-effort */ }
