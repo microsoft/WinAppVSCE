@@ -11,6 +11,7 @@ import {
     EXTENSION_ROOT,
     cleanupTempDirectories,
     hasInstalledTemplatePack,
+    listInstalledTemplates,
     makeTempDirectory
 } from './new-command-helpers';
 
@@ -128,18 +129,25 @@ test.describe('winapp.new command — template selection', () => {
 
             await openTemplatePicker(page);
 
-            const rows = page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
+            // Scope to the label: VS Code renders a separator inside the row,
+            // and recycles row DOM, so whole-row text can carry stale chrome.
+            const rows = page.locator(
+                '.quick-input-widget .quick-input-list .monaco-list-row .quick-input-list-label'
+            );
             const rowText = await rows.allTextContents();
 
-            // The CLI lists the blank app first and the picker preserves that order.
-            expect(rowText[0]).toContain('WinUI Blank App');
-            // Each row shows the display name and the CLI's short name, matching
-            // `winapp new --list`, and nothing else.
-            expect(rowText[0]).toContain('(winui)');
-            // The pack ships several templates; the picker shouldn't collapse to
-            // one entry, and every row should be a WinUI template.
+            // The picker must mirror `winapp new --list`: same order, each row
+            // rendered as "Display Name (short-name)" and nothing else. Compare
+            // against the CLI so upstream pack changes can't break this.
+            const expected = listInstalledTemplates();
+            expect(expected.length).toBeGreaterThan(1);
             expect(rowText.length).toBeGreaterThan(1);
-            expect(rowText.every(text => /winui/i.test(text))).toBe(true);
+            // A prefix compare, since VS Code only renders the visible rows.
+            expect(rowText).toEqual(
+                expected
+                    .slice(0, rowText.length)
+                    .map(template => `${template.displayName}(${template.shortName})`)
+            );
 
             await page.keyboard.press('Escape');
         } finally {

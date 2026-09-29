@@ -32,6 +32,24 @@ export function hasInstalledTemplatePack(): boolean {
     }
 }
 
+/**
+ * The installed pack's templates, in the order the CLI lists them. Lets a spec
+ * assert the picker mirrors the CLI instead of hard-coding template names,
+ * which change whenever the upstream pack does.
+ */
+export function listInstalledTemplates(): { shortName: string; displayName: string }[] {
+    const output = execFileSync(
+        CLI_PATH,
+        ['new', '--list', '--json', '--template-version', 'installed'],
+        { cwd: os.tmpdir(), encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    const payload = JSON.parse(output.slice(output.indexOf('{'), output.lastIndexOf('}') + 1));
+    return (payload.Templates ?? []).map((template: { ShortName: string; DisplayName: string }) => ({
+        shortName: template.ShortName,
+        displayName: template.DisplayName
+    }));
+}
+
 /** Temp directories to remove once the spec that made them finishes. */
 const pendingDirectories = new Set<string>();
 
