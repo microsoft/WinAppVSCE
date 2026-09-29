@@ -37,12 +37,36 @@ $vsix = Get-ChildItem $artifacts -Filter *.vsix -ErrorAction SilentlyContinue |
 if (-not $vsix) { throw "No .vsix found in $artifacts. Build may have failed." }
 
 Write-Step "Installing extension: $($vsix.Name)"
-& code --install-extension $vsix.FullName --force
+$extensionId = "microsoft-winappcli.winapp"
+$extensionsDir = Join-Path (Split-Path $PSScriptRoot -Parent) ".drive-extensions"
+New-Item -ItemType Directory -Force -Path $extensionsDir | Out-Null
+$installedBefore = & code "--extensions-dir=$extensionsDir" --list-extensions 2>$null |
+    Where-Object { $_ -eq $extensionId }
+if ($installedBefore) {
+    Write-Step "Removing the currently registered WinApp extension to avoid stale VS Code metadata"
+    & code "--extensions-dir=$extensionsDir" --uninstall-extension $extensionId
+    if ($LASTEXITCODE -ne 0) {
+        throw "code --uninstall-extension failed with exit code $LASTEXITCODE"
+    }
+}
+
+& code "--extensions-dir=$extensionsDir" --install-extension $vsix.FullName --force
 if ($LASTEXITCODE -ne 0) { throw "code --install-extension failed with exit code $LASTEXITCODE" }
 
 Write-Step "Installed VSIX. Verifying extension is registered with VS Code:"
-$installed = & code --list-extensions --show-versions 2>$null | Select-String -Pattern 'winapp'
-if ($installed) { Write-Host $installed -ForegroundColor Green } else { Write-Warning "winapp extension not found in code --list-extensions" }
+$installed = & code "--extensions-dir=$extensionsDir" --list-extensions --show-versions 2>$null |
+    Where-Object { $_ -like "$extensionId@*" }
+if (-not $installed) {
+    throw "WinApp extension not found after installation."
+}
+
+$expectedVersion = [System.IO.Path]::GetFileNameWithoutExtension($vsix.Name) -replace '^winapp-', ''
+$installedVersion = ($installed -split '@')[-1]
+if ($installedVersion -ne $expectedVersion) {
+    throw "VS Code reports WinApp $installedVersion, but the installed VSIX is $expectedVersion. Its extension metadata cache is stale."
+}
+
+Write-Host $installed -ForegroundColor Green
 
 Write-Host "VSIX path: $($vsix.FullName)"
 return $vsix.FullName

@@ -34,6 +34,16 @@ import {
 } from './sign-utils';
 import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
 import {
+	buildCertGenerateArgs,
+	decideCertGenerateOutcome,
+	executeCertGenerateFlow,
+	resolveCertPublisherSourceDecision,
+	selectCanonicalManifest,
+	type CertGenerateFlowAdapter,
+	type CertIfExists,
+	type CertPublisherSource
+} from './cert-utils';
+import {
 	detectArchFromPath,
 	getMachineArch,
 	checkSelfContainedArchMismatch,
@@ -317,7 +327,7 @@ async function runWinappCapture(
 						return;
 					}
 					cancelled = true;
-					outputChannel.appendLine('\nPackaging cancelled.');
+					outputChannel.appendLine('\nCancelled.');
 					if (child.pid) {
 						// On Windows, winapp pack may spawn helper processes; taskkill /t
 						// terminates the whole tree instead of only the direct child.
@@ -486,7 +496,8 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 async function findWorkspaceArtifactsWithCancellation(
 	workspacePath: string,
 	patterns: string[],
-	token: vscode.CancellationToken
+	token: vscode.CancellationToken,
+	exclude?: string
 ): Promise<string[] | undefined> {
 	const abortController = new AbortController();
 	const cancellation = token.onCancellationRequested(() => abortController.abort());
@@ -500,7 +511,7 @@ async function findWorkspaceArtifactsWithCancellation(
 			async includePattern => {
 				const matches = await vscode.workspace.findFiles(
 					new vscode.RelativePattern(workspacePath, includePattern),
-					null,
+					exclude ?? null,
 					undefined,
 					token
 				);
@@ -513,6 +524,168 @@ async function findWorkspaceArtifactsWithCancellation(
 	} finally {
 		cancellation.dispose();
 	}
+}
+
+/**
+ * Resolve the publisher source, supplying VS Code UI to the decision logic in
+ * `resolveCertPublisherSourceDecision`.
+ *
+ * @returns The resolved source, or `undefined` if the user cancelled.
+ */
+async function resolveCertPublisherSource(
+	projectDir: string
+): Promise<CertPublisherSource | undefined> {
+	return resolveCertPublisherSourceDecision({
+		findCanonicalManifest: async () => {
+			// A plain directory read, not a workspace glob: the CLI only ever looks
+			// for its manifest beside the project file, so recursing would surface
+			// templates and sibling projects it would never have used.
+			let entries: fs.Dirent[];
+			try {
+				entries = await fs.promises.readdir(projectDir, { withFileTypes: true });
+			} catch {
+				return undefined;
+			}
+
+			return selectCanonicalManifest(
+				entries
+					.filter(entry => entry.isFile())
+					.map(entry => path.join(projectDir, entry.name)),
+				projectDir
+			);
+		},
+
+		promptPublisher: async () => {
+			// The value is passed to the CLI as typed; it owns what a valid
+			// publisher is.
+			const publisher = await vscode.window.showInputBox({
+				title: 'Certificate publisher',
+				prompt: `Enter the publisher for the certificate in ${path.basename(projectDir)} — it must match your package's Identity/@Publisher.`,
+				placeHolder: 'Contoso or CN=Contoso, O=Contoso Ltd, C=US',
+				ignoreFocusOut: true
+			});
+
+			return publisher?.trim();
+		}
+	});
+}
+
+/** Build the `cert generate` arguments for a resolved publisher source. */
+function certGenerateArgsFor(source: CertPublisherSource, ifExists: CertIfExists): string[] {
+	return buildCertGenerateArgs(
+		source.kind === 'manifest'
+			? { manifestPath: source.manifestPath, ifExists }
+			: { publisher: source.publisher, ifExists }
+	);
+}
+
+/**
+ * Report the outcome, offering to reveal the certificate.
+ *
+ * @param created `false` when an existing certificate was reused rather than
+ *   generated, so the message does not claim work that did not happen.
+ * @param installing `true` when an elevated `cert install` was handed off; the
+ *   install runs in a separate window, so its own result is reported there.
+ */
+async function showCertGenerateSuccess(
+	certificatePath: string,
+	{ created, installing }: { created: boolean; installing: boolean }
+): Promise<void> {
+	const lead = created
+		? `Certificate created at ${certificatePath}.`
+		: `Using the existing certificate at ${certificatePath}.`;
+	const message = installing
+		? `${lead} Approve the UAC prompt in the elevated window to finish installing it.`
+		: lead;
+
+	const action = await vscode.window.showInformationMessage(message, 'Reveal in Explorer');
+	if (action === 'Reveal in Explorer') {
+		await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(certificatePath));
+	}
+}
+
+/**
+ * Where `cert generate` writes by default.
+ *
+ * The extension does not pass `--output`, so the CLI writes `devcert.pfx` into
+ * the working directory it is spawned in. Knowing the path up front means the
+ * result does not have to be parsed back out of the CLI's output.
+ */
+function defaultCertificatePath(projectDir: string): string {
+	return path.join(projectDir, 'devcert.pfx');
+}
+
+/**
+ * Build the VS Code adapter for the certificate-generation flow.
+ *
+ * The decision logic lives in `executeCertGenerateFlow` (cert-utils); this only
+ * supplies the UI and process operations it delegates to.
+ */
+function createCertGenerateFlowAdapter(
+	extensionPath: string,
+	projectDir: string,
+	source: CertPublisherSource
+): CertGenerateFlowAdapter {
+	const certificatePath = defaultCertificatePath(projectDir);
+
+	return {
+		runGenerate: async (ifExists: CertIfExists) => {
+			const { code, output, cancelled } = await runWinappCapture(
+				extensionPath,
+				certGenerateArgsFor(source, ifExists),
+				projectDir,
+				'Generating certificate...'
+			);
+			return decideCertGenerateOutcome(code, output, certificatePath, cancelled);
+		},
+
+		confirmOverwrite: async (existingPath) => {
+			const choice = await vscode.window.showWarningMessage(
+				`A certificate already exists at ${existingPath}. Overwriting it invalidates packages already signed with it, and the new certificate must be trusted again.`,
+				'Overwrite Existing Cert',
+				'Use Existing Cert'
+			);
+
+			if (choice === 'Overwrite Existing Cert') {
+				return 'overwrite';
+			}
+			if (choice === 'Use Existing Cert') {
+				return 'reuse';
+			}
+			return 'dismiss';
+		},
+
+		installCertificate: async (certificatePath: string) => {
+			// Installing trusts the certificate in the machine store, which needs
+			// administrator rights. VS Code cannot elevate the integrated terminal,
+			// so this runs in a separate UAC-elevated window.
+			await runWinappCommandElevated(
+				extensionPath,
+				`cert install ${escapePowerShellArg(certificatePath)}`,
+				projectDir
+			);
+		},
+
+		reportSuccess: async (certPath, context) => {
+			await showCertGenerateSuccess(certPath, context);
+		},
+
+		reportFailure: (message?: string) => {
+			const outputChannel = getWinappOutputChannel();
+			outputChannel.show(true);
+			vscode.window.showErrorMessage(
+				message
+					? `Certificate generation failed: ${message}`
+					: 'Certificate generation failed. See the WinApp output channel for details.'
+			);
+		},
+
+		reportKeptExisting: (existingPath: string) => {
+			vscode.window.showInformationMessage(
+				`Kept the existing certificate at ${existingPath}. No certificate was generated or installed.`
+			);
+		}
+	};
 }
 
 const FOLDER_PICKER_DETAIL = 'Open a folder picker';
@@ -1511,15 +1684,19 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			// Installing trusts the certificate in the machine store, which needs
-			// administrator rights. When VS Code isn't elevated we can't install
-			// from the integrated terminal, so run the whole generate+install in a
-			// separate UAC-elevated window instead of failing with "Access denied".
-			if (install === 'Generate and install (requires admin)') {
-				await runWinappCommandElevated(extensionPath, 'cert generate --install', projectDir);
-			} else {
-				await runWinappCommand(extensionPath, 'cert generate', projectDir);
+			const source = await resolveCertPublisherSource(projectDir);
+			if (!source) {
+				return;
 			}
+
+			// Generation runs un-elevated so its exit code is visible here: a bad
+			// publisher or an existing certificate can then be reported in VS Code
+			// instead of scrolling past inside a UAC window. Only the install step
+			// needs administrator rights, and it is elevated separately.
+			await executeCertGenerateFlow(
+				createCertGenerateFlowAdapter(extensionPath, projectDir, source),
+				install === 'Generate and install (requires admin)'
+			);
 		})
 	);
 

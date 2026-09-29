@@ -96,7 +96,7 @@ ${getEditorStyles(nonce)}
     <!-- ───── Identity ───── -->
     <div class="tab-content active" id="tab-identity" role="tabpanel">
         <div class="section-header">Package Identity</div>
-        <p class="page-description">Use this section to define the unique identity of your package. These values determine how Windows and the Microsoft Store distinguish your package from all others. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-identity">Learn more</a></p>
+        <p class="page-description">Use this section to define the unique identity of your package. These values determine how Windows and the Microsoft Store distinguish your package from all others. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-identity">Learn more</a></p>
         <div class="form-group" data-field="identity.name">
             <label for="identity-name">Name:</label>
             <input type="text" id="identity-name" data-section="identity" data-field-name="name" placeholder="com.company.app" />
@@ -162,7 +162,7 @@ ${getEditorStyles(nonce)}
     <!-- ───── Properties ───── -->
     <div class="tab-content" id="tab-properties" role="tabpanel">
         <div class="section-header">Package Properties</div>
-        <p class="page-description">Use this section to configure the user-facing display information for your package. These values appear in the Microsoft Store listing, package details, and the Windows shell. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-properties">Learn more</a></p>
+        <p class="page-description">Use this section to configure the user-facing display information for your package. These values appear in the Microsoft Store listing, package details, and the Windows shell. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-properties">Learn more</a></p>
         <div class="form-group" data-field="properties.displayName">
             <label for="props-displayname">Display Name:</label>
             <input type="text" id="props-displayname" data-section="properties" data-field-name="displayName" placeholder="My Application" />
@@ -200,7 +200,7 @@ ${getEditorStyles(nonce)}
         </div>
 
         <div class="section-header section-header-spaced">Package Type</div>
-        <p class="page-description">Use this section to control what type of package this is. Most packages are Application packages. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-properties">Learn more</a></p>
+        <p class="page-description">Use this section to control what type of package this is. Most packages are Application packages. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-properties">Learn more</a></p>
         <div class="form-group" data-field="properties.packageType">
             <label id="pkg-type-label">Package Type:</label>
             <div class="custom-select" id="pkg-type-select">
@@ -347,7 +347,7 @@ ${getEditorStyles(nonce)}
     <!-- ───── Dependencies ───── -->
     <div class="tab-content" id="tab-dependencies" role="tabpanel">
         <div class="section-header">Target Device Families</div>
-        <p class="page-description">Use this section to declare the Windows versions and framework packages your package requires. Target device families determine which devices can install your package. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-dependencies">Learn more</a></p>
+        <p class="page-description">Use this section to declare the Windows versions and framework packages your package requires. Target device families determine which devices can install your package. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-dependencies">Learn more</a></p>
         <div id="target-device-families" class="list-container"></div>
         <div class="custom-dropdown" id="add-family-dropdown">
             <button class="custom-dropdown-btn" id="add-target-family">+ Add Target Device Family</button>
@@ -357,32 +357,32 @@ ${getEditorStyles(nonce)}
         </div>
 
         <div class="section-header section-header-spaced">Package Dependencies</div>
-        <p class="page-description">Use this section to declare framework and library package dependencies required by your package. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-packagedependency">Learn more</a></p>
+        <p class="page-description">Use this section to declare framework and library package dependencies required by your package. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-packagedependency">Learn more</a></p>
         <div id="package-dependencies" class="list-container"></div>
         <button class="btn" id="add-package-dep">+ Add Package Dependency</button>
 
         <div class="section-header section-header-spaced">Main Package Dependencies (uap3)</div>
-        <p class="page-description">Use this section to declare a dependency on a main package for optional packages. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-uap3-mainpackagedependency2">Learn more</a></p>
+        <p class="page-description">Use this section to declare a dependency on a main package for optional packages. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap3-mainpackagedependency2">Learn more</a></p>
         <div id="main-package-dependencies" class="list-container"></div>
         <button class="btn" id="add-main-pkg-dep">+ Add Main Package Dependency</button>
 
         <div class="section-header section-header-spaced">Driver Constraints (uap5)</div>
-        <p class="page-description">Use this section to declare driver constraints that your package depends on. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-uap5-driverdependency">Learn more</a></p>
+        <p class="page-description">Use this section to declare driver constraints that your package depends on. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap5-driverdependency">Learn more</a></p>
         <div id="driver-constraints" class="list-container"></div>
         <button class="btn" id="add-driver-constraint">+ Add Driver Constraint</button>
 
         <div class="section-header section-header-spaced">OS Package Dependencies (uap7)</div>
-        <p class="page-description">Use this section to declare a dependency on an OS package. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-uap7-ospackagedependency">Learn more</a></p>
+        <p class="page-description">Use this section to declare a dependency on an OS package. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap7-ospackagedependency">Learn more</a></p>
         <div id="os-package-dependencies" class="list-container"></div>
         <button class="btn" id="add-os-pkg-dep">+ Add OS Package Dependency</button>
 
         <div class="section-header section-header-spaced">Host Runtime Dependencies (uap10)</div>
-        <p class="page-description">Use this section to declare a dependency on a host runtime. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-uap10-hostruntimedependency">Learn more</a></p>
+        <p class="page-description">Use this section to declare a dependency on a host runtime. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap10-hostruntimedependency">Learn more</a></p>
         <div id="host-runtime-dependencies" class="list-container"></div>
         <button class="btn" id="add-host-runtime-dep">+ Add Host Runtime Dependency</button>
 
         <div class="section-header section-header-spaced">External Dependencies (win32dependencies)</div>
-        <p class="page-description">Use this section to declare a dependency on an external Win32 component. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-win32dependencies-externaldependency">Learn more</a></p>
+        <p class="page-description">Use this section to declare a dependency on an external Win32 component. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-win32dependencies-externaldependency">Learn more</a></p>
         <div id="external-dependencies" class="list-container"></div>
         <button class="btn" id="add-external-dep">+ Add External Dependency</button>
     </div>
@@ -390,7 +390,7 @@ ${getEditorStyles(nonce)}
     <!-- ───── Resources ───── -->
     <div class="tab-content" id="tab-resources" role="tabpanel">
         <div class="section-header">Resources</div>
-        <p class="page-description">Use this section to declare the language resources your package supports. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-resources">Learn more</a></p>
+        <p class="page-description">Use this section to declare the language resources your package supports. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-resources">Learn more</a></p>
         <div id="resources-list" class="list-container"></div>
         <button class="btn" id="add-resource-btn">+ Add Resource</button>
     </div>
@@ -398,7 +398,7 @@ ${getEditorStyles(nonce)}
     <!-- ───── Applications ───── -->
     <div class="tab-content" id="tab-applications" role="tabpanel">
         <div class="section-header">Applications</div>
-        <p class="page-description">Use this section to configure the entry points and visual presentation of your applications. Each Application element represents a separate executable that can be launched from the package. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-application">Learn more</a></p>
+        <p class="page-description">Use this section to configure the entry points and visual presentation of your applications. Each Application element represents a separate executable that can be launched from the package. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-application">Learn more</a></p>
         <div id="applications-list"></div>
         <button class="btn mt-12" id="add-application-btn">+ Add Application</button>
     </div>
@@ -406,7 +406,7 @@ ${getEditorStyles(nonce)}
     <!-- ───── Capabilities ───── -->
     <div class="tab-content" id="tab-capabilities" role="tabpanel">
         <div class="section-header">Capabilities</div>
-        <p class="page-description">Use this section to declare the system resources and devices your package needs access to. Users will be prompted to grant restricted capabilities at install time. Only request capabilities your package actually uses. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-capabilities">Learn more</a></p>
+        <p class="page-description">Use this section to declare the system resources and devices your package needs access to. Users will be prompted to grant restricted capabilities at install time. Only request capabilities your package actually uses. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-capabilities">Learn more</a></p>
         <div class="capabilities-columns">
             <div class="capabilities-left">
                 <div class="cap-category">
@@ -423,7 +423,7 @@ ${getEditorStyles(nonce)}
                 </div>
                 <div class="cap-category">
                     <div class="cap-category-title">Custom Capability</div>
-                    <p class="field-description">Custom capabilities must follow the format <code>company.capabilityname_publisherId</code> where publisherId is a 13-character base32 identifier. <a href="https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-uap4-customcapability">Learn more</a></p>
+                    <p class="field-description">Custom capabilities must follow the format <code>company.capabilityname_publisherId</code> where publisherId is a 13-character base32 identifier. <a href="https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap4-customcapability">Learn more</a></p>
                     <div class="custom-cap-row">
                         <input type="text" id="custom-cap-input" placeholder="e.g. Contoso.Devices.SerialCommunication_0wer1ey63g7b4" />
                         <button class="btn" id="add-custom-cap">Add</button>
