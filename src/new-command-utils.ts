@@ -210,12 +210,3 @@ export function buildNewArgs(options: {
 
 	return args;
 }
-
-/** Build the argument list for a `winapp new --list` run. */
-export function buildListArgs(templateVersion?: 'latest' | 'installed'): string[] {
-	const args = ['new', '--list', '--json'];
-	if (templateVersion) {
-		args.push('--template-version', templateVersion);
-	}
-	return args;
-}

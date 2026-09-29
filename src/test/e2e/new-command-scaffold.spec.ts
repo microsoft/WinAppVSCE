@@ -5,60 +5,24 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { execFile, execFileSync } from 'child_process';
+import { execFile } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
-import * as os from 'os';
 import { promisify } from 'util';
-import { getWinappCliPath } from '../../winapp-cli-utils';
 import { buildNewArgs, parseScaffoldResult, isNonEmptyOutputFailure, NEW_EXIT } from '../../new-command-utils';
+import {
+    CLI_PATH,
+    cleanupTempDirectories,
+    hasInstalledTemplatePack,
+    makeTempDirectory
+} from './new-command-helpers';
 
 const execFileAsync = promisify(execFile);
-
-const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
-const CLI_PATH = getWinappCliPath(EXTENSION_ROOT);
 
 /** A real scaffold runs `dotnet new` plus a NuGet restore. */
 const SCAFFOLD_TIMEOUT = 300_000;
 
-/**
- * Whether a WinUI template pack is already installed. `--template-version
- * installed` is a purely local query. Run from temp so a repo `global.json`
- * can't make a present SDK look missing.
- */
-function hasInstalledTemplatePack(): boolean {
-    try {
-        const output = execFileSync(
-            CLI_PATH,
-            ['new', '--list', '--json', '--template-version', 'installed'],
-            { cwd: os.tmpdir(), encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }
-        );
-        return /"Listed"\s*:\s*true/.test(output);
-    } catch {
-        // Non-zero exit means no pack (or no SDK) — either way, don't install one.
-        return false;
-    }
-}
-
-/** Temp directories to remove once the whole spec finishes. */
-const pendingDirectories = new Set<string>();
-
-function makeTempDirectory(prefix: string): string {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    pendingDirectories.add(directory);
-    return directory;
-}
-
-test.afterAll(() => {
-    for (const directory of pendingDirectories) {
-        try {
-            fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-        } catch {
-            // A leftover temp directory must never fail an otherwise green run.
-        }
-    }
-    pendingDirectories.clear();
-});
+test.afterAll(cleanupTempDirectories);
 
 /** Every file under `root`, as paths relative to it. */
 function listFilesRecursively(root: string): string[] {

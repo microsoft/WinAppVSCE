@@ -5,67 +5,27 @@
  */
 
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
-import { execFileSync } from 'child_process';
 import * as path from 'path';
-import * as fs from 'fs';
 import * as os from 'os';
-import { getWinappCliPath } from '../../winapp-cli-utils';
+import {
+    EXTENSION_ROOT,
+    cleanupTempDirectories,
+    hasInstalledTemplatePack,
+    makeTempDirectory
+} from './new-command-helpers';
 
 const VSCODE_EXE =
     process.env.VSCODE_PATH ??
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
 
-const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
 const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
     ? []
     : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
 
-/**
- * Whether a WinUI template pack is already installed. `--template-version
- * installed` is a purely local query. Run from temp so a repo `global.json`
- * can't make a present SDK look missing.
- */
-function hasInstalledTemplatePack(): boolean {
-    try {
-        const output = execFileSync(
-            getWinappCliPath(EXTENSION_ROOT),
-            ['new', '--list', '--json', '--template-version', 'installed'],
-            { cwd: os.tmpdir(), encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }
-        );
-        return /"Listed"\s*:\s*true/.test(output);
-    } catch {
-        // Non-zero exit means no pack (or no SDK) — either way, don't install one.
-        return false;
-    }
-}
-
 /** How long the local `winapp new --list` may take. */
 const TEMPLATE_LOAD_TIMEOUT = 120_000;
 
-/** Temp directories to remove once the whole spec finishes. */
-const pendingDirectories = new Set<string>();
-
-/**
- * Create a temp directory swept up after the whole spec finishes. Deferred
- * rather than per-test because VS Code can hold a handle on the workspace for a
- * moment after the Electron app closes, which makes an immediate delete fail.
- */
-function makeTempDirectory(prefix: string): string {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    pendingDirectories.add(directory);
-    return directory;
-}
-
-test.afterAll(() => {
-    for (const directory of pendingDirectories) {
-        try {
-            fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-        } catch {
-            // A leftover temp directory must never fail an otherwise green run.
-        }
-    }
-    pendingDirectories.clear();
-});
+test.afterAll(cleanupTempDirectories);
 
 async function launchVSCodeForFolder(folderPath: string): Promise<{ app: ElectronApplication; page: Page }> {
     // An isolated user-data-dir is required: with a VS Code already running,

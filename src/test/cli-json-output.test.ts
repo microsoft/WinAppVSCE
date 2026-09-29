@@ -33,4 +33,29 @@ describe('extractJsonObject', () => {
 		// rather than rejected. No winapp command emits a top-level array today.
 		assert.deepEqual(extractJsonObject('[{"a":1}]'), { a: 1 });
 	});
+
+	it('skips brace-wrapped prose printed before the payload', () => {
+		// A '{' in progress text used to anchor the scan and lose the payload.
+		assert.deepEqual(extractJsonObject('warning {x} skipped\n{"Created":true}'), { Created: true });
+		assert.deepEqual(extractJsonObject('{not json}\n{"Created":true}'), { Created: true });
+	});
+
+	it('ignores braces and quotes inside JSON string values', () => {
+		assert.deepEqual(extractJsonObject('{"Error":"bad } name"}'), { Error: 'bad } name' });
+		assert.deepEqual(extractJsonObject('{"Error":"a {b} c"}\nDone.'), { Error: 'a {b} c' });
+		assert.deepEqual(extractJsonObject('{"Path":"C:\\\\dir\\\\"}'), { Path: 'C:\\dir\\' });
+	});
+
+	it('is not confused by unbalanced quotes in surrounding prose', () => {
+		assert.deepEqual(extractJsonObject('say "hi\n{"Created":true}'), { Created: true });
+	});
+
+	it('scans a large unterminated payload in linear time', () => {
+		// parseProcessIdFromJson runs on every stdout chunk, so a half-arrived
+		// payload must not trigger a re-parse per '}' (quadratic, seconds-long).
+		const partial = '{"items":[' + Array.from({ length: 4000 }, (_, i) => `{"id":${i}}`).join(',');
+		const started = Date.now();
+		assert.equal(extractJsonObject(partial), undefined);
+		assert.ok(Date.now() - started < 250, 'extractJsonObject should stay linear on partial input');
+	});
 });

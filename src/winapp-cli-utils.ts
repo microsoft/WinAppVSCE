@@ -71,8 +71,12 @@ export function parseWinappErrorMessage(output: string): string | undefined {
 
 /**
  * Extract the JSON object from `winapp ... --json` output. Progress or warning
- * text can surround the payload, so anchor on the first `{` and walk back from
- * the last `}` rather than requiring the output to be JSON and nothing else.
+ * text can surround the payload, so scan for the first brace-balanced object
+ * rather than requiring the output to be JSON and nothing else.
+ *
+ * Brace counting ignores braces inside JSON strings, and only runs once the
+ * scan is inside a candidate: quotes in surrounding prose must not swallow the
+ * payload. A single pass keeps this linear on the growing `winapp run` buffer.
  *
  * @returns The parsed object, or `undefined` when the output holds no complete one.
  */
@@ -81,23 +85,66 @@ export function extractJsonObject(output: string): Record<string, unknown> | und
 		return undefined;
 	}
 
-	const start = output.indexOf('{');
-	if (start < 0) {
-		return undefined;
-	}
+	let depth = 0;
+	let start = -1;
+	let inString = false;
+	let escaped = false;
 
-	for (let end = output.lastIndexOf('}'); end > start; end = output.lastIndexOf('}', end - 1)) {
-		try {
-			const parsed = JSON.parse(output.slice(start, end + 1));
-			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-				return parsed as Record<string, unknown>;
+	for (let i = 0; i < output.length; i++) {
+		const char = output[i];
+
+		// Outside a candidate only '{' matters, so prose cannot affect the scan.
+		if (depth === 0) {
+			if (char === '{') {
+				start = i;
+				depth = 1;
+				inString = false;
+				escaped = false;
 			}
-		} catch {
-			// Not a complete object at this boundary — try the previous '}'.
+			continue;
+		}
+
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+			} else if (char === '\\') {
+				escaped = true;
+			} else if (char === '"') {
+				inString = false;
+			}
+			continue;
+		}
+
+		if (char === '"') {
+			inString = true;
+		} else if (char === '{') {
+			depth++;
+		} else if (char === '}') {
+			depth--;
+			if (depth === 0) {
+				const parsed = parseJsonObject(output.slice(start, i + 1));
+				if (parsed) {
+					return parsed;
+				}
+				// Balanced but not valid JSON (e.g. '{x}' in a warning): keep scanning.
+				start = -1;
+			}
 		}
 	}
 
 	return undefined;
+}
+
+/** Parse `text` as a JSON object, rejecting arrays, primitives and malformed input. */
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+	try {
+		const parsed = JSON.parse(text);
+		return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+			? parsed as Record<string, unknown>
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 export function resolveWindowsPowerShellPath(systemRoot: string | undefined): string {

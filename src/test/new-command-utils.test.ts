@@ -1,7 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-	buildListArgs,
 	buildNewArgs,
 	describeNewFailure,
 	isNonEmptyOutputFailure,
@@ -223,15 +222,5 @@ describe('buildNewArgs', () => {
 			templateVersion: 'latest'
 		});
 		assert.deepEqual(args.slice(-2), ['--template-version', 'latest']);
-	});
-});
-
-describe('buildListArgs', () => {
-	it('lists with JSON output by default', () => {
-		assert.deepEqual(buildListArgs(), ['new', '--list', '--json']);
-	});
-
-	it('pins the template version when asked', () => {
-		assert.deepEqual(buildListArgs('latest'), ['new', '--list', '--json', '--template-version', 'latest']);
 	});
 });
