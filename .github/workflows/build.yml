@@ -63,6 +63,31 @@ jobs:
         }
         "VSCODE_PATH=$code" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+    - name: Install WinUI template pack
+      shell: pwsh
+      run: |
+        # The winapp.new E2E specs skip unless a template pack is installed. A CI
+        # runner is ephemeral, so install one up front and let those specs run.
+        $cli = "bin/win-x64/winapp.exe"
+        if (-not (Test-Path $cli)) {
+          throw "WinApp CLI not found at $cli. Did the 'Download CLI binaries' step run?"
+        }
+
+        # Run from a neutral directory: a global.json in the repo would make
+        # dotnet resolve no SDK and the CLI would report one as missing.
+        Push-Location $env:RUNNER_TEMP
+        try {
+          & (Join-Path $env:GITHUB_WORKSPACE $cli) new --list --json --template-version latest
+          $exit = $LASTEXITCODE
+        } finally {
+          Pop-Location
+        }
+
+        if ($exit -ne 0) {
+          throw "Failed to install the WinUI template pack (winapp new --list exited $exit)."
+        }
+        Write-Host "WinUI template pack installed."
+
     - name: Run E2E tests
       run: npm run test:e2e -- --grep-invert "adding empty custom capability|adding invalid format custom capability|adding valid custom capability|custom capability appears in the custom capabilities list|invalid inputFolder|cancelling the artifact QuickPick|selecting Browse|cancelling the certificate QuickPick"
 

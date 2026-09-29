@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { spawn, execFile } from 'child_process';
 import {
@@ -9,6 +10,7 @@ import {
 	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
 	decideElevatedWinappCommand,
+	extractJsonObject,
 	resolveWorkingDirectory
 } from './winapp-cli-utils';
 import { detectProjects, deduplicateBuildOutputFolders, BUILD_OUTPUT_EXCLUDE_GLOB, BUILD_OUTPUT_MAX_RESULTS } from './project-detection';
@@ -57,6 +59,13 @@ import {
 	validateInputFolder
 } from './debugger-resolver';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
+import { registerWinappNewCommand } from './new-command';
+import {
+	disposeWinappOutputChannel,
+	getWinappOutputChannel,
+	runWinappCapture,
+	selectFolder
+} from './winapp-host';
 import {
 	createWinappToolTaskSpec,
 	executeWinappToolTask,
@@ -264,115 +273,6 @@ async function runWinappTool(spec: WinappToolTaskSpec): Promise<vscode.TaskExecu
 		},
 		executeTask: task => vscode.tasks.executeTask(task)
 	});
-}
-
-/**
- * Shared output channel for capture-based winapp commands (e.g. pack). Created
- * lazily and reused so repeated runs don't leak channels.
- */
-let winappOutputChannel: vscode.OutputChannel | undefined;
-
-function getWinappOutputChannel(): vscode.OutputChannel {
-	if (!winappOutputChannel) {
-		winappOutputChannel = vscode.window.createOutputChannel('WinApp');
-	}
-	return winappOutputChannel;
-}
-
-/**
- * Run a winapp CLI command via `spawn` (shell: false) while capturing its
- * combined stdout/stderr, streaming it to the WinApp output channel and a
- * progress notification. Unlike {@link runWinappCommand}, this waits for the
- * command to finish so callers can inspect the output (e.g. the produced
- * package path).
- *
- * @returns The process exit code and the full captured output.
- */
-async function runWinappCapture(
-	extensionPath: string,
-	args: string[],
-	cwd: string,
-	progressTitle: string
-): Promise<{ code: number | null; output: string; cancelled?: boolean }> {
-	const cliPath = getWinappCliPath(extensionPath);
-	const outputChannel = getWinappOutputChannel();
-	outputChannel.appendLine(`> winapp ${args.join(' ')}`);
-
-	return vscode.window.withProgress(
-		{
-			location: vscode.ProgressLocation.Notification,
-			title: progressTitle,
-			cancellable: true
-		},
-		(_progress, token) =>
-			new Promise<{ code: number | null; output: string; cancelled?: boolean }>((resolve) => {
-				const child = spawn(cliPath, args, {
-					cwd,
-					env: { ...process.env, WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE },
-					shell: false
-				});
-
-				let output = '';
-				let settled = false;
-				let cancelled = false;
-				const finish = (result: { code: number | null; output: string; cancelled?: boolean }) => {
-					if (!settled) {
-						settled = true;
-						resolve(result);
-					}
-				};
-
-				const cancellation = token.onCancellationRequested(() => {
-					if (cancelled || settled) {
-						return;
-					}
-					cancelled = true;
-					outputChannel.appendLine('\nCancelled.');
-					if (child.pid) {
-						// On Windows, winapp pack may spawn helper processes; taskkill /t
-						// terminates the whole tree instead of only the direct child.
-						const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
-							windowsHide: true
-						});
-						killer.on('error', () => child.kill());
-						killer.on('close', (code) => {
-							if (code !== 0) {
-								child.kill();
-							}
-						});
-					} else {
-						child.kill();
-					}
-				});
-
-				child.stdout!.on('data', (data: Buffer) => {
-					const text = data.toString();
-					output += text;
-					outputChannel.append(text);
-				});
-
-				child.stderr!.on('data', (data: Buffer) => {
-					const text = data.toString();
-					output += text;
-					outputChannel.append(text);
-				});
-
-				child.on('error', (err) => {
-					cancellation.dispose();
-					if (cancelled) {
-						finish({ code: null, output, cancelled: true });
-						return;
-					}
-					outputChannel.appendLine(`\nFailed to run winapp: ${err.message}`);
-					finish({ code: null, output });
-				});
-
-				child.on('close', (code) => {
-					cancellation.dispose();
-					finish({ code, output, cancelled });
-				});
-			})
-	);
 }
 
 /**
@@ -1008,21 +908,6 @@ async function selectFile(title: string, filters?: { [name: string]: string[] })
 	return result?.[0]?.fsPath;
 }
 
-/**
- * Prompt user to select a folder
- */
-async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<string | undefined> {
-	const result = await vscode.window.showOpenDialog({
-		canSelectFiles: false,
-		canSelectFolders: true,
-		canSelectMany: false,
-		title: title,
-		defaultUri: defaultUri
-	});
-
-	return result?.[0]?.fsPath;
-}
-
 class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
 	private extensionPath: string;
 
@@ -1328,7 +1213,7 @@ export function activate(context: vscode.ExtensionContext) {
 	const provider = new WinAppDebugConfigurationProvider(extensionPath);
 
 	// Dispose the shared WinApp output channel when the extension unloads.
-	context.subscriptions.push({ dispose: () => winappOutputChannel?.dispose() });
+	context.subscriptions.push({ dispose: () => disposeWinappOutputChannel() });
 
 	context.subscriptions.push(
 		vscode.debug.registerDebugConfigurationProvider(WINAPP_DEBUG_TYPE, provider)
@@ -1435,6 +1320,8 @@ export function activate(context: vscode.ExtensionContext) {
 			await vscode.commands.executeCommand('vscode.openWith', manifestUri, ManifestEditorProvider.viewType);
 		})
 	);
+
+	registerWinappNewCommand(context, extensionPath);
 
 	// Register winapp.init command
 	context.subscriptions.push(
@@ -1911,16 +1798,9 @@ export function activate(context: vscode.ExtensionContext) {
  * Expects a JSON object with a processId (or pid) field.
  */
 function parseProcessIdFromJson(output: string): number | undefined {
-	try {
-		const json = JSON.parse(output.trim());
-		const pid = json.processId ?? json.pid ?? json.ProcessId ?? json.PID;
-		if (typeof pid === 'number' && pid > 0) {
-			return pid;
-		}
-	} catch {
-		// JSON not complete yet or invalid
-	}
-	return undefined;
+	const json = extractJsonObject(output);
+	const pid = json?.processId ?? json?.pid ?? json?.ProcessId ?? json?.PID;
+	return typeof pid === 'number' && pid > 0 ? pid : undefined;
 }
 
 export function deactivate() {
