@@ -200,6 +200,28 @@ export async function readSolutionProjectPaths(solutionPath: string): Promise<st
 }
 
 /**
+ * Absolute paths of the projects directly inside a directory.
+ *
+ * Only the top level is read, matching the CLI's own rule that a directory
+ * input is resolved from the projects "at its top level". Returns an empty
+ * array when the directory can't be read.
+ */
+export async function readDirectoryProjectPaths(directoryPath: string): Promise<string[]> {
+	let entries: string[];
+	try {
+		entries = await fsp.readdir(directoryPath);
+	} catch {
+		return [];
+	}
+
+	return entries
+		.filter(name => (PROJECT_FILE_EXTENSIONS as readonly string[])
+			.includes(path.extname(name).toLowerCase()))
+		.map(name => path.join(directoryPath, name))
+		.sort((left, right) => left.localeCompare(right));
+}
+
+/**
  * Removes project candidates that are already represented by a solution
  * candidate.
  *

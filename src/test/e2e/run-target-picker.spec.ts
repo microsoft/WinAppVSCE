@@ -35,9 +35,31 @@ const VSCODE_EXE =
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
 
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
+
+/**
+ * Extensions that interfere with this suite and must not load.
+ *
+ * The fixtures are real .csproj files, which activates C# Dev Kit. It then
+ * contributes status-bar items and announcement UI that can take focus while
+ * the command palette is opening, and the palette keystroke is swallowed.
+ */
+const INTERFERING_EXTENSIONS = [
+    'ms-dotnettools.csdevkit',
+    'ms-dotnettools.csharp',
+    'ms-dotnettools.vscode-dotnet-runtime',
+];
+
+/**
+ * Isolate the extension under test from other installed extensions.
+ *
+ * `--disable-extensions` is exempt for `--extensionDevelopmentPath`, so it is
+ * correct when the extension is loaded from disk. It cannot be used when the
+ * *installed* build is under test, because it would disable that build too;
+ * that mode names the interfering extensions individually instead.
+ */
 const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-    ? []
-    : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+    ? INTERFERING_EXTENSIONS.flatMap((id) => ['--disable-extension', id])
+    : ['--disable-extensions', `--extensionDevelopmentPath=${EXTENSION_ROOT}`];
 
 const MINIMAL_CSPROJ = `<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -63,6 +85,24 @@ async function launchVSCode(targetPath: string): Promise<{ app: ElectronApplicat
     const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-e2e-profile-'));
     userDataDirs.push(userDataPath);
 
+    // Seed the fresh profile rather than relying on CLI flags, which do not
+    // cover this. A brand new profile opens the Welcome dialog and focuses the
+    // chat input, and either one swallows the command palette shortcut.
+    const userSettingsDir = path.join(userDataPath, 'User');
+    fs.mkdirSync(userSettingsDir, { recursive: true });
+    fs.writeFileSync(
+        path.join(userSettingsDir, 'settings.json'),
+        JSON.stringify({
+            'workbench.startupEditor': 'none',
+            'workbench.tips.enabled': false,
+            'workbench.welcomePage.walkthroughs.openOnInstall': false,
+            'security.workspace.trust.enabled': false,
+            'update.mode': 'none',
+            'telemetry.telemetryLevel': 'off',
+            'chat.commandCenter.enabled': false,
+        }, null, 2)
+    );
+
     const app = await electron.launch({
         executablePath: VSCODE_EXE,
         args: [
@@ -85,11 +125,62 @@ async function launchVSCode(targetPath: string): Promise<{ app: ElectronApplicat
     return { app, page };
 }
 
+const PALETTE_PLACEHOLDER = /Type the name of a command to run/;
+
+/**
+ * Dismisses first-run UI that takes focus.
+ *
+ * A fresh profile can show a "Welcome to Visual Studio Code" sign-in dialog and
+ * notification toasts. Neither is suppressed by `workbench.startupEditor`, and
+ * while either holds focus the palette shortcut is swallowed.
+ */
+async function dismissFirstRunUI(page: Page): Promise<void> {
+    for (const name of [/Continue without Signing In/, /^Close$/]) {
+        const button = page.getByRole('button', { name });
+        try {
+            if (await button.first().isVisible({ timeout: 1_000 })) {
+                await button.first().click({ timeout: 2_000 });
+                await page.waitForTimeout(500);
+            }
+        } catch { /* the dialog is absent, which is the common case */ }
+    }
+}
+
+/**
+ * Opens the command palette, retrying until it genuinely has focus.
+ *
+ * Typing blind is unsafe: anything that takes focus while the palette opens
+ * sends the keystrokes into an editor instead, and the command silently never
+ * runs. Asserting on the palette's own placeholder makes that failure loud.
+ */
+async function openCommandPalette(page: Page) {
+    const input = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await dismissFirstRunUI(page);
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(500);
+        await page.keyboard.press('Control+Shift+P');
+
+        try {
+            await expect(input).toHaveAttribute('placeholder', PALETTE_PLACEHOLDER, { timeout: 10_000 });
+            return input;
+        } catch {
+            if (attempt === 3) {
+                throw new Error('The command palette never opened after 3 attempts.');
+            }
+            await page.waitForTimeout(2_000);
+        }
+    }
+
+    throw new Error('unreachable');
+}
+
 async function runCommandPalette(page: Page, commandLabel: string): Promise<void> {
-    await page.keyboard.press('Control+Shift+P');
-    await page.waitForTimeout(1_000);
+    const input = await openCommandPalette(page);
     await page.keyboard.type(commandLabel, { delay: 30 });
     await page.waitForTimeout(1_500);
+    await expect(input).toBeFocused({ timeout: 5_000 });
     await page.keyboard.press('Enter');
 }
 

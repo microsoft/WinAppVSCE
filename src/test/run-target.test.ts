@@ -1,6 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 import {
 	classifyRunTargetEntries,
 	classifyRunTargetFile,
@@ -8,6 +10,7 @@ import {
 	findOwningRoot,
 	isProjectMode,
 	parseSolutionProjectPaths,
+	readDirectoryProjectPaths,
 	sortRunTargets,
 	type RunTargetCandidate,
 	type WorkspaceRoot
@@ -188,8 +191,7 @@ describe('sortRunTargets', () => {
 	});
 });
 
-describe('findOwningRoot', () => {
-	it('finds the containing root', () => {
+describe('findOwningRoot', () => {	it('finds the containing root', () => {
 		const result = findOwningRoot([rootA, rootB], path.resolve('C:/ws/AppB/src/Program.cs'));
 		assert.strictEqual(result?.name, 'AppB');
 	});
@@ -206,5 +208,43 @@ describe('findOwningRoot', () => {
 
 	it('returns undefined when there is no file', () => {
 		assert.strictEqual(findOwningRoot([rootA], undefined), undefined);
+	});
+});
+
+describe('readDirectoryProjectPaths', () => {
+	// Awaits the callback before cleaning up. A sync `finally` would delete the
+	// directory while an async body was still reading it, and the assertion
+	// failure would then surface outside the test rather than failing it.
+	async function withTempDir(entries: string[], run: (dir: string) => Promise<void>): Promise<void> {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-dir-'));
+		try {
+			for (const entry of entries) {
+				const full = path.join(dir, entry);
+				fs.mkdirSync(path.dirname(full), { recursive: true });
+				fs.writeFileSync(full, '');
+			}
+			await run(dir);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	it('returns every project at the top level', async () => {
+		await withTempDir(['AppOne.csproj', 'AppTwo.csproj', 'readme.md'], async dir => {
+			const found = (await readDirectoryProjectPaths(dir)).map(p => path.basename(p));
+			assert.deepStrictEqual(found, ['AppOne.csproj', 'AppTwo.csproj']);
+		});
+	});
+
+	it('ignores projects nested below the top level, matching the CLI', async () => {
+		await withTempDir(['AppOne.csproj', path.join('nested', 'Deep.csproj')], async dir => {
+			const found = (await readDirectoryProjectPaths(dir)).map(p => path.basename(p));
+			assert.deepStrictEqual(found, ['AppOne.csproj']);
+		});
+	});
+
+	it('returns an empty array for an unreadable directory', async () => {
+		const missing = path.join(os.tmpdir(), 'run-target-does-not-exist-12345');
+		assert.deepStrictEqual(await readDirectoryProjectPaths(missing), []);
 	});
 });

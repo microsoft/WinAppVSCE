@@ -22,6 +22,7 @@ import {
 	PROJECT_FILE_GLOB,
 	PROJECT_FILE_MAX_RESULTS,
 	readSolutionProjectPaths,
+	readDirectoryProjectPaths,
 	sortRunTargets,
 	type RunTargetCandidate,
 	type RunTargetKind,
@@ -1185,31 +1186,50 @@ function getRunSettings(rootPath: string): Partial<WinAppRunOptions> {
 	};
 }
 
+/** True when `targetPath` exists and is a directory. */
+async function isDirectory(targetPath: string): Promise<boolean> {
+	try {
+		return (await fs.promises.stat(targetPath)).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
 /**
- * Ask which project to launch when the target is a solution containing more
- * than one runnable app.
+ * Ask which project to launch when the target contains more than one runnable
+ * app — either a solution, or a directory with several projects at its top
+ * level. The CLI accepts `--project` for both.
  *
  * Returns `{ cancelled: true }` when the user dismissed the prompt, which is
  * distinct from "no selection needed" — the caller must not run in that case.
- * When the solution can't be parsed we return no project at all and let the
+ * When the candidates can't be read we return no project at all and let the
  * CLI produce its own, better-informed error.
  */
 async function pickSolutionProject(
 	target: RunTargetCandidate
 ): Promise<{ cancelled: boolean; project?: string }> {
-	if (target.kind !== 'solution') {
+	let projects: string[];
+	let containerPath: string;
+
+	if (target.kind === 'solution') {
+		projects = await readSolutionProjectPaths(target.path);
+		containerPath = path.dirname(target.path);
+	} else if (target.kind === 'project' && await isDirectory(target.path)) {
+		// A directory input is only ambiguous when it holds several projects;
+		// a path to a single .csproj already names the project.
+		projects = await readDirectoryProjectPaths(target.path);
+		containerPath = target.path;
+	} else {
 		return { cancelled: false };
 	}
 
-	const projects = await readSolutionProjectPaths(target.path);
 	if (projects.length <= 1) {
 		return { cancelled: false };
 	}
 
-	const solutionDir = path.dirname(target.path);
 	const items = projects.map(projectPath => ({
 		label: `$(file-code) ${path.basename(projectPath)}`,
-		description: path.relative(solutionDir, projectPath),
+		description: path.relative(containerPath, projectPath),
 		projectPath
 	}));
 
