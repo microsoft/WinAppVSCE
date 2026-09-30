@@ -1,5 +1,6 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
+import { walkDirectoryTree } from './directory-walk';
 
 /**
  * Mirrors the C# DetectedProjectType enum from WinApp.Cli.
@@ -33,7 +34,12 @@ export function getProjectLabel(project: DetectedProject): string {
 	return `${project.type} project (${getDisplayFilePath(project)})`;
 }
 
-const SKIP_DIRS = new Set([
+/**
+ * Directories skipped when scanning for *project roots*. Tuned for source
+ * discovery — it deliberately skips build output (`bin`, `obj`, `dist`), so it
+ * is the wrong list for artifact discovery, which searches those folders.
+ */
+export const SKIP_DIRS = new Set([
 	'node_modules', '.git', 'bin', 'obj', 'debug', 'release',
 	'.vs', '.vscode', '.idea', 'packages', 'dist', 'build', 'out',
 	'target', '.winapp', 'artifacts', 'testresults',
@@ -89,45 +95,17 @@ export async function detectProjectAt(directory: string, searchRoot: string): Pr
  */
 export async function detectProjects(root: string, maxProjects: number = 10): Promise<DetectedProject[]> {
 	const results: DetectedProject[] = [];
-	const queue: string[] = [root];
-	let iterations = 0;
 
-	while (queue.length > 0 && results.length < maxProjects) {
-		const current = queue.shift()!;
+	await walkDirectoryTree(root, async (current) => {
 		const detected = await detectProjectAt(current, root);
-		if (detected) {
-			results.push(detected);
-			// Don't recurse into detected project directories
-			continue;
+		if (!detected) {
+			return 'descend';
 		}
 
-		// Enqueue child directories (skip known non-project dirs)
-		try {
-			const entries = await fsp.readdir(current, { withFileTypes: true });
-			for (const entry of entries) {
-				if (!entry.isDirectory() && !entry.isSymbolicLink()) { continue; }
-				if (entry.name.startsWith('.') && entry.name !== '.') { continue; }
-				if (SKIP_DIRS.has(entry.name.toLowerCase())) { continue; }
-				const fullPath = path.join(current, entry.name);
-				// Skip symlinks and junctions (reparse points)
-				if (entry.isSymbolicLink()) { continue; }
-				try {
-					const stat = await fsp.stat(fullPath);
-					if (!stat.isDirectory()) { continue; }
-				} catch {
-					continue;
-				}
-				queue.push(fullPath);
-			}
-		} catch {
-			// Skip directories we can't read
-		}
-
-		// Yield to the event loop periodically to keep the UI responsive
-		if (++iterations % 50 === 0) {
-			await new Promise(resolve => setTimeout(resolve, 0));
-		}
-	}
+		results.push(detected);
+		// Don't recurse into detected project directories.
+		return results.length >= maxProjects ? 'stop' : 'skip';
+	}, { skipDirs: SKIP_DIRS });
 
 	return results;
 }

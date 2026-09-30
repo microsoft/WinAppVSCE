@@ -47,9 +47,9 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (137 tests)
+## Test inventory (140 tests)
 
-### `sign-quickpick.spec.ts` — 6 tests
+### `sign-quickpick.spec.ts` — 9 tests
 
 Validates that `winapp.sign` discovers signable files and certificates in workspace QuickPicks.
 
@@ -57,10 +57,13 @@ Validates that `winapp.sign` discovers signable files and certificates in worksp
 |---|------|-----------|
 | 1 | shows QuickPick with .msix file and Browse option when artifacts exist | QuickPick appears with artifact rows and Browse… fallback |
 | 2 | shows packages before executables and limits discovered files to 10 | Package-first ordering and the discovery cap |
-| 3 | shows certificate QuickPick with .pfx file after selecting a package | Certificate QuickPick appears after package selection with .pfx rows and Browse… fallback |
-| 4 | cancelling the artifact QuickPick aborts the sign flow | Cancelling before file selection stops signing |
-| 5 | selecting Browse dismisses the QuickPick in a native-dialog smoke test | Browse hands off to the native file picker |
-| 6 | cancelling the certificate QuickPick aborts the sign flow | Cancelling before certificate selection stops signing |
+| 3 | keeps Browse reachable when the typed filter matches no discovered file | Browse stays selectable when the filter excludes every discovered row |
+| 4 | ranks MSIX packages above newer APPX packages and executables | Tier order beats mtime, and Browse appears after the ranked results |
+| 5 | ignores files.exclude without showing dependency artifacts | `files.exclude` cannot hide signable output, while `node_modules` stays filtered |
+| 6 | shows certificate QuickPick with .pfx file after selecting a package | Certificate QuickPick appears after package selection with .pfx rows and Browse… fallback |
+| 7 | cancelling the artifact QuickPick aborts the sign flow | Cancelling before file selection stops signing |
+| 8 | selecting Browse dismisses the QuickPick in a native-dialog smoke test | Browse hands off to the native file picker |
+| 9 | cancelling the certificate QuickPick aborts the sign flow | Cancelling before certificate selection stops signing |
 
 ### `input-folder-validation.spec.ts` — 1 test
 
