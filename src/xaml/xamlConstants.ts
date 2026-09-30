@@ -30,7 +30,6 @@ export const EXTERNAL_COMMANDS = {
   manageTrust: "workbench.trust.manage",
   manageTrustLegacy: "workbench.action.manageTrust",
   searchExtensions: "workbench.extensions.search",
-  dotnetFindPath: "dotnet.findPath",
 } as const;
 
 export const DOTNET_DOWNLOAD_URL =

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  DOTNET_REQUIRED_STATUS,
   DiagnosticsLevelInteraction,
   getDiagnosticsLevelValidationMessage,
   getXamlStatus,
@@ -24,15 +23,6 @@ import {
   XAML_STATUS_PREFIX,
 } from "../xaml/xamlConstants";
 
-test("defines the persistent missing-runtime status and recovery command", () => {
-  assert.deepEqual(DOTNET_REQUIRED_STATUS, {
-    text: "$(warning) XAML: .NET 10 required",
-    tooltip:
-      "WinUI XAML IntelliSense requires .NET 10. Select for install and restart options.",
-    command: "winui-xaml.showInfo",
-  });
-});
-
 test("pins the status message prefixes", () => {
   assert.equal(XAML_STATUS_PREFIX, "WinUI XAML Tools:");
   assert.equal(
@@ -53,7 +43,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     actions: [],
   });
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, {
+    getXamlStatus(true, true, true, true, {
       state: "loading",
     }),
     {
@@ -62,7 +52,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     }
   );
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, {
+    getXamlStatus(true, true, true, true, {
       state: "framework-ready",
     }),
     {
@@ -71,7 +61,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     }
   );
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, {
+    getXamlStatus(true, true, true, true, {
       state: "error",
       message: "Restore required.",
     }),
@@ -81,7 +71,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     }
   );
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, { state: "error" }),
+    getXamlStatus(true, true, true, true, { state: "error" }),
     {
       message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE}`,
       actions: ["Restart Language Server", "Show Output"],
@@ -91,10 +81,6 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     "Restart Language Server",
     "Show Output",
   ]);
-  assert.deepEqual(getXamlStatus(true, false, true, true, true), {
-    message: `${XAML_STATUS_PREFIX} .NET 10 is required; XAML syntax highlighting remains active.`,
-    actions: ["Install .NET", "Restart Language Server", "Show Output"],
-  });
   assert.deepEqual(getXamlStatus(true, false, false, true).actions, [
     "Manage Workspace Trust",
     "Show Output",
@@ -111,7 +97,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
 // opened to find out what was wrong.
 test("Show Info names the degraded conditions instead of reporting a healthy server", () => {
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, {
+    getXamlStatus(true, true, true, true, {
       state: "packages-not-restored",
       message: "Restore the project's packages.",
     }),
@@ -124,7 +110,7 @@ test("Show Info names the degraded conditions instead of reporting a healthy ser
   // Auto-restore is already running, so asking for the same work would be instructions the user
   // cannot act on.
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, {
+    getXamlStatus(true, true, true, true, {
       state: "packages-not-restored",
       message: "Restore the project's packages.",
       restoreInFlight: true,
@@ -136,7 +122,7 @@ test("Show Info names the degraded conditions instead of reporting a healthy ser
   );
 
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, {
+    getXamlStatus(true, true, true, true, {
       state: "reference-build-failed",
     }),
     {
@@ -147,7 +133,7 @@ test("Show Info names the degraded conditions instead of reporting a healthy ser
 
   // No build or restore reaches the helper, so restarting is the only offer that can change it.
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, {
+    getXamlStatus(true, true, true, true, {
       state: "generators-unavailable",
     }),
     {
@@ -159,7 +145,7 @@ test("Show Info names the degraded conditions instead of reporting a healthy ser
   // The server runs without .NET, so this reaches Show Info while the server is healthy. Only the
   // download link fixes it, and the restart is what applies the SDK once it is installed.
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, {
+    getXamlStatus(true, true, true, true, {
       state: "dotnet-sdk-required",
     }),
     {

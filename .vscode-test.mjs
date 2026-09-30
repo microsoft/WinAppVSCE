@@ -5,10 +5,7 @@ import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-// The extension resolves its .NET host through the .NET Install Tool extension,
-// which this harness cannot use because it launches with --disable-extensions.
-// Supply the host directly instead, the same way WINUI_XAML_SERVER_PATH supplies
-// the server DLL.
+// Pin the dotnet host so the harness tests one known SDK rather than whatever PATH resolves to.
 function resolveDotnetHost() {
   if (process.env.WINUI_XAML_DOTNET_PATH) {
     return process.env.WINUI_XAML_DOTNET_PATH;

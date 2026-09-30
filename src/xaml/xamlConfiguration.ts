@@ -55,13 +55,6 @@ export interface XamlProjectContextSummary {
   restoreInFlight?: boolean;
 }
 
-export const DOTNET_REQUIRED_STATUS = {
-  text: "$(warning) XAML: .NET 10 required",
-  tooltip:
-    "WinUI XAML IntelliSense requires .NET 10. Select for install and restart options.",
-  command: XAML_COMMANDS.showInfo,
-} as const;
-
 export type XamlStatusEffect =
   | { command: string; args?: string[] }
   | { showOutput: true }
@@ -72,7 +65,6 @@ export function getXamlStatus(
   running: boolean,
   trusted: boolean,
   hasOpenXamlDocument: boolean,
-  requiresDotnet = false,
   projectContext?: XamlProjectContextSummary
 ): XamlStatus {
   if (!enabled) {
@@ -164,18 +156,6 @@ export function getXamlStatus(
       message:
         `${XAML_STATUS_PREFIX} ready; the language server starts when a XAML file is opened.`,
       actions: [],
-    };
-  }
-
-  if (requiresDotnet) {
-    return {
-      message:
-        `${XAML_STATUS_PREFIX} .NET 10 is required; XAML syntax highlighting remains active.`,
-      actions: [
-        XAML_STATUS_ACTIONS.installDotnet,
-        XAML_STATUS_ACTIONS.restartServer,
-        XAML_STATUS_ACTIONS.showOutput,
-      ],
     };
   }
 

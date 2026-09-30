@@ -2,8 +2,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	buildDegradedNotification,
-	DOTNET_DOWNLOAD_URL,
-	DOTNET_RUNTIME_DISMISSED_KEY,
 	executeDegradedAction,
 	shouldShowDegradedNotification,
 	SERVER_SETTINGS_QUERY,
@@ -42,72 +40,27 @@ describe('buildDegradedNotification', () => {
 		assert.equal(showOutput.url, undefined);
 	});
 
-	it('installTool cause: offers a retry instead of telling the user to install .NET', () => {
-		const { message, actions } = buildDegradedNotification('installTool');
-
-		// The runtime may well be installed; only the tool that locates it is missing,
-		// so "Install .NET" would be wrong advice here.
-		assert.match(message, /Install Tool/i);
-		assert.doesNotMatch(message, /requires the \.NET 10 runtime/i);
-		assert.ok(!actions.some((a) => a.url));
-		assert.ok(!actions.some((a) => a.dismissDotnetRequirement));
-
-		assert.deepEqual(
-			actions.map((a) => a.label),
-			['Retry', 'Install Manually', 'Show Output']
-		);
-
-		const retry = actions.find((a) => a.label === 'Retry');
-		assert.ok(retry);
-		assert.equal(retry.command, 'winui-xaml.restartServer');
-
-		const manual = actions.find((a) => a.label === 'Install Manually');
-		assert.ok(manual);
-		assert.equal(manual.command, 'workbench.extensions.search');
-		assert.equal(manual.commandArg, 'ms-dotnettools.vscode-dotnet-runtime');
+	// The server is self-contained, so it either starts or fails for a reason .NET cannot explain.
+	// A .NET cause here would send the user to install something the server never needed.
+	it('has no .NET cause, because a missing SDK is reported per project instead', () => {
+		const causes = ['untrusted', 'server'] as const;
+		for (const cause of causes) {
+			const { message } = buildDegradedNotification(cause);
+			assert.doesNotMatch(message, /\.NET/i, `${cause} must not mention .NET`);
+		}
 	});
 
-	it('shows the first warning, suppresses duplicates and dismissal, and honors explicit retries', () => {
-		assert.equal(shouldShowDegradedNotification('dotnet', undefined, false, false), true);
-		assert.equal(shouldShowDegradedNotification('dotnet', 'dotnet', false, false), false);
-		assert.equal(shouldShowDegradedNotification('dotnet', undefined, true, false), false);
-		assert.equal(shouldShowDegradedNotification('dotnet', 'dotnet', true, true), true);
-	});
-
-	it('dotnet cause: offers only explicit install and dismiss actions', () => {
-		const { message, actions } = buildDegradedNotification('dotnet');
-
-		assert.match(message, /\.NET 10 runtime/i);
-		assert.match(message, /not found/i);
-		assert.match(message, /Restart Language Server/i);
-		assert.deepEqual(actions.map((a) => a.label), ['Install .NET', "Don't Show Again"]);
-		assert.equal(actions[0].url, DOTNET_DOWNLOAD_URL);
-		assert.equal(actions[1].dismissDotnetRequirement, true);
-		assert.equal(DOTNET_RUNTIME_DISMISSED_KEY, 'winui-xaml.dotnetRuntimeRequirementDismissed');
-	});
-
-	it('executes Install .NET and persistent dismissal through host operations', async () => {
-		const actions = buildDegradedNotification('dotnet').actions;
-		const opened: string[] = [];
-		let dismissed = false;
-		const handlers = {
-			dismissDotnetRequirement: async () => { dismissed = true; },
-			showOutput: () => undefined,
-			openUrl: async (url: string) => { opened.push(url); },
-			executeCommand: async () => undefined,
-		};
-
-		await executeDegradedAction(actions[0], handlers);
-		assert.deepEqual(opened, [DOTNET_DOWNLOAD_URL]);
-		await executeDegradedAction(actions[1], handlers);
-		assert.equal(dismissed, true);
+	it('shows the first warning, suppresses duplicates, and honors explicit retries', () => {
+		assert.equal(shouldShowDegradedNotification('server', undefined, false), true);
+		assert.equal(shouldShowDegradedNotification('server', 'server', false), false);
+		assert.equal(shouldShowDegradedNotification('server', 'untrusted', false), true);
+		assert.equal(shouldShowDegradedNotification('server', 'server', true), true);
 	});
 
 	it('executes commands, command fallbacks, and output actions through host operations', async () => {
 		const commands: Array<[string, string | undefined]> = [];
 		let outputShown = false;
 		const handlers = {
-			dismissDotnetRequirement: async () => undefined,
 			showOutput: () => { outputShown = true; },
 			openUrl: async () => undefined,
 			executeCommand: async (command: string, commandArg?: string) => {

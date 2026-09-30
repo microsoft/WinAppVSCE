@@ -1,19 +1,15 @@
 import * as path from "path";
 
-/**
- * Builds the environment for a spawned dotnet child process.
- *
- * DOTNET_ROOT points the host at the .NET installation we resolved, matching
- * what the C# extension sets for its language server. DOTNET_HOST_PATH is set
- * alongside it because MSBuild targets and Roslyn's build host resolve and exec
- * it directly; it is contractually an absolute path to the host executable.
- *
- * Paths come from the Install Tool's `dotnet.findPath`, which always returns an
- * absolute path, so the non-absolute branch is defensive only. It logs rather
- * than writing a value that would send MSBuild somewhere unintended, and drops
- * any inherited DOTNET_HOST_PATH rather than forwarding a host we did not
- * choose.
- */
+/** The `dotnet` for MSBuild/restore/build: PATH, which the SDK installer sets, unless
+ * `WINUI_XAML_DOTNET_PATH` pins a specific install for dev/test. */
+export function resolveDotnetCommand(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.WINUI_XAML_DOTNET_PATH;
+  return override && override.length > 0 ? override : "dotnet";
+}
+
+/** Environment for a spawned dotnet child. Only an absolute override pins DOTNET_HOST_PATH /
+ * DOTNET_ROOT, which MSBuild and Roslyn's build host exec directly; a bare `dotnet` from PATH
+ * keeps the inherited values, because guessing DOTNET_ROOT can break a working SDK. */
 export function createDotnetChildEnvironment(
   dotnetPath: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -24,9 +20,7 @@ export function createDotnetChildEnvironment(
     childEnv.DOTNET_HOST_PATH = dotnetPath;
     childEnv.DOTNET_ROOT = path.dirname(dotnetPath);
   } else {
-    log?.(`Resolved .NET host '${dotnetPath}' is not an absolute path; leaving DOTNET_ROOT unset.`);
-    delete childEnv.DOTNET_HOST_PATH;
-    delete childEnv.DOTNET_ROOT;
+    log?.(`Using '${dotnetPath}' from PATH; leaving DOTNET_ROOT as inherited.`);
   }
   return childEnv;
 }

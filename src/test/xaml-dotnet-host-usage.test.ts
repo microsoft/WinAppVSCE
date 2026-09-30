@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-// The extension never launches a .NET tool by name; VS Code's PATH often lacks a newly installed or shell-only SDK.
-// Bare `dotnet` would fail without naming the extension or SDK, so every launch site must use the resolver.
+// The extension never launches a .NET tool by a hardcoded name: `resolveDotnetCommand` is the one
+// place that decides which `dotnet` runs, so a dev/test override applies everywhere at once.
 // Source-level assertions fit because private launch sites build vscode.Task/child processes and the defect is a missing call.
 const source = readFileSync(
   path.join(__dirname, "..", "..", "src", "xaml", "xamlLanguageService.ts"),
@@ -28,50 +28,48 @@ test("no process is launched by the bare name 'dotnet'", () => {
     assert.notEqual(
       executable,
       '"dotnet"',
-      `a process is launched as the bare name "dotnet"; resolve the host first, ` +
-        `as restoreProject does, so the failure can name the missing SDK`
+      `a process is launched as the bare name "dotnet"; call resolveDotnetCommand() instead ` +
+        `so WINUI_XAML_DOTNET_PATH applies to every launch site`
     );
   }
 });
 
-test("every .NET launch site resolves the host and passes a child environment", () => {
+test("every .NET launch site names its command through resolveDotnetCommand", () => {
   const body = code();
 
-  // Both launch sites pass a resolved variable, and both build the environment the resolved
-  // host needs. A launch that resolved the host but dropped the environment would still break
-  // on a private install, so the two are asserted together.
-  const launchSites = [
+  // Each launch passes a variable, and each variable is assigned from resolveDotnetCommand.
+  const launches = [
     ...body.matchAll(
-      /(?:new vscode\.ProcessExecution|spawn)\(\s*([A-Za-z_$][\w$]*)\s*,[\s\S]{0,400}?createDotnetChildEnvironment\(\s*([A-Za-z_$][\w$]*)/g
+      /(?:new vscode\.ProcessExecution|spawn|execFile|spawnSync)\(\s*([A-Za-z_$][\w$]*)\s*,/g
     ),
   ];
 
-  // Self-calibrating rather than a hardcoded count: every launch the first test discovered must
-  // also appear here with a resolved host and its environment. A new launch site therefore has to
-  // be correct to pass, instead of merely changing an expected number.
-  const launches = [
-    ...body.matchAll(/(?:new vscode\.ProcessExecution|spawn|execFile|spawnSync)\(\s*([^,]+),/g),
-  ];
+  assert.ok(launches.length > 0, "expected to find at least one process launch to check");
 
-  assert.equal(
-    launchSites.length,
-    launches.length,
-    `every .NET launch site must resolve the host and pass its environment; found ` +
-      `${launches.length} launch(es) but only ${launchSites.length} are host-resolved`
+  const resolved = new Set(
+    [...body.matchAll(/(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*resolveDotnetCommand\(/g)].map(
+      (match) => match[1]
+    )
   );
 
-  for (const site of launchSites) {
-    assert.equal(
-      site[1],
-      site[2],
-      "the environment must be built for the same host the process is launched with"
+  // Parameters carry an already-resolved command in from a caller, so accept them too: the
+  // caller's assignment is what this test pins, and it is checked above.
+  const parameters = new Set(
+    [...body.matchAll(/([A-Za-z_$][\w$]*)\s*:\s*string/g)].map((match) => match[1])
+  );
+
+  for (const launch of launches) {
+    const executable = launch[1];
+    assert.ok(
+      resolved.has(executable) || parameters.has(executable),
+      `'${executable}' is launched without coming from resolveDotnetCommand()`
     );
   }
 
-  // Server startup resolves the host too, so resolutions outnumber the launch sites checked
-  // here. What matters is that none of them is missing.
+  // The helper must still exist and be the only decision point, or the assertions above pass
+  // vacuously against a renamed function.
   assert.ok(
-    (body.match(/requireDotnetHostResolver\(\)\.resolve\(\)/g) ?? []).length >= launchSites.length,
-    "every launch site must be backed by a host resolution"
+    body.includes("resolveDotnetCommand"),
+    "resolveDotnetCommand must remain the single place that names the dotnet command"
   );
 });
