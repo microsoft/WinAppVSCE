@@ -256,20 +256,18 @@ export async function readDirectoryProjectPaths(directoryPath: string): Promise<
  * {@link import('./project-detection').classifyProjectRunnability} for why the
  * heuristic is deliberately one-sided.
  *
- * Fails open: if the filter would remove *everything*, the original list is
- * returned unchanged. Showing a list that needs narrowing is a far better
- * outcome than showing an empty one, and it keeps a bad heuristic from ever
- * making a project unreachable.
+ * May return an empty array, and deliberately so. Anything the heuristic is
+ * unsure about classifies as `unknown` and survives, so an empty result means
+ * every candidate *explicitly* declared itself a library or a test project —
+ * the one case where we can say with confidence that `winapp run` will reject
+ * all of them. Offering them anyway would only invite the user to pick one and
+ * walk into "is not a runnable project". Callers are expected to treat empty
+ * as "nothing runnable here" and offer a route that can actually succeed.
  */
 export async function filterOfferableProjects(projectPaths: readonly string[]): Promise<string[]> {
-	if (projectPaths.length <= 1) {
-		return [...projectPaths];
-	}
-
 	const runnability = await Promise.all(projectPaths.map(readProjectRunnability));
-	const offerable = projectPaths.filter((_, index) => isOfferableProject(runnability[index]));
 
-	return offerable.length > 0 ? offerable : [...projectPaths];
+	return projectPaths.filter((_, index) => isOfferableProject(runnability[index]));
 }
 
 /**
@@ -312,12 +310,17 @@ export function dedupeSolutionMembers(
  *
  * Solutions are never filtered: the CLI resolves the runnable project inside a
  * solution itself, and it does so with full MSBuild evaluation.
+ *
+ * A lone project is filtered like any other. Exempting it would let a
+ * single-library workspace auto-select that library and run head-first into
+ * the CLI's folder-mode fallback ("Manifest file not found"), which says
+ * nothing about the real problem.
  */
 export async function filterOfferableCandidates(
 	candidates: readonly RunTargetCandidate[]
 ): Promise<RunTargetCandidate[]> {
 	const projects = candidates.filter(candidate => candidate.kind === 'project');
-	if (projects.length <= 1) {
+	if (projects.length === 0) {
 		return [...candidates];
 	}
 

@@ -303,27 +303,39 @@ describe('filterOfferableProjects', () => {
 		});
 	});
 
-	// The CLI classifies via full MSBuild evaluation; a static parse can be
-	// wrong. Hiding every candidate would leave the user with nothing to pick,
-	// so an all-negative result is discarded in favour of the raw list.
-	//
-	// This is the one case where we knowingly diverge from the CLI: it rejects
-	// such a directory outright ("Multiple .csproj files found" / "No runnable
-	// app project was found") whereas we still prompt, and the pick then fails
-	// with "is not a runnable project". Both paths fail and ours names the
-	// offending project, so the cost is one redundant prompt in a directory
-	// that could never have run. Blocking here instead would make our static
-	// parse authoritative, which is exactly what the fail-open rule avoids.
-	it('fails open when filtering would remove every candidate', async () => {
+	// Anything the heuristic is unsure about classifies as `unknown` and
+	// survives, so an empty result is the *confident* case: every candidate
+	// explicitly declared itself a library or a test project. Returning them
+	// anyway would only invite the user to pick one and hit the CLI's "is not
+	// a runnable project". Callers route this to a path that can succeed.
+	it('returns nothing when every candidate is explicitly unrunnable', async () => {
 		await withProjects({ 'Core.csproj': library, 'Tests.csproj': tests }, async (_dir, paths) => {
-			const kept = (await filterOfferableProjects(paths)).map(p => path.basename(p));
-			assert.deepStrictEqual(kept.sort(), ['Core.csproj', 'Tests.csproj']);
+			assert.deepStrictEqual(await filterOfferableProjects(paths), []);
 		});
 	});
 
-	it('keeps a lone candidate without reading it', async () => {
-		const only = path.join(os.tmpdir(), 'never-read-offerable', 'Core.csproj');
-		assert.deepStrictEqual(await filterOfferableProjects([only]), [only]);
+	// The counterweight to the rule above: an inherited or conditional
+	// OutputType must never make a real app disappear.
+	it('keeps a project whose OutputType is not stated in the file', async () => {
+		const inherited = '<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>';
+		await withProjects({ 'Core.csproj': library, 'Mystery.csproj': inherited }, async (_dir, paths) => {
+			const kept = (await filterOfferableProjects(paths)).map(p => path.basename(p));
+			assert.deepStrictEqual(kept, ['Mystery.csproj']);
+		});
+	});
+
+	it('keeps an unreadable candidate rather than hiding it', async () => {
+		const missing = path.join(os.tmpdir(), 'never-created-offerable', 'Core.csproj');
+		assert.deepStrictEqual(await filterOfferableProjects([missing]), [missing]);
+	});
+
+	// A lone library gets no exemption. Keeping it would let the picker
+	// auto-select it and run straight into the CLI's folder-mode fallback,
+	// which reports "Manifest file not found" and never mentions the library.
+	it('drops a lone library', async () => {
+		await withProjects({ 'Core.csproj': library }, async (_dir, paths) => {
+			assert.deepStrictEqual(await filterOfferableProjects(paths), []);
+		});
 	});
 
 	// A directory holding two apps and a library is the case where the CLI's
@@ -348,5 +360,46 @@ describe('filterOfferableCandidates', () => {
 			candidate('folder', 'C:/ws/bin/Debug')
 		];
 		assert.deepStrictEqual(await filterOfferableCandidates(candidates), candidates);
+	});
+
+	async function withCandidateDir(
+		files: Record<string, string>,
+		run: (dir: string) => Promise<void>
+	): Promise<void> {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offerable-cand-'));
+		try {
+			for (const [name, content] of Object.entries(files)) {
+				fs.writeFileSync(path.join(dir, name), content);
+			}
+			await run(dir);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	const library = '<Project><PropertyGroup><OutputType>Library</OutputType></PropertyGroup></Project>';
+
+	// Folder mode is how `winapp run <build output folder>` works, and it has
+	// to stay reachable in a workspace whose only projects are libraries.
+	it('keeps a build output folder when every project is dropped', async () => {
+		await withCandidateDir({ 'Core.csproj': library }, async dir => {
+			const folder = candidate('folder', path.join(dir, 'bin', 'Debug'));
+			const result = await filterOfferableCandidates([
+				candidate('project', path.join(dir, 'Core.csproj')),
+				folder
+			]);
+			assert.deepStrictEqual(result, [folder]);
+		});
+	});
+
+	// A lone project is filtered like any other, so a single-library workspace
+	// cannot auto-select that library.
+	it('drops a lone library project', async () => {
+		await withCandidateDir({ 'Core.csproj': library }, async dir => {
+			const result = await filterOfferableCandidates([
+				candidate('project', path.join(dir, 'Core.csproj'))
+			]);
+			assert.deepStrictEqual(result, []);
+		});
 	});
 });

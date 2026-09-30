@@ -346,14 +346,8 @@ export async function pickRunTarget(
 	let candidates = projects;
 	let solutionMembers = new Map<string, string[]>();
 	let buildOutputScanned = false;
-	if (candidates.length === 0) {
-		const folders = await findBuildOutputTargets(roots);
-		if (!folders) {
-			return undefined;
-		}
-		candidates = folders;
-		buildOutputScanned = true;
-	} else {
+
+	if (candidates.length > 0) {
 		solutionMembers = await mapSolutionMembers(candidates);
 		candidates = dedupeSolutionMembers(candidates, solutionMembers);
 		// Drop projects the project file itself identifies as a library or a
@@ -362,11 +356,26 @@ export async function pickRunTarget(
 		candidates = await filterOfferableCandidates(candidates);
 	}
 
+	// Discovery either found nothing, or found only libraries and test
+	// projects. Both leave a build output folder as the one remaining way to
+	// run, so look for one before giving up on the workspace.
+	const onlyUnrunnableProjects = projects.length > 0 && candidates.length === 0;
 	if (candidates.length === 0) {
-		// Nothing discoverable at all. Say so before a file dialog appears
+		const folders = await findBuildOutputTargets(roots);
+		if (!folders) {
+			return undefined;
+		}
+		candidates = folders;
+		buildOutputScanned = true;
+	}
+
+	if (candidates.length === 0) {
+		// Nothing runnable at all. Say so before a file dialog appears
 		// unbidden — the user asked to run, not to browse.
 		vscode.window.showWarningMessage(
-			'No projects, solutions, or build output folders were found in this workspace. Browse to the project or folder you want to run.'
+			onlyUnrunnableProjects
+				? 'Only library and test projects were found in this workspace, and winapp run needs an executable app project. Browse to the project or folder you want to run.'
+				: 'No projects, solutions, or build output folders were found in this workspace. Browse to the project or folder you want to run.'
 		);
 		return browseForRunTarget(roots, 'folder');
 	}
@@ -588,8 +597,10 @@ export async function pickSolutionProject(
 
 	const offerable = await filterOfferableProjects(projects);
 	if (offerable.length <= 1) {
-		// Exactly one plausible app (or none we can distinguish). Let the CLI
-		// make the final call with its own, better-informed classification.
+		// Exactly one plausible app, or none at all. Either way there is
+		// nothing worth asking about: the CLI makes the final call with its
+		// own, better-informed classification, and when nothing is runnable it
+		// reports that far more precisely than a doomed QuickPick would.
 		return { cancelled: false };
 	}
 

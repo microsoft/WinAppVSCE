@@ -21,6 +21,11 @@
  *   A workspace with a single project auto-selects for "Run Application" but
  *   still prompts for "Run Application (Advanced)".
  *
+ * Test 5 — Library-only workspaces reach folder mode:
+ *   A workspace whose only project is a class library hides that library and
+ *   falls through to the build-output scan, keeping `winapp run <folder>`
+ *   reachable.
+ *
  * Every test dismisses the picker with Escape, so the winapp CLI is never
  * actually invoked and nothing is built, deployed, or registered.
  */
@@ -277,8 +282,51 @@ test.describe('run target picker', () => {
         }
     });
 
-    test('caps the list and points at browse when many projects are found', async () => {
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-cap-e2e-'));
+    // Folder mode is how `winapp run <build output folder>` works. A workspace
+    // whose only project is a library must not offer that library — the CLI
+    // would degrade to folder mode and report "Manifest file not found", which
+    // says nothing about the real problem — but it must still reach the build
+    // output folder, which is the one target that can actually run.
+    test('falls back to build output when the only project is a library', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-libonly-e2e-'));
+        writeProject(tmpDir, path.join('CoreLib', 'CoreLib.csproj'), `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+`);
+        const outputDir = path.join(tmpDir, 'CoreLib', 'bin', 'Debug', 'net8.0');
+        fs.mkdirSync(outputDir, { recursive: true });
+        fs.writeFileSync(path.join(outputDir, 'CoreLib.Sample.exe'), '');
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+
+            const rows = await readRunTargetPicker(page);
+            const joined = rows.join('\n');
+
+            // The library is gone, and discovery pressed on to folder mode
+            // rather than stopping at "nothing to run".
+            expect(joined).not.toContain('CoreLib.csproj');
+            expect(joined).toContain('net8.0');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: library-only workspace falls through to build output');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    test('caps the list and points at browse when many projects are found', async () => {        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-cap-e2e-'));
         const total = 14;
         for (let index = 0; index < total; index += 1) {
             const name = `App${String(index).padStart(2, '0')}`;
