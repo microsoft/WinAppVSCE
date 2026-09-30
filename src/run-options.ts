@@ -29,6 +29,8 @@ export interface WinAppRunOptions {
 	noBuild?: boolean;
 	/** Skip restoring before building. */
 	noRestore?: boolean;
+	/** Run the project's configured .NET Native AOT publish. Requires `PublishAot=true`. */
+	aot?: boolean;
 
 	// --- Both modes ---
 	/** Remove the existing package's application data before re-deploying. */
@@ -45,6 +47,11 @@ export interface WinAppRunOptions {
 	unregisterOnExit?: boolean;
 	/** Launch via the manifest's execution alias instead of AUMID activation. */
 	withAlias?: boolean;
+	/**
+	 * Launch via AUMID activation even for a console app, which would otherwise
+	 * use its execution alias. Mutually exclusive with {@link withAlias}.
+	 */
+	withoutAlias?: boolean;
 	/** Path to the executable relative to the input folder. */
 	executable?: string;
 	/** Explicit `Package.appxmanifest` path. */
@@ -101,6 +108,7 @@ export function buildRunArgs(options: WinAppRunOptions): string[] {
 
 	if (options.noRestore) { args.push('--no-restore'); }
 	if (options.noBuild) { args.push('--no-build'); }
+	if (options.aot) { args.push('--aot'); }
 	if (options.clean) { args.push('--clean'); }
 
 	if (options.manifest) { args.push('--manifest', options.manifest); }
@@ -108,6 +116,7 @@ export function buildRunArgs(options: WinAppRunOptions): string[] {
 	if (options.executable) { args.push('--executable', options.executable); }
 
 	if (options.withAlias) { args.push('--with-alias'); }
+	if (options.withoutAlias) { args.push('--without-alias'); }
 	if (options.unregisterOnExit) { args.push('--unregister-on-exit'); }
 	if (options.noLaunch) { args.push('--no-launch'); }
 	if (options.detach) { args.push('--detach'); }
@@ -151,6 +160,13 @@ export function validateRunOptions(
 		diagnostics.push({
 			severity: 'error',
 			message: 'The "--debug-output" option cannot be combined with "--no-launch", because there is no process to capture output from.'
+		});
+	}
+
+	if (options.withAlias && options.withoutAlias) {
+		diagnostics.push({
+			severity: 'error',
+			message: 'The "withAlias" and "withoutAlias" options are opposites and cannot both be set.'
 		});
 	}
 
@@ -284,11 +300,13 @@ export interface WinAppDebugConfiguration {
 	properties?: Record<string, string>;
 	noBuild?: boolean;
 	noRestore?: boolean;
+	aot?: boolean;
 	clean?: boolean;
 	detach?: boolean;
 	noLaunch?: boolean;
 	unregisterOnExit?: boolean;
 	withAlias?: boolean;
+	withoutAlias?: boolean;
 	executable?: string;
 	manifest?: string;
 	outputAppxDirectory?: string;
@@ -330,11 +348,13 @@ export function runOptionsFromDebugConfig(
 		properties: config.properties,
 		noBuild: config.noBuild,
 		noRestore: config.noRestore,
+		aot: config.aot,
 		clean: config.clean,
 		detach: config.detach,
 		noLaunch: config.noLaunch,
 		unregisterOnExit: config.unregisterOnExit,
 		withAlias: config.withAlias,
+		withoutAlias: config.withoutAlias,
 		executable: config.executable,
 		manifest: config.manifest,
 		outputAppxDirectory: config.outputAppxDirectory,
@@ -358,6 +378,7 @@ function listProjectOnlyOptions(options: WinAppRunOptions): string[] {
 	if (options.properties && Object.keys(options.properties).length > 0) { present.push('--property'); }
 	if (options.noBuild) { present.push('--no-build'); }
 	if (options.noRestore) { present.push('--no-restore'); }
+	if (options.aot) { present.push('--aot'); }
 	return present;
 }
 

@@ -268,11 +268,11 @@
               },
               "project": {
                 "type": "string",
-                "description": "Project mode only. The project to launch when \"input\" is a solution containing more than one application."
+                "description": "Project mode only. The project to launch when \"input\" is a solution, or a directory holding more than one runnable app project. Accepts a project name or path. Ignored in folder mode. Defaults to the only runnable project, when there is exactly one."
               },
               "configuration": {
                 "type": "string",
-                "description": "Project mode only. The build configuration to use.",
+                "description": "Project mode only. The build configuration to use. Ignored in folder mode.",
                 "default": "Debug"
               },
               "arch": {
@@ -282,55 +282,65 @@
                   "arm64",
                   "x86"
                 ],
-                "description": "Project mode only. Target architecture to build for. Defaults to the current process architecture. Ignored when \"runtime\" is set."
+                "description": "Project mode only. Target architecture to build for. Ignored in folder mode, and ignored when \"runtime\" is set. Defaults to the current process architecture."
               },
               "framework": {
                 "type": "string",
-                "description": "Project mode only. Target framework moniker to build, for multi-targeted projects (e.g., 'net8.0-windows10.0.19041.0')."
+                "description": "Project mode only. Target framework moniker to build, for multi-targeted projects (e.g., 'net8.0-windows10.0.19041.0'). Ignored in folder mode. Defaults to the project's own target framework, which is unambiguous unless the project multi-targets."
               },
               "runtime": {
                 "type": "string",
-                "description": "Project mode only. Runtime identifier to build for (e.g., 'win-x64'). Overrides \"arch\". Only Windows RIDs are supported."
+                "description": "Project mode only. Runtime identifier to build for (e.g., 'win-x64'). Overrides \"arch\". Only Windows RIDs are supported. Ignored in folder mode. Defaults to the RID for \"arch\", or for the current process architecture when neither is set."
               },
               "properties": {
                 "type": "object",
-                "description": "Project mode only. MSBuild properties to pass to the build, as name/value pairs.",
+                "description": "Project mode only. MSBuild properties to pass to the build, as name/value pairs. Ignored in folder mode. Defaults to none.",
                 "additionalProperties": {
                   "type": "string"
                 }
               },
               "noBuild": {
                 "type": "boolean",
-                "description": "Project mode only. Run the existing build output without rebuilding.",
+                "description": "Project mode only. Run the existing build output without rebuilding. Ignored in folder mode, which never builds.",
                 "default": false
               },
               "noRestore": {
                 "type": "boolean",
-                "description": "Project mode only. Do not restore the project before building.",
+                "description": "Project mode only. Do not restore the project before building. Ignored in folder mode, and has no effect when \"noBuild\" is set.",
+                "default": false
+              },
+              "aot": {
+                "type": "boolean",
+                "description": "Project mode only. Run the project's configured .NET Native AOT publish instead of an ordinary build. Requires an effective PublishAot=true. Ignored in folder mode.",
                 "default": false
               },
               "clean": {
                 "type": "boolean",
-                "description": "Remove the existing package's application data (LocalState and settings) before deploying.",
+                "description": "Both modes. Remove the existing package's application data (LocalState and settings) before deploying. Application data is otherwise preserved across re-deployments.",
                 "default": false
               },
               "unregisterOnExit": {
                 "type": "boolean",
-                "description": "Remove the development package registration after the application exits.",
+                "description": "Both modes. Remove the development package registration after the application exits. Only removes packages registered in development mode.",
                 "default": false
               },
               "withAlias": {
                 "type": "boolean",
-                "description": "Launch through the package's execution alias so stdin/stdout are inherited. Requires an execution alias in the manifest.",
+                "description": "Both modes. Launch through the package's execution alias so stdin/stdout are inherited. Console apps (OutputType=Exe) already do this; set it to force the same for a windowed app. Cannot be combined with \"withoutAlias\".",
+                "default": false
+              },
+              "withoutAlias": {
+                "type": "boolean",
+                "description": "Both modes. Launch through AUMID activation even for a console app, which would otherwise use its execution alias. The app then runs without a console and prints nothing to the terminal. Cannot be combined with \"withAlias\".",
                 "default": false
               },
               "executable": {
                 "type": "string",
-                "description": "Which executable to launch, when the input contains more than one."
+                "description": "Folder mode only. Which executable to launch, relative to the input folder, when the manifest uses a $targetnametoken$ placeholder and the folder holds more than one .exe. Defaults to auto-detection."
               },
               "manifest": {
                 "type": "string",
-                "description": "Path to the AppxManifest.xml file. If not set, the CLI auto-detects from the input or current directory."
+                "description": "Both modes. Path to the Package.appxmanifest file. Defaults to auto-detection from the input folder or the current directory; the CLI locates an existing manifest and never generates one."
               },
               "debuggerType": {
                 "type": "string",
@@ -343,15 +353,15 @@
               },
               "workingDirectory": {
                 "type": "string",
-                "description": "Working directory for the application"
+                "description": "Both modes. Working directory for the launched application. Defaults to the input folder."
               },
               "args": {
                 "type": "string",
-                "description": "Command-line arguments to pass to the application"
+                "description": "Both modes. Command-line arguments to pass to the application. Defaults to none."
               },
               "outputAppxDirectory": {
                 "type": "string",
-                "description": "Output directory for the loose layout package. If not specified, a directory named AppX inside the input folder will be used."
+                "description": "Both modes. Output directory for the loose layout package. Defaults to a directory named AppX inside the input directory."
               }
             }
           }
@@ -402,6 +412,8 @@
     "download-cli": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1\"",
     "download-cli:latest": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1 -Tag latest\"",
     "sync-schemas": "pwsh -NoProfile -Command \"& ./scripts/sync-schemas.ps1\"",
+    "sync-run-schema": "pwsh -NoProfile -File ./scripts/sync-run-schema.ps1",
+    "verify-run-schema": "pwsh -NoProfile -File ./scripts/sync-run-schema.ps1 -Check",
     "verify-schemas": "node -e \"const fs=require('fs'),p=require('path'),d=p.join(__dirname,'schemas');if(!fs.existsSync(d)||fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length===0){console.error('ERROR: schemas/ contains no XSD files. Run npm run sync-schemas first.');process.exit(1);}console.log('schemas/ verified:',fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length,'XSD files');\"",
     "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && npx tsx --test src/test/artifact-types.test.ts src/test/arch-detection.test.ts src/test/asset-copy-token-store.test.ts src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-path.test.ts src/test/manifest-validator.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/noop-debug-adapter.test.ts src/test/pack-result.test.ts src/test/sign-utils.test.ts src/test/sign-flow.test.ts src/test/tool-command-utils.test.ts src/test/xsd-parser.test.ts src/test/xml-context.test.ts src/test/intellisense-integration.test.ts src/test/intellisense-validation.test.ts src/test/schema-shared.test.ts src/test/semantic-validation.test.ts src/test/working-directory.test.ts src/test/run-target.test.ts src/test/project-runnability.test.ts src/test/run-options.test.ts src/test/package-contributions.test.ts src/test/run-cli-contract.test.ts"
   },

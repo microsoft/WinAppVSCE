@@ -633,10 +633,19 @@ interface RunToggle {
 	projectOnly?: boolean;
 }
 
+/**
+ * The toggles offered by the advanced run command.
+ *
+ * `--without-alias` is deliberately absent: it is the inverse of
+ * `--with-alias`, and two mutually exclusive checkboxes in one multi-select
+ * invite a selection that `validateRunOptions` then has to reject. It stays
+ * available in launch.json, where the two are separate properties.
+ */
 const RUN_TOGGLES: RunToggle[] = [
 	{ key: 'clean', label: 'Clean application data', detail: 'Remove the existing package\'s LocalState and settings before deploying (--clean)' },
 	{ key: 'noBuild', label: 'Skip build', detail: 'Run the existing build output without rebuilding (--no-build)', projectOnly: true },
 	{ key: 'noRestore', label: 'Skip restore', detail: 'Do not restore the project before building (--no-restore)', projectOnly: true },
+	{ key: 'aot', label: 'Native AOT publish', detail: 'Run the project\'s configured Native AOT publish; requires PublishAot=true (--aot)', projectOnly: true },
 	{ key: 'detach', label: 'Launch and return immediately', detail: 'Do not wait for the app to exit (--detach)' },
 	{ key: 'noLaunch', label: 'Register only, do not launch', detail: 'Create the debug identity and register the package without starting the app (--no-launch)' },
 	{ key: 'withAlias', label: 'Launch via execution alias', detail: 'Run in the terminal with stdin/stdout inherited; requires an execution alias in the manifest (--with-alias)' },

@@ -108,6 +108,17 @@ describe('validateRunOptions — CLI conflicts', () => {
 		assert.ok(result.some(d => d.severity === 'warning' && d.message.includes('symbols')));
 	});
 
+	it('rejects the two alias options together, since they are opposites', () => {
+		const result = validateRunOptions(options({ withAlias: true, withoutAlias: true }), 'project');
+		assert.ok(getRunOptionErrors(result).some(d => d.message.includes('opposites')));
+	});
+
+	it('accepts either alias option on its own', () => {
+		for (const opts of [{ withAlias: true }, { withoutAlias: true }]) {
+			assert.deepStrictEqual(getRunOptionErrors(validateRunOptions(options(opts), 'project')), []);
+		}
+	});
+
 	it('accepts a clean project-mode option set', () => {
 		const result = validateRunOptions(options({ configuration: 'Release', arch: 'x64' }), 'project');
 		assert.deepStrictEqual(getRunOptionErrors(result), []);
@@ -161,6 +172,15 @@ describe('validateRunOptions — mode mismatches', () => {
 	it('does not warn about folder-compatible options', () => {
 		const result = validateRunOptions(options({ clean: true, withAlias: true }), 'folder');
 		assert.deepStrictEqual(result, []);
+	});
+
+	// --aot drives an MSBuild publish, so folder mode has nothing to apply it
+	// to. Listing it keeps the warning honest about everything being dropped.
+	it('names --aot among the options a folder run ignores', () => {
+		const result = validateRunOptions(options({ aot: true }), 'folder');
+		const warning = result.find(d => d.severity === 'warning');
+		assert.ok(warning);
+		assert.ok(warning!.message.includes('--aot'));
 	});
 });
 
@@ -237,6 +257,7 @@ describe('runOptionsFromDebugConfig', () => {
 			properties: { Foo: 'Bar' },
 			noBuild: true,
 			noRestore: true,
+			aot: true,
 			clean: true,
 			debugOutput: true,
 			symbols: true,
@@ -244,6 +265,9 @@ describe('runOptionsFromDebugConfig', () => {
 			noLaunch: false,
 			unregisterOnExit: true,
 			withAlias: true,
+			// The opposite of withAlias, so a valid pairing still proves the
+			// key is read rather than dropped.
+			withoutAlias: false,
 			executable: 'App.exe',
 			manifest: 'Package.appxmanifest',
 			outputAppxDirectory: 'out'
@@ -261,6 +285,7 @@ describe('runOptionsFromDebugConfig', () => {
 			properties: { Foo: 'Bar' },
 			noBuild: true,
 			noRestore: true,
+			aot: true,
 			clean: true,
 			debugOutput: true,
 			symbols: true,
@@ -268,6 +293,7 @@ describe('runOptionsFromDebugConfig', () => {
 			noLaunch: false,
 			unregisterOnExit: true,
 			withAlias: true,
+			withoutAlias: false,
 			executable: 'App.exe',
 			manifest: 'Package.appxmanifest',
 			outputAppxDirectory: 'out',

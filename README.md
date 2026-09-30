@@ -199,12 +199,14 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 | `runtime` | string | | *Project mode only.* Runtime identifier to build for (e.g., `win-x64`). Overrides `arch`. Only Windows RIDs are supported. |
 | `properties` | object | | *Project mode only.* MSBuild properties to pass to the build, as name/value pairs. |
 | `noBuild` | boolean | `false` | *Project mode only.* Run the existing build output without rebuilding. |
-| `noRestore` | boolean | `false` | *Project mode only.* Do not restore the project before building. |
+| `noRestore` | boolean | `false` | *Project mode only.* Do not restore the project before building. Has no effect alongside `noBuild`. |
+| `aot` | boolean | `false` | *Project mode only.* Run the project's configured .NET Native AOT publish instead of an ordinary build. Requires an effective `PublishAot=true`. |
 | `clean` | boolean | `false` | Remove the existing package's application data (LocalState and settings) before deploying. |
 | `unregisterOnExit` | boolean | `false` | Remove the development package registration after the application exits. |
-| `withAlias` | boolean | `false` | Launch through the package's execution alias so stdin/stdout are inherited. Requires an execution alias in the manifest. |
-| `executable` | string | | Which executable to launch, when the input contains more than one. |
-| `manifest` | string | | Path to the `AppxManifest.xml` file. If not set, the CLI auto-detects from the input or current directory. |
+| `withAlias` | boolean | `false` | Launch through the package's execution alias so stdin/stdout are inherited. Console apps (`OutputType=Exe`) already do this; set it to force the same for a windowed app. Cannot be combined with `withoutAlias`. |
+| `withoutAlias` | boolean | `false` | Launch through AUMID activation even for a console app, which would otherwise use its execution alias. The app then runs without a console. Cannot be combined with `withAlias`. |
+| `executable` | string | auto-detect | *Folder mode only.* Which executable to launch, relative to the input folder, when the manifest uses a `$targetnametoken$` placeholder and the folder holds more than one `.exe`. |
+| `manifest` | string | auto-detect | Path to the `Package.appxmanifest` file. The CLI locates an existing manifest from the input folder or current directory; it never generates one. |
 | `debuggerType` | string | | Optional underlying debugger override (`coreclr`, `cppvsdbg`, or `node`). If omitted, WinApp reuses an installed debugger or prompts you to pick one. |
 | `workingDirectory` | string | workspace folder | Working directory for the application. |
 | `args` | string | | Command-line arguments to pass to the application. |

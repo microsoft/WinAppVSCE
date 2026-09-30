@@ -69,16 +69,23 @@ Validates that an invalid configured `inputFolder` offers to open its owning deb
 |---|------|-----------|
 | 1 | invalid inputFolder offers to open its debug configuration | Validation cancels debugging, shows the resource-neutral action, and opens the correct folder `launch.json` with its unique configuration content |
 
-### `run-target-picker.spec.ts` — 4 tests
+### `run-target-picker.spec.ts` — 11 tests
 
 Covers run-target discovery for `winapp.run` / `winapp.runAdvanced`, which depends on VS Code's own `findFiles` indexing and workspace-folder resolution and so cannot be unit tested. Every test dismisses the picker with `Escape`, so the CLI is never invoked and nothing is built or deployed.
 
 | # | Test | Validates |
 |---|------|-----------|
-| 1 | lists every discovered project in the workspace | Both `.csproj` files appear, alongside the build-output search and the two browse entries |
-| 2 | shows a solution once rather than also listing its member projects | A `.sln` and its member `.csproj` collapse to a single entry |
-| 3 | discovers projects in every folder of a multi-root workspace | Projects from *both* folders of a `.code-workspace` appear — previously only `workspaceFolders[0]` was searched |
-| 4 | advanced command prompts even when a single project would auto-select | `winapp.runAdvanced` always shows the picker |
+| 1 | hides class libraries and test projects | Non-runnable projects are filtered out rather than offered as targets the CLI would reject |
+| 2 | falls back to build output when the only project is a library | With nothing runnable found, the build-output scan still supplies targets |
+| 3 | prefers the project over its own build output folder | A project and its `bin` output collapse to the project entry |
+| 4 | finds output for a project-less app without surfacing node_modules | Electron/Rust-shaped workspaces reach the `.exe` scan, and excluded directories stay excluded |
+| 5 | asks which project to run inside a multi-app solution | A multi-app `.sln` raises the second prompt that supplies `--project` |
+| 6 | skips the project prompt when a solution holds one runnable app | A single-app solution goes straight on, landing on the build-configuration prompt |
+| 7 | caps the list and points at browse when many projects are found | Beyond the cap the picker truncates and surfaces the browse entry instead of hundreds of rows |
+| 8 | lists every discovered project in the workspace | Both `.csproj` files appear, alongside the build-output search and the two browse entries |
+| 9 | shows a solution once rather than also listing its member projects | A `.sln` and its member `.csproj` collapse to a single entry |
+| 10 | discovers projects in every folder of a multi-root workspace | Projects from *both* folders of a `.code-workspace` appear — previously only `workspaceFolders[0]` was searched |
+| 11 | advanced command prompts even when a single project would auto-select | `winapp.runAdvanced` always shows the picker |
 
 > When matching the picker, assert on the full placeholder. The command palette's own placeholder is "Type the name of a command **to run**", so a loose `/to run/` match silently reads the palette's rows instead of the picker's.
 

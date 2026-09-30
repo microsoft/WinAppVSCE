@@ -82,6 +82,9 @@ $onEditor = Confirm-VSCodeEditor -Ctx $ctx -OpenFileIfNeeded $file
 Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.certGenerate' -Answers @(@{accept=$true})
 Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'some.command' -Arguments @('value', 42)
 Invoke-VSCodeDriverDebug   -Ctx $ctx -InputFolder "$proj\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64"
+#   ^ writes launch.json's deprecated `inputFolder` key, so this drives FOLDER mode only.
+#     To exercise project mode, write launch.json yourself with `input` set to a .csproj/.sln
+#     and call Invoke-VSCodeDriverStep with @{ type='debug'; writeLaunch=$false }.
 Invoke-VSCodeDriverOpenFile -Ctx $ctx -Path "$proj\Package.appxmanifest"
 
 # 4. Observe: screenshot the integrated terminal / editor.
@@ -154,7 +157,10 @@ Command arguments are passed with `-Arguments`; queue/script JSON uses `args`. D
 `kind: activeDocumentUri`, `fileUri`, or `position` resolve to the corresponding VS Code API object.
 Legacy steps with `type: commandArgs` remain supported.
 
-`debug` steps use `launch.json`'s `inputFolder` (the app's built `win-x64` output). No dialogs.
+`debug` steps use `launch.json`'s `input` — a `.csproj`/`.sln`/`.slnx`, a directory containing one,
+or the app's built `win-x64` output folder. No dialogs. The older `inputFolder` key is a deprecated
+alias that still works and only accepts a build-output folder. Omit both and F5 prompts with the
+run-target picker, which needs a QuickPick answer rather than a dialog.
 
 ---
 
@@ -173,11 +179,14 @@ Legacy steps with `type: commandArgs` remain supported.
 - **Pack is slow + fire-and-forget.** The driver returns `done` in ~11s but `winapp pack` keeps
   building in the terminal; **poll for the MSIX** (up to ~2 min). Output lands at
   `<proj>\.winapp\self-contained\<arch>\extracted\MSIX\Main.msix` (hidden, generically named).
-- **F5 / `Invoke-VSCodeDriverDebug` works** with a valid `launch.json` `inputFolder` = the `win-x64`
-  build output containing the exe: `sessionEvents` shows `start:coreclr:…` and the app process comes
-  up. NOTE `startDebugging` returns **false** even on success — key on `launched` (a `start:coreclr`
-  event), not `started`. If `inputFolder` is empty/wrong, F5 silently falls back to the pack folder
-  picker.
+- **F5 / `Invoke-VSCodeDriverDebug` works** with a valid `launch.json` `input`. Two shapes are
+  useful: project mode (`input` = a `.csproj`/`.sln`, which restores and builds before launching —
+  slower, so allow for the build) and folder mode (`input` = the `win-x64` build output containing
+  the exe, which launches what is already built). Either way `sessionEvents` shows
+  `start:coreclr:…` and the app process comes up. NOTE `startDebugging` returns **false** even on
+  success — key on `launched` (a `start:coreclr` event), not `started`. If `input` is empty/wrong,
+  F5 falls back to prompting; with neither `input` nor `inputFolder` set it raises the run-target
+  QuickPick, answered with `@{accept=$true}`, not a dialog.
 - **The WinApp debugger requires `ms-dotnettools.csharp`** (coreclr) — install it into
   `.drive-extensions` too: `code --extensions-dir=.drive-extensions
   --install-extension ms-dotnettools.csharp`. Without it F5 shows an "Install Extension" prompt.
