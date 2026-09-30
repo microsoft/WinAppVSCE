@@ -57,6 +57,24 @@ Commands that already take an explicit target — such as **Create MSIX Package*
 
 **Run Application and F5** use their own target discovery rather than the project detection above. They search **every folder of a multi-root workspace** for projects and solutions, skipping `node_modules`, `.git`, `bin`, `obj`, and similar directories, and list them in a single prompt, auto-selecting when there is only one. Class libraries and test projects are left out of the list, even when one is the only project in the workspace — `winapp run` cannot launch them. At most 10 targets are shown; if there are more, **Browse for a project or solution…** reaches the rest. When the chosen target contains more than one runnable app — a solution, or a directory with several projects at its top level — a second prompt asks which project to launch; when only one candidate remains, WinApp lets the CLI resolve it rather than asking. If the workspace contains no project or solution — or contains only class libraries and test projects — they fall back to scanning for folders containing `.exe` files; you can also reach that scan explicitly from the **Search for build output folders…** entry, or pick any path with **Browse for a project or solution…** / **Browse for a folder…**.
 
+**What that means per workspace shape:**
+
+| Workspace | Prompts | Mode | Result |
+|-----------|---------|------|--------|
+| WinUI or WPF app — one `.csproj` | none | project | Restores, builds, launches |
+| App `.csproj` **and** an existing build output folder | none | project | Builds first; the folder is not offered (see below) |
+| Two or more app projects | 1 — which project | project | Runs the one you pick |
+| App plus class libraries or test projects | none | project | Runs the app; the others are filtered out |
+| Solution with several apps | 1 — which project | project | Passes `--project` to the CLI |
+| Solution with one app plus libraries | none | project | The CLI auto-selects the only runnable project |
+| Only class libraries or test projects | none, unless several output folders exist | folder | Falls through to build output; warns and offers **Browse…** if nothing is built |
+| More than 10 projects | 1, capped with a browse hint | project | **Browse…** reaches the rest |
+| Electron (`dist/win-unpacked/App.exe`), Rust (`target/debug/app.exe`), or any app without a `.csproj` | none, unless several output folders exist | folder | Launches what is already built (see below) |
+
+> **A project always wins over its own build output.** The `.exe` scan only runs when no project or solution is found, so a workspace containing both runs in project mode and builds first. To pick the folder instead, use **Run Application (Advanced)**, which always shows the picker, then **Search for build output folders…**.
+
+> **Folder mode still needs a manifest.** In folder mode the CLI auto-detects a `Package.appxmanifest` from the input folder — it does not generate one. Apps without a project file (Electron, Rust, and similar) therefore need a manifest in the folder, or `manifest` set in `launch.json`. Run **WinApp: Generate Manifest** to create one.
+
 **Configuration (optional):**
 
 To skip automatic scanning, add the `winapp.appDirectories` setting to your workspace:
