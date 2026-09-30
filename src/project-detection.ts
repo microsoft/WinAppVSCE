@@ -300,6 +300,10 @@ export type ProjectRunnability = 'app' | 'test' | 'library' | 'unknown';
  * `library` when the project file explicitly says so. Anything else is
  * `unknown` and stays visible, so a project whose `OutputType` is inherited or
  * conditional is never hidden from the user.
+ *
+ * This approximation exists only because the CLI cannot be queried for its
+ * classification without also building and launching the app. See
+ * microsoft/winappCli#957 for the upstream query API and #273 for adopting it.
  */
 export function classifyProjectRunnability(content: string): ProjectRunnability {
 	if (/<IsTestProject>\s*true\s*<\/IsTestProject>/i.test(content)) {
