@@ -306,6 +306,14 @@ describe('filterOfferableProjects', () => {
 	// The CLI classifies via full MSBuild evaluation; a static parse can be
 	// wrong. Hiding every candidate would leave the user with nothing to pick,
 	// so an all-negative result is discarded in favour of the raw list.
+	//
+	// This is the one case where we knowingly diverge from the CLI: it rejects
+	// such a directory outright ("Multiple .csproj files found" / "No runnable
+	// app project was found") whereas we still prompt, and the pick then fails
+	// with "is not a runnable project". Both paths fail and ours names the
+	// offending project, so the cost is one redundant prompt in a directory
+	// that could never have run. Blocking here instead would make our static
+	// parse authoritative, which is exactly what the fail-open rule avoids.
 	it('fails open when filtering would remove every candidate', async () => {
 		await withProjects({ 'Core.csproj': library, 'Tests.csproj': tests }, async (_dir, paths) => {
 			const kept = (await filterOfferableProjects(paths)).map(p => path.basename(p));
