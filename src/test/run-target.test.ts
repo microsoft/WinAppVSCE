@@ -317,6 +317,20 @@ describe('filterOfferableProjects', () => {
 		const only = path.join(os.tmpdir(), 'never-read-offerable', 'Core.csproj');
 		assert.deepStrictEqual(await filterOfferableProjects([only]), [only]);
 	});
+
+	// A directory holding two apps and a library is the case where the CLI's
+	// own ambiguity message is unfiltered: it lists the library as a candidate
+	// even though `--project <library>` then fails with "is not a runnable
+	// project". Filtering here gives the user a better list than the CLI's.
+	it('offers only the apps when a directory holds two apps and a library', async () => {
+		await withProjects(
+			{ 'Alpha.csproj': app, 'Beta.csproj': app, 'CoreLib.csproj': library },
+			async (_dir, paths) => {
+				const kept = (await filterOfferableProjects(paths)).map(p => path.basename(p)).sort();
+				assert.deepStrictEqual(kept, ['Alpha.csproj', 'Beta.csproj']);
+			}
+		);
+	});
 });
 
 describe('filterOfferableCandidates', () => {
