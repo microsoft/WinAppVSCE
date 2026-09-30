@@ -10,6 +10,7 @@ import {
 	isOfferableProject,
 	readProjectRunnability
 } from '../project-detection';
+import { PROJECT_FILE_SKIP_DIRS } from '../run-target';
 
 function csproj(body: string): string {
 	return `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>${body}</PropertyGroup></Project>`;
@@ -101,5 +102,23 @@ describe('skip directory lists', () => {
 		for (const dir of ['bin', 'artifacts', 'Debug', 'Release']) {
 			assert.ok(!always.includes(dir), `${dir} must not be always-skipped`);
 		}
+	});
+
+	// Apps with no project file reach folder mode only through the .exe scan,
+	// and Electron/Rust put their output in exactly the directories that
+	// .csproj discovery treats as build copies. The two lists must disagree
+	// here, so assert both halves rather than just one.
+	it('scans project-less output directories that project discovery skips', () => {
+		const projectSkips: readonly string[] = PROJECT_FILE_SKIP_DIRS;
+		for (const dir of ['dist', 'out', 'build', 'target']) {
+			assert.ok(!BUILD_OUTPUT_SKIP_DIRS.has(dir), `${dir} must be scanned for executables`);
+			assert.ok(projectSkips.includes(dir), `${dir} must be skipped when finding project files`);
+		}
+	});
+
+	// Every Electron workspace vendors an electron.exe here. Scanning it would
+	// bury the real app under framework binaries.
+	it('never scans node_modules for executables', () => {
+		assert.ok(BUILD_OUTPUT_SKIP_DIRS.has('node_modules'));
 	});
 });

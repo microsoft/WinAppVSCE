@@ -26,6 +26,28 @@
  *   falls through to the build-output scan, keeping `winapp run <folder>`
  *   reachable.
  *
+ * Test 6 — Libraries and test projects are hidden:
+ *   A workspace mixing an app with a class library and a test project offers
+ *   only the app.
+ *
+ * Test 7 — A project outranks its own build output:
+ *   A workspace with both a .csproj and a populated bin/ offers the project
+ *   only, so the run rebuilds instead of launching stale output.
+ *
+ * Test 8 — Project-less apps (Electron, Rust, …) still resolve:
+ *   A workspace with no project file finds its dist/ output while skipping the
+ *   electron.exe vendored under node_modules.
+ *
+ * Test 9 — Multi-app solutions prompt for `--project`:
+ *   Selecting a .sln with two runnable apps asks which one to run.
+ *
+ * Test 10 — Single-app solutions do not:
+ *   The same flow with one app and one library moves straight on, because the
+ *   CLI resolves `--project` itself.
+ *
+ * Test 11 — Long project lists are capped:
+ *   More than ten projects are truncated with a pointer at the browse entry.
+ *
  * Every test dismisses the picker with Escape, so the winapp CLI is never
  * actually invoked and nothing is built, deployed, or registered.
  */
@@ -208,17 +230,23 @@ function quickPickRows(page: Page) {
 // matches the palette and reads its rows instead of the picker's.
 const RUN_TARGET_PLACEHOLDER = /Select the project, solution, or build output folder to run/;
 
+/** The placeholder of the second prompt, which disambiguates `--project`. */
+const PROJECT_PICKER_PLACEHOLDER = /Which project in .+ would you like to run\?/;
+
+/** The placeholder of the advanced command's first build-settings prompt. */
+const BUILD_CONFIG_PLACEHOLDER = /^Build configuration$/;
+
 /**
- * Wait for the run-target picker and return the text of every row.
+ * Wait for a quick pick identified by its placeholder and return every row.
  *
- * The picker is identified by its placeholder, and we wait for that placeholder
- * rather than for rows: the command palette's own rows are visible the instant
- * Enter is pressed, so reading rows immediately captures the palette instead of
- * the picker that replaces it.
+ * The picker is identified by its placeholder rather than by waiting for rows:
+ * the command palette's own rows are visible the instant Enter is pressed, so
+ * reading rows immediately captures the palette instead of the picker that
+ * replaces it.
  */
-async function readRunTargetPicker(page: Page): Promise<string[]> {
+async function readPickerRows(page: Page, placeholder: RegExp): Promise<string[]> {
     const input = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
-    await expect(input).toHaveAttribute('placeholder', RUN_TARGET_PLACEHOLDER, { timeout: 30_000 });
+    await expect(input).toHaveAttribute('placeholder', placeholder, { timeout: 30_000 });
 
     const rows = quickPickRows(page);
     await expect(rows.first()).toBeVisible({ timeout: 15_000 });
@@ -231,6 +259,10 @@ async function readRunTargetPicker(page: Page): Promise<string[]> {
         texts.push((await rows.nth(index).textContent()) ?? '');
     }
     return texts;
+}
+
+async function readRunTargetPicker(page: Page): Promise<string[]> {
+    return readPickerRows(page, RUN_TARGET_PLACEHOLDER);
 }
 
 test.describe('run target picker', () => {
@@ -318,6 +350,170 @@ test.describe('run target picker', () => {
 
             await page.keyboard.press('Escape');
             console.log('✅ PASS: library-only workspace falls through to build output');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    // A project always beats its own build output: the .exe scan only runs
+    // when discovery finds no project at all. Without this the picker would
+    // offer both, and picking the folder would launch stale output instead of
+    // rebuilding.
+    test('prefers the project over its own build output folder', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-prefer-e2e-'));
+        writeProject(tmpDir, path.join('App', 'App.csproj'));
+        const outputDir = path.join(tmpDir, 'App', 'bin', 'Debug', 'net8.0-windows10.0.19041.0');
+        fs.mkdirSync(outputDir, { recursive: true });
+        fs.writeFileSync(path.join(outputDir, 'App.exe'), '');
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+
+            const joined = (await readRunTargetPicker(page)).join('\n');
+
+            expect(joined).toContain('App.csproj');
+            // No row carries the target framework, so the bin folder is absent.
+            expect(joined).not.toContain('net8.0-windows');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: project preferred over its own build output');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    // Apps with no project file — Electron, Rust, and anything else that only
+    // produces an .exe — reach folder mode through the build-output scan. The
+    // scan must look inside dist/ and target/, which .csproj discovery skips,
+    // while still skipping node_modules: every Electron workspace ships an
+    // electron.exe there that would otherwise bury the real app.
+    test('finds output for a project-less app without surfacing node_modules', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-noproj-e2e-'));
+        fs.writeFileSync(path.join(tmpDir, 'package.json'), '{ "name": "sample-app" }');
+
+        const appOutput = path.join(tmpDir, 'dist', 'win-unpacked');
+        fs.mkdirSync(appOutput, { recursive: true });
+        fs.writeFileSync(path.join(appOutput, 'SampleApp.exe'), '');
+
+        const vendored = path.join(tmpDir, 'node_modules', 'electron', 'dist');
+        fs.mkdirSync(vendored, { recursive: true });
+        fs.writeFileSync(path.join(vendored, 'electron.exe'), '');
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+
+            const joined = (await readRunTargetPicker(page)).join('\n');
+
+            expect(joined).toContain('win-unpacked');
+            expect(joined).not.toContain('node_modules');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: project-less app resolved to its build output');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    // The second prompt, which supplies `--project`. Selecting the solution
+    // from the first picker must lead to a project prompt listing both apps,
+    // because `winapp run` cannot resolve a multi-app solution on its own.
+    test('asks which project to run inside a multi-app solution', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-sln-project-e2e-'));
+        writeProject(tmpDir, path.join('Alpha', 'Alpha.csproj'));
+        writeProject(tmpDir, path.join('Beta', 'Beta.csproj'));
+        fs.writeFileSync(path.join(tmpDir, 'MySln.sln'),
+            'Microsoft Visual Studio Solution File, Format Version 12.00\r\n'
+            + 'Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Alpha", "Alpha\\Alpha.csproj", '
+            + '"{11111111-1111-1111-1111-111111111111}"\r\nEndProject\r\n'
+            + 'Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Beta", "Beta\\Beta.csproj", '
+            + '"{22222222-2222-2222-2222-222222222222}"\r\nEndProject\r\n');
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+
+            // Solutions sort ahead of projects, so the first row is the
+            // solution and its members are already folded into it.
+            const targets = await readRunTargetPicker(page);
+            expect(targets.join('\n')).toContain('MySln.sln');
+            await page.keyboard.press('Enter');
+
+            const projects = (await readPickerRows(page, PROJECT_PICKER_PLACEHOLDER)).join('\n');
+            expect(projects).toContain('Alpha.csproj');
+            expect(projects).toContain('Beta.csproj');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: multi-app solution prompted for a project');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    // The mirror of the test above: when a solution holds exactly one runnable
+    // app the CLI resolves `--project` on its own, so prompting would be pure
+    // noise. Proven by asserting the flow moves on to the run options prompt.
+    test('skips the project prompt when a solution holds one runnable app', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-sln-single-e2e-'));
+        writeProject(tmpDir, path.join('Alpha', 'Alpha.csproj'));
+        writeProject(tmpDir, path.join('CoreLib', 'CoreLib.csproj'), `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+`);
+        fs.writeFileSync(path.join(tmpDir, 'MySln.sln'),
+            'Microsoft Visual Studio Solution File, Format Version 12.00\r\n'
+            + 'Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Alpha", "Alpha\\Alpha.csproj", '
+            + '"{11111111-1111-1111-1111-111111111111}"\r\nEndProject\r\n'
+            + 'Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CoreLib", "CoreLib\\CoreLib.csproj", '
+            + '"{22222222-2222-2222-2222-222222222222}"\r\nEndProject\r\n');
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+
+            const targets = await readRunTargetPicker(page);
+            expect(targets.join('\n')).toContain('MySln.sln');
+            await page.keyboard.press('Enter');
+
+            // The project prompt precedes build settings, so landing on the
+            // configuration prompt proves it never appeared.
+            const options = await readPickerRows(page, BUILD_CONFIG_PLACEHOLDER);
+            expect(options.join('\n')).toContain('Debug');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: single-app solution skipped the project prompt');
         } finally {
             if (app) {
                 await app.close().catch(() => {});
