@@ -1,5 +1,6 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
+import { ALWAYS_SKIP_DIRS, isOfferableProject, readProjectRunnability } from './project-detection';
 
 /**
  * How `winapp run` will interpret a given input path.
@@ -27,15 +28,28 @@ export const SOLUTION_FILE_EXTENSIONS = ['.sln', '.slnx'] as const;
 export const PROJECT_FILE_GLOB = '**/*.{sln,slnx,csproj}';
 
 /**
- * Maximum number of project/solution files to surface. Much higher than the
- * build-output cap because the glob is targeted rather than speculative.
+ * Maximum number of project/solution files to read from the glob. The glob is
+ * targeted rather than speculative, so this is generous — it exists to bound
+ * the work on a monorepo, not to bound what the user sees. Display is capped
+ * separately by {@link RUN_TARGET_DISPLAY_LIMIT} after filtering.
  */
-export const PROJECT_FILE_MAX_RESULTS = 100;
+export const PROJECT_FILE_MAX_RESULTS = 200;
+
+/**
+ * Maximum number of run targets shown in the picker.
+ *
+ * A large repository can contain dozens of project files; listing them all
+ * produces a wall of names that is slower to scan than simply browsing to the
+ * one you want. Matches the build-output picker's cap, and the picker always
+ * offers Browse so nothing is unreachable.
+ */
+export const RUN_TARGET_DISPLAY_LIMIT = 10;
 
 /** Directories excluded from project-file discovery. */
 export const PROJECT_FILE_SKIP_DIRS = [
-	'node_modules', '.git', 'bin', 'obj', '.vs', '.vscode', 'packages',
-	'dist', 'build', 'out', 'target', '.winapp', 'artifacts', 'AppX'
+	...ALWAYS_SKIP_DIRS,
+	// A project file under a build-output directory is a copy, never a source.
+	'bin', 'obj', 'dist', 'build', 'out', 'target', 'artifacts', 'AppX'
 ];
 
 /** VS Code-compatible exclude glob for project-file discovery. */
@@ -185,6 +199,11 @@ function parseSlnxProjectPaths(content: string): string[] {
 /**
  * Reads a solution and returns the absolute paths of the projects it contains.
  * Returns an empty array when the solution can't be read or parsed.
+ *
+ * Entries that resolve outside the solution's own directory are dropped. A
+ * solution file is workspace content, and the picker shows only each project's
+ * file name, so a `..\..\` entry would otherwise put an unreviewable path on a
+ * `--project` argument behind a label that looks ordinary.
  */
 export async function readSolutionProjectPaths(solutionPath: string): Promise<string[]> {
 	let content: string;
@@ -196,7 +215,14 @@ export async function readSolutionProjectPaths(solutionPath: string): Promise<st
 
 	const solutionDir = path.dirname(solutionPath);
 	return parseSolutionProjectPaths(content, solutionPath)
-		.map(relative => path.resolve(solutionDir, relative.replace(/\\/g, path.sep)));
+		.map(relative => path.resolve(solutionDir, relative.replace(/\\/g, path.sep)))
+		.filter(resolved => isContainedIn(solutionDir, resolved));
+}
+
+/** True when `candidate` is inside `container` (or is `container` itself). */
+export function isContainedIn(container: string, candidate: string): boolean {
+	const relative = path.relative(path.resolve(container), path.resolve(candidate));
+	return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
 /**
@@ -219,6 +245,31 @@ export async function readDirectoryProjectPaths(directoryPath: string): Promise<
 			.includes(path.extname(name).toLowerCase()))
 		.map(name => path.join(directoryPath, name))
 		.sort((left, right) => left.localeCompare(right));
+}
+
+/**
+ * Narrows a set of project paths to those worth offering the user.
+ *
+ * Projects the file explicitly identifies as a test project or a library are
+ * dropped; everything else — including projects whose `OutputType` is
+ * inherited or conditional — is kept. See
+ * {@link import('./project-detection').classifyProjectRunnability} for why the
+ * heuristic is deliberately one-sided.
+ *
+ * Fails open: if the filter would remove *everything*, the original list is
+ * returned unchanged. Showing a list that needs narrowing is a far better
+ * outcome than showing an empty one, and it keeps a bad heuristic from ever
+ * making a project unreachable.
+ */
+export async function filterOfferableProjects(projectPaths: readonly string[]): Promise<string[]> {
+	if (projectPaths.length <= 1) {
+		return [...projectPaths];
+	}
+
+	const runnability = await Promise.all(projectPaths.map(readProjectRunnability));
+	const offerable = projectPaths.filter((_, index) => isOfferableProject(runnability[index]));
+
+	return offerable.length > 0 ? offerable : [...projectPaths];
 }
 
 /**
@@ -253,6 +304,25 @@ export function dedupeSolutionMembers(
 	return candidates.filter(candidate =>
 		candidate.kind !== 'project' || !covered.has(normalizeForComparison(candidate.path))
 	);
+}
+
+/**
+ * Applies {@link filterOfferableProjects} to the `project` candidates in a
+ * discovered set, leaving solutions and build-output folders untouched.
+ *
+ * Solutions are never filtered: the CLI resolves the runnable project inside a
+ * solution itself, and it does so with full MSBuild evaluation.
+ */
+export async function filterOfferableCandidates(
+	candidates: readonly RunTargetCandidate[]
+): Promise<RunTargetCandidate[]> {
+	const projects = candidates.filter(candidate => candidate.kind === 'project');
+	if (projects.length <= 1) {
+		return [...candidates];
+	}
+
+	const keep = new Set(await filterOfferableProjects(projects.map(candidate => candidate.path)));
+	return candidates.filter(candidate => candidate.kind !== 'project' || keep.has(candidate.path));
 }
 
 /**

@@ -256,6 +256,95 @@ export function getRunOptionErrors(diagnostics: readonly RunOptionDiagnostic[]):
 }
 
 /**
+ * The subset of a `launch.json` configuration this extension reads.
+ *
+ * Declared explicitly rather than using `vscode.DebugConfiguration`, whose
+ * index signature is `any` — that would let a misspelled key typecheck and
+ * silently drop the user's setting.
+ */
+export interface WinAppDebugConfiguration {
+	/**
+	 * Launch configurations carry arbitrary extra keys (`type`, `name`,
+	 * `request`, debugger-specific settings). Accepting them keeps this
+	 * assignable from `vscode.DebugConfiguration`; the declared properties
+	 * below still win for the keys this extension reads, so a misspelling is
+	 * caught at the point of use.
+	 */
+	[key: string]: unknown;
+
+	/** Positional input. Supersedes {@link inputFolder}. */
+	input?: string;
+	/** Deprecated alias for {@link input}, kept so existing launch.json files keep working. */
+	inputFolder?: string;
+	project?: string;
+	configuration?: string;
+	arch?: string;
+	framework?: string;
+	runtime?: string;
+	properties?: Record<string, string>;
+	noBuild?: boolean;
+	noRestore?: boolean;
+	clean?: boolean;
+	detach?: boolean;
+	noLaunch?: boolean;
+	unregisterOnExit?: boolean;
+	withAlias?: boolean;
+	executable?: string;
+	manifest?: string;
+	outputAppxDirectory?: string;
+	debugOutput?: boolean;
+	symbols?: boolean;
+}
+
+/**
+ * Resolve the run input from a debug configuration.
+ *
+ * `input` supersedes the original `inputFolder`, which is retained as a
+ * deprecated alias. When both are present the new name wins.
+ */
+export function resolveDebugInput(config: WinAppDebugConfiguration): string | undefined {
+	return config.input || config.inputFolder || undefined;
+}
+
+/**
+ * Map a launch.json configuration onto the shared run options.
+ *
+ * `json` is always set: the adapter depends on parsing the process ID out of
+ * the CLI's JSON output in order to attach.
+ *
+ * `debugOutput` and `symbols` are mapped even though a debug session rejects
+ * them, so {@link validateRunOptions} can explain *why* rather than silently
+ * ignoring what the user asked for.
+ */
+export function runOptionsFromDebugConfig(
+	config: WinAppDebugConfiguration,
+	input: string
+): WinAppRunOptions {
+	return {
+		input,
+		project: config.project,
+		configuration: config.configuration,
+		arch: config.arch,
+		framework: config.framework,
+		runtime: config.runtime,
+		properties: config.properties,
+		noBuild: config.noBuild,
+		noRestore: config.noRestore,
+		clean: config.clean,
+		detach: config.detach,
+		noLaunch: config.noLaunch,
+		unregisterOnExit: config.unregisterOnExit,
+		withAlias: config.withAlias,
+		executable: config.executable,
+		manifest: config.manifest,
+		outputAppxDirectory: config.outputAppxDirectory,
+		debugOutput: config.debugOutput,
+		symbols: config.symbols,
+		json: true
+	};
+}
+
+/**
  * Names the project-only options present in `options`, using the CLI's own
  * flag spelling so the warning is greppable against `winapp run --help`.
  */

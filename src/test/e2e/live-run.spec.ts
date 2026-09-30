@@ -206,7 +206,7 @@ const scaffolded: ScaffoldedApp[] = [];
  * pass without having built anything.
  */
 function scaffoldWinUiApp(prefix: string): ScaffoldedApp {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `${SCAFFOLD_PREFIX}${prefix}-`));
     const appName = `LiveRun${Math.random().toString(36).slice(2, 8)}`;
     const projectDir = path.join(tempRoot, appName);
 
@@ -228,8 +228,17 @@ function scaffoldWinUiApp(prefix: string): ScaffoldedApp {
     return app;
 }
 
-/** Prefix shared by every temp directory this spec creates. */
-const TEMP_PREFIX = 'live-run-';
+/**
+ * Prefix for the scaffolded app workspaces this spec creates.
+ *
+ * Deliberately distinct from the VS Code profile prefix below: the orphan sweep
+ * matches on this prefix and treats each child directory as a deployed app, so
+ * a profile directory must never match it.
+ */
+const SCAFFOLD_PREFIX = 'live-run-app-';
+
+/** Prefix for the throwaway VS Code user-data directories this spec creates. */
+const PROFILE_PREFIX = 'live-run-profile-';
 
 /** Blocks the current thread; usable from synchronous teardown. */
 function sleepSync(ms: number): void {
@@ -257,7 +266,7 @@ function findOrphanedScaffolds(): string[] {
     }
 
     return entries
-        .filter(entry => entry.isDirectory() && entry.name.startsWith(TEMP_PREFIX))
+        .filter(entry => entry.isDirectory() && entry.name.startsWith(SCAFFOLD_PREFIX))
         .map(entry => path.resolve(path.join(os.tmpdir(), entry.name)))
         .filter(dir => !active.has(dir));
 }
@@ -283,19 +292,23 @@ function reclaimOrphanedScaffold(orphanDir: string): void {
             continue;
         }
 
+        const manifestPath = path.join(orphanDir, entry.name, 'Package.appxmanifest');
+        let manifest: string;
+        try {
+            manifest = fs.readFileSync(manifestPath, 'utf8');
+        } catch {
+            // Not a deployed app directory, so its name is not an app name.
+            // Killing by name here would target an unrelated process.
+            continue;
+        }
+
         // The project directory is named after the app, which is also the
         // process name.
         killProcess(entry.name);
 
-        const manifestPath = path.join(orphanDir, entry.name, 'Package.appxmanifest');
-        try {
-            const manifest = fs.readFileSync(manifestPath, 'utf8');
-            const identityName = /<Identity[^>]*?\bName\s*=\s*"([^"]+)"/s.exec(manifest)?.[1];
-            if (identityName) {
-                removeRegisteredPackage(identityName);
-            }
-        } catch {
-            // No manifest here (e.g. a profile directory); nothing to unregister.
+        const identityName = /<Identity[^>]*?\bName\s*=\s*"([^"]+)"/s.exec(manifest)?.[1];
+        if (identityName) {
+            removeRegisteredPackage(identityName);
         }
     }
 }
@@ -394,7 +407,7 @@ function findBuiltExecutable(projectDir: string, configuration: string, appName:
 const userDataDirs: string[] = [];
 
 async function launchVSCode(targetPath: string): Promise<{ app: ElectronApplication; page: Page }> {
-    const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'live-run-profile-'));
+    const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), PROFILE_PREFIX));
     userDataDirs.push(userDataPath);
 
     // Seed the fresh profile rather than relying on CLI flags, which do not
@@ -568,6 +581,13 @@ async function waitFor(
  * report a stale crash as a failure of whatever ran next.
  */
 test.afterAll(() => {
+    // This hook is file-scoped, so it also runs when the suite below is
+    // skipped. Sweeping the machine on a run that never created anything is
+    // not this hook's job.
+    if (!liveRunEnabled) {
+        return;
+    }
+
     const leaks: string[] = [];
 
     for (const app of scaffolded) {
@@ -614,7 +634,7 @@ test.describe('live winapp run (project mode)', () => {
     test('builds, deploys, and launches a WinUI project', async () => {
         test.setTimeout(LIVE_RUN_TIMEOUT_MS);
 
-        const app = scaffoldWinUiApp('live-run-e2e');
+        const app = scaffoldWinUiApp('basic');
         expect(findRegisteredPackage(app.identityName), 'identity should be unused before the run')
             .toBeUndefined();
 
@@ -659,7 +679,7 @@ test.describe('live winapp run (project mode)', () => {
     test('applies the configuration setting to a project-mode build', async () => {
         test.setTimeout(LIVE_RUN_TIMEOUT_MS);
 
-        const app = scaffoldWinUiApp('live-run-config-e2e');
+        const app = scaffoldWinUiApp('config');
 
         // getRunSettings reads this and only forwards it in project mode.
         // Nothing else proves the value survives the trip to the CLI.

@@ -26,7 +26,7 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Restore Packages** | Restore project packages and dependencies. |
 | **WinApp: Update Packages** | Update packages and dependencies to the latest versions. |
 | **WinApp: Run Application** | Build and run your app as a loose-layout packaged application with full package identity — great for testing APIs that require identity. Select a project (`.csproj`), a solution (`.sln`/`.slnx`), or an already-built output folder. |
-| **WinApp: Run Application (Advanced)...** | Same as **Run Application**, but prompts for the build configuration, target architecture, and options such as cleaning app data, skipping the build, or unregistering on exit. |
+| **WinApp: Run Application (Advanced)...** | Same as **Run Application**, but prompts for the build configuration, target architecture, and options such as cleaning app data, skipping the build, detaching, or unregistering on exit. |
 | **WinApp: Create Debug Identity** | Add sparse package identity to an existing executable so you can launch and debug it directly from VS Code with identity. |
 | **WinApp: Unregister Package** | Unregister a sideloaded development package (e.g., one registered via Run or Create Debug Identity). |
 | **WinApp: Create MSIX Package** | Package your application into an MSIX, with options to generate a certificate and bundle the runtime self-contained. If self-contained packaging appears to target a different architecture than your machine, WinApp shows a warning before continuing. On completion, a notification names the built package and offers **Reveal in Explorer**, **Sign**, and **Install** actions. |
@@ -55,7 +55,7 @@ When you run a project-context WinApp command — such as **Initialize Project**
 
 Commands that already take an explicit target — such as **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
-**Run Application and F5** use their own target discovery rather than the project detection above. They search **every folder of a multi-root workspace** for projects and solutions, list them in a single prompt, and auto-select when there is only one. When the chosen target contains more than one runnable app — a solution, or a directory with several projects at its top level — a second prompt asks which project to launch. If the workspace contains no project or solution, they fall back to scanning for folders containing `.exe` files; you can also reach that scan explicitly from the **Search for build output folders…** entry, or pick any path with **Browse for a project or solution…** / **Browse for a folder…**.
+**Run Application and F5** use their own target discovery rather than the project detection above. They search **every folder of a multi-root workspace** for projects and solutions, skipping `node_modules`, `.git`, `bin`, `obj`, and similar directories, and list them in a single prompt, auto-selecting when there is only one. Class libraries and test projects are left out of the list. At most 10 targets are shown; if there are more, **Browse for a project or solution…** reaches the rest. When the chosen target contains more than one runnable app — a solution, or a directory with several projects at its top level — a second prompt asks which project to launch; when only one candidate remains, WinApp lets the CLI resolve it rather than asking. If the workspace contains no project or solution, they fall back to scanning for folders containing `.exe` files; you can also reach that scan explicitly from the **Search for build output folders…** entry, or pick any path with **Browse for a project or solution…** / **Browse for a folder…**.
 
 **Configuration (optional):**
 
@@ -196,7 +196,7 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 
 **Settings for Run Application:**
 
-The palette's **Run Application** command takes its build settings from your workspace, so the common case stays a single prompt. All four are resource-scoped, so each folder of a multi-root workspace can set its own value.
+The palette's **Run Application** command takes its build settings from your workspace, so the common case stays a single prompt. All four are resource-scoped, so each folder of a multi-root workspace can set its own value. They apply to the palette commands only — a `launch.json` configuration sets the equivalent property directly.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|

@@ -3,7 +3,10 @@ import assert from 'node:assert';
 import {
 	buildRunArgs,
 	getRunOptionErrors,
+	resolveDebugInput,
+	runOptionsFromDebugConfig,
 	validateRunOptions,
+	type WinAppDebugConfiguration,
 	type WinAppRunOptions
 } from '../run-options';
 
@@ -197,5 +200,96 @@ describe('validateRunOptions — value checks', () => {
 	it('accepts an empty property value', () => {
 		const result = validateRunOptions(options({ properties: { Foo: '' } }), 'project');
 		assert.deepStrictEqual(getRunOptionErrors(result), []);
+	});
+});
+
+describe('resolveDebugInput', () => {
+	it('prefers the new input key over the deprecated inputFolder alias', () => {
+		assert.strictEqual(resolveDebugInput({ input: 'A.csproj', inputFolder: 'bin/Debug' }), 'A.csproj');
+	});
+
+	it('still honours inputFolder so existing launch.json files keep working', () => {
+		assert.strictEqual(resolveDebugInput({ inputFolder: 'bin/Debug' }), 'bin/Debug');
+	});
+
+	it('returns undefined when neither is set so the picker runs', () => {
+		assert.strictEqual(resolveDebugInput({}), undefined);
+	});
+
+	it('treats an empty string as unset', () => {
+		assert.strictEqual(resolveDebugInput({ input: '', inputFolder: '' }), undefined);
+	});
+});
+
+describe('runOptionsFromDebugConfig', () => {
+	// Every key the launch.json schema declares must reach the CLI. A key that
+	// is contributed but never mapped is silently ignored at F5 time.
+	it('maps every declared launch.json key onto run options', () => {
+		const config: WinAppDebugConfiguration = {
+			type: 'winapp',
+			name: 'Launch',
+			request: 'launch',
+			project: 'App',
+			configuration: 'Release',
+			arch: 'arm64',
+			framework: 'net8.0-windows10.0.19041.0',
+			runtime: 'win-arm64',
+			properties: { Foo: 'Bar' },
+			noBuild: true,
+			noRestore: true,
+			clean: true,
+			debugOutput: true,
+			symbols: true,
+			detach: false,
+			noLaunch: false,
+			unregisterOnExit: true,
+			withAlias: true,
+			executable: 'App.exe',
+			manifest: 'Package.appxmanifest',
+			outputAppxDirectory: 'out'
+		};
+
+		const options = runOptionsFromDebugConfig(config, 'C:/ws/App.csproj');
+
+		assert.deepStrictEqual(options, {
+			input: 'C:/ws/App.csproj',
+			project: 'App',
+			configuration: 'Release',
+			arch: 'arm64',
+			framework: 'net8.0-windows10.0.19041.0',
+			runtime: 'win-arm64',
+			properties: { Foo: 'Bar' },
+			noBuild: true,
+			noRestore: true,
+			clean: true,
+			debugOutput: true,
+			symbols: true,
+			detach: false,
+			noLaunch: false,
+			unregisterOnExit: true,
+			withAlias: true,
+			executable: 'App.exe',
+			manifest: 'Package.appxmanifest',
+			outputAppxDirectory: 'out',
+			json: true
+		});
+	});
+
+	// The adapter parses the launched process ID out of the CLI's JSON output
+	// in order to attach, so this can never be opted out of.
+	it('always requests JSON output', () => {
+		assert.strictEqual(runOptionsFromDebugConfig({}, 'C:/ws/App.csproj').json, true);
+	});
+
+	it('produces a minimal command line for a bare configuration', () => {
+		const options = runOptionsFromDebugConfig({}, 'C:/ws/App.csproj');
+		assert.deepStrictEqual(buildRunArgs(options), ['run', 'C:/ws/App.csproj', '--json']);
+	});
+
+	it('round-trips debugOutput and symbols, which validation depends on', () => {
+		const options = runOptionsFromDebugConfig({ debugOutput: true, symbols: true }, 'C:/ws/App.csproj');
+		const args = buildRunArgs(options);
+		assert.ok(args.includes('--debug-output'));
+		assert.ok(args.includes('--symbols'));
 	});
 });

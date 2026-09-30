@@ -229,6 +229,98 @@ async function readRunTargetPicker(page: Page): Promise<string[]> {
 }
 
 test.describe('run target picker', () => {
+    test('hides class libraries and test projects', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-filter-e2e-'));
+        writeProject(tmpDir, path.join('AppOne', 'AppOne.csproj'));
+        writeProject(tmpDir, path.join('CoreLib', 'CoreLib.csproj'), `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+`);
+        writeProject(tmpDir, path.join('AppOne.Tests', 'AppOne.Tests.csproj'), `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+  </ItemGroup>
+</Project>
+`);
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            // Only one runnable project survives filtering, which "Run
+            // Application" would auto-select and launch. The advanced command
+            // always shows the picker without invoking the CLI.
+            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+
+            const rows = await readRunTargetPicker(page);
+            const joined = rows.join('\n');
+
+            expect(joined).toContain('AppOne.csproj');
+            expect(joined).not.toContain('CoreLib.csproj');
+            expect(joined).not.toContain('AppOne.Tests.csproj');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: library and test projects filtered out of the picker');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    test('caps the list and points at browse when many projects are found', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-cap-e2e-'));
+        const total = 14;
+        for (let index = 0; index < total; index += 1) {
+            const name = `App${String(index).padStart(2, '0')}`;
+            writeProject(tmpDir, path.join(name, `${name}.csproj`));
+        }
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application');
+
+            const topRows = await readRunTargetPicker(page);
+            // The list virtualizes, so the tail — including the cap separator
+            // and the browse entries — is not in the DOM until it scrolls into
+            // view. ArrowUp from the first item wraps to the last.
+            await page.keyboard.press('ArrowUp');
+            await page.waitForTimeout(750);
+            const bottomRows = await readRunTargetPicker(page);
+
+            const rows = [...topRows, ...bottomRows];
+            const joined = rows.join('\n');
+            const projectNames = new Set(
+                rows.map(row => /App\d\d\.csproj/.exec(row)?.[0]).filter((name): name is string => !!name)
+            );
+
+            expect(projectNames.size).toBeLessThanOrEqual(10);
+            expect(joined).toContain(`Showing 10 of ${total}`);
+            expect(joined).toContain('Browse for a project or solution');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: project list capped at 10 with a browse hint');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
     test('lists every discovered project in the workspace', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-e2e-'));
         writeProject(tmpDir, path.join('AppOne', 'AppOne.csproj'));

@@ -7,7 +7,10 @@ import {
 	classifyRunTargetEntries,
 	classifyRunTargetFile,
 	dedupeSolutionMembers,
+	filterOfferableCandidates,
+	filterOfferableProjects,
 	findOwningRoot,
+	isContainedIn,
 	isProjectMode,
 	parseSolutionProjectPaths,
 	readDirectoryProjectPaths,
@@ -246,5 +249,82 @@ describe('readDirectoryProjectPaths', () => {
 	it('returns an empty array for an unreadable directory', async () => {
 		const missing = path.join(os.tmpdir(), 'run-target-does-not-exist-12345');
 		assert.deepStrictEqual(await readDirectoryProjectPaths(missing), []);
+	});
+});
+
+describe('isContainedIn', () => {
+	it('accepts a project nested under the container', () => {
+		assert.strictEqual(isContainedIn('C:/ws', 'C:/ws/src/App.csproj'), true);
+	});
+
+	it('accepts the container itself', () => {
+		assert.strictEqual(isContainedIn('C:/ws', 'C:/ws'), true);
+	});
+
+	// A .sln can legally reference `..\Other\Other.csproj`. Those members are
+	// real, but the extension only shows paths relative to the container, so a
+	// sibling would render as a confusing `..\..` string.
+	it('rejects a sibling directory reached through ..', () => {
+		assert.strictEqual(isContainedIn('C:/ws/App', 'C:/ws/Other/Other.csproj'), false);
+	});
+
+	it('rejects a path that only shares a name prefix', () => {
+		assert.strictEqual(isContainedIn('C:/ws/App', 'C:/ws/AppOther/Other.csproj'), false);
+	});
+});
+
+describe('filterOfferableProjects', () => {
+	async function withProjects(
+		files: Record<string, string>,
+		run: (dir: string, paths: string[]) => Promise<void>
+	): Promise<void> {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offerable-'));
+		try {
+			const paths: string[] = [];
+			for (const [name, content] of Object.entries(files)) {
+				const full = path.join(dir, name);
+				fs.writeFileSync(full, content);
+				paths.push(full);
+			}
+			await run(dir, paths);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	const app = '<Project><PropertyGroup><OutputType>WinExe</OutputType></PropertyGroup></Project>';
+	const library = '<Project><PropertyGroup><OutputType>Library</OutputType></PropertyGroup></Project>';
+	const tests = '<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>';
+
+	it('drops libraries and test projects', async () => {
+		await withProjects({ 'App.csproj': app, 'Core.csproj': library, 'Tests.csproj': tests }, async (_dir, paths) => {
+			const kept = (await filterOfferableProjects(paths)).map(p => path.basename(p));
+			assert.deepStrictEqual(kept, ['App.csproj']);
+		});
+	});
+
+	// The CLI classifies via full MSBuild evaluation; a static parse can be
+	// wrong. Hiding every candidate would leave the user with nothing to pick,
+	// so an all-negative result is discarded in favour of the raw list.
+	it('fails open when filtering would remove every candidate', async () => {
+		await withProjects({ 'Core.csproj': library, 'Tests.csproj': tests }, async (_dir, paths) => {
+			const kept = (await filterOfferableProjects(paths)).map(p => path.basename(p));
+			assert.deepStrictEqual(kept.sort(), ['Core.csproj', 'Tests.csproj']);
+		});
+	});
+
+	it('keeps a lone candidate without reading it', async () => {
+		const only = path.join(os.tmpdir(), 'never-read-offerable', 'Core.csproj');
+		assert.deepStrictEqual(await filterOfferableProjects([only]), [only]);
+	});
+});
+
+describe('filterOfferableCandidates', () => {
+	it('never filters solutions or build output folders', async () => {
+		const candidates = [
+			candidate('solution', 'C:/ws/App.sln'),
+			candidate('folder', 'C:/ws/bin/Debug')
+		];
+		assert.deepStrictEqual(await filterOfferableCandidates(candidates), candidates);
 	});
 });

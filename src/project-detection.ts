@@ -33,11 +33,28 @@ export function getProjectLabel(project: DetectedProject): string {
 	return `${project.type} project (${getDisplayFilePath(project)})`;
 }
 
-const SKIP_DIRS = new Set([
-	'node_modules', '.git', 'bin', 'obj', 'debug', 'release',
-	'.vs', '.vscode', '.idea', 'packages', 'dist', 'build', 'out',
-	'target', '.winapp', 'artifacts', 'testresults',
-	'__pycache__', '.gradle', '.dart_tool', '.pub-cache', '.nuget', '.cargo'
+/**
+ * Directories no scan should ever descend into, regardless of what it is
+ * looking for: dependency caches, VCS/IDE metadata, and tool scratch space.
+ *
+ * The three scans in this codebase (project detection, project-file
+ * discovery, and build-output discovery) each extend this with exclusions
+ * specific to what they look for. Those extensions legitimately differ —
+ * build-output discovery must *not* skip `bin`, since that is exactly where
+ * the executables live — so only this common base is shared, and each
+ * specialization derives from it rather than restating it.
+ */
+export const ALWAYS_SKIP_DIRS = [
+	'node_modules', '.git', '.vs', '.vscode', '.idea', 'packages', '.winapp'
+] as const;
+
+const SKIP_DIRS = new Set<string>([
+	...ALWAYS_SKIP_DIRS,
+	// Build inputs/outputs and language caches: a project file found under
+	// these is a copy, not a source.
+	'bin', 'obj', 'debug', 'release', 'dist', 'build', 'out', 'target',
+	'artifacts', 'testresults', '__pycache__',
+	'.gradle', '.dart_tool', '.pub-cache', '.nuget', '.cargo'
 ]);
 
 /**
@@ -133,8 +150,12 @@ export async function detectProjects(root: string, maxProjects: number = 10): Pr
 }
 
 /** Directories to exclude from build-output scanning. */
-export const BUILD_OUTPUT_SKIP_DIRS = new Set([
-	'node_modules', '.git', 'appx', '.winapp', 'obj', '.vs', 'packages'
+export const BUILD_OUTPUT_SKIP_DIRS = new Set<string>([
+	...ALWAYS_SKIP_DIRS,
+	// `bin`, the configuration folders under it, and `artifacts` (the .NET 8+
+	// artifacts output layout) are deliberately absent: build-output discovery
+	// is looking for exactly what lives there.
+	'appx', 'obj'
 ]);
 
 /**
@@ -255,27 +276,83 @@ async function findExecutableCsproj(directory: string): Promise<string | undefin
 }
 
 /**
+ * How a `.csproj` is likely to behave when handed to `winapp run`.
+ *
+ * `unknown` is a first-class result and is deliberately common: the markers
+ * this looks at can come from an SDK default, `Directory.Build.props`, or a
+ * condition on `$(TargetFramework)`, none of which a static read can see. The
+ * CLI resolves those correctly via full MSBuild evaluation, so the extension
+ * must never treat `unknown` as "not runnable".
+ */
+export type ProjectRunnability = 'app' | 'test' | 'library' | 'unknown';
+
+/**
+ * Classifies csproj XML by the markers that are visible without evaluating
+ * MSBuild.
+ *
+ * This intentionally does **not** reimplement the CLI's classification. The
+ * CLI evaluates each project (falling back to a static parse only when the SDK
+ * is unavailable) and is authoritative; this heuristic exists purely so the
+ * extension can avoid *offering* a project the user plainly cannot run, and so
+ * it can tell "obviously one app" from "genuinely ambiguous" before prompting.
+ *
+ * It is deliberately asymmetric: a project is only classified as `test` or
+ * `library` when the project file explicitly says so. Anything else is
+ * `unknown` and stays visible, so a project whose `OutputType` is inherited or
+ * conditional is never hidden from the user.
+ */
+export function classifyProjectRunnability(content: string): ProjectRunnability {
+	if (/<IsTestProject>\s*true\s*<\/IsTestProject>/i.test(content)) {
+		return 'test';
+	}
+
+	// The test SDK is what actually makes a project a test project; projects
+	// relying on it rarely set IsTestProject themselves.
+	if (/<PackageReference\b[^>]*\bInclude\s*=\s*"Microsoft\.NET\.Test\.Sdk"/i.test(content)) {
+		return 'test';
+	}
+
+	const outputTypeMatch = content.match(/<OutputType>\s*(.*?)\s*<\/OutputType>/i);
+	if (!outputTypeMatch) {
+		// No explicit OutputType. It may still build an executable (WinUI and
+		// WPF templates usually set it, but SDK defaults and shared props
+		// files can supply it too), so defer to the CLI.
+		return 'unknown';
+	}
+
+	const outputType = outputTypeMatch[1].toLowerCase();
+	if (outputType === 'exe' || outputType === 'winexe') {
+		return 'app';
+	}
+	if (outputType === 'library') {
+		return 'library';
+	}
+	return 'unknown';
+}
+
+/**
+ * Reads and classifies a project file. Unreadable files are `unknown` so an
+ * I/O hiccup can never hide a project the user is looking for.
+ */
+export async function readProjectRunnability(projectPath: string): Promise<ProjectRunnability> {
+	try {
+		return classifyProjectRunnability(await fsp.readFile(projectPath, 'utf-8'));
+	} catch {
+		return 'unknown';
+	}
+}
+
+/** True when a project should be offered as a run target. */
+export function isOfferableProject(runnability: ProjectRunnability): boolean {
+	return runnability === 'app' || runnability === 'unknown';
+}
+
+/**
  * Parses csproj XML content to determine if it's an executable, non-test project.
  * Simplified heuristic inspired by the CLI's IsExecutableProject logic — uses regex
  * to match the first <OutputType> and <IsTestProject> elements. Does not handle
  * multiple/conditional PropertyGroups or values inside XML comments.
  */
 function isExecutableCsproj(content: string): boolean {
-	// Extract OutputType value from PropertyGroup elements
-	const outputTypeMatch = content.match(/<OutputType>\s*(.*?)\s*<\/OutputType>/i);
-	if (!outputTypeMatch) {
-		return false;
-	}
-	const outputType = outputTypeMatch[1].toLowerCase();
-	if (outputType !== 'exe' && outputType !== 'winexe') {
-		return false;
-	}
-
-	// Check IsTestProject property
-	const isTestMatch = content.match(/<IsTestProject>\s*(.*?)\s*<\/IsTestProject>/i);
-	if (isTestMatch && isTestMatch[1].toLowerCase() === 'true') {
-		return false;
-	}
-
-	return true;
+	return classifyProjectRunnability(content) === 'app';
 }
