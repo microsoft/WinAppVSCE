@@ -426,6 +426,25 @@ test("names a missing SDK, outranks restore and build, and survives a reload", (
   assert.equal(isProjectContextState("dotnet-sdk-required"), true);
 });
 
+// The status bar applies `presentation.command ?? showOutput` on every render, so leaving the
+// SDK-required state only restores the default click target if no other state carries a command.
+test("limits the custom status command to the SDK-required state", () => {
+  for (const state of [
+    "loading",
+    "ready",
+    "packages-not-restored",
+    "reference-build-failed",
+    "generators-unavailable",
+    "error",
+  ] as const) {
+    assert.equal(
+      getProjectContextStatusPresentation({ uri: "file:///A.xaml", state })?.command,
+      undefined,
+      `${state} must not pin a custom status command`
+    );
+  }
+});
+
 test("presents ready status briefly and hides idle status", () => {
   assert.deepEqual(
     getProjectContextStatusPresentation({

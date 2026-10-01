@@ -275,14 +275,15 @@ describe("WinUI XAML — client commands & lifecycle", function () {
         `expected no project-aware IntelliSense without .NET; got: ${degraded.labels.join(", ")}`
       );
 
-      // The point of the native server: absence of semantic completion is also what a server that
-      // never started looks like, so assert a feature only a running server can answer.
-      const ranges = await h.foldingRangesAt(
+      // Absence of semantic completion also describes a server that never started, so assert a
+      // feature only this server can answer. VS Code contributes no XAML semantic token provider,
+      // and the server computes tokens from the document alone, so this needs no project.
+      const semantic = await h.semanticTokensAt(
         `<Page ${h.NS}>\n  <Grid>\n    <Button />\n  </Grid>\n</Page>`
       );
       assert.ok(
-        ranges.length > 0,
-        "the native server must still serve folding ranges with no .NET installed"
+        semantic.tokens.length > 0,
+        "the native server must still serve semantic tokens with no .NET installed"
       );
     } finally {
       delete process.env.WINUI_XAML_FORCE_NO_DOTNET;
