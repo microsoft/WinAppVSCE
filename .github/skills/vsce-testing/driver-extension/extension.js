@@ -81,6 +81,20 @@ async function acceptQuickInput() {
   catch (e) { return 'accept-error:' + String(e); }
 }
 
+// Move the QuickPick highlight down N rows. Needed whenever the item under
+// test is not the first one (e.g. picking a sparse manifest in a list that
+// also contains build-output folders); `accept` alone always takes row 0.
+async function selectNextQuickInput(count) {
+  const n = Math.max(1, Number(count) || 1);
+  try {
+    for (let i = 0; i < n; i++) {
+      await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
+      await delay(250);
+    }
+    return 'selected-next:' + n;
+  } catch (e) { return 'select-next-error:' + String(e); }
+}
+
 // Run a command step. Ordinary command steps are not awaited because the command may block on
 // prompts; legacy commandArgs steps are awaited so existing scripted provider queries keep results.
 async function executeCommandStep(step, result) {
@@ -113,6 +127,9 @@ async function executeCommandStep(step, result) {
     } else if (a.nativeDialogPath) {
       const r = await typeIntoNativeDialog(a.nativeDialogPath);
       log.answers.push({ kind: 'nativeDialog', path: a.nativeDialogPath, dialogResult: r });
+    } else if (a.selectNext) {
+      const r = await selectNextQuickInput(a.selectNext);
+      log.answers.push({ kind: 'selectNext', count: a.selectNext, result: r });
     } else if (a.accept) {
       const r = await acceptQuickInput();
       log.answers.push({ kind: 'accept', result: r });
