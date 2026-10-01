@@ -253,7 +253,7 @@ XAML editing degrades to **syntax highlighting only** rather than failing outrig
 
 #### What works at each loading stage
 
-Editing stays responsive while the project loads, because features light up in stages rather than waiting for the whole project. The columns below correspond to the status bar messages above: **Loading** is *XAML IntelliSense loading*, **Framework&#8209;ready** is *XAML project loading*, and **Ready** is *XAML IntelliSense ready*.
+Editing stays responsive while the project loads, because features light up in stages rather than waiting for the whole project. The columns below correspond to the status bar messages above: **Loading** is *WinApp: Loading XAML IntelliSense*, **Framework&#8209;ready** is *WinApp: WinUI Types Ready · Loading Project Symbols and Diagnostics*, and **Ready** is *WinApp: XAML IntelliSense Ready*.
 
 | Feature | Loading | Framework&#8209;ready | Ready |
 |---------|:-------:|:---------------------:|:-----:|
@@ -278,7 +278,7 @@ Two details worth knowing:
 
 F12 opens source you own: event handlers, `x:Bind` members, your own control and page types, `x:Name` declarations, and resource keys. Types from the WinUI SDK or a NuGet package are compiled metadata with no source to open, so F12 does nothing on those; use **hover** to inspect them instead. This matches Visual Studio, which also does not navigate into SDK types from XAML markup.
 
-F12 never blocks on the project load. If VS Code reports **"No definition found"** while the project is still loading, press it again once the status bar reports **WinApp: XAML IntelliSense ready**.
+F12 never blocks on the project load. If VS Code reports **"No definition found"** while the project is still loading, press it again once the status bar reports **WinApp: XAML IntelliSense Ready**.
 
 #### C# code-behind IntelliSense
 

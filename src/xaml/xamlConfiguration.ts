@@ -77,10 +77,11 @@ export function getXamlStatus(
 
   if (running) {
     // The server reports the process failure, which names dotnet rather than what the developer
-    // has to install, so this state always states the requirement; the raw text goes to the output.
+    // has to install, so the requirement leads and any server detail follows it.
     if (projectContext?.state === "dotnet-sdk-required") {
+      const detail = projectContext.message ? ` ${projectContext.message}` : "";
       return {
-        message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE}`,
+        message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE}${detail}`,
         actions: [
           XAML_STATUS_ACTIONS.installDotnet,
           XAML_STATUS_ACTIONS.restartServer,

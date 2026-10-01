@@ -32,11 +32,13 @@ import { createDotnetChildEnvironment, resolveDotnetCommand } from "./dotnetRunt
 import {
   DIAGNOSTICS_LEVEL_KEY,
   DIAGNOSTICS_LEVEL_SETTING,
+  DOTNET_DOWNLOAD_URL,
   EXTERNAL_COMMANDS,
   INTELLISENSE_ENABLE_KEY,
   INTELLISENSE_ENABLE_SETTING,
   XAML_COMMANDS,
   XAML_SETTINGS_SECTION,
+  XAML_STATUS_ACTIONS,
 } from "./xamlConstants";
 import { ServerLifecycle } from "./serverLifecycle";
 import {
@@ -54,6 +56,7 @@ import {
   notifyProjectBuildRequired as runProjectBuildNotification,
 } from "./projectBuildNotification";
 import {
+  PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE,
   PROJECT_CONTEXT_STATUS_NOTIFICATION,
   ProjectContextStatus,
   getRelevantProjectContextStatuses,
@@ -576,7 +579,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
   // The Native AOT server is self-contained, so nothing about .NET gates its launch. Only a
   // contributor-supplied framework-dependent .dll runs under `dotnet`.
   const isNativeServer = serverPath.toLowerCase().endsWith(".exe");
-  const dotnet = resolveDotnetCommand();
+  const dotnet = resolveDotnetCommand() ?? "dotnet";
 
   log(
     isNativeServer
@@ -743,6 +746,10 @@ function notifyProjectBuildRequired(
 // Pass the project as a ProcessExecution argument, not shell text, so PowerShell cannot expand `$(...)` or backticks in a server-reported path.
 async function runProjectBuild(projectPath: string): Promise<void> {
   const dotnet = resolveDotnetCommand();
+  if (dotnet === undefined) {
+    reportMissingDotnetSdk("build");
+    return;
+  }
   const task = new vscode.Task(
     { type: "winapp-xaml-build" },
     vscode.TaskScope.Workspace,
@@ -819,13 +826,35 @@ function isTrustedWorkspaceProject(projectPath: string): boolean {
   });
 }
 
+// Launching a bare `dotnet` here would let the project directory, which is the working directory,
+// satisfy the lookup, so an unresolved host is reported instead of run.
+function reportMissingDotnetSdk(operation: string): void {
+  log(`No .NET SDK found on PATH; skipping project ${operation}.`);
+  void vscode.window
+    .showErrorMessage(
+      `WinUI project ${operation} needs the .NET SDK. ${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE}`,
+      XAML_STATUS_ACTIONS.installDotnet
+    )
+    .then((choice) => {
+      if (choice === XAML_STATUS_ACTIONS.installDotnet) {
+        void vscode.env.openExternal(vscode.Uri.parse(DOTNET_DOWNLOAD_URL));
+      }
+    });
+}
+
 async function restoreProject(projectPath: string): Promise<void> {
+  const dotnet = resolveDotnetCommand();
+  if (dotnet === undefined) {
+    reportMissingDotnetSdk("package restore");
+    return;
+  }
+
   log(`Restoring project packages: ${projectPath}`);
   restoresInFlight += 1;
   renderProjectContextStatus();
 
   try {
-    await runDotnetRestore(projectPath, resolveDotnetCommand());
+    await runDotnetRestore(projectPath, dotnet);
     log("Project package restore completed. IntelliSense metadata is reloading.");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

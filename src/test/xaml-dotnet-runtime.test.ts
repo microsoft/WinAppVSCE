@@ -3,7 +3,11 @@ import test from "node:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { createDotnetChildEnvironment, resolveDotnetCommand } from "../xaml/dotnetRuntime";
+import {
+  createDotnetChildEnvironment,
+  listSearchableDirectories,
+  resolveDotnetCommand,
+} from "../xaml/dotnetRuntime";
 
 test("points DOTNET_ROOT and DOTNET_HOST_PATH at an explicitly named host", () => {
   const env = createDotnetChildEnvironment("C:\\dotnet10\\dotnet.exe", {
@@ -38,35 +42,44 @@ test("clears an inherited DOTNET_HOST_PATH but keeps DOTNET_ROOT when dotnet com
 
 // The server is self-contained and C++ projects never invoke dotnet, so PATH is the discovery
 // mechanism and the override exists only so tests can pin a specific install.
-test("names dotnet from PATH unless an explicit override is set", () => {
-  assert.equal(resolveDotnetCommand({}), "dotnet");
-  assert.equal(resolveDotnetCommand({ PATH: "" }), "dotnet");
+test("reports no host when PATH holds none, unless an explicit override is set", () => {
+  assert.equal(resolveDotnetCommand({}), undefined);
+  assert.equal(resolveDotnetCommand({ PATH: "" }), undefined);
   assert.equal(
     resolveDotnetCommand({ WINUI_XAML_DOTNET_PATH: "C:\\dotnet10\\dotnet.exe" }),
     "C:\\dotnet10\\dotnet.exe"
   );
 });
 
-// Restore and build run with the project folder as the working directory, and Windows resolves a
-// bare command against it, so a dotnet planted in an opened repo would win over the real one.
-test("skips relative and empty PATH entries, which resolve against the project folder", () => {
+// Restore and build run with the project folder as the working directory, and Windows resolves
+// empty and relative entries against it, so a dotnet planted in an opened repo would win.
+test("never searches a PATH entry that resolves against the working directory", () => {
+  const absolute = path.join(os.tmpdir(), "winui-xaml-absolute");
+  const entries = ["", ".", "..", "relative", path.join(".", "tools")];
+
+  assert.deepEqual(
+    listSearchableDirectories({ PATH: [...entries, absolute].join(path.delimiter) }),
+    [absolute]
+  );
+  assert.deepEqual(listSearchableDirectories({ PATH: entries.join(path.delimiter) }), []);
+});
+
+test("returns the first absolute PATH entry holding a dotnet executable", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "winui-xaml-dotnet-"));
-  const executable = process.platform === "win32" ? "dotnet.exe" : "dotnet";
-  const planted = path.join(dir, executable);
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "winui-xaml-nodotnet-"));
+  const planted = path.join(dir, process.platform === "win32" ? "dotnet.exe" : "dotnet");
   fs.writeFileSync(planted, "");
 
   try {
     assert.equal(resolveDotnetCommand({ PATH: dir }), planted);
+    assert.equal(resolveDotnetCommand({ PATH: empty }), undefined);
     assert.equal(
-      resolveDotnetCommand({ PATH: ["", ".", "relative"].join(path.delimiter) }),
-      "dotnet"
-    );
-    assert.equal(
-      resolveDotnetCommand({ PATH: ["", ".", dir].join(path.delimiter) }),
+      resolveDotnetCommand({ PATH: ["", ".", empty, dir].join(path.delimiter) }),
       planted
     );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(empty, { recursive: true, force: true });
   }
 });
 
