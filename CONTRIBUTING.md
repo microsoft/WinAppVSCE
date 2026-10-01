@@ -47,16 +47,13 @@ npm run test:e2e
 
 `npm run download-cli:latest` bundles the latest stable `winapp` release into `bin/`.
 The extension's `winapp run` surface is checked against that binary's own
-`--cli-schema` output by `src/test/run-cli-contract.test.ts`, using the generated
-fixture `src/test/fixtures/run-cli-schema.json`.
-
-Never hand-edit that fixture. When the CLI adds, removes, or renames a `run`
-option, regenerate it:
+`--cli-schema` output by `src/test/run-cli-contract.test.ts`, which reads the
+schema from `bin/` at test time. There is nothing to regenerate or keep in
+sync — the bundled CLI is the only source of truth:
 
 ```powershell
 npm run download-cli:latest
-npm run sync-run-schema     # rewrites the fixture from the bundled CLI
-npm run verify-run-schema   # -Check mode: fails if the two have drifted
+npm run test:unit
 ```
 
 Then surface any new option in `src/run-options.ts`, `src/run-utils.ts`, and the
