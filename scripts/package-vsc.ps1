@@ -188,7 +188,7 @@ try
         $ServerBundleModeSet = $true
     } else {
         # Normal packaging: DON'T publish the server here. The `vsce package` step below triggers
-        # vscode:prepublish -> ensure-server-bundle.mjs publishes a fresh framework-dependent dist/server.
+        # vscode:prepublish -> ensure-server-bundle.mjs publishes a fresh Native AOT dist/server.
         # Publishing here too would build the server twice for every package.
         $env:WINUI_XAML_SERVER_BUNDLE_MODE = "source"
         $ServerBundleModeSet = $true

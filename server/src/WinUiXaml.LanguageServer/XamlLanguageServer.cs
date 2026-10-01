@@ -34,8 +34,8 @@ internal sealed partial class XamlLanguageServer
     private readonly ConcurrentDictionary<string, AsyncCancellationLifetime> _semanticDiagnosticCancellations =
         new(StringComparer.OrdinalIgnoreCase);
     private int _msbuildUnavailableNotified;
-    private readonly ConcurrentDictionary<string, byte> _restoreRequiredProjects =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ProjectPromptLatch _restoreRequiredProjects = new();
+    private readonly ProjectPromptLatch _buildRequiredProjects = new();
     private bool _shuttingDown;
 
     // MSBuild evaluation is restricted to trusted roots because project files can execute code. An empty list disables project evaluation.
@@ -484,7 +484,7 @@ internal sealed partial class XamlLanguageServer
             _contexts.Invalidate(p.TextDocument.Uri, discardLatest: true);
             await _connection.SendNotificationAsync(
                 "winui-xaml/projectContextStatus",
-                new { uri = p.TextDocument.Uri, state = "idle" })
+                new ProjectContextStatusParams { Uri = p.TextDocument.Uri, State = "idle" })
                 .ConfigureAwait(false);
             await _connection.SendNotificationAsync(
                 "textDocument/publishDiagnostics",

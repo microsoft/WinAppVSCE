@@ -12,9 +12,14 @@ import {
   XamlStatusAction,
 } from "./xamlConstants";
 import {
+  PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE,
   PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
+  PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_LOADING_MESSAGE,
+  PROJECT_CONTEXT_PACKAGES_NOT_RESTORED_FALLBACK_MESSAGE,
+  PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE,
+  PROJECT_CONTEXT_RESTORING_MESSAGE,
   ProjectContextState,
 } from "./projectContextStatus";
 
@@ -46,14 +51,9 @@ export interface XamlStatus {
 export interface XamlProjectContextSummary {
   state: ProjectContextState;
   message?: string;
+  /** True while the extension is running `dotnet restore`, which changes what the developer should do next. */
+  restoreInFlight?: boolean;
 }
-
-export const DOTNET_REQUIRED_STATUS = {
-  text: "$(warning) XAML: .NET 10 required",
-  tooltip:
-    "WinUI XAML IntelliSense requires .NET 10. Select for install and restart options.",
-  command: XAML_COMMANDS.showInfo,
-} as const;
 
 export type XamlStatusEffect =
   | { command: string; args?: string[] }
@@ -65,7 +65,6 @@ export function getXamlStatus(
   running: boolean,
   trusted: boolean,
   hasOpenXamlDocument: boolean,
-  requiresDotnet = false,
   projectContext?: XamlProjectContextSummary
 ): XamlStatus {
   if (!enabled) {
@@ -77,10 +76,56 @@ export function getXamlStatus(
   }
 
   if (running) {
+    // The server reports the process failure, which names dotnet rather than what the developer
+    // has to install, so the requirement leads and any server detail follows it.
+    if (projectContext?.state === "dotnet-sdk-required") {
+      const detail = projectContext.message ? ` ${projectContext.message}` : "";
+      return {
+        message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE}${detail}`,
+        actions: [
+          XAML_STATUS_ACTIONS.installDotnet,
+          XAML_STATUS_ACTIONS.restartServer,
+          XAML_STATUS_ACTIONS.showOutput,
+        ],
+      };
+    }
     if (projectContext?.state === "error") {
       return {
         message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${
           projectContext.message ?? PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE
+        }`,
+        actions: [
+          XAML_STATUS_ACTIONS.restartServer,
+          XAML_STATUS_ACTIONS.showOutput,
+        ],
+      };
+    }
+    if (projectContext?.state === "packages-not-restored") {
+      return {
+        message: projectContext.restoreInFlight
+          ? `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_RESTORING_MESSAGE}`
+          : `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${
+              projectContext.message ??
+              PROJECT_CONTEXT_PACKAGES_NOT_RESTORED_FALLBACK_MESSAGE
+            }`,
+        actions: [XAML_STATUS_ACTIONS.showOutput],
+      };
+    }
+    if (projectContext?.state === "reference-build-failed") {
+      return {
+        message: `${XAML_STATUS_PREFIX} ${
+          projectContext.message ??
+          PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE
+        }`,
+        actions: [XAML_STATUS_ACTIONS.showOutput],
+      };
+    }
+    // Restarting is the one action that can help: the helper is resolved when the server starts.
+    if (projectContext?.state === "generators-unavailable") {
+      return {
+        message: `${XAML_STATUS_PREFIX} ${
+          projectContext.message ??
+          PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE
         }`,
         actions: [
           XAML_STATUS_ACTIONS.restartServer,
@@ -111,18 +156,6 @@ export function getXamlStatus(
       message:
         `${XAML_STATUS_PREFIX} ready; the language server starts when a XAML file is opened.`,
       actions: [],
-    };
-  }
-
-  if (requiresDotnet) {
-    return {
-      message:
-        `${XAML_STATUS_PREFIX} .NET 10 is required; XAML syntax highlighting remains active.`,
-      actions: [
-        XAML_STATUS_ACTIONS.installDotnet,
-        XAML_STATUS_ACTIONS.restartServer,
-        XAML_STATUS_ACTIONS.showOutput,
-      ],
     };
   }
 

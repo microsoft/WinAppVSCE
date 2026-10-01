@@ -87,7 +87,23 @@ namespace WinUiXaml.Workspace
 
             for (var dir = directory; dir != null; dir = dir.Parent)
             {
-                var candidates = dir.GetFiles("*.csproj");
+                // A directory-listing failure must not end the walk: the owning project usually
+                // lives in a still-readable ancestor, and DirectoryNotFoundException is covered by
+                // IOException for missing/renamed leaves.
+                FileInfo[] candidates;
+                try
+                {
+                    candidates = dir.GetFiles("*.csproj");
+                }
+                catch (IOException)
+                {
+                    continue;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    continue;
+                }
+
                 if (candidates.Length == 1)
                 {
                     return candidates[0].FullName;
@@ -150,7 +166,9 @@ namespace WinUiXaml.Workspace
                 compilation,
                 referencedAssemblies,
                 workspace.XamlFiles,
-                workspace.ApplicationDefinitionPath);
+                workspace.ApplicationDefinitionPath,
+                workspace.UnresolvedProjectReferences,
+                workspace.GeneratorFailure);
         }
 
         /// <summary>
@@ -192,7 +210,8 @@ namespace WinUiXaml.Workspace
                     compilation,
                     compilation.SourceModule.ReferencedAssemblySymbols,
                     frameworkProject.XamlFiles,
-                    frameworkProject.ApplicationDefinitionPath);
+                    frameworkProject.ApplicationDefinitionPath,
+                    frameworkProject.UnresolvedProjectReferences);
             }
 
             // Unsupported custom project systems retain the existing authoritative path.
@@ -209,7 +228,8 @@ namespace WinUiXaml.Workspace
                 fallbackCompilation,
                 fallbackCompilation.SourceModule.ReferencedAssemblySymbols,
                 workspace.XamlFiles,
-                workspace.ApplicationDefinitionPath);
+                workspace.ApplicationDefinitionPath,
+                workspace.UnresolvedProjectReferences);
         }
 
         private static bool IsWithin(string path, string root)
@@ -284,6 +304,11 @@ namespace WinUiXaml.Workspace
         /// <summary>Drops every cached workspace after a shared imported MSBuild file changes.</summary>
         public void InvalidateAll()
         {
+            // An imported build file is the one change that can alter a project's declared target
+            // frameworks without touching anything the memo's write stamp covers, so the decision
+            // has to be dropped alongside the compilations it produced.
+            MsBuildCli.ClearTargetFrameworkMemo();
+
             List<CacheEntry> evicted;
             lock (_gate)
             {

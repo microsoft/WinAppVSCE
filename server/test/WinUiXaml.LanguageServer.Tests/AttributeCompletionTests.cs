@@ -153,7 +153,6 @@ public sealed class AttributeCompletionTests
         """;
 
     [Theory]
-    [InlineData("<Button Margin=\"|\" />", "0,0,0,0")]
     [InlineData("<Button FontFamily=\"|\" />", "Segoe Fluent Icons")]
     [InlineData("<Grid RowDefinitions=\"|\" />", "Auto,*,Auto")]
     [InlineData("<Grid ColumnDefinitions=\"|\" />", "Auto,*,Auto")]
@@ -170,6 +169,26 @@ public sealed class AttributeCompletionTests
             CreateTypeSystem()).Items.Select(item => item.Label);
 
         Assert.Contains(expected, labels);
+    }
+
+    /// <summary>
+    /// Thickness is left free-form because its arity examples still need digit replacement; FontFamily proves literal completion still works on this path.
+    /// </summary>
+    [Fact]
+    public void ThicknessValuesAreLeftFreeForm()
+    {
+        const string marked = "<Page xmlns=\"using:TestApp\"><Button Margin=\"|\" /></Page>";
+        var offset = marked.IndexOf('|');
+        var text = marked.Remove(offset, 1);
+
+        var labels = CompletionProvider.Provide(
+            new TextDocument("file:///C:/test/Page.xaml", text),
+            offset,
+            CreateTypeSystem()).Items.Select(item => item.Label).ToArray();
+
+        Assert.DoesNotContain("0", labels);
+        Assert.DoesNotContain("0,0", labels);
+        Assert.DoesNotContain("0,0,0,0", labels);
     }
 
     [Theory]
@@ -502,6 +521,7 @@ public sealed class AttributeCompletionTests
     [InlineData("Click", true)]
     [InlineData("Text", false)]
     [InlineData("Width", false)]
+    [InlineData("Margin", false)]
     public void AttributeCompletion_TriggersValueSuggestionsOnlyWhenAvailable(
         string attributeName,
         bool expectsValueSuggestions)

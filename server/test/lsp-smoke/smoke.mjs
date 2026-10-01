@@ -1,7 +1,16 @@
 // End-to-end LSP smoke test for the WinUI XAML language server. Drives the real server over stdio (no VS Code, no test framework, no npm deps) and proves the spine: initialize -> didOpen (syntactic diagnostics) -> textDocument/definition (F12) resolves an event-handler attribute value to the C# method in the page's code-behind. Usage:  node smoke.mjs Exit 0 = pass. Requires the server to be built (Debug) and the WinUI smoke fixture on disk.
 
-import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { spawn, execFileSync } from "node:child_process";
+import {
+  readFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  writeFileSync,
+  rmSync,
+  realpathSync,
+} from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -53,8 +62,282 @@ function offsetToPosition(text, offset) {
 }
 
 if (!existsSync(APP_XAML)) fail(`fixture not found: ${APP_XAML}`);
-const appXamlText = readFileSync(APP_XAML, "utf8");
-const accentKeyOffset = appXamlText.indexOf('x:Key="SmokeAccentBrush"');
+
+// Never-restored project: stable packages-not-restored path, impossible in a real editor because the extension auto-restores as soon as the server reports it.
+// The package cannot resolve, so ambient NuGet caches cannot mask it as merely slow.
+// Normalize tmpdir paths because short temp paths versus long server paths would make notifications look missing.
+const unrestoredRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "winui-xaml-unrestored-")));
+const unrestoredProject = join(unrestoredRoot, "Unrestored.csproj");
+writeFileSync(
+  unrestoredProject,
+  `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <ItemGroup><PackageReference Include="Example.Unrestored.Package" Version="1.0.0" /></ItemGroup>
+</Project>
+`,
+  "utf8"
+);
+const unrestoredXamlPath = join(unrestoredRoot, "UnrestoredPage.xaml");
+const unrestoredXamlText = `<Page
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <TextBlock Text="Hello" />
+</Page>
+`;
+writeFileSync(unrestoredXamlPath, unrestoredXamlText, "utf8");
+const unrestoredXamlUri = pathToFileURL(unrestoredXamlPath).href;
+process.once("exit", () => {
+  try {
+    rmSync(unrestoredRoot, { recursive: true, force: true });
+  } catch {
+    // A leaked temp directory must not turn a real pass into a failure.
+  }
+});
+// Never-built ProjectReference: stable developer-must-act state that a real editor build would resolve permanently.
+// WMC1006 comes from the markup compiler, so this must be a real WinUI project.
+// Reuse checked-in package versions so restore doesn't hit the network and fail like a resolved project.
+const buildRequiredRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "winui-xaml-unbuilt-")));
+const buildRequiredAppDir = join(buildRequiredRoot, "App");
+const buildRequiredLibDir = join(buildRequiredRoot, "Lib");
+mkdirSync(buildRequiredAppDir);
+mkdirSync(buildRequiredLibDir);
+process.once("exit", () => {
+  try {
+    rmSync(buildRequiredRoot, { recursive: true, force: true });
+  } catch {
+    // A leaked temp directory must not turn a real pass into a failure.
+  }
+});
+
+const fixtureDir = dirname(XAML);
+const fixtureProjectName = readdirSync(fixtureDir).find((name) => name.endsWith(".csproj"));
+if (!fixtureProjectName) fail(`no .csproj beside the fixture: ${fixtureDir}`);
+const fixtureProjectText = readFileSync(join(fixtureDir, fixtureProjectName), "utf8");
+function fixturePackageVersion(id) {
+  const match = fixtureProjectText.match(
+    new RegExp(`Include="${id}"\\s+Version="([^"]+)"`, "i")
+  );
+  if (!match) fail(`could not read the ${id} version from ${fixtureProjectName}`);
+  return match[1];
+}
+const targetFrameworkMatch = fixtureProjectText.match(/<TargetFramework>([^<]+)</);
+if (!targetFrameworkMatch) fail(`could not read TargetFramework from ${fixtureProjectName}`);
+const buildRequiredTfm = targetFrameworkMatch[1];
+
+writeFileSync(
+  join(buildRequiredLibDir, "Lib.csproj"),
+  `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>${buildRequiredTfm}</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+  </PropertyGroup>
+</Project>
+`,
+  "utf8"
+);
+writeFileSync(
+  join(buildRequiredLibDir, "Greeter.cs"),
+  "namespace Lib;\npublic class Greeter { public string Text => \"hi\"; }\n",
+  "utf8"
+);
+const buildRequiredProject = join(buildRequiredAppDir, "UnbuiltRef.csproj");
+writeFileSync(
+  buildRequiredProject,
+  `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>${buildRequiredTfm}</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>UnbuiltRefApp</RootNamespace>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="${fixturePackageVersion(
+      "Microsoft.Windows.SDK.BuildTools"
+    )}" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="${fixturePackageVersion(
+      "Microsoft.WindowsAppSDK"
+    )}" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\\Lib\\Lib.csproj" />
+  </ItemGroup>
+</Project>
+`,
+  "utf8"
+);
+writeFileSync(
+  join(buildRequiredAppDir, "App.xaml"),
+  `<Application
+    x:Class="UnbuiltRefApp.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+</Application>
+`,
+  "utf8"
+);
+writeFileSync(
+  join(buildRequiredAppDir, "App.xaml.cs"),
+  "namespace UnbuiltRefApp;\npublic partial class App : Microsoft.UI.Xaml.Application { public App() { InitializeComponent(); } }\n",
+  "utf8"
+);
+const buildRequiredXamlPath = join(buildRequiredAppDir, "UnbuiltRefPage.xaml");
+const buildRequiredXamlText = `<Page
+    x:Class="UnbuiltRefApp.UnbuiltRefPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <TextBlock Text="Hello" />
+</Page>
+`;
+writeFileSync(buildRequiredXamlPath, buildRequiredXamlText, "utf8");
+writeFileSync(
+  join(buildRequiredAppDir, "UnbuiltRefPage.xaml.cs"),
+  "namespace UnbuiltRefApp;\npublic partial class UnbuiltRefPage : Microsoft.UI.Xaml.Controls.Page { public UnbuiltRefPage() { InitializeComponent(); } }\n",
+  "utf8"
+);
+
+// Second page in the same project: the reference-build-failed toast fires once per project, so only the status bar still says a build is needed.
+// Publishing `framework-ready` here is exactly the regression the durable state was added to remove.
+const buildRequiredSecondXamlPath = join(buildRequiredAppDir, "UnbuiltRefSecondPage.xaml");
+const buildRequiredSecondXamlText = `<Page
+    x:Class="UnbuiltRefApp.UnbuiltRefSecondPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <TextBlock Text="Second" />
+    </StackPanel>
+</Page>
+`;
+writeFileSync(buildRequiredSecondXamlPath, buildRequiredSecondXamlText, "utf8");
+writeFileSync(
+  join(buildRequiredAppDir, "UnbuiltRefSecondPage.xaml.cs"),
+  "namespace UnbuiltRefApp;\npublic partial class UnbuiltRefSecondPage : Microsoft.UI.Xaml.Controls.Page { public UnbuiltRefSecondPage() { InitializeComponent(); } }\n",
+  "utf8"
+);
+
+// Restore, but never build: without restore the server would stop earlier and this leg would test nothing.
+// `dotnet restore` does not build project references, so Lib.dll stays absent.
+let buildRequiredFixtureReady = false;
+try {
+  execFileSync("dotnet", ["restore", buildRequiredProject], {
+    stdio: "pipe",
+    timeout: 300000,
+  });
+  buildRequiredFixtureReady = true;
+} catch (err) {
+  console.error(
+    `[warn] could not restore the unbuilt-reference fixture, skipping the reference-build-failed leg: ${err.message}`
+  );
+}
+const buildRequiredXamlUri = pathToFileURL(buildRequiredXamlPath).href;
+const buildRequiredSecondXamlUri = pathToFileURL(buildRequiredSecondXamlPath).href;
+
+// Residual case: a reference that is not merely unbuilt but cannot be built because its own source does not compile.
+// App reference builds are now normal, so this is the remaining path where a developer sees the build prompt.
+// Without this fixture, swallowing real reference failures would leave every other test passing.
+const unresolvableAppDir = join(buildRequiredRoot, "UnresolvableApp");
+const unresolvableLibDir = join(buildRequiredRoot, "BrokenLib");
+mkdirSync(unresolvableAppDir);
+mkdirSync(unresolvableLibDir);
+writeFileSync(
+  join(unresolvableLibDir, "BrokenLib.csproj"),
+  `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>${buildRequiredTfm}</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+  </PropertyGroup>
+</Project>
+`,
+  "utf8"
+);
+writeFileSync(
+  join(unresolvableLibDir, "Broken.cs"),
+  "public class Broken { this is not valid C# }\n",
+  "utf8"
+);
+const unresolvableProject = join(unresolvableAppDir, "UnresolvableRef.csproj");
+writeFileSync(
+  unresolvableProject,
+  `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>${buildRequiredTfm}</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>UnresolvableRefApp</RootNamespace>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="${fixturePackageVersion(
+      "Microsoft.Windows.SDK.BuildTools"
+    )}" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="${fixturePackageVersion(
+      "Microsoft.WindowsAppSDK"
+    )}" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\\BrokenLib\\BrokenLib.csproj" />
+  </ItemGroup>
+</Project>
+`,
+  "utf8"
+);
+writeFileSync(
+  join(unresolvableAppDir, "App.xaml"),
+  `<Application
+    x:Class="UnresolvableRefApp.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+</Application>
+`,
+  "utf8"
+);
+writeFileSync(
+  join(unresolvableAppDir, "App.xaml.cs"),
+  "namespace UnresolvableRefApp;\npublic partial class App : Microsoft.UI.Xaml.Application { public App() { InitializeComponent(); } }\n",
+  "utf8"
+);
+const unresolvableXamlPath = join(unresolvableAppDir, "UnresolvablePage.xaml");
+const unresolvableXamlText = `<Page
+    x:Class="UnresolvableRefApp.UnresolvablePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <TextBlock Text="Hello" />
+</Page>
+`;
+writeFileSync(unresolvableXamlPath, unresolvableXamlText, "utf8");
+writeFileSync(
+  join(unresolvableAppDir, "UnresolvablePage.xaml.cs"),
+  "namespace UnresolvableRefApp;\npublic partial class UnresolvablePage : Microsoft.UI.Xaml.Controls.Page { public UnresolvablePage() { InitializeComponent(); } }\n",
+  "utf8"
+);
+
+let unresolvableFixtureReady = false;
+try {
+  execFileSync("dotnet", ["restore", unresolvableProject], {
+    stdio: "pipe",
+    timeout: 300000,
+  });
+  unresolvableFixtureReady = true;
+} catch (err) {
+  console.error(
+    `[warn] could not restore the unresolvable-reference fixture, skipping that leg: ${err.message}`
+  );
+}
+const unresolvableXamlUri = pathToFileURL(unresolvableXamlPath).href;
+
+const appXamlText = readFileSync(APP_XAML, "utf8");const accentKeyOffset = appXamlText.indexOf('x:Key="SmokeAccentBrush"');
 if (accentKeyOffset < 0) fail('could not find x:Key="SmokeAccentBrush" in App.xaml');
 const EXPECTED_ACCENT_KEY_LINE = offsetToPosition(appXamlText, accentKeyOffset).line;
 
@@ -98,16 +381,26 @@ if (resIdx < 0) fail("could not find {StaticResource SmokeAccentBrush} in the fi
 const resCaretOffset = xamlText.indexOf("SmokeAccentBrush", resIdx) + 3;
 const resCaret = offsetToPosition(xamlText, resCaretOffset);
 
-if (!serverPath.toLowerCase().endsWith(".dll")) fail(`server must be a framework-dependent DLL: ${serverPath}`);
-server = spawn("dotnet", [serverPath], {
-  stdio: ["pipe", "pipe", "inherit"],
-  cwd: dirname(serverPath),
-});
+// The server ships as a Native AOT executable, but the debug build used by most local runs is
+// still a framework-dependent DLL. Accept either and launch it the right way.
+const isNativeExe = serverPath.toLowerCase().endsWith(".exe");
+if (!isNativeExe && !serverPath.toLowerCase().endsWith(".dll"))
+  fail(`server must be a native .exe or a framework-dependent .dll: ${serverPath}`);
+server = spawn(
+  isNativeExe ? serverPath : "dotnet",
+  isNativeExe ? [] : [serverPath],
+  {
+    stdio: ["pipe", "pipe", "inherit"],
+    cwd: dirname(serverPath),
+  },
+);
 
 // --- LSP framing ---
 let buffer = Buffer.alloc(0);
 const waiters = [];
 const publishedDiagnostics = [];
+const buildRequiredNotifications = [];
+const projectContextStatuses = [];
 
 server.stdout.on("data", (chunk) => {
   buffer = Buffer.concat([buffer, chunk]);
@@ -129,6 +422,12 @@ server.stdout.on("data", (chunk) => {
 function dispatch(msg) {
   if (msg.method === "textDocument/publishDiagnostics") {
     publishedDiagnostics.push(msg.params);
+  }
+  if (msg.method === "winui-xaml/projectBuildRequired") {
+    buildRequiredNotifications.push(msg.params);
+  }
+  if (msg.method === "winui-xaml/projectContextStatus") {
+    projectContextStatuses.push(msg.params);
   }
 
   for (let i = 0; i < waiters.length; i++) {
@@ -164,8 +463,9 @@ const responseFor = (id) => (m) => m.id === id && (m.result !== undefined || m.e
 const notification = (method) => (m) => m.method === method;
 
 async function main() {
-  // 1) initialize Pass the fixture directory as the sole trusted workspace root so the server performs project discovery / MSBuild evaluation for the in-root fixture (matching the real client, which sends its workspace folders as initializationOptions.allowedRoots).
-  const allowedRoots = [dirname(XAML)];
+  // 1) initialize. Pass the fixture dir as the trusted root so discovery/MSBuild evaluation matches the real client's allowedRoots.
+  // Keep the never-restored project outside the fixture: SDK-style projects glob **/*.cs, so nesting could pollute fixture compile items.
+  const allowedRoots = [dirname(XAML), unrestoredRoot, buildRequiredRoot];
   send({
     id: 1,
     method: "initialize",
@@ -396,9 +696,9 @@ async function main() {
     '<Project><ItemGroup><Compile Remove="SmokePage.xaml.cs" /></ItemGroup></Project>',
     "utf8"
   );
-  // The blocking F12 below used to double as this section's reload barrier. Definition is now
-  // non-blocking (issue #220), so synchronize on the same status notification the real client uses.
-  // Registered before the change is sent so the reload's notification cannot be missed.
+  // Definition is non-blocking (issue #220), so synchronize on the same status notification the
+  // real client uses. Registered before the change is sent so the reload's notification cannot be
+  // missed.
   //
   // Matching a bare `state === "ready"` is not enough. The obj/bin watched-file check just above can
   // still emit a trailing `ready` for the context that is already loaded, and dispatch resolves the
@@ -445,11 +745,9 @@ async function main() {
     fail(`post-invalidation hover should be suppressed while reloading: ${JSON.stringify(fallbackResponse.result)}`);
   }
 
-  // The load-bearing regression check for non-blocking F12 (issue #220). Unlike the cold check at
-  // startup -- where an intermediate framework context may already have been published, letting even
-  // the old blocking code answer quickly -- the cache is provably empty here (the hover above was
-  // suppressed) and the reload takes seconds. So the old blocking implementation would stall for
-  // seconds before answering, and only the non-blocking one can come back inside the budget.
+  // The load-bearing regression check for non-blocking F12 (issue #220). The cache is provably
+  // empty here (the hover above was suppressed) and the reload takes seconds, so only a
+  // non-blocking definition can answer inside the budget.
   const reloadDefinitionStarted = performance.now();
   send({
     id: 701,
@@ -469,9 +767,38 @@ async function main() {
   await reloadLoadingPromise;
   await reloadReadyPromise;
 
+  // The reload barrier can release on a load immediately superseded by pending re-evaluation, briefly returning to loading.
+  // Each response must still be fast because the server never blocks on project load.
+  // Poll on a wall-clock budget rather than asserting a single instant.
+  const authoritativeDeadline = performance.now() + 15000;
+  let authoritativeText = "";
+  let authoritativeMs = 0;
+  let authoritativeId = 109;
+  while (performance.now() < authoritativeDeadline) {
+    const id = authoritativeId++;
+    const authoritativeStarted = performance.now();
+    send({
+      id,
+      method: "textDocument/hover",
+      params: { textDocument: { uri: xamlUri }, position: pageCaret },
+    });
+    const authoritativeResponse = await waitFor(responseFor(id), 5000, "post-reload Page hover");
+    authoritativeMs = performance.now() - authoritativeStarted;
+    if (authoritativeMs >= 1000) fail(`post-reload hover took ${authoritativeMs.toFixed(0)} ms`);
+    authoritativeText = authoritativeResponse.result?.contents?.value ?? "";
+    if (/```csharp/.test(authoritativeText) &&
+        /Represents|page/i.test((authoritativeText.split("```")[2] || ""))) {
+      break;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  if (!/```csharp/.test(authoritativeText) ||
+      !/Represents|page/i.test((authoritativeText.split("```")[2] || ""))) {
+    fail(`context did not restore authoritative Page hover after invalidation: ${authoritativeText}`);
+  }
   // SmokePage.xaml.cs is no longer part of the compilation, so F12 on the handler must not resolve.
-  // Asserted after the reload has completed, which proves the context actually changed rather than
-  // merely that the request arrived while the project was still loading.
+  // Asserted only once the hover above proved the context is authoritative again: a null result
+  // while the project is still loading would otherwise satisfy this for the wrong reason.
   send({
     id: 700,
     method: "textDocument/definition",
@@ -482,20 +809,6 @@ async function main() {
     fail(`imported props change did not alter project context: ${JSON.stringify(removedDefinition.result)}`);
   }
 
-  const authoritativeStarted = performance.now();
-  send({
-    id: 109,
-    method: "textDocument/hover",
-    params: { textDocument: { uri: xamlUri }, position: pageCaret },
-  });
-  const authoritativeResponse = await waitFor(responseFor(109), 5000, "post-reload Page hover");
-  const authoritativeMs = performance.now() - authoritativeStarted;
-  const authoritativeText = authoritativeResponse.result?.contents?.value ?? "";
-  if (authoritativeMs >= 1000) fail(`post-reload hover took ${authoritativeMs.toFixed(0)} ms`);
-  if (!/```csharp/.test(authoritativeText) ||
-      !/Represents|page/i.test((authoritativeText.split("```")[2] || ""))) {
-    fail(`context did not restore authoritative Page hover after invalidation: ${authoritativeText}`);
-  }
   console.log(`[ok] hover is suppressed during invalidation and authoritative after reload (${fallbackMs.toFixed(0)} ms suppressed, ${authoritativeMs.toFixed(0)} ms restored)`);
 
   cleanImportedBuild();
@@ -505,8 +818,14 @@ async function main() {
     params: { changes: [{ uri: importedBuildUri, type: 3 }] },
   });
   let restoredDefinition;
-  for (let attempt = 0; attempt < 80; attempt++) {
-    const id = 701 + attempt;
+  // Recovery requires a full project reload, which runs MSBuild out of process. Bound this by
+  // wall clock rather than attempt count so it does not depend on how warm the MSBuild caches
+  // and the machine happen to be.
+  const recoveryStarted = performance.now();
+  const recoveryDeadline = recoveryStarted + 60000;
+  let attempt = 0;
+  while (performance.now() < recoveryDeadline) {
+    const id = 701 + attempt++;
     send({
       id,
       method: "textDocument/definition",
@@ -520,7 +839,9 @@ async function main() {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
   }
   if (!restoredDefinition) fail("project context did not recover after imported props removal");
-  console.log("[ok] imported props watched event changes and restores project context");
+  console.log(
+    `[ok] imported props watched event changes and restores project context (${(performance.now() - recoveryStarted).toFixed(0)} ms, ${attempt} attempts)`
+  );
 
   // Unsaved x:Class edits invalidate only this URI and resolution must use the in-memory text.
   const page2Text = xamlText
@@ -1088,25 +1409,36 @@ async function main() {
   await clearedGeneratedHandlerDiagnostic;
   await generatedHandlerReady;
 
-  const generatedDefinitionId = 9998;
-  send({
-    id: generatedDefinitionId,
-    method: "textDocument/definition",
-    params: {
-      textDocument: { uri: xamlUri },
-      position: offsetToPosition(
-        generatedHandlerText,
-        generatedHandlerText.indexOf(generatedHandlerName) + 3
-      ),
-    },
-  });
-  const generatedDefinition = await waitFor(
-    responseFor(generatedDefinitionId),
-    30000,
-    "generated event-handler definition"
-  );
-  if (!generatedDefinition.result?.uri?.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) {
-    fail(`generated event handler was not loaded from code-behind: ${JSON.stringify(generatedDefinition.result)}`);
+  // Same superseded-reload window as the post-invalidation hover above: the ready barrier can
+  // release on a load that a pending re-evaluation replaces, so poll on a wall-clock budget.
+  const generatedDeadline = performance.now() + 15000;
+  let generatedDefinition;
+  let generatedDefinitionId = 9998;
+  while (performance.now() < generatedDeadline) {
+    const id = generatedDefinitionId++;
+    send({
+      id,
+      method: "textDocument/definition",
+      params: {
+        textDocument: { uri: xamlUri },
+        position: offsetToPosition(
+          generatedHandlerText,
+          generatedHandlerText.indexOf(generatedHandlerName) + 3
+        ),
+      },
+    });
+    generatedDefinition = await waitFor(
+      responseFor(id),
+      30000,
+      "generated event-handler definition"
+    );
+    if (generatedDefinition.result?.uri?.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) {
+      break;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  if (!generatedDefinition?.result?.uri?.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) {
+    fail(`generated event handler was not loaded from code-behind: ${JSON.stringify(generatedDefinition?.result)}`);
   }
   console.log("[ok] generated event-handler save clears stale XAML diagnostics");
 
@@ -1181,13 +1513,239 @@ async function main() {
   }
   console.log("[ok] didClose cancels pending diagnostics, evicts context, and prevents stale publication");
 
-  // 22) shutdown
+  // 22) packages-not-restored path, end to end on the wire: proves ProjectRestoreRequiredException becomes a notification.
+  // It also proves the payload serializes under the AOT context with JsonSerializerIsReflectionEnabledByDefault=false.
+  // A notification has no reply, so serialization failure would be silently absent like a project that restored fine.
+  const restoreRequired = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectRestoreRequired" &&
+      typeof message.params?.projectPath === "string" &&
+      message.params.projectPath.toLowerCase() === unrestoredProject.toLowerCase(),
+    90000,
+    "projectRestoreRequired for the never-restored project"
+  );
+  const restoreStatus = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectContextStatus" &&
+      message.params?.uri === unrestoredXamlUri &&
+      message.params?.state === "packages-not-restored",
+    90000,
+    "packages-not-restored project context status"
+  );
+  send({
+    method: "textDocument/didOpen",
+    params: {
+      textDocument: {
+        uri: unrestoredXamlUri,
+        languageId: "xaml",
+        version: 1,
+        text: unrestoredXamlText,
+      },
+    },
+  });
+  // didOpen alone does not drive project resolution -- the notification is raised from the
+  // context path a feature request goes through, so ask for completions to get there.
+  send({
+    id: 7301,
+    method: "textDocument/completion",
+    params: {
+      textDocument: { uri: unrestoredXamlUri },
+      position: { line: 3, character: 4 },
+    },
+  });
+  const restoreNotification = await restoreRequired;
+  const restoreStatusMessage = await restoreStatus;
+  // The status carries the reason the user reads. An empty one would render the bar's fallback
+  // text, which would look identical in a screenshot and tell them nothing about their project.
+  if (
+    typeof restoreStatusMessage.params.message !== "string" ||
+    restoreStatusMessage.params.message.length === 0
+  ) {
+    fail(
+      `packages-not-restored status carried no message: ${JSON.stringify(restoreStatusMessage.params)}`
+    );
+  }
+  if (!restoreNotification.params.projectPath.endsWith("Unrestored.csproj")) {
+    fail(
+      `projectRestoreRequired named the wrong project: ${restoreNotification.params.projectPath}`
+    );
+  }
+  console.log(
+    "[ok] never-restored project: projectRestoreRequired + packages-not-restored status both reach the wire"
+  );
+
+  // 22b) Never-built project reference, end to end: it compiles from source into scratch output for
+  // the markup compiler, so the project loads as if already built. No projectBuildRequired reaches
+  // the wire, no document settles on `reference-build-failed`, and completion resolves for real.
+  if (buildRequiredFixtureReady) {
+    const firstReady = waitFor(
+      (message) =>
+        message.method === "winui-xaml/projectContextStatus" &&
+        message.params?.uri === buildRequiredXamlUri &&
+        message.params?.state === "ready",
+      180000,
+      "ready project context status for the never-built project reference"
+    );
+    send({
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: {
+          uri: buildRequiredXamlUri,
+          languageId: "xaml",
+          version: 1,
+          text: buildRequiredXamlText,
+        },
+      },
+    });
+    await firstReady;
+
+    // The notification is the thing a developer actually sees. Asserting its absence is what
+    // makes this leg fail if the reference build silently stops running and the prompt comes back.
+    if (buildRequiredNotifications.length > 0) {
+      fail(
+        "the never-built project reference was built, so projectBuildRequired should never " +
+          `have been sent: ${JSON.stringify(buildRequiredNotifications)}`
+      );
+    }
+    console.log(
+      "[ok] never-built project reference: built to ready, no projectBuildRequired on the wire"
+    );
+
+    // A second document in the same project. The reference build is cached per load, and this is where a
+    // regression that only served the first document would show up.
+    const secondReady = waitFor(
+      (message) =>
+        message.method === "winui-xaml/projectContextStatus" &&
+        message.params?.uri === buildRequiredSecondXamlUri &&
+        message.params?.state === "ready",
+      180000,
+      "ready project context status on a second document in the same project"
+    );
+    send({
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: {
+          uri: buildRequiredSecondXamlUri,
+          languageId: "xaml",
+          version: 1,
+          text: buildRequiredSecondXamlText,
+        },
+      },
+    });
+    await secondReady;
+
+    send({
+      id: 7303,
+      method: "textDocument/completion",
+      params: {
+        textDocument: { uri: buildRequiredSecondXamlUri },
+        position: { line: 5, character: 9 },
+      },
+    });
+    const secondCompletion = await waitFor(
+      responseFor(7303),
+      180000,
+      "completion on the second document of an unbuilt project"
+    );
+    if (secondCompletion.error) {
+      fail(`completion on the unbuilt project errored: ${JSON.stringify(secondCompletion.error)}`);
+    }
+    const secondItems = Array.isArray(secondCompletion.result)
+      ? secondCompletion.result
+      : secondCompletion.result?.items;
+    if (!Array.isArray(secondItems) || secondItems.length === 0) {
+      fail(
+        "the project returned no completions: " + JSON.stringify(secondCompletion.result)
+      );
+    }
+    // A framework type proves references really resolved, rather than the leg passing on whatever
+    // a contextless document happens to offer.
+    const secondLabels = secondItems.map((item) => String(item.label));
+    if (!secondLabels.includes("TextBlock")) {
+      fail(`the project resolved no framework types: ${JSON.stringify(secondLabels.slice(0, 40))}`);
+    }
+    // No document in the project may settle on the durable failure state.
+    const stuck = projectContextStatuses.filter(
+      (status) =>
+        (status?.uri === buildRequiredXamlUri || status?.uri === buildRequiredSecondXamlUri) &&
+        status?.state === "reference-build-failed"
+    );
+    if (stuck.length > 0) {
+      fail(`a built-reference document still reported reference-build-failed: ${JSON.stringify(stuck)}`);
+    }
+    console.log(
+      "[ok] unbuilt project, second document: stays ready and framework completions still resolve"
+    );
+  } else {
+    fail(
+      "the unbuilt-reference fixture could not be restored, so the never-built-reference leg " +
+        "tested nothing (see the warning above)"
+    );
+  }
+
+  // 22c) Residual case: the reference cannot be produced from source either.
+  // Because the reference build removed leg 22b's prompt, this proves the prompt still exists at all.
+  // Otherwise swallowing `ProjectBuildRequiredException` would leave the developer with no signal and the suite green.
+  if (unresolvableFixtureReady) {
+    const buildRequired = waitFor(
+      (message) =>
+        message.method === "winui-xaml/projectContextStatus" &&
+        message.params?.uri === unresolvableXamlUri &&
+        message.params?.state === "reference-build-failed",
+      180000,
+      "reference-build-failed project context status for an unresolvable project reference"
+    );
+    send({
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: {
+          uri: unresolvableXamlUri,
+          languageId: "xaml",
+          version: 1,
+          text: unresolvableXamlText,
+        },
+      },
+    });
+    const status = await buildRequired;
+    if (!String(status.params?.message ?? "").includes("BrokenLib")) {
+      fail(
+        "the status bar must name the reference that could not be resolved: " +
+          JSON.stringify(status.params)
+      );
+    }
+
+    // The toast is the part the developer actually sees, and it travels on its own notification.
+    const notified = buildRequiredNotifications.find((params) =>
+      String(params?.projectPath ?? "").endsWith("UnresolvableRef.csproj")
+    );
+    if (!notified) {
+      fail(
+        "an unresolvable project reference must still send projectBuildRequired: " +
+          JSON.stringify(buildRequiredNotifications)
+      );
+    }
+    if (!(notified.unresolvedAssemblies ?? []).includes("BrokenLib")) {
+      fail(
+        `projectBuildRequired must name the unresolved project: ${JSON.stringify(notified)}`
+      );
+    }
+    console.log(
+      "[ok] unresolvable project reference: projectBuildRequired + reference-build-failed status both still reach the wire"
+    );
+  } else {
+    fail(
+      "the unresolvable-reference fixture could not be restored, so the residual reference-build-failed " +
+        "leg tested nothing (see the warning above)"
+    );
+  }
+
+  // 23) shutdown
   send({ id: 11, method: "shutdown", params: null });
   await waitFor(responseFor(11), 10000, "shutdown");
 
   // Assert the process actually terminates rather than sending `exit` and walking away. A server
   // that answers `shutdown` but never exits leaves an orphaned dotnet process behind every time the
-  // editor closes, which the old fixed 200 ms timeout would have reported as a pass.
+  // editor closes, so wait on the real exit event instead of a fixed timeout.
   const exited = new Promise((resolveExit) => server.once("exit", (code) => resolveExit(code)));
   send({ method: "exit", params: null });
   const exitCode = await Promise.race([

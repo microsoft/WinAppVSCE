@@ -8,8 +8,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>WinUiXaml.LanguageServer</AssemblyName>
     <RootNamespace>WinUiXaml.LanguageServer</RootNamespace>
-    <!-- MSBuild refs are compile-only; runtime copies come from the SDK via Build.Locator. -->
-    <NoWarn>$(NoWarn);NU1903</NoWarn>
+    <!-- Set here, not on the command line: command-line properties propagate to project references, and
+         WinUiXaml.Xaml targets netstandard2.0, which fails with NETSDK1207. PublishAot also implies
+         JsonSerializerIsReflectionEnabledByDefault=false, hence the source-generated JsonSerializerContext. -->
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <!-- Report every trim/AOT warning individually instead of one rolled-up warning per assembly. -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,13 +27,26 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- As an MSBuildWorkspace entry point, this exe must also exclude MSBuild's runtime assemblies
-         (Build.Locator provides them from the SDK). See MSBL001. -->
-    <PackageReference Include="Microsoft.Build" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Build.Framework" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Build.Tasks.Core" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.NET.StringTools" Version="17.14.8" ExcludeAssets="runtime" PrivateAssets="all" />
+    <!-- Source generators are analyzer assemblies loaded with Assembly.LoadFrom, which Native AOT cannot
+         do, so the host stays a separate framework-dependent helper. Built here to keep it in lockstep;
+         ReferenceOutputAssembly is off because the server launches it as a child process, never links it. -->
+    <ProjectReference Include="..\WinUiXaml.GeneratorHost\WinUiXaml.GeneratorHost.csproj"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true"
+                      Private="false" />
   </ItemGroup>
+
+  <!-- Deploy the helper beside the server's *build* output, where HostAssemblyPath probes. Without it,
+       running from bin (what the XAML smoke suite does) silently degrades every project to "no generated
+       members", the blind spot that let a helper deadlock ship past a green suite. $(OutDir), not $(PublishDir). -->
+  <Target Name="CopyGeneratorHostBesideServer" AfterTargets="Build">
+    <ItemGroup>
+      <_HostPayload Include="$(MSBuildThisFileDirectory)..\WinUiXaml.GeneratorHost\bin\$(Configuration)\net10.0\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_HostPayload)"
+          DestinationFiles="@(_HostPayload->'$(OutDir)generator-host\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_HostPayload)' != ''" />
+  </Target>
 
 </Project>

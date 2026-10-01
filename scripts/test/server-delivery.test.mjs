@@ -10,15 +10,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".
 const ensureScript = path.join(root, "scripts", "ensure-server-bundle.mjs");
 const downloadScript = path.join(root, "scripts", "download-server.ps1");
 const validateVsixScript = path.join(root, "scripts", "validate-vsix-server.ps1");
+// The bundle ships one Native AOT executable per architecture plus the shared, framework-dependent
+// generator host.
 const requiredRelativeFiles = [
-  "WinUiXaml.LanguageServer.dll",
-  "WinUiXaml.LanguageServer.deps.json",
-  "WinUiXaml.LanguageServer.runtimeconfig.json",
-  "WinUiXaml.Workspace.dll",
-  "WinUiXaml.Xaml.dll",
-  path.join("BuildHost-netcore", "Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.dll"),
-  path.join("BuildHost-netcore", "Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.deps.json"),
-  path.join("BuildHost-netcore", "Microsoft.CodeAnalysis.Workspaces.MSBuild.BuildHost.runtimeconfig.json"),
+  path.join("win-x64", "WinUiXaml.LanguageServer.exe"),
+  path.join("win-arm64", "WinUiXaml.LanguageServer.exe"),
+  path.join("generator-host", "WinUiXaml.GeneratorHost.dll"),
+  path.join("generator-host", "WinUiXaml.GeneratorHost.deps.json"),
+  path.join("generator-host", "WinUiXaml.GeneratorHost.runtimeconfig.json"),
 ];
 
 function createServer(directory) {
@@ -211,7 +210,7 @@ test("VSIX validator rejects a missing required server file", () => {
   const temp = mkdtempSync(path.join(tmpdir(), "winui-vsix-"));
   try {
     const vsix = createSyntheticVsix(temp, (server) =>
-      rmSync(path.join(server, "WinUiXaml.Workspace.dll"))
+      rmSync(path.join(server, "win-arm64", "WinUiXaml.LanguageServer.exe"))
     );
     const result = validateVsix(vsix);
     assert.notEqual(result.status, 0);

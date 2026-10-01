@@ -351,13 +351,24 @@ internal sealed partial class XamlLanguageServer
         catch (MsBuildUnavailableException ex)
         {
             await NotifyMsBuildUnavailableAsync(ex).ConfigureAwait(false);
-            await NotifyProjectContextStatusAsync(uri, "error", ex.Message).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(
+                uri,
+                ex.HostMissing ? "dotnet-sdk-required" : "error",
+                ex.Message).ConfigureAwait(false);
             return null;
         }
         catch (ProjectRestoreRequiredException ex)
         {
             await NotifyProjectRestoreRequiredAsync(ex).ConfigureAwait(false);
-            await NotifyProjectContextStatusAsync(uri, "error", ex.Message).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(uri, "packages-not-restored", ex.Message)
+                .ConfigureAwait(false);
+            return null;
+        }
+        catch (ProjectBuildRequiredException ex)
+        {
+            await NotifyProjectBuildRequiredAsync(ex).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(uri, "reference-build-failed", ex.Message)
+                .ConfigureAwait(false);
             return null;
         }
         catch (Exception ex)
@@ -379,6 +390,11 @@ internal sealed partial class XamlLanguageServer
                 "No owning project was found for this XAML document.").ConfigureAwait(false);
             return null;
         }
+
+        // Project load clears restore prompts; build prompts are decided only after full resolution.
+        // The framework stage stays fast by resolving SDK/package closure without building references,
+        // so only the full stage can prove a reference is unresolvable.
+        _restoreRequiredProjects.Clear(frameworkResolution.ProjectPath);
 
         var frameworkTypeSystem = latestContext?.Stage == XamlProjectStage.Framework
             ? latestContext.TypeSystem
@@ -422,10 +438,67 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
+        // Full resolution proves unresolvable references. IntelliSense still works, but generated
+        // members are missing, so prompt once per project instead of leaving a silent partial outage.
+        if (!fullResolution.UnresolvedProjectReferences.IsDefaultOrEmpty)
+        {
+            await NotifyProjectBuildRequiredAsync(
+                new ProjectBuildRequiredException(
+                    fullResolution.ProjectPath,
+                    fullResolution.UnresolvedProjectReferences)).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(
+                uri,
+                "reference-build-failed",
+                ReferenceBuildFailedStatusMessage(fullResolution.UnresolvedProjectReferences))
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            _buildRequiredProjects.Clear(fullResolution.ProjectPath);
+
+            // The compilation is healthy apart from generated members, so nothing else reports this.
+            // Left unpublished it reads as ordinary missing code in the user's own project.
+            if (fullResolution.GeneratorFailure is { } generatorFailure)
+            {
+                await NotifyProjectContextStatusAsync(
+                    uri,
+                    "generators-unavailable",
+                    GeneratorsUnavailableStatusMessage(generatorFailure)).ConfigureAwait(false);
+            }
+        }
+
         var fullTypeSystem = _typeSystems.GetValue(
             fullResolution.Compilation,
             _ => XamlTypeSystem.FromResolution(fullResolution));
         return new XamlProjectContext(fullResolution, fullTypeSystem, XamlProjectStage.Full);
+    }
+
+    private static string ReferenceBuildFailedStatusMessage(
+        System.Collections.Immutable.ImmutableArray<string> unresolved) =>
+        unresolved.IsDefaultOrEmpty
+            ? "A referenced project could not be resolved."
+            : $"Unresolved reference: {string.Join(", ", unresolved)}";
+
+    private static string GeneratorsUnavailableStatusMessage(string reason) =>
+        $"Source generators could not run ({reason}), so generated members are missing.";
+
+    /// <summary>
+    /// The state a loaded context reports. A degraded condition outranks the stage, so a republish cannot overwrite a standing instruction with a working state.
+    /// </summary>
+    private static (string State, string? Message) ProjectContextStatusFor(XamlProjectContext context)
+    {
+        var unresolved = context.Resolution.UnresolvedProjectReferences;
+        if (!unresolved.IsDefaultOrEmpty)
+        {
+            return ("reference-build-failed", ReferenceBuildFailedStatusMessage(unresolved));
+        }
+
+        if (context.Resolution.GeneratorFailure is { } generatorFailure)
+        {
+            return ("generators-unavailable", GeneratorsUnavailableStatusMessage(generatorFailure));
+        }
+
+        return (context.Stage == XamlProjectStage.Full ? "ready" : "framework-ready", null);
     }
 
     private Task NotifyProjectContextStatusAsync(
@@ -434,7 +507,7 @@ internal sealed partial class XamlLanguageServer
         string? message = null) =>
         _connection.SendNotificationAsync(
             "winui-xaml/projectContextStatus",
-            new { uri, state, message });
+            new ProjectContextStatusParams { Uri = uri, State = state, Message = message });
 
     /// <summary>Shared pipeline for definition/hover: map the caret to a member name on the page's x:Class type (either an event-handler attribute value or an x:Bind path segment) and resolve it</summary>
     private async Task<(ISymbol? Symbol, MemberTarget? Target)> ResolveSymbolAtAsync(TextDocumentPositionParams p)
@@ -501,10 +574,10 @@ internal sealed partial class XamlLanguageServer
         return Interlocked.Exchange(ref _msbuildUnavailableNotified, 1) == 0
             ? _connection.SendNotificationAsync(
                 "window/showMessage",
-                new
+                new ShowMessageParams
                 {
-                    type = 2,
-                    message = exception.Message +
+                    Type = 2,
+                    Message = exception.Message +
                         " The language server remains available for project-independent XAML features.",
                 })
             : Task.CompletedTask;
@@ -513,10 +586,26 @@ internal sealed partial class XamlLanguageServer
     private Task NotifyProjectRestoreRequiredAsync(ProjectRestoreRequiredException exception)
     {
         Console.Error.WriteLine($"[winui-xaml-ls] restore required: {exception.ProjectPath}");
-        return _restoreRequiredProjects.TryAdd(exception.ProjectPath, 0)
+        return _restoreRequiredProjects.ShouldNotify(exception.ProjectPath)
             ? _connection.SendNotificationAsync(
                 "winui-xaml/projectRestoreRequired",
-                new { projectPath = exception.ProjectPath })
+                new ProjectRestoreRequiredParams { ProjectPath = exception.ProjectPath })
+            : Task.CompletedTask;
+    }
+
+    private Task NotifyProjectBuildRequiredAsync(ProjectBuildRequiredException exception)
+    {
+        Console.Error.WriteLine(
+            $"[winui-xaml-ls] build required: {exception.ProjectPath} " +
+            $"(unresolved: {string.Join(", ", exception.UnresolvedAssemblies)})");
+        return _buildRequiredProjects.ShouldNotify(exception.ProjectPath)
+            ? _connection.SendNotificationAsync(
+                "winui-xaml/projectBuildRequired",
+                new ProjectBuildRequiredParams
+                {
+                    ProjectPath = exception.ProjectPath,
+                    UnresolvedAssemblies = exception.UnresolvedAssemblies.ToList(),
+                })
             : Task.CompletedTask;
     }
 
@@ -877,9 +966,8 @@ internal sealed partial class XamlLanguageServer
             var context = await GetOrStartContext(uri).ConfigureAwait(false);
             if (context is not null)
             {
-                await NotifyProjectContextStatusAsync(
-                    uri,
-                    context.Stage == XamlProjectStage.Full ? "ready" : "framework-ready").ConfigureAwait(false);
+                var (state, message) = ProjectContextStatusFor(context);
+                await NotifyProjectContextStatusAsync(uri, state, message).ConfigureAwait(false);
             }
         });
     }
@@ -1000,6 +1088,8 @@ internal sealed partial class XamlLanguageServer
             return new T();
         }
 
-        return e.Deserialize<T>(LspJson.Options) ?? new T();
+        // Resolve T through the source-generated context rather than reflection, so this
+        // stays trim- and AOT-safe. Every T used here is declared on LspJsonContext.
+        return (T?)e.Deserialize(typeof(T), LspJsonContext.Default) ?? new T();
     }
 }

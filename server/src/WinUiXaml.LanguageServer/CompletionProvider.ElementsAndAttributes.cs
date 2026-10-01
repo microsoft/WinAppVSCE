@@ -882,7 +882,6 @@ internal static partial class CompletionProvider
                  valueType.SpecialType != SpecialType.System_Boolean &&
                  valueType is not INamedTypeSymbol { Name: "Type", ContainingNamespace.Name: "System" } &&
                  !XamlValueConverter.IsGridLength(valueType, typeSystem) &&
-                 !XamlValueConverter.IsThickness(valueType, typeSystem) &&
                  !XamlValueConverter.IsFontFamily(valueType, typeSystem) &&
                  !XamlValueConverter.IsGridDefinitionCollection(valueType, typeSystem) &&
                  !XamlValueConverter.IsBrush(valueType, typeSystem) &&
@@ -1083,16 +1082,6 @@ internal static partial class CompletionProvider
                 ("Auto,*", $"Two {dimension}: content-sized, then remaining space"),
                 ("Auto,*,Auto", $"Three {dimension}: content-sized, remaining space, content-sized"),
                 ("*,*", $"Two equal star-sized {dimension}"));
-        }
-
-        if (XamlValueConverter.IsThickness(valueType, typeSystem))
-        {
-            return CompleteLiteralValues(
-                partial,
-                valueReplaceRange,
-                ("0", "Uniform thickness"),
-                ("0,0", "Horizontal and vertical thickness"),
-                ("0,0,0,0", "Left, top, right, and bottom thickness"));
         }
 
         if (XamlValueConverter.IsFontFamily(valueType, typeSystem))

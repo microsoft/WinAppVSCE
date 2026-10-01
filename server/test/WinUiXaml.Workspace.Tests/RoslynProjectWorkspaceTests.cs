@@ -93,6 +93,8 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
             """);
         await File.WriteAllTextAsync(xamlPath, "<Page />");
 
+        FixtureRestore.Run(appProject);
+
         Assert.False(File.Exists(Path.Combine(
             controlsDirectory, "bin", "Debug", "net10.0", "Controls.dll")));
 
@@ -123,6 +125,77 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
         Assert.Contains(
             XamlTypeSystem.FromResolution(refreshed!).GetReferencedElementTypes(),
             type => type.ToDisplayString() == "Controls.AddedControl");
+    }
+
+    [Fact]
+    public async Task DiamondProjectReferenceIsAvailableToEveryProjectThatDeclaresIt()
+    {
+        // App and Middle both reference Shared, so the graph walk must keep the sibling edge App needs for source compilation rather than let the first branch to Shared hide it.
+        var sharedDirectory = Path.Combine(_root, "Shared");
+        var middleDirectory = Path.Combine(_root, "Middle");
+        var appDirectory = Path.Combine(_root, "App");
+        Directory.CreateDirectory(sharedDirectory);
+        Directory.CreateDirectory(middleDirectory);
+        Directory.CreateDirectory(appDirectory);
+
+        const string Library = """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """;
+
+        await File.WriteAllTextAsync(Path.Combine(sharedDirectory, "Shared.csproj"), Library);
+        await File.WriteAllTextAsync(
+            Path.Combine(sharedDirectory, "Shared.cs"),
+            "namespace Shared; public sealed class SharedType { }");
+
+        await File.WriteAllTextAsync(
+            Path.Combine(middleDirectory, "Middle.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                <ProjectReference Include="..\Shared\Shared.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(
+            Path.Combine(middleDirectory, "Middle.cs"),
+            "namespace Middle; public sealed class MiddleType { }");
+
+        var appProject = Path.Combine(appDirectory, "App.csproj");
+        await File.WriteAllTextAsync(
+            appProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                <ProjectReference Include="..\Middle\Middle.csproj" />
+                <ProjectReference Include="..\Shared\Shared.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(
+            Path.Combine(appDirectory, "App.cs"),
+            "namespace App; public sealed class AppType { }");
+
+        Assert.False(File.Exists(Path.Combine(
+            sharedDirectory, "bin", "Debug", "net10.0", "Shared.dll")));
+
+        FixtureRestore.Run(appProject);
+
+        using var workspace = await RoslynProjectWorkspace.LoadProjectAsync(appProject);
+        var compilation = await workspace.GetCompilationAsync();
+
+        Assert.NotNull(compilation);
+        Assert.NotNull(compilation!.GetTypeByMetadataName("Middle.MiddleType"));
+        Assert.NotNull(compilation.GetTypeByMetadataName("Shared.SharedType"));
     }
 
     [Fact]
@@ -195,6 +268,8 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
             """);
         await File.WriteAllTextAsync(xamlPath, "<Page />");
 
+        FixtureRestore.Run(appProject);
+
         using var resolver = new XamlProjectResolver();
 
         // Invalidate the referenced project while the App load is still in flight. At this point the
@@ -262,7 +337,7 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
                 reference => Path.GetFullPath(reference.FilePath!),
                 reference => reference.Properties,
                 StringComparer.OrdinalIgnoreCase);
-        var workspaceReferences = workspace.Project.MetadataReferences
+        var workspaceReferences = workspace.MetadataReferences
             .OfType<PortableExecutableReference>()
             .ToDictionary(
                 reference => Path.GetFullPath(reference.FilePath!),

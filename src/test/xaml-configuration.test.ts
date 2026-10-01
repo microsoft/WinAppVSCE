@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  DOTNET_REQUIRED_STATUS,
   DiagnosticsLevelInteraction,
   getDiagnosticsLevelValidationMessage,
   getXamlStatus,
@@ -11,23 +10,18 @@ import {
   shouldRestartXamlLanguageServer,
 } from "../xaml/xamlConfiguration";
 import {
+  PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE,
   PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
+  PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_LOADING_MESSAGE,
+  PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE,
+  PROJECT_CONTEXT_RESTORING_MESSAGE,
 } from "../xaml/projectContextStatus";
 import {
   XAML_INTELLISENSE_UNAVAILABLE_PREFIX,
   XAML_STATUS_PREFIX,
 } from "../xaml/xamlConstants";
-
-test("defines the persistent missing-runtime status and recovery command", () => {
-  assert.deepEqual(DOTNET_REQUIRED_STATUS, {
-    text: "$(warning) XAML: .NET 10 required",
-    tooltip:
-      "WinUI XAML IntelliSense requires .NET 10. Select for install and restart options.",
-    command: "winui-xaml.showInfo",
-  });
-});
 
 test("pins the status message prefixes", () => {
   assert.equal(XAML_STATUS_PREFIX, "WinUI XAML Tools:");
@@ -49,7 +43,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     actions: [],
   });
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, {
+    getXamlStatus(true, true, true, true, {
       state: "loading",
     }),
     {
@@ -58,7 +52,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     }
   );
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, {
+    getXamlStatus(true, true, true, true, {
       state: "framework-ready",
     }),
     {
@@ -67,7 +61,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     }
   );
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, {
+    getXamlStatus(true, true, true, true, {
       state: "error",
       message: "Restore required.",
     }),
@@ -77,7 +71,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     }
   );
   assert.deepEqual(
-    getXamlStatus(true, true, true, true, false, { state: "error" }),
+    getXamlStatus(true, true, true, true, { state: "error" }),
     {
       message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE}`,
       actions: ["Restart Language Server", "Show Output"],
@@ -87,10 +81,6 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     "Restart Language Server",
     "Show Output",
   ]);
-  assert.deepEqual(getXamlStatus(true, false, true, true, true), {
-    message: `${XAML_STATUS_PREFIX} .NET 10 is required; XAML syntax highlighting remains active.`,
-    actions: ["Install .NET", "Restart Language Server", "Show Output"],
-  });
   assert.deepEqual(getXamlStatus(true, false, false, true).actions, [
     "Manage Workspace Trust",
     "Show Output",
@@ -100,6 +90,84 @@ test("reports disabled, running, and degraded XAML status actions", () => {
       `${XAML_STATUS_PREFIX} ready; the language server starts when a XAML file is opened.`,
     actions: [],
   });
+});
+
+// Each of these used to reach the "language server running" line, which told the user everything
+// was fine while the condition the status bar was reporting went unmentioned in the one place they
+// opened to find out what was wrong.
+test("Show Info names the degraded conditions instead of reporting a healthy server", () => {
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "packages-not-restored",
+      message: "Restore the project's packages.",
+    }),
+    {
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} Restore the project's packages.`,
+      actions: ["Show Output"],
+    }
+  );
+
+  // Auto-restore is already running, so asking for the same work would be instructions the user
+  // cannot act on.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "packages-not-restored",
+      message: "Restore the project's packages.",
+      restoreInFlight: true,
+    }),
+    {
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_RESTORING_MESSAGE}`,
+      actions: ["Show Output"],
+    }
+  );
+
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "reference-build-failed",
+    }),
+    {
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE}`,
+      actions: ["Show Output"],
+    }
+  );
+
+  // No build or restore reaches the helper, so restarting is the only offer that can change it.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "generators-unavailable",
+    }),
+    {
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE}`,
+      actions: ["Restart Language Server", "Show Output"],
+    }
+  );
+
+  // The server runs without .NET, so this reaches Show Info while the server is healthy. Only the
+  // download link fixes it, and the restart is what applies the SDK once it is installed.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "dotnet-sdk-required",
+    }),
+    {
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE}`,
+      actions: ["Install .NET", "Restart Language Server", "Show Output"],
+    }
+  );
+
+  // The server reports the process that failed, which names dotnet rather than the SDK the user
+  // has to install, so the requirement leads and the server detail follows it.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "dotnet-sdk-required",
+      message: "Failed to start 'dotnet msbuild'.",
+    }),
+    {
+      message:
+        `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE}` +
+        ` Failed to start 'dotnet msbuild'.`,
+      actions: ["Install .NET", "Restart Language Server", "Show Output"],
+    }
+  );
 });
 
 test("maps every XAML status action to its recovery effect", () => {

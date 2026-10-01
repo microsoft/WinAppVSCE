@@ -80,7 +80,7 @@ extends:
                   if ($LASTEXITCODE -ne 0) { Write-Error "WinUI XAML language server tests failed: $project"; exit 1 }
                 }
           - task: PowerShell@2
-            displayName: Publish framework-dependent WinUI XAML language server
+            displayName: Publish Native AOT WinUI XAML language server and generator host
             inputs:
               pwsh: true
               errorActionPreference: 'stop'
@@ -105,7 +105,10 @@ extends:
                 AuthCertName: $(SigningAuthCertName)
                 AuthSignCertName: $(SigningSignCertName)
                 FolderPath: '$(Build.ArtifactStagingDirectory)/server-bundle'
-                Pattern: '**/WinUiXaml*.dll'
+                # The Native AOT server ships as WinUiXaml.LanguageServer.exe per RID; only the
+                # out-of-proc generator host is still a managed .dll. A .dll-only glob silently
+                # leaves the primary binaries unsigned.
+                Pattern: '**/WinUiXaml*.dll,**/WinUiXaml*.exe'
                 UseMinimatch: true
                 signConfigType: inlineSignParams
                 inlineOperation: |
@@ -131,6 +134,44 @@ extends:
                           "ToolVersion": "1.0"
                       }
                   ]
+            # SigntoolVerify above only checks files the Pattern already matched, so it cannot
+            # catch the Pattern missing a binary. Enumerate the bundle independently instead.
+            - task: PowerShell@2
+              displayName: Verify every first-party server binary is signed
+              inputs:
+                errorActionPreference: 'stop'
+                targetType: 'inline'
+                script: |
+                  $bundle = "$(Build.ArtifactStagingDirectory)/server-bundle"
+                  $binaries = Get-ChildItem -Path $bundle -Recurse -Include '*.dll','*.exe'
+                  if ($binaries.Count -eq 0) {
+                    Write-Error "No server binaries found under $bundle"
+                    exit 1
+                  }
+
+                  $firstParty = @($binaries | Where-Object { $_.Name -like 'WinUiXaml*' })
+                  if ($firstParty.Count -eq 0) {
+                    Write-Error "No first-party WinUiXaml binaries found under $bundle"
+                    exit 1
+                  }
+
+                  # Third-party dependencies arrive already signed by their publisher, so every
+                  # shipped binary is expected to carry a valid signature, not just ours.
+                  $unsigned = @()
+                  foreach ($binary in $binaries) {
+                    $signature = Get-AuthenticodeSignature -FilePath $binary.FullName
+                    Write-Host "$($signature.Status)`t$($binary.FullName)"
+                    if ($signature.Status -ne 'Valid') {
+                      $unsigned += "$($binary.FullName) [$($signature.Status)]"
+                    }
+                  }
+
+                  if ($unsigned.Count -gt 0) {
+                    Write-Error "Unsigned binaries in the server bundle:`n$($unsigned -join "`n")"
+                    exit 1
+                  }
+
+                  Write-Host "All $($binaries.Count) server binaries are signed ($($firstParty.Count) first-party)."
           - task: 1ES.PublishPipelineArtifact@1
             displayName: Upload server artifact
             inputs:
@@ -182,7 +223,7 @@ extends:
               filePath: $(System.DefaultWorkingDirectory)\scripts\download-server.ps1
               arguments: "-ArtifactPath '$(Pipeline.Workspace)/winui-xaml-server'"
           - task: PowerShell@2
-            displayName: Smoke signed framework-dependent WinUI XAML server
+            displayName: Smoke the signed Native AOT WinUI XAML server
             env:
               # Smoke the SIGNED artifact installed above; never republish over it.
               WINUI_XAML_SERVER_BUNDLE_MODE: artifact
@@ -192,7 +233,7 @@ extends:
               errorActionPreference: 'stop'
               script: |
                 dotnet restore "$(System.DefaultWorkingDirectory)\test\fixtures\xaml\fixture\SmokeFixture.csproj" -p:Platform=x64
-                node "$(System.DefaultWorkingDirectory)\scripts\test-framework-dependent-server.mjs"
+                node "$(System.DefaultWorkingDirectory)\scripts\test-bundled-server.mjs"
           - task: PowerShell@2
             displayName: Create temporary .npmrc for Build
             inputs:

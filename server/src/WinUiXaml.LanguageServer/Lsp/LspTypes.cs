@@ -6,12 +6,37 @@ namespace WinUiXaml.LanguageServer.Lsp;
 /// <summary>Shared JSON options for the LSP wire format (camelCase, omit nulls).</summary>
 internal static class LspJson
 {
+    // Source-generated resolution keeps serialization trim- and AOT-safe; undeclared types throw
+    // instead of silently falling back to reflection.
     public static readonly JsonSerializerOptions Options = new()
     {
+        TypeInfoResolver = LspJsonContext.Default,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         PropertyNameCaseInsensitive = true,
     };
+}
+
+// --- Server-to-client notifications (winui-xaml/*) --------------------------
+
+internal sealed class ProjectContextStatusParams
+{
+    [JsonPropertyName("uri")] public string? Uri { get; set; }
+    [JsonPropertyName("state")] public string? State { get; set; }
+    [JsonPropertyName("message")] public string? Message { get; set; }
+}
+
+internal sealed class ProjectRestoreRequiredParams
+{
+    [JsonPropertyName("projectPath")] public string? ProjectPath { get; set; }
+}
+
+/// <summary>Tells the client a referenced project has never been built and names what to build.</summary>
+internal sealed class ProjectBuildRequiredParams
+{
+    [JsonPropertyName("projectPath")] public string? ProjectPath { get; set; }
+
+    [JsonPropertyName("unresolvedAssemblies")] public List<string>? UnresolvedAssemblies { get; set; }
 }
 
 // --- Base protocol envelope -------------------------------------------------
@@ -225,6 +250,13 @@ internal sealed class DocumentHighlight
 }
 
 // --- Diagnostics ------------------------------------------------------------
+
+/// <summary>Parameters for the window/showMessage notification.</summary>
+internal sealed class ShowMessageParams
+{
+    [JsonPropertyName("type")] public int Type { get; set; }
+    [JsonPropertyName("message")] public string Message { get; set; } = string.Empty;
+}
 
 internal sealed class PublishDiagnosticsParams
 {

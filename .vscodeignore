@@ -24,15 +24,20 @@ test-results/**
 playwright.config.ts
 PR_REVIEW.md
 EDITOR_SUPPORT.md
-# WinUI XAML language service:
-#   - exclude the C# server sources + build output and the test harness/fixtures
-#   - the published server (dist/server, produced by `bundle:server`) is NOT excluded and ships in the VSIX
-#   - trim debug symbols and XML doc comments
-#   - the framework-dependent server DLL and Roslyn BuildHost ship without a .NET runtime
+# WinUI XAML language service: exclude the C# server sources, build output, and test fixtures.
+# The published server (dist/server, from `bundle:server`) DOES ship -- Native AOT executables per
+# architecture plus the framework-dependent generator host, with no .NET runtime. Symbols/docs trimmed.
 server/**
 test/**
 .vscode-test.mjs
 server-test.log
 dist/server/**/*.pdb
 dist/server/**/*.xml
+# Native-linker intermediates. The AOT publish output is clean today, but an SDK or PublishAot
+# change that leaves an import library behind would otherwise ship it silently, and native
+# artifacts now dominate the VSIX. validate-vsix-server.ps1 rejects these too.
+dist/server/**/*.lib
+dist/server/**/*.exp
+dist/server/**/*.ilk
+dist/server/**/*.obj
 winapp.yaml

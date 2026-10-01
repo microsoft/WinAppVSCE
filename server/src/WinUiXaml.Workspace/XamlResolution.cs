@@ -14,7 +14,9 @@ namespace WinUiXaml.Workspace
             Compilation compilation,
             ImmutableArray<IAssemblySymbol> referencedAssemblies,
             ImmutableArray<string> xamlFiles,
-            string? applicationDefinitionPath)
+            string? applicationDefinitionPath,
+            ImmutableArray<string> unresolvedProjectReferences = default,
+            string? generatorFailure = null)
         {
             XamlPath = xamlPath;
             ProjectPath = projectPath;
@@ -24,6 +26,10 @@ namespace WinUiXaml.Workspace
             ReferencedAssemblies = referencedAssemblies;
             XamlFiles = xamlFiles;
             ApplicationDefinitionPath = applicationDefinitionPath;
+            GeneratorFailure = generatorFailure;
+            UnresolvedProjectReferences = unresolvedProjectReferences.IsDefault
+                ? ImmutableArray<string>.Empty
+                : unresolvedProjectReferences;
         }
 
         /// <summary>Absolute, normalized path to the <c>.xaml</c> file.</summary>
@@ -51,6 +57,16 @@ namespace WinUiXaml.Workspace
         public string? ApplicationDefinitionPath { get; }
 
         /// <summary>
+        /// Referenced assemblies missing at load; non-empty means fallback restored type resolution, but markup output and generated members still require a build.
+        /// </summary>
+        public ImmutableArray<string> UnresolvedProjectReferences { get; }
+
+        /// <summary>
+        /// Non-null when the generator host could not run, so <c>{x:Bind}</c> and completion are missing generated members even though every other symbol resolved.
+        /// </summary>
+        public string? GeneratorFailure { get; }
+
+        /// <summary>
         /// Rebinds the document's in-memory <c>x:Class</c> against the same immutable project
         /// compilation. This avoids rebuilding project-wide XAML metadata for an XML-only edit.
         /// </summary>
@@ -63,6 +79,8 @@ namespace WinUiXaml.Workspace
                 Compilation,
                 ReferencedAssemblies,
                 XamlFiles,
-                ApplicationDefinitionPath);
+                ApplicationDefinitionPath,
+                UnresolvedProjectReferences,
+                GeneratorFailure);
     }
 }

@@ -262,17 +262,28 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     assert.ok(recovered.includes("Button"), "server should recover after clearing the missing-DLL seam");
   });
 
-  it("degrades to syntax-only without .NET 10, then recovers after restart", async function () {
+  it("starts the server without .NET, serving language-independent features but not project IntelliSense", async function () {
     process.env.WINUI_XAML_FORCE_NO_DOTNET = "1";
     try {
       await assert.doesNotReject(
         () => vscode.commands.executeCommand("winui-xaml.restartServer"),
-        "restartServer must not reject when the required runtime is absent"
+        "restartServer must not reject when .NET is absent"
       );
       const degraded = await waitForSemanticButton(false);
       assert.ok(
         !degraded.found,
-        `expected syntax-only degradation without .NET 10; got: ${degraded.labels.join(", ")}`
+        `expected no project-aware IntelliSense without .NET; got: ${degraded.labels.join(", ")}`
+      );
+
+      // Absence of semantic completion also describes a server that never started, so assert a
+      // feature only this server can answer. VS Code contributes no XAML semantic token provider,
+      // and the server computes tokens from the document alone, so this needs no project.
+      const semantic = await h.semanticTokensAt(
+        `<Page ${h.NS}>\n  <Grid>\n    <Button />\n  </Grid>\n</Page>`
+      );
+      assert.ok(
+        semantic.tokens.length > 0,
+        "the native server must still serve semantic tokens with no .NET installed"
       );
     } finally {
       delete process.env.WINUI_XAML_FORCE_NO_DOTNET;
@@ -280,7 +291,7 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     }
 
     const recovered = await waitForSemanticButton(true, 60000);
-    assert.ok(recovered.found, "server should recover after .NET 10 becomes available");
+    assert.ok(recovered.found, "project IntelliSense should return once .NET is available");
   });
 
   it("degrades to syntax-only when the workspace is untrusted, then recovers (WINUI_XAML_FORCE_UNTRUSTED)", async function () {

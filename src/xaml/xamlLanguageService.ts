@@ -15,7 +15,6 @@ import {
 import { firstExistingPath } from "../winapp-cli-utils";
 import {
   buildDegradedNotification,
-  DOTNET_RUNTIME_DISMISSED_KEY,
   DegradedAction,
   DegradedCause,
   executeDegradedAction,
@@ -29,22 +28,17 @@ import {
   CsharpDevKitNotificationGate,
 } from "./csharpDevKitNotification";
 import { notificationDismissal } from "./notificationDismissal";
-import { createDotnetChildEnvironment } from "./dotnetRuntime";
-import {
-  DOTNET_INSTALL_TOOL_ID,
-  DotnetFindPathRequest,
-  DotnetHostResolver,
-  InstallToolHost,
-  describeDotnetResolutionFailure,
-} from "./dotnetInstallTool";
+import { createDotnetChildEnvironment, resolveDotnetCommand } from "./dotnetRuntime";
 import {
   DIAGNOSTICS_LEVEL_KEY,
   DIAGNOSTICS_LEVEL_SETTING,
+  DOTNET_DOWNLOAD_URL,
   EXTERNAL_COMMANDS,
   INTELLISENSE_ENABLE_KEY,
   INTELLISENSE_ENABLE_SETTING,
   XAML_COMMANDS,
   XAML_SETTINGS_SECTION,
+  XAML_STATUS_ACTIONS,
 } from "./xamlConstants";
 import { ServerLifecycle } from "./serverLifecycle";
 import {
@@ -54,21 +48,26 @@ import {
 import {
   PROJECT_RESTORE_ACTIONS,
   PROJECT_RESTORE_NOTIFICATION,
-  ProjectRestoreNotificationGate,
   notifyProjectRestoreRequired as runProjectRestoreNotification,
 } from "./projectRestoreNotification";
 import {
+  PROJECT_BUILD_ACTIONS,
+  PROJECT_BUILD_NOTIFICATION,
+  notifyProjectBuildRequired as runProjectBuildNotification,
+} from "./projectBuildNotification";
+import {
+  PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE,
   PROJECT_CONTEXT_STATUS_NOTIFICATION,
   ProjectContextStatus,
   getRelevantProjectContextStatuses,
   getProjectContextStatusPresentation,
   isProjectContextState,
   selectProjectContextStatus,
+  shouldReplaceProjectContextStatus,
 } from "./projectContextStatus";
 import {
   normalizeDiagnosticsLevel,
   DiagnosticsLevelInteraction,
-  DOTNET_REQUIRED_STATUS,
   getXamlStatus,
   getXamlStatusEffect,
   readXamlLanguageServerConfiguration,
@@ -76,6 +75,7 @@ import {
   XamlStatusAction,
 } from "./xamlConfiguration";
 import { hasOpenXamlDocument } from "./xamlDemand";
+import { serverRidFor } from "./serverRid";
 import {
   DOCUMENT_CHANGED_MESSAGE,
   INVALID_EDIT_RANGE_MESSAGE,
@@ -107,6 +107,8 @@ function findOpenDocument(documentUri: string): vscode.TextDocument | undefined 
       : candidate.uri.toString() === target.toString()));
 }
 let readyStatusTimer: NodeJS.Timeout | undefined;
+/** Restores currently running; counted per reported project because the status bar shows whichever document is active. */
+let restoresInFlight = 0;
 const projectContextStatuses = new Map<string, ProjectContextStatus>();
 
 // The client does not own caller-supplied watchers.
@@ -118,10 +120,7 @@ const lifecycle = new ServerLifecycle();
 // Track each degraded cause once until the next successful start.
 let lastDegradedCause: DegradedCause | undefined;
 
-/** Resolves the .NET host through the Install Tool; created during activation. */
-let dotnetHostResolver: DotnetHostResolver | undefined;
 const csharpDevKitNotificationGate = new CsharpDevKitNotificationGate();
-const projectRestoreNotificationGate = new ProjectRestoreNotificationGate();
 const diagnosticsLevelInteraction = new DiagnosticsLevelInteraction({
   log,
   showWarningMessage: (message, action) =>
@@ -146,12 +145,6 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
   // Allow reactivation in the same host process.
   lifecycle.reset();
   output = vscode.window.createOutputChannel("WinUI XAML");
-  dotnetHostResolver = new DotnetHostResolver(
-    createInstallToolHost(),
-    context.extension.id,
-    process.arch,
-    process.env.WINUI_XAML_DOTNET_PATH
-  );
   projectStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   projectStatusItem.name = "WinApp XAML IntelliSense";
   projectStatusItem.command = XAML_COMMANDS.showOutput;
@@ -422,8 +415,9 @@ function showXamlInfo(): void {
     client?.isRunning() ?? false,
     vscode.workspace.isTrusted,
     vscode.workspace.textDocuments.some((document) => document.languageId === "xaml"),
-    lastDegradedCause === "dotnet",
     projectContext
+      ? { ...projectContext, restoreInFlight: restoresInFlight > 0 }
+      : undefined
   );
   void vscode.window
     .showInformationMessage<XamlStatusAction>(status.message, ...status.actions)
@@ -484,71 +478,6 @@ export async function deactivateXaml(): Promise<void> {
   await stopClient();
 }
 
-/** Bridges the Install Tool resolver to the VS Code extension host. */
-function createInstallToolHost(): InstallToolHost {
-  return {
-    isInstalled: () => vscode.extensions.getExtension(DOTNET_INSTALL_TOOL_ID) !== undefined,
-    install: async () => {
-      await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: "Setting up .NET tooling for XAML IntelliSense",
-        },
-        async () => {
-          await vscode.commands.executeCommand(
-            "workbench.extensions.installExtension",
-            DOTNET_INSTALL_TOOL_ID
-          );
-          await waitForExtensionRegistration(DOTNET_INSTALL_TOOL_ID);
-        }
-      );
-    },
-    activate: async () => {
-      // The Install Tool activates on startup finished, which has already passed
-      // for a mid-session install, so activate it explicitly before its commands
-      // are needed.
-      const extension = vscode.extensions.getExtension(DOTNET_INSTALL_TOOL_ID);
-      if (extension && !extension.isActive) {
-        await extension.activate();
-      }
-    },
-    findPath: async (request: DotnetFindPathRequest) =>
-      vscode.commands.executeCommand<{ dotnetPath: string } | undefined>(
-        EXTERNAL_COMMANDS.dotnetFindPath,
-        request
-      ),
-    log,
-    now: () => Date.now(),
-  };
-}
-
-/** Waits for a freshly installed extension to appear in the registry. */
-function waitForExtensionRegistration(id: string, timeoutMs = 15000): Promise<void> {
-  if (vscode.extensions.getExtension(id)) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    const finish = () => {
-      clearTimeout(timer);
-      subscription.dispose();
-      resolve();
-    };
-    const timer = setTimeout(finish, timeoutMs);
-    const subscription = vscode.extensions.onDidChange(() => {
-      if (vscode.extensions.getExtension(id)) {
-        finish();
-      }
-    });
-  });
-}
-
-function requireDotnetHostResolver(): DotnetHostResolver {
-  if (!dotnetHostResolver) {
-    throw new Error("The XAML .NET host resolver was used before activation completed.");
-  }
-  return dotnetHostResolver;
-}
-
 /** Starts the server without interleaving with a stop. */
 async function startClient(context: vscode.ExtensionContext): Promise<void> {
   return lifecycle.runExclusive(() => doStart(context));
@@ -562,9 +491,6 @@ async function restartClient(
   return lifecycle.runExclusive(async () => {
     await doStop();
     if (!lifecycle.isDisposing) {
-      // An explicit restart is the user's retry, so re-run host discovery
-      // instead of returning the cached answer that may have failed.
-      dotnetHostResolver?.invalidate();
       await doStart(context, showRestartNotification);
     }
   });
@@ -624,10 +550,24 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     return;
   }
 
+  // The shipped server is a Windows-only native binary; elsewhere the .exe exists but spawn fails with ENOEXEC.
+  // Gate explicitly so users see unsupported-platform wording, not a generic failed-to-start error.
+  // WINUI_XAML_SERVER_PATH bypasses this for contributor framework-dependent .dlls that run under dotnet cross-platform.
+  if (!process.env.WINUI_XAML_SERVER_PATH && !serverRidFor(process.platform, process.arch)) {
+    notifyDegraded(
+      `WinUI XAML language support requires Windows on x64 or ARM64 (this host is ${process.platform}-${process.arch}). ` +
+        "Syntax highlighting remains available.",
+      "server",
+      userInitiated,
+      context
+    );
+    return;
+  }
+
   const serverPath = resolveServerPath(context);
   if (!serverPath) {
     notifyDegraded(
-      "Framework-dependent language server DLL not found. IntelliSense, diagnostics, and navigation are unavailable; " +
+      "Bundled WinUI XAML language server executable not found. IntelliSense, diagnostics, and navigation are unavailable; " +
         "syntax highlighting remains available.",
       "server",
       userInitiated,
@@ -636,31 +576,41 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     return;
   }
 
-  const resolution =
-    process.env.WINUI_XAML_FORCE_NO_DOTNET === "1"
-      ? ({ status: "failed", reason: "runtime-not-found" } as const)
-      : await requireDotnetHostResolver().resolve();
-  if (resolution.status === "failed") {
-    const installToolUnavailable = resolution.reason === "install-tool-unavailable";
-    notifyDegraded(
-      describeDotnetResolutionFailure(resolution.reason),
-      installToolUnavailable ? "installTool" : "dotnet",
-      userInitiated,
-      context
-    );
-    return;
-  }
-  const dotnet = resolution.dotnetPath;
+  // The Native AOT server is self-contained, so nothing about .NET gates its launch. Only a
+  // contributor-supplied framework-dependent .dll runs under `dotnet`.
+  const isNativeServer = serverPath.toLowerCase().endsWith(".exe");
+  const dotnet = resolveDotnetCommand(process.env, log);
 
-  log(`Starting language server: ${dotnet} ${serverPath}`);
+  let command = serverPath;
+  let args: string[] = [];
+  if (!isNativeServer) {
+    if (dotnet === undefined) {
+      notifyDegraded(
+        `The language server at ${serverPath} is framework-dependent and no .NET host was found. ` +
+          "Publish the Native AOT server or install the .NET SDK; syntax highlighting remains available.",
+        "server",
+        userInitiated,
+        context
+      );
+      return;
+    }
+    command = dotnet;
+    args = [serverPath];
+  }
+
+  log(
+    isNativeServer
+      ? `Starting language server: ${serverPath} (native, self-contained)`
+      : `Starting language server: ${command} ${serverPath}`
+  );
 
   const executable: Executable = {
-    command: dotnet,
-    args: [serverPath],
+    command,
+    args,
     transport: TransportKind.stdio,
     options: {
       cwd: path.dirname(serverPath),
-      env: createDotnetChildEnvironment(dotnet, process.env, log),
+      env: createDotnetChildEnvironment(dotnet, process.env),
     },
   };
 
@@ -733,6 +683,16 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     ({ projectPath }: { projectPath?: string }) => notifyProjectRestoreRequired(projectPath)
   );
   candidate.onNotification(
+    PROJECT_BUILD_NOTIFICATION,
+    ({
+      projectPath,
+      unresolvedAssemblies,
+    }: {
+      projectPath?: string;
+      unresolvedAssemblies?: string[];
+    }) => notifyProjectBuildRequired(projectPath, unresolvedAssemblies)
+  );
+  candidate.onNotification(
     PROJECT_CONTEXT_STATUS_NOTIFICATION,
     (status: ProjectContextStatus) => updateProjectContextStatus(status)
   );
@@ -768,7 +728,9 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     // The client never took ownership of this watcher.
     disposeFileWatcher();
     notifyDegraded(
-      `Failed to start language server (${dotnet}): ${detail}. ` +
+      // Name the executable that was actually launched. For the AOT server this is the native
+      // binary, and blaming `dotnet` for its spawn failure sends triage to the wrong process.
+      `Failed to start language server (${isNativeServer ? serverPath : dotnet}): ${detail}. ` +
         "Syntax highlighting remains available.",
       "server",
       userInitiated,
@@ -780,12 +742,92 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
 function notifyProjectRestoreRequired(projectPath: string | undefined): void {
   void runProjectRestoreNotification(projectPath, {
     isTrustedWorkspaceProject,
-    shouldShow: (path) => projectRestoreNotificationGate.shouldShow(path),
-    showInformationMessage: (message, ...actions) =>
-      vscode.window.showInformationMessage(message, ...actions),
-    showOutput: () => output?.show(true),
     restoreProject,
   });
+}
+
+function notifyProjectBuildRequired(
+  projectPath: string | undefined,
+  unresolvedAssemblies: string[] | undefined
+): void {
+  void runProjectBuildNotification(projectPath, unresolvedAssemblies, {
+    isTrustedWorkspaceProject,
+    showWarningMessage: (message, ...actions) =>
+      vscode.window.showWarningMessage(message, ...actions),
+    showOutput: () => output?.show(true),
+    buildProject: (projectPath) => void runProjectBuild(projectPath),
+  });
+}
+
+// Builds in a visible task terminal: it is the user's action, build errors surface there, and existing outputs let the server re-resolve on next request.
+// Pass the project as a ProcessExecution argument, not shell text, so PowerShell cannot expand `$(...)` or backticks in a server-reported path.
+async function runProjectBuild(projectPath: string): Promise<void> {
+  const dotnet = resolveDotnetCommand();
+  if (dotnet === undefined) {
+    reportMissingDotnetSdk("build");
+    return;
+  }
+  const task = new vscode.Task(
+    { type: "winapp-xaml-build" },
+    vscode.TaskScope.Workspace,
+    "Build",
+    "WinApp",
+    new vscode.ProcessExecution(dotnet, ["build", projectPath], {
+      cwd: path.dirname(projectPath),
+      env: toTaskEnvironment(createDotnetChildEnvironment(dotnet, process.env)),
+    })
+  );
+  task.presentationOptions = {
+    reveal: vscode.TaskRevealKind.Always,
+    panel: vscode.TaskPanelKind.Dedicated,
+    clear: true,
+  };
+
+  // A rejected executeTask is the one remaining way this can fail silently: the task is
+  // well-formed, but VS Code can still decline to start it.
+  void Promise.resolve(vscode.tasks.executeTask(task)).then(
+    (execution) => watchProjectBuildCompletion(execution, projectPath),
+    (error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      log(`Project build task could not start: ${detail}`);
+      void vscode.window.showErrorMessage(`WinUI project build could not start: ${detail}`);
+    }
+  );
+}
+
+// A successful build writes only under bin/obj, which the server ignores, so nothing would tell it
+// the references it reported as unbuilt now exist. Naming the project file is the same signal a
+// .csproj edit sends, and it is what clears the build-required status without a restart.
+function watchProjectBuildCompletion(
+  execution: vscode.TaskExecution,
+  projectPath: string
+): void {
+  const subscription = vscode.tasks.onDidEndTaskProcess((event) => {
+    if (event.execution !== execution) {
+      return;
+    }
+
+    subscription.dispose();
+    if (event.exitCode !== 0) {
+      return;
+    }
+
+    log(`Project build completed: ${projectPath}. Reloading project metadata.`);
+    void client?.sendNotification("workspace/didChangeWatchedFiles", {
+      changes: [{ uri: vscode.Uri.file(projectPath).toString(), type: 2 }],
+    });
+  });
+}
+
+/** Converts a process env to ProcessExecution's string map, dropping undefined values like direct spawn would. */
+function toTaskEnvironment(env: NodeJS.ProcessEnv): { [key: string]: string } {
+  const result: { [key: string]: string } = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
 function isTrustedWorkspaceProject(projectPath: string): boolean {
@@ -801,34 +843,36 @@ function isTrustedWorkspaceProject(projectPath: string): boolean {
   });
 }
 
+// Launching a bare `dotnet` here would let the project directory, which is the working directory,
+// satisfy the lookup, so an unresolved host is reported instead of run.
+function reportMissingDotnetSdk(operation: string): void {
+  log(`No .NET SDK found on PATH; skipping project ${operation}.`);
+  void vscode.window
+    .showErrorMessage(
+      `WinUI project ${operation} needs the .NET SDK. ${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE}`,
+      XAML_STATUS_ACTIONS.installDotnet
+    )
+    .then((choice) => {
+      if (choice === XAML_STATUS_ACTIONS.installDotnet) {
+        void vscode.env.openExternal(vscode.Uri.parse(DOTNET_DOWNLOAD_URL));
+      }
+    });
+}
+
 async function restoreProject(projectPath: string): Promise<void> {
-  output?.show(true);
+  const dotnet = resolveDotnetCommand();
+  if (dotnet === undefined) {
+    reportMissingDotnetSdk("package restore");
+    return;
+  }
+
   log(`Restoring project packages: ${projectPath}`);
+  restoresInFlight += 1;
+  renderProjectContextStatus();
 
   try {
-    const resolution = await requireDotnetHostResolver().resolve();
-    if (resolution.status === "failed") {
-      throw new Error(
-        `${describeDotnetResolutionFailure(resolution.reason)} ${
-          resolution.reason === "install-tool-unavailable"
-            ? "See the WinUI XAML output for details."
-            : "Install the .NET 10 runtime, then run restore again."
-        }`
-      );
-    }
-    const dotnet = resolution.dotnetPath;
-
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: "Restoring WinUI project packages",
-      },
-      () => runDotnetRestore(projectPath, dotnet)
-    );
+    await runDotnetRestore(projectPath, dotnet);
     log("Project package restore completed. IntelliSense metadata is reloading.");
-    void vscode.window.showInformationMessage(
-      "WinUI project packages restored. XAML IntelliSense is reloading."
-    );
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     log(`Project package restore failed: ${detail}`);
@@ -840,6 +884,9 @@ async function restoreProject(projectPath: string): Promise<void> {
         output?.show(true);
       }
     });
+  } finally {
+    restoresInFlight -= 1;
+    renderProjectContextStatus();
   }
 }
 
@@ -848,7 +895,7 @@ function runDotnetRestore(projectPath: string, dotnetPath: string): Promise<void
     const child = spawn(dotnetPath, ["restore", projectPath, "--nologo"], {
       cwd: path.dirname(projectPath),
       windowsHide: true,
-      env: createDotnetChildEnvironment(dotnetPath, process.env, log),
+      env: createDotnetChildEnvironment(dotnetPath, process.env),
     });
 
     child.stdout.on("data", (data: Buffer) => output?.append(data.toString()));
@@ -879,7 +926,12 @@ function updateProjectContextStatus(status: ProjectContextStatus): void {
 
   if (status.state === "idle") {
     projectContextStatuses.delete(status.uri);
-  } else {
+  } else if (
+    shouldReplaceProjectContextStatus(
+      projectContextStatuses.get(status.uri),
+      status
+    )
+  ) {
     projectContextStatuses.set(status.uri, status);
   }
   renderProjectContextStatus();
@@ -897,20 +949,15 @@ function renderProjectContextStatus(): void {
       ? activeEditor.document.uri.toString()
       : null
     : undefined;
-  if (projectStatusItem && activeDocumentUri && lastDegradedCause === "dotnet") {
-    projectStatusItem.text = DOTNET_REQUIRED_STATUS.text;
-    projectStatusItem.tooltip = DOTNET_REQUIRED_STATUS.tooltip;
-    projectStatusItem.command = DOTNET_REQUIRED_STATUS.command;
-    projectStatusItem.show();
-    return;
-  }
   const relevantStatuses = getRelevantProjectContextStatuses(
     projectContextStatuses.values(),
     activeDocumentUri
   );
   const selected = selectProjectContextStatus(relevantStatuses);
   const presentation = selected
-    ? getProjectContextStatusPresentation(selected)
+    ? getProjectContextStatusPresentation(selected, {
+        restoreInFlight: restoresInFlight > 0,
+      })
     : undefined;
   if (!projectStatusItem || !selected || !presentation) {
     projectStatusItem?.hide();
@@ -919,7 +966,7 @@ function renderProjectContextStatus(): void {
 
   projectStatusItem.text = presentation.text;
   projectStatusItem.tooltip = presentation.tooltip;
-  projectStatusItem.command = XAML_COMMANDS.showOutput;
+  projectStatusItem.command = presentation.command ?? XAML_COMMANDS.showOutput;
   projectStatusItem.show();
   if (presentation.transient) {
     readyStatusTimer = setTimeout(() => {
@@ -981,7 +1028,6 @@ function notifyDegraded(
   const shouldShow = shouldShowDegradedNotification(
     cause,
     lastDegradedCause,
-    notificationDismissal(DOTNET_RUNTIME_DISMISSED_KEY, context?.globalState).isDismissed,
     forceNotification
   );
   lastDegradedCause = cause;
@@ -1006,8 +1052,6 @@ function runDegradedAction(
   context?: vscode.ExtensionContext
 ): Thenable<unknown> | void {
   return executeDegradedAction(action, {
-    dismissDotnetRequirement: () =>
-      notificationDismissal(DOTNET_RUNTIME_DISMISSED_KEY, context?.globalState).dismiss(),
     showOutput: () => output?.show(true),
     openUrl: (url) => vscode.env.openExternal(vscode.Uri.parse(url)),
     executeCommand: (command, commandArg) =>
@@ -1017,7 +1061,7 @@ function runDegradedAction(
   });
 }
 
-/** Locates the framework-dependent server DLL or a development-only DLL override. */
+/** Locates the bundled Native AOT server executable, or a development-only override. */
 function resolveServerPath(context: vscode.ExtensionContext): string | undefined {
   // Exercise missing-server degradation in the integration harness.
   if (process.env.WINUI_XAML_FORCE_NO_SERVER === "1") {
@@ -1030,16 +1074,20 @@ function resolveServerPath(context: vscode.ExtensionContext): string | undefined
       : configured
         ? [configured, bundledServer(context)]
         : [bundledServer(context)];
+  // The bundled server is a native .exe; an override may still be a framework-dependent .dll,
+  // which is how local debug builds and the smoke harness run it.
   return firstExistingPath(
-    candidates.filter((candidate) => path.extname(candidate).toLowerCase() === ".dll")
+    candidates.filter((candidate) =>
+      [".exe", ".dll"].includes(path.extname(candidate).toLowerCase())
+    )
   );
 }
 
+/** Returns the architecture-specific Native AOT server executable carried under dist/server/win-<arch>/. */
 function bundledServer(context: vscode.ExtensionContext): string {
-  return path.join(
-    context.extensionPath,
-    "dist",
-    "server",
-    "WinUiXaml.LanguageServer.dll"
-  );
+  return path.join(context.extensionPath, "dist", "server", serverRid(), "WinUiXaml.LanguageServer.exe");
+}
+
+function serverRid(): string {
+  return serverRidFor(process.platform, process.arch) ?? "win-x64";
 }

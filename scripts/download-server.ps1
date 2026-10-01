@@ -5,7 +5,7 @@
 .DESCRIPTION
     The release pipeline downloads the ESRP-signed server artifact, then this script installs and
     validates it in dist/server. Local development does not use this script; ensure-server-bundle.mjs
-    publishes a fresh framework-dependent server from source instead.
+    publishes a fresh Native AOT server from source instead.
 .PARAMETER ArtifactPath
     Path to the downloaded winui-xaml-server pipeline artifact directory.
 .PARAMETER DestinationPath
@@ -63,4 +63,4 @@ finally {
     }
 }
 
-Write-Host "[SERVER] Signed framework-dependent server artifact installed in $DestinationPath" -ForegroundColor Green
+Write-Host "[SERVER] Signed Native AOT server artifact installed in $DestinationPath" -ForegroundColor Green
