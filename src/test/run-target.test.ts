@@ -14,6 +14,7 @@ import {
 	isProjectMode,
 	parseSolutionProjectPaths,
 	readDirectoryProjectPaths,
+	readSolutionProjectPaths,
 	sortRunTargets,
 	type RunTargetCandidate,
 	type WorkspaceRoot
@@ -270,6 +271,71 @@ describe('isContainedIn', () => {
 
 	it('rejects a path that only shares a name prefix', () => {
 		assert.strictEqual(isContainedIn('C:/ws/App', 'C:/ws/AppOther/Other.csproj'), false);
+	});
+});
+
+describe('readSolutionProjectPaths containment', () => {
+	function writeSolution(dir: string, members: string[]): string {
+		const body = members
+			.map((member, index) =>
+				`Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "P${index}", ` +
+				`"${member}", "{00000000-0000-0000-0000-00000000000${index}}"\r\nEndProject`)
+			.join('\r\n');
+		const solutionPath = path.join(dir, 'App.sln');
+		fs.writeFileSync(solutionPath, body);
+		return solutionPath;
+	}
+
+	it('keeps a member that really lives inside the solution directory', async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-contain-'));
+		try {
+			fs.mkdirSync(path.join(dir, 'App'));
+			fs.writeFileSync(path.join(dir, 'App', 'App.csproj'), '<Project />');
+			const solutionPath = writeSolution(dir, ['App\\App.csproj']);
+			const result = await readSolutionProjectPaths(solutionPath);
+			assert.deepStrictEqual(result, [path.join(dir, 'App', 'App.csproj')]);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('drops a member reached through .. traversal', async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-traverse-'));
+		try {
+			const solutionPath = writeSolution(dir, ['..\\Outside\\Outside.csproj']);
+			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), []);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	// The lexical check alone passes this: "link\Outside.csproj" contains no
+	// `..`, so nothing in the string reveals that `link` redirects out of the
+	// solution directory. Only resolving the reparse point catches it.
+	it('drops a member whose path crosses a junction out of the solution directory', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-junction-'));
+		const solutionDir = path.join(root, 'sln');
+		const outside = path.join(root, 'outside');
+		fs.mkdirSync(solutionDir);
+		fs.mkdirSync(outside);
+		fs.writeFileSync(path.join(outside, 'Outside.csproj'), '<Project />');
+
+		const link = path.join(solutionDir, 'link');
+		try {
+			fs.symlinkSync(outside, link, 'junction');
+		} catch {
+			// Junction creation can be unavailable; the lexical cases above
+			// still cover the rule, so skip rather than fail the suite.
+			fs.rmSync(root, { recursive: true, force: true });
+			return;
+		}
+
+		try {
+			const solutionPath = writeSolution(solutionDir, ['link\\Outside.csproj']);
+			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), []);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 

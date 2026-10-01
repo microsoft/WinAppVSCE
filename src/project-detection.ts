@@ -48,6 +48,42 @@ export const ALWAYS_SKIP_DIRS = [
 	'node_modules', '.git', '.vs', '.vscode', '.idea', 'packages', '.winapp'
 ] as const;
 
+/**
+ * True when `candidate` stays inside `container`, following reparse points.
+ *
+ * The lexical check rejects `..` traversal; the real-path check then rejects a
+ * symlink or NTFS junction that lives inside `container` but resolves outside
+ * it. A purely lexical test passes such a path, because nothing in the string
+ * reveals the redirection.
+ *
+ * When either side cannot be resolved the target does not exist, and a path
+ * that does not exist cannot be a reparse point — so the lexical result
+ * stands rather than the path being rejected for being absent.
+ *
+ * This is the one containment rule for paths read out of workspace content
+ * (solution members, configured app directories). Callers that only need the
+ * lexical test can use the synchronous `isContainedIn` in `run-target.ts`.
+ */
+export async function isContainedInReal(container: string, candidate: string): Promise<boolean> {
+	const resolved = path.resolve(container, candidate);
+	if (!isLexicallyContained(path.resolve(container), resolved)) {
+		return false;
+	}
+
+	try {
+		const realContainer = await fsp.realpath(container);
+		const realResolved = await fsp.realpath(resolved);
+		return isLexicallyContained(realContainer, realResolved);
+	} catch {
+		return true;
+	}
+}
+
+function isLexicallyContained(container: string, candidate: string): boolean {
+	const relative = path.relative(container, candidate);
+	return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 const SKIP_DIRS = new Set<string>([
 	...ALWAYS_SKIP_DIRS,
 	// Build inputs/outputs and language caches: a project file found under

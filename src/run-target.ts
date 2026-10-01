@@ -1,6 +1,6 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
-import { ALWAYS_SKIP_DIRS, isOfferableProject, readProjectRunnability } from './project-detection';
+import { ALWAYS_SKIP_DIRS, isContainedInReal, isOfferableProject, readProjectRunnability } from './project-detection';
 
 /**
  * How `winapp run` will interpret a given input path.
@@ -203,7 +203,9 @@ function parseSlnxProjectPaths(content: string): string[] {
  * Entries that resolve outside the solution's own directory are dropped. A
  * solution file is workspace content, and the picker shows only each project's
  * file name, so a `..\..\` entry would otherwise put an unreviewable path on a
- * `--project` argument behind a label that looks ordinary.
+ * `--project` argument behind a label that looks ordinary. Containment follows
+ * reparse points, so a junction inside the solution directory cannot be used
+ * to smuggle an outside path past the lexical check.
  */
 export async function readSolutionProjectPaths(solutionPath: string): Promise<string[]> {
 	let content: string;
@@ -214,9 +216,12 @@ export async function readSolutionProjectPaths(solutionPath: string): Promise<st
 	}
 
 	const solutionDir = path.dirname(solutionPath);
-	return parseSolutionProjectPaths(content, solutionPath)
-		.map(relative => path.resolve(solutionDir, relative.replace(/\\/g, path.sep)))
-		.filter(resolved => isContainedIn(solutionDir, resolved));
+	const resolved = parseSolutionProjectPaths(content, solutionPath)
+		.map(relative => path.resolve(solutionDir, relative.replace(/\\/g, path.sep)));
+	const contained = await Promise.all(
+		resolved.map(candidate => isContainedInReal(solutionDir, candidate))
+	);
+	return resolved.filter((_, index) => contained[index]);
 }
 
 /** True when `candidate` is inside `container` (or is `container` itself). */

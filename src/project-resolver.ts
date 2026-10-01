@@ -1,6 +1,6 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
-import { detectProjectAt, DetectedProject, getDisplayFilePath } from './project-detection';
+import { detectProjectAt, DetectedProject, getDisplayFilePath, isContainedInReal } from './project-detection';
 
 /**
  * Maximum number of projects the workspace scan will surface before stopping.
@@ -119,32 +119,8 @@ export async function resolveProjectDirectory(
 
 /**
  * Determines whether `dir` (resolved relative to `workspacePath`) stays inside
- * the workspace.
- *
- * Applies a lexical check first (rejecting `..` traversal and absolute paths),
- * then — when the target exists on disk — a real-path check so that a symlink
- * or junction living inside the workspace cannot point the command at a
- * directory outside it. Non-existent targets cannot be reparse points, so the
- * lexical result stands.
+ * the workspace. See {@link isContainedInReal} for the containment rule.
  */
-async function isContainedInWorkspace(workspacePath: string, dir: string): Promise<boolean> {
-	const resolved = path.resolve(workspacePath, dir);
-	const relative = path.relative(workspacePath, resolved);
-	if (relative.startsWith('..') || path.isAbsolute(relative)) {
-		return false;
-	}
-
-	try {
-		const realWorkspace = await fsp.realpath(workspacePath);
-		const realResolved = await fsp.realpath(resolved);
-		const realRelative = path.relative(realWorkspace, realResolved);
-		if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
-			return false;
-		}
-	} catch {
-		// The target (or workspace) does not exist yet — it cannot be a symlink
-		// escape, so the lexical check above is authoritative.
-	}
-
-	return true;
+function isContainedInWorkspace(workspacePath: string, dir: string): Promise<boolean> {
+	return isContainedInReal(workspacePath, dir);
 }
