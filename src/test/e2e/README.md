@@ -63,7 +63,16 @@ Validates that `winapp.sign` discovers signable files and certificates in worksp
 
 ### `input-folder-validation.spec.ts` — 1 test
 
-Validates that an invalid configured `inputFolder` offers to open its owning debug configuration. This also covers the deprecated `inputFolder` alias: the error message must keep naming `inputFolder` (not `input`) when that is the property the user actually set.
+Validates that an invalid configured run input offers to open its owning debug configuration.
+
+The `winapp` launch.json property is called `input`. `inputFolder` is its older
+name, kept working so launch.json files written before project mode still run.
+Error messages quote whichever of the two the user actually set —
+`validateRunInput` takes the name as a parameter and `extension.ts` passes
+`config.input ? 'input' : 'inputFolder'` — so this test sets the old name and
+asserts the message says `inputFolder`. Quoting `"input"` at someone whose
+launch.json does not contain that word would send them hunting for a property
+they never wrote.
 
 | # | Test | Validates |
 |---|------|-----------|
