@@ -403,10 +403,12 @@ export function isOfferableProject(runnability: ProjectRunnability): boolean {
 }
 
 /**
- * Parses csproj XML content to determine if it's an executable, non-test project.
- * Simplified heuristic inspired by the CLI's IsExecutableProject logic — uses regex
- * to match the first <OutputType> and <IsTestProject> elements. Does not handle
- * multiple/conditional PropertyGroups or values inside XML comments.
+ * True when a csproj's XML names an executable, non-test project.
+ *
+ * Thin wrapper over {@link classifyProjectRunnability}, which is deliberately
+ * one-sided: anything it cannot determine classifies as `unknown` and is *not*
+ * an app by this stricter test. Callers wanting the one-sided behavior should
+ * use {@link isOfferableProject} instead.
  */
 function isExecutableCsproj(content: string): boolean {
 	return classifyProjectRunnability(content) === 'app';

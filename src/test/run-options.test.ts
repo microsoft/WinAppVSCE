@@ -3,9 +3,11 @@ import assert from 'node:assert';
 import {
 	buildRunArgs,
 	clearInapplicableOptions,
+	COMMON_CONFIGURATIONS,
 	getRunOptionErrors,
 	resolveDebugInput,
 	runOptionsFromDebugConfig,
+	SUPPORTED_ARCHITECTURES,
 	validateRunOptions,
 	type WinAppDebugConfiguration,
 	type WinAppRunOptions
@@ -175,13 +177,25 @@ describe('validateRunOptions — mode mismatches', () => {
 		assert.deepStrictEqual(result, []);
 	});
 
-	// --aot drives an MSBuild publish, so folder mode has nothing to apply it
-	// to. Listing it keeps the warning honest about everything being dropped.
-	it('names --aot among the options a folder run ignores', () => {
+	// --aot is the one project-only option the CLI *rejects* rather than
+	// ignores: winapp 0.7.0 answers `run <folder> --aot` with "--aot requires
+	// a .csproj, solution, or source directory that resolves to project mode"
+	// and exits 1. Warning and dropping it the way the other eight are dropped
+	// would quietly run a non-AOT build the user never asked for.
+	it('rejects --aot on a folder, matching the CLI', () => {
 		const result = validateRunOptions(options({ aot: true }), 'folder');
+		const error = result.find(d => d.severity === 'error');
+		assert.ok(error, 'expected an error, not a warning');
+		assert.ok(error!.message.includes('aot'));
+	});
+
+	// The warning enumerates what gets dropped, and --aot is not dropped.
+	it('does not list --aot among the ignored options', () => {
+		const result = validateRunOptions(options({ aot: true, configuration: 'Release' }), 'folder');
 		const warning = result.find(d => d.severity === 'warning');
 		assert.ok(warning);
-		assert.ok(warning!.message.includes('--aot'));
+		assert.ok(warning!.message.includes('--configuration'));
+		assert.ok(!warning!.message.includes('--aot'));
 	});
 });
 
@@ -191,21 +205,64 @@ describe('validateRunOptions — value checks', () => {
 		assert.ok(result.some(d => d.severity === 'warning' && d.message.includes('precedence')));
 	});
 
-	it('rejects non-Windows runtime identifiers', () => {
-		const result = validateRunOptions(options({ runtime: 'linux-x64' }), 'project');
-		assert.ok(getRunOptionErrors(result).some(d => d.message.includes('linux-x64')));
+	// Every accept/reject case below was probed against the bundled winapp
+	// 0.7.0 CLI, so these tests pin the extension to the CLI's real behavior
+	// rather than to a guess. Rejecting a value the CLI accepts is the worse
+	// failure: it blocks a legal build with an extension-only error.
+	it('rejects runtime identifiers the CLI cannot derive an architecture from', () => {
+		// The CLI answers each of these with "Could not determine an
+		// architecture from --runtime". Bare "win" is included deliberately:
+		// it looks like a Windows RID but carries no architecture.
+		for (const rid of ['linux-x64', 'osx-arm64', 'win', 'win-arm', 'win-mips', 'windows-x64', 'win-x64-aot', 'winxp-x64']) {
+			const result = validateRunOptions(options({ runtime: rid }), 'project');
+			assert.ok(
+				getRunOptionErrors(result).some(d => d.message.includes(rid)),
+				`expected ${rid} to be rejected`
+			);
+		}
 	});
 
-	it('accepts Windows runtime identifiers', () => {
-		for (const rid of ['win-x64', 'win-arm64', 'win10-x64', 'win']) {
+	it('accepts every runtime identifier shape the CLI resolves', () => {
+		// win + optional version digits + a supported architecture, matched
+		// case-insensitively, with amd64 as a spelling of x64.
+		for (const rid of ['win-x64', 'win-arm64', 'win-x86', 'win-amd64', 'win7-x64', 'win10-x64', 'win11-x64', 'win81-x86', 'WIN-X64', 'win10-ARM64', '  win-x64  ']) {
 			const result = validateRunOptions(options({ runtime: rid }), 'project');
 			assert.deepStrictEqual(getRunOptionErrors(result), [], `expected ${rid} to be accepted`);
 		}
 	});
 
 	it('rejects unsupported architectures', () => {
-		const result = validateRunOptions(options({ arch: 'mips' }), 'project');
-		assert.ok(getRunOptionErrors(result).some(d => d.message.includes('mips')));
+		for (const arch of ['mips', 'arm', 'i386', 'win-x64']) {
+			const result = validateRunOptions(options({ arch }), 'project');
+			assert.ok(
+				getRunOptionErrors(result).some(d => d.message.includes(arch)),
+				`expected ${arch} to be rejected`
+			);
+		}
+	});
+
+	it('accepts every supported architecture', () => {
+		for (const arch of SUPPORTED_ARCHITECTURES) {
+			const result = validateRunOptions(options({ arch }), 'project');
+			assert.deepStrictEqual(getRunOptionErrors(result), [], `expected ${arch} to be accepted`);
+		}
+	});
+
+	it('accepts architectures the CLI matches case-insensitively, plus amd64', () => {
+		for (const arch of ['X64', 'ARM64', 'X86', 'amd64', 'AMD64', '  x64  ']) {
+			const result = validateRunOptions(options({ arch }), 'project');
+			assert.deepStrictEqual(getRunOptionErrors(result), [], `expected ${arch} to be accepted`);
+		}
+	});
+
+	// COMMON_CONFIGURATIONS is a convenience list for the QuickPick, not an
+	// allow-list: MSBuild projects routinely define their own configurations
+	// and the CLI forwards whatever it is given.
+	it('accepts any configuration name, not just the common ones', () => {
+		for (const configuration of [...COMMON_CONFIGURATIONS, 'ReleaseSigned', 'Debug-Internal', 'x64 Release']) {
+			const result = validateRunOptions(options({ configuration }), 'project');
+			assert.deepStrictEqual(getRunOptionErrors(result), [], `expected ${configuration} to be accepted`);
+		}
 	});
 
 	it('warns that noRestore is redundant with noBuild', () => {
@@ -350,7 +407,9 @@ describe('clearInapplicableOptions', () => {
 				.filter(([, value]) => value !== undefined)
 				.map(([key]) => key)
 				.sort(),
-			['debugOutput', 'input', 'symbols']
+			// aot survives on purpose: the CLI rejects it outright rather than
+			// ignoring it, so validateRunOptions blocks the run instead.
+			['aot', 'debugOutput', 'input', 'symbols']
 		);
 	});
 

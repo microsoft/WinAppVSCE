@@ -203,7 +203,20 @@ export function validateRunOptions(
 
 	// --- Mode mismatches ---
 	if (!isProjectMode(kind) && kind !== 'unknown') {
-		const projectOnly = listProjectOnlyOptions(options);
+		// `--aot` is the one project-only option the CLI *rejects* rather than
+		// ignores: winapp 0.7.0 answers `run <folder> --aot` with "--aot
+		// requires a .csproj, solution, or source directory that resolves to
+		// project mode" and exits 1. Dropping it with a warning the way the
+		// other eight are dropped would quietly run a non-AOT build the user
+		// never asked for, so this blocks instead.
+		if (options.aot) {
+			diagnostics.push({
+				severity: 'error',
+				message: 'The "aot" option requires a project, solution, or source directory, and cannot be used with a build output folder.'
+			});
+		}
+
+		const projectOnly = listProjectOnlyOptions(options).filter(name => name !== '--aot');
 		if (projectOnly.length > 0) {
 			const list = projectOnly.join(', ');
 			const verb = projectOnly.length === 1 ? 'applies' : 'apply';
@@ -225,11 +238,11 @@ export function validateRunOptions(
 	if (options.runtime && !isWindowsRuntimeIdentifier(options.runtime)) {
 		diagnostics.push({
 			severity: 'error',
-			message: `"${options.runtime}" is not a Windows runtime identifier. Use a win-* RID such as "win-x64".`
+			message: `"${options.runtime}" is not a Windows runtime identifier the CLI can derive an architecture from. Use a win-* RID that ends in a supported architecture, such as "win-x64", "win-arm64", or "win10-x86".`
 		});
 	}
 
-	if (options.arch && !(SUPPORTED_ARCHITECTURES as readonly string[]).includes(options.arch)) {
+	if (options.arch && !isSupportedArchitecture(options.arch)) {
 		diagnostics.push({
 			severity: 'error',
 			message: `"${options.arch}" is not a supported architecture. Use one of: ${SUPPORTED_ARCHITECTURES.join(', ')}.`
@@ -284,6 +297,11 @@ export function getRunOptionErrors(diagnostics: readonly RunOptionDiagnostic[]):
  *
  * `unknown` targets are left untouched — the CLI classifies better than we do,
  * and clearing options it would have honoured is the worse failure.
+ *
+ * `aot` is deliberately *not* cleared. It is the one project-only option the
+ * CLI rejects outright rather than ignoring, so {@link validateRunOptions}
+ * raises it as an error and the run never reaches here; were it cleared too, a
+ * caller that ignored errors would silently run a non-AOT build instead.
  */
 export function clearInapplicableOptions(
 	options: WinAppRunOptions,
@@ -302,8 +320,7 @@ export function clearInapplicableOptions(
 		runtime: undefined,
 		properties: undefined,
 		noBuild: undefined,
-		noRestore: undefined,
-		aot: undefined
+		noRestore: undefined
 	};
 }
 
@@ -418,7 +435,33 @@ function listProjectOnlyOptions(options: WinAppRunOptions): string[] {
 	return present;
 }
 
+/**
+ * True when `--arch` would be accepted by the CLI.
+ *
+ * Matches winapp 0.7.0, which compares case-insensitively and also understands
+ * `amd64` as a spelling of x64: `--arch X64`, `--arch ARM64`, and `--arch
+ * amd64` all resolve (to win-x64, win-arm64, and win-x64), while `arm`,
+ * `i386`, and `win-x64` are rejected. A case-sensitive check against
+ * {@link SUPPORTED_ARCHITECTURES} would turn values the CLI accepts into
+ * extension-side errors.
+ */
+function isSupportedArchitecture(arch: string): boolean {
+	const normalized = arch.trim().toLowerCase();
+	return (SUPPORTED_ARCHITECTURES as readonly string[]).includes(normalized) || normalized === 'amd64';
+}
+
+/**
+ * True when `--runtime` would be accepted by the CLI.
+ *
+ * winapp 0.7.0 derives the target architecture from the RID, so it accepts
+ * only `win` + optional version digits + `-` + a supported architecture,
+ * compared case-insensitively: `win-x64`, `win10-ARM64`, `win81-x86`,
+ * `win7-x64`, and `win-amd64` all resolve. Everything else is rejected with
+ * "Could not determine an architecture from --runtime" — including bare `win`
+ * (no architecture to derive), `win-arm` and `win-mips` (unsupported
+ * architecture), `windows-x64` (non-numeric version), and `win-x64-aot`
+ * (trailing segment).
+ */
 function isWindowsRuntimeIdentifier(runtime: string): boolean {
-	const normalized = runtime.trim().toLowerCase();
-	return normalized === 'win' || normalized.startsWith('win-') || normalized.startsWith('win10-') || normalized.startsWith('win81-');
+	return /^win\d*-(?:x64|arm64|x86|amd64)$/.test(runtime.trim().toLowerCase());
 }
