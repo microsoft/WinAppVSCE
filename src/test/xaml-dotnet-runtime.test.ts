@@ -20,23 +20,30 @@ test("points DOTNET_ROOT and DOTNET_HOST_PATH at an explicitly named host", () =
   assert.equal(env.PATH, "C:\\dotnet10");
 });
 
-// An inherited DOTNET_HOST_PATH would send the server's MSBuild to a host other than the `dotnet`
-// being launched, while DOTNET_ROOT is how a user's non-default SDK install is found.
-test("clears an inherited DOTNET_HOST_PATH but keeps DOTNET_ROOT when dotnet comes from PATH", () => {
-  const logged: string[] = [];
-  const env = createDotnetChildEnvironment(
-    "dotnet",
-    {
-      PATH: "C:\\dotnet10",
-      DOTNET_HOST_PATH: "C:\\dotnet8\\dotnet.exe",
-      DOTNET_ROOT: "C:\\custom-sdk",
-    },
-    (message) => logged.push(message)
-  );
+// An inherited DOTNET_HOST_PATH would send the server's MSBuild to a host this extension did not
+// resolve, while DOTNET_ROOT is how a user's non-default SDK install is found.
+test("clears an inherited DOTNET_HOST_PATH but keeps DOTNET_ROOT when no host resolves", () => {
+  const env = createDotnetChildEnvironment(undefined, {
+    PATH: "C:\\dotnet10",
+    DOTNET_HOST_PATH: "C:\\dotnet8\\dotnet.exe",
+    DOTNET_ROOT: "C:\\custom-sdk",
+  });
 
   assert.ok(!("DOTNET_HOST_PATH" in env));
   assert.equal(env.DOTNET_ROOT, "C:\\custom-sdk");
   assert.equal(env.PATH, "C:\\dotnet10");
+});
+
+// A relative override would resolve against the child's working directory, which is the project
+// folder, so it is refused rather than quietly turned into a different host.
+test("refuses a WINUI_XAML_DOTNET_PATH that is not absolute", () => {
+  const logged: string[] = [];
+  const resolved = resolveDotnetCommand(
+    { WINUI_XAML_DOTNET_PATH: "dotnet", PATH: "" },
+    (message) => logged.push(message)
+  );
+
+  assert.equal(resolved, undefined);
   assert.equal(logged.length, 1);
 });
 

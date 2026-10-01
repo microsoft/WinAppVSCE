@@ -579,21 +579,38 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
   // The Native AOT server is self-contained, so nothing about .NET gates its launch. Only a
   // contributor-supplied framework-dependent .dll runs under `dotnet`.
   const isNativeServer = serverPath.toLowerCase().endsWith(".exe");
-  const dotnet = resolveDotnetCommand() ?? "dotnet";
+  const dotnet = resolveDotnetCommand(process.env, log);
+
+  let command = serverPath;
+  let args: string[] = [];
+  if (!isNativeServer) {
+    if (dotnet === undefined) {
+      notifyDegraded(
+        `The language server at ${serverPath} is framework-dependent and no .NET host was found. ` +
+          "Publish the Native AOT server or install the .NET SDK; syntax highlighting remains available.",
+        "server",
+        userInitiated,
+        context
+      );
+      return;
+    }
+    command = dotnet;
+    args = [serverPath];
+  }
 
   log(
     isNativeServer
       ? `Starting language server: ${serverPath} (native, self-contained)`
-      : `Starting language server: ${dotnet} ${serverPath}`
+      : `Starting language server: ${command} ${serverPath}`
   );
 
   const executable: Executable = {
-    command: isNativeServer ? serverPath : dotnet,
-    args: isNativeServer ? [] : [serverPath],
+    command,
+    args,
     transport: TransportKind.stdio,
     options: {
       cwd: path.dirname(serverPath),
-      env: createDotnetChildEnvironment(dotnet, process.env, log),
+      env: createDotnetChildEnvironment(dotnet, process.env),
     },
   };
 
@@ -757,7 +774,7 @@ async function runProjectBuild(projectPath: string): Promise<void> {
     "WinApp",
     new vscode.ProcessExecution(dotnet, ["build", projectPath], {
       cwd: path.dirname(projectPath),
-      env: toTaskEnvironment(createDotnetChildEnvironment(dotnet, process.env, log)),
+      env: toTaskEnvironment(createDotnetChildEnvironment(dotnet, process.env)),
     })
   );
   task.presentationOptions = {
@@ -878,7 +895,7 @@ function runDotnetRestore(projectPath: string, dotnetPath: string): Promise<void
     const child = spawn(dotnetPath, ["restore", projectPath, "--nologo"], {
       cwd: path.dirname(projectPath),
       windowsHide: true,
-      env: createDotnetChildEnvironment(dotnetPath, process.env, log),
+      env: createDotnetChildEnvironment(dotnetPath, process.env),
     });
 
     child.stdout.on("data", (data: Buffer) => output?.append(data.toString()));

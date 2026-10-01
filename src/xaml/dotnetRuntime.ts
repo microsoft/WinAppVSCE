@@ -4,10 +4,17 @@ import * as path from "path";
 /** The `dotnet` for MSBuild/restore/build, as an absolute path so a child spawned in a project
  * directory cannot resolve a planted `dotnet.exe` there. Undefined means no SDK is installed, which
  * callers report rather than run. `WINUI_XAML_DOTNET_PATH` pins an install for dev/test. */
-export function resolveDotnetCommand(env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function resolveDotnetCommand(
+  env: NodeJS.ProcessEnv = process.env,
+  log?: (message: string) => void
+): string | undefined {
   const override = env.WINUI_XAML_DOTNET_PATH;
   if (override && override.length > 0) {
-    return override;
+    if (path.isAbsolute(override)) {
+      return override;
+    }
+    log?.(`Ignoring WINUI_XAML_DOTNET_PATH='${override}': it must be an absolute path.`);
+    return undefined;
   }
   return findDotnetOnPath(env);
 }
@@ -32,21 +39,20 @@ export function listSearchableDirectories(env: NodeJS.ProcessEnv): string[] {
     .filter((entry) => entry.length > 0 && path.isAbsolute(entry));
 }
 
-/** Environment for a spawned dotnet child. An absolute override pins DOTNET_HOST_PATH / DOTNET_ROOT,
- * which MSBuild and Roslyn's build host exec directly. A bare `dotnet` clears an inherited
- * DOTNET_HOST_PATH, which would reach a different host, but keeps DOTNET_ROOT. */
+/** Environment for a child that may run dotnet. A resolved host pins DOTNET_HOST_PATH and
+ * DOTNET_ROOT, which MSBuild and Roslyn's build host exec directly. With no host, an inherited
+ * DOTNET_HOST_PATH is cleared because it names a host this extension did not resolve. */
 export function createDotnetChildEnvironment(
-  dotnetPath: string,
-  env: NodeJS.ProcessEnv = process.env,
-  log?: (message: string) => void
+  dotnetPath: string | undefined,
+  env: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
   const childEnv = { ...env };
-  if (path.isAbsolute(dotnetPath)) {
-    childEnv.DOTNET_HOST_PATH = dotnetPath;
-    childEnv.DOTNET_ROOT = path.dirname(dotnetPath);
-  } else {
+  if (dotnetPath === undefined) {
     delete childEnv.DOTNET_HOST_PATH;
-    log?.(`Using '${dotnetPath}' from PATH; leaving DOTNET_ROOT as inherited.`);
+    return childEnv;
   }
+
+  childEnv.DOTNET_HOST_PATH = dotnetPath;
+  childEnv.DOTNET_ROOT = path.dirname(dotnetPath);
   return childEnv;
 }
