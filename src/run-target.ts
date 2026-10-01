@@ -1,6 +1,7 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
 import { ALWAYS_SKIP_DIRS, isContainedInReal, isOfferableProject, readProjectRunnability } from './project-detection';
+import { attributeValue, findElementsByLocalName, tryParseXml } from './xml-read';
 
 /**
  * How `winapp run` will interpret a given input path.
@@ -187,11 +188,21 @@ function parseSlnProjectPaths(content: string): string[] {
 
 function parseSlnxProjectPaths(content: string): string[] {
 	// <Project Path="src/MyApp/MyApp.csproj" />
-	const pattern = /<Project\b[^>]*?\bPath\s*=\s*"([^"]*)"/g;
+	//
+	// Parsed rather than pattern-matched so that single-quoted attributes,
+	// escaped entities in the path, and commented-out members are all handled
+	// the way the solution's own consumers handle them.
+	const doc = tryParseXml(content);
+	if (!doc) {
+		return [];
+	}
+
 	const results: string[] = [];
-	let match: RegExpExecArray | null;
-	while ((match = pattern.exec(content)) !== null) {
-		results.push(match[1]);
+	for (const element of findElementsByLocalName(doc, 'Project')) {
+		const value = attributeValue(element, 'Path');
+		if (value) {
+			results.push(value);
+		}
 	}
 	return results;
 }
@@ -238,6 +249,26 @@ export function isContainedIn(container: string, candidate: string): boolean {
  * array when the directory can't be read.
  */
 export async function readDirectoryProjectPaths(directoryPath: string): Promise<string[]> {
+	return readDirectoryEntriesWithExtensions(directoryPath, PROJECT_FILE_EXTENSIONS);
+}
+
+/**
+ * Absolute paths of the solutions directly inside a directory.
+ *
+ * A directory input is resolved by the CLI from its top-level solution in
+ * preference to any top-level project: `winapp 0.7.0` handed a directory
+ * containing both `All.sln` and `Top.csproj` reports on `All.sln`. Callers
+ * must therefore check for a solution before falling back to
+ * {@link readDirectoryProjectPaths}.
+ */
+export async function readDirectorySolutionPaths(directoryPath: string): Promise<string[]> {
+	return readDirectoryEntriesWithExtensions(directoryPath, SOLUTION_FILE_EXTENSIONS);
+}
+
+async function readDirectoryEntriesWithExtensions(
+	directoryPath: string,
+	extensions: readonly string[]
+): Promise<string[]> {
 	let entries: string[];
 	try {
 		entries = await fsp.readdir(directoryPath);
@@ -246,10 +277,75 @@ export async function readDirectoryProjectPaths(directoryPath: string): Promise<
 	}
 
 	return entries
-		.filter(name => (PROJECT_FILE_EXTENSIONS as readonly string[])
-			.includes(path.extname(name).toLowerCase()))
+		.filter(name => extensions.includes(path.extname(name).toLowerCase()))
 		.map(name => path.join(directoryPath, name))
 		.sort((left, right) => left.localeCompare(right));
+}
+
+/** True when `targetPath` exists and is a directory. */
+export async function isDirectory(targetPath: string): Promise<boolean> {
+	try {
+		return (await fsp.stat(targetPath)).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The projects a target contains, or an empty array when the target already
+ * names a single project.
+ *
+ * Branches on what the path *is* rather than on its classified kind: a
+ * directory holding a `.sln` classifies as `solution`, but must be read as a
+ * directory. Reading it as a solution file fails with `EISDIR`, and because
+ * that failure is swallowed the caller would silently skip the prompt. The
+ * directory branch then has to re-enter the solution itself, since the
+ * projects a directory offers are usually its solution's members rather than
+ * files sitting at its top level.
+ */
+export async function readTargetProjects(
+	target: RunTargetCandidate
+): Promise<{ projects: string[]; containerPath: string }> {
+	if (!isProjectMode(target.kind)) {
+		return { projects: [], containerPath: target.path };
+	}
+
+	if (await isDirectory(target.path)) {
+		// A directory input is resolved by the CLI from the projects and
+		// solutions at its top level, and a solution takes precedence: winapp
+		// 0.7.0 handed a directory holding both All.sln and Top.csproj
+		// resolves All.sln. Reading the solution's members is what lets a
+		// browsed directory reach the --project prompt at all; without it a
+		// multi-app solution one level down looks like "nothing to choose".
+		const solutions = await readDirectorySolutionPaths(target.path);
+		if (solutions.length === 1) {
+			return {
+				projects: await readSolutionProjectPaths(solutions[0]),
+				containerPath: path.dirname(solutions[0])
+			};
+		}
+		if (solutions.length > 1) {
+			// Which solution wins is the CLI's call, and it reports the
+			// ambiguity precisely. Prompting here would mean guessing first.
+			return { projects: [], containerPath: target.path };
+		}
+
+		const directoryProjects = await readDirectoryProjectPaths(target.path);
+		if (directoryProjects.length > 0) {
+			return { projects: directoryProjects, containerPath: target.path };
+		}
+		return { projects: [], containerPath: target.path };
+	}
+
+	if (target.kind === 'solution') {
+		return {
+			projects: await readSolutionProjectPaths(target.path),
+			containerPath: path.dirname(target.path)
+		};
+	}
+
+	// A path to a single .csproj already names the project.
+	return { projects: [], containerPath: path.dirname(target.path) };
 }
 
 /**

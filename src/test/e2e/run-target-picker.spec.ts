@@ -48,6 +48,10 @@
  * Test 11 — Long project lists are capped:
  *   More than ten projects are truncated with a pointer at the browse entry.
  *
+ * Test 12 — F5 with no `input` prompts:
+ *   A winapp launch configuration that omits `input` falls through to the same
+ *   picker instead of failing with a missing-argument error.
+ *
  * Every test dismisses the picker with Escape, so the winapp CLI is never
  * actually invoked and nothing is built, deployed, or registered.
  */
@@ -693,6 +697,73 @@ test.describe('run target picker', () => {
 
             await page.keyboard.press('Escape');
             console.log('✅ PASS: advanced command prompted for a single candidate');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+    /**
+     * A winapp launch configuration with no `input` is legal: F5 is expected
+     * to fall through to the same run-target picker the palette uses, rather
+     * than failing with a missing-argument error. Driven through F5 because
+     * that is the only path through
+     * `WinAppDebugAdapterFactory.createDebugAdapterDescriptor`; the palette
+     * command never reaches it.
+     */
+    test('F5 with no input in launch.json prompts for a run target', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-f5-e2e-'));
+        // Two runnable projects, deliberately: a single candidate auto-selects
+        // and the adapter goes straight on to invoke the CLI, which this suite
+        // must never do.
+        writeProject(tmpDir, path.join('AppOne', 'AppOne.csproj'));
+        writeProject(tmpDir, path.join('AppTwo', 'AppTwo.csproj'));
+        fs.mkdirSync(path.join(tmpDir, '.vscode'));
+        fs.writeFileSync(
+            path.join(tmpDir, '.vscode', 'launch.json'),
+            JSON.stringify({
+                version: '0.2.0',
+                configurations: [{
+                    type: 'winapp',
+                    request: 'launch',
+                    name: 'Run without input',
+                    // Avoids the ms-dotnettools.csharp install prompt, which
+                    // this suite cannot answer: it runs --disable-extensions.
+                    debuggerType: 'node'
+                }]
+            }, null, 2)
+        );
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            // Driven through the palette rather than a bare F5 keypress: the
+            // palette helper retries until it provably has focus, whereas a
+            // raw keyboard shortcut can land in the chat sidebar and silently
+            // do nothing. The command is the same one F5 is bound to.
+            await runCommandPalette(page, 'Debug: Start Debugging');
+
+            // With no configuration yet selected in the Run and Debug view,
+            // VS Code first asks which one to start. The workspace has exactly
+            // one, so Enter accepts it.
+            const quickInput = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
+            await expect(quickInput).toHaveAttribute(
+                'placeholder',
+                /Type the name of a launch configuration to run/,
+                { timeout: 30_000 }
+            );
+            await page.keyboard.press('Enter');
+
+            const rows = await readRunTargetPicker(page);
+            expect(rows.join('\n')).toContain('AppOne.csproj');
+            expect(rows.join('\n')).toContain('AppTwo.csproj');
+
+            await page.keyboard.press('Escape');
+            console.log('✅ PASS: F5 without input prompted for a run target');
         } finally {
             if (app) {
                 await app.close().catch(() => {});

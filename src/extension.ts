@@ -19,6 +19,7 @@ import {
 } from './run-target';
 import {
 	buildRunArgs,
+	clearInapplicableOptions,
 	getRunOptionErrors,
 	resolveDebugInput,
 	runOptionsFromDebugConfig,
@@ -880,12 +881,22 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		// Reject option combinations the adapter cannot honour (for example
 		// --detach or --no-launch, which leave nothing for the debugger to
 		// attach to) before the session starts.
-		const optionErrors = getRunOptionErrors(
-			validateRunOptions(runOptionsFromDebugConfig(config, input ?? ''), kind, 'debug')
+		//
+		// Warnings are surfaced rather than discarded. They are how a user
+		// learns that a project-only property they wrote into launch.json —
+		// "configuration", "arch", "noBuild" — does nothing against a build
+		// output folder. The CLI ignores those flags silently, so if this is
+		// quiet too, nothing ever tells them.
+		const diagnostics = validateRunOptions(
+			runOptionsFromDebugConfig(config, input ?? ''), kind, 'debug'
 		);
+		const optionErrors = getRunOptionErrors(diagnostics);
 		if (optionErrors.length > 0) {
 			vscode.window.showErrorMessage(optionErrors.map(d => d.message).join(' '));
 			return undefined;
+		}
+		for (const warning of diagnostics) {
+			void vscode.window.showWarningMessage(warning.message);
 		}
 
 		if (input) {
@@ -957,6 +968,10 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// disambiguates in the same way; without this, F5 would launch
 			// `winapp run <sln>` with no --project and the CLI would refuse.
 			let pickedProject: string | undefined;
+			// Tracked so project-only options can be dropped for a folder
+			// target. When the picker supplies the target it already knows the
+			// kind; a launch.json input has to be classified.
+			let kind: RunTargetKind;
 
 			if (!input) {
 				const selection = await pickRunTarget(false, folder);
@@ -964,12 +979,17 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 					throw new Error('No run target selected, cancelling debug session.');
 				}
 				input = selection.target.path;
+				kind = selection.target.kind;
 
 				const projectSelection = await pickSolutionProject(selection);
 				if (projectSelection.cancelled) {
 					throw new Error('No project selected, cancelling debug session.');
 				}
 				pickedProject = projectSelection.project;
+			} else {
+				kind = await classifyRunTarget(
+					path.isAbsolute(input) ? input : path.resolve(cwd, input)
+				);
 			}
 
 			const cliPath = getWinappCliPath(this.extensionPath);
@@ -989,10 +1009,13 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				args = '--inspect' + (config.port ? `=${config.port}` : '') + ' ' + args;
 			}
 
-			const runOptions = runOptionsFromDebugConfig(config, input);
+			const runOptions = clearInapplicableOptions(
+				runOptionsFromDebugConfig(config, input), kind
+			);
 			runOptions.args = args.trim() || undefined;
 			// An explicit launch.json "project" always wins; this only fills in
-			// what the interactive picker resolved.
+			// what the interactive picker resolved. Applied after the mode
+			// filter so a folder target never picks one back up.
 			runOptions.project = runOptions.project ?? pickedProject;
 
 			const baseSpawnArgs = buildRunArgs(runOptions);

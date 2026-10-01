@@ -56,6 +56,42 @@ describe('classifyProjectRunnability', () => {
 	it('reports unknown for an unrecognised OutputType', () => {
 		assert.strictEqual(classifyProjectRunnability(csproj('<OutputType>Module</OutputType>')), 'unknown');
 	});
+
+	// Each of these passed the old regex scan, which could not tell markup
+	// from text. The first two hid a runnable project; the third invented a
+	// classification the project file never actually declared.
+	it('ignores a commented-out Library output', () => {
+		const content = csproj('<!-- <OutputType>Library</OutputType> --><TargetFramework>net8.0</TargetFramework>');
+		assert.strictEqual(classifyProjectRunnability(content), 'unknown');
+	});
+
+	it('ignores a commented-out IsTestProject marker', () => {
+		const content = csproj('<!-- <IsTestProject>true</IsTestProject> -->');
+		assert.strictEqual(classifyProjectRunnability(content), 'unknown');
+	});
+
+	it('ignores an OutputType mentioned only in documentation text', () => {
+		const content = csproj('<PropertyGroup><Description>Set &lt;OutputType&gt;Library&lt;/OutputType&gt; to build a DLL.</Description></PropertyGroup>');
+		assert.strictEqual(classifyProjectRunnability(content), 'unknown');
+	});
+
+	// A conditioned OutputType is the "cannot tell without MSBuild" case, so
+	// it must stay visible rather than being read as unconditional.
+	it('does not read a conditioned OutputType as the effective value', () => {
+		const content = csproj('<OutputType Condition="\'$(Configuration)\'==\'Debug\'">Library</OutputType>');
+		assert.strictEqual(classifyProjectRunnability(content), 'unknown');
+	});
+
+	it('accepts a single-quoted Include on the test SDK reference', () => {
+		const content = "<Project Sdk='Microsoft.NET.Sdk'><ItemGroup>"
+			+ "<PackageReference Include='Microsoft.NET.Test.Sdk' Version='17.11.1' />"
+			+ '</ItemGroup></Project>';
+		assert.strictEqual(classifyProjectRunnability(content), 'test');
+	});
+
+	it('reports unknown for malformed XML rather than hiding the project', () => {
+		assert.strictEqual(classifyProjectRunnability('<Project><OutputType>Library'), 'unknown');
+	});
 });
 
 describe('isOfferableProject', () => {

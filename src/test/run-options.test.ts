@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import {
 	buildRunArgs,
+	clearInapplicableOptions,
 	getRunOptionErrors,
 	resolveDebugInput,
 	runOptionsFromDebugConfig,
@@ -318,4 +319,44 @@ describe('runOptionsFromDebugConfig', () => {
 		assert.ok(args.includes('--debug-output'));
 		assert.ok(args.includes('--symbols'));
 	});
+});
+
+/**
+ * Project-only options reaching a folder run are a *silent* no-op: winapp
+ * 0.7.0 parses `--configuration` against a build output folder without
+ * complaint and simply ignores it, so a launch.json asking for Release builds
+ * nothing and says nothing. Dropping them keeps the invoked command line an
+ * honest record of what actually happened; the warning is raised separately.
+ */
+describe('clearInapplicableOptions', () => {
+	const projectOnly = options({
+		project: 'App',
+		configuration: 'Release',
+		arch: 'x64',
+		framework: 'net8.0-windows10.0.19041.0',
+		runtime: 'win-x64',
+		properties: { Foo: 'Bar' },
+		noBuild: true,
+		noRestore: true,
+		aot: true,
+		debugOutput: true,
+		symbols: true
+	});
+
+	it('drops every project-only option for a folder target', () => {
+		const cleared = clearInapplicableOptions(projectOnly, 'folder');
+		assert.deepStrictEqual(
+			Object.entries(cleared)
+				.filter(([, value]) => value !== undefined)
+				.map(([key]) => key)
+				.sort(),
+			['debugOutput', 'input', 'symbols']
+		);
+	});
+
+	for (const kind of ['project', 'solution', 'unknown'] as const) {
+		it(`leaves a ${kind} target untouched`, () => {
+			assert.deepStrictEqual(clearInapplicableOptions(projectOnly, kind), projectOnly);
+		});
+	}
 });

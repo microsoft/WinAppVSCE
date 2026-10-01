@@ -15,6 +15,7 @@ import {
 	parseSolutionProjectPaths,
 	readDirectoryProjectPaths,
 	readSolutionProjectPaths,
+	readTargetProjects,
 	sortRunTargets,
 	type RunTargetCandidate,
 	type WorkspaceRoot
@@ -120,6 +121,42 @@ describe('parseSolutionProjectPaths (.slnx)', () => {
 	it('ignores non-project elements', () => {
 		const result = parseSolutionProjectPaths(slnx, 'C:/ws/MyApp.slnx');
 		assert.ok(!result.some(p => p.includes('src/')  && p.endsWith('/')));
+	});
+
+	// `.slnx` is XML, and these three shapes are all legal in it. The previous
+	// double-quote-only pattern missed the first two and invented the third.
+	it('reads a single-quoted Path attribute', () => {
+		const content = "<Solution><Project Path='src/MyApp/MyApp.csproj' /></Solution>";
+		assert.deepStrictEqual(
+			parseSolutionProjectPaths(content, 'C:/ws/MyApp.slnx'),
+			['src/MyApp/MyApp.csproj']
+		);
+	});
+
+	it('decodes escaped entities in a path', () => {
+		const content = '<Solution><Project Path="src/A&amp;B/A&amp;B.csproj" /></Solution>';
+		assert.deepStrictEqual(
+			parseSolutionProjectPaths(content, 'C:/ws/MyApp.slnx'),
+			['src/A&B/A&B.csproj']
+		);
+	});
+
+	it('ignores a commented-out member', () => {
+		const content = [
+			'<Solution>',
+			'  <Project Path="src/MyApp/MyApp.csproj" />',
+			'  <!-- <Project Path="src/Removed/Removed.csproj" /> -->',
+			'</Solution>'
+		].join('\n');
+		assert.deepStrictEqual(
+			parseSolutionProjectPaths(content, 'C:/ws/MyApp.slnx'),
+			['src/MyApp/MyApp.csproj']
+		);
+	});
+
+	it('returns nothing for malformed XML instead of guessing', () => {
+		const content = '<Solution><Project Path="src/MyApp/MyApp.csproj"';
+		assert.deepStrictEqual(parseSolutionProjectPaths(content, 'C:/ws/MyApp.slnx'), []);
 	});
 });
 
@@ -466,6 +503,131 @@ describe('filterOfferableCandidates', () => {
 				candidate('project', path.join(dir, 'Core.csproj'))
 			]);
 			assert.deepStrictEqual(result, []);
+		});
+	});
+});
+
+/**
+ * `readTargetProjects` for a *directory* target.
+ *
+ * Directories only ever reach the picker through Browse…, which is why the
+ * earlier `.sln`-file coverage never exercised this branch. The expectations
+ * below were taken from winapp 0.7.0 run against the same layouts.
+ */
+describe('readTargetProjects for a directory', () => {
+	async function withLayout(
+		files: Record<string, string>,
+		run: (dir: string) => Promise<void>
+	): Promise<void> {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'target-projects-'));
+		try {
+			for (const [name, contents] of Object.entries(files)) {
+				const full = path.join(dir, name);
+				fs.mkdirSync(path.dirname(full), { recursive: true });
+				fs.writeFileSync(full, contents);
+			}
+			await run(dir);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	function slnx(...members: string[]): string {
+		const entries = members.map(m => `  <Project Path="${m}" />`).join('\n');
+		return `<Solution>\n${entries}\n</Solution>\n`;
+	}
+
+	const app = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>WinExe</OutputType></PropertyGroup></Project>';
+
+	it('reads the members of a solution one level down', async () => {
+		await withLayout(
+			{
+				'All.slnx': slnx('src/AppOne/AppOne.csproj', 'src/AppTwo/AppTwo.csproj'),
+				'src/AppOne/AppOne.csproj': app,
+				'src/AppTwo/AppTwo.csproj': app
+			},
+			async dir => {
+				const result = await readTargetProjects({
+					kind: 'solution',
+					path: dir,
+					root: { name: 'ws', path: dir }
+				});
+				assert.deepStrictEqual(
+					result.projects.map(p => path.basename(p)).sort(),
+					['AppOne.csproj', 'AppTwo.csproj']
+				);
+				assert.strictEqual(result.containerPath, dir);
+			}
+		);
+	});
+
+	// winapp 0.7.0 handed a directory holding both reports on the solution.
+	it('prefers the solution over a sibling top-level project', async () => {
+		await withLayout(
+			{
+				'All.slnx': slnx('src/AppOne/AppOne.csproj', 'src/AppTwo/AppTwo.csproj'),
+				'src/AppOne/AppOne.csproj': app,
+				'src/AppTwo/AppTwo.csproj': app,
+				'Top.csproj': app
+			},
+			async dir => {
+				const result = await readTargetProjects({
+					kind: 'solution',
+					path: dir,
+					root: { name: 'ws', path: dir }
+				});
+				assert.deepStrictEqual(
+					result.projects.map(p => path.basename(p)).sort(),
+					['AppOne.csproj', 'AppTwo.csproj']
+				);
+			}
+		);
+	});
+
+	// Which of several solutions wins is the CLI's call, and it names the
+	// ambiguity precisely. Prompting here would mean guessing first.
+	it('offers nothing when the directory holds more than one solution', async () => {
+		await withLayout(
+			{
+				'One.slnx': slnx('src/AppOne/AppOne.csproj'),
+				'Two.slnx': slnx('src/AppTwo/AppTwo.csproj'),
+				'src/AppOne/AppOne.csproj': app,
+				'src/AppTwo/AppTwo.csproj': app
+			},
+			async dir => {
+				const result = await readTargetProjects({
+					kind: 'solution',
+					path: dir,
+					root: { name: 'ws', path: dir }
+				});
+				assert.deepStrictEqual(result.projects, []);
+			}
+		);
+	});
+
+	it('falls back to top-level projects when there is no solution', async () => {
+		await withLayout({ 'AppOne.csproj': app, 'AppTwo.csproj': app }, async dir => {
+			const result = await readTargetProjects({
+				kind: 'project',
+				path: dir,
+				root: { name: 'ws', path: dir }
+			});
+			assert.deepStrictEqual(
+				result.projects.map(p => path.basename(p)).sort(),
+				['AppOne.csproj', 'AppTwo.csproj']
+			);
+		});
+	});
+
+	// A folder target is not project mode at all, so nothing is read.
+	it('offers nothing for a folder target', async () => {
+		await withLayout({ 'App.exe': '' }, async dir => {
+			const result = await readTargetProjects({
+				kind: 'folder',
+				path: dir,
+				root: { name: 'ws', path: dir }
+			});
+			assert.deepStrictEqual(result.projects, []);
 		});
 	});
 });

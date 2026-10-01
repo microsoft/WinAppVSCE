@@ -1,5 +1,6 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
+import { attributeValue, elementText, findElementsByLocalName, tryParseXml } from './xml-read';
 
 /**
  * Mirrors the C# DetectedProjectType enum from WinApp.Cli.
@@ -342,25 +343,39 @@ export type ProjectRunnability = 'app' | 'test' | 'library' | 'unknown';
  * microsoft/winappCli#957 for the upstream query API and #273 for adopting it.
  */
 export function classifyProjectRunnability(content: string): ProjectRunnability {
-	if (/<IsTestProject>\s*true\s*<\/IsTestProject>/i.test(content)) {
-		return 'test';
+	const doc = tryParseXml(content);
+	if (!doc) {
+		// Malformed or half-written. Falling back to `unknown` keeps the
+		// project visible, which is the safe direction for this heuristic.
+		return 'unknown';
+	}
+
+	for (const element of findElementsByLocalName(doc, 'IsTestProject')) {
+		if (elementText(element).toLowerCase() === 'true') {
+			return 'test';
+		}
 	}
 
 	// The test SDK is what actually makes a project a test project; projects
 	// relying on it rarely set IsTestProject themselves.
-	if (/<PackageReference\b[^>]*\bInclude\s*=\s*"Microsoft\.NET\.Test\.Sdk"/i.test(content)) {
-		return 'test';
+	for (const element of findElementsByLocalName(doc, 'PackageReference')) {
+		if (attributeValue(element, 'Include')?.toLowerCase() === 'microsoft.net.test.sdk') {
+			return 'test';
+		}
 	}
 
-	const outputTypeMatch = content.match(/<OutputType>\s*(.*?)\s*<\/OutputType>/i);
-	if (!outputTypeMatch) {
+	// A conditioned OutputType is exactly the "can't tell without MSBuild"
+	// case this heuristic must not guess at, so it is left to the CLI.
+	const outputTypes = findElementsByLocalName(doc, 'OutputType')
+		.filter(element => attributeValue(element, 'Condition') === undefined);
+	if (outputTypes.length === 0) {
 		// No explicit OutputType. It may still build an executable (WinUI and
 		// WPF templates usually set it, but SDK defaults and shared props
 		// files can supply it too), so defer to the CLI.
 		return 'unknown';
 	}
 
-	const outputType = outputTypeMatch[1].toLowerCase();
+	const outputType = elementText(outputTypes[0]).toLowerCase();
 	if (outputType === 'exe' || outputType === 'winexe') {
 		return 'app';
 	}

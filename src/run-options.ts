@@ -272,6 +272,42 @@ export function getRunOptionErrors(diagnostics: readonly RunOptionDiagnostic[]):
 }
 
 /**
+ * Clears the options that do not apply to the target's mode.
+ *
+ * The CLI ignores project-only flags in folder mode rather than rejecting
+ * them, which is precisely the problem: a `launch.json` that sets
+ * `"configuration": "Release"` against a build output folder would otherwise
+ * build nothing, change nothing, and say nothing. Dropping the flags keeps the
+ * command line honest about what will actually happen; the caller is expected
+ * to pair this with the warning {@link validateRunOptions} produces, so the
+ * user finds out their setting is inert.
+ *
+ * `unknown` targets are left untouched — the CLI classifies better than we do,
+ * and clearing options it would have honoured is the worse failure.
+ */
+export function clearInapplicableOptions(
+	options: WinAppRunOptions,
+	kind: RunTargetKind
+): WinAppRunOptions {
+	if (kind !== 'folder') {
+		return options;
+	}
+
+	return {
+		...options,
+		project: undefined,
+		configuration: undefined,
+		arch: undefined,
+		framework: undefined,
+		runtime: undefined,
+		properties: undefined,
+		noBuild: undefined,
+		noRestore: undefined,
+		aot: undefined
+	};
+}
+
+/**
  * The subset of a `launch.json` configuration this extension reads.
  *
  * Declared explicitly rather than using `vscode.DebugConfiguration`, whose

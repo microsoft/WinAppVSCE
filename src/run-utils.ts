@@ -13,12 +13,13 @@ import {
 	filterOfferableCandidates,
 	filterOfferableProjects,
 	findOwningRoot,
+	isDirectory,
 	isProjectMode,
 	PROJECT_FILE_EXCLUDE_GLOB,
 	PROJECT_FILE_GLOB,
 	PROJECT_FILE_MAX_RESULTS,
-	readDirectoryProjectPaths,
 	readSolutionProjectPaths,
+	readTargetProjects,
 	RUN_TARGET_DISPLAY_LIMIT,
 	sortRunTargets,
 	type RunTargetCandidate,
@@ -514,51 +515,6 @@ export function getRunSettings(rootPath: string): Partial<WinAppRunOptions> {
 	};
 }
 
-/** True when `targetPath` exists and is a directory. */
-async function isDirectory(targetPath: string): Promise<boolean> {
-	try {
-		return (await fs.promises.stat(targetPath)).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
-/**
- * The projects a target contains, or an empty array when the target already
- * names a single project.
- *
- * Branches on what the path *is* rather than on its classified kind: a
- * directory holding a `.sln` classifies as `solution`, but must be read as a
- * directory. Reading it as a solution file fails with `EISDIR`, and because
- * that failure is swallowed the caller would silently skip the prompt.
- */
-async function readTargetProjects(
-	target: RunTargetCandidate
-): Promise<{ projects: string[]; containerPath: string }> {
-	if (!isProjectMode(target.kind)) {
-		return { projects: [], containerPath: target.path };
-	}
-
-	if (await isDirectory(target.path)) {
-		// A directory input is resolved by the CLI from the projects and
-		// solutions at its top level.
-		const directoryProjects = await readDirectoryProjectPaths(target.path);
-		if (directoryProjects.length > 0) {
-			return { projects: directoryProjects, containerPath: target.path };
-		}
-		return { projects: [], containerPath: target.path };
-	}
-
-	if (target.kind === 'solution') {
-		return {
-			projects: await readSolutionProjectPaths(target.path),
-			containerPath: path.dirname(target.path)
-		};
-	}
-
-	// A path to a single .csproj already names the project.
-	return { projects: [], containerPath: path.dirname(target.path) };
-}
 
 /**
  * Ask which project to launch, but only when the CLI genuinely cannot work it
