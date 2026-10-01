@@ -1,10 +1,31 @@
+import * as fs from "fs";
 import * as path from "path";
 
-/** The `dotnet` for MSBuild/restore/build: PATH, which the SDK installer sets, unless
- * `WINUI_XAML_DOTNET_PATH` pins a specific install for dev/test. */
+/** The `dotnet` for MSBuild/restore/build, as an absolute path so a child spawned in a project
+ * directory cannot resolve a planted `dotnet.exe` there. PATH is the discovery mechanism the SDK
+ * installer sets up; `WINUI_XAML_DOTNET_PATH` pins a specific install for dev/test. */
 export function resolveDotnetCommand(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.WINUI_XAML_DOTNET_PATH;
-  return override && override.length > 0 ? override : "dotnet";
+  if (override && override.length > 0) {
+    return override;
+  }
+  return findDotnetOnPath(env) ?? "dotnet";
+}
+
+/** Empty and relative PATH entries resolve against the child's working directory, which is the
+ * untrusted project folder, so only absolute entries are searched. */
+function findDotnetOnPath(env: NodeJS.ProcessEnv): string | undefined {
+  const executable = process.platform === "win32" ? "dotnet.exe" : "dotnet";
+  for (const entry of (env.PATH ?? env.Path ?? "").split(path.delimiter)) {
+    if (entry.length === 0 || !path.isAbsolute(entry)) {
+      continue;
+    }
+    const candidate = path.join(entry, executable);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 /** Environment for a spawned dotnet child. An absolute override pins DOTNET_HOST_PATH / DOTNET_ROOT,

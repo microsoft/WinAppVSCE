@@ -153,6 +153,19 @@ test("Show Info names the degraded conditions instead of reporting a healthy ser
       actions: ["Install .NET", "Restart Language Server", "Show Output"],
     }
   );
+
+  // The server reports the process that failed, which names dotnet rather than the SDK the user
+  // has to install, so the requirement has to survive a populated server message.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "dotnet-sdk-required",
+      message: "Failed to start 'dotnet msbuild'.",
+    }),
+    {
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE}`,
+      actions: ["Install .NET", "Restart Language Server", "Show Output"],
+    }
+  );
 });
 
 test("maps every XAML status action to its recovery effect", () => {

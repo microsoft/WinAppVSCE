@@ -69,6 +69,37 @@ namespace WinUiXaml.Workspace.Tests
             Assert.False(unavailable.HostMissing);
         }
 
+        /// <summary>A runtime-only machine is the state the extension stopped resolving away, and dotnet is present there, so the SDK requirement arrives as a nonzero exit rather than a failed start. Classifying it as a generic build error would offer restart and output instead of the install the user actually needs.</summary>
+        [Theory]
+        [InlineData("No .NET SDKs were found.")]
+        [InlineData("A compatible .NET SDK was not found.")]
+        [InlineData("Could not execute because the specified command or file was not found: dotnet-msbuild")]
+        public void DotnetWithoutSdk_IsReportedAsHostMissing(string output)
+        {
+            var failure = MsBuildCli.ClassifyFailure(
+                1,
+                combined: output,
+                standardError: string.Empty,
+                ProjectPath);
+
+            var unavailable = Assert.IsType<MsBuildUnavailableException>(failure);
+            Assert.True(unavailable.HostMissing);
+            Assert.Contains("require the .NET SDK", unavailable.Message);
+        }
+
+        /// <summary>The detector reads build output, so an ordinary compile error that happens to discuss msbuild must not be mistaken for a missing SDK and send the user to the installer.</summary>
+        [Fact]
+        public void BuildErrorMentioningMsBuild_IsNotHostMissing()
+        {
+            var failure = MsBuildCli.ClassifyFailure(
+                1,
+                combined: "error MSB4062: the msbuild task could not be loaded",
+                standardError: string.Empty,
+                ProjectPath);
+
+            Assert.False(Assert.IsType<MsBuildUnavailableException>(failure).HostMissing);
+        }
+
         /// <summary>The server now starts without .NET, so "no dotnet on this machine" is a state the user reaches by opening a C# project rather than an impossible one. It has to be distinguishable from a build that ran and failed, because only the former is fixed by installing the SDK.</summary>
         [Fact]
         public void AbsentDotnetHost_IsReportedAsHostMissing()

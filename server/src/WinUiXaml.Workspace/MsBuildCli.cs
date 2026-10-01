@@ -826,9 +826,27 @@ namespace WinUiXaml.Workspace
                     RoslynProjectWorkspace.ExtractUnresolvedAssemblies(diagnosticText));
             }
 
+            // A runtime-only install starts dotnet and then fails to find msbuild, so the SDK
+            // requirement only shows up in the output rather than as a start failure.
+            if (IsMissingSdkFailure(diagnosticText))
+            {
+                return new MsBuildUnavailableException(
+                    "Project-aware XAML features require the .NET SDK. " +
+                    $"'dotnet msbuild' is unavailable. {Truncate(detail)}",
+                    hostMissing: true);
+            }
+
             return new MsBuildUnavailableException(
                 $"MSBuild exited with code {exitCode}. {Truncate(detail)}");
         }
+
+        /// <summary>Recognizes a dotnet host without a usable SDK, which the muxer reports as a missing SDK or as an unknown command because <c>msbuild</c> ships in the SDK.</summary>
+        internal static bool IsMissingSdkFailure(string message) =>
+            message.Contains("No .NET SDKs were found", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("A compatible .NET SDK was not found", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("could not be found or is not compatible", StringComparison.OrdinalIgnoreCase) ||
+            (message.Contains("specified command or file was not found", StringComparison.OrdinalIgnoreCase) &&
+             message.Contains("msbuild", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>Runs a child with event-drained pipes, timeout, and cancellation; split out to test hang cases without a real build and avoid <c>ReadToEnd</c> deadlocks.</summary>
         internal static (int ExitCode, string StandardOutput, string StandardError) RunProcess(
