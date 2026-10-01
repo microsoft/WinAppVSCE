@@ -136,6 +136,31 @@ describe('validateRunInput (folder mode)', () => {
 		}
 	});
 
+	// 'unknown' — not 'folder' — is the kind that reaches the no-exe branch in
+	// production: classifyRunTarget only returns 'folder' for a directory that
+	// already contains an .exe, so a real no-exe directory arrives as 'unknown'.
+	it('returns no-exe for an unknown-kind directory with no .exe files', async () => {
+		const result = await validateRunInput(emptyDir, tmpDir, 'unknown');
+		assert.equal(result.valid, false);
+		if (!result.valid) {
+			assert.equal(result.reason, 'no-exe');
+			assert.ok(result.message.includes('does not contain any .exe files'));
+		}
+	});
+
+	it('accepts an unknown-kind directory that does contain an .exe', async () => {
+		const result = await validateRunInput(validDir, tmpDir, 'unknown');
+		assert.equal(result.valid, true);
+	});
+
+	it('returns not-found for an unknown-kind path that does not exist', async () => {
+		const result = await validateRunInput('nonexistent-subdir', tmpDir, 'unknown');
+		assert.equal(result.valid, false);
+		if (!result.valid) {
+			assert.equal(result.reason, 'not-found');
+		}
+	});
+
 	it('resolves relative paths against the provided cwd', async () => {
 		const result = await validateRunInput('with-exe', tmpDir, 'folder');
 		assert.equal(result.valid, true);
