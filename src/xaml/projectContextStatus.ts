@@ -1,3 +1,5 @@
+import { XAML_COMMANDS } from "./xamlConstants";
+
 export const PROJECT_CONTEXT_STATUS_NOTIFICATION = "winui-xaml/projectContextStatus";
 
 /**
@@ -51,6 +53,9 @@ export const PROJECT_CONTEXT_RESTORING_MESSAGE =
 export const SHOW_XAML_OUTPUT_HINT =
   "Click to show the WinUI XAML output.";
 
+/** The install action lives in Show Info, so this state sends the click there instead. */
+export const SHOW_XAML_INFO_HINT = "Click for install and restart actions.";
+
 export interface ProjectContextStatus {
   uri: string;
   state: ProjectContextState;
@@ -61,6 +66,8 @@ export interface ProjectContextStatusPresentation {
   text: string;
   tooltip: string;
   transient: boolean;
+  /** Status-bar click target. Defaults to showing the output channel. */
+  command?: string;
 }
 
 export function getRelevantProjectContextStatuses(
@@ -137,8 +144,9 @@ export function getProjectContextStatusPresentation(
     case "dotnet-sdk-required":
       return {
         text: "$(cloud-download) WinApp: .NET SDK Required for XAML IntelliSense",
-        tooltip: `${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
+        tooltip: `${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE} ${SHOW_XAML_INFO_HINT}`,
         transient: false,
+        command: XAML_COMMANDS.showInfo,
       };
     // The reference build was attempted and failed, so the useful thing to say is what broke, not
     // to ask for a build that just failed or a generic "unavailable" that implicates the extension.

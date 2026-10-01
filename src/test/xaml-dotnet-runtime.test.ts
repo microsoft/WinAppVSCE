@@ -13,17 +13,22 @@ test("points DOTNET_ROOT and DOTNET_HOST_PATH at an explicitly named host", () =
   assert.equal(env.PATH, "C:\\dotnet10");
 });
 
-// Deleting these would point a working SDK at nothing: the user's own DOTNET_ROOT is how a
-// non-default install is found, and a bare `dotnet` from PATH is not a reason to discard it.
-test("preserves the inherited environment when dotnet comes from PATH", () => {
+// An inherited DOTNET_HOST_PATH would send the server's MSBuild to a host other than the `dotnet`
+// being launched, while DOTNET_ROOT is how a user's non-default SDK install is found.
+test("clears an inherited DOTNET_HOST_PATH but keeps DOTNET_ROOT when dotnet comes from PATH", () => {
   const logged: string[] = [];
   const env = createDotnetChildEnvironment(
     "dotnet",
-    { PATH: "C:\\dotnet10", DOTNET_HOST_PATH: "C:\\dotnet10\\dotnet.exe" },
+    {
+      PATH: "C:\\dotnet10",
+      DOTNET_HOST_PATH: "C:\\dotnet8\\dotnet.exe",
+      DOTNET_ROOT: "C:\\custom-sdk",
+    },
     (message) => logged.push(message)
   );
 
-  assert.equal(env.DOTNET_HOST_PATH, "C:\\dotnet10\\dotnet.exe");
+  assert.ok(!("DOTNET_HOST_PATH" in env));
+  assert.equal(env.DOTNET_ROOT, "C:\\custom-sdk");
   assert.equal(env.PATH, "C:\\dotnet10");
   assert.equal(logged.length, 1);
 });

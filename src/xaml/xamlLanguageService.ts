@@ -920,7 +920,7 @@ function renderProjectContextStatus(): void {
 
   projectStatusItem.text = presentation.text;
   projectStatusItem.tooltip = presentation.tooltip;
-  projectStatusItem.command = XAML_COMMANDS.showOutput;
+  projectStatusItem.command = presentation.command ?? XAML_COMMANDS.showOutput;
   projectStatusItem.show();
   if (presentation.transient) {
     readyStatusTimer = setTimeout(() => {

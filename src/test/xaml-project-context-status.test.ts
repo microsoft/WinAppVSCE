@@ -384,8 +384,9 @@ test("names a missing SDK, outranks restore and build, and survives a reload", (
     }),
     {
       text: "$(cloud-download) WinApp: .NET SDK Required for XAML IntelliSense",
-      tooltip: `${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE} Click to show the WinUI XAML output.`,
+      tooltip: `${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE} Click for install and restart actions.`,
       transient: false,
+      command: "winui-xaml.showInfo",
     }
   );
 
