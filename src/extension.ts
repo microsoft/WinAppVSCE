@@ -767,6 +767,43 @@ async function findSparseManifests(
 }
 
 /**
+ * Locate the sparse manifest that `winapp embed-identity` should read identity
+ * from for `target`.
+ *
+ * When `--manifest` is omitted the CLI searches a `sparse/` folder beside the
+ * target and then the current directory. Neither location holds the manifest in
+ * the common case: {@link winapp.initSparse} anchors its output on the
+ * executable's *project root*, while a built exe usually sits several levels
+ * deeper under `bin/`. Resolving the path here keeps the two commands in step
+ * instead of relying on a search that only succeeds for a flat layout.
+ *
+ * @returns The manifest to pass explicitly, or `undefined` to let the CLI search.
+ */
+async function resolveSparseManifestForTarget(
+	workspacePath: string,
+	target: string
+): Promise<string | undefined> {
+	// Mirror of the output directory winapp.initSparse passes to --output-dir,
+	// so the manifest it just wrote is found without a workspace scan.
+	const expected = getSparseManifestPath(
+		defaultSparseOutputDir(workspacePath, findProjectRootForFile(workspacePath, target))
+	);
+	if (fs.existsSync(expected)) {
+		return expected;
+	}
+
+	// The manifest may have been moved or generated outside the extension. A
+	// single workspace-wide match is unambiguous enough to use; anything else
+	// falls through to the CLI's own search rather than guessing.
+	const discovered = await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Window, title: 'Looking for sparse manifests…' },
+		(_progress, token) => findSparseManifests(workspacePath, token)
+	);
+
+	return discovered?.length === 1 ? discovered[0] : undefined;
+}
+
+/**
  * Let the user choose what to pack: a build output folder (a full package
  * layout) or a sparse `appxmanifest.xml` (an identity-only package).
  *
@@ -1751,7 +1788,8 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			}
 
-			const args = buildEmbedIdentityArgs({ target });
+			const manifestPath = await resolveSparseManifestForTarget(workspacePath, target);
+			const args = buildEmbedIdentityArgs({ target, manifestPath });
 			await runWinappCommand(
 				extensionPath,
 				formatPowerShellArgs(args),

@@ -116,10 +116,12 @@ export function buildSparseInitArgs(options: {
 /**
  * Build the argument list for `winapp embed-identity`.
  *
- * `--manifest` is intentionally omitted when not supplied: the CLI already
+ * `--manifest` should normally be supplied. When it is omitted the CLI
  * searches a `sparse/` folder beside the target and then the current
- * directory, which is exactly where {@link buildSparseInitArgs} writes the
- * manifest. Passing it explicitly would only restate the default.
+ * directory — neither of which holds the manifest for a typical project, where
+ * {@link buildSparseInitArgs} anchors output on the project root while the exe
+ * sits under `bin/`. Omitting it is only correct for a flat layout where the
+ * exe really does sit beside `sparse/`.
  *
  * @param target Path to the `.exe`, or to an `.xml`/`.manifest` side-by-side manifest.
  * @param manifestPath Optional explicit sparse manifest to read identity from.
