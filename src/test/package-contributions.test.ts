@@ -155,7 +155,7 @@ describe('package.json contributions', () => {
 	it('types every build option in the launch.json schema', () => {
 		const properties = manifest.contributes.debuggers[0].configurationAttributes.launch.properties;
 
-		assert.deepEqual(properties.arch.enum, [...SUPPORTED_ARCHITECTURES], 'arch must offer the validated architectures');
+		assert.deepEqual(properties.arch.enum, [...SUPPORTED_ARCHITECTURES], 'arch must offer the architectures the CLI accepts');
 		assert.ok(!properties.configuration.enum, 'configuration must stay free-form for custom MSBuild configurations');
 		assert.equal(properties.configuration.type, 'string');
 		assert.equal(properties.framework.type, 'string');
