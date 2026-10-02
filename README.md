@@ -153,14 +153,6 @@ The extension provides a **custom `winapp` debug type** that launches your app w
             "type": "winapp",
             "request": "launch",
             "name": "WinApp: Launch and Attach",
-        },
-        {
-            // Project mode: builds the project, then launches and attaches.
-            "type": "winapp",
-            "request": "launch",
-            "name": "WinApp: Build and Launch Project",
-            "input": "${workspaceFolder}/MyApp/MyApp.csproj",
-            "configuration": "Debug"
         }
     ]
 }
