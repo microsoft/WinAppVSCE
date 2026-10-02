@@ -103,10 +103,9 @@ describe('package.json contributions', () => {
 		}
 	});
 
-	// The arch setting offers a fixed menu while validateRunOptions enforces a
-	// fixed list; if the two drift, the settings UI either hides a value the
-	// CLI supports or offers one the extension will reject.
-	it('offers exactly the architectures the run validator accepts', () => {
+	// Keep the settings menu aligned with the CLI's supported values so it
+	// neither hides a value the CLI accepts nor offers one it rejects.
+	it('offers exactly the architectures the CLI accepts', () => {
 		const arch = manifest.contributes.configuration.properties['winapp.run.arch'];
 		assert.deepEqual(
 			arch.enum.filter((value: string) => value !== ''),

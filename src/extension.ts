@@ -20,10 +20,9 @@ import {
 import {
 	buildRunArgs,
 	clearInapplicableOptions,
-	getRunOptionErrors,
 	resolveDebugInput,
 	runOptionsFromDebugConfig,
-	validateRunOptions,
+	validateDebugRunOptions,
 	type WinAppRunOptions
 } from './run-options';
 import {
@@ -843,25 +842,12 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 			: undefined;
 		const kind = resolvedInput ? await classifyRunTarget(resolvedInput) : 'unknown';
 
-		// Reject option combinations the adapter cannot honour (for example
-		// --detach or --no-launch, which leave nothing for the debugger to
-		// attach to) before the session starts.
-		//
-		// Warnings are surfaced rather than discarded. They are how a user
-		// learns that a project-only property they wrote into launch.json —
-		// "configuration", "arch", "noBuild" — does nothing against a build
-		// output folder. The CLI ignores those flags silently, so if this is
-		// quiet too, nothing ever tells them.
-		const diagnostics = validateRunOptions(
-			runOptionsFromDebugConfig(config, input ?? ''), kind, 'debug'
-		);
-		const optionErrors = getRunOptionErrors(diagnostics);
+		// The CLI reports bad option values itself; these three are rejected
+		// here because they break the debug session, so it never sees them.
+		const optionErrors = validateDebugRunOptions(runOptionsFromDebugConfig(config, input ?? ''));
 		if (optionErrors.length > 0) {
-			vscode.window.showErrorMessage(optionErrors.map(d => d.message).join(' '));
+			vscode.window.showErrorMessage(optionErrors.join(' '));
 			return undefined;
-		}
-		for (const warning of diagnostics) {
-			void vscode.window.showWarningMessage(warning.message);
 		}
 
 		if (input) {

@@ -28,9 +28,7 @@ import {
 } from './run-target';
 import {
 	COMMON_CONFIGURATIONS,
-	getRunOptionErrors,
 	SUPPORTED_ARCHITECTURES,
-	validateRunOptions,
 	type WinAppRunOptions
 } from './run-options';
 
@@ -578,23 +576,6 @@ export async function pickBuildSettings(
 	return { configuration: configuration.label, arch: arch.arch };
 }
 
-/** Warnings do not block runs because the CLI ignores inapplicable options. */
-export function reportRunDiagnostics(options: WinAppRunOptions, kind: RunTargetKind): boolean {
-	const diagnostics = validateRunOptions(options, kind, 'palette');
-	const errors = getRunOptionErrors(diagnostics);
-
-	if (errors.length > 0) {
-		vscode.window.showErrorMessage(errors.map(d => d.message).join(' '));
-		return false;
-	}
-
-	for (const warning of diagnostics) {
-		vscode.window.showWarningMessage(warning.message);
-	}
-
-	return true;
-}
-
 /** Resolve run options shared by palette commands and debug fallback. */
 export async function resolveRunOptions(
 	withOptions: boolean,
@@ -646,9 +627,4 @@ export async function resolveRunOptions(
 		options = { ...options, ...toggles };
 	}
 
-	if (!reportRunDiagnostics(options, target.kind)) {
-		return undefined;
-	}
-
-	return { options, target };
-}
+	return { options, target };}

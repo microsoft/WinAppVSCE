@@ -4,11 +4,10 @@ import {
 	buildRunArgs,
 	clearInapplicableOptions,
 	COMMON_CONFIGURATIONS,
-	getRunOptionErrors,
 	resolveDebugInput,
 	runOptionsFromDebugConfig,
 	SUPPORTED_ARCHITECTURES,
-	validateRunOptions,
+	validateDebugRunOptions,
 	type WinAppDebugConfiguration,
 	type WinAppRunOptions
 } from '../run-options';
@@ -95,184 +94,28 @@ describe('buildRunArgs', () => {
 	});
 });
 
-describe('validateRunOptions — CLI conflicts', () => {
-	it('rejects --debug-output with --json', () => {
-		const result = validateRunOptions(options({ debugOutput: true, json: true }), 'project');
-		assert.ok(getRunOptionErrors(result).some(d => d.message.includes('JSON')));
-	});
-
-	it('rejects --debug-output with --no-launch', () => {
-		const result = validateRunOptions(options({ debugOutput: true, noLaunch: true }), 'project');
-		assert.ok(getRunOptionErrors(result).some(d => d.message.includes('no-launch')));
-	});
-
-	it('warns that symbols without debug output is ignored', () => {
-		const result = validateRunOptions(options({ symbols: true }), 'project');
-		assert.ok(result.some(d => d.severity === 'warning' && d.message.includes('symbols')));
-	});
-
-	it('rejects the two alias options together, since they are opposites', () => {
-		const result = validateRunOptions(options({ withAlias: true, withoutAlias: true }), 'project');
-		assert.ok(getRunOptionErrors(result).some(d => d.message.includes('opposites')));
-	});
-
-	it('accepts either alias option on its own', () => {
-		for (const opts of [{ withAlias: true }, { withoutAlias: true }]) {
-			assert.deepStrictEqual(getRunOptionErrors(validateRunOptions(options(opts), 'project')), []);
-		}
-	});
-
-	it('accepts a clean project-mode option set', () => {
-		const result = validateRunOptions(options({ configuration: 'Release', arch: 'x64' }), 'project');
-		assert.deepStrictEqual(getRunOptionErrors(result), []);
-	});
-});
-
-describe('validateRunOptions — debug context', () => {
+describe('validateDebugRunOptions', () => {
 	it('rejects noLaunch, which leaves nothing to attach to', () => {
-		const result = validateRunOptions(options({ noLaunch: true }), 'project', 'debug');
-		assert.ok(getRunOptionErrors(result).some(d => d.message.includes('noLaunch')));
+		assert.ok(validateDebugRunOptions(options({ noLaunch: true })).some(m => m.includes('noLaunch')));
 	});
 
 	it('rejects detach, which orphans the run process', () => {
-		const result = validateRunOptions(options({ detach: true }), 'project', 'debug');
-		assert.ok(getRunOptionErrors(result).some(d => d.message.includes('detach')));
+		assert.ok(validateDebugRunOptions(options({ detach: true })).some(m => m.includes('detach')));
 	});
 
 	it('rejects debugOutput, since Windows allows one debugger per process', () => {
-		const result = validateRunOptions(options({ debugOutput: true }), 'project', 'debug');
-		assert.ok(getRunOptionErrors(result).some(d => d.message.includes('debugOutput')));
+		assert.ok(validateDebugRunOptions(options({ debugOutput: true })).some(m => m.includes('debugOutput')));
 	});
 
-	it('allows the same options in the palette context', () => {
-		for (const opt of [{ noLaunch: true }, { detach: true }, { debugOutput: true }]) {
-			assert.deepStrictEqual(getRunOptionErrors(validateRunOptions(options(opt), 'project', 'palette')), []);
-		}
-	});
-});
-
-describe('validateRunOptions — mode mismatches', () => {
-	it('warns when project-only options are used on a folder', () => {
-		const result = validateRunOptions(options({ configuration: 'Release', noBuild: true }), 'folder');
-		const warning = result.find(d => d.severity === 'warning');
-		assert.ok(warning);
-		assert.ok(warning!.message.includes('--configuration'));
-		assert.ok(warning!.message.includes('--no-build'));
+	it('reports every unsupported option at once', () => {
+		const errors = validateDebugRunOptions(options({ noLaunch: true, detach: true, debugOutput: true }));
+		assert.strictEqual(errors.length, 3);
 	});
 
-	it('does not warn in project or solution mode', () => {
-		for (const kind of ['project', 'solution'] as const) {
-			const result = validateRunOptions(options({ configuration: 'Release' }), kind);
-			assert.deepStrictEqual(result, []);
-		}
-	});
-
-	it('stays quiet for unknown targets, letting the CLI decide', () => {
-		const result = validateRunOptions(options({ configuration: 'Release' }), 'unknown');
-		assert.deepStrictEqual(result, []);
-	});
-
-	it('does not warn about folder-compatible options', () => {
-		const result = validateRunOptions(options({ clean: true, withAlias: true }), 'folder');
-		assert.deepStrictEqual(result, []);
-	});
-
-	// --aot is the one project-only option the CLI rejects rather than
-	// ignores; dropping it would silently run a non-AOT build.
-	it('rejects --aot on a folder, matching the CLI', () => {
-		const result = validateRunOptions(options({ aot: true }), 'folder');
-		const error = result.find(d => d.severity === 'error');
-		assert.ok(error, 'expected an error, not a warning');
-		assert.ok(error!.message.includes('aot'));
-	});
-
-	// The warning enumerates what gets dropped, and --aot is not dropped.
-	it('does not list --aot among the ignored options', () => {
-		const result = validateRunOptions(options({ aot: true, configuration: 'Release' }), 'folder');
-		const warning = result.find(d => d.severity === 'warning');
-		assert.ok(warning);
-		assert.ok(warning!.message.includes('--configuration'));
-		assert.ok(!warning!.message.includes('--aot'));
-	});
-});
-
-describe('validateRunOptions — value checks', () => {
-	it('warns that runtime overrides arch', () => {
-		const result = validateRunOptions(options({ runtime: 'win-x64', arch: 'x86' }), 'project');
-		assert.ok(result.some(d => d.severity === 'warning' && d.message.includes('precedence')));
-	});
-
-	// These cases pin the bundled CLI behavior; rejecting a CLI-accepted value
-	// would block a legal build with an extension-only error.
-	it('rejects runtime identifiers the CLI cannot derive an architecture from', () => {
-		// The CLI answers each of these with "Could not determine an
-		// architecture from --runtime". Bare "win" is included deliberately:
-		// it looks like a Windows RID but carries no architecture.
-		for (const rid of ['linux-x64', 'osx-arm64', 'win', 'win-arm', 'win-mips', 'windows-x64', 'win-x64-aot', 'winxp-x64']) {
-			const result = validateRunOptions(options({ runtime: rid }), 'project');
-			assert.ok(
-				getRunOptionErrors(result).some(d => d.message.includes(rid)),
-				`expected ${rid} to be rejected`
-			);
-		}
-	});
-
-	it('accepts every runtime identifier shape the CLI resolves', () => {
-		// win + optional version digits + a supported architecture, matched
-		// case-insensitively, with amd64 as a spelling of x64.
-		for (const rid of ['win-x64', 'win-arm64', 'win-x86', 'win-amd64', 'win7-x64', 'win10-x64', 'win11-x64', 'win81-x86', 'WIN-X64', 'win10-ARM64', '  win-x64  ']) {
-			const result = validateRunOptions(options({ runtime: rid }), 'project');
-			assert.deepStrictEqual(getRunOptionErrors(result), [], `expected ${rid} to be accepted`);
-		}
-	});
-
-	it('rejects unsupported architectures', () => {
-		for (const arch of ['mips', 'arm', 'i386', 'win-x64']) {
-			const result = validateRunOptions(options({ arch }), 'project');
-			assert.ok(
-				getRunOptionErrors(result).some(d => d.message.includes(arch)),
-				`expected ${arch} to be rejected`
-			);
-		}
-	});
-
-	it('accepts every supported architecture', () => {
-		for (const arch of SUPPORTED_ARCHITECTURES) {
-			const result = validateRunOptions(options({ arch }), 'project');
-			assert.deepStrictEqual(getRunOptionErrors(result), [], `expected ${arch} to be accepted`);
-		}
-	});
-
-	it('accepts architectures the CLI matches case-insensitively, plus amd64', () => {
-		for (const arch of ['X64', 'ARM64', 'X86', 'amd64', 'AMD64', '  x64  ']) {
-			const result = validateRunOptions(options({ arch }), 'project');
-			assert.deepStrictEqual(getRunOptionErrors(result), [], `expected ${arch} to be accepted`);
-		}
-	});
-
-	// COMMON_CONFIGURATIONS is a convenience list for the QuickPick, not an
-	// allow-list: MSBuild projects routinely define their own configurations
-	// and the CLI forwards whatever it is given.
-	it('accepts any configuration name, not just the common ones', () => {
-		for (const configuration of [...COMMON_CONFIGURATIONS, 'ReleaseSigned', 'Debug-Internal', 'x64 Release']) {
-			const result = validateRunOptions(options({ configuration }), 'project');
-			assert.deepStrictEqual(getRunOptionErrors(result), [], `expected ${configuration} to be accepted`);
-		}
-	});
-
-	it('warns that noRestore is redundant with noBuild', () => {
-		const result = validateRunOptions(options({ noBuild: true, noRestore: true }), 'project');
-		assert.ok(result.some(d => d.severity === 'warning' && d.message.includes('noRestore')));
-	});
-
-	it('rejects malformed MSBuild property names', () => {
-		assert.ok(getRunOptionErrors(validateRunOptions(options({ properties: { '': 'x' } }), 'project')).length > 0);
-		assert.ok(getRunOptionErrors(validateRunOptions(options({ properties: { 'A=B': 'x' } }), 'project')).length > 0);
-	});
-
-	it('accepts an empty property value', () => {
-		const result = validateRunOptions(options({ properties: { Foo: '' } }), 'project');
-		assert.deepStrictEqual(getRunOptionErrors(result), []);
+	// Everything else is the CLI's to validate; it reports bad values itself.
+	it('leaves build options alone', () => {
+		const opts = options({ configuration: 'Release', arch: 'x64', runtime: 'win-x64', noBuild: true });
+		assert.deepStrictEqual(validateDebugRunOptions(opts), []);
 	});
 });
 
@@ -397,7 +240,7 @@ describe('clearInapplicableOptions', () => {
 				.map(([key]) => key)
 				.sort(),
 			// aot survives on purpose: the CLI rejects it outright rather than
-			// ignoring it, so validateRunOptions blocks the run instead.
+			// ignoring it, so the CLI's own error is what the user sees.
 			['aot', 'debugOutput', 'input', 'symbols']
 		);
 	});

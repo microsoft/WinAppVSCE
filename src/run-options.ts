@@ -54,15 +54,7 @@ export interface WinAppRunOptions {
 	json?: boolean;
 }
 
-export interface RunOptionDiagnostic {
-	severity: 'error' | 'warning';
-	message: string;
-}
-
-/** The debug adapter has stricter rules because it must attach. */
-export type RunOptionsContext = 'palette' | 'debug';
-
-/** Architectures accepted by `--arch`. */
+/** Architectures offered in the UI. The CLI validates the value it is given. */
 export const SUPPORTED_ARCHITECTURES = ['x64', 'arm64', 'x86'] as const;
 
 /** Build configurations offered in the UI. `--configuration` accepts any value. */
@@ -108,147 +100,31 @@ export function buildRunArgs(options: WinAppRunOptions): string[] {
 	return args;
 }
 
-/** Errors block the run; warnings surface CLI-ignored settings. */
-export function validateRunOptions(
-	options: WinAppRunOptions,
-	kind: RunTargetKind,
-	context: RunOptionsContext = 'palette'
-): RunOptionDiagnostic[] {
-	const diagnostics: RunOptionDiagnostic[] = [];
+/**
+ * Options the debug adapter cannot honour. The CLI accepts all three; it is
+ * the VS Code debug session they break, so the CLI never reports them.
+ */
+export function validateDebugRunOptions(options: WinAppRunOptions): string[] {
+	const errors: string[] = [];
 
-	// --- CLI-documented conflicts ---
-	if (options.debugOutput && options.json) {
-		diagnostics.push({
-			severity: 'error',
-			message: 'The "--debug-output" option cannot be combined with JSON output.'
-		});
+	if (options.noLaunch) {
+		errors.push('"noLaunch" is not supported in a WinApp debug configuration, because there is no launched process to attach to.');
 	}
 
-	if (options.debugOutput && options.noLaunch) {
-		diagnostics.push({
-			severity: 'error',
-			message: 'The "--debug-output" option cannot be combined with "--no-launch", because there is no process to capture output from.'
-		});
+	if (options.detach) {
+		errors.push('"detach" is not supported in a WinApp debug configuration, because WinApp must stay attached to manage the debug session.');
 	}
 
-	if (options.withAlias && options.withoutAlias) {
-		diagnostics.push({
-			severity: 'error',
-			message: 'The "withAlias" and "withoutAlias" options are opposites and cannot both be set.'
-		});
+	// Windows allows one debugger per process, so the CLI cannot capture debug
+	// output while VS Code is attached.
+	if (options.debugOutput) {
+		errors.push('"debugOutput" is not supported in a WinApp debug configuration, because VS Code is already attached as the debugger.');
 	}
 
-	if (options.symbols && !options.debugOutput) {
-		diagnostics.push({
-			severity: 'warning',
-			message: 'The "symbols" option only applies when debug output capture is enabled, and will be ignored.'
-		});
-	}
-
-	// --- Attach-specific rules ---
-	if (context === 'debug') {
-		if (options.noLaunch) {
-			diagnostics.push({
-				severity: 'error',
-				message: '"noLaunch" is not supported in a WinApp debug configuration, because there is no launched process for the debugger to attach to. '
-					+ 'Remove it, or register the package from the command palette and use a standard "attach" configuration instead.'
-			});
-		}
-		if (options.detach) {
-			diagnostics.push({
-				severity: 'error',
-				message: '"detach" is not supported in a WinApp debug configuration, because WinApp must stay attached to the launched app to manage the debug session. Remove it from launch.json.'
-			});
-		}
-		if (options.debugOutput) {
-			diagnostics.push({
-				severity: 'error',
-				message: '"debugOutput" is not supported in a WinApp debug configuration. '
-					+ 'Windows allows only one debugger per process, so WinApp cannot capture debug output while VS Code is attached.'
-			});
-		}
-	}
-
-	// --- Mode mismatches ---
-	if (!isProjectMode(kind) && kind !== 'unknown') {
-		// `--aot` is the one project-only option the CLI rejects instead of
-		// ignores, so silently dropping it would run a non-AOT build.
-		if (options.aot) {
-			diagnostics.push({
-				severity: 'error',
-				message: 'The "aot" option requires a project, solution, or source directory, and cannot be used with a build output folder.'
-			});
-		}
-
-		const projectOnly = listProjectOnlyOptions(options).filter(name => name !== '--aot');
-		if (projectOnly.length > 0) {
-			const list = projectOnly.join(', ');
-			const verb = projectOnly.length === 1 ? 'applies' : 'apply';
-			diagnostics.push({
-				severity: 'warning',
-				message: `${list} ${verb} only when running a project or solution, and will be ignored for a build output folder.`
-			});
-		}
-	}
-
-	// --- Value checks ---
-	if (options.runtime && options.arch) {
-		diagnostics.push({
-			severity: 'warning',
-			message: 'Both "runtime" and "arch" are set. The runtime identifier takes precedence, so "arch" will be ignored.'
-		});
-	}
-
-	if (options.runtime && !isWindowsRuntimeIdentifier(options.runtime)) {
-		diagnostics.push({
-			severity: 'error',
-			message: `"${options.runtime}" is not a Windows runtime identifier the CLI can derive an architecture from. Use a win-* RID that ends in a supported architecture, such as "win-x64", "win-arm64", or "win10-x86".`
-		});
-	}
-
-	if (options.arch && !isSupportedArchitecture(options.arch)) {
-		diagnostics.push({
-			severity: 'error',
-			message: `"${options.arch}" is not a supported architecture. Use one of: ${SUPPORTED_ARCHITECTURES.join(', ')}.`
-		});
-	}
-
-	if (options.noBuild && options.noRestore) {
-		diagnostics.push({
-			severity: 'warning',
-			message: 'The "noRestore" option has no effect when "noBuild" is set, because no build runs.'
-		});
-	}
-
-	for (const [name, value] of Object.entries(options.properties ?? {})) {
-		if (name.trim() === '') {
-			diagnostics.push({
-				severity: 'error',
-				message: 'MSBuild property names cannot be empty.'
-			});
-		} else if (name.includes('=')) {
-			diagnostics.push({
-				severity: 'error',
-				message: `MSBuild property name "${name}" cannot contain "=".`
-			});
-		}
-		if (value === undefined || value === null) {
-			diagnostics.push({
-				severity: 'error',
-				message: `MSBuild property "${name}" has no value. Use an empty string to set it to nothing.`
-			});
-		}
-	}
-
-	return diagnostics;
+	return errors;
 }
 
-/** Convenience filter: the blocking diagnostics from {@link validateRunOptions}. */
-export function getRunOptionErrors(diagnostics: readonly RunOptionDiagnostic[]): RunOptionDiagnostic[] {
-	return diagnostics.filter(d => d.severity === 'error');
-}
-
-/** Leaves `unknown` and `aot` untouched so CLI/validation handle them. */
+/** Leaves `unknown` and `aot` untouched so the CLI reports them. */
 export function clearInapplicableOptions(
 	options: WinAppRunOptions,
 	kind: RunTargetKind
@@ -337,28 +213,3 @@ export function runOptionsFromDebugConfig(
 	};
 }
 
-/** Uses CLI flag spelling so warnings match `winapp run --help`. */
-function listProjectOnlyOptions(options: WinAppRunOptions): string[] {
-	const present: string[] = [];
-	if (options.project) { present.push('--project'); }
-	if (options.configuration) { present.push('--configuration'); }
-	if (options.arch) { present.push('--arch'); }
-	if (options.framework) { present.push('--framework'); }
-	if (options.runtime) { present.push('--runtime'); }
-	if (options.properties && Object.keys(options.properties).length > 0) { present.push('--property'); }
-	if (options.noBuild) { present.push('--no-build'); }
-	if (options.noRestore) { present.push('--no-restore'); }
-	if (options.aot) { present.push('--aot'); }
-	return present;
-}
-
-/** Matches CLI arch parsing: case-insensitive, with `amd64` as x64. */
-function isSupportedArchitecture(arch: string): boolean {
-	const normalized = arch.trim().toLowerCase();
-	return (SUPPORTED_ARCHITECTURES as readonly string[]).includes(normalized) || normalized === 'amd64';
-}
-
-/** CLI accepts only `win` + optional digits + a supported architecture. */
-function isWindowsRuntimeIdentifier(runtime: string): boolean {
-	return /^win\d*-(?:x64|arm64|x86|amd64)$/.test(runtime.trim().toLowerCase());
-}
