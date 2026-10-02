@@ -52,6 +52,16 @@ namespace WinUIXamlPreview.Protocol
         private bool _connecting;
         private string? _privateRun;
 
+        // Failure funnel: every failure (startup, connect, read-loop close, timeout, process exit) routes
+        // through Fault(). _lifetimeCts cancels the connect + read loop on fault/dispose; _timeoutCts (linked
+        // to it) is cancelled on its own the moment Ready arrives, so the startup timeout can never fire
+        // against a healthy surface. _faulted guards Fault() so exactly one Closed is raised however many
+        // failures race in; _intentionalStop suppresses Closed when we stop the surface on purpose.
+        private readonly CancellationTokenSource _lifetimeCts = new CancellationTokenSource();
+        private CancellationTokenSource? _timeoutCts;
+        private int _faulted;
+        private volatile bool _intentionalStop;
+
         public SurfaceClient(string surfaceExe, string? userDll, Action<string> log, string? userAppXaml = null, bool liveMode = false, string? theme = null, bool reflectionFallback = false, bool renderSettle = false, string? userPri = null)
         {
             _surfaceExe = surfaceExe;
@@ -120,7 +130,7 @@ namespace WinUIXamlPreview.Protocol
                     _privateRun = Path.Combine(Path.GetTempPath(), "wsr-v2", Guid.NewGuid().ToString("N"));
                     HostPayload.CreateRunCopy(source, _privateRun);
                 }
-                catch (Exception ex) { Fail(ex); return _ready.Task; }
+                catch (Exception ex) { Fault("Failed to stage the matched-host PRI run-copy.", ex); return _ready.Task; }
                 if (args.Length > 0)
                 {
                     args.Append(' ');
@@ -183,17 +193,25 @@ namespace WinUIXamlPreview.Protocol
             }
             catch (Exception ex)
             {
-                Fail(ex);
+                Fault("Failed to start the surface process.", ex);
                 return _ready.Task;
             }
 
-            _ = Task.Delay(timeout).ContinueWith(_ =>
+            _timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+            var timeoutToken = _timeoutCts.Token;
+            _ = Task.Delay(timeout, timeoutToken).ContinueWith(t =>
             {
+                if (t.IsCanceled)
+                {
+                    return; // Ready arrived (or we're tearing down) — nothing to time out.
+                }
+
                 if (_ready != null && !_ready.Task.IsCompleted)
                 {
-                    Fail(new TimeoutException("Timed out waiting for SURFACE_PORT / Ready from the surface process."));
+                    Fault("Timed out waiting for SURFACE_PORT / Ready from the surface process.",
+                        new TimeoutException("Timed out waiting for SURFACE_PORT / Ready from the surface process."));
                 }
-            });
+            }, TaskScheduler.Default);
 
             return _ready.Task;
         }
@@ -238,13 +256,7 @@ namespace WinUIXamlPreview.Protocol
         private void OnExited(object? sender, EventArgs e)
         {
             var code = TryGetExitCode();
-            var reason = $"Surface process exited (code={code}).";
-            _log(reason);
-            Fail(new Exception(reason));
-            if (!_disposed)
-            {
-                Closed?.Invoke(reason);
-            }
+            Fault($"Surface process exited (code={code}).");
         }
 
         private int? TryGetExitCode()
@@ -260,6 +272,7 @@ namespace WinUIXamlPreview.Protocol
             }
 
             _connecting = true;
+            var token = _lifetimeCts.Token;
             _ = Task.Run(async () =>
             {
                 try
@@ -270,25 +283,24 @@ namespace WinUIXamlPreview.Protocol
                     _stream = tcp.GetStream();
                     _log("Connected to surface. Sending Hello.");
                     Send(new HelloMsg());
-                    await ReadLoop(_stream).ConfigureAwait(false);
+                    await ReadLoop(_stream, token).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
-                    _log($"Socket error: {ex.Message}");
-                    Fail(ex);
+                    Fault($"Surface connection failed: {ex.Message}", ex);
                 }
             });
         }
 
-        private async Task ReadLoop(NetworkStream stream)
+        private async Task ReadLoop(NetworkStream stream, CancellationToken token)
         {
             var buffer = new byte[64 * 1024];
-            while (!_disposed)
+            while (!_disposed && !token.IsCancellationRequested)
             {
                 int n;
                 try
                 {
-                    n = await stream.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                    n = await stream.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -306,10 +318,7 @@ namespace WinUIXamlPreview.Protocol
                 }
             }
 
-            if (!_disposed)
-            {
-                Closed?.Invoke("Surface socket closed.");
-            }
+            Fault("Surface socket closed.");
         }
 
         private void Dispatch(string json)
@@ -328,6 +337,7 @@ namespace WinUIXamlPreview.Protocol
             switch (type)
             {
                 case "Ready":
+                    _timeoutCts?.Cancel();
                     var ready = JsonSerializer.Deserialize<ReadyMsg>(json, ReadOptions);
                     if (ready != null)
                     {
@@ -472,9 +482,24 @@ namespace WinUIXamlPreview.Protocol
         public void SetCanvasSize(double width, double height)
             => Send(new SetCanvasSizeMsg { Width = width, Height = height });
 
-        private void Fail(Exception ex)
+        // Single funnel for every failure — startup, connect, read-loop close, timeout, process exit.
+        // Idempotent (first fault wins), so _ready is completed once and exactly one Closed is raised.
+        // Cancels the lifetime token to stop the read loop; suppresses Closed during intentional stop/dispose.
+        private void Fault(string reason, Exception? ex = null)
         {
-            _ready?.TrySetException(ex);
+            if (Interlocked.Exchange(ref _faulted, 1) != 0)
+            {
+                return;
+            }
+
+            _log(reason);
+            _ready?.TrySetException(ex ?? new Exception(reason));
+            try { _lifetimeCts.Cancel(); } catch (ObjectDisposedException) { }
+
+            if (!_disposed && !_intentionalStop)
+            {
+                Closed?.Invoke(reason);
+            }
         }
 
         private static string Quote(string s) => s.IndexOf(' ') >= 0 ? $"\"{s}\"" : s;
@@ -486,7 +511,9 @@ namespace WinUIXamlPreview.Protocol
                 return;
             }
 
+            _intentionalStop = true;
             _disposed = true;
+            try { _lifetimeCts.Cancel(); } catch { }
             try { _stream?.Dispose(); } catch { }
             try { _tcp?.Close(); } catch { }
             try
@@ -508,6 +535,9 @@ namespace WinUIXamlPreview.Protocol
                 catch (IOException ex) { _log($"Private Surface run cleanup failed for '{_privateRun}': {ex.Message}"); }
                 catch (UnauthorizedAccessException ex) { _log($"Private Surface run cleanup denied for '{_privateRun}': {ex.Message}"); }
             }
+
+            try { _lifetimeCts.Dispose(); } catch { }
+            try { _timeoutCts?.Dispose(); } catch { }
         }
     }
 

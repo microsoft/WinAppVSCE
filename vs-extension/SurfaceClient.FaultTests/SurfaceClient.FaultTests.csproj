@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Deterministic fault-injection harness for SurfaceClient (Workstream 1 T13). Drives the SAME
+       production SurfaceClient that ships in the VSIX, but against a controllable in-process "fake
+       surface" (this same exe re-launched with a fake-surface flag) instead of the real Surface.exe. That
+       lets us provoke never-Ready, timeout, mid-stream kill, send-after-close, and dispose-under-load
+       without a Windows App SDK install, and assert the failure funnel raises exactly one Closed and
+       never leaks a child process. Targets net472 to match the runtime that hosts the VS extension. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>SurfaceClient.FaultTests</AssemblyName>
+    <RootNamespace>WinUIXamlPreview.FaultTests</RootNamespace>
+    <UseWindowsForms>false</UseWindowsForms>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\surface\Shared\HostPayload.cs" Link="Shared\HostPayload.cs" />
+    <!-- Compile the production protocol/client sources in place — no duplication. -->
+    <Compile Include="..\WinUIXamlPreview\Protocol\Messages.cs" Link="Protocol\Messages.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Protocol\LineDecoder.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceClient.cs" Link="Protocol\SurfaceClient.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceResolver.cs" Link="Protocol\SurfaceResolver.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\ProjectDllLocator.cs" Link="Protocol\ProjectDllLocator.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="10.0.9" />
+  </ItemGroup>
+
+</Project>
