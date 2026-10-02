@@ -1517,13 +1517,15 @@ namespace WinUIXamlPreview.UI
 
                 if (_hasFrame || _hasNative)
                 {
+                    ShowReconnectBanner(
+                        _restartAttempts >= MaxAutoRestarts
+                            ? $"Auto-restart gave up after {MaxAutoRestarts} attempts. {reason}"
+                            : reason);
                     return;
                 }
 
-                SetStatus(
-                    "Surface closed.",
-                    spinner: false,
-                    detail: _restartAttempts >= MaxAutoRestarts
+                ShowReconnectBanner(
+                    _restartAttempts >= MaxAutoRestarts
                         ? $"Auto-restart gave up after {MaxAutoRestarts} attempts. {reason}"
                         : reason);
             });
@@ -1617,6 +1619,7 @@ namespace WinUIXamlPreview.UI
 
         private void SetStatus(string text, bool spinner, string? detail = null)
         {
+            HideReconnectBanner();
             StatusOverlay.Visibility = Visibility.Visible;
             StatusIcon.Visibility = Visibility.Collapsed;
             Spinner.Visibility = spinner ? Visibility.Visible : Visibility.Collapsed;
@@ -1676,8 +1679,68 @@ namespace WinUIXamlPreview.UI
 
         private void HideStatus()
         {
+            HideReconnectBanner();
             StatusOverlay.Visibility = Visibility.Collapsed;
             StatusOverlay.VerticalAlignment = VerticalAlignment.Center;
+        }
+
+        /// <summary>
+        /// T11/T12 terminal recovery state: the surface has died and auto-restart is exhausted (or there is
+        /// nothing to relaunch). Dim any stale frame with a full-pane scrim and present the single, persistent,
+        /// explicit "Reload preview" affordance. This is the one give-up sink for all fault paths; a working
+        /// state (SetStatus) or a successful render (HideStatus) clears it again.
+        /// </summary>
+        private void ShowReconnectBanner(string? reason)
+        {
+            // Not a working status — collapse the spinner overlay so only the scrim + Reload card show.
+            StatusOverlay.Visibility = Visibility.Collapsed;
+            StatusOverlay.VerticalAlignment = VerticalAlignment.Center;
+
+            if (string.IsNullOrEmpty(reason))
+            {
+                ReconnectDetail.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                ReconnectDetail.Text = reason;
+                ReconnectDetail.Visibility = Visibility.Visible;
+            }
+
+            ReconnectOverlay.Visibility = Visibility.Visible;
+        }
+
+        private void HideReconnectBanner()
+        {
+            ReconnectOverlay.Visibility = Visibility.Collapsed;
+        }
+
+        private void OnReloadClick(object sender, System.Windows.RoutedEventArgs e)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            // User-initiated recovery: clear the terminal banner, hand back a fresh auto-restart budget, and
+            // force a full cold re-init of the current document (the dead surface can't be reused).
+            HideReconnectBanner();
+            _restartAttempts = 0;
+            _suppressAutoRestart = false;
+
+            var path = _pinnedPath ?? _currentPath;
+            if (string.IsNullOrEmpty(path))
+            {
+                path = PreviewPackageState.GetActiveXamlPath();
+            }
+
+            if (string.IsNullOrEmpty(path))
+            {
+                Reload();
+                return;
+            }
+
+            _currentPath = null; // force ShowDocument to fully re-init rather than short-circuit
+            ShowDocument(path!);
         }
 
         private void MaybeShowLiveFallbackBanner()

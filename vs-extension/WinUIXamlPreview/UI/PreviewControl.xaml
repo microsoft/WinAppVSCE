@@ -117,5 +117,55 @@
                         Click="OnFidelityCancelClick" />
             </StackPanel>
         </Border>
+
+        <!-- Terminal recovery overlay (T11/T12): shown only when the surface has died AND auto-restart is
+             exhausted (or there's nothing left to relaunch). A full-pane scrim dims whatever stale frame
+             remains so it reads as disconnected, and a single, persistent, explicit "Reload preview" button
+             is the one actionable recovery affordance. All give-up fault paths funnel here (OnClosed exhausted
+             branches) instead of silently freezing on a stale frame or showing a dead-end status line. -->
+        <Border x:Name="ReconnectOverlay"
+                Background="#A6000000"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Stretch"
+                Visibility="Collapsed">
+            <Border Background="#F22D2D30"
+                    BorderBrush="#555558"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="24,20"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center">
+                <StackPanel Orientation="Vertical" MinWidth="240" MaxWidth="420">
+                    <TextBlock x:Name="ReconnectIcon"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="28"
+                               Foreground="#FFE6A23C"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,12"
+                               Text="&#xE7BA;" />
+                    <TextBlock x:Name="ReconnectText"
+                               Foreground="#FFF0F0F0"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center"
+                               Text="Preview disconnected" />
+                    <TextBlock x:Name="ReconnectDetail"
+                               Foreground="#FFB0B0B0"
+                               FontSize="11"
+                               Margin="0,6,0,0"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center"
+                               Visibility="Collapsed" />
+                    <Button x:Name="ReconnectButton"
+                            Content="Reload preview"
+                            HorizontalAlignment="Center"
+                            Margin="0,14,0,0"
+                            Padding="14,4"
+                            FontSize="12"
+                            Click="OnReloadClick" />
+                </StackPanel>
+            </Border>
+        </Border>
     </Grid>
 </UserControl>
