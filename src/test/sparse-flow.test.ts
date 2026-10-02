@@ -396,46 +396,47 @@ describe('chooseSparseManifest', () => {
 	const expectedPath = 'C:\\repo\\src\\App\\sparse\\appxmanifest.xml';
 
 	it('prefers the location sparse init writes to', () => {
-		assert.equal(
+		assert.deepEqual(
 			chooseSparseManifest({
 				expectedPath,
 				expectedExists: true,
 				discovered: ['C:\\repo\\other\\appxmanifest.xml']
 			}),
-			expectedPath
+			{ kind: 'resolved', path: expectedPath }
 		);
 	});
 
-	it('falls back to a single unambiguous workspace match', () => {
-		assert.equal(
+	it('never adopts a single workspace match on its own', () => {
+		// Embedding rewrites the binary in place, so the one manifest that
+		// happened to turn up in a scan must not decide the identity — it may
+		// belong to an entirely unrelated project.
+		assert.deepEqual(
 			chooseSparseManifest({
 				expectedPath,
 				expectedExists: false,
-				discovered: ['C:\\repo\\moved\\appxmanifest.xml']
+				discovered: ['C:\\repo\\unrelated\\appxmanifest.xml']
 			}),
-			'C:\\repo\\moved\\appxmanifest.xml'
+			{ kind: 'ask', candidates: ['C:\\repo\\unrelated\\appxmanifest.xml'] }
 		);
 	});
 
-	it('defers to the CLI when several manifests match', () => {
-		assert.equal(
-			chooseSparseManifest({
-				expectedPath,
-				expectedExists: false,
-				discovered: ['C:\\repo\\a\\appxmanifest.xml', 'C:\\repo\\b\\appxmanifest.xml']
-			}),
-			undefined
+	it('offers every candidate when several manifests match', () => {
+		const discovered = ['C:\\repo\\a\\appxmanifest.xml', 'C:\\repo\\b\\appxmanifest.xml'];
+
+		assert.deepEqual(
+			chooseSparseManifest({ expectedPath, expectedExists: false, discovered }),
+			{ kind: 'ask', candidates: discovered }
 		);
 	});
 
-	it('defers to the CLI when nothing is found', () => {
-		assert.equal(
+	it('asks with no candidates when nothing is found', () => {
+		assert.deepEqual(
 			chooseSparseManifest({ expectedPath, expectedExists: false, discovered: [] }),
-			undefined
+			{ kind: 'ask', candidates: [] }
 		);
-		assert.equal(
+		assert.deepEqual(
 			chooseSparseManifest({ expectedPath, expectedExists: false }),
-			undefined
+			{ kind: 'ask', candidates: [] }
 		);
 	});
 });
@@ -471,9 +472,9 @@ describe('embed-identity manifest resolution (regression)', () => {
 			expectedExists: true
 		});
 
-		assert.equal(resolved, initManifest);
+		assert.deepEqual(resolved, { kind: 'resolved', path: initManifest });
 		assert.deepEqual(
-			buildEmbedIdentityArgs({ target: exe, manifestPath: resolved }),
+			buildEmbedIdentityArgs({ target: exe, manifestPath: initManifest }),
 			['embed-identity', exe, '--manifest', initManifest]
 		);
 	});
@@ -482,12 +483,15 @@ describe('embed-identity manifest resolution (regression)', () => {
 		const initArgs = buildSparseInitArgs({ exePath: exe, outputDir: initOutputDir });
 		const outputDir = initArgs[initArgs.indexOf('--output-dir') + 1];
 
+		const resolved = chooseSparseManifest({
+			expectedPath: getSparseManifestPath(outputDir),
+			expectedExists: true
+		});
+		assert.equal(resolved.kind, 'resolved');
+
 		const embedArgs = buildEmbedIdentityArgs({
 			target: exe,
-			manifestPath: chooseSparseManifest({
-				expectedPath: getSparseManifestPath(outputDir),
-				expectedExists: true
-			})
+			manifestPath: resolved.kind === 'resolved' ? resolved.path : undefined
 		});
 		const manifest = embedArgs[embedArgs.indexOf('--manifest') + 1];
 

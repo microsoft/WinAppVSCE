@@ -779,7 +779,13 @@ async function findSparseManifests(
  * deeper under `bin/`. Resolving the path here keeps the two commands in step
  * instead of relying on a search that only succeeds for a flat layout.
  *
- * @returns The manifest to pass explicitly, or `undefined` to let the CLI search.
+ * Only the path this extension would have written is adopted automatically.
+ * Embedding rewrites the executable in place, so a manifest found anywhere
+ * else is confirmed by the user rather than guessed at — even when it is the
+ * only one in the workspace, since it may belong to an unrelated project.
+ *
+ * @returns The manifest to pass explicitly, or `undefined` if the user
+ * cancelled, in which case the caller must abort.
  */
 async function resolveSparseManifestForTarget(
 	workspacePath: string,
@@ -791,22 +797,63 @@ async function resolveSparseManifestForTarget(
 		defaultSparseOutputDir(workspacePath, findProjectRootForFile(workspacePath, target))
 	);
 	if (fs.existsSync(expected)) {
-		return chooseSparseManifest({ expectedPath: expected, expectedExists: true });
+		const choice = chooseSparseManifest({ expectedPath: expected, expectedExists: true });
+		return choice.kind === 'resolved' ? choice.path : undefined;
 	}
 
-	// The manifest may have been moved or generated outside the extension. A
-	// single workspace-wide match is unambiguous enough to use; anything else
-	// falls through to the CLI's own search rather than guessing.
 	const discovered = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Window, title: 'Looking for sparse manifests…' },
 		(_progress, token) => findSparseManifests(workspacePath, token)
 	);
 
-	return chooseSparseManifest({
+	const choice = chooseSparseManifest({
 		expectedPath: expected,
 		expectedExists: false,
 		discovered
 	});
+	if (choice.kind === 'resolved') {
+		return choice.path;
+	}
+
+	return pickSparseManifestForEmbed(workspacePath, target, choice.candidates);
+}
+
+/**
+ * Ask which identity to embed when the expected manifest is missing.
+ *
+ * Candidates found elsewhere in the workspace are offered, but always behind
+ * an explicit choice: the identity that gets stamped into the binary should
+ * never be decided by which manifest happened to turn up in a scan.
+ *
+ * @returns The chosen manifest, or `undefined` if the user cancelled.
+ */
+async function pickSparseManifestForEmbed(
+	workspacePath: string,
+	target: string,
+	candidates: string[]
+): Promise<string | undefined> {
+	const browseLabel = '$(file-code) Browse for sparse manifest…';
+	const items: vscode.QuickPickItem[] = candidates.map(manifestPath => ({
+		label: `$(file-code) ${path.basename(manifestPath)}`,
+		description: path.relative(workspacePath, manifestPath),
+		detail: manifestPath
+	}));
+	items.push({ label: browseLabel });
+
+	const picked = await vscode.window.showQuickPick(items, {
+		placeHolder: candidates.length > 0
+			? `Select the sparse manifest whose identity to embed into ${path.basename(target)}`
+			: `No sparse manifest found for ${path.basename(target)} — browse for one`,
+		ignoreFocusOut: true
+	});
+	if (!picked) {
+		return undefined;
+	}
+	if (picked.label !== browseLabel) {
+		return picked.detail;
+	}
+
+	return selectFile('Select sparse manifest', { 'App manifests': ['xml', 'appxmanifest'] });
 }
 
 /**
@@ -863,13 +910,6 @@ async function pickPackInput(workspacePath: string): Promise<PackInput | undefin
 	}
 
 	const { folders, sparseManifests } = discovered;
-
-	// Nothing discovered at all — go straight to the folder dialog, matching
-	// the existing behaviour of the folder-only picker.
-	if (folders.length === 0 && sparseManifests.length === 0) {
-		const folder = await selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
-		return folder ? { kind: 'folder', path: folder } : undefined;
-	}
 
 	type PackInputItem = vscode.QuickPickItem & { input?: PackInput };
 
@@ -1764,6 +1804,9 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			const manifestPath = await resolveSparseManifestForTarget(workspacePath, target);
+			if (!manifestPath) {
+				return;
+			}
 			const args = buildEmbedIdentityArgs({ target, manifestPath });
 			await runWinappCommand(
 				extensionPath,

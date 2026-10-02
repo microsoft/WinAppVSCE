@@ -20,6 +20,11 @@
  *
  * Test 4 — Cancel:
  *   Escaping the picker aborts packing without opening a terminal.
+ *
+ * Test 5 — Identity-only prompt skipping:
+ *   Selecting a sparse manifest skips the self-contained prompt, which is
+ *   meaningless for a package that carries no binaries; selecting a folder
+ *   still asks.
  */
 
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
@@ -175,6 +180,23 @@ function packQuickPickRows(page: Page) {
     return page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
 }
 
+/** The placeholder of whichever QuickPick is currently showing. */
+function quickPickPlaceholder(page: Page) {
+    return page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
+}
+
+/**
+ * Filter the open picker down to one row and accept it.
+ *
+ * Typing is used rather than arrow keys so the test states *which* row it
+ * wants instead of depending on row ordering.
+ */
+async function choosePackRow(page: Page, filterText: string): Promise<void> {
+    await page.keyboard.type(filterText, { delay: 30 });
+    await page.waitForTimeout(1_500);
+    await page.keyboard.press('Enter');
+}
+
 /** Close VS Code and remove the throwaway workspace and profile. */
 async function cleanup(
     app: ElectronApplication | undefined,
@@ -314,6 +336,79 @@ test.describe('winapp.pack command — input discovery', () => {
             await expect(page.locator('.terminal-wrapper')).toHaveCount(0);
 
             console.log('✅ PASS: cancelling the pack picker aborted the flow');
+        } finally {
+            await cleanup(app, tmpDir, userDataDir);
+        }
+    });
+
+    test('skips the self-contained prompt for an identity-only manifest', async () => {
+        const tmpDir = createPackWorkspace({
+            sparseManifests: [path.join('src', 'App', 'sparse', 'appxmanifest.xml')],
+        });
+
+        let app: ElectronApplication | undefined;
+        let userDataDir: string | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            userDataDir = launched.userDataDir;
+            const page = launched.page;
+
+            await openPackPicker(page);
+            await choosePackRow(page, 'appxmanifest');
+
+            // The certificate question is common to both input kinds.
+            await expect(quickPickPlaceholder(page)).toHaveAttribute(
+                'placeholder',
+                /development certificate/,
+                { timeout: DISCOVERY_TIMEOUT }
+            );
+            await page.keyboard.press('Escape');
+
+            // An identity-only package has no binaries, so there is no runtime
+            // to bundle and the question must never be asked.
+            await page.waitForTimeout(5_000);
+            await expect(
+                page.locator('.quick-input-widget input[placeholder*="self-contained"]')
+            ).toHaveCount(0);
+
+            console.log('✅ PASS: identity-only input skipped the self-contained prompt');
+        } finally {
+            await cleanup(app, tmpDir, userDataDir);
+        }
+    });
+
+    test('still asks about self-contained for a build output folder', async () => {
+        // The contrast case: without it, a prompt that never fires for any
+        // input would pass the test above.
+        const tmpDir = createPackWorkspace();
+
+        let app: ElectronApplication | undefined;
+        let userDataDir: string | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            userDataDir = launched.userDataDir;
+            const page = launched.page;
+
+            await openPackPicker(page);
+            await choosePackRow(page, 'net8.0');
+
+            await expect(quickPickPlaceholder(page)).toHaveAttribute(
+                'placeholder',
+                /development certificate/,
+                { timeout: DISCOVERY_TIMEOUT }
+            );
+            await page.keyboard.press('Escape');
+
+            await expect(quickPickPlaceholder(page)).toHaveAttribute(
+                'placeholder',
+                /self-contained/,
+                { timeout: DISCOVERY_TIMEOUT }
+            );
+            await page.keyboard.press('Escape');
+
+            console.log('✅ PASS: folder input was asked about self-contained');
         } finally {
             await cleanup(app, tmpDir, userDataDir);
         }

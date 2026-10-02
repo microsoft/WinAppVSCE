@@ -247,6 +247,16 @@ export function findProjectRootIn(
 }
 
 /**
+ * The outcome of resolving which sparse manifest to embed.
+ *
+ * `ask` carries the manifests found elsewhere in the workspace so the caller
+ * can offer them, but it never picks one: see {@link chooseSparseManifest}.
+ */
+export type SparseManifestChoice =
+	| { kind: 'resolved'; path: string }
+	| { kind: 'ask'; candidates: string[] };
+
+/**
  * Pick which sparse manifest `winapp embed-identity` should be pointed at.
  *
  * Passing `--manifest` explicitly is required in the general case: the CLI's
@@ -255,20 +265,20 @@ export function findProjectRootIn(
  * on the *project root*. For any project whose exe builds into `bin/`, those
  * locations never coincide.
  *
- * Preference order:
- *  1. The location this extension would have written — authoritative.
- *  2. A single workspace-wide match, which is unambiguous.
- *  3. `undefined` for zero or several matches, deferring to the CLI rather
- *     than guessing (and letting it report a better-scoped error).
+ * Only the location this extension would have written is treated as
+ * authoritative. Anything else is returned as `ask`, including the case of a
+ * single workspace-wide match: embedding rewrites the executable in place, so
+ * adopting a manifest that merely happens to be the only one in the workspace
+ * would silently stamp an unrelated identity onto the user's binary.
  */
 export function chooseSparseManifest(options: {
 	expectedPath: string;
 	expectedExists: boolean;
 	discovered?: string[];
-}): string | undefined {
+}): SparseManifestChoice {
 	if (options.expectedExists) {
-		return options.expectedPath;
+		return { kind: 'resolved', path: options.expectedPath };
 	}
 
-	return options.discovered?.length === 1 ? options.discovered[0] : undefined;
+	return { kind: 'ask', candidates: options.discovered ?? [] };
 }
