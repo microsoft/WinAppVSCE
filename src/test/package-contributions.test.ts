@@ -155,7 +155,7 @@ describe('package.json contributions', () => {
 	it('exposes the run commands', () => {
 		const commands = manifest.contributes.commands.map((c: { command: string }) => c.command);
 		assert.ok(commands.includes('winapp.run'));
-		assert.ok(commands.includes('winapp.runAdvanced'));
+		assert.ok(commands.includes('winapp.runWithOptions'));
 	});
 
 	// launch.json is the only place a user types these by hand, so the schema

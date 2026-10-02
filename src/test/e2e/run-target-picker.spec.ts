@@ -1,5 +1,5 @@
 /**
- * E2E tests for the run-target picker used by `winapp.run`, `winapp.runAdvanced`,
+ * E2E tests for the run-target picker used by `winapp.run`, `winapp.runWithOptions`,
  * and the `winapp` debug adapter.
  *
  * These cover the discovery behavior that unit tests cannot reach, because it
@@ -17,9 +17,9 @@
  *   A .code-workspace with two folders shows projects from *both*, which is the
  *   multi-root fix — discovery previously only ever saw workspaceFolders[0].
  *
- * Test 4 — Advanced command always prompts:
+ * Test 4 — With Options command always prompts:
  *   A workspace with a single project auto-selects for "Run Application" but
- *   still prompts for "Run Application (Advanced)".
+ *   still prompts for "Run Application With Options".
  *
  * Test 5 — Library-only workspaces reach folder mode:
  *   A workspace whose only project is a class library hides that library and
@@ -237,7 +237,7 @@ const RUN_TARGET_PLACEHOLDER = /Select the project, solution, or build output fo
 /** The placeholder of the second prompt, which disambiguates `--project`. */
 const PROJECT_PICKER_PLACEHOLDER = /Which project in .+ would you like to run\?/;
 
-/** The placeholder of the advanced command's first build-settings prompt. */
+/** The placeholder of the With Options command's first build-settings prompt. */
 const BUILD_CONFIG_PLACEHOLDER = /^Build configuration$/;
 
 /**
@@ -297,9 +297,9 @@ test.describe('run target picker', () => {
             const page = launched.page;
 
             // Only one runnable project survives filtering, which "Run
-            // Application" would auto-select and launch. The advanced command
+            // Application" would auto-select and launch. The With Options command
             // always shows the picker without invoking the CLI.
-            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
 
             const rows = await readRunTargetPicker(page);
             const joined = rows.join('\n');
@@ -342,7 +342,7 @@ test.describe('run target picker', () => {
             app = launched.app;
             const page = launched.page;
 
-            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
 
             const rows = await readRunTargetPicker(page);
             const joined = rows.join('\n');
@@ -379,7 +379,7 @@ test.describe('run target picker', () => {
             app = launched.app;
             const page = launched.page;
 
-            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
 
             const joined = (await readRunTargetPicker(page)).join('\n');
 
@@ -420,7 +420,7 @@ test.describe('run target picker', () => {
             app = launched.app;
             const page = launched.page;
 
-            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
 
             const joined = (await readRunTargetPicker(page)).join('\n');
 
@@ -457,7 +457,7 @@ test.describe('run target picker', () => {
             app = launched.app;
             const page = launched.page;
 
-            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
 
             // Solutions sort ahead of projects, so the first row is the
             // solution and its members are already folded into it.
@@ -505,7 +505,7 @@ test.describe('run target picker', () => {
             app = launched.app;
             const page = launched.page;
 
-            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
 
             const targets = await readRunTargetPicker(page);
             expect(targets.join('\n')).toContain('MySln.sln');
@@ -619,9 +619,9 @@ test.describe('run target picker', () => {
             const page = launched.page;
 
             // Deduplication leaves a single candidate, which "Run Application"
-            // would auto-select and launch. Use the advanced command so the
+            // would auto-select and launch. Use the With Options command so the
             // picker is always shown and the CLI is never invoked.
-            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
 
             const rows = await readRunTargetPicker(page);
             const joined = rows.join('\n');
@@ -680,8 +680,8 @@ test.describe('run target picker', () => {
         }
     });
 
-    test('advanced command prompts even when a single project would auto-select', async () => {
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-advanced-e2e-'));
+    test('With Options command prompts even when a single project would auto-select', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-with-options-e2e-'));
         writeProject(tmpDir, path.join('OnlyApp', 'OnlyApp.csproj'));
 
         let app: ElectronApplication | undefined;
@@ -690,13 +690,13 @@ test.describe('run target picker', () => {
             app = launched.app;
             const page = launched.page;
 
-            await runCommandPalette(page, 'WinApp: Run Application (Advanced)');
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
 
             const rows = await readRunTargetPicker(page);
             expect(rows.join('\n')).toContain('OnlyApp.csproj');
 
             await page.keyboard.press('Escape');
-            console.log('✅ PASS: advanced command prompted for a single candidate');
+            console.log('✅ PASS: With Options command prompted for a single candidate');
         } finally {
             if (app) {
                 await app.close().catch(() => {});

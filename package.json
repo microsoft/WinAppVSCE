@@ -37,7 +37,7 @@
     "onCommand:winapp.unregister",
     "onCommand:winapp.certInfo",
     "onCommand:winapp.openManifestEditor",
-    "onCommand:winapp.runAdvanced"
+    "onCommand:winapp.runWithOptions"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -83,8 +83,8 @@
         "category": "WinApp"
       },
       {
-        "command": "winapp.runAdvanced",
-        "title": "Run Application (Advanced)...",
+        "command": "winapp.runWithOptions",
+        "title": "Run Application With Options...",
         "category": "WinApp"
       },
       {

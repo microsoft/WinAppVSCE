@@ -80,7 +80,7 @@ they never wrote.
 
 ### `run-target-picker.spec.ts` — 12 tests
 
-Covers run-target discovery for `winapp.run` / `winapp.runAdvanced`, which depends on VS Code's own `findFiles` indexing and workspace-folder resolution and so cannot be unit tested. Every test dismisses the picker with `Escape`, so the CLI is never invoked and nothing is built or deployed.
+Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which depends on VS Code's own `findFiles` indexing and workspace-folder resolution and so cannot be unit tested. Every test dismisses the picker with `Escape`, so the CLI is never invoked and nothing is built or deployed.
 
 | # | Test | Validates |
 |---|------|-----------|
@@ -94,7 +94,7 @@ Covers run-target discovery for `winapp.run` / `winapp.runAdvanced`, which depen
 | 8 | lists every discovered project in the workspace | Both `.csproj` files appear, alongside the build-output search and the two browse entries |
 | 9 | shows a solution once rather than also listing its member projects | A `.sln` and its member `.csproj` collapse to a single entry |
 | 10 | discovers projects in every folder of a multi-root workspace | Projects from *both* folders of a `.code-workspace` appear — previously only `workspaceFolders[0]` was searched |
-| 11 | advanced command prompts even when a single project would auto-select | `winapp.runAdvanced` always shows the picker |
+| 11 | With Options command prompts even when a single project would auto-select | `winapp.runWithOptions` always shows the picker |
 | 12 | F5 with no input in launch.json prompts for a run target | A `winapp` launch configuration that omits `input` falls through to the picker instead of failing with a missing-argument error |
 
 > When matching the picker, assert on the full placeholder. The command palette's own placeholder is "Type the name of a command **to run**", so a loose `/to run/` match silently reads the palette's rows instead of the picker's.

@@ -801,8 +801,8 @@ async function runWinappRun(extensionPath: string, options: WinAppRunOptions, cw
  * Shared flow for both run commands: pick a target, resolve options, validate,
  * and launch.
  */
-async function executeRunCommand(extensionPath: string, advanced: boolean): Promise<void> {
-	const resolved = await resolveRunOptions(advanced);
+async function executeRunCommand(extensionPath: string, withOptions: boolean): Promise<void> {
+	const resolved = await resolveRunOptions(withOptions);
 	if (!resolved) {
 		return;
 	}
@@ -1455,9 +1455,9 @@ export function activate(context: vscode.ExtensionContext) {
 		})
 	);
 
-	// Register winapp.runAdvanced command
+	// Register winapp.runWithOptions command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.runAdvanced', async () => {
+		vscode.commands.registerCommand('winapp.runWithOptions', async () => {
 			await executeRunCommand(extensionPath, true);
 		})
 	);

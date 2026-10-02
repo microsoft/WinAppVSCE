@@ -311,7 +311,7 @@ function buildRunTargetItems(
  * derived from the selection.
  *
  * @param alwaysPrompt Show the picker even when there is a single obvious
- *   candidate. Used by the advanced command, where the user has explicitly
+ *   candidate. Used by the With Options command, where the user has explicitly
  *   asked to make choices.
  * @param scope Restrict discovery to a single workspace folder. The debug
  *   adapter passes the session's folder so F5 stays within the root that owns
@@ -580,7 +580,7 @@ export async function pickSolutionProject(
 	return { cancelled: false, project: picked.projectPath };
 }
 
-/** A toggle offered by the advanced run command. */
+/** A toggle offered by the With Options run command. */
 interface RunToggle {
 	key: keyof WinAppRunOptions;
 	label: string;
@@ -590,7 +590,7 @@ interface RunToggle {
 }
 
 /**
- * The toggles offered by the advanced run command.
+ * The toggles offered by the With Options run command.
  *
  * `--without-alias` is deliberately absent: it is the inverse of
  * `--with-alias`, and two mutually exclusive checkboxes in one multi-select
@@ -609,7 +609,7 @@ const RUN_TOGGLES: RunToggle[] = [
 ];
 
 /**
- * Prompt for the advanced run options in a single multi-select, rather than a
+ * Prompt for the optional run settings in a single multi-select, rather than a
  * chain of yes/no prompts.
  *
  * Options that the CLI ignores for the chosen target are omitted entirely
@@ -734,10 +734,10 @@ export function reportRunDiagnostics(options: WinAppRunOptions, kind: RunTargetK
  *   the user cancelled or validation failed.
  */
 export async function resolveRunOptions(
-	advanced: boolean,
+	withOptions: boolean,
 	scope?: vscode.WorkspaceFolder
 ): Promise<{ options: WinAppRunOptions; target: RunTargetCandidate } | undefined> {
-	const selection = await pickRunTarget(advanced, scope);
+	const selection = await pickRunTarget(withOptions, scope);
 	if (!selection) {
 		return undefined;
 	}
@@ -767,7 +767,7 @@ export async function resolveRunOptions(
 	}
 	options.project = projectSelection.project;
 
-	if (advanced) {
+	if (withOptions) {
 		if (projectMode) {
 			const buildSettings = await pickBuildSettings(settings);
 			if (!buildSettings) {
