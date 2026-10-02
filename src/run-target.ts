@@ -1,6 +1,6 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
-import { ALWAYS_SKIP_DIRS, isContainedInReal, isOfferableProject, readProjectRunnability } from './project-detection';
+import { isContainedInReal, isOfferableProject, PROJECT_SCAN_SKIP_DIRS, readProjectRunnability } from './project-detection';
 import { attributeValue, findElementsByLocalName, tryParseXml } from './xml-read';
 
 /** The extension-only target classification is never passed to the CLI. */
@@ -21,15 +21,9 @@ export const PROJECT_FILE_MAX_RESULTS = 200;
 /** Caps picker entries while Browse keeps all targets reachable. */
 export const RUN_TARGET_DISPLAY_LIMIT = 10;
 
-/** Directories excluded from project-file discovery. */
-export const PROJECT_FILE_SKIP_DIRS = [
-	...ALWAYS_SKIP_DIRS,
-	// A project file under a build-output directory is a copy, never a source.
-	'bin', 'obj', 'dist', 'build', 'out', 'target', 'artifacts', 'AppX'
-];
-
 /** VS Code-compatible exclude glob for project-file discovery. */
-export const PROJECT_FILE_EXCLUDE_GLOB = `{${PROJECT_FILE_SKIP_DIRS.map(d => `**/${d}/**`).join(',')}}`;
+export const PROJECT_FILE_EXCLUDE_GLOB =
+	`{${[...PROJECT_SCAN_SKIP_DIRS].map(d => `**/${d}/**`).join(',')}}`;
 
 /** A workspace folder, reduced to what target discovery needs. */
 export interface WorkspaceRoot {

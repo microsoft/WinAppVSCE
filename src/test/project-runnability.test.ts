@@ -8,9 +8,9 @@ import {
 	BUILD_OUTPUT_SKIP_DIRS,
 	classifyProjectRunnability,
 	isOfferableProject,
+	PROJECT_SCAN_SKIP_DIRS,
 	readProjectRunnability
 } from '../project-detection';
-import { PROJECT_FILE_SKIP_DIRS } from '../run-target';
 
 function csproj(body: string): string {
 	return `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>${body}</PropertyGroup></Project>`;
@@ -145,10 +145,9 @@ describe('skip directory lists', () => {
 	// .csproj discovery treats as build copies. The two lists must disagree
 	// here, so assert both halves rather than just one.
 	it('scans project-less output directories that project discovery skips', () => {
-		const projectSkips: readonly string[] = PROJECT_FILE_SKIP_DIRS;
 		for (const dir of ['dist', 'out', 'build', 'target']) {
 			assert.ok(!BUILD_OUTPUT_SKIP_DIRS.has(dir), `${dir} must be scanned for executables`);
-			assert.ok(projectSkips.includes(dir), `${dir} must be skipped when finding project files`);
+			assert.ok(PROJECT_SCAN_SKIP_DIRS.has(dir), `${dir} must be skipped when finding project files`);
 		}
 	});
 

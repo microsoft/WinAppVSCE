@@ -57,12 +57,13 @@ function isLexicallyContained(container: string, candidate: string): boolean {
 	return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-const SKIP_DIRS = new Set<string>([
+/** Directories excluded from project-file discovery, by BFS and by glob. */
+export const PROJECT_SCAN_SKIP_DIRS = new Set<string>([
 	...ALWAYS_SKIP_DIRS,
 	// Build inputs/outputs and language caches: a project file found under
 	// these is a copy, not a source.
 	'bin', 'obj', 'debug', 'release', 'dist', 'build', 'out', 'target',
-	'artifacts', 'testresults', '__pycache__',
+	'artifacts', 'testresults', 'appx', '__pycache__',
 	'.gradle', '.dart_tool', '.pub-cache', '.nuget', '.cargo'
 ]);
 
@@ -126,7 +127,7 @@ export async function detectProjects(root: string, maxProjects: number = 10): Pr
 			for (const entry of entries) {
 				if (!entry.isDirectory() && !entry.isSymbolicLink()) { continue; }
 				if (entry.name.startsWith('.') && entry.name !== '.') { continue; }
-				if (SKIP_DIRS.has(entry.name.toLowerCase())) { continue; }
+				if (PROJECT_SCAN_SKIP_DIRS.has(entry.name.toLowerCase())) { continue; }
 				const fullPath = path.join(current, entry.name);
 				// Skip symlinks and junctions (reparse points)
 				if (entry.isSymbolicLink()) { continue; }
