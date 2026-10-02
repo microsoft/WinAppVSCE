@@ -564,24 +564,33 @@ namespace WinUIXamlPreview.Protocol
             try { _lifetimeCts.Cancel(); } catch { }
             try { _stream?.Dispose(); } catch { }
             try { _tcp?.Close(); } catch { }
-            try
+
+            // T5: request termination synchronously (Kill() does not block), but move the WaitForExit and the
+            // run-copy cleanup — which blocks until the process releases its file locks — onto a background
+            // thread so Dispose never stalls the caller (typically the VS UI thread). Hand ownership of _proc
+            // and the run directory to that task so nothing else touches them while it reaps.
+            var proc = _proc;
+            _proc = null;
+            var runDir = _privateRun;
+            _privateRun = null;
+            try { if (proc != null && !proc.HasExited) proc.Kill(); } catch { }
+
+            if (proc != null || runDir != null)
             {
-                if (_proc != null && !_proc.HasExited)
+                Task.Run(() =>
                 {
-                    _proc.Kill();
-                    _proc.WaitForExit(5000);
-                }
-            }
-            catch { }
-            try { _proc?.Dispose(); } catch { }
-            if (_privateRun != null)
-            {
-                try
-                {
-                    if (Directory.Exists(_privateRun)) Directory.Delete(_privateRun, true);
-                }
-                catch (IOException ex) { _log($"Private Surface run cleanup failed for '{_privateRun}': {ex.Message}"); }
-                catch (UnauthorizedAccessException ex) { _log($"Private Surface run cleanup denied for '{_privateRun}': {ex.Message}"); }
+                    try { proc?.WaitForExit(5000); } catch { }
+                    try { proc?.Dispose(); } catch { }
+                    if (runDir != null)
+                    {
+                        try
+                        {
+                            if (Directory.Exists(runDir)) Directory.Delete(runDir, true);
+                        }
+                        catch (IOException ex) { _log($"Private Surface run cleanup failed for '{runDir}': {ex.Message}"); }
+                        catch (UnauthorizedAccessException ex) { _log($"Private Surface run cleanup denied for '{runDir}': {ex.Message}"); }
+                    }
+                });
             }
 
             try { _lifetimeCts.Dispose(); } catch { }
