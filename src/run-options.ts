@@ -124,7 +124,7 @@ export function validateDebugRunOptions(options: WinAppRunOptions): string[] {
 	return errors;
 }
 
-/** Explicit launch.json subset avoids `any` hiding misspelled keys. */
+/** Typed view of a `winapp` launch.json entry; `vscode.DebugConfiguration` is all `any`. */
 export interface WinAppDebugConfiguration {
 	/** Keeps this assignable from `vscode.DebugConfiguration`. */
 	[key: string]: unknown;
