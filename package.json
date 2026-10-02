@@ -382,17 +382,6 @@
               "request": "launch",
               "name": "WinApp: Launch and Attach"
             }
-          },
-          {
-            "label": "WinApp: Build and Launch Project",
-            "description": "Build a project or solution, then launch it and attach the debugger",
-            "body": {
-              "type": "winapp",
-              "request": "launch",
-              "name": "WinApp: Build and Launch Project",
-              "input": "^\"\\${workspaceFolder}/MyApp/MyApp.csproj\"",
-              "configuration": "Debug"
-            }
           }
         ]
       }
