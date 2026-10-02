@@ -176,3 +176,99 @@ export function defaultSparseOutputDir(workspacePath: string, projectRoot?: stri
 export function getSparseManifestPath(outputDir: string): string {
 	return path.join(outputDir, SPARSE_MANIFEST_FILENAME);
 }
+
+/**
+ * Whether a directory entry marks its directory as a project root.
+ *
+ * Intentionally a shallow name check rather than real project detection —
+ * this only picks a *default* output location.
+ */
+export function isProjectMarker(entry: string): boolean {
+	const lower = entry.toLowerCase();
+	return (
+		lower.endsWith('.csproj') ||
+		lower.endsWith('.vcxproj') ||
+		lower === 'cargo.toml' ||
+		lower === 'package.json' ||
+		lower === 'cmakelists.txt' ||
+		lower === 'pubspec.yaml'
+	);
+}
+
+/**
+ * Whether `candidate` is strictly inside `root`.
+ *
+ * Uses `path.relative` rather than a string prefix test so that a sibling
+ * directory sharing a textual prefix (`C:\repo-other` against `C:\repo`) is
+ * not treated as contained.
+ */
+function isStrictlyInside(candidate: string, root: string): boolean {
+	const relative = path.relative(path.resolve(root), path.resolve(candidate));
+	return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+/**
+ * Walk up from `filePath` to the nearest enclosing project root, stopping at
+ * (and never escaping) `workspacePath`.
+ *
+ * Anchors sparse init's output directory so that in a monorepo the generated
+ * `sparse/` folder lands beside the project owning the executable rather than
+ * at the workspace root.
+ *
+ * @param readDir Lists a directory's entry names. Injected so the walk can be
+ * unit-tested without touching disk; throwing for an unreadable directory is
+ * expected and simply continues the walk upward.
+ * @returns The project directory, or `undefined` to fall back to the workspace root.
+ */
+export function findProjectRootIn(
+	workspacePath: string,
+	filePath: string,
+	readDir: (dir: string) => string[]
+): string | undefined {
+	let dir = path.dirname(path.resolve(filePath));
+
+	while (isStrictlyInside(dir, workspacePath)) {
+		try {
+			if (readDir(dir).some(isProjectMarker)) {
+				return dir;
+			}
+		} catch {
+			// Unreadable directory — keep walking up.
+		}
+
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			break;
+		}
+		dir = parent;
+	}
+
+	return undefined;
+}
+
+/**
+ * Pick which sparse manifest `winapp embed-identity` should be pointed at.
+ *
+ * Passing `--manifest` explicitly is required in the general case: the CLI's
+ * own fallback searches a `sparse/` folder beside the *executable* and then
+ * the current directory, while {@link defaultSparseOutputDir} anchors output
+ * on the *project root*. For any project whose exe builds into `bin/`, those
+ * locations never coincide.
+ *
+ * Preference order:
+ *  1. The location this extension would have written — authoritative.
+ *  2. A single workspace-wide match, which is unambiguous.
+ *  3. `undefined` for zero or several matches, deferring to the CLI rather
+ *     than guessing (and letting it report a better-scoped error).
+ */
+export function chooseSparseManifest(options: {
+	expectedPath: string;
+	expectedExists: boolean;
+	discovered?: string[];
+}): string | undefined {
+	if (options.expectedExists) {
+		return options.expectedPath;
+	}
+
+	return options.discovered?.length === 1 ? options.discovered[0] : undefined;
+}

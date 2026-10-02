@@ -10,6 +10,9 @@ import {
 	embedRewritesBinary,
 	defaultSparseOutputDir,
 	getSparseManifestPath,
+	isProjectMarker,
+	findProjectRootIn,
+	chooseSparseManifest,
 	SPARSE_OUTPUT_FOLDER,
 	PackInput
 } from '../sparse-flow';
@@ -155,7 +158,7 @@ describe('buildSparseInitArgs', () => {
 });
 
 describe('buildEmbedIdentityArgs', () => {
-	it('omits --manifest so the CLI uses its own sparse/ search', () => {
+	it('omits --manifest when none is supplied, leaving the CLI to search', () => {
 		assert.deepEqual(
 			buildEmbedIdentityArgs({ target: 'C:\\app\\MyApp.exe' }),
 			['embed-identity', 'C:\\app\\MyApp.exe']
@@ -243,5 +246,251 @@ describe('getSparseManifestPath', () => {
 			getSparseManifestPath('C:\\repo\\sparse'),
 			path.join('C:\\repo\\sparse', 'appxmanifest.xml')
 		);
+	});
+});
+
+describe('isProjectMarker', () => {
+	it('recognises the supported project markers', () => {
+		for (const entry of [
+			'App.csproj',
+			'App.vcxproj',
+			'Cargo.toml',
+			'package.json',
+			'CMakeLists.txt',
+			'pubspec.yaml'
+		]) {
+			assert.equal(isProjectMarker(entry), true, entry);
+		}
+	});
+
+	it('is case-insensitive', () => {
+		assert.equal(isProjectMarker('APP.CSPROJ'), true);
+		assert.equal(isProjectMarker('cargo.TOML'), true);
+	});
+
+	it('rejects unrelated entries', () => {
+		for (const entry of ['App.exe', 'readme.md', 'bin', 'packages.config', 'App.csproj.user']) {
+			assert.equal(isProjectMarker(entry), false, entry);
+		}
+	});
+});
+
+describe('findProjectRootIn', () => {
+	// Directory listings keyed by path; anything absent is "unreadable".
+	function reader(tree: Record<string, string[]>) {
+		return (dir: string) => {
+			const entries = tree[dir];
+			if (!entries) {
+				throw new Error(`ENOENT: ${dir}`);
+			}
+			return entries;
+		};
+	}
+
+	it('anchors on the nearest project root above the executable', () => {
+		const root = findProjectRootIn(
+			'C:\\repo',
+			'C:\\repo\\src\\App\\bin\\x64\\Debug\\net8.0\\win-x64\\App.exe',
+			reader({
+				'C:\\repo\\src\\App\\bin\\x64\\Debug\\net8.0\\win-x64': ['App.exe', 'App.dll'],
+				'C:\\repo\\src\\App\\bin\\x64\\Debug\\net8.0': ['win-x64'],
+				'C:\\repo\\src\\App\\bin\\x64\\Debug': ['net8.0'],
+				'C:\\repo\\src\\App\\bin\\x64': ['Debug'],
+				'C:\\repo\\src\\App\\bin': ['x64'],
+				'C:\\repo\\src\\App': ['App.csproj', 'bin', 'Program.cs'],
+				'C:\\repo\\src': ['App'],
+				'C:\\repo': ['src', 'README.md']
+			})
+		);
+
+		assert.equal(root, 'C:\\repo\\src\\App');
+	});
+
+	it('picks the innermost project in a monorepo, not an outer one', () => {
+		const root = findProjectRootIn(
+			'C:\\repo',
+			'C:\\repo\\apps\\Inner\\bin\\App.exe',
+			reader({
+				'C:\\repo\\apps\\Inner\\bin': ['App.exe'],
+				'C:\\repo\\apps\\Inner': ['Inner.csproj'],
+				'C:\\repo\\apps': ['package.json', 'Inner'],
+				'C:\\repo': ['apps']
+			})
+		);
+
+		assert.equal(root, 'C:\\repo\\apps\\Inner');
+	});
+
+	it('returns undefined when the workspace root itself holds the only marker', () => {
+		// The walk stops *before* the workspace root, so the caller falls back
+		// to it rather than this function returning it.
+		const root = findProjectRootIn(
+			'C:\\repo',
+			'C:\\repo\\bin\\App.exe',
+			reader({
+				'C:\\repo\\bin': ['App.exe'],
+				'C:\\repo': ['App.csproj', 'bin']
+			})
+		);
+
+		assert.equal(root, undefined);
+		assert.equal(defaultSparseOutputDir('C:\\repo', root), path.join('C:\\repo', SPARSE_OUTPUT_FOLDER));
+	});
+
+	it('keeps walking past directories it cannot read', () => {
+		const root = findProjectRootIn(
+			'C:\\repo',
+			'C:\\repo\\src\\App\\bin\\App.exe',
+			reader({
+				// 'C:\\repo\\src\\App\\bin' deliberately absent → throws.
+				'C:\\repo\\src\\App': ['App.csproj'],
+				'C:\\repo\\src': ['App'],
+				'C:\\repo': ['src']
+			})
+		);
+
+		assert.equal(root, 'C:\\repo\\src\\App');
+	});
+
+	it('returns undefined when no marker exists anywhere below the workspace', () => {
+		const root = findProjectRootIn(
+			'C:\\repo',
+			'C:\\repo\\a\\b\\App.exe',
+			reader({
+				'C:\\repo\\a\\b': ['App.exe'],
+				'C:\\repo\\a': ['b'],
+				'C:\\repo': ['a']
+			})
+		);
+
+		assert.equal(root, undefined);
+	});
+
+	it('never escapes into a sibling directory sharing a name prefix', () => {
+		// Guards a prefix-matching bug: 'C:\repo-other'.startsWith('C:\repo')
+		// is true, so a naive check would walk into an unrelated project.
+		const root = findProjectRootIn(
+			'C:\\repo',
+			'C:\\repo-other\\src\\App.exe',
+			reader({
+				'C:\\repo-other\\src': ['App.csproj', 'App.exe'],
+				'C:\\repo-other': ['src']
+			})
+		);
+
+		assert.equal(root, undefined);
+	});
+
+	it('returns undefined for an executable outside the workspace entirely', () => {
+		const root = findProjectRootIn(
+			'C:\\repo',
+			'D:\\elsewhere\\App\\App.exe',
+			reader({ 'D:\\elsewhere\\App': ['App.csproj'] })
+		);
+
+		assert.equal(root, undefined);
+	});
+});
+
+describe('chooseSparseManifest', () => {
+	const expectedPath = 'C:\\repo\\src\\App\\sparse\\appxmanifest.xml';
+
+	it('prefers the location sparse init writes to', () => {
+		assert.equal(
+			chooseSparseManifest({
+				expectedPath,
+				expectedExists: true,
+				discovered: ['C:\\repo\\other\\appxmanifest.xml']
+			}),
+			expectedPath
+		);
+	});
+
+	it('falls back to a single unambiguous workspace match', () => {
+		assert.equal(
+			chooseSparseManifest({
+				expectedPath,
+				expectedExists: false,
+				discovered: ['C:\\repo\\moved\\appxmanifest.xml']
+			}),
+			'C:\\repo\\moved\\appxmanifest.xml'
+		);
+	});
+
+	it('defers to the CLI when several manifests match', () => {
+		assert.equal(
+			chooseSparseManifest({
+				expectedPath,
+				expectedExists: false,
+				discovered: ['C:\\repo\\a\\appxmanifest.xml', 'C:\\repo\\b\\appxmanifest.xml']
+			}),
+			undefined
+		);
+	});
+
+	it('defers to the CLI when nothing is found', () => {
+		assert.equal(
+			chooseSparseManifest({ expectedPath, expectedExists: false, discovered: [] }),
+			undefined
+		);
+		assert.equal(
+			chooseSparseManifest({ expectedPath, expectedExists: false }),
+			undefined
+		);
+	});
+});
+
+describe('embed-identity manifest resolution (regression)', () => {
+	// Reproduces the layout that broke the three-step workflow: the CLI's own
+	// fallback searches `sparse/` beside the *exe* and then the cwd, but init
+	// anchors output on the *project root*. For any project building into
+	// `bin/`, those never coincide — so `--manifest` must be passed.
+	const workspace = 'C:\\repo';
+	const exe = 'C:\\repo\\src\\App\\bin\\x64\\Debug\\net8.0\\win-x64\\App.exe';
+	const projectRoot = 'C:\\repo\\src\\App';
+
+	const initOutputDir = defaultSparseOutputDir(workspace, projectRoot);
+	const initManifest = getSparseManifestPath(initOutputDir);
+
+	it('writes the manifest somewhere the CLI would not have looked', () => {
+		const besideExe = getSparseManifestPath(
+			path.join(path.dirname(exe), SPARSE_OUTPUT_FOLDER)
+		);
+		const inWorkspaceRoot = getSparseManifestPath(
+			path.join(workspace, SPARSE_OUTPUT_FOLDER)
+		);
+
+		assert.equal(initManifest, path.join(projectRoot, 'sparse', 'appxmanifest.xml'));
+		assert.notEqual(initManifest, besideExe);
+		assert.notEqual(initManifest, inWorkspaceRoot);
+	});
+
+	it('passes the init output location through to embed-identity', () => {
+		const resolved = chooseSparseManifest({
+			expectedPath: initManifest,
+			expectedExists: true
+		});
+
+		assert.equal(resolved, initManifest);
+		assert.deepEqual(
+			buildEmbedIdentityArgs({ target: exe, manifestPath: resolved }),
+			['embed-identity', exe, '--manifest', initManifest]
+		);
+	});
+
+	it('round-trips: init --output-dir and embed --manifest agree', () => {
+		const initArgs = buildSparseInitArgs({ exePath: exe, outputDir: initOutputDir });
+		const outputDir = initArgs[initArgs.indexOf('--output-dir') + 1];
+
+		const embedArgs = buildEmbedIdentityArgs({
+			target: exe,
+			manifestPath: chooseSparseManifest({
+				expectedPath: getSparseManifestPath(outputDir),
+				expectedExists: true
+			})
+		});
+		const manifest = embedArgs[embedArgs.indexOf('--manifest') + 1];
+
+		assert.equal(path.dirname(manifest), outputDir);
 	});
 });

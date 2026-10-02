@@ -57,6 +57,8 @@ import {
 	embedRewritesBinary,
 	defaultSparseOutputDir,
 	getSparseManifestPath,
+	findProjectRootIn,
+	chooseSparseManifest,
 	type PackInput
 } from './sparse-flow';
 import {
@@ -789,7 +791,7 @@ async function resolveSparseManifestForTarget(
 		defaultSparseOutputDir(workspacePath, findProjectRootForFile(workspacePath, target))
 	);
 	if (fs.existsSync(expected)) {
-		return expected;
+		return chooseSparseManifest({ expectedPath: expected, expectedExists: true });
 	}
 
 	// The manifest may have been moved or generated outside the extension. A
@@ -800,7 +802,11 @@ async function resolveSparseManifestForTarget(
 		(_progress, token) => findSparseManifests(workspacePath, token)
 	);
 
-	return discovered?.length === 1 ? discovered[0] : undefined;
+	return chooseSparseManifest({
+		expectedPath: expected,
+		expectedExists: false,
+		discovered
+	});
 }
 
 /**
@@ -943,38 +949,7 @@ async function isSparseManifestFile(manifestPath: string): Promise<boolean> {
  * explicit executable rather than on a resolved project.
  */
 function findProjectRootForFile(workspacePath: string, filePath: string): string | undefined {
-	const resolvedWorkspace = path.resolve(workspacePath);
-	let dir = path.dirname(path.resolve(filePath));
-
-	while (dir.startsWith(resolvedWorkspace) && dir !== resolvedWorkspace) {
-		try {
-			const entries = fs.readdirSync(dir);
-			const hasProjectMarker = entries.some(entry => {
-				const lower = entry.toLowerCase();
-				return (
-					lower.endsWith('.csproj') ||
-					lower.endsWith('.vcxproj') ||
-					lower === 'cargo.toml' ||
-					lower === 'package.json' ||
-					lower === 'cmakelists.txt' ||
-					lower === 'pubspec.yaml'
-				);
-			});
-			if (hasProjectMarker) {
-				return dir;
-			}
-		} catch {
-			// Unreadable directory — keep walking up.
-		}
-
-		const parent = path.dirname(dir);
-		if (parent === dir) {
-			break;
-		}
-		dir = parent;
-	}
-
-	return undefined;
+	return findProjectRootIn(workspacePath, filePath, dir => fs.readdirSync(dir));
 }
 
 /**
