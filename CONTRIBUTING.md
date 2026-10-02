@@ -43,25 +43,6 @@ npm run test:unit
 npm run test:e2e
 ```
 
-### Keeping up with the WinApp CLI
-
-`npm run download-cli:latest` bundles the latest stable `winapp` release into `bin/`.
-The extension's `winapp run` surface is checked against that binary's own
-`--cli-schema` output by `src/test/run-cli-contract.test.ts`, which reads the
-schema from `bin/` at test time. There is nothing to regenerate or keep in
-sync — the bundled CLI is the only source of truth:
-
-```powershell
-npm run download-cli:latest
-npm run test:unit
-```
-
-Then surface any new option in `src/run-options.ts`, `src/run-utils.ts`, and the
-`launch.json` contribution in `package.json` — the contract test enumerates all
-three and will fail until they agree. The contract tests skip themselves when
-`bin/` holds no CLI, so a local run without one stays green; CI downloads the
-CLI before `npm run test:unit`, so drift is caught there.
-
 ## Package
 
 To produce a VSIX package locally:
