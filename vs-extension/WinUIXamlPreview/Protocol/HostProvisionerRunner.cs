@@ -243,7 +243,7 @@ namespace WinUIXamlPreview.Protocol
                 }
 
                 var build = new MatchedHostBuild(version);
-                build.Start(ct => Task.Run(() => RunBuild(env, version, targetProject, log, ct)));
+                build.Start(ct => Task.Run(() => RunBuildAsync(env, version, targetProject, log, ct)));
                 Builds[buildKey] = build;
 
                 // Drop the dictionary entry once the build settles so a later re-open re-evaluates the cache.
@@ -262,7 +262,7 @@ namespace WinUIXamlPreview.Protocol
             }
         }
 
-        private static HostBuildOutcome RunBuild(HostBuildEnvironment env, string version, string targetProject, Action<string> log, CancellationToken ct)
+        private static async Task<HostBuildOutcome> RunBuildAsync(HostBuildEnvironment env, string version, string targetProject, Action<string> log, CancellationToken ct)
         {
             var sw = Stopwatch.StartNew();
             Process? proc = null;
@@ -320,21 +320,23 @@ namespace WinUIXamlPreview.Protocol
                 var stdout = proc.StandardOutput.ReadToEndAsync();
                 var stderr = proc.StandardError.ReadToEndAsync();
 
-                // Poll so cancellation can kill the (long) build promptly.
-                while (!proc.WaitForExit(250))
+                // Await exit asynchronously so the pooled build thread isn't parked in a blocking 250ms poll,
+                // and honor cancellation promptly: closing stdin asks the provisioner (--cancel-on-stdin) to
+                // abort cleanly, then we allow a grace period before killing the whole tree.
+                if (!await WaitForProcessExitAsync(proc, Timeout.Infinite, ct).ConfigureAwait(false))
                 {
-                    if (ct.IsCancellationRequested)
+                    proc.StandardInput.Close();
+                    if (!await WaitForProcessExitAsync(proc, 15000, CancellationToken.None).ConfigureAwait(false))
                     {
-                        proc.StandardInput.Close();
-                        if (!proc.WaitForExit(15000)) KillTree(proc);
-                        log($"Provisioner build for {version} cancelled.");
-                        return new HostBuildOutcome { Success = false, Error = "cancelled", DurationSeconds = sw.Elapsed.TotalSeconds };
+                        KillTree(proc);
                     }
+                    log($"Provisioner build for {version} cancelled.");
+                    return new HostBuildOutcome { Success = false, Error = "cancelled", DurationSeconds = sw.Elapsed.TotalSeconds };
                 }
 
                 var exit = proc.ExitCode;
-                var output = stdout.GetAwaiter().GetResult();
-                var diagnostics = stderr.GetAwaiter().GetResult();
+                var output = await stdout.ConfigureAwait(false);
+                var diagnostics = await stderr.ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(diagnostics)) Log(log, diagnostics);
                 sw.Stop();
                 JsonDocument parsed;
@@ -365,6 +367,52 @@ namespace WinUIXamlPreview.Protocol
                 return new HostBuildOutcome { Success = false, Error = ex.Message, DurationSeconds = sw.Elapsed.TotalSeconds };
             }
             finally { proc?.Dispose(); }
+        }
+
+        /// <summary>
+        /// net472 has no <c>Process.WaitForExitAsync</c>: await exit via the <see cref="Process.Exited"/> event
+        /// (no thread parked on a blocking wait). Returns true when the process exited; false when the wait was
+        /// cut short by <paramref name="timeoutMs"/> elapsing or <paramref name="ct"/> cancelling. Pass
+        /// <see cref="Timeout.Infinite"/> to wait until exit-or-cancellation.
+        /// </summary>
+        private static async Task<bool> WaitForProcessExitAsync(Process proc, int timeoutMs, CancellationToken ct)
+        {
+            if (proc.HasExited)
+            {
+                return true;
+            }
+
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnExited(object? sender, EventArgs e) => tcs.TrySetResult(true);
+
+            proc.EnableRaisingEvents = true;
+            proc.Exited += OnExited;
+            try
+            {
+                // Guard the race where the process exits between the HasExited check and the subscription.
+                if (proc.HasExited)
+                {
+                    return true;
+                }
+
+                using (var delayCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    var delay = Task.Delay(timeoutMs, delayCts.Token);
+                    var done = await Task.WhenAny(tcs.Task, delay).ConfigureAwait(false);
+                    if (done == tcs.Task)
+                    {
+                        delayCts.Cancel(); // retire the pending delay
+                        return true;
+                    }
+
+                    // The delay won: either the timeout elapsed or the token cancelled.
+                    return false;
+                }
+            }
+            finally
+            {
+                proc.Exited -= OnExited;
+            }
         }
 
         private static string? BundledHostDir()
