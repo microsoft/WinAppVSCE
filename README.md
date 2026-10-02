@@ -166,7 +166,7 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 |----------|------|---------|-------------|
 | `input` | string | | What to run: a project (`.csproj`), a solution (`.sln`/`.slnx`), a directory containing one, or a build output folder (e.g., `${workspaceFolder}/bin/Debug/net8.0-windows10.0.22621`). If not set, you will be prompted to select a target. |
 | `inputFolder` | string | | **Deprecated.** Use `input`, which also accepts projects and solutions. Still honored for existing configurations; if both are set, `input` wins. |
-| `project` | string | | *Project mode only.* The project to launch when `input` is a solution, or a directory holding several projects, containing more than one application. |
+| `project` | string | | *Project mode only.* Selects which project to launch, by name or path, when `input` is a solution or a directory containing more than one runnable app project. |
 | `configuration` | string | `Debug` | *Project mode only.* Build configuration to use. |
 | `arch` | string | current process arch | *Project mode only.* Target architecture (`x64`, `arm64`, or `x86`). Ignored when `runtime` is set. |
 | `framework` | string | | *Project mode only.* Target framework moniker to build, for multi-targeted projects (e.g., `net8.0-windows10.0.19041.0`). |
