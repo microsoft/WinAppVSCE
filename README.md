@@ -199,6 +199,18 @@ The palette's **Run Application** command takes its build settings from your wor
 | `winapp.run.properties` | object | `{}` | MSBuild properties passed to every project-mode run. |
 | `winapp.run.unregisterOnExit` | boolean | `false` | Remove the development package registration after the application exits. |
 
+```jsonc
+// .vscode/settings.json
+{
+  "winapp.run.configuration": "Release",
+  "winapp.run.arch": "arm64",
+  "winapp.run.properties": { "DefineConstants": "CANARY" },
+  "winapp.run.unregisterOnExit": true
+}
+```
+
+**Run Application** uses these values without prompting. **Run Application (Advanced)...** starts its prompts from them, marking each one `current default`, so you can override a setting for a single run without editing it.
+
 ### AppxManifest Visual Editor
 
 The extension includes a **visual editor** for `AppxManifest.xml` and `.appxmanifest` files. Instead of hand-editing XML, you get a form-based UI organized into tabs:
