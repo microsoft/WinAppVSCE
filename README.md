@@ -222,17 +222,9 @@ Full IntelliSense for C++/WinRT is planned. The type information WinUI needs alr
 
 #### Loading and status
 
-Features light up in stages so editing stays responsive: formatting, folding, outline, and syntax diagnostics work immediately, WinUI SDK and package types resolve next, and your own types and semantic diagnostics complete the load. The status bar reports the stage for the active document.
+Features light up in stages so editing stays responsive: formatting, folding, outline, and syntax diagnostics work immediately, then WinUI SDK and package types, then your own types and semantic diagnostics. The status bar tracks the active document and clears once it reports **WinApp: XAML IntelliSense Ready**.
 
-| Status | Meaning |
-|--------|---------|
-| **WinApp: Loading XAML IntelliSense** | Type information is still loading. |
-| **WinApp: WinUI Types Ready · Loading Project Symbols and Diagnostics** | SDK and package types are ready; your own types are still loading. |
-| **WinApp: XAML IntelliSense Ready** | Fully loaded. Hides after a few seconds. |
-
-Those three are the normal sequence on a healthy project. Other statuses appear only when something needs attention — unrestored packages, a referenced project that failed to build, a source-generator host that could not run, or a missing .NET SDK — and selecting the status offers the matching action. A project that has never been built still resolves: WinApp runs a design-time build and, in a trusted workspace, restores packages for you.
-
-If the server cannot start at all — an untrusted workspace, a host that is not Windows on x64 or ARM64, or a startup failure — XAML editing falls back to syntax highlighting and a one-time notification names the cause. Use **WinApp: Show Info** for server status and **WinApp: Restart Language Server** to restart it.
+Other statuses appear only when something needs attention — unrestored packages, a reference that failed to build, or a missing .NET SDK — and selecting one offers the fix. A project that has never been built still resolves, and packages are restored for you in a trusted workspace. If the server cannot start at all, XAML editing falls back to syntax highlighting and a notification names the cause. Use **WinApp: Show Info** for server status and **WinApp: Restart Language Server** to restart it.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
