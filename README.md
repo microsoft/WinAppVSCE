@@ -196,113 +196,59 @@ When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer 
 
 ### WinUI XAML Language Service
 
-The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files, powered by a packaged Native AOT language server built for `win-x64` and `win-arm64`. Beyond syntax highlighting, it provides project-aware editing that understands your app's types, `x:Class`, `x:Bind` targets, and `App.xaml` resources:
+The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files. Beyond syntax highlighting, it provides project-aware editing that understands your app's types, `x:Class`, `x:Bind` targets, and `App.xaml` resources.
 
 | Feature | What it does |
 |---------|--------------|
-| **Completion / IntelliSense** | Element names, properties, events, attached properties, enum/bool values, markup extensions, and resource keys, resolved against your app source and referenced projects or assemblies. Unprefixed custom-control completion reuses an existing XML namespace prefix or adds the required `xmlns` declaration. |
+| **Completion / IntelliSense** | Elements, properties, events, attached properties, enum and bool values, markup extensions, and resource keys, resolved against your app source and its references. Custom controls reuse an existing prefix or get the `xmlns` declaration added for you. |
 | **Hover** | Type and member information for elements, properties, and resource references. |
-| **Go to Definition (F12)** | Jump from an event handler or member name to its C# declaration on the page's `x:Class` type, from an `x:Name` reference to its declaration, and from resource references to their declaration. Navigation targets source you own; SDK and NuGet package types are metadata-only. See [Where Go to Definition works](#where-go-to-definition-works). |
+| **Go to Definition (F12)** | Jump to C# declarations for event handlers and `x:Bind` members, and to `x:Name` and resource-key declarations. SDK and NuGet types are compiled metadata with no source to open, so F12 does nothing there — hover to inspect them instead. |
 | **Diagnostics** | Syntactic diagnostics as you type, plus semantic validation against the resolved type system. |
-| **Find All References** | Locate references to names and resource keys. |
-| **Rename** | Rename symbols with a prepare-rename validity check. |
+| **Find All References / Rename** | For `x:Name` declarations and resource keys. |
 | **Formatting** | Whole-document and range formatting. |
-| **Semantic tokens** | Richer, type-aware colorization layered on top of the TextMate grammar. |
-| **Code actions** | Press **Ctrl+.** to import and qualify unresolved types, add or correct namespace declarations, insert `x:DataType`, repair names, attributes, values, bindings, and Setter properties, remove invalid extra content, or generate event handlers. Prompted fixes are applied only when the document still matches the diagnostic. If the code-behind has pending edits, save it first when prompted, then retry handler generation so edits use current source positions. |
+| **Semantic tokens** | Type-aware colorization layered on top of the TextMate grammar. |
+| **Code actions** | Press **Ctrl+.** to import and qualify unresolved types, add namespace declarations, insert `x:DataType`, repair bindings, names, and Setter properties, or generate event handlers. |
 
-The language server starts automatically when you open a `.xaml` file, and it starts whether or not .NET is installed. .NET is a requirement of the project-aware features, not of the editor.
+The server starts automatically when you open a `.xaml` file. It ships as a self-contained native executable, so it runs whether or not .NET is installed — .NET is a requirement of the *project-aware* features, not of the editor.
 
-Native AOT changes *what needs .NET*, not just how the server starts. The server is a self-contained native executable with the runtime linked in, so it launches with no .NET on the machine. What leaves the native process is everything derived from your real project: MSBuild evaluation and package restore run through the `dotnet` CLI, which ships in the SDK, and source generators run in a framework-dependent host (`WinUiXaml.GeneratorHost.dll`), which needs the runtime. Source generators cannot be part of the native binary because running them means loading your project's analyzer assemblies at runtime, which Native AOT has no loader for.
+#### Language support
 
-So the .NET requirement follows your project language. A C++/WinRT project needs no .NET at all: it has no `.csproj`, so it never invokes MSBuild or the generator host, and it gets the language-independent XAML features — formatting, folding, outline, close-tag completion, document links, syntax diagnostics. A C# project is the one that reads project context from its `.csproj`, and it needs the .NET 10 SDK for type-aware completion, `x:Bind` checking, and navigation; without it the server still runs and the status bar reports **WinApp: .NET SDK Required for XAML IntelliSense**, which you can select for an install link.
+Project-aware features read your project through MSBuild, so today they require a `.csproj`:
 
-WinApp never installs a runtime or SDK automatically; it offers the official .NET download page. Project-aware features derive their type and resource capabilities from your project's WinUI SDK metadata rather than substituting a bundled framework catalog. Use **WinApp: Show Info** to check the server status and **WinApp: Restart Language Server** to restart it.
+- **C#** gets the full feature set, with the .NET 10 SDK installed. Without it the server still runs and the status bar reports **WinApp: .NET SDK Required for XAML IntelliSense** with an install link. WinApp never installs .NET for you; it links to the official download.
+- **C++/WinRT** gets language-independent editing only — formatting, folding, outline, close-tag completion, document links, and syntax diagnostics. Completion, hover, and F12 are unavailable, because the server cannot yet read types from a `.vcxproj`.
 
-The status bar reports project-loading progress for the active XAML document:
+Full IntelliSense for C++/WinRT is planned. The type information WinUI needs already exists as WinMD metadata; the remaining work is sourcing project references and generated types from a C++ project rather than a C# one. [Let us know](https://github.com/microsoft/WinAppVSCE/issues) if this matters to you.
+
+#### Loading and status
+
+Features light up in stages so editing stays responsive: formatting, folding, outline, and syntax diagnostics work immediately, WinUI SDK and package types resolve next, and your own types and semantic diagnostics complete the load. The status bar reports the stage for the active document.
 
 | Status | Meaning |
 |--------|---------|
-| **WinApp: Loading XAML IntelliSense** | The project's type information is loading; no project-aware results are ready yet. |
-| **WinApp: WinUI Types Ready · Loading Project Symbols and Diagnostics** | WinUI and package types complete now. Your own types, `x:Bind` members, and diagnostics are still loading. |
-| **WinApp: XAML IntelliSense Ready** | Project-aware XAML IntelliSense is ready. This confirmation hides after a few seconds. |
-| **WinApp: Restoring Packages** | The project's NuGet packages have not been restored, so no project metadata can be read yet. WinApp restores them for you; this status stays until the restore finishes. |
-| **WinApp: Restore Required for XAML IntelliSense** | Packages are still missing after a restore was attempted, or the workspace is untrusted so no restore was run. Trusting the workspace lets WinApp restore automatically; otherwise run `dotnet restore` yourself. This status stays until the condition clears. |
-| **WinApp: Referenced Project Failed to Build** | A project the workspace references could not be built, so the types it defines are unavailable and the WinUI markup compiler could not generate `InitializeComponent` or the `x:Name` backing fields. Framework and package types still resolve. A separate notification offers **Build** once per project, which surfaces that project's compiler errors. This status stays until the condition clears. |
-| **WinApp: Generated Members Unavailable** | The out-of-process source-generator host could not run, so generated members such as `[ObservableProperty]` properties are missing from completion and `{x:Bind}`. Every other symbol still resolves. **WinApp: Show Info** offers restart and output actions. |
-| **WinApp: XAML IntelliSense Unavailable** | Project IntelliSense failed to load. Select the status to open the **WinUI XAML** output for details. **WinApp: Show Info** offers restart and output actions. Runtime and workspace-trust failures provide their own recovery actions in **Show Info**. |
-| **WinApp: .NET SDK Required for XAML IntelliSense** | A C# project was opened on a machine with no usable `dotnet`, so MSBuild could not evaluate it. Language-independent XAML editing keeps working. Selecting the status — or **WinApp: Show Info** — offers **Install .NET**, restart, and output actions. This status stays until the condition clears. |
+| **WinApp: Loading XAML IntelliSense** | Type information is still loading. |
+| **WinApp: WinUI Types Ready · Loading Project Symbols and Diagnostics** | SDK and package types are ready; your own types are still loading. |
+| **WinApp: XAML IntelliSense Ready** | Fully loaded. Hides after a few seconds. |
 
-The first three are the normal startup sequence and are what you will see on a healthy project. The rest appear only when their condition is true — an unrestored project, a reference that fails to build, a generator host that could not run, or a C# project with no .NET SDK — so a project that builds cleanly never shows them.
+Those three are the normal sequence on a healthy project. Other statuses appear only when something needs attention — unrestored packages, a referenced project that failed to build, a source-generator host that could not run, or a missing .NET SDK — and selecting the status offers the matching action. A project that has never been built still resolves: WinApp runs a design-time build and, in a trusted workspace, restores packages for you.
 
-XAML tooling supports these settings:
+If the server cannot start at all — an untrusted workspace, a host that is not Windows on x64 or ARM64, or a startup failure — XAML editing falls back to syntax highlighting and a one-time notification names the cause. Use **WinApp: Show Info** for server status and **WinApp: Restart Language Server** to restart it.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `winapp.xaml.intelliSense.enable` | `true` | Starts the XAML language server when XAML files are opened. Disabling it keeps syntax highlighting active. |
 | `winapp.xaml.diagnostics.level` | `all` | Controls XAML diagnostics: `all`, `errorsOnly`, or `off`. Changes apply immediately to open XAML documents. |
 
-#### Resolving references that have never been built
-
-To read a project the language server runs a design-time build with `dotnet msbuild`. The WinUI markup compiler runs out of process and resolves project references as assemblies on disk, so on a fresh clone — where nothing has been built yet — it would abort and no `InitializeComponent` or `x:Name` members would exist. Rather than asking you to build first, the design-time build builds the referenced projects the same way a normal build would. Two things are worth knowing:
-
-- **Packages are restored for you.** A project whose packages have never been restored cannot be evaluated at all, so WinApp runs the restore itself in a trusted workspace and reports progress in the status bar. An untrusted workspace is never restored; a notification offers **Restore Packages** instead.
-- **A reference that fails to build is reported, not worked around.** If a referenced project has real compiler errors, the design-time build cannot produce its assembly, and the types it defines stay unavailable. The status bar reports *referenced project failed to build* and a notification offers **Build** so you can see the errors. Framework and package types continue to resolve in the meantime.
-
-#### When the language server cannot start
-XAML editing degrades to **syntax highlighting only** rather than failing outright. Everything else in the extension keeps working. This happens when the workspace is not trusted, the host platform is not Windows on x64 or ARM64, or the server itself fails to start. A missing .NET SDK is no longer one of these causes: the server starts anyway and reports the condition per project. WinApp shows a one-time notification naming the cause with the relevant recovery action, and **WinApp: Show Info** repeats it on demand.
-
-#### What works at each loading stage
-
-Editing stays responsive while the project loads, because features light up in stages rather than waiting for the whole project. The columns below correspond to the status bar messages above: **Loading** is *WinApp: Loading XAML IntelliSense*, **Framework&#8209;ready** is *WinApp: WinUI Types Ready · Loading Project Symbols and Diagnostics*, and **Ready** is *WinApp: XAML IntelliSense Ready*.
-
-| Feature | Loading | Framework&#8209;ready | Ready |
-|---------|:-------:|:---------------------:|:-----:|
-| Formatting, folding, selection ranges, linked editing, document symbols, document links | ✅ | ✅ | ✅ |
-| Semantic tokens (type-aware colorization) | ✅ | ✅ | ✅ |
-| Syntactic diagnostics (malformed XAML) | ✅ | ✅ | ✅ |
-| Hover on `x:` directives such as `x:Class` and `x:Name` | ✅ | ✅ | ✅ |
-| Completion and hover for WinUI SDK and NuGet package types | - | ✅ | ✅ |
-| Resource keys: completion, hover, **F12**, Find All References | - | ✅ | ✅ |
-| `x:Name` references: **F12**, Find All References, rename, highlights | - | ✅ | ✅ |
-| Color swatches and code actions | - | ✅ | ✅ |
-| Completion and hover for types declared in **your own app source** | - | - | ✅ |
-| **F12 into C#**: event handlers, `x:Bind` members, your own controls | - | - | ✅ |
-| Semantic diagnostics (unknown types, members, and values) | - | - | ✅ |
-
-Two details worth knowing:
-
-- **Your own types arrive last.** The framework-ready stage resolves referenced assemblies from compiled metadata, which is why SDK and package types appear quickly. Types you declare in your own C# require the full load, which parses your source. Completion results served before then are marked incomplete, so VS Code re-queries automatically: you do not need to retype to pick up a control you just wrote.
-- **F12 opens source, not metadata.** It works at the framework-ready stage for resource keys and `x:Name`, and at the ready stage for C# declarations. See [Where Go to Definition works](#where-go-to-definition-works). Quick fixes that respond to semantic diagnostics likewise appear only once those diagnostics do.
-
-#### Where Go to Definition works
-
-F12 opens source you own: event handlers, `x:Bind` members, your own control and page types, `x:Name` declarations, and resource keys. Types from the WinUI SDK or a NuGet package are compiled metadata with no source to open, so F12 does nothing on those; use **hover** to inspect them instead. This matches Visual Studio, which also does not navigate into SDK types from XAML markup.
-
-F12 never blocks on the project load. If VS Code reports **"No definition found"** while the project is still loading, press it again once the status bar reports **WinApp: XAML IntelliSense Ready**.
-
 #### C# code-behind IntelliSense
 
-For IntelliSense in `.xaml.cs` code-behind files, install the [C# Dev Kit](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csdevkit). Unlike the packaged XAML language server, C# Dev Kit requires the .NET SDK used by your project.
+The XAML language service covers `.xaml` files. For IntelliSense in `.xaml.cs` code-behind, install the [C# Dev Kit](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csdevkit), which requires the .NET SDK your project targets. Open the folder containing the `.csproj` (not a single file), then restore and build once before reloading VS Code:
 
-1. Open the folder containing the WinUI `.csproj`, rather than opening a code-behind file by itself.
-2. Install the .NET SDK version targeted by the project.
-3. Restore and build the project for the appropriate platform:
+```powershell
+dotnet restore path\to\App.csproj
+dotnet build path\to\App.csproj -p:Platform=x64
+```
 
-   ```powershell
-   dotnet restore path\to\App.csproj
-   dotnet build path\to\App.csproj -p:Platform=x64
-   ```
-
-   Use `ARM64` instead of `x64` on an ARM64 project.
-4. Reload VS Code after the first successful build.
-
-C# Dev Kit provides IntelliSense for normal C# source and referenced WinUI APIs, including types such as `Window`, `Page`, and `Button`, their properties and methods, and your handwritten classes and event handlers.
-
-There is currently a [known C# Dev Kit limitation for WinUI XAML-generated code](https://github.com/dotnet/vscode-csharp/issues/9172). The C# language-service workspace does not include the partial-class files generated by the WinUI XAML compiler, even when those files exist under `obj` and the project builds successfully. As a result, code-behind files may show false `CS0103` diagnostics for:
-
-- `InitializeComponent()`
-- fields generated from XAML `x:Name` declarations
-- other members that exist only in generated `.g.cs` or `.g.i.cs` files
+A [known C# Dev Kit limitation](https://github.com/dotnet/vscode-csharp/issues/9172) can produce false `CS0103` errors in code-behind for `InitializeComponent()` and `x:Name` fields, because its workspace omits the partial classes generated by the WinUI XAML compiler.
 
 ### AppxManifest IntelliSense
 
@@ -398,7 +344,7 @@ The winapp CLI (and this extension) works with any Windows app framework:
 
 - Windows 10 or later
 - Visual Studio Code 1.109.0 or later
-- The .NET 10 SDK, for project-aware XAML IntelliSense in C# projects only. The XAML language server is a self-contained Native AOT executable and starts with no .NET installed, so C++/WinRT projects and language-independent XAML editing need nothing. C# projects reach their types through `dotnet msbuild` and a framework-dependent source-generator host, which the SDK provides. The extension does not install or bundle .NET.
+- The .NET 10 SDK, for project-aware XAML IntelliSense in C# projects only. The XAML language server itself needs no .NET, and the extension never installs or bundles it. See [WinUI XAML Language Service](#winui-xaml-language-service).
 
 The winapp CLI is bundled with the extension: no separate installation required.
 
