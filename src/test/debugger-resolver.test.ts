@@ -105,7 +105,8 @@ describe('validateRunInput (folder mode)', () => {
 			assert.equal(
 				result.message,
 				'The configured "input" path does not exist: C:\\does\\not\\exist. '
-					+ 'Build your project first, or update "input" in launch.json to point to your build output directory.'
+					+ 'Build your project first, or update "input" in launch.json to point to '
+					+ 'a project, a solution, or the folder containing your built application.'
 			);
 		}
 	});
@@ -131,7 +132,8 @@ describe('validateRunInput (folder mode)', () => {
 			assert.equal(
 				result.message,
 				`The configured "input" does not contain any .exe files: ${emptyDir}. `
-					+ 'Build your project first, or update "input" in launch.json to point to a project file or the folder containing your built application.'
+					+ 'Build your project first, or update "input" in launch.json to point to '
+					+ 'a project, a solution, or the folder containing your built application.'
 			);
 		}
 	});

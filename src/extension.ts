@@ -24,6 +24,7 @@ import {
 	FOLDER_PICKER_DETAIL,
 	getRunSettings,
 	getWorkspaceRoots,
+	NO_WORKSPACE_MESSAGE,
 	pickBuildOutputFolder,
 	pickRunTarget,
 	pickSolutionProject,
@@ -733,7 +734,7 @@ async function resolveProjectDirectory(workspacePath: string): Promise<string | 
 function getWorkspacePath(): string | undefined {
 	const workspaceFolders = vscode.workspace.workspaceFolders;
 	if (!workspaceFolders || workspaceFolders.length === 0) {
-		vscode.window.showErrorMessage('No workspace folder open');
+		vscode.window.showErrorMessage(NO_WORKSPACE_MESSAGE);
 		return undefined;
 	}
 	return workspaceFolders[0].uri.fsPath;
@@ -808,7 +809,7 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		_token?: vscode.CancellationToken
 	): Promise<vscode.DebugConfiguration | undefined> {
 		if (!folder) {
-			vscode.window.showErrorMessage('No workspace folder open');
+			vscode.window.showErrorMessage(NO_WORKSPACE_MESSAGE);
 			return undefined;
 		}
 
@@ -894,7 +895,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 		const folder = session.workspaceFolder;
 
 		if (!folder) {
-			throw new Error('No workspace folder open');
+			throw new Error(NO_WORKSPACE_MESSAGE);
 		}
 
 		try {

@@ -41,6 +41,19 @@ const PROJECT_PICKER_DETAIL = 'Open a file picker for .csproj, .sln, or .slnx';
 
 const BUILD_OUTPUT_SEARCH_DETAIL = 'Scan the workspace for folders containing .exe files';
 
+/** Shown whenever an executable scan comes up empty, in either picker. */
+const NO_BUILD_OUTPUT_MESSAGE =
+	'No folders containing .exe files were found. Build your project first, or browse to a folder.';
+
+/** Title of the native folder dialog used as the build-output fallback. */
+const SELECT_BUILD_OUTPUT_TITLE = 'Select build output folder';
+
+/** Placeholder for every build-output QuickPick. */
+const SELECT_BUILD_OUTPUT_PLACEHOLDER = 'Select the build output folder containing your app';
+
+/** Every run entry point reports a missing workspace identically. */
+export const NO_WORKSPACE_MESSAGE = 'No workspace folder open';
+
 /**
  * Prompt the user to select a folder.
  */
@@ -90,10 +103,8 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 	}
 
 	if (outputFolders.length === 0) {
-		vscode.window.showWarningMessage(
-			'No folders containing .exe files were found. Build your project first, or browse to a folder.'
-		);
-		return selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
+		vscode.window.showWarningMessage(NO_BUILD_OUTPUT_MESSAGE);
+		return selectFolder(SELECT_BUILD_OUTPUT_TITLE, vscode.Uri.file(workspacePath));
 	}
 
 	const items: Array<vscode.QuickPickItem & { directory?: string }> = outputFolders.map((folderPath) => ({
@@ -105,7 +116,7 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL });
 
 	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select the build output folder containing your app'
+		placeHolder: SELECT_BUILD_OUTPUT_PLACEHOLDER
 	});
 
 	if (!picked) {
@@ -113,7 +124,7 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 	}
 
 	if (picked.detail === FOLDER_PICKER_DETAIL) {
-		return selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
+		return selectFolder(SELECT_BUILD_OUTPUT_TITLE, vscode.Uri.file(workspacePath));
 	}
 
 	return picked.directory;
@@ -252,7 +263,7 @@ export async function pickRunTarget(
 		? [{ name: scope.name, path: scope.uri.fsPath }]
 		: getWorkspaceRoots();
 	if (roots.length === 0) {
-		vscode.window.showErrorMessage('No workspace folder open');
+		vscode.window.showErrorMessage(NO_WORKSPACE_MESSAGE);
 		return undefined;
 	}
 
@@ -358,9 +369,7 @@ export async function pickRunTarget(
 			return undefined;
 		}
 		if (folders.length === 0) {
-			vscode.window.showWarningMessage(
-				'No folders containing .exe files were found. Build your project first, or browse to a folder.'
-			);
+			vscode.window.showWarningMessage(NO_BUILD_OUTPUT_MESSAGE);
 			return browseForRunTarget(roots, 'folder');
 		}
 		const folderItems = buildRunTargetItems(
@@ -368,7 +377,7 @@ export async function pickRunTarget(
 			roots.length > 1
 		);
 		const pickedFolder = await vscode.window.showQuickPick(folderItems, {
-			placeHolder: 'Select the build output folder containing your app',
+			placeHolder: SELECT_BUILD_OUTPUT_PLACEHOLDER,
 			matchOnDescription: true
 		});
 		return pickedFolder?.candidate ? { target: pickedFolder.candidate } : undefined;

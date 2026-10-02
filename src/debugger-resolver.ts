@@ -15,6 +15,19 @@ export type RunInputValidation = {
 	message: string;
 };
 
+/** One phrase for every "point launch.json somewhere valid" hint. */
+const RUNNABLE_TARGET = 'a project, a solution, or the folder containing your built application';
+
+const BUILD_FIRST = 'Build your project first, or ';
+
+function pointAt(propertyName: string, target: string): string {
+	return `update "${propertyName}" in launch.json to point to ${target}.`;
+}
+
+function capitalize(text: string): string {
+	return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** Only folder-mode input must already contain an executable. */
 export async function validateRunInput(
 	input: string,
@@ -32,7 +45,7 @@ export async function validateRunInput(
 				valid: false,
 				reason: 'not-found',
 				message: `The configured "${propertyName}" ${noun} does not exist: ${input}. `
-					+ `Update "${propertyName}" in launch.json to point to your ${noun} file.`
+					+ capitalize(pointAt(propertyName, `your ${noun} file`))
 			};
 		}
 		// A project/solution input may be the file itself or a directory
@@ -45,7 +58,7 @@ export async function validateRunInput(
 			valid: false,
 			reason: 'not-found',
 			message: `The configured "${propertyName}" path does not exist: ${input}. `
-				+ `Build your project first, or update "${propertyName}" in launch.json to point to your build output directory.`
+				+ BUILD_FIRST + pointAt(propertyName, RUNNABLE_TARGET)
 		};
 	}
 
@@ -54,7 +67,7 @@ export async function validateRunInput(
 			valid: false,
 			reason: 'not-directory',
 			message: `The configured "${propertyName}" is not a directory or a project file: ${input}. `
-				+ `Update "${propertyName}" in launch.json to point to a project, a solution, or the folder containing your built application.`
+				+ capitalize(pointAt(propertyName, RUNNABLE_TARGET))
 		};
 	}
 
@@ -64,7 +77,7 @@ export async function validateRunInput(
 			valid: false,
 			reason: 'no-exe',
 			message: `The configured "${propertyName}" does not contain any .exe files: ${input}. `
-				+ `Build your project first, or update "${propertyName}" in launch.json to point to a project file or the folder containing your built application.`
+				+ BUILD_FIRST + pointAt(propertyName, RUNNABLE_TARGET)
 		};
 	}
 
