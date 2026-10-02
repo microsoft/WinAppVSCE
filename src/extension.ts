@@ -12,14 +12,9 @@ import {
 	resolveWorkingDirectory
 } from './winapp-cli-utils';
 import { detectProjects, BUILD_OUTPUT_EXCLUDE_GLOB } from './project-detection';
-import {
-	classifyRunTarget,
-	isProjectMode,
-	type RunTargetKind
-} from './run-target';
+import { classifyRunTarget } from './run-target';
 import {
 	buildRunArgs,
-	clearInapplicableOptions,
 	resolveDebugInput,
 	runOptionsFromDebugConfig,
 	validateDebugRunOptions,
@@ -913,10 +908,6 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// disambiguates in the same way; without this, F5 would launch
 			// `winapp run <sln>` with no --project and the CLI would refuse.
 			let pickedProject: string | undefined;
-			// Tracked so project-only options can be dropped for a folder
-			// target. When the picker supplies the target it already knows the
-			// kind; a launch.json input has to be classified.
-			let kind: RunTargetKind;
 
 			if (!input) {
 				const selection = await pickRunTarget(false, folder);
@@ -924,17 +915,12 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 					throw new Error('No run target selected, cancelling debug session.');
 				}
 				input = selection.target.path;
-				kind = selection.target.kind;
 
 				const projectSelection = await pickSolutionProject(selection);
 				if (projectSelection.cancelled) {
 					throw new Error('No project selected, cancelling debug session.');
 				}
 				pickedProject = projectSelection.project;
-			} else {
-				kind = await classifyRunTarget(
-					path.isAbsolute(input) ? input : path.resolve(cwd, input)
-				);
 			}
 
 			const cliPath = getWinappCliPath(this.extensionPath);
@@ -954,13 +940,10 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				args = '--inspect' + (config.port ? `=${config.port}` : '') + ' ' + args;
 			}
 
-			const runOptions = clearInapplicableOptions(
-				runOptionsFromDebugConfig(config, input), kind
-			);
+			const runOptions = runOptionsFromDebugConfig(config, input);
 			runOptions.args = args.trim() || undefined;
 			// An explicit launch.json "project" always wins; this only fills in
-			// what the interactive picker resolved. Applied after the mode
-			// filter so a folder target never picks one back up.
+			// what the interactive picker resolved.
 			runOptions.project = runOptions.project ?? pickedProject;
 
 			const baseSpawnArgs = buildRunArgs(runOptions);

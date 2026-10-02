@@ -2,7 +2,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import {
 	buildRunArgs,
-	clearInapplicableOptions,
 	COMMON_CONFIGURATIONS,
 	resolveDebugInput,
 	runOptionsFromDebugConfig,
@@ -216,38 +215,3 @@ describe('runOptionsFromDebugConfig', () => {
 	});
 });
 
-/** Folder runs silently ignore project-only options, so drop them and warn. */
-describe('clearInapplicableOptions', () => {
-	const projectOnly = options({
-		project: 'App',
-		configuration: 'Release',
-		arch: 'x64',
-		framework: 'net8.0-windows10.0.19041.0',
-		runtime: 'win-x64',
-		properties: { Foo: 'Bar' },
-		noBuild: true,
-		noRestore: true,
-		aot: true,
-		debugOutput: true,
-		symbols: true
-	});
-
-	it('drops every project-only option for a folder target', () => {
-		const cleared = clearInapplicableOptions(projectOnly, 'folder');
-		assert.deepStrictEqual(
-			Object.entries(cleared)
-				.filter(([, value]) => value !== undefined)
-				.map(([key]) => key)
-				.sort(),
-			// aot survives on purpose: the CLI rejects it outright rather than
-			// ignoring it, so the CLI's own error is what the user sees.
-			['aot', 'debugOutput', 'input', 'symbols']
-		);
-	});
-
-	for (const kind of ['project', 'solution', 'unknown'] as const) {
-		it(`leaves a ${kind} target untouched`, () => {
-			assert.deepStrictEqual(clearInapplicableOptions(projectOnly, kind), projectOnly);
-		});
-	}
-});

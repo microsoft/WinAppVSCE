@@ -1,4 +1,4 @@
-import { isProjectMode, RunTargetKind } from './run-target';
+
 
 /** Shared `winapp run` option shape for palette and debug invocations. */
 export interface WinAppRunOptions {
@@ -122,28 +122,6 @@ export function validateDebugRunOptions(options: WinAppRunOptions): string[] {
 	}
 
 	return errors;
-}
-
-/** Leaves `unknown` and `aot` untouched so the CLI reports them. */
-export function clearInapplicableOptions(
-	options: WinAppRunOptions,
-	kind: RunTargetKind
-): WinAppRunOptions {
-	if (kind !== 'folder') {
-		return options;
-	}
-
-	return {
-		...options,
-		project: undefined,
-		configuration: undefined,
-		arch: undefined,
-		framework: undefined,
-		runtime: undefined,
-		properties: undefined,
-		noBuild: undefined,
-		noRestore: undefined
-	};
 }
 
 /** Explicit launch.json subset avoids `any` hiding misspelled keys. */
