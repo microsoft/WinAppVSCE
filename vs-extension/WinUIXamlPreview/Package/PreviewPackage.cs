@@ -164,6 +164,8 @@ namespace WinUIXamlPreview
         {
             if (disposing)
             {
+                // Dispose every live preview session first so no surface process outlives VS, then the tracker.
+                PreviewPackageState.ShutdownAll();
                 PreviewPackageState.EditorTracker?.Dispose();
                 PreviewPackageState.EditorTracker = null;
             }

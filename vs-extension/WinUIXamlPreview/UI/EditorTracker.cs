@@ -6,6 +6,7 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
+using WinUIXamlPreview.Logging;
 
 namespace WinUIXamlPreview.UI
 {
@@ -140,23 +141,43 @@ namespace WinUIXamlPreview.UI
             }
 
             _disposed = true;
-            try
+
+            // When already on the UI thread (the normal package-shutdown path) unsubscribe directly: calling
+            // _jtf.Run here would needlessly re-enter the message pump and can deadlock during shell teardown.
+            // Only marshal when we are genuinely off the UI thread. Each step is guarded on its own so a
+            // throwing DTE-event detach can never skip the RDT unadvise — the COM sink that must come off (T8).
+            if (_jtf.Context.IsOnMainThread)
             {
-                _jtf.Run(async () =>
+                Unsubscribe();
+            }
+            else
+            {
+                try
                 {
-                    await _jtf.SwitchToMainThreadAsync();
-                    _windowEvents.WindowActivated -= OnWindowActivated;
-                    _documentEvents.DocumentSaved -= OnDocumentSaved;
-                    if (_cookie != 0)
+                    _jtf.Run(async () =>
                     {
-                        _rdt.UnadviseRunningDocTableEvents(_cookie);
-                    }
-                });
+                        await _jtf.SwitchToMainThreadAsync();
+                        Unsubscribe();
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("EditorTracker teardown failed to marshal to the UI thread: " + ex);
+                }
             }
-            catch
-            {
-                // best-effort teardown
-            }
+        }
+
+        private void Unsubscribe()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try { _windowEvents.WindowActivated -= OnWindowActivated; }
+            catch (Exception ex) { Log.Write("EditorTracker: WindowActivated detach failed: " + ex); }
+
+            try { _documentEvents.DocumentSaved -= OnDocumentSaved; }
+            catch (Exception ex) { Log.Write("EditorTracker: DocumentSaved detach failed: " + ex); }
+
+            try { if (_cookie != 0) _rdt.UnadviseRunningDocTableEvents(_cookie); }
+            catch (Exception ex) { Log.Write("EditorTracker: RDT unadvise failed: " + ex); }
         }
     }
 }

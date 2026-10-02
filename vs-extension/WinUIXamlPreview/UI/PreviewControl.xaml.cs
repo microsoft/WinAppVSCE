@@ -124,6 +124,10 @@ namespace WinUIXamlPreview.UI
             Loaded += OnLoaded;
             Unloaded += OnUnloaded;
             SizeChanged += (_, __) => { _resizeDebounce.Stop(); _resizeDebounce.Start(); };
+
+            // Hand the package ownership of this session so a VS shutdown disposes it (and its surface
+            // process) even if this control's tab/margin teardown never fires (T7).
+            PreviewPackageState.RegisterSession(this);
         }
 
         private void OnLoaded(object sender, RoutedEventArgs e)
@@ -1791,6 +1795,7 @@ namespace WinUIXamlPreview.UI
             }
 
             _disposed = true;
+            PreviewPackageState.UnregisterSession(this);
             _resizeDebounce.Stop();
             DisposeClient();
         }
