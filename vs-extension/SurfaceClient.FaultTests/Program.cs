@@ -117,6 +117,7 @@ namespace WinUIXamlPreview.FaultTests
             Console.WriteLine();
 
             NeverReadyTimesOutAndReapsProcess();
+            NeverReadyTimeoutKillsProcessWithoutDispose();
             NoPortTimesOut();
             CrashBeforeReadyFaultsOnce();
             CrashAfterReadyRaisesClosedOnce();
@@ -160,6 +161,22 @@ namespace WinUIXamlPreview.FaultTests
             Assert(name,
                 threw && sawClosed && h.ClosedCount == 1 && reaped,
                 $"threw={threw}, closed={h.ClosedCount} (expect 1), reaped={reaped}, pid={h.FakePid}");
+        }
+
+        private static void NeverReadyTimeoutKillsProcessWithoutDispose()
+        {
+            const string name = "never-Ready timeout kills the surface without waiting for Dispose (T1)";
+            using var h = new Harness("never-ready");
+            try
+            {
+                h.Client.StartAsync(TimeSpan.FromSeconds(1.5)).GetAwaiter().GetResult();
+            }
+            catch (TimeoutException) { }
+            catch (Exception ex) { Fail(name, $"expected TimeoutException, got {ex.GetType().Name}"); return; }
+
+            // Deliberately do NOT Dispose — Fault() itself must have requested the kill.
+            var reaped = h.WaitForFakeExit(TimeSpan.FromSeconds(5));
+            Assert(name, reaped, $"reaped={reaped}, pid={h.FakePid}");
         }
 
         private static void NoPortTimesOut()
@@ -242,17 +259,20 @@ namespace WinUIXamlPreview.FaultTests
             h.WaitForClosed(1, TimeSpan.FromSeconds(5));
 
             var escaped = false;
+            var r1 = true; var r2 = true; var r3 = true;
             try
             {
-                h.Client.LoadXaml("<Grid/>", 100, 100, 1.0);
-                h.Client.UpdateXaml("<Grid/>");
-                h.Client.Resize(120, 120, 1.0);
+                r1 = h.Client.LoadXaml("<Grid/>", 100, 100, 1.0);
+                r2 = h.Client.UpdateXaml("<Grid/>");
+                r3 = h.Client.Resize(120, 120, 1.0);
             }
             catch (Exception ex) { escaped = true; Fail(name, $"Send threw {ex.GetType().Name}"); }
 
             if (escaped) return;
+            var oneClosed = h.ClosedCount == 1; // the broken sends must not raise additional Closed events
             h.Client.Dispose();
-            Assert(name, true, "commands after close were swallowed");
+            Assert(name, !r1 && !r2 && !r3 && oneClosed,
+                $"returns={r1}/{r2}/{r3} (expect all false), closed={h.ClosedCount} (expect 1)");
         }
 
         private static void IntentionalDisposeSuppressesClosedAndIsIdempotent()

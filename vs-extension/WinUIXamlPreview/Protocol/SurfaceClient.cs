@@ -275,9 +275,12 @@ namespace WinUIXamlPreview.Protocol
             var token = _lifetimeCts.Token;
             _ = Task.Run(async () =>
             {
+                var tcp = new TcpClient();
+                // net472 TcpClient.ConnectAsync has no CancellationToken overload; closing the socket
+                // from the token callback aborts a hung connect the instant we fault or dispose (T2).
+                using var reg = token.Register(() => { try { tcp.Close(); } catch { } });
                 try
                 {
-                    var tcp = new TcpClient();
                     await tcp.ConnectAsync("127.0.0.1", port).ConfigureAwait(false);
                     _tcp = tcp;
                     _stream = tcp.GetStream();
@@ -287,6 +290,11 @@ namespace WinUIXamlPreview.Protocol
                 }
                 catch (Exception ex)
                 {
+                    if (token.IsCancellationRequested)
+                    {
+                        return; // Intentional teardown aborted the connect; Fault already ran (or Dispose owns it).
+                    }
+
                     Fault($"Surface connection failed: {ex.Message}", ex);
                 }
             });
@@ -295,6 +303,7 @@ namespace WinUIXamlPreview.Protocol
         private async Task ReadLoop(NetworkStream stream, CancellationToken token)
         {
             var buffer = new byte[64 * 1024];
+            var closeReason = "Surface socket closed.";
             while (!_disposed && !token.IsCancellationRequested)
             {
                 int n;
@@ -302,13 +311,22 @@ namespace WinUIXamlPreview.Protocol
                 {
                     n = await stream.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    // Cancellation/disposal is an intentional teardown — the fault (if any) is already
+                    // funnelled, so stay quiet. Anything else is a genuine transport error worth logging (T3).
+                    if (token.IsCancellationRequested || _disposed)
+                    {
+                        return;
+                    }
+
+                    closeReason = $"Surface socket read failed: {ex.Message}";
                     break;
                 }
 
                 if (n <= 0)
                 {
+                    closeReason = "Surface closed the connection (end of stream).";
                     break;
                 }
 
@@ -318,7 +336,7 @@ namespace WinUIXamlPreview.Protocol
                 }
             }
 
-            Fault("Surface socket closed.");
+            Fault(closeReason);
         }
 
         private void Dispatch(string json)
@@ -398,12 +416,18 @@ namespace WinUIXamlPreview.Protocol
             }
         }
 
-        private void Send(object msg)
+        /// <summary>
+        /// Writes a message to the surface. Returns <c>true</c> when the bytes were handed to the socket,
+        /// <c>false</c> when the client is already torn down or the write failed. A write failure means the
+        /// pipe is broken, so it is funnelled through <see cref="Fault"/> — the UI then sees a single
+        /// disconnected/recovery signal instead of a silently dropped command (T4).
+        /// </summary>
+        private bool Send(object msg)
         {
             var stream = _stream;
             if (stream == null || _disposed)
             {
-                return;
+                return false;
             }
 
             try
@@ -412,42 +436,44 @@ namespace WinUIXamlPreview.Protocol
                 var bytes = Encoding.UTF8.GetBytes(json);
                 stream.Write(bytes, 0, bytes.Length);
                 stream.Flush();
+                return true;
             }
             catch (Exception ex)
             {
-                _log($"Send failed: {ex.Message}");
+                Fault($"Surface send failed: {ex.Message}", ex);
+                return false;
             }
         }
 
-        public void LoadXaml(string xaml, int width, int height, double scale)
+        public bool LoadXaml(string xaml, int width, int height, double scale)
             => Send(new LoadXamlMsg { Xaml = xaml, Width = width, Height = height, Scale = scale });
 
-        public void UpdateXaml(string xaml)
+        public bool UpdateXaml(string xaml)
             => Send(new UpdateXamlMsg { Xaml = xaml });
 
-        public void Resize(int width, int height, double scale)
+        public bool Resize(int width, int height, double scale)
             => Send(new ResizeMsg { Width = width, Height = height, Scale = scale });
 
         /// <summary>Enter native-HWND mode; the surface replies with an <see cref="HwndMsg"/> to reparent.</summary>
-        public void EnterNative(string xaml, double width, double height, double scale)
+        public bool EnterNative(string xaml, double width, double height, double scale)
             => Send(new EnterNativeMsg { Xaml = xaml, Width = width, Height = height, Scale = scale });
 
         /// <summary>Leave native mode; the surface re-cloaks its window and replies <c>NativeExited</c>.</summary>
-        public void ExitNative()
+        public bool ExitNative()
             => Send(new ExitNativeMsg());
 
         /// <summary>
         /// Set the design surface mode: <c>true</c> = design (clicks select an element), <c>false</c> =
         /// interact (clicks reach the live content). Applied live by the surface with no re-render (plan §41).
         /// </summary>
-        public void SetMode(bool design)
+        public bool SetMode(bool design)
             => Send(new SetModeMsg { Design = design });
 
         /// <summary>
         /// Select the element at an authored-tree index path (editor caret -> designer, plan §41 #2). The
         /// surface resolves the path to a live element and replies with the usual <c>Selected</c>/props.
         /// </summary>
-        public void SelectByPath(string path)
+        public bool SelectByPath(string path)
             => Send(new SelectByPathMsg { Path = path });
 
         /// <summary>
@@ -456,7 +482,7 @@ namespace WinUIXamlPreview.Protocol
         /// pick/hit-test path and replies with the usual <c>Selected</c>. Not used by the production margin;
         /// the D3 UI test uses it to assert point -> element selection deterministically.
         /// </summary>
-        public void PickAt(double x, double y)
+        public bool PickAt(double x, double y)
             => Send(new PickAtMsg { X = x, Y = y });
 
         /// <summary>
@@ -464,14 +490,14 @@ namespace WinUIXamlPreview.Protocol
         /// surface converts the value to the property's type, sets it on the live element, and replies with a
         /// fresh <c>ElementProps</c> (applied value, or reverted if the string didn't convert).
         /// </summary>
-        public void SetProperty(int id, string name, string value)
+        public bool SetProperty(int id, string name, string value)
             => Send(new SetPropertyMsg { Id = id, Name = name, Value = value });
 
         /// <summary>
         /// Preview the mounted page under a different theme (<c>Light</c>/<c>Dark</c>/<c>Default</c>). The
         /// surface applies it live to the mounted design canvas (no re-render) and persists it across re-hosts.
         /// </summary>
-        public void SetTheme(string theme)
+        public bool SetTheme(string theme)
             => Send(new SetThemeMsg { Theme = theme });
 
         /// <summary>
@@ -479,7 +505,7 @@ namespace WinUIXamlPreview.Protocol
         /// <paramref name="width"/>/<paramref name="height"/> &lt;= 0 restores auto (the page's own size). The
         /// surface re-hosts and replies with a fresh <c>Hwnd</c>; the design surface re-fits the new board.
         /// </summary>
-        public void SetCanvasSize(double width, double height)
+        public bool SetCanvasSize(double width, double height)
             => Send(new SetCanvasSizeMsg { Width = width, Height = height });
 
         // Single funnel for every failure — startup, connect, read-loop close, timeout, process exit.
@@ -496,10 +522,32 @@ namespace WinUIXamlPreview.Protocol
             _ready?.TrySetException(ex ?? new Exception(reason));
             try { _lifetimeCts.Cancel(); } catch (ObjectDisposedException) { }
 
+            // T1: terminate a wedged/faulted surface right away (e.g. one that never sent Ready) so it can't
+            // linger as an orphan. Non-blocking Kill() only — full reaping/disposal stays with Dispose. On an
+            // intentional stop, Dispose already owns the kill, so skip it here to avoid racing _proc disposal.
+            if (!_intentionalStop)
+            {
+                RequestKill();
+            }
+
             if (!_disposed && !_intentionalStop)
             {
                 Closed?.Invoke(reason);
             }
+        }
+
+        // Fire-and-forget terminate; never waits, so it is safe to call from the UI thread via Send/Fault.
+        private void RequestKill()
+        {
+            try
+            {
+                var proc = _proc;
+                if (proc != null && !proc.HasExited)
+                {
+                    proc.Kill();
+                }
+            }
+            catch { }
         }
 
         private static string Quote(string s) => s.IndexOf(' ') >= 0 ? $"\"{s}\"" : s;
