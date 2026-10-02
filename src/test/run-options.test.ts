@@ -177,11 +177,8 @@ describe('validateRunOptions — mode mismatches', () => {
 		assert.deepStrictEqual(result, []);
 	});
 
-	// --aot is the one project-only option the CLI *rejects* rather than
-	// ignores: winapp 0.7.0 answers `run <folder> --aot` with "--aot requires
-	// a .csproj, solution, or source directory that resolves to project mode"
-	// and exits 1. Warning and dropping it the way the other eight are dropped
-	// would quietly run a non-AOT build the user never asked for.
+	// --aot is the one project-only option the CLI rejects rather than
+	// ignores; dropping it would silently run a non-AOT build.
 	it('rejects --aot on a folder, matching the CLI', () => {
 		const result = validateRunOptions(options({ aot: true }), 'folder');
 		const error = result.find(d => d.severity === 'error');
@@ -205,10 +202,8 @@ describe('validateRunOptions — value checks', () => {
 		assert.ok(result.some(d => d.severity === 'warning' && d.message.includes('precedence')));
 	});
 
-	// Every accept/reject case below was probed against the bundled winapp
-	// 0.7.0 CLI, so these tests pin the extension to the CLI's real behavior
-	// rather than to a guess. Rejecting a value the CLI accepts is the worse
-	// failure: it blocks a legal build with an extension-only error.
+	// These cases pin the bundled CLI behavior; rejecting a CLI-accepted value
+	// would block a legal build with an extension-only error.
 	it('rejects runtime identifiers the CLI cannot derive an architecture from', () => {
 		// The CLI answers each of these with "Could not determine an
 		// architecture from --runtime". Bare "win" is included deliberately:
@@ -378,13 +373,7 @@ describe('runOptionsFromDebugConfig', () => {
 	});
 });
 
-/**
- * Project-only options reaching a folder run are a *silent* no-op: winapp
- * 0.7.0 parses `--configuration` against a build output folder without
- * complaint and simply ignores it, so a launch.json asking for Release builds
- * nothing and says nothing. Dropping them keeps the invoked command line an
- * honest record of what actually happened; the warning is raised separately.
- */
+/** Folder runs silently ignore project-only options, so drop them and warn. */
 describe('clearInapplicableOptions', () => {
 	const projectOnly = options({
 		project: 'App',

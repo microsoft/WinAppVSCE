@@ -7,10 +7,7 @@ import { attributeValue, elementText, findElementsByLocalName, tryParseXml } fro
  */
 export type DetectedProjectType = 'Tauri' | 'Electron' | 'Flutter' | '.NET' | 'Rust' | 'C++';
 
-/**
- * Represents a project detected during directory scanning.
- * Mirrors the C# DetectedProject record from WinApp.Cli.
- */
+/** Mirrors the C# DetectedProject record from WinApp.Cli. */
 export interface DetectedProject {
 	type: DetectedProjectType;
 	directory: string;
@@ -34,37 +31,12 @@ export function getProjectLabel(project: DetectedProject): string {
 	return `${project.type} project (${getDisplayFilePath(project)})`;
 }
 
-/**
- * Directories no scan should ever descend into, regardless of what it is
- * looking for: dependency caches, VCS/IDE metadata, and tool scratch space.
- *
- * The three scans in this codebase (project detection, project-file
- * discovery, and build-output discovery) each extend this with exclusions
- * specific to what they look for. Those extensions legitimately differ —
- * build-output discovery must *not* skip `bin`, since that is exactly where
- * the executables live — so only this common base is shared, and each
- * specialization derives from it rather than restating it.
- */
+/** Shared scan exclusions; build-output discovery keeps `bin` searchable. */
 export const ALWAYS_SKIP_DIRS = [
 	'node_modules', '.git', '.vs', '.vscode', '.idea', 'packages', '.winapp'
 ] as const;
 
-/**
- * True when `candidate` stays inside `container`, following reparse points.
- *
- * The lexical check rejects `..` traversal; the real-path check then rejects a
- * symlink or NTFS junction that lives inside `container` but resolves outside
- * it. A purely lexical test passes such a path, because nothing in the string
- * reveals the redirection.
- *
- * When either side cannot be resolved the target does not exist, and a path
- * that does not exist cannot be a reparse point — so the lexical result
- * stands rather than the path being rejected for being absent.
- *
- * This is the one containment rule for paths read out of workspace content
- * (solution members, configured app directories). Callers that only need the
- * lexical test can use the synchronous `isContainedIn` in `run-target.ts`.
- */
+/** Real-path containment rejects symlink/junction escapes; absent paths cannot. */
 export async function isContainedInReal(container: string, candidate: string): Promise<boolean> {
 	const resolved = path.resolve(container, candidate);
 	if (!isLexicallyContained(path.resolve(container), resolved)) {
@@ -94,10 +66,7 @@ const SKIP_DIRS = new Set<string>([
 	'.gradle', '.dart_tool', '.pub-cache', '.nuget', '.cargo'
 ]);
 
-/**
- * Detects a project at a single directory (does not recurse).
- * Mirrors ProjectDetectionService.DetectProject from WinApp.Cli.
- */
+/** Mirrors ProjectDetectionService.DetectProject from WinApp.Cli. */
 export async function detectProjectAt(directory: string, searchRoot: string): Promise<DetectedProject | undefined> {
 	const displayPath = getRelativeDisplayPath(directory, searchRoot);
 
@@ -136,11 +105,7 @@ export async function detectProjectAt(directory: string, searchRoot: string): Pr
 	return undefined;
 }
 
-/**
- * Performs a breadth-first search of the directory tree to find compatible projects.
- * Mirrors ProjectDetectionService.DetectProjectsAsync from WinApp.Cli.
- * Uses async I/O with periodic yielding to keep the UI responsive.
- */
+/** Breadth-first project detection with periodic yielding for UI responsiveness. */
 export async function detectProjects(root: string, maxProjects: number = 10): Promise<DetectedProject[]> {
 	const results: DetectedProject[] = [];
 	const queue: string[] = [root];
@@ -205,14 +170,7 @@ export const BUILD_OUTPUT_MAX_DEPTH = 8;
  */
 export const BUILD_OUTPUT_MAX_RESULTS = 10;
 
-/**
- * Given a list of absolute file paths (typically .exe matches) and a workspace
- * root, returns the unique parent directories sorted by relative path. Filters
- * out directories deeper than `maxDepth` segments from the root.
- *
- * This is the pure logic extracted from the VS Code build-output scan so it
- * can be unit tested without the VS Code API.
- */
+/** Deduplicates executable parent folders and enforces `maxDepth`. */
 export function deduplicateBuildOutputFolders(
 	filePaths: string[],
 	workspacePath: string,
@@ -312,36 +270,10 @@ async function findExecutableCsproj(directory: string): Promise<string | undefin
 	return undefined;
 }
 
-/**
- * How a `.csproj` is likely to behave when handed to `winapp run`.
- *
- * `unknown` is a first-class result and is deliberately common: the markers
- * this looks at can come from an SDK default, `Directory.Build.props`, or a
- * condition on `$(TargetFramework)`, none of which a static read can see. The
- * CLI resolves those correctly via full MSBuild evaluation, so the extension
- * must never treat `unknown` as "not runnable".
- */
+/** `unknown` stays visible because only the CLI can fully evaluate MSBuild. */
 export type ProjectRunnability = 'app' | 'test' | 'library' | 'unknown';
 
-/**
- * Classifies csproj XML by the markers that are visible without evaluating
- * MSBuild.
- *
- * This intentionally does **not** reimplement the CLI's classification. The
- * CLI evaluates each project (falling back to a static parse only when the SDK
- * is unavailable) and is authoritative; this heuristic exists purely so the
- * extension can avoid *offering* a project the user plainly cannot run, and so
- * it can tell "obviously one app" from "genuinely ambiguous" before prompting.
- *
- * It is deliberately asymmetric: a project is only classified as `test` or
- * `library` when the project file explicitly says so. Anything else is
- * `unknown` and stays visible, so a project whose `OutputType` is inherited or
- * conditional is never hidden from the user.
- *
- * This approximation exists only because the CLI cannot be queried for its
- * classification without also building and launching the app. See
- * microsoft/winappCli#957 for the upstream query API and #273 for adopting it.
- */
+/** Only explicit `test`/`library` markers demote; pending microsoft/winappCli#957. */
 export function classifyProjectRunnability(content: string): ProjectRunnability {
 	const doc = tryParseXml(content);
 	if (!doc) {
@@ -385,10 +317,7 @@ export function classifyProjectRunnability(content: string): ProjectRunnability 
 	return 'unknown';
 }
 
-/**
- * Reads and classifies a project file. Unreadable files are `unknown` so an
- * I/O hiccup can never hide a project the user is looking for.
- */
+/** Unreadable project files are `unknown` so I/O hiccups never hide them. */
 export async function readProjectRunnability(projectPath: string): Promise<ProjectRunnability> {
 	try {
 		return classifyProjectRunnability(await fsp.readFile(projectPath, 'utf-8'));
@@ -402,14 +331,7 @@ export function isOfferableProject(runnability: ProjectRunnability): boolean {
 	return runnability === 'app' || runnability === 'unknown';
 }
 
-/**
- * True when a csproj's XML names an executable, non-test project.
- *
- * Thin wrapper over {@link classifyProjectRunnability}, which is deliberately
- * one-sided: anything it cannot determine classifies as `unknown` and is *not*
- * an app by this stricter test. Callers wanting the one-sided behavior should
- * use {@link isOfferableProject} instead.
- */
+/** Strict wrapper: `unknown` is not an app here; offerable projects may include it. */
 function isExecutableCsproj(content: string): boolean {
 	return classifyProjectRunnability(content) === 'app';
 }

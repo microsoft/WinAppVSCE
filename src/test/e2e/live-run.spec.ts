@@ -1,45 +1,5 @@
 /**
- * Live end-to-end test: scaffold a real WinUI app, then build, deploy, and
- * launch it through `winapp run` project mode driven from the extension's
- * command palette.
- *
- * Why this exists
- * ---------------
- * Every other test stops short of running the CLI. The unit tests assert that
- * `buildRunArgs` emits what we intended, `run-cli-contract.test.ts` checks
- * those flags against the CLI's own schema, and `run-target-picker.spec.ts`
- * dismisses the picker with Escape before anything executes. None of them
- * prove the pieces work when connected.
- *
- * The palette path in particular is unverified end to end. `runWinappRun`
- * joins the argv with `escapePowerShellArg` and hands the string to a
- * PowerShell terminal via `Terminal.sendText`, so the arguments are re-parsed
- * by a shell on the way to the CLI. That escaping layer sits between the
- * argv we test and the process that actually runs, and nothing exercises it
- * against a real build.
- *
- * What it asserts
- * ---------------
- * The observable results of a successful project-mode run: the app is built,
- * the package is registered in development mode, and the process is running.
- * These are read from the OS rather than from the terminal, so the test
- * verifies what actually happened instead of what was printed.
- *
- * Why it is opt-in
- * ----------------
- * Unlike the rest of the suite this mutates the machine — it registers an MSIX
- * package and launches a GUI app — and takes minutes rather than seconds. It
- * runs only when `E2E_LIVE_RUN=1`, and skips with a diagnostic when the .NET
- * SDK, WinUI templates, or the winapp CLI are unavailable.
- *
- *   $env:E2E_LIVE_RUN=1; npx playwright test live-run
- *
- * Cleanup
- * -------
- * The scaffolded app's identity is a GUID generated per scaffold, so a leaked
- * package cannot be overwritten by a later run — it accumulates. Every test
- * therefore records its identity before launching and tears down in `finally`,
- * with an `afterAll` sweep as a backstop for a crashed or timed-out test.
+ * Live test for real CLI project-mode build, deploy, and launch; opt in with E2E_LIVE_RUN=1.
  */
 
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
@@ -54,29 +14,14 @@ const VSCODE_EXE =
 
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
 
-/**
- * Extensions that interfere with this test and must not load.
- *
- * C# Dev Kit recognises a scaffolded .csproj, opens an announcement tab that
- * steals focus from the command palette, and builds the project itself — which
- * both breaks the interaction and pollutes the build output this test inspects.
- */
+/** C# Dev Kit can steal focus and mutate build output, so it must not load. */
 const INTERFERING_EXTENSIONS = [
     'ms-dotnettools.csdevkit',
     'ms-dotnettools.csharp',
     'ms-dotnettools.vscode-dotnet-runtime',
 ];
 
-/**
- * Isolate the extension under test from the other installed extensions.
- *
- * `--disable-extensions` is the blunt way to do this and is correct when the
- * extension under test is loaded from disk, because `--extensionDevelopmentPath`
- * is exempt from it. It cannot be used when the *installed* build is the thing
- * under test, since the flag would disable that build too and the commands
- * would simply not exist. That case has to name the interfering extensions
- * individually instead.
- */
+/** Installed-extension mode must disable only known interfering extensions. */
 const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
     ? INTERFERING_EXTENSIONS.flatMap((id) => ['--disable-extension', id])
     : ['--disable-extensions', `--extensionDevelopmentPath=${EXTENSION_ROOT}`];
@@ -130,12 +75,7 @@ function isProcessRunning(processName: string): boolean {
     return Number(result ?? '0') > 0;
 }
 
-/**
- * Terminates the app and waits for it to actually exit.
- *
- * `Stop-Process` returns before the process has gone, and until it does the app
- * still holds handles on its own build output, so deleting the directory fails.
- */
+/** Stop-Process returns before handles are released, so wait for exit. */
 function killProcess(processName: string): void {
     tryPs(
         `Get-Process -Name '${processName}' -ErrorAction SilentlyContinue `
@@ -198,13 +138,7 @@ interface ScaffoldedApp {
 /** Identities registered by this suite, swept in afterAll if a test dies. */
 const scaffolded: ScaffoldedApp[] = [];
 
-/**
- * Creates a WinUI app from the official template.
- *
- * The name is randomised so a leaked process or package from an earlier run
- * can never be mistaken for this run's app, which would otherwise let the test
- * pass without having built anything.
- */
+/** Random names prevent leaked apps or packages from satisfying this run. */
 function scaffoldWinUiApp(prefix: string): ScaffoldedApp {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `${SCAFFOLD_PREFIX}${prefix}-`));
     const appName = `LiveRun${Math.random().toString(36).slice(2, 8)}`;
@@ -228,13 +162,7 @@ function scaffoldWinUiApp(prefix: string): ScaffoldedApp {
     return app;
 }
 
-/**
- * Prefix for the scaffolded app workspaces this spec creates.
- *
- * Deliberately distinct from the VS Code profile prefix below: the orphan sweep
- * matches on this prefix and treats each child directory as a deployed app, so
- * a profile directory must never match it.
- */
+/** App scaffold prefix; must not match VS Code profile directories. */
 const SCAFFOLD_PREFIX = 'live-run-app-';
 
 /** Prefix for the throwaway VS Code user-data directories this spec creates. */
@@ -245,13 +173,7 @@ function sleepSync(ms: number): void {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-/**
- * Temp directories from this spec that no live test is tracking — the residue
- * of a run that crashed or was interrupted before its cleanup ran.
- *
- * Directories belonging to the current run are excluded, so this can never
- * delete a workspace a test is still using.
- */
+/** Orphaned scaffolds exclude directories still tracked by this run. */
 function findOrphanedScaffolds(): string[] {
     const active = new Set([
         ...scaffolded.map(app => path.resolve(app.tempRoot)),
@@ -271,14 +193,7 @@ function findOrphanedScaffolds(): string[] {
         .filter(dir => !active.has(dir));
 }
 
-/**
- * Unregisters any package deployed from an orphaned scaffold, and stops the app
- * if it is still running.
- *
- * Deleting the directory alone is not enough: a crashed run can leave a
- * registered package behind, and because every scaffold generates a fresh GUID
- * identity, nothing will ever replace it.
- */
+/** Orphaned scaffolds can leave unique registered packages behind. */
 function reclaimOrphanedScaffold(orphanDir: string): void {
     let projectDirs: fs.Dirent[];
     try {
@@ -313,15 +228,7 @@ function reclaimOrphanedScaffold(orphanDir: string): void {
     }
 }
 
-/**
- * Removes everything a test created: the running app, the registered package,
- * and the scaffolded project on disk.
- *
- * Returns what could not be removed, so a leak becomes a reported failure
- * rather than a warning nobody reads. Each scaffold gets a fresh GUID identity
- * and a fresh temp directory, so anything left behind is never reused — it just
- * accumulates until someone notices the disk.
- */
+/** Cleanup returns leaks so undeleted real packages and processes fail the test. */
 function cleanUp(app: ScaffoldedApp): string[] {
     const leaks: string[] = [];
 
@@ -455,14 +362,7 @@ async function launchVSCode(targetPath: string): Promise<{ app: ElectronApplicat
 
 const PALETTE_PLACEHOLDER = /Type the name of a command to run/;
 
-/**
- * Opens the command palette, retrying until it genuinely has focus.
- *
- * Startup is racy: a late-opening editor or the chat input can take focus after
- * the window settles, and the shortcut is then swallowed. Retrying is more
- * reliable than any single fixed wait, and asserting on the placeholder turns a
- * silently mis-sent keystroke into an explicit failure.
- */
+/** Retry until the palette has focus; startup UI can swallow the shortcut. */
 async function openCommandPalette(page: Page) {
     const input = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
 
@@ -485,13 +385,7 @@ async function openCommandPalette(page: Page) {
     throw new Error('unreachable');
 }
 
-/**
- * Runs a command, confirming the palette is actually focused first.
- *
- * Typing blind is unsafe: anything that takes focus while the palette opens
- * sends the keystrokes into an editor instead, and the command silently never
- * runs. Waiting on the palette's own placeholder makes that failure loud.
- */
+/** Wait for the palette placeholder so typed commands cannot land in an editor. */
 async function runCommandPalette(page: Page, commandLabel: string): Promise<void> {
     const input = await openCommandPalette(page);
 
@@ -503,32 +397,13 @@ async function runCommandPalette(page: Page, commandLabel: string): Promise<void
     await page.keyboard.press('Enter');
 }
 
-/**
- * Waits for the WinApp CLI terminal, which `runWinappCommand` opens via
- * `terminal.show()` before sending the command.
- *
- * This is a fast, specific check that the command actually dispatched. Without
- * it a mis-dispatched command is indistinguishable from a slow build, and the
- * test burns its entire launch budget before reporting a timeout that points
- * at the wrong thing.
- */
+/** Terminal visibility proves the command dispatched before launch polling begins. */
 async function waitForCliTerminal(page: Page): Promise<void> {
     await expect(page.locator('.terminal-wrapper, .terminal .xterm-rows').first())
         .toBeVisible({ timeout: 60_000 });
 }
 
-/**
- * Text currently rendered in the VS Code terminal.
- *
- * Only used to explain a failure. When a build breaks, the OS-level assertions
- * below simply time out, which says nothing about the cause; the terminal holds
- * the CLI error that does.
- *
- * Reads `.xterm-rows`, which only holds text because the profile disables
- * terminal GPU acceleration. With the default canvas renderer this finds
- * nothing and reports that no terminal was opened, which is worse than no
- * diagnostic at all — it points the reader at the wrong failure.
- */
+/** Terminal text is only for explaining build failures that would otherwise time out. */
 async function readTerminalText(page: Page): Promise<string> {
     try {
         const rows = page.locator('.xterm-rows');
@@ -568,18 +443,7 @@ async function waitFor(
 // Tests
 // ──────────────────────────────────────────────────────
 
-/**
- * Final backstop, covering what the per-test `finally` blocks cannot: a test
- * that crashed, timed out, or was interrupted before its own cleanup ran.
- *
- * Resources this run created are a hard failure — the run owns them, and
- * leaving real packages and processes on the machine is the worst outcome.
- *
- * Residue from *earlier* runs is only swept on a best-effort basis. A killed
- * run can leave VS Code still running and holding its profile directory, which
- * the current run cannot remove and is not responsible for; failing here would
- * report a stale crash as a failure of whatever ran next.
- */
+/** Final backstop for crashed or interrupted tests; current-run leaks are failures. */
 test.afterAll(() => {
     // This hook is file-scoped, so it also runs when the suite below is
     // skipped. Sweeping the machine on a run that never created anything is
@@ -721,12 +585,8 @@ test.describe('live winapp run (project mode)', () => {
         }
     });
 
-    // The remaining two project-mode settings, covered in one run because each
-    // live build costs minutes. `unregisterOnExit` is deliberately not live
-    // tested: proving it would mean launching the app, terminating it, and
-    // then racing the asynchronous deregistration sweep, which is far more
-    // likely to produce a flaky failure than to catch a real regression. Its
-    // flag emission is unit tested in run-options.test.ts instead.
+    // Covers expensive project-mode settings in one run; unregisterOnExit stays
+    // in unit tests to avoid racing asynchronous deregistration.
     test('applies the arch and properties settings to a project-mode build', async () => {
         test.setTimeout(LIVE_RUN_TIMEOUT_MS);
 

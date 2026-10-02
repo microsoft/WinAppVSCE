@@ -117,10 +117,7 @@ export async function resolveProjectDirectory(
 	return deps.pickDirectory(items, placeHolder);
 }
 
-/**
- * Determines whether `dir` (resolved relative to `workspacePath`) stays inside
- * the workspace. See {@link isContainedInReal} for the containment rule.
- */
+/** Uses {@link isContainedInReal} for workspace containment. */
 function isContainedInWorkspace(workspacePath: string, dir: string): Promise<boolean> {
 	return isContainedInReal(workspacePath, dir);
 }

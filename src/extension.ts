@@ -280,10 +280,7 @@ async function runWinappTool(spec: WinappToolTaskSpec): Promise<vscode.TaskExecu
 	});
 }
 
-/**
- * Shared output channel for capture-based winapp commands (e.g. pack). Created
- * lazily and reused so repeated runs don't leak channels.
- */
+/** Shared lazy output channel for capture-based winapp commands. */
 let winappOutputChannel: vscode.OutputChannel | undefined;
 
 function getWinappOutputChannel(): vscode.OutputChannel {
@@ -293,15 +290,7 @@ function getWinappOutputChannel(): vscode.OutputChannel {
 	return winappOutputChannel;
 }
 
-/**
- * Run a winapp CLI command via `spawn` (shell: false) while capturing its
- * combined stdout/stderr, streaming it to the WinApp output channel and a
- * progress notification. Unlike {@link runWinappCommand}, this waits for the
- * command to finish so callers can inspect the output (e.g. the produced
- * package path).
- *
- * @returns The process exit code and the full captured output.
- */
+/** Uses shell-free spawn and waits so callers can inspect captured output. */
 async function runWinappCapture(
 	extensionPath: string,
 	args: string[],
@@ -389,15 +378,7 @@ async function runWinappCapture(
 	);
 }
 
-/**
- * Search the workspace for signable packages, executables, and libraries and
- * let the user pick one via
- * a QuickPick. When no artifacts are found the function falls back directly to
- * a native file dialog; a "Browse…" entry is always appended so the user can
- * opt into the dialog even when artifacts *are* discovered.
- *
- * @returns The selected file path, or `undefined` if cancelled.
- */
+/** Always includes Browse so users can bypass discovered artifacts. */
 async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
 	const artifactPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
@@ -456,13 +437,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 	return picked.detail;
 }
 
-/**
- * Search the workspace for PFX certificate files and let the user pick one
- * via a QuickPick. Falls back to a native file dialog when none are found;
- * a "Browse…" entry is always appended.
- *
- * @returns The selected certificate path, or `undefined` if cancelled.
- */
+/** Always includes Browse so users can choose an undiscovered certificate. */
 async function pickCertificateFile(workspacePath: string): Promise<string | undefined> {
 	const certPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for certificates...', cancellable: true },
@@ -785,22 +760,12 @@ async function selectFile(title: string, filters?: { [name: string]: string[] })
 	return result?.[0]?.fsPath;
 }
 
-/**
- * Run a resolved option set in a terminal.
- *
- * Each argument is escaped individually rather than concatenated into a
- * pre-built command string, so values containing spaces or quotes - most
- * notably `--property Name=Value` - survive PowerShell parsing intact.
- */
+/** Escapes each argument separately so PowerShell preserves boundaries. */
 async function runWinappRun(extensionPath: string, options: WinAppRunOptions, cwd: string): Promise<void> {
 	const command = buildRunArgs(options).map(escapePowerShellArg).join(' ');
 	await runWinappCommand(extensionPath, command, cwd);
 }
 
-/**
- * Shared flow for both run commands: pick a target, resolve options, validate,
- * and launch.
- */
 async function executeRunCommand(extensionPath: string, withOptions: boolean): Promise<void> {
 	const resolved = await resolveRunOptions(withOptions);
 	if (!resolved) {
@@ -930,13 +895,7 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 	}
 }
 
-/**
- * A `winapp run` invocation that failed after producing output.
- *
- * Distinguished from other launch errors so the handler can offer the output
- * channel — which already holds the full build log — rather than inlining it
- * into a notification.
- */
+/** Preserves failed run output so the handler can offer the output channel. */
 class WinAppRunFailure extends Error { }
 
 class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {

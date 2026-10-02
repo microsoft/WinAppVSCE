@@ -26,12 +26,7 @@ export function buildSignCommand(filePath: string, certPath: string): string {
 	return `sign ${escapePowerShellArg(filePath)} ${escapePowerShellArg(certPath)}`;
 }
 
-/**
- * Find files matching the given glob patterns within a workspace root.
- *
- * Results are sorted by modification time (newest first) so the most recently
- * packaged artifact appears at the top of the QuickPick.
- */
+/** Sorts newest first so recent packages top the QuickPick. */
 export async function findWorkspaceArtifacts(
 	workspacePath: string,
 	findFiles: WorkspaceFileFinder,

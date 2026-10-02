@@ -406,11 +406,8 @@ describe('filterOfferableProjects', () => {
 		});
 	});
 
-	// Anything the heuristic is unsure about classifies as `unknown` and
-	// survives, so an empty result is the *confident* case: every candidate
-	// explicitly declared itself a library or a test project. Returning them
-	// anyway would only invite the user to pick one and hit the CLI's "is not
-	// a runnable project". Callers route this to a path that can succeed.
+	// An empty result is the confident case: every candidate explicitly
+	// declared itself a library or test project.
 	it('returns nothing when every candidate is explicitly unrunnable', async () => {
 		await withProjects({ 'Core.csproj': library, 'Tests.csproj': tests }, async (_dir, paths) => {
 			assert.deepStrictEqual(await filterOfferableProjects(paths), []);
@@ -441,10 +438,8 @@ describe('filterOfferableProjects', () => {
 		});
 	});
 
-	// A directory holding two apps and a library is the case where the CLI's
-	// own ambiguity message is unfiltered: it lists the library as a candidate
-	// even though `--project <library>` then fails with "is not a runnable
-	// project". Filtering here gives the user a better list than the CLI's.
+	// Filter directory candidates because the CLI's ambiguity list includes
+	// libraries that `--project <library>` cannot run.
 	it('offers only the apps when a directory holds two apps and a library', async () => {
 		await withProjects(
 			{ 'Alpha.csproj': app, 'Beta.csproj': app, 'CoreLib.csproj': library },
@@ -507,13 +502,7 @@ describe('filterOfferableCandidates', () => {
 	});
 });
 
-/**
- * `readTargetProjects` for a *directory* target.
- *
- * Directories only ever reach the picker through Browse…, which is why the
- * earlier `.sln`-file coverage never exercised this branch. The expectations
- * below were taken from winapp 0.7.0 run against the same layouts.
- */
+/** Directory targets reach this path only through Browse…, not .sln selection. */
 describe('readTargetProjects for a directory', () => {
 	async function withLayout(
 		files: Record<string, string>,

@@ -15,18 +15,7 @@ export type RunInputValidation = {
 	message: string;
 };
 
-/**
- * Validates the `input` of a debug launch.
- *
- * Validation must branch on the target kind: in project mode the build output
- * does not exist yet — producing it is the point — so requiring an `.exe`
- * would reject every valid project. Only folder mode carries that requirement.
- *
- * Relative paths are resolved against the provided cwd.
- *
- * @param kind How `winapp run` will interpret the input. Callers derive this
- *   with `classifyRunTarget` from `run-target.ts`.
- */
+/** Only folder-mode input must already contain an executable. */
 export async function validateRunInput(
 	input: string,
 	cwd: string,

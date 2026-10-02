@@ -7,25 +7,7 @@ import { describe, it } from 'node:test';
 import { buildRunArgs, WinAppRunOptions } from '../run-options';
 
 /**
- * Contract tests between `buildRunArgs` and the real `winapp run` surface.
- *
- * Every other test in this suite asserts that `buildRunArgs` emits what we
- * *intended*; none of them can catch the case where the intent itself is wrong
- * because the CLI spells an option differently, dropped it, or never had it.
- * A typo like `--no-builds` produces a confident green suite and a runtime
- * failure, so the flag names are checked against the CLI's own schema.
- *
- * The schema is read straight from the binary in `bin/`, which is the exact
- * CLI the extension ships. An earlier version of this file compared against a
- * checked-in copy of the schema instead, which bought nothing: the copy could
- * only ever be as fresh as the last time someone remembered to regenerate it,
- * so it needed a second suite guarding the copy against the binary, plus a
- * script to rewrite it and another command to verify it. Reading the binary
- * directly makes drift impossible by construction rather than detectable.
- *
- * Skipped when no CLI is present. `bin/` is gitignored and populated by
- * `npm run download-cli`, so a fresh clone has nothing to check; CI downloads
- * the CLI before running unit tests, which is where this contract is enforced.
+ * Flag names are checked against the CLI --cli-schema; reads bin/ and skips when absent.
  */
 
 interface RunSchemaOption {
@@ -45,12 +27,7 @@ const cliPath = [
 	join(__dirname, '..', '..', 'bin', 'win-arm64', 'winapp.exe')
 ].find(existsSync);
 
-/**
- * Reads the `run` subcommand out of `winapp --cli-schema`.
- *
- * Read once at load time: shelling out costs ~100ms and every test below needs
- * the same answer.
- */
+/** Reads the `run` schema once; shelling out costs about 100ms. */
 function readRunSchema(): RunSchema | undefined {
 	if (!cliPath) { return undefined; }
 
@@ -91,12 +68,7 @@ function requireSchema(): RunSchema {
 	return schema!;
 }
 
-/**
- * Options with every field populated, so `buildRunArgs` emits every flag it is
- * capable of emitting. Mutually exclusive combinations are deliberately
- * included: `validateRunOptions` rejects those, but this test is about whether
- * the CLI understands each flag at all, not whether the combination is legal.
- */
+/** Includes mutually exclusive fields to force every emitted flag through schema validation. */
 const maximalOptions: Required<WinAppRunOptions> = {
 	input: 'C:\\src\\App\\App.csproj',
 	project: 'App',
@@ -123,15 +95,7 @@ const maximalOptions: Required<WinAppRunOptions> = {
 	json: true,
 };
 
-/**
- * Walks an argv the way the CLI's parser would, using the schema to decide
- * which flags consume the following token. A positional-scanning heuristic
- * cannot do this correctly: `--args "--flag value"` has a value that itself
- * begins with `--`, and would be misread as a bare flag.
- *
- * Returns the flags encountered, and throws if the argv is malformed — a flag
- * that needs a value but is last or followed by another known flag.
- */
+/** Schema-guided argv walk; --args may contain values that start with --. */
 function walkArgs(args: string[]): Set<string> {
 	const schema = requireSchema();
 	const seen = new Set<string>();

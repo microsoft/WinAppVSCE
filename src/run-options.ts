@@ -1,13 +1,6 @@
 import { isProjectMode, RunTargetKind } from './run-target';
 
-/**
- * Every `winapp run` option the extension can emit.
- *
- * Both the command palette and the debug adapter build their invocations from
- * this shape so the two surfaces cannot drift — previously each hand-assembled
- * its own arguments, and they had already diverged (one built a PowerShell
- * string, the other an argv array).
- */
+/** Shared `winapp run` option shape for palette and debug invocations. */
 export interface WinAppRunOptions {
 	/** Positional `input`: a build-output folder, `.csproj`, `.sln`/`.slnx`, or a directory containing one. */
 	input: string;
@@ -47,10 +40,7 @@ export interface WinAppRunOptions {
 	unregisterOnExit?: boolean;
 	/** Launch via the manifest's execution alias instead of AUMID activation. */
 	withAlias?: boolean;
-	/**
-	 * Launch via AUMID activation even for a console app, which would otherwise
-	 * use its execution alias. Mutually exclusive with {@link withAlias}.
-	 */
+	/** Forces AUMID activation; mutually exclusive with {@link withAlias}. */
 	withoutAlias?: boolean;
 	/** Path to the executable relative to the input folder. */
 	executable?: string;
@@ -69,10 +59,7 @@ export interface RunOptionDiagnostic {
 	message: string;
 }
 
-/**
- * Where the options will be used. The debug adapter has stricter rules than
- * the palette because it must attach to the launched process.
- */
+/** The debug adapter has stricter rules because it must attach. */
 export type RunOptionsContext = 'palette' | 'debug';
 
 /** Architectures accepted by `--arch`. */
@@ -81,18 +68,7 @@ export const SUPPORTED_ARCHITECTURES = ['x64', 'arm64', 'x86'] as const;
 /** Build configurations offered in the UI. `--configuration` accepts any value. */
 export const COMMON_CONFIGURATIONS = ['Debug', 'Release'] as const;
 
-/**
- * Builds the argument vector for `spawn(cliPath, args, { shell: false })`.
- *
- * Flag order is stable and deterministic so the output can be asserted in
- * tests and read predictably in the output channel. Values are never quoted or
- * escaped here — passing argv directly to `spawn` avoids shell parsing
- * entirely, which matters most for `-p Name=Value` and paths with spaces.
- *
- * Project-only options are emitted regardless of target kind; the CLI ignores
- * them in folder mode, and {@link validateRunOptions} is responsible for
- * warning the user rather than silently dropping what they asked for.
- */
+/** Builds argv for shell-free spawn; project-only options stay for validation. */
 export function buildRunArgs(options: WinAppRunOptions): string[] {
 	const args = ['run', options.input];
 
@@ -132,15 +108,7 @@ export function buildRunArgs(options: WinAppRunOptions): string[] {
 	return args;
 }
 
-/**
- * Validates an option set against the CLI's documented constraints and the
- * requirements of the calling surface.
- *
- * Centralizing this means the conflict rules are stated once instead of being
- * rediscovered at each call site. Errors should block the run; warnings should
- * be surfaced but not block, since the CLI's own behavior (ignoring
- * inapplicable options) is well defined.
- */
+/** Errors block the run; warnings surface CLI-ignored settings. */
 export function validateRunOptions(
 	options: WinAppRunOptions,
 	kind: RunTargetKind,
@@ -203,12 +171,8 @@ export function validateRunOptions(
 
 	// --- Mode mismatches ---
 	if (!isProjectMode(kind) && kind !== 'unknown') {
-		// `--aot` is the one project-only option the CLI *rejects* rather than
-		// ignores: winapp 0.7.0 answers `run <folder> --aot` with "--aot
-		// requires a .csproj, solution, or source directory that resolves to
-		// project mode" and exits 1. Dropping it with a warning the way the
-		// other eight are dropped would quietly run a non-AOT build the user
-		// never asked for, so this blocks instead.
+		// `--aot` is the one project-only option the CLI rejects instead of
+		// ignores, so silently dropping it would run a non-AOT build.
 		if (options.aot) {
 			diagnostics.push({
 				severity: 'error',
@@ -284,25 +248,7 @@ export function getRunOptionErrors(diagnostics: readonly RunOptionDiagnostic[]):
 	return diagnostics.filter(d => d.severity === 'error');
 }
 
-/**
- * Clears the options that do not apply to the target's mode.
- *
- * The CLI ignores project-only flags in folder mode rather than rejecting
- * them, which is precisely the problem: a `launch.json` that sets
- * `"configuration": "Release"` against a build output folder would otherwise
- * build nothing, change nothing, and say nothing. Dropping the flags keeps the
- * command line honest about what will actually happen; the caller is expected
- * to pair this with the warning {@link validateRunOptions} produces, so the
- * user finds out their setting is inert.
- *
- * `unknown` targets are left untouched — the CLI classifies better than we do,
- * and clearing options it would have honoured is the worse failure.
- *
- * `aot` is deliberately *not* cleared. It is the one project-only option the
- * CLI rejects outright rather than ignoring, so {@link validateRunOptions}
- * raises it as an error and the run never reaches here; were it cleared too, a
- * caller that ignored errors would silently run a non-AOT build instead.
- */
+/** Leaves `unknown` and `aot` untouched so CLI/validation handle them. */
 export function clearInapplicableOptions(
 	options: WinAppRunOptions,
 	kind: RunTargetKind
@@ -324,21 +270,9 @@ export function clearInapplicableOptions(
 	};
 }
 
-/**
- * The subset of a `launch.json` configuration this extension reads.
- *
- * Declared explicitly rather than using `vscode.DebugConfiguration`, whose
- * index signature is `any` — that would let a misspelled key typecheck and
- * silently drop the user's setting.
- */
+/** Explicit launch.json subset avoids `any` hiding misspelled keys. */
 export interface WinAppDebugConfiguration {
-	/**
-	 * Launch configurations carry arbitrary extra keys (`type`, `name`,
-	 * `request`, debugger-specific settings). Accepting them keeps this
-	 * assignable from `vscode.DebugConfiguration`; the declared properties
-	 * below still win for the keys this extension reads, so a misspelling is
-	 * caught at the point of use.
-	 */
+	/** Keeps this assignable from `vscode.DebugConfiguration`. */
 	[key: string]: unknown;
 
 	/** Positional input. Supersedes {@link inputFolder}. */
@@ -367,26 +301,12 @@ export interface WinAppDebugConfiguration {
 	symbols?: boolean;
 }
 
-/**
- * Resolve the run input from a debug configuration.
- *
- * `input` supersedes the original `inputFolder`, which is retained as a
- * deprecated alias. When both are present the new name wins.
- */
+/** `input` supersedes the deprecated `inputFolder` alias. */
 export function resolveDebugInput(config: WinAppDebugConfiguration): string | undefined {
 	return config.input || config.inputFolder || undefined;
 }
 
-/**
- * Map a launch.json configuration onto the shared run options.
- *
- * `json` is always set: the adapter depends on parsing the process ID out of
- * the CLI's JSON output in order to attach.
- *
- * `debugOutput` and `symbols` are mapped even though a debug session rejects
- * them, so {@link validateRunOptions} can explain *why* rather than silently
- * ignoring what the user asked for.
- */
+/** Sets `json` and keeps rejected debug flags for validation messages. */
 export function runOptionsFromDebugConfig(
 	config: WinAppDebugConfiguration,
 	input: string
@@ -417,10 +337,7 @@ export function runOptionsFromDebugConfig(
 	};
 }
 
-/**
- * Names the project-only options present in `options`, using the CLI's own
- * flag spelling so the warning is greppable against `winapp run --help`.
- */
+/** Uses CLI flag spelling so warnings match `winapp run --help`. */
 function listProjectOnlyOptions(options: WinAppRunOptions): string[] {
 	const present: string[] = [];
 	if (options.project) { present.push('--project'); }
@@ -435,33 +352,13 @@ function listProjectOnlyOptions(options: WinAppRunOptions): string[] {
 	return present;
 }
 
-/**
- * True when `--arch` would be accepted by the CLI.
- *
- * Matches winapp 0.7.0, which compares case-insensitively and also understands
- * `amd64` as a spelling of x64: `--arch X64`, `--arch ARM64`, and `--arch
- * amd64` all resolve (to win-x64, win-arm64, and win-x64), while `arm`,
- * `i386`, and `win-x64` are rejected. A case-sensitive check against
- * {@link SUPPORTED_ARCHITECTURES} would turn values the CLI accepts into
- * extension-side errors.
- */
+/** Matches CLI arch parsing: case-insensitive, with `amd64` as x64. */
 function isSupportedArchitecture(arch: string): boolean {
 	const normalized = arch.trim().toLowerCase();
 	return (SUPPORTED_ARCHITECTURES as readonly string[]).includes(normalized) || normalized === 'amd64';
 }
 
-/**
- * True when `--runtime` would be accepted by the CLI.
- *
- * winapp 0.7.0 derives the target architecture from the RID, so it accepts
- * only `win` + optional version digits + `-` + a supported architecture,
- * compared case-insensitively: `win-x64`, `win10-ARM64`, `win81-x86`,
- * `win7-x64`, and `win-amd64` all resolve. Everything else is rejected with
- * "Could not determine an architecture from --runtime" — including bare `win`
- * (no architecture to derive), `win-arm` and `win-mips` (unsupported
- * architecture), `windows-x64` (non-numeric version), and `win-x64-aot`
- * (trailing segment).
- */
+/** CLI accepts only `win` + optional digits + a supported architecture. */
 function isWindowsRuntimeIdentifier(runtime: string): boolean {
 	return /^win\d*-(?:x64|arm64|x86|amd64)$/.test(runtime.trim().toLowerCase());
 }

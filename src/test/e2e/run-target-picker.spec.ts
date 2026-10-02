@@ -1,59 +1,5 @@
 /**
- * E2E tests for the run-target picker used by `winapp.run`, `winapp.runWithOptions`,
- * and the `winapp` debug adapter.
- *
- * These cover the discovery behavior that unit tests cannot reach, because it
- * depends on VS Code's own `findFiles` indexing and on real workspace-folder
- * resolution:
- *
- * Test 1 — Projects are discovered and listed:
- *   A workspace with two .csproj files shows both, plus the build-output search
- *   and browse entries.
- *
- * Test 2 — Solution members are deduplicated:
- *   A .sln listing a member .csproj shows one entry for the solution, not two.
- *
- * Test 3 — Multi-root discovery:
- *   A .code-workspace with two folders shows projects from *both*, which is the
- *   multi-root fix — discovery previously only ever saw workspaceFolders[0].
- *
- * Test 4 — With Options command always prompts:
- *   A workspace with a single project auto-selects for "Run Application" but
- *   still prompts for "Run Application With Options".
- *
- * Test 5 — Library-only workspaces reach folder mode:
- *   A workspace whose only project is a class library hides that library and
- *   falls through to the build-output scan, keeping `winapp run <folder>`
- *   reachable.
- *
- * Test 6 — Libraries and test projects are hidden:
- *   A workspace mixing an app with a class library and a test project offers
- *   only the app.
- *
- * Test 7 — A project outranks its own build output:
- *   A workspace with both a .csproj and a populated bin/ offers the project
- *   only, so the run rebuilds instead of launching stale output.
- *
- * Test 8 — Project-less apps (Electron, Rust, …) still resolve:
- *   A workspace with no project file finds its dist/ output while skipping the
- *   electron.exe vendored under node_modules.
- *
- * Test 9 — Multi-app solutions prompt for `--project`:
- *   Selecting a .sln with two runnable apps asks which one to run.
- *
- * Test 10 — Single-app solutions do not:
- *   The same flow with one app and one library moves straight on, because the
- *   CLI resolves `--project` itself.
- *
- * Test 11 — Long project lists are capped:
- *   More than ten projects are truncated with a pointer at the browse entry.
- *
- * Test 12 — F5 with no `input` prompts:
- *   A winapp launch configuration that omits `input` falls through to the same
- *   picker instead of failing with a missing-argument error.
- *
- * Every test dismisses the picker with Escape, so the winapp CLI is never
- * actually invoked and nothing is built, deployed, or registered.
+ * E2E picker coverage for VS Code findFiles/workspace behavior; Escape prevents CLI invocation.
  */
 
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
@@ -67,27 +13,14 @@ const VSCODE_EXE =
 
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
 
-/**
- * Extensions that interfere with this suite and must not load.
- *
- * The fixtures are real .csproj files, which activates C# Dev Kit. It then
- * contributes status-bar items and announcement UI that can take focus while
- * the command palette is opening, and the palette keystroke is swallowed.
- */
+/** C# Dev Kit UI can steal focus while the command palette opens. */
 const INTERFERING_EXTENSIONS = [
     'ms-dotnettools.csdevkit',
     'ms-dotnettools.csharp',
     'ms-dotnettools.vscode-dotnet-runtime',
 ];
 
-/**
- * Isolate the extension under test from other installed extensions.
- *
- * `--disable-extensions` is exempt for `--extensionDevelopmentPath`, so it is
- * correct when the extension is loaded from disk. It cannot be used when the
- * *installed* build is under test, because it would disable that build too;
- * that mode names the interfering extensions individually instead.
- */
+/** Installed-extension mode must disable only known interfering extensions. */
 const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
     ? INTERFERING_EXTENSIONS.flatMap((id) => ['--disable-extension', id])
     : ['--disable-extensions', `--extensionDevelopmentPath=${EXTENSION_ROOT}`];
@@ -158,13 +91,7 @@ async function launchVSCode(targetPath: string): Promise<{ app: ElectronApplicat
 
 const PALETTE_PLACEHOLDER = /Type the name of a command to run/;
 
-/**
- * Dismisses first-run UI that takes focus.
- *
- * A fresh profile can show a "Welcome to Visual Studio Code" sign-in dialog and
- * notification toasts. Neither is suppressed by `workbench.startupEditor`, and
- * while either holds focus the palette shortcut is swallowed.
- */
+/** Fresh VS Code profiles can show first-run UI that swallows palette shortcuts. */
 async function dismissFirstRunUI(page: Page): Promise<void> {
     for (const name of [/Continue without Signing In/, /^Close$/]) {
         const button = page.getByRole('button', { name });
@@ -177,13 +104,7 @@ async function dismissFirstRunUI(page: Page): Promise<void> {
     }
 }
 
-/**
- * Opens the command palette, retrying until it genuinely has focus.
- *
- * Typing blind is unsafe: anything that takes focus while the palette opens
- * sends the keystrokes into an editor instead, and the command silently never
- * runs. Asserting on the palette's own placeholder makes that failure loud.
- */
+/** Retry until the palette has focus; startup UI can swallow the shortcut. */
 async function openCommandPalette(page: Page) {
     const input = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
 
@@ -240,14 +161,7 @@ const PROJECT_PICKER_PLACEHOLDER = /Which project in .+ would you like to run\?/
 /** The placeholder of the With Options command's first build-settings prompt. */
 const BUILD_CONFIG_PLACEHOLDER = /^Build configuration$/;
 
-/**
- * Wait for a quick pick identified by its placeholder and return every row.
- *
- * The picker is identified by its placeholder rather than by waiting for rows:
- * the command palette's own rows are visible the instant Enter is pressed, so
- * reading rows immediately captures the palette instead of the picker that
- * replaces it.
- */
+/** Placeholder matching avoids reading stale command-palette rows. */
 async function readPickerRows(page: Page, placeholder: RegExp): Promise<string[]> {
     const input = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
     await expect(input).toHaveAttribute('placeholder', placeholder, { timeout: 30_000 });
@@ -318,11 +232,8 @@ test.describe('run target picker', () => {
         }
     });
 
-    // Folder mode is how `winapp run <build output folder>` works. A workspace
-    // whose only project is a library must not offer that library — the CLI
-    // would degrade to folder mode and report "Manifest file not found", which
-    // says nothing about the real problem — but it must still reach the build
-    // output folder, which is the one target that can actually run.
+    // Library-only workspaces must skip the library but still reach folder mode;
+    // otherwise the CLI reports a misleading missing-manifest error.
     test('falls back to build output when the only project is a library', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-libonly-e2e-'));
         writeProject(tmpDir, path.join('CoreLib', 'CoreLib.csproj'), `<Project Sdk="Microsoft.NET.Sdk">
@@ -362,10 +273,8 @@ test.describe('run target picker', () => {
         }
     });
 
-    // A project always beats its own build output: the .exe scan only runs
-    // when discovery finds no project at all. Without this the picker would
-    // offer both, and picking the folder would launch stale output instead of
-    // rebuilding.
+    // A project beats its own build output; otherwise stale output could launch
+    // instead of rebuilding.
     test('prefers the project over its own build output folder', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-prefer-e2e-'));
         writeProject(tmpDir, path.join('App', 'App.csproj'));
@@ -397,11 +306,8 @@ test.describe('run target picker', () => {
         }
     });
 
-    // Apps with no project file — Electron, Rust, and anything else that only
-    // produces an .exe — reach folder mode through the build-output scan. The
-    // scan must look inside dist/ and target/, which .csproj discovery skips,
-    // while still skipping node_modules: every Electron workspace ships an
-    // electron.exe there that would otherwise bury the real app.
+    // Project-less apps reach folder mode through dist/ or target/, but
+    // node_modules must stay hidden because Electron ships electron.exe there.
     test('finds output for a project-less app without surfacing node_modules', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-noproj-e2e-'));
         fs.writeFileSync(path.join(tmpDir, 'package.json'), '{ "name": "sample-app" }');
@@ -704,14 +610,7 @@ test.describe('run target picker', () => {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
-    /**
-     * A winapp launch configuration with no `input` is legal: F5 is expected
-     * to fall through to the same run-target picker the palette uses, rather
-     * than failing with a missing-argument error. Driven through F5 because
-     * that is the only path through
-     * `WinAppDebugAdapterFactory.createDebugAdapterDescriptor`; the palette
-     * command never reaches it.
-     */
+    /** F5 without `input` must fall through to the run-target picker. */
     test('F5 with no input in launch.json prompts for a run target', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-f5-e2e-'));
         // Two runnable projects, deliberately: a single candidate auto-selects
@@ -741,10 +640,8 @@ test.describe('run target picker', () => {
             app = launched.app;
             const page = launched.page;
 
-            // Driven through the palette rather than a bare F5 keypress: the
-            // palette helper retries until it provably has focus, whereas a
-            // raw keyboard shortcut can land in the chat sidebar and silently
-            // do nothing. The command is the same one F5 is bound to.
+            // Use the palette helper because it retries until focus is proven;
+            // a raw F5 can land in chat and do nothing.
             await runCommandPalette(page, 'Debug: Start Debugging');
 
             // With no configuration yet selected in the Run and Debug view,

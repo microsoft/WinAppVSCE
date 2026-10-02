@@ -1,35 +1,9 @@
 import { DOMParser } from '@xmldom/xmldom';
 import type { Document, Element } from '@xmldom/xmldom';
 
-/**
- * Read-only XML helpers for project and solution files.
- *
- * These are deliberately separate from `manifest-editor/xml-utils.ts`. That
- * module does string surgery on manifests because it must round-trip the
- * user's exact formatting; nothing here writes anything back, so a real parse
- * is both simpler and more accurate.
- *
- * Reading this XML with regular expressions got three things wrong that a
- * parser gets right for free:
- *
- * - **Comments.** `<!-- <OutputType>Library</OutputType> -->` matched, so a
- *   commented-out marker could hide a perfectly runnable project.
- * - **Quote style.** `Path='App.csproj'` is valid XML but did not match a
- *   double-quote-only pattern, so the member went missing.
- * - **Entities.** `Path="A&amp;B\App.csproj"` yielded the raw `&amp;` rather
- *   than the `&` the path actually uses.
- */
+/** Real XML parsing avoids regex mistakes with comments, quote style, and entities. */
 
-/**
- * Parses XML, returning `undefined` rather than throwing when the document is
- * malformed.
- *
- * Callers are classifying files that the user merely happens to have in the
- * workspace, so a broken or half-written file must degrade to "I don't know"
- * instead of breaking discovery. Parser diagnostics are swallowed for the same
- * reason — and because `@xmldom/xmldom` otherwise writes them to the console,
- * which would be noise in the extension host log.
- */
+/** Malformed workspace XML degrades to unknown and suppresses parser log noise. */
 export function tryParseXml(content: string): Document | undefined {
 	let failed = false;
 	const parser = new DOMParser({
@@ -53,14 +27,7 @@ export function tryParseXml(content: string): Document | undefined {
 	return doc;
 }
 
-/**
- * Every element in the document with the given local name, ignoring namespace
- * prefixes.
- *
- * Project and solution files are not consistently namespaced — an SDK-style
- * `.csproj` has no namespace while a legacy one uses the MSBuild namespace —
- * so matching on local name keeps both working.
- */
+/** Match local names so SDK-style and legacy MSBuild namespaces both work. */
 export function findElementsByLocalName(doc: Document, localName: string): Element[] {
 	const wanted = localName.toLowerCase();
 	const results: Element[] = [];
@@ -75,12 +42,7 @@ export function findElementsByLocalName(doc: Document, localName: string): Eleme
 	return results;
 }
 
-/**
- * An element's direct text content, with surrounding whitespace removed.
- *
- * Only child text nodes are read, so a nested element cannot contribute to the
- * value the way `textContent` would.
- */
+/** Direct child text only; nested elements must not contribute. */
 export function elementText(element: Element): string {
 	let text = '';
 	const children = element.childNodes;

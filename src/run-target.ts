@@ -3,16 +3,7 @@ import * as path from 'path';
 import { ALWAYS_SKIP_DIRS, isContainedInReal, isOfferableProject, readProjectRunnability } from './project-detection';
 import { attributeValue, findElementsByLocalName, tryParseXml } from './xml-read';
 
-/**
- * How `winapp run` will interpret a given input path.
- *
- * The CLI accepts a build-output folder, a `.csproj`, a `.sln`/`.slnx`, or a
- * directory containing one of those at its top level, and decides for itself
- * which mode to use. The extension classifies the same input only so it can
- * decide which options are meaningful (project-only options are silently
- * ignored in folder mode) and which prompts to show — the classification is
- * never passed to the CLI.
- */
+/** The extension-only target classification is never passed to the CLI. */
 export type RunTargetKind = 'project' | 'solution' | 'folder' | 'unknown';
 
 /** Project file extensions the CLI can build in project mode. */
@@ -21,29 +12,13 @@ export const PROJECT_FILE_EXTENSIONS = ['.csproj'] as const;
 /** Solution file extensions the CLI can build in project mode. */
 export const SOLUTION_FILE_EXTENSIONS = ['.sln', '.slnx'] as const;
 
-/**
- * VS Code glob matching every project/solution file. Project-file discovery is
- * dramatically cheaper and more precise than scanning for `**\/*.exe`, so this
- * is the primary discovery mechanism; the executable scan is only a fallback.
- */
+/** Primary discovery glob; executable scanning is only a fallback. */
 export const PROJECT_FILE_GLOB = '**/*.{sln,slnx,csproj}';
 
-/**
- * Maximum number of project/solution files to read from the glob. The glob is
- * targeted rather than speculative, so this is generous — it exists to bound
- * the work on a monorepo, not to bound what the user sees. Display is capped
- * separately by {@link RUN_TARGET_DISPLAY_LIMIT} after filtering.
- */
+/** Bounds project-file glob work; display is capped separately. */
 export const PROJECT_FILE_MAX_RESULTS = 200;
 
-/**
- * Maximum number of run targets shown in the picker.
- *
- * A large repository can contain dozens of project files; listing them all
- * produces a wall of names that is slower to scan than simply browsing to the
- * one you want. Matches the build-output picker's cap, and the picker always
- * offers Browse so nothing is unreachable.
- */
+/** Caps picker entries while Browse keeps all targets reachable. */
 export const RUN_TARGET_DISPLAY_LIMIT = 10;
 
 /** Directories excluded from project-file discovery. */
@@ -73,13 +48,7 @@ export interface RunTargetCandidate {
 	root: WorkspaceRoot;
 }
 
-/**
- * Classifies a path by its file extension alone.
- *
- * Returns `undefined` for anything that is not a recognized project or
- * solution file, including directories — use {@link classifyRunTargetEntries}
- * for those, since classifying a directory requires knowing its contents.
- */
+/** Returns `undefined` for directories; classify those from top-level entries. */
 export function classifyRunTargetFile(filePath: string): RunTargetKind | undefined {
 	const extension = path.extname(filePath).toLowerCase();
 	if ((SOLUTION_FILE_EXTENSIONS as readonly string[]).includes(extension)) {
@@ -91,15 +60,7 @@ export function classifyRunTargetFile(filePath: string): RunTargetKind | undefin
 	return undefined;
 }
 
-/**
- * Classifies a directory from the names of the entries at its top level.
- *
- * Mirrors the CLI's own precedence: a solution wins over a project, and a
- * project wins over loose executables (the CLI prefers to build rather than
- * run stale output). A directory with neither is `unknown` — the CLI will
- * still be given the chance to reject it, since it understands framework
- * layouts the extension does not.
- */
+/** Mirrors CLI precedence; `unknown` still goes to the CLI for final handling. */
 export function classifyRunTargetEntries(entryNames: readonly string[]): RunTargetKind {
 	let hasProject = false;
 	let hasExecutable = false;
@@ -121,12 +82,7 @@ export function classifyRunTargetEntries(entryNames: readonly string[]): RunTarg
 	return 'unknown';
 }
 
-/**
- * Classifies an input path on disk, reading the directory when needed.
- *
- * Non-existent paths classify from their extension so a `launch.json` naming a
- * not-yet-built project is still treated as project mode.
- */
+/** Non-existent paths classify by extension so `launch.json` can name projects. */
 export async function classifyRunTarget(inputPath: string): Promise<RunTargetKind> {
 	const byExtension = classifyRunTargetFile(inputPath);
 	if (byExtension) {
@@ -154,18 +110,7 @@ export function isProjectMode(kind: RunTargetKind): boolean {
 	return kind === 'project' || kind === 'solution';
 }
 
-/**
- * Extracts referenced project paths from a solution file.
- *
- * Handles both the classic `.sln` text format and the newer XML `.slnx`.
- * Returned paths are relative to the solution file, using the separators the
- * solution itself used; callers resolve them against the solution directory.
- *
- * This is a deliberately lightweight parse — consistent with how
- * `project-detection.ts` reads `<OutputType>` — used only to decide whether a
- * `--project` prompt is needed. When it comes up empty the caller omits
- * `--project` entirely and lets the CLI produce its own, better error.
- */
+/** Lightweight solution parse; empty results defer errors to the CLI. */
 export function parseSolutionProjectPaths(content: string, solutionPath: string): string[] {
 	const isXml = path.extname(solutionPath).toLowerCase() === '.slnx';
 	const paths = isXml ? parseSlnxProjectPaths(content) : parseSlnProjectPaths(content);
@@ -189,9 +134,7 @@ function parseSlnProjectPaths(content: string): string[] {
 function parseSlnxProjectPaths(content: string): string[] {
 	// <Project Path="src/MyApp/MyApp.csproj" />
 	//
-	// Parsed rather than pattern-matched so that single-quoted attributes,
-	// escaped entities in the path, and commented-out members are all handled
-	// the way the solution's own consumers handle them.
+	// XML parse handles quoting, entities, and commented-out members.
 	const doc = tryParseXml(content);
 	if (!doc) {
 		return [];
@@ -207,17 +150,7 @@ function parseSlnxProjectPaths(content: string): string[] {
 	return results;
 }
 
-/**
- * Reads a solution and returns the absolute paths of the projects it contains.
- * Returns an empty array when the solution can't be read or parsed.
- *
- * Entries that resolve outside the solution's own directory are dropped. A
- * solution file is workspace content, and the picker shows only each project's
- * file name, so a `..\..\` entry would otherwise put an unreviewable path on a
- * `--project` argument behind a label that looks ordinary. Containment follows
- * reparse points, so a junction inside the solution directory cannot be used
- * to smuggle an outside path past the lexical check.
- */
+/** Drops solution entries that escape the solution directory via reparse points. */
 export async function readSolutionProjectPaths(solutionPath: string): Promise<string[]> {
 	let content: string;
 	try {
@@ -241,26 +174,12 @@ export function isContainedIn(container: string, candidate: string): boolean {
 	return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-/**
- * Absolute paths of the projects directly inside a directory.
- *
- * Only the top level is read, matching the CLI's own rule that a directory
- * input is resolved from the projects "at its top level". Returns an empty
- * array when the directory can't be read.
- */
+/** Reads only top-level projects, matching the CLI's directory-input rule. */
 export async function readDirectoryProjectPaths(directoryPath: string): Promise<string[]> {
 	return readDirectoryEntriesWithExtensions(directoryPath, PROJECT_FILE_EXTENSIONS);
 }
 
-/**
- * Absolute paths of the solutions directly inside a directory.
- *
- * A directory input is resolved by the CLI from its top-level solution in
- * preference to any top-level project: `winapp 0.7.0` handed a directory
- * containing both `All.sln` and `Top.csproj` reports on `All.sln`. Callers
- * must therefore check for a solution before falling back to
- * {@link readDirectoryProjectPaths}.
- */
+/** Check top-level solutions before projects; `winapp 0.7.0` does too. */
 export async function readDirectorySolutionPaths(directoryPath: string): Promise<string[]> {
 	return readDirectoryEntriesWithExtensions(directoryPath, SOLUTION_FILE_EXTENSIONS);
 }
@@ -291,18 +210,7 @@ export async function isDirectory(targetPath: string): Promise<boolean> {
 	}
 }
 
-/**
- * The projects a target contains, or an empty array when the target already
- * names a single project.
- *
- * Branches on what the path *is* rather than on its classified kind: a
- * directory holding a `.sln` classifies as `solution`, but must be read as a
- * directory. Reading it as a solution file fails with `EISDIR`, and because
- * that failure is swallowed the caller would silently skip the prompt. The
- * directory branch then has to re-enter the solution itself, since the
- * projects a directory offers are usually its solution's members rather than
- * files sitting at its top level.
- */
+/** Directories classified as `solution` still need directory resolution first. */
 export async function readTargetProjects(
 	target: RunTargetCandidate
 ): Promise<{ projects: string[]; containerPath: string }> {
@@ -311,12 +219,8 @@ export async function readTargetProjects(
 	}
 
 	if (await isDirectory(target.path)) {
-		// A directory input is resolved by the CLI from the projects and
-		// solutions at its top level, and a solution takes precedence: winapp
-		// 0.7.0 handed a directory holding both All.sln and Top.csproj
-		// resolves All.sln. Reading the solution's members is what lets a
-		// browsed directory reach the --project prompt at all; without it a
-		// multi-app solution one level down looks like "nothing to choose".
+		// A top-level solution takes precedence over projects; reading its
+		// members lets browsed directories reach the --project prompt.
 		const solutions = await readDirectorySolutionPaths(target.path);
 		if (solutions.length === 1) {
 			return {
@@ -348,42 +252,14 @@ export async function readTargetProjects(
 	return { projects: [], containerPath: path.dirname(target.path) };
 }
 
-/**
- * Narrows a set of project paths to those worth offering the user.
- *
- * Projects the file explicitly identifies as a test project or a library are
- * dropped; everything else — including projects whose `OutputType` is
- * inherited or conditional — is kept. See
- * {@link import('./project-detection').classifyProjectRunnability} for why the
- * heuristic is deliberately one-sided.
- *
- * May return an empty array, and deliberately so. Anything the heuristic is
- * unsure about classifies as `unknown` and survives, so an empty result means
- * every candidate *explicitly* declared itself a library or a test project —
- * the one case where we can say with confidence that `winapp run` will reject
- * all of them. Offering them anyway would only invite the user to pick one and
- * walk into "is not a runnable project". Callers are expected to treat empty
- * as "nothing runnable here" and offer a route that can actually succeed.
- */
+/** Drops only explicit test/library projects; `unknown` stays visible. */
 export async function filterOfferableProjects(projectPaths: readonly string[]): Promise<string[]> {
 	const runnability = await Promise.all(projectPaths.map(readProjectRunnability));
 
 	return projectPaths.filter((_, index) => isOfferableProject(runnability[index]));
 }
 
-/**
- * Removes project candidates that are already represented by a solution
- * candidate.
- *
- * Without this, a three-app solution produces four near-identical QuickPick
- * entries. The solution is the better target — it preserves solution-level
- * MSBuild context and lets `--project` disambiguate — so its members are
- * folded into it.
- *
- * @param candidates All discovered candidates.
- * @param solutionMembers Absolute project paths belonging to each solution,
- *   keyed by the solution's absolute path.
- */
+/** Folds solution members into the solution target to preserve MSBuild context. */
 export function dedupeSolutionMembers(
 	candidates: readonly RunTargetCandidate[],
 	solutionMembers: ReadonlyMap<string, readonly string[]>
@@ -405,18 +281,7 @@ export function dedupeSolutionMembers(
 	);
 }
 
-/**
- * Applies {@link filterOfferableProjects} to the `project` candidates in a
- * discovered set, leaving solutions and build-output folders untouched.
- *
- * Solutions are never filtered: the CLI resolves the runnable project inside a
- * solution itself, and it does so with full MSBuild evaluation.
- *
- * A lone project is filtered like any other. Exempting it would let a
- * single-library workspace auto-select that library and run head-first into
- * the CLI's folder-mode fallback ("Manifest file not found"), which says
- * nothing about the real problem.
- */
+/** Solutions are never filtered; the CLI resolves them with full MSBuild. */
 export async function filterOfferableCandidates(
 	candidates: readonly RunTargetCandidate[]
 ): Promise<RunTargetCandidate[]> {
@@ -429,13 +294,7 @@ export async function filterOfferableCandidates(
 	return candidates.filter(candidate => candidate.kind !== 'project' || keep.has(candidate.path));
 }
 
-/**
- * Sorts candidates for display: projects and solutions before build-output
- * folders, the preferred root first, then by path.
- *
- * `preferredRootPath` is normally the root owning the active editor, so the
- * app you are looking at is the top entry without the others being hidden.
- */
+/** Sorts candidates with the active editor's root first, without hiding others. */
 export function sortRunTargets(
 	candidates: readonly RunTargetCandidate[],
 	preferredRootPath?: string
@@ -464,10 +323,7 @@ export function sortRunTargets(
 	});
 }
 
-/**
- * Identifies the workspace root containing `filePath`, preferring the deepest
- * match so nested roots resolve to the most specific one.
- */
+/** Prefers the deepest matching workspace root for nested roots. */
 export function findOwningRoot(
 	roots: readonly WorkspaceRoot[],
 	filePath: string | undefined

@@ -8,15 +8,7 @@ const packageJsonPath = path.resolve(__dirname, '..', '..', 'package.json');
 const raw = fs.readFileSync(packageJsonPath, 'utf8');
 const manifest = JSON.parse(raw);
 
-/**
- * Find object keys that appear more than once at the same position in the
- * document.
- *
- * Duplicate keys are legal JSON — `JSON.parse` silently keeps the last one —
- * so a plain parse cannot catch them. That makes it possible to add a second
- * `contributes.configuration` block and unknowingly delete every setting in
- * the first, with no syntax error and no failing parse to warn you.
- */
+/** Duplicate JSON keys silently replace earlier extension contributions. */
 function findDuplicateKeys(json: string): string[] {
 	const duplicates: string[] = [];
 	const stack: { keys: Set<string>; path: string }[] = [];

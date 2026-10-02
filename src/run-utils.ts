@@ -34,15 +34,7 @@ import {
 	type WinAppRunOptions
 } from './run-options';
 
-/**
- * The run flow for `winapp run`: discovering targets, resolving options, and
- * prompting only where the CLI genuinely cannot decide for itself.
- *
- * Extracted from `extension.ts`, which had grown past 76 KB. The pure pieces
- * live in `run-target.ts` and `run-options.ts`; this module is the VS Code
- * layer that sits on top of them and is shared by the palette commands and the
- * debug adapter.
- */
+/** VS Code layer for `winapp run`, shared by commands and the debug adapter. */
 
 export const FOLDER_PICKER_DETAIL = 'Open a folder picker';
 
@@ -66,13 +58,7 @@ export async function selectFolder(title: string, defaultUri?: vscode.Uri): Prom
 	return result?.[0]?.fsPath;
 }
 
-/**
- * Scan a workspace root for build output folders (directories containing .exe
- * files). Shows a progress notification with cancel support.
- *
- * @returns The discovered folder paths sorted by relative path, or `undefined`
- *   if cancelled.
- */
+/** Find build-output folders with cancellable VS Code progress. */
 export async function findBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
 	const outputFolders = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for build output folders...', cancellable: true },
@@ -98,17 +84,7 @@ export async function findBuildOutputFolders(workspacePath: string): Promise<str
 	return outputFolders;
 }
 
-/**
- * Search the workspace for build output folders and let the user pick one via
- * a QuickPick. Falls back to a native folder dialog when none are found; a
- * "Browse…" entry is always appended.
- *
- * Used by the commands that genuinely require built output (for example
- * `winapp pack`). The run flow uses {@link pickRunTarget} instead, which can
- * also offer projects and solutions.
- *
- * @returns The selected folder path, or `undefined` if cancelled.
- */
+/** Pick build output, always leaving Browse available. */
 export async function pickBuildOutputFolder(workspacePath: string): Promise<string | undefined> {
 	const outputFolders = await findBuildOutputFolders(workspacePath);
 	if (!outputFolders) {
@@ -145,12 +121,7 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 	return picked.directory;
 }
 
-/**
- * The workspace folders, reduced to what run-target discovery needs.
- *
- * Unlike `getWorkspacePath`, this does not collapse a multi-root workspace to
- * its first folder.
- */
+/** Returns all workspace roots; never collapses multi-root workspaces. */
 export function getWorkspaceRoots(): WorkspaceRoot[] {
 	return (vscode.workspace.workspaceFolders ?? []).map(folder => ({
 		name: folder.name,
@@ -158,10 +129,7 @@ export function getWorkspaceRoots(): WorkspaceRoot[] {
 	}));
 }
 
-/**
- * The root owning the active editor, used to sort its targets first. This only
- * affects ordering — every root's targets remain listed.
- */
+/** Root owning the active editor, used only as a sort hint. */
 function getPreferredRootPath(roots: readonly WorkspaceRoot[]): string | undefined {
 	const activeUri = vscode.window.activeTextEditor?.document.uri;
 	if (!activeUri || activeUri.scheme !== 'file') {
@@ -170,14 +138,7 @@ function getPreferredRootPath(roots: readonly WorkspaceRoot[]): string | undefin
 	return findOwningRoot(roots, activeUri.fsPath)?.path;
 }
 
-/**
- * Find project and solution files across every workspace root.
- *
- * This is the primary discovery mechanism for run targets: globbing for
- * project files is far cheaper and more precise than scanning for `**\/*.exe`,
- * so the executable scan is reserved for workspaces where no project is found
- * (or when the user explicitly asks for it).
- */
+/** Prefer project globbing; reserve executable scans for fallback or explicit use. */
 async function findProjectTargets(
 	roots: readonly WorkspaceRoot[],
 	token: vscode.CancellationToken
@@ -207,12 +168,7 @@ async function findProjectTargets(
 	return candidates;
 }
 
-/**
- * Find build-output folders (directories containing `.exe` files) across every
- * workspace root.
- *
- * @returns The discovered folders, or `undefined` if the user cancelled the scan.
- */
+/** Find `.exe` output folders across every workspace root. */
 async function findBuildOutputTargets(roots: readonly WorkspaceRoot[]): Promise<RunTargetCandidate[] | undefined> {
 	const candidates: RunTargetCandidate[] = [];
 
@@ -229,10 +185,7 @@ async function findBuildOutputTargets(roots: readonly WorkspaceRoot[]): Promise<
 	return candidates;
 }
 
-/**
- * Resolve the projects belonging to each discovered solution, so members can be
- * folded into their solution rather than listed alongside it.
- */
+/** Map each discovered solution to its member projects. */
 async function mapSolutionMembers(
 	candidates: readonly RunTargetCandidate[]
 ): Promise<Map<string, string[]>> {
@@ -253,24 +206,14 @@ interface RunTargetQuickPickItem extends vscode.QuickPickItem {
 	candidate?: RunTargetCandidate;
 }
 
-/**
- * A chosen run target, plus anything discovery already learned about it.
- *
- * Carrying the solution's members avoids re-reading and re-parsing a solution
- * file that discovery has already parsed in order to fold its members away.
- */
+/** Selected run target plus discovery data already parsed for it. */
 export interface RunTargetSelection {
 	target: RunTargetCandidate;
 	/** Absolute project paths belonging to `target`, when already known. */
 	members?: readonly string[];
 }
 
-/**
- * Build the QuickPick items for a set of run targets, grouped by kind.
- *
- * Root names are only shown when the workspace actually has more than one
- * root, so single-folder users see no extra noise.
- */
+/** Build grouped items; show root names only for multi-root workspaces. */
 function buildRunTargetItems(
 	candidates: readonly RunTargetCandidate[],
 	showRootNames: boolean
@@ -302,22 +245,7 @@ function buildRunTargetItems(
 	return items;
 }
 
-/**
- * Pick the target for `winapp run`.
- *
- * Presents projects, solutions and build-output folders from every workspace
- * root in a single prompt, and auto-selects when there is only one candidate.
- * The user chooses *what to run*, never which CLI mode to use — the mode is
- * derived from the selection.
- *
- * @param alwaysPrompt Show the picker even when there is a single obvious
- *   candidate. Used by the With Options command, where the user has explicitly
- *   asked to make choices.
- * @param scope Restrict discovery to a single workspace folder. The debug
- *   adapter passes the session's folder so F5 stays within the root that owns
- *   the launch configuration.
- * @returns The selected target, or `undefined` if cancelled.
- */
+/** Pick what to run; the selection derives the CLI mode. */
 export async function pickRunTarget(
 	alwaysPrompt: boolean = false,
 	scope?: vscode.WorkspaceFolder
@@ -453,13 +381,7 @@ export async function pickRunTarget(
 		: undefined;
 }
 
-/**
- * Fall back to a native dialog, classifying whatever the user selects so the
- * caller still knows which options apply.
- *
- * File and folder selection are separate entry points because a Windows open
- * dialog cannot offer both at once.
- */
+/** Native fallback; Windows cannot select files and folders in one dialog. */
 async function browseForRunTarget(
 	roots: readonly WorkspaceRoot[],
 	mode: 'file' | 'folder'
@@ -494,13 +416,7 @@ async function browseForRunTarget(
 	};
 }
 
-/**
- * Read the `winapp.run.*` defaults for a workspace root.
- *
- * These settings are resource-scoped, so each folder of a multi-root workspace
- * can carry its own configuration/architecture/properties in its
- * `.vscode/settings.json`.
- */
+/** `winapp.run.*` defaults are resource-scoped per workspace root. */
 export function getRunSettings(rootPath: string): Partial<WinAppRunOptions> {
 	const config = vscode.workspace.getConfiguration('winapp', vscode.Uri.file(rootPath));
 	const configuration = config.get<string>('run.configuration');
@@ -516,20 +432,7 @@ export function getRunSettings(rootPath: string): Partial<WinAppRunOptions> {
 }
 
 
-/**
- * Ask which project to launch, but only when the CLI genuinely cannot work it
- * out for itself.
- *
- * `winapp run` already auto-selects the single runnable app project in a
- * solution or directory, using full MSBuild evaluation — it only fails when
- * there are several. So this prompts only when more than one candidate
- * survives filtering, and otherwise emits no `--project` at all. Guessing on
- * the CLI's behalf with a weaker heuristic risks pinning the *wrong* project,
- * which is worse than letting the CLI decide or report a precise error.
- *
- * Returns `{ cancelled: true }` when the user dismissed the prompt, which is
- * distinct from "no selection needed" — the caller must not run in that case.
- */
+/** Prompt only for multiple plausible apps; otherwise the CLI is authoritative. */
 export async function pickSolutionProject(
 	selection: RunTargetSelection
 ): Promise<{ cancelled: boolean; project?: string }> {
@@ -553,10 +456,8 @@ export async function pickSolutionProject(
 
 	const offerable = await filterOfferableProjects(projects);
 	if (offerable.length <= 1) {
-		// Exactly one plausible app, or none at all. Either way there is
-		// nothing worth asking about: the CLI makes the final call with its
-		// own, better-informed classification, and when nothing is runnable it
-		// reports that far more precisely than a doomed QuickPick would.
+		// The CLI makes the final app classification and reports failures more
+		// precisely than a doomed QuickPick would.
 		return { cancelled: false };
 	}
 
@@ -589,14 +490,7 @@ interface RunToggle {
 	projectOnly?: boolean;
 }
 
-/**
- * The toggles offered by the With Options run command.
- *
- * `--without-alias` is deliberately absent: it is the inverse of
- * `--with-alias`, and two mutually exclusive checkboxes in one multi-select
- * invite a selection that `validateRunOptions` then has to reject. It stays
- * available in launch.json, where the two are separate properties.
- */
+/** With Options toggles; omit `--without-alias` to avoid conflicting aliases. */
 const RUN_TOGGLES: RunToggle[] = [
 	{ key: 'clean', label: 'Clean application data', detail: 'Remove the existing package\'s LocalState and settings before deploying (--clean)' },
 	{ key: 'noBuild', label: 'Skip build', detail: 'Run the existing build output without rebuilding (--no-build)', projectOnly: true },
@@ -608,17 +502,7 @@ const RUN_TOGGLES: RunToggle[] = [
 	{ key: 'unregisterOnExit', label: 'Unregister on exit', detail: 'Remove the development package after the app exits (--unregister-on-exit)' }
 ];
 
-/**
- * Prompt for the optional run settings in a single multi-select, rather than a
- * chain of yes/no prompts.
- *
- * Options that the CLI ignores for the chosen target are omitted entirely
- * rather than shown disabled, so the list never offers a no-op. Options
- * already enabled by settings start checked, so leaving the prompt untouched
- * preserves the configured behaviour.
- *
- * @returns The selected options, or `undefined` if cancelled.
- */
+/** Omit target-inapplicable toggles; configured defaults start checked. */
 export async function pickRunToggles(
 	kind: RunTargetKind,
 	defaults: Partial<WinAppRunOptions>
@@ -647,15 +531,7 @@ export async function pickRunToggles(
 	return selected;
 }
 
-/**
- * Prompt for build configuration and architecture in project mode.
- *
- * Both prompts are seeded from the current settings and mark the active value,
- * so a configured non-default (for example a custom configuration name) is
- * offered rather than silently replaced.
- *
- * @returns The selections, or `undefined` if cancelled.
- */
+/** Seed build prompts from settings so custom defaults remain selectable. */
 export async function pickBuildSettings(
 	defaults: Partial<WinAppRunOptions>
 ): Promise<Partial<WinAppRunOptions> | undefined> {
@@ -702,13 +578,7 @@ export async function pickBuildSettings(
 	return { configuration: configuration.label, arch: arch.arch };
 }
 
-/**
- * Surface option diagnostics. Errors block the run; warnings are shown but do
- * not stop it, because the CLI's behavior for inapplicable options (ignore
- * them) is well defined.
- *
- * @returns True when the run should proceed.
- */
+/** Warnings do not block runs because the CLI ignores inapplicable options. */
 export function reportRunDiagnostics(options: WinAppRunOptions, kind: RunTargetKind): boolean {
 	const diagnostics = validateRunOptions(options, kind, 'palette');
 	const errors = getRunOptionErrors(diagnostics);
@@ -725,14 +595,7 @@ export function reportRunDiagnostics(options: WinAppRunOptions, kind: RunTargetK
 	return true;
 }
 
-/**
- * Resolve the full option set for a run, from target selection through to
- * validation. Shared by the palette commands and the debug adapter's
- * no-configuration fallback.
- *
- * @returns The resolved options and the selected target, or `undefined` when
- *   the user cancelled or validation failed.
- */
+/** Resolve run options shared by palette commands and debug fallback. */
 export async function resolveRunOptions(
 	withOptions: boolean,
 	scope?: vscode.WorkspaceFolder
