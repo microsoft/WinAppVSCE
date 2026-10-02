@@ -160,7 +160,11 @@ export function resolveDebugInput(config: WinAppDebugConfiguration): string | un
 	return config.input || config.inputFolder || undefined;
 }
 
-/** Sets `json` and keeps rejected debug flags for validation messages. */
+/**
+ * Maps a launch.json entry onto {@link WinAppRunOptions}, always setting `json`
+ * so the adapter can parse the PID. Debug-hostile flags are copied through so
+ * {@link validateDebugRunOptions} can reject them by name.
+ */
 export function runOptionsFromDebugConfig(
 	config: WinAppDebugConfiguration,
 	input: string
