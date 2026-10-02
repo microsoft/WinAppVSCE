@@ -11,8 +11,6 @@ Thanks for your interest in contributing to the WinApp VS Code Extension.
 - **Visual Studio C++ build tools (MSVC / `link.exe`)** — required to publish the Native AOT server locally. `dotnet publish` invokes the ILC native linker, which fails with `MSB3073` (`link.exe exited with code 123`) when the C++ toolchain is missing or `vswhere.exe` is not resolvable. Install the "Desktop development with C++" workload in Visual Studio or the standalone Build Tools. If the toolchain is installed and the failure text still reports `'vswhere.exe' is not recognized`, add `C:\Program Files (x86)\Microsoft Visual Studio\Installer` to `PATH` and publish from a developer command prompt matching the target architecture (`vcvarsarm64.bat` for `win-arm64`).
 - [WinApp CLI](https://github.com/microsoft/WinAppCli) (for syncing manifest schemas)
 
-> Native AOT removes the .NET dependency for anything the server does in process — it is a self-contained native binary and starts with no .NET installed. Users of the packaged extension need the .NET 10 SDK only for project-aware IntelliSense in C# projects, because project evaluation goes through `dotnet msbuild` and the source-generator host (`WinUiXaml.GeneratorHost.dll`) runs out of process on `dotnet`. C++/WinRT projects need no .NET at all. The extension never installs or bundles .NET.
-
 ## Setup
 
 After cloning the repository, restore the Windows SDK packages and sync the
@@ -83,91 +81,6 @@ After packaging, install the VSIX into VS Code:
 $vsix = Get-ChildItem artifacts\winapp-*.vsix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 code --install-extension $vsix.FullName
 ```
-
-## Language server dependencies
-
-The server hand-rolls its JSON-RPC transport (`Lsp/JsonRpcConnection.cs`) and its LSP type
-definitions (`Lsp/LspTypes.cs`). Only the second of those is forced by Native AOT.
-
-**`StreamJsonRpc` is Native AOT capable** and could replace the transport. This was verified by
-publishing a `win-arm64` Native AOT binary against `StreamJsonRpc` 2.25.29 that completes a typed
-request/response round trip with zero `IL2xxx`/`IL3xxx` warnings. It requires the recipe in the
-library's [Native AOT guidance](https://github.com/microsoft/vs-streamjsonrpc/blob/main/docfx/docs/nativeAOT.md):
-
-- Set `EnableStreamJsonRpcInterceptors` to `true` so proxies are source generated.
-- Mark contracts `[JsonRpcContract]` and `[GenerateShape]`, and register targets with the
-  `AddLocalRpcTarget(RpcTargetMetadata, object, JsonRpcTargetOptions)` overload. The
-  `AddLocalRpcTarget(object)` overload is reflection based and is not AOT safe.
-- Use `SystemTextJsonFormatter` with `JsonSerializerOptions.TypeInfoResolver` pointed at a
-  `JsonSerializerContext`. Its constructor carries a blanket `[RequiresDynamicCode]`, which the
-  official sample suppresses once the source-generated resolver is supplied.
-- Supply `JsonTypeInfo` for `StreamJsonRpc.RequestId` as well. The documented recipe does not
-  mention it, and without it `$/cancelRequest` fails to serialize, so cancelled LSP requests hang
-  until the client gives up. A converter plus a small `IJsonTypeInfoResolver` returning
-  `JsonMetadataServices.CreateValueInfo<RequestId>` fixes it.
-
-Verified against the server's real `LspTypes.cs` and `LspJsonContext.cs`: a `win-arm64` Native AOT
-binary built from them publishes with zero warnings and passes `initialize`, `textDocument/hover`,
-a client notification, a server-to-client `textDocument/publishDiagnostics`, and request
-cancellation.
-
-**The LSP type packages are the real blocker.** `Microsoft.VisualStudio.LanguageServer.Protocol`
-tops out at 17.2.8 on our feed, and an explicit reference to a newer version fails `NU1102` rather
-than pulling from upstream. That version predates the package's move to System.Text.Json: it
-targets `netstandard2.0` and its only non-BCL assembly reference is `Newtonsoft.Json`.
-`Microsoft.CommonLanguageServerProtocol.Framework` inherits the same problem through
-`StreamJsonRpc` 2.21.10 and `Newtonsoft.Json` 13.0.3.
-
-Adopting 17.2.8 under Native AOT therefore means owning a Newtonsoft-to-System.Text.Json shim.
-Measured scope, should this be revisited:
-
-- Wire names are recoverable cheaply. Of 393 `[DataMember]` properties, 383 are the camelCase of
-  the property name, so a naming policy plus 10 hardcoded overrides covers all of them.
-- `SumType` unions are not. 27 properties span 24 distinct union shapes, each needing an explicitly
-  registered converter, because a `JsonConverterFactory` would rely on `MakeGenericType`.
-- Several enums serialize as LSP strings rather than numbers, and `DocumentUri`,
-  `ParameterInformation`, `StrictPrimitive`, and `TextDocumentSync` all have Newtonsoft converters
-  to reimplement.
-
-A probe confirmed the cheap half works and the rest does not: source-generated types emitted
-correct `"label"` and `"sortText"` names, but `MarkupKind` came out as `"kind":1` instead of
-`"markdown"`. That is the shape of the risk. Wire-format mistakes fail silently rather than
-throwing, so the shim would need to be right across all 184 public types, not just the ones the
-server uses today.
-
-So adopting `StreamJsonRpc` would replace 365 lines of transport but leave the larger 666-line
-`LspTypes.cs` hand-maintained. Native AOT trims unused assemblies, so the cost is not the package
-count but the linked output: an equivalent probe measured 5.4 MB against 2.29 MB for the same
-round trip written directly on System.Text.Json, and 7.0 MB once the server's real LSP types were
-linked in. Revisit if a System.Text.Json build of the LSP
-protocol types reaches the feed, which would make replacing both halves worthwhile in one change.
-
-### The transport migration was built and then reverted
-
-The full migration exists and compiles: a `[JsonRpcContract, GenerateShape]` interface over all 29
-methods, `AddLocalRpcTarget(RpcTargetMetadata.FromShape<T>(), ...)`, and the handlers bound by
-explicit interface implementation. It published Native AOT for `win-arm64` with no always-throw
-methods and one new IL2026 warning, and 895 server tests passed. It was reverted because the XAML
-smoke suite — the only check that drives real LSP traffic over stdio — regressed: project loading
-stalls, and the failure point moves when timing changes, so it is a genuine concurrency defect and
-not a test artifact. The same suite passes on the commit before the migration. The patch is kept
-out of tree rather than landed half-working.
-
-Three wire-level details cost the most to find, and any future attempt needs all three:
-
-- LSP sends `params` as one object, but StreamJsonRpc splats it into named arguments and then
-  reports the method as missing. Every method carrying params needs
-  `[JsonRpcMethod(..., UseSingleObjectParameterDeserialization = true)]`.
-- `NotifyAsync(method, payload)` sends `params` as a one-element **array**. Server-to-client
-  notifications must use `NotifyWithParameterObjectAsync`. Nothing throws when this is wrong;
-  `NotificationWireTests` is what catches it.
-- `StreamJsonRpc.RequestId` gets no `JsonTypeInfo` from the source generator, and
-  `[JsonSerializable(typeof(RequestId))]` does not supply one. Without a hand-written
-  `JsonConverter<RequestId>` registered through `TypeInfoResolverChain`, `$/cancelRequest` fails to
-  serialize and cancelled requests hang silently.
-
-Ruled out as causes of the stall: blocking notification handlers do not stall the reader loop, and
-`Task<object?>` returns — which the server relies on for LSP unions — work under AOT.
 
 ## Pull requests
 
