@@ -21,9 +21,9 @@ function Assert-File([string]$Path) {
 }
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 Assert-File $vswhere
-$msbuild = & $vswhere -latest -prerelease -products * -requires Microsoft.Component.MSBuild `
+$msbuild = & $vswhere -latest -prerelease -products * -version "[17.0,18.0)" -requires Microsoft.Component.MSBuild `
     -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
-if (-not $msbuild) { throw "Desktop MSBuild not found via vswhere." }
+if (-not $msbuild) { throw "Desktop MSBuild (VS 2022, 17.x) not found via vswhere." }
 $mt = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter mt.exe -Recurse |
     Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending |
     Select-Object -First 1 -ExpandProperty FullName

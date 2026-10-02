@@ -280,10 +280,55 @@ namespace WinUIXamlPreview.Editor
             return bar;
         }
 
+        // Flat, theme-aware chrome for the toolbar buttons. The stock WPF Button template paints an opaque
+        // light-gray background that ignores the VS theme, so in dark mode the buttons read as washed-out
+        // light chips with near-white icons. This template keeps the button transparent (the command shelf
+        // shows through) and lights up hover/pressed with VS environment brushes, so it tracks every theme.
+        private static Style? _flatButtonStyle;
+        private static Style FlatButtonStyle => _flatButtonStyle ??= BuildFlatButtonStyle();
+
+        private static Style BuildFlatButtonStyle()
+        {
+            var style = new Style(typeof(Button));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(UIElement.SnapsToDevicePixelsProperty, true));
+
+            var template = new ControlTemplate(typeof(Button));
+            var border = new FrameworkElementFactory(typeof(Border), "Bd");
+            border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
+            border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
+            border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+            border.SetValue(UIElement.SnapsToDevicePixelsProperty, true);
+
+            var content = new FrameworkElementFactory(typeof(ContentPresenter));
+            content.SetValue(FrameworkElement.MarginProperty, new TemplateBindingExtension(Control.PaddingProperty));
+            content.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            content.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            border.AppendChild(content);
+            template.VisualTree = border;
+
+            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarHoverBrushKey), "Bd"));
+            hover.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuBorderBrushKey), "Bd"));
+            template.Triggers.Add(hover);
+
+            var pressed = new Trigger { Property = Button.IsPressedProperty, Value = true };
+            pressed.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMouseDownBackgroundBeginBrushKey), "Bd"));
+            pressed.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuBorderBrushKey), "Bd"));
+            template.Triggers.Add(pressed);
+
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            return style;
+        }
+
         private Button MakeButton(ImageMoniker moniker, string label, string tooltip, RoutedEventHandler onClick, string automationId)
         {
             var b = new Button
             {
+                Style = FlatButtonStyle,
                 ToolTip = tooltip,
                 Padding = new Thickness(6, 1, 8, 1),
                 Margin = new Thickness(0, 3, 2, 3),
@@ -374,6 +419,7 @@ namespace WinUIXamlPreview.Editor
         {
             var b = new Button
             {
+                Style = FlatButtonStyle,
                 ToolTip = tooltip,
                 Padding = new Thickness(6, 1, 6, 1),
                 Margin = new Thickness(0, 3, 2, 3),
