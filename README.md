@@ -25,7 +25,7 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Initialize Project** | Set up a new project with the Windows SDK and/or Windows App SDK. Prompts for SDK channel (stable, preview, experimental, or none). |
 | **WinApp: Restore Packages** | Restore project packages and dependencies. |
 | **WinApp: Update Packages** | Update packages and dependencies to the latest versions. |
-| **WinApp: Run Application** | Build and run your app as a loose-layout packaged application with full package identity — great for testing APIs that require identity. Select a project (`.csproj`), a solution (`.sln`/`.slnx`), or an already-built output folder. |
+| **WinApp: Run Application** | Build and run your app as a loose-layout packaged application with full package identity, which is great for testing APIs that require identity. Select a project (`.csproj`), a solution (`.sln`/`.slnx`), or an already-built output folder. |
 | **WinApp: Run Application (Advanced)...** | Same as **Run Application**, but prompts for the build configuration, target architecture, and options such as cleaning app data, skipping the build, detaching, or unregistering on exit. |
 | **WinApp: Create Debug Identity** | Add sparse package identity to an existing executable so you can launch and debug it directly from VS Code with identity. |
 | **WinApp: Unregister Package** | Unregister a sideloaded development package (e.g., one registered via Run or Create Debug Identity). |
@@ -55,7 +55,7 @@ When you run a project-context WinApp command — such as **Initialize Project**
 
 Commands that already take an explicit target — such as **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
-**Run Application and F5** use their own target discovery rather than the project detection above. They auto-discover runnable `.csproj` and `.sln` files for .NET apps and prompt if several are found. If none is found, they fall back to discovering build output folders. You can always pick something that wasn't listed with **Browse for a project or solution…** or **Browse for a folder…**. Running a build output folder needs a `Package.appxmanifest` in it — run **WinApp: Generate Manifest** if you don't have one.
+**Run Application and F5** use their own target discovery rather than the project detection above. They auto-discover runnable `.csproj` and `.sln` files for .NET apps and prompt if several are found. If none is found, they fall back to discovering build output folders. You can always pick something that wasn't listed with **Browse for a project or solution…** or **Browse for a folder…**. Running a build output folder needs a `Package.appxmanifest` in it. Run **WinApp: Generate Manifest** if you don't have one.
 
 **Configuration (optional):**
 
@@ -99,12 +99,12 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 **How it works:**
 
 1. You press **F5** (or start a debug session).
-2. The extension resolves what to run from `input` in `launch.json`. If `input` isn't set, it searches every workspace folder for projects and solutions — falling back to scanning for build output folders — and prompts you to pick one.
+2. The extension resolves what to run from `input` in `launch.json`. If `input` isn't set, it searches every workspace folder for projects and solutions, falling back to scanning for build output folders, and prompts you to pick one.
 3. If the target is a project or solution, WinApp restores and builds it first. If it's a build output folder, WinApp launches it as-is.
 4. It launches your app via `winapp run` to give it package identity, using the manifest specified via `manifest` in `launch.json` or auto-detected by the CLI.
 5. A child debug session attaches to the running process using the debugger you specified.
 
-> **Point `input` at a project to get builds for free.** When `input` is a `.csproj`, `.sln`, or `.slnx`, `winapp run` restores and builds before launching, so your code changes are always reflected. When `input` is a build output folder, WinApp **does not** build — you must rebuild yourself (or use a `preLaunchTask`) after making code changes.
+> **Point `input` at a project to get builds for free.** When `input` is a `.csproj`, `.sln`, or `.slnx`, `winapp run` restores and builds before launching, so your code changes are always reflected. When `input` is a build output folder, WinApp **does not** build; you must rebuild yourself (or use a `preLaunchTask`) after making code changes.
 
 > If you prefer to keep pointing at a build output folder, you can automate the build step by adding a `preLaunchTask` to your `launch.json` configuration. This tells VS Code to run a build task before every debug session, so your changes are always compiled before launch.
 >
@@ -168,12 +168,12 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 
 **Configuration properties:**
 
-`input` accepts either a **project or solution** (project mode — WinApp restores, builds, and then launches) or a **build output folder** (folder mode — WinApp launches what is already built). Properties marked *project mode only* are ignored when `input` is a build output folder.
+`input` accepts either a **project or solution** (project mode: WinApp restores, builds, and then launches) or a **build output folder** (folder mode: WinApp launches what is already built). Properties marked *project mode only* are ignored when `input` is a build output folder.
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `input` | string | | What to run: a project (`.csproj`), a solution (`.sln`/`.slnx`), a directory containing one, or a build output folder (e.g., `${workspaceFolder}/bin/Debug/net8.0-windows10.0.22621`). If not set, you will be prompted to select a target. |
-| `inputFolder` | string | | **Deprecated** — use `input`, which also accepts projects and solutions. Still honored for existing configurations; if both are set, `input` wins. |
+| `inputFolder` | string | | **Deprecated.** Use `input`, which also accepts projects and solutions. Still honored for existing configurations; if both are set, `input` wins. |
 | `project` | string | | *Project mode only.* The project to launch when `input` is a solution, or a directory holding several projects, containing more than one application. |
 | `configuration` | string | `Debug` | *Project mode only.* Build configuration to use. |
 | `arch` | string | current process arch | *Project mode only.* Target architecture (`x64`, `arm64`, or `x86`). Ignored when `runtime` is set. |
@@ -198,7 +198,7 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 
 **Settings for Run Application:**
 
-The palette's **Run Application** command takes its build settings from your workspace, so the common case stays a single prompt. All four are resource-scoped, so each folder of a multi-root workspace can set its own value. They apply to the palette commands only — a `launch.json` configuration sets the equivalent property directly.
+The palette's **Run Application** command takes its build settings from your workspace, so the common case stays a single prompt. All four are resource-scoped, so each folder of a multi-root workspace can set its own value. They apply to the palette commands only; a `launch.json` configuration sets the equivalent property directly.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
@@ -335,7 +335,7 @@ For debugging, install the debugger extension that matches your app's language (
 
 | Problem | Cause | Solution |
 |---------|-------|----------|
-| **Invalid `input` notification when pressing F5** | The configured path is missing, or — in folder mode — is not a directory or contains no `.exe`. | Select **Open debug configuration** in the notification to open the relevant debug or launch configuration, then correct `input`. |
+| **Invalid `input` notification when pressing F5** | The configured path is missing, or (in folder mode) is not a directory or contains no `.exe`. | Select **Open debug configuration** in the notification to open the relevant debug or launch configuration, then correct `input`. |
 | **"No run target selected..."** when pressing F5 | The workspace contains no project or solution and nothing has been built yet, or the build output is in an unexpected location. | Set `input` in `launch.json` to a project file so WinApp builds it for you, or build first (e.g., `dotnet build`) and point `input` at the folder containing your `.exe`. |
 | **Debugger doesn't attach** | The required debugger extension isn't installed. | Install the matching extension for your language — see [Supported debuggers](#integrated-debugging). |
 | **App launches but changes aren't visible** | `input` points at a build output folder, which WinApp launches as-is without building. | Point `input` at your `.csproj` or `.sln` so WinApp builds before launching, rebuild manually before pressing F5, or add a `preLaunchTask` (see the tip in [Integrated Debugging](#integrated-debugging)). |
