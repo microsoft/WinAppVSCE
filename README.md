@@ -55,7 +55,7 @@ When you run a project-context WinApp command — such as **Initialize Project**
 
 Commands that already take an explicit target — such as **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
-**Run Application and F5** use their own target discovery rather than the project detection above. They auto-discover runnable `.csproj` and `.sln` files for .NET apps and prompt if several are found. If none is found, they fall back to discovering build output folders. You can always pick something that wasn't listed with **Browse for a project or solution…** or **Browse for a folder…**. Running a build output folder needs a `Package.appxmanifest` in it. Run **WinApp: Generate Manifest** if you don't have one.
+**Run Application and F5** use their own target discovery rather than the project detection above. They auto-discover runnable `.csproj` and `.sln` files for .NET apps and prompt if several are found. If none is found, they fall back to discovering build output folders. You can always pick something that wasn't listed with **Browse for a project or solution…** or **Browse for a folder…**. Running a build output folder needs a `Package.appxmanifest` (or `AppxManifest.xml`) in it. Run **WinApp: Generate Manifest** if you don't have one.
 
 **Configuration (optional):**
 
@@ -180,7 +180,7 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 | `withAlias` | boolean | `false` | Launch through the package's execution alias so stdin/stdout are inherited. Console apps (`OutputType=Exe`) already do this; set it to force the same for a windowed app. Cannot be combined with `withoutAlias`. |
 | `withoutAlias` | boolean | `false` | Launch through AUMID activation even for a console app, which would otherwise use its execution alias. The app then runs without a console. Cannot be combined with `withAlias`. |
 | `executable` | string | auto-detect | *Folder mode only.* Which executable to launch, relative to the input folder, when the manifest uses a `$targetnametoken$` placeholder and the folder holds more than one `.exe`. |
-| `manifest` | string | auto-detect | Path to the `Package.appxmanifest` file. The CLI locates an existing manifest from the input folder or current directory; it never generates one. |
+| `manifest` | string | auto-detect | Path to the package manifest. The CLI locates an existing `Package.appxmanifest` or `AppxManifest.xml` in the input folder or current directory; it never generates one. |
 | `debuggerType` | string | | Optional underlying debugger override (`coreclr`, `cppvsdbg`, or `node`). If omitted, WinApp reuses an installed debugger or prompts you to pick one. |
 | `workingDirectory` | string | workspace folder | Working directory for the application. |
 | `args` | string | | Command-line arguments to pass to the application. |
