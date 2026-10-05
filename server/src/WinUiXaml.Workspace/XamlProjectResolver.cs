@@ -30,6 +30,9 @@ namespace WinUiXaml.Workspace
         private readonly Dictionary<string, Task<MsBuildFrameworkProject?>> _frameworkProjects =
             new Dictionary<string, Task<MsBuildFrameworkProject?>>(StringComparer.OrdinalIgnoreCase);
         private readonly IReadOnlyDictionary<string, string> _globalProperties;
+
+        /// <summary>Cancelled on dispose so resolver-owned loads stop their MSBuild and generator-host children instead of outliving the server.</summary>
+        private readonly CancellationTokenSource _shutdown = new CancellationTokenSource();
         private bool _disposed;
 
         public XamlProjectResolver(IReadOnlyDictionary<string, string>? globalProperties = null)
@@ -337,8 +340,9 @@ namespace WinUiXaml.Workspace
                     return existing.Task;
                 }
 
-                // Load with an independent token so one caller's cancellation can't poison the shared cache entry for other callers.
-                var task = RoslynProjectWorkspace.LoadProjectAsync(key, _globalProperties.ToDictionary(p => p.Key, p => p.Value), CancellationToken.None);
+                // Load on the resolver's own token: no single caller's cancellation can poison the shared cache entry,
+                // but dispose still stops the work and kills its child processes.
+                var task = RoslynProjectWorkspace.LoadProjectAsync(key, _globalProperties.ToDictionary(p => p.Key, p => p.Value), _shutdown.Token);
                 var entry = new CacheEntry(task);
                 _projects[key] = entry;
 
@@ -406,8 +410,8 @@ namespace WinUiXaml.Workspace
                 }
 
                 var task = Task.Run(
-                    () => MsBuildFrameworkProject.Load(key, _globalProperties),
-                    CancellationToken.None);
+                    () => MsBuildFrameworkProject.Load(key, _globalProperties, _shutdown.Token),
+                    _shutdown.Token);
                 _frameworkProjects[key] = task;
                 _ = task.ContinueWith(
                     completed =>
@@ -493,10 +497,16 @@ namespace WinUiXaml.Workspace
                 _frameworkProjects.Clear();
             }
 
+            // Cancel before awaiting: in-flight loads own dotnet/generator-host children that
+            // would otherwise keep running after the server exits, holding obj locks.
+            _shutdown.Cancel();
+
             foreach (var entry in entries)
             {
                 DisposeWhenComplete(entry.Task);
             }
+
+            _shutdown.Dispose();
         }
     }
 }

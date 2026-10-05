@@ -593,8 +593,11 @@ internal sealed partial class XamlLanguageServer
         string xamlUri, INamedTypeSymbol classSymbol, string handlerName, string parameters)
     {
         var xamlPath = UriToPath(xamlUri);
-        string? preferred = xamlPath != null ? xamlPath + ".cs" : null;
+        string? preferred = xamlPath != null && TryGetAllowedRoot(xamlPath + ".cs", out var canonicalPreferred, out _)
+            ? canonicalPreferred
+            : null;
         SyntaxReference? selected = null;
+        string? codeBehindPath = null;
         foreach (var reference in classSymbol.DeclaringSyntaxReferences)
         {
             var file = reference.SyntaxTree.FilePath;
@@ -603,21 +606,30 @@ internal sealed partial class XamlLanguageServer
                 continue;
             }
 
-            if (preferred != null && string.Equals(file, preferred, StringComparison.OrdinalIgnoreCase))
+            // A project can compile sources from anywhere, so only ever write to a partial inside an allowed root.
+            if (!TryGetAllowedRoot(file, out var canonicalFile, out _))
+            {
+                continue;
+            }
+
+            if (preferred != null && string.Equals(canonicalFile, preferred, StringComparison.OrdinalIgnoreCase))
             {
                 selected = reference;
+                codeBehindPath = canonicalFile;
                 break;
             }
 
-            selected ??= reference;
+            if (selected == null)
+            {
+                selected = reference;
+                codeBehindPath = canonicalFile;
+            }
         }
 
-        if (selected == null)
+        if (selected == null || codeBehindPath == null)
         {
             return null;
         }
-
-        var codeBehindPath = selected.SyntaxTree.FilePath;
 
         string source;
         try
