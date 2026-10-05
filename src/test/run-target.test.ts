@@ -232,17 +232,6 @@ describe('sortRunTargets', () => {
 		assert.deepStrictEqual(result.map(c => c.kind), ['solution', 'project', 'folder']);
 	});
 
-	it('puts the preferred root first, ahead of kind', () => {
-		const result = sortRunTargets(
-			[
-				candidate('solution', 'C:/ws/AppA/a.sln', rootA),
-				candidate('folder', 'C:/ws/AppB/bin', rootB)
-			],
-			rootB.path
-		);
-		assert.strictEqual(result[0].root.name, 'AppB');
-	});
-
 	it('does not mutate its input', () => {
 		const input = [candidate('folder', 'C:/ws/AppA/bin'), candidate('solution', 'C:/ws/AppA/a.sln')];
 		sortRunTargets(input);

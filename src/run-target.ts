@@ -294,12 +294,10 @@ export async function filterOfferableCandidates(
 	return candidates.filter(candidate => candidate.kind !== 'project' || keep.has(candidate.path));
 }
 
-/** Sorts candidates with the active editor's root first, without hiding others. */
+/** Orders candidates for the picker; never filters. */
 export function sortRunTargets(
-	candidates: readonly RunTargetCandidate[],
-	preferredRootPath?: string
+	candidates: readonly RunTargetCandidate[]
 ): RunTargetCandidate[] {
-	const preferred = preferredRootPath ? normalizeForComparison(preferredRootPath) : undefined;
 	const kindRank = (kind: RunTargetKind): number => {
 		switch (kind) {
 			case 'solution': return 0;
@@ -310,12 +308,6 @@ export function sortRunTargets(
 	};
 
 	return [...candidates].sort((left, right) => {
-		if (preferred) {
-			const leftPreferred = normalizeForComparison(left.root.path) === preferred ? 0 : 1;
-			const rightPreferred = normalizeForComparison(right.root.path) === preferred ? 0 : 1;
-			if (leftPreferred !== rightPreferred) { return leftPreferred - rightPreferred; }
-		}
-
 		const rankDelta = kindRank(left.kind) - kindRank(right.kind);
 		if (rankDelta !== 0) { return rankDelta; }
 

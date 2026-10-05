@@ -41,15 +41,6 @@ const PROJECT_PICKER_DETAIL = 'Open a file picker for .csproj, .sln, or .slnx';
 
 const BUILD_OUTPUT_SEARCH_DETAIL = 'Scan the workspace for folders containing .exe files';
 
-/** Root owning the active editor, used only as a sort hint. */
-function getPreferredRootPath(roots: readonly WorkspaceRoot[]): string | undefined {
-	const activeUri = vscode.window.activeTextEditor?.document.uri;
-	if (!activeUri || activeUri.scheme !== 'file') {
-		return undefined;
-	}
-	return findOwningRoot(roots, activeUri.fsPath)?.path;
-}
-
 /** Prefer project globbing; reserve executable scans for fallback or explicit use. */
 async function findProjectTargets(
 	roots: readonly WorkspaceRoot[],
@@ -226,8 +217,7 @@ export async function pickRunTarget(
 		return browseForRunTarget(roots, 'folder');
 	}
 
-	const preferredRootPath = getPreferredRootPath(roots);
-	const sorted = sortRunTargets(candidates, preferredRootPath);
+	const sorted = sortRunTargets(candidates);
 
 	// A single unambiguous target needs no prompt at all.
 	if (sorted.length === 1 && !alwaysPrompt) {
@@ -281,7 +271,7 @@ export async function pickRunTarget(
 			return browseForRunTarget(roots, 'folder');
 		}
 		const folderItems = buildRunTargetItems(
-			sortRunTargets(folders, preferredRootPath).slice(0, RUN_TARGET_DISPLAY_LIMIT),
+			sortRunTargets(folders).slice(0, RUN_TARGET_DISPLAY_LIMIT),
 			roots.length > 1
 		);
 		const pickedFolder = await vscode.window.showQuickPick(folderItems, {
