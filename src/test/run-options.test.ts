@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import {
 	buildRunArgs,
 	COMMON_CONFIGURATIONS,
+	parseProcessIdFromJson,
 	resolveDebugInput,
 	runOptionsFromDebugConfig,
 	SUPPORTED_ARCHITECTURES,
@@ -215,3 +216,35 @@ describe('runOptionsFromDebugConfig', () => {
 	});
 });
 
+
+describe('parseProcessIdFromJson', () => {
+	it('reads processId', () => {
+		assert.strictEqual(parseProcessIdFromJson('{"processId": 4242}'), 4242);
+	});
+
+	it('accepts the casing variants the CLI has used', () => {
+		assert.strictEqual(parseProcessIdFromJson('{"pid": 7}'), 7);
+		assert.strictEqual(parseProcessIdFromJson('{"ProcessId": 8}'), 8);
+		assert.strictEqual(parseProcessIdFromJson('{"PID": 9}'), 9);
+	});
+
+	it('tolerates surrounding whitespace', () => {
+		assert.strictEqual(parseProcessIdFromJson('\n  {"processId": 12}\r\n'), 12);
+	});
+
+	// Called on every stdout chunk, so a partial object is the normal case.
+	it('returns undefined for incomplete JSON', () => {
+		assert.strictEqual(parseProcessIdFromJson('{"processId": 42'), undefined);
+	});
+
+	it('returns undefined for non-JSON output', () => {
+		assert.strictEqual(parseProcessIdFromJson('Building MyApp.csproj...'), undefined);
+	});
+
+	it('rejects a missing, non-numeric, or non-positive id', () => {
+		assert.strictEqual(parseProcessIdFromJson('{"exitCode": 0}'), undefined);
+		assert.strictEqual(parseProcessIdFromJson('{"processId": "4242"}'), undefined);
+		assert.strictEqual(parseProcessIdFromJson('{"processId": 0}'), undefined);
+		assert.strictEqual(parseProcessIdFromJson('{"processId": -1}'), undefined);
+	});
+});

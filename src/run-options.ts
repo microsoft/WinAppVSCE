@@ -195,3 +195,21 @@ export function runOptionsFromDebugConfig(
 	};
 }
 
+/**
+ * Reads the process ID out of `winapp run --json` output — the reciprocal of
+ * the `--json` flag {@link runOptionsFromDebugConfig} always sets. Called on
+ * every stdout chunk, so incomplete JSON is an expected miss, not an error.
+ */
+export function parseProcessIdFromJson(output: string): number | undefined {
+	try {
+		const json = JSON.parse(output.trim());
+		const pid = json.processId ?? json.pid ?? json.ProcessId ?? json.PID;
+		if (typeof pid === 'number' && pid > 0) {
+			return pid;
+		}
+	} catch {
+		// JSON not complete yet or invalid
+	}
+	return undefined;
+}
+
