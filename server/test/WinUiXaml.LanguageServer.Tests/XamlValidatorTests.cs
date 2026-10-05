@@ -348,6 +348,18 @@ public class XamlValidatorTests
             d.Message.Contains("not a callable method"));
     }
 
+    // Parity with path bindings: an argument member that exists but is out of reach is inaccessible, not unknown.
+    [Fact]
+    public void BindFunction_ReportsInaccessibleArgumentMemberAsInaccessible()
+    {
+        var diagnostics = Validate(Page("""Text="{x:Bind Format(Child.Secret)}" """));
+
+        Assert.Contains(diagnostics, d =>
+            d.Code == XamlValidator.InaccessibleBindMemberCode &&
+            d.Message.Contains("'Secret' is not accessible to x:Bind."));
+        Assert.DoesNotContain(diagnostics, d => d.Code == XamlValidator.UnknownBindMemberCode);
+    }
+
     [Theory]
     [InlineData("Choose(Text)")]
     [InlineData("Choose(Text, Text)")]

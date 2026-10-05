@@ -276,8 +276,8 @@ internal static partial class XamlValidator
         var standardNamespace = prefix switch
         {
             "x" => XamlTypeSystem.XamlLanguageNamespace,
-            "d" => "http://schemas.microsoft.com/expression/blend/2008",
-            "mc" => "http://schemas.openxmlformats.org/markup-compatibility/2006",
+            "d" => XamlNamespaces.DesignTime2008,
+            "mc" => XamlNamespaces.MarkupCompatibility,
             _ => null,
         };
         if (standardNamespace is not null)

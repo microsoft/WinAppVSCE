@@ -285,6 +285,32 @@ internal static partial class XamlValidator
         }
     }
 
+    /// <summary>Reports a segment that did not resolve: an error when the name exists but is out of reach, otherwise a warning with near-miss suggestions. Shared so path and function-argument chains stay consistent.</summary>
+    private static void ReportUnresolvedBindMember(
+        TextDocument doc,
+        List<Diagnostic> diagnostics,
+        TextSpan badSpan,
+        ITypeSymbol current,
+        string baseName,
+        bool includeRootNonPublic,
+        ISymbol? accessWithin,
+        XamlTypeSystem typeSystem)
+    {
+        if (FindInaccessibleMember(current, baseName, accessWithin, typeSystem) is not null)
+        {
+            diagnostics.Add(Diag(doc, badSpan, SeverityError, InaccessibleBindMemberCode,
+                $"'{baseName}' is not accessible to x:Bind."));
+            return;
+        }
+
+        diagnostics.Add(Diag(doc, badSpan, SeverityWarning, UnknownBindMemberCode,
+            $"'{baseName}' is not a member of '{current.Name}' bound by x:Bind.",
+            SuggestData(
+                baseName,
+                typeSystem.GetBindableMembers(current, includeRootNonPublic, accessWithin)
+                    .Select(m => m.Name))));
+    }
+
     private static ISymbol? FindInaccessibleMember(
         ITypeSymbol type,
         string name,
@@ -554,24 +580,9 @@ internal static partial class XamlValidator
                 int badStart = valueSpan.Start + segStart + lead;
                 int badEnd = badStart + baseName.Length;
                 var badSpan = badEnd <= valueSpan.End ? new TextSpan(badStart, badEnd) : valueSpan;
-                if (FindInaccessibleMember(
-                        current, baseName, accessWithin, typeSystem) is not null)
-                {
-                    diagnostics.Add(Diag(doc, badSpan, SeverityError, InaccessibleBindMemberCode,
-                        $"'{baseName}' is not accessible to x:Bind."));
-                }
-                else
-                {
-                    diagnostics.Add(Diag(doc, badSpan, SeverityWarning, UnknownBindMemberCode,
-                        $"'{baseName}' is not a member of '{current.Name}' bound by x:Bind.",
-                        SuggestData(
-                            baseName,
-                            typeSystem.GetBindableMembers(
-                                    current,
-                                    includeRootNonPublic: atRoot,
-                                    accessWithin)
-                                .Select(m => m.Name))));
-                }
+                ReportUnresolvedBindMember(
+                    doc, diagnostics, badSpan, current, baseName,
+                    atRoot && includeRootNonPublic, accessWithin, typeSystem);
                 return;
             }
 

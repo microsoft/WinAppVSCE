@@ -830,15 +830,17 @@ namespace WinUiXaml.Workspace
             // requirement only shows up in the output rather than as a start failure.
             if (IsMissingSdkFailure(diagnosticText))
             {
-                return new MsBuildUnavailableException(
-                    "Project-aware XAML features require the .NET SDK. " +
-                    $"'dotnet msbuild' is unavailable. {Truncate(detail)}",
-                    hostMissing: true);
+                return MissingSdk($"'dotnet msbuild' is unavailable. {Truncate(detail)}", hostMissing: true);
             }
 
             return new MsBuildUnavailableException(
                 $"MSBuild exited with code {exitCode}. {Truncate(detail)}");
         }
+
+        /// <summary>Builds the missing-SDK failure so every branch shares one prefix and the <c>HostMissing</c> contract.</summary>
+        private static MsBuildUnavailableException MissingSdk(
+            string reason, bool hostMissing, Exception? innerException = null) =>
+            new($"Project-aware XAML features require the .NET SDK. {reason}", innerException, hostMissing);
 
         /// <summary>Recognizes a dotnet host without a usable SDK, which the muxer reports as a missing SDK or as an unknown command because <c>msbuild</c> ships in the SDK.</summary>
         internal static bool IsMissingSdkFailure(string message) =>
@@ -858,12 +860,12 @@ namespace WinUiXaml.Workspace
             process.OutputDataReceived += (_, e) => { if (e.Data != null) { standardOutput.AppendLine(e.Data); } };
             process.ErrorDataReceived += (_, e) => { if (e.Data != null) { standardError.AppendLine(e.Data); } };
 
+            MsBuildUnavailableException FailedToStart(bool hostMissing, Exception? innerException = null) =>
+                MissingSdk($"Failed to start '{startInfo.FileName} msbuild'.", hostMissing, innerException);
+
             if (HostForcedMissing)
             {
-                throw new MsBuildUnavailableException(
-                    "Project-aware XAML features require the .NET SDK. " +
-                    $"Failed to start '{startInfo.FileName} msbuild'.",
-                    hostMissing: true);
+                throw FailedToStart(hostMissing: true);
             }
 
             try
@@ -872,11 +874,8 @@ namespace WinUiXaml.Workspace
             }
             catch (Exception ex)
             {
-                throw new MsBuildUnavailableException(
-                    "Project-aware XAML features require the .NET SDK. " +
-                    $"Failed to start '{startInfo.FileName} msbuild'.",
-                    ex,
-                    hostMissing: ex is Win32Exception { NativeErrorCode: FileNotFoundNativeErrorCode });
+                throw FailedToStart(
+                    ex is Win32Exception { NativeErrorCode: FileNotFoundNativeErrorCode }, ex);
             }
 
             process.BeginOutputReadLine();

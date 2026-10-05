@@ -18,7 +18,7 @@ namespace WinUiXaml.Workspace
 
         /// <summary>The XAML language namespace (<c>x:</c> — x:Class, x:Name, x:Bind, ...).</summary>
         public const string XamlLanguageNamespace =
-            "http://schemas.microsoft.com/winfx/2006/xaml";
+            Xaml.XamlIntrospection.XamlNamespace;
 
         private const string UsingScheme = "using:";
         private const string ClrNamespaceScheme = "clr-namespace:";

@@ -562,15 +562,9 @@ internal static partial class XamlValidator
                 int badStart = argAbsStart + segStart;
                 int badEnd = badStart + baseName.Length;
                 var badSpan = badEnd <= valueSpan.End ? new TextSpan(badStart, badEnd) : valueSpan;
-                diagnostics.Add(Diag(doc, badSpan, SeverityWarning, UnknownBindMemberCode,
-                    $"'{baseName}' is not a member of '{current.Name}' bound by x:Bind.",
-                    SuggestData(
-                        baseName,
-                        typeSystem.GetBindableMembers(
-                                current,
-                                includeRootNonPublic: atRoot && includeRootNonPublic,
-                                accessWithin)
-                            .Select(m => m.Name))));
+                ReportUnresolvedBindMember(
+                    doc, diagnostics, badSpan, current, baseName,
+                    atRoot && includeRootNonPublic, accessWithin, typeSystem);
                 return;
             }
 

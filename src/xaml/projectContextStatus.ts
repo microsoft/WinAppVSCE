@@ -98,24 +98,41 @@ export function shouldReplaceProjectContextStatus(
   return !DURABLE_STATES.includes(current.state);
 }
 
+/** Priority when several projects report at once, lowest rank first. Typed as a total record, so a new state fails to compile until it is ranked. `idle` is absent: it means there is nothing to report. */
+const PROJECT_CONTEXT_PRIORITY: Record<
+  Exclude<ProjectContextState, "idle">,
+  number
+> = {
+  // A missing SDK blocks restore and build alike, so it outranks both: telling the developer to
+  // restore names a step that cannot run.
+  "dotnet-sdk-required": 0,
+  // Restore precedes build: an unrestored project cannot be built, so when both conditions are
+  // present, naming the build is telling the developer to do the step that will fail.
+  "packages-not-restored": 1,
+  "reference-build-failed": 2,
+  "generators-unavailable": 3,
+  error: 4,
+  loading: 5,
+  "framework-ready": 6,
+  ready: 7,
+};
+
 export function selectProjectContextStatus(
   statuses: Iterable<ProjectContextStatus>
 ): ProjectContextStatus | undefined {
-  const values = [...statuses];
-  return (
-    // A missing SDK blocks restore and build alike, so it outranks both: telling the developer to
-    // restore names a step that cannot run.
-    values.find((status) => status.state === "dotnet-sdk-required") ??
-    // Restore precedes build: an unrestored project cannot be built, so when both conditions are
-    // present, naming the build is telling the developer to do the step that will fail.
-    values.find((status) => status.state === "packages-not-restored") ??
-    values.find((status) => status.state === "reference-build-failed") ??
-    values.find((status) => status.state === "generators-unavailable") ??
-    values.find((status) => status.state === "error") ??
-    values.find((status) => status.state === "loading") ??
-    values.find((status) => status.state === "framework-ready") ??
-    values.find((status) => status.state === "ready")
-  );
+  let best: ProjectContextStatus | undefined;
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (const status of statuses) {
+    const rank =
+      PROJECT_CONTEXT_PRIORITY[
+        status.state as Exclude<ProjectContextState, "idle">
+      ];
+    if (rank !== undefined && rank < bestRank) {
+      best = status;
+      bestRank = rank;
+    }
+  }
+  return best;
 }
 
 /**
@@ -200,5 +217,10 @@ export function getProjectContextStatusPresentation(
       };
     case "idle":
       return undefined;
+    default: {
+      // A new state must be given a presentation here; this fails to compile until it is.
+      const unhandled: never = status.state;
+      return unhandled;
+    }
   }
 }
