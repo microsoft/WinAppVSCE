@@ -32,8 +32,9 @@ if (-not $AllSessions) {
 $samples = foreach ($line in $lines) {
     if ($line -match 'PERF (?<name>\S+) ms=(?<ms>\d+)(?<rest>.*)$') {
         $name = $Matches.name
+        $ms = [int]$Matches.ms
         if ($ByOutcome -and $Matches.rest -match 'outcome=(?<o>\S+)') { $name = "$name [$($Matches.o)]" }
-        [pscustomobject]@{ Name = $name; Ms = [int]$Matches.ms }
+        [pscustomobject]@{ Name = $name; Ms = $ms }
     }
 }
 
