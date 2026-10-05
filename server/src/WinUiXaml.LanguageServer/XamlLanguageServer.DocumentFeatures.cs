@@ -279,7 +279,7 @@ internal sealed partial class XamlLanguageServer
             throw new RequestFailedException(
                 "Rename requires complete WinUI SDK metadata so every named-element reference can " +
                 "be updated safely. Restore the project, reload the window, and use " +
-                "'WinApp: Show Info' to check project resolution.");
+                "'WinApp: Show XAML Language Server Status' to check project resolution.");
         }
     }
 
@@ -294,7 +294,7 @@ internal sealed partial class XamlLanguageServer
             throw new RequestFailedException(
                 $"{operation} requires complete WinUI SDK metadata so every named-element reference " +
                 "can be reported. Restore the project, reload the window, and use " +
-                "'WinApp: Show Info' to check project resolution.");
+                "'WinApp: Show XAML Language Server Status' to check project resolution.");
         }
     }
 

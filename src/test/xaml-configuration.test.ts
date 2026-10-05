@@ -95,7 +95,7 @@ test("reports disabled, running, and degraded XAML status actions", () => {
 // Each of these used to reach the "language server running" line, which told the user everything
 // was fine while the condition the status bar was reporting went unmentioned in the one place they
 // opened to find out what was wrong.
-test("Show Info names the degraded conditions instead of reporting a healthy server", () => {
+test("Show XAML Language Server Status names the degraded conditions instead of reporting a healthy server", () => {
   assert.deepEqual(
     getXamlStatus(true, true, true, true, {
       state: "packages-not-restored",
@@ -142,7 +142,7 @@ test("Show Info names the degraded conditions instead of reporting a healthy ser
     }
   );
 
-  // The server runs without .NET, so this reaches Show Info while the server is healthy. Only the
+  // The server runs without .NET, so this reaches Show XAML Language Server Status while the server is healthy. Only the
   // download link fixes it, and the restart is what applies the SDK once it is installed.
   assert.deepEqual(
     getXamlStatus(true, true, true, true, {

@@ -164,7 +164,7 @@
       },
       {
         "command": "winui-xaml.showInfo",
-        "title": "Show Info",
+        "title": "Show XAML Language Server Status",
         "category": "WinApp"
       },
       {

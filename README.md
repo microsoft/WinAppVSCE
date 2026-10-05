@@ -40,7 +40,7 @@ packaging, and language-service commands.
 | **WinApp: Sign File** | Sign an MSIX/APPX package, executable, or library with a certificate. |
 | **WinApp: Run SDK Tool** | Run Windows SDK tools (`makeappx`, `signtool`, `mt`, `makepri`) with custom arguments. |
 | **WinApp: Get WinApp Path** | Show paths to installed SDK components. |
-| **WinApp: Show Info** | Show whether the WinUI XAML language server is running, the editor is in syntax-only mode, or IntelliSense is disabled in Settings. |
+| **WinApp: Show XAML Language Server Status** | Show whether the WinUI XAML language server is running, the editor is in syntax-only mode, or IntelliSense is disabled in Settings. |
 | **WinApp: Restart Language Server** | Restart the WinUI XAML language server (e.g. after changing server settings). |
 
 #### Workspace & Multi-Project Support
@@ -224,7 +224,7 @@ Full IntelliSense for C++/WinRT is planned. [Let us know](https://github.com/mic
 
 Features light up in stages so editing stays responsive: formatting, folding, outline, and syntax diagnostics work immediately, then WinUI SDK and package types, then your own types and semantic diagnostics. The status bar tracks the active document and clears once it reports **WinApp: XAML IntelliSense Ready**.
 
-Other statuses appear only when something needs attention — unrestored packages, a reference that failed to build, or a missing .NET SDK — and selecting one offers the fix. A project that has never been built still resolves, and packages are restored for you in a trusted workspace. If the server cannot start at all, XAML editing falls back to syntax highlighting and a notification names the cause. Use **WinApp: Show Info** for server status and **WinApp: Restart Language Server** to restart it.
+Other statuses appear only when something needs attention — unrestored packages, a reference that failed to build, or a missing .NET SDK — and selecting one offers the fix. A project that has never been built still resolves, and packages are restored for you in a trusted workspace. If the server cannot start at all, XAML editing falls back to syntax highlighting and a notification names the cause. Use **WinApp: Show XAML Language Server Status** for server status and **WinApp: Restart Language Server** to restart it.
 
 | Setting | Default | Description |
 |---------|---------|-------------|

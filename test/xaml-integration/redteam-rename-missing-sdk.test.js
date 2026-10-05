@@ -111,7 +111,7 @@ describe("WinUI XAML — rename without SDK metadata", function () {
           textDocument: { uri },
           position: { line: 0, character: 16 },
         }),
-        /Rename requires complete WinUI SDK metadata.*restore.*Show Info/i);
+        /Rename requires complete WinUI SDK metadata.*restore.*Show XAML Language Server Status/i);
 
       const declarationText = '<Grid x:Name="Root" />';
       await assert.rejects(
@@ -120,7 +120,7 @@ describe("WinUI XAML — rename without SDK metadata", function () {
           position: positionOf(declarationText, "Root"),
           context: { includeDeclaration: true },
         }),
-        /Find References requires complete WinUI SDK metadata.*restore.*Show Info/i);
+        /Find References requires complete WinUI SDK metadata.*restore.*Show XAML Language Server Status/i);
       assert.equal(
         await send("textDocument/documentHighlight", {
           textDocument: { uri },
@@ -143,7 +143,7 @@ describe("WinUI XAML — rename without SDK metadata", function () {
             position,
             context: { includeDeclaration: true },
           }),
-          /Find References requires complete WinUI SDK metadata.*restore.*Show Info/i);
+          /Find References requires complete WinUI SDK metadata.*restore.*Show XAML Language Server Status/i);
         assert.equal(
           await send("textDocument/documentHighlight", {
             textDocument: { uri },
@@ -155,14 +155,14 @@ describe("WinUI XAML — rename without SDK metadata", function () {
             textDocument: { uri },
             position,
           }),
-          /Rename requires complete WinUI SDK metadata.*restore.*Show Info/i);
+          /Rename requires complete WinUI SDK metadata.*restore.*Show XAML Language Server Status/i);
         await assert.rejects(
           send("textDocument/rename", {
             textDocument: { uri },
             position,
             newName: "Panel",
           }),
-          /Rename requires complete WinUI SDK metadata.*restore.*Show Info/i);
+          /Rename requires complete WinUI SDK metadata.*restore.*Show XAML Language Server Status/i);
       }
 
       const paddedSetter =
@@ -173,7 +173,7 @@ describe("WinUI XAML — rename without SDK metadata", function () {
           textDocument: { uri },
           position: positionOf(paddedSetter, "Root", 1),
         }),
-        /Rename requires complete WinUI SDK metadata.*restore.*Show Info/i);
+        /Rename requires complete WinUI SDK metadata.*restore.*Show XAML Language Server Status/i);
 
       const ordinaryValue =
         '<Grid x:Name="Root"><TextBlock Text="Root" /></Grid>';
@@ -190,7 +190,7 @@ describe("WinUI XAML — rename without SDK metadata", function () {
           position: { line: 0, character: 16 },
           newName: "Panel",
         }),
-        /Rename requires complete WinUI SDK metadata.*restore.*Show Info/i);
+        /Rename requires complete WinUI SDK metadata.*restore.*Show XAML Language Server Status/i);
     } finally {
       try { await send("shutdown", null); } catch {}
       try { await send("exit", null, true); } catch {}

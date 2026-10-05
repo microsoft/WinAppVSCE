@@ -53,7 +53,7 @@ export const PROJECT_CONTEXT_RESTORING_MESSAGE =
 export const SHOW_XAML_OUTPUT_HINT =
   "Click to show the WinUI XAML output.";
 
-/** The install action lives in Show Info, so this state sends the click there instead. */
+/** The install action lives in Show XAML Language Server Status, so this state sends the click there instead. */
 export const SHOW_XAML_INFO_HINT = "Click for install and restart actions.";
 
 export interface ProjectContextStatus {
