@@ -10,7 +10,7 @@ function dump(value) {
 }
 
 function clean(buffer) {
-  return buffer.replace("|", "");
+  return buffer.replaceAll("|", "");
 }
 
 function lineStartsOf(text) {

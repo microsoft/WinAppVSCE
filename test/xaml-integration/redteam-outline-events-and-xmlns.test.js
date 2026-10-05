@@ -312,7 +312,7 @@ describe("WinUI XAML red-team 30 — xmlns prefix validation", function () {
     ].join("\n  "));
     const diags = await h.diagnosticsFor(buffer, (d) => byCode(d, "WXAML0001").length >= 2, 15000);
     const hits = byCode(diags, "WXAML0001");
-    const clean = buffer.replace("|", "");
+    const clean = buffer.replaceAll("|", "");
     const elementLine = clean.split("\n").findIndex((l) => l.includes("<zzz:Widget"));
     const attachedLine = clean.split("\n").findIndex((l) => l.includes("zzz:Foo.Bar"));
     assert.ok(hits.some((x) => diagText(x) === "zzz" && x.range.start.line === elementLine), `expected undeclared element prefix; buffer=${buffer}; got ${summary(diags)}`);

@@ -30,7 +30,7 @@ function page(inner) {
 }
 
 function clean(text) {
-  return text.replace("|", "").replace("[|]", "");
+  return text.replaceAll("|", "");
 }
 
 function declLine(buffer, name) {

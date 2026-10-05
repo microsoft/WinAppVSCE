@@ -158,7 +158,7 @@ describe("WinUI XAML — red-team 50 (using: namespace completion)", function ()
     const probe = page('<Grid xmlns:zzz="using:Smo|" />');
     const smoke = findSmoke(await clrAt(probe), "expected SmokeFixture for Smo");
     assert.strictEqual(smoke.range && smoke.range.start.character < smoke.range.end.character, true, `expected a replacement range; got ${JSON.stringify(smoke)}`);
-    const fixed = applySingleEdit(probe.replace("|", ""), smoke);
+    const fixed = applySingleEdit(probe.replaceAll("|", ""), smoke);
     assert.ok(fixed.includes('xmlns:zzz="using:SmokeFixture"'), fixed);
     assert.ok(!fixed.includes("SmoSmokeFixture"), fixed);
   });

@@ -102,7 +102,7 @@ describe("WinUI XAML red-team 39 — selection range provider", function () {
 
   it("keeps promised attribute-value granularity strictly nested on a single line", async () => {
     const probe = '<Grid Background="#FF|0000" />';
-    const clean = probe.replace("|", "");
+    const clean = probe.replaceAll("|", "");
     const { caret, ranges } = await assertProbe("attribute value granularity", probe);
     const texts = ranges
       .filter((r) => r.start.line === 0 && r.end.line === 0)

@@ -8,7 +8,7 @@ function page(inner) {
 }
 
 function clean(text) {
-  return text.replace("|", "");
+  return text.replaceAll("|", "");
 }
 
 function declLine(buffer, name) {
