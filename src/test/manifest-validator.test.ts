@@ -601,6 +601,42 @@ describe('Properties Validation', () => {
         expectNoError(validateManifest(m, schema), 'properties.logo');
     });
 
+    // A manifest may reference a qualified variant directly. Each prefix below is
+    // allowlisted in hasUnsupportedImageExtension; the near-misses confirm the list
+    // stays strict enough to keep flagging genuinely unsupported formats.
+    for (const qualified of [
+        'Assets\\StoreLogo.scale-200',
+        'Assets\\StoreLogo.contrast-high',
+        'Assets\\StoreLogo.targetsize-24',
+        'Assets\\StoreLogo.theme-dark',
+        'Assets\\StoreLogo.layoutdirection-rtl',
+        'Assets\\StoreLogo.language-en-US',
+        'Assets\\StoreLogo.dxfeaturelevel-10',
+        'Assets\\StoreLogo.altform-unplated',
+        'Assets\\StoreLogo.device-family-desktop',
+        'Assets\\StoreLogo.homeregion-us',
+        'Assets\\StoreLogo.configuration-debug',
+    ]) {
+        it(`should accept logo qualified with ${qualified.split('.').pop()}`, () => {
+            const m = makeValidManifest();
+            m.properties.logo = qualified;
+            expectNoError(validateManifest(m, schema), 'properties.logo');
+        });
+    }
+
+    for (const notAQualifier of [
+        'Assets\\StoreLogo.altform',       // prefix without the trailing "-value"
+        'Assets\\StoreLogo.device-family', // ditto
+        'Assets\\StoreLogo.scale200',      // missing the hyphen
+        'Assets\\StoreLogo.webp',
+    ]) {
+        it(`should error on ${notAQualifier.split('.').pop()}, which is not a qualifier`, () => {
+            const m = makeValidManifest();
+            m.properties.logo = notAQualifier;
+            expectError(validateManifest(m, schema), 'properties.logo');
+        });
+    }
+
     it('should not error when description is empty (optional)', () => {
         const m = makeValidManifest();
         m.properties.description = '';

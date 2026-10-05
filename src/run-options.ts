@@ -1,3 +1,4 @@
+import { extractJsonObject } from './winapp-cli-utils';
 
 
 /** Shared `winapp run` option shape for palette and debug invocations. */
@@ -199,17 +200,13 @@ export function runOptionsFromDebugConfig(
  * Reads the process ID out of `winapp run --json` output — the reciprocal of
  * the `--json` flag {@link runOptionsFromDebugConfig} always sets. Called on
  * every stdout chunk, so incomplete JSON is an expected miss, not an error.
+ *
+ * Scans for the JSON object rather than parsing the whole buffer, because the
+ * CLI interleaves progress prose with its `--json` payload on stdout.
  */
 export function parseProcessIdFromJson(output: string): number | undefined {
-	try {
-		const json = JSON.parse(output.trim());
-		const pid = json.processId ?? json.pid ?? json.ProcessId ?? json.PID;
-		if (typeof pid === 'number' && pid > 0) {
-			return pid;
-		}
-	} catch {
-		// JSON not complete yet or invalid
-	}
-	return undefined;
+	const json = extractJsonObject(output);
+	const pid = json?.processId ?? json?.pid ?? json?.ProcessId ?? json?.PID;
+	return typeof pid === 'number' && pid > 0 ? pid : undefined;
 }
 

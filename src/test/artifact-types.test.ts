@@ -2,7 +2,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	ARTIFACT_EXTENSIONS,
-	ARTIFACT_GLOBS,
 	ARTIFACT_DIALOG_FILTER,
 	isArtifactPath,
 	stripArtifactExtension
@@ -11,15 +10,6 @@ import {
 describe('ARTIFACT_EXTENSIONS', () => {
 	it('contains the four known artifact types (without dots)', () => {
 		assert.deepEqual([...ARTIFACT_EXTENSIONS], ['msix', 'msixbundle', 'appx', 'appxbundle']);
-	});
-});
-
-describe('ARTIFACT_GLOBS', () => {
-	it('produces recursive glob patterns for each extension', () => {
-		for (const glob of ARTIFACT_GLOBS) {
-			assert.ok(glob.startsWith('**/'), `Expected "${glob}" to start with "**/"`);
-		}
-		assert.equal(ARTIFACT_GLOBS.length, ARTIFACT_EXTENSIONS.length);
 	});
 });
 

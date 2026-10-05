@@ -5,6 +5,7 @@ import {
 	BUILD_OUTPUT_MAX_RESULTS,
 	deduplicateBuildOutputFolders
 } from './project-detection';
+import { selectFolder } from './winapp-host';
 
 /**
  * Folder selection shared by the run, pack, and project commands.
@@ -38,17 +39,7 @@ export interface BuildOutputFolder {
 /**
  * Prompt the user to select a folder.
  */
-export async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<string | undefined> {
-	const result = await vscode.window.showOpenDialog({
-		canSelectFiles: false,
-		canSelectFolders: true,
-		canSelectMany: false,
-		title,
-		defaultUri
-	});
-
-	return result?.[0]?.fsPath;
-}
+export { selectFolder };
 
 /**
  * Scan every root for folders containing `.exe` files, under one cancellable
