@@ -97,6 +97,12 @@ decision is therefore lower priority; P1a is the new top item.
 Also observed: a one-off VS repaint glitch after a live-spare swap (white block over
 the editor and toolbar, cleared on its own). Tracked under WS8.
 
+**After P1a + P1 (cold VS reopen, cache present):** `upgrade.build` 37.3 s → **2.4 s**;
+upgrade start → matched ready 44.5 s → **6.8 s**; swap → paint 4.8 s → 0.9 s.
+Open → full-fidelity matched preview went from ~65 s to **~12 s**. The first open after
+an extension update still does one real build (67.7 s observed), because a new engine
+stamp gives a new cache key.
+
 | ID | Task | Evidence | Depends on |
 |----|------|----------|------------|
 | P0 ✅ | Instrument latency baseline: PERF markers for open→first paint (split: identity / run-copy / start→Ready / Ready→paint), edit→paint, theme→paint, crash→recovered, upgrade→swap; capture an ARM64 baseline with the mock project | baseline above | — |
