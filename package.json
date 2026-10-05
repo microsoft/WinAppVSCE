@@ -185,45 +185,6 @@
           "type": "boolean",
           "default": false,
           "description": "When enabled, report known manifest elements that appear under an unexpected parent even when substitution-group coverage is incomplete."
-        },
-        "winapp.run.configuration": {
-          "type": "string",
-          "default": "Debug",
-          "scope": "resource",
-          "description": "Build configuration used by \"WinApp: Run Application\" when the target is a project or solution. Ignored when running a build output folder."
-        },
-        "winapp.run.arch": {
-          "type": "string",
-          "enum": [
-            "",
-            "x64",
-            "arm64",
-            "x86"
-          ],
-          "enumDescriptions": [
-            "Use the current process architecture",
-            "64-bit x86",
-            "64-bit ARM",
-            "32-bit x86"
-          ],
-          "default": "",
-          "scope": "resource",
-          "description": "Target architecture used by \"WinApp: Run Application\" when the target is a project or solution. Leave empty to use the current process architecture."
-        },
-        "winapp.run.properties": {
-          "type": "object",
-          "default": {},
-          "scope": "resource",
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "MSBuild properties passed by \"WinApp: Run Application\" to every project-mode run, as name/value pairs. launch.json configurations set \"properties\" directly."
-        },
-        "winapp.run.unregisterOnExit": {
-          "type": "boolean",
-          "default": false,
-          "scope": "resource",
-          "description": "Remove the development package registration after the application exits. Applies to \"WinApp: Run Application\"; launch.json configurations set \"unregisterOnExit\" directly."
         }
       }
     },

@@ -86,51 +86,18 @@ describe('package.json contributions', () => {
 			'winapp.appDirectories',
 			'winapp.manifest.intelliSense.enable',
 			'winapp.manifest.diagnostics.level',
-			'winapp.manifest.intelliSense.diagnostics.strictChildPlacement',
-			'winapp.run.configuration',
-			'winapp.run.arch',
-			'winapp.run.properties',
-			'winapp.run.unregisterOnExit'
+			'winapp.manifest.intelliSense.diagnostics.strictChildPlacement'
 		]) {
 			assert.ok(properties.includes(expected), `missing setting: ${expected}`);
 		}
 	});
 
-	it('scopes the run settings to the resource so multi-root workspaces can differ', () => {
-		const properties = manifest.contributes.configuration.properties;
-		for (const name of Object.keys(properties).filter(k => k.startsWith('winapp.run.'))) {
-			assert.equal(properties[name].scope, 'resource', `${name} should be resource-scoped`);
-		}
-	});
-
-	// Keep the settings menu aligned with the CLI's supported values so it
-	// neither hides a value the CLI accepts nor offers one it rejects.
-	it('offers exactly the architectures the CLI accepts', () => {
-		const arch = manifest.contributes.configuration.properties['winapp.run.arch'];
-		assert.deepEqual(
-			arch.enum.filter((value: string) => value !== ''),
-			[...SUPPORTED_ARCHITECTURES]
-		);
-		assert.equal(arch.enum.length, arch.enumDescriptions.length, 'every arch choice needs a description');
-		assert.equal(arch.default, '', 'the default must be empty so the CLI picks the process architecture');
-	});
-
-	// Projects routinely define configurations beyond Debug/Release, and the
-	// CLI forwards whatever it is given, so this must stay a free-form string.
-	it('leaves the configuration setting free-form', () => {
-		const configuration = manifest.contributes.configuration.properties['winapp.run.configuration'];
-		assert.equal(configuration.type, 'string');
-		assert.ok(!configuration.enum, 'configuration must not be restricted to an enum');
-		assert.equal(configuration.default, 'Debug');
-	});
-
-	it('types the run settings so VS Code validates them before the CLI does', () => {
-		const properties = manifest.contributes.configuration.properties;
-		assert.equal(properties['winapp.run.properties'].type, 'object');
-		assert.equal(properties['winapp.run.properties'].additionalProperties.type, 'string');
-		assert.deepEqual(properties['winapp.run.properties'].default, {});
-		assert.equal(properties['winapp.run.unregisterOnExit'].type, 'boolean');
-		assert.equal(properties['winapp.run.unregisterOnExit'].default, false);
+	// Run options are per-run (the With Options prompts) or per-configuration
+	// (launch.json). A workspace setting would be a third source of truth that
+	// F5 could not honor, so the surface deliberately has none.
+	it('contributes no winapp.run.* settings', () => {
+		const properties = Object.keys(manifest.contributes.configuration.properties);
+		assert.deepEqual(properties.filter(name => name.startsWith('winapp.run.')), []);
 	});
 
 	it('registers an activation event for every contributed command', () => {

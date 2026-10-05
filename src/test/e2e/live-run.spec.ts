@@ -397,6 +397,20 @@ async function runCommandPalette(page: Page, commandLabel: string): Promise<void
     await page.keyboard.press('Enter');
 }
 
+/**
+ * Answer an open QuickPick by filtering to `label` and accepting it.
+ *
+ * Typing rather than clicking a row keeps this independent of where the item
+ * lands in the list, which varies with the architectures the host reports.
+ */
+async function pickQuickItem(page: Page, label: string): Promise<void> {
+    const input = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
+    await expect(input).toBeVisible({ timeout: 30_000 });
+    await input.fill(label);
+    await page.waitForTimeout(500);
+    await page.keyboard.press('Enter');
+}
+
 /** Terminal visibility proves the command dispatched before launch polling begins. */
 async function waitForCliTerminal(page: Page): Promise<void> {
     await expect(page.locator('.terminal-wrapper, .terminal .xterm-rows').first())
@@ -540,19 +554,13 @@ test.describe('live winapp run (project mode)', () => {
         }
     });
 
-    test('applies the configuration setting to a project-mode build', async () => {
+    // The With Options prompts are the only way to vary a build now that the
+    // palette carries no workspace settings, so one run drives the whole chain
+    // and checks both answers reached the CLI.
+    test('applies the With Options build prompts to a project-mode build', async () => {
         test.setTimeout(LIVE_RUN_TIMEOUT_MS);
 
-        const app = scaffoldWinUiApp('config');
-
-        // getRunSettings reads this and only forwards it in project mode.
-        // Nothing else proves the value survives the trip to the CLI.
-        const settingsDir = path.join(app.projectDir, '.vscode');
-        fs.mkdirSync(settingsDir, { recursive: true });
-        fs.writeFileSync(
-            path.join(settingsDir, 'settings.json'),
-            JSON.stringify({ 'winapp.run.configuration': 'Release' }, null, 2)
-        );
+        const app = scaffoldWinUiApp('buildprompts');
 
         let codeApp: ElectronApplication | undefined;
         try {
@@ -560,7 +568,13 @@ test.describe('live winapp run (project mode)', () => {
             codeApp = launched.app;
             const page = launched.page;
 
-            await runCommandPalette(page, 'WinApp: Run Application');
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
+
+            await pickQuickItem(page, 'Release');
+            await pickQuickItem(page, 'x64');
+            // The toggle picker is multi-select; accept it with nothing chosen.
+            await page.keyboard.press('Enter');
+
             await waitForCliTerminal(page);
 
             await waitFor(
@@ -570,79 +584,23 @@ test.describe('live winapp run (project mode)', () => {
             );
 
             // Debug is the CLI's default, so its absence is what shows the
-            // setting was honoured rather than ignored.
+            // prompt answer was honoured rather than ignored.
             expect(
                 findBuiltExecutable(app.projectDir, 'Debug', app.appName),
                 'the Debug default should not have been built'
             ).toBeUndefined();
 
-            console.log(`✅ PASS: winapp.run.configuration=Release produced a Release build`);
-        } finally {
-            if (codeApp) {
-                await codeApp.close().catch(() => {});
-            }
-            cleanUp(app);
-        }
-    });
-
-    // Covers expensive project-mode settings in one run; unregisterOnExit stays
-    // in unit tests to avoid racing asynchronous deregistration.
-    test('applies the arch and properties settings to a project-mode build', async () => {
-        test.setTimeout(LIVE_RUN_TIMEOUT_MS);
-
-        const app = scaffoldWinUiApp('buildsettings');
-        const customAssemblyName = `${app.appName}Custom`;
-
-        // AssemblyName is the cleanest observable MSBuild property: it renames
-        // the produced executable, so finding that name proves --property
-        // reached MSBuild rather than being dropped somewhere in between.
-        const settingsDir = path.join(app.projectDir, '.vscode');
-        fs.mkdirSync(settingsDir, { recursive: true });
-        fs.writeFileSync(
-            path.join(settingsDir, 'settings.json'),
-            JSON.stringify({
-                'winapp.run.arch': 'x64',
-                'winapp.run.properties': { AssemblyName: customAssemblyName }
-            }, null, 2)
-        );
-
-        let codeApp: ElectronApplication | undefined;
-        try {
-            const launched = await launchVSCode(app.projectDir);
-            codeApp = launched.app;
-            const page = launched.page;
-
-            await runCommandPalette(page, 'WinApp: Run Application');
-            await waitForCliTerminal(page);
-
-            await waitFor(
-                () => findBuiltExecutable(app.projectDir, 'Debug', customAssemblyName) !== undefined,
-                `a build of the renamed assembly ${customAssemblyName}`,
-                page
-            );
-
-            // The template's own name must be absent, otherwise the property
-            // was ignored and this would pass against a default build.
-            expect(
-                findBuiltExecutable(app.projectDir, 'Debug', app.appName),
-                'the default assembly name should not have been built'
-            ).toBeUndefined();
-
-            const exePath = findBuiltExecutable(app.projectDir, 'Debug', customAssemblyName)!;
+            const exePath = findBuiltExecutable(app.projectDir, 'Release', app.appName)!;
             expect(
                 exePath.toLowerCase().split(path.sep).includes('win-x64'),
                 `expected an x64 runtime-identifier output, got ${exePath}`
             ).toBe(true);
 
-            console.log(`✅ PASS: winapp.run.properties and winapp.run.arch produced ${exePath}`);
+            console.log(`✅ PASS: With Options produced ${exePath}`);
         } finally {
             if (codeApp) {
                 await codeApp.close().catch(() => {});
             }
-            // cleanUp kills by the scaffolded app name, but AssemblyName
-            // renamed the process, so it has to be stopped here or the package
-            // and temp directory below it cannot be removed.
-            killProcess(customAssemblyName);
             cleanUp(app);
         }
     });

@@ -189,28 +189,9 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 
 > The `--detach` and `--no-launch` CLI options are deliberately not available in `launch.json`: both leave no running process for the debugger to attach to. Use **WinApp: Run Application With Options...** if you need them.
 
-**Settings for Run Application:**
+**Choosing build settings:**
 
-The palette's **Run Application** command takes its build settings from your workspace, so the common case stays a single prompt. All four are resource-scoped, so each folder of a multi-root workspace can set its own value. They apply to the palette commands only; a `launch.json` configuration sets the equivalent property directly.
-
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `winapp.run.configuration` | string | `Debug` | Build configuration used in project mode. |
-| `winapp.run.arch` | string | *(empty)* | Target architecture used in project mode. Empty means the current process architecture. |
-| `winapp.run.properties` | object | `{}` | MSBuild properties passed to every project-mode run. |
-| `winapp.run.unregisterOnExit` | boolean | `false` | Remove the development package registration after the application exits. |
-
-```jsonc
-// .vscode/settings.json
-{
-  "winapp.run.configuration": "Release",
-  "winapp.run.arch": "arm64",
-  "winapp.run.properties": { "DefineConstants": "CANARY" },
-  "winapp.run.unregisterOnExit": true
-}
-```
-
-**Run Application** uses these values without prompting. **Run Application With Options...** starts its prompts from them, marking each one `current default`, so you can override a setting for a single run without editing it.
+**Run Application** builds with the CLI's own defaults and prompts only for the target. To change the configuration, architecture, or any of the run toggles, use **WinApp: Run Application With Options...**, which prompts for them per run. For a setting you want applied every time, put it in a `launch.json` configuration and start with F5.
 
 ### AppxManifest Visual Editor
 

@@ -321,22 +321,6 @@ async function browseForRunTarget(
 	};
 }
 
-/** `winapp.run.*` defaults are resource-scoped per workspace root. */
-export function getRunSettings(rootPath: string): Partial<WinAppRunOptions> {
-	const config = vscode.workspace.getConfiguration('winapp', vscode.Uri.file(rootPath));
-	const configuration = config.get<string>('run.configuration');
-	const arch = config.get<string>('run.arch');
-	const properties = config.get<Record<string, string>>('run.properties');
-
-	return {
-		configuration: configuration || undefined,
-		arch: arch || undefined,
-		properties: properties && Object.keys(properties).length > 0 ? properties : undefined,
-		unregisterOnExit: config.get<boolean>('run.unregisterOnExit') || undefined
-	};
-}
-
-
 /** Prompt only for multiple plausible apps; otherwise the CLI is authoritative. */
 export async function pickSolutionProject(
 	selection: RunTargetSelection
@@ -407,17 +391,15 @@ const RUN_TOGGLES: RunToggle[] = [
 	{ key: 'unregisterOnExit', label: 'Unregister on exit', detail: 'Remove the development package after the app exits (--unregister-on-exit)' }
 ];
 
-/** Omit target-inapplicable toggles; configured defaults start checked. */
+/** Omit target-inapplicable toggles; everything starts unchecked. */
 export async function pickRunToggles(
-	kind: RunTargetKind,
-	defaults: Partial<WinAppRunOptions>
+	kind: RunTargetKind
 ): Promise<Partial<WinAppRunOptions> | undefined> {
 	const available = RUN_TOGGLES.filter(toggle => !toggle.projectOnly || isProjectMode(kind));
 	const items = available.map(toggle => ({
 		label: toggle.label,
 		detail: toggle.detail,
-		toggle,
-		picked: defaults[toggle.key] === true
+		toggle
 	}));
 
 	const picked = await vscode.window.showQuickPick(items, {
@@ -436,22 +418,9 @@ export async function pickRunToggles(
 	return selected;
 }
 
-/** Seed build prompts from settings so custom defaults remain selectable. */
-export async function pickBuildSettings(
-	defaults: Partial<WinAppRunOptions>
-): Promise<Partial<WinAppRunOptions> | undefined> {
-	const currentConfiguration = defaults.configuration ?? 'Debug';
-	const configurationNames = [...COMMON_CONFIGURATIONS] as string[];
-	if (!configurationNames.includes(currentConfiguration)) {
-		// A custom configuration from settings must remain selectable, or the
-		// prompt would quietly replace it with Debug.
-		configurationNames.unshift(currentConfiguration);
-	}
-
-	const configurationItems = configurationNames.map(name => ({
-		label: name,
-		description: name === currentConfiguration ? 'current default' : undefined
-	}));
+/** Build prompts for the With Options flow; the CLI owns the defaults. */
+export async function pickBuildSettings(): Promise<Partial<WinAppRunOptions> | undefined> {
+	const configurationItems = [...COMMON_CONFIGURATIONS].map(name => ({ label: name }));
 
 	const configuration = await vscode.window.showQuickPick(configurationItems, {
 		placeHolder: 'Build configuration'
@@ -461,14 +430,10 @@ export async function pickBuildSettings(
 	}
 
 	const archItems = [
-		{
-			label: 'Default',
-			description: defaults.arch ? undefined : 'current default',
-			arch: undefined as string | undefined
-		},
+		{ label: 'Default', description: 'current process architecture', arch: undefined as string | undefined },
 		...[...SUPPORTED_ARCHITECTURES].map(name => ({
 			label: name,
-			description: name === defaults.arch ? 'current default' : undefined,
+			description: undefined as string | undefined,
 			arch: name as string | undefined
 		}))
 	];
@@ -494,23 +459,9 @@ export async function resolveRunOptions(
 	}
 
 	const target = selection.target;
-	const settings = getRunSettings(target.root.path);
 	const projectMode = isProjectMode(target.kind);
 
-	// Only apply the project-mode settings to a project-mode target. Carrying
-	// them into folder mode would make every plain folder run report warnings
-	// about options the CLI silently ignores.
-	let options: WinAppRunOptions = {
-		input: target.path,
-		unregisterOnExit: settings.unregisterOnExit,
-		...(projectMode
-			? {
-				configuration: settings.configuration,
-				arch: settings.arch,
-				properties: settings.properties
-			}
-			: {})
-	};
+	let options: WinAppRunOptions = { input: target.path };
 
 	const projectSelection = await pickSolutionProject(selection);
 	if (projectSelection.cancelled) {
@@ -520,14 +471,14 @@ export async function resolveRunOptions(
 
 	if (withOptions) {
 		if (projectMode) {
-			const buildSettings = await pickBuildSettings(settings);
+			const buildSettings = await pickBuildSettings();
 			if (!buildSettings) {
 				return undefined;
 			}
 			options = { ...options, ...buildSettings };
 		}
 
-		const toggles = await pickRunToggles(target.kind, settings);
+		const toggles = await pickRunToggles(target.kind);
 		if (!toggles) {
 			return undefined;
 		}

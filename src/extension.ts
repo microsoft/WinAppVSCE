@@ -26,7 +26,6 @@ import {
 	pickBuildOutputFolder
 } from './folder-picker';
 import {
-	getRunSettings,
 	pickRunTarget,
 	pickSolutionProject,
 	resolveRunOptions

@@ -120,8 +120,7 @@ It skips with a diagnostic when the .NET SDK, WinUI templates, or the winapp CLI
 | # | Test | Validates |
 |---|------|-----------|
 | 1 | builds, deploys, and launches a WinUI project | A single `.csproj` auto-selects, builds, registers in development mode, and the process starts |
-| 2 | applies the configuration setting to a project-mode build | `winapp.run.configuration: Release` reaches the CLI — a Release build appears and the Debug default does not |
-| 3 | applies the arch and properties settings to a project-mode build | `winapp.run.properties` reaches MSBuild (an `AssemblyName` override renames the executable) and `winapp.run.arch: x64` produces a `win-x64` output |
+| 2 | applies the With Options build prompts to a project-mode build | Answering the configuration and architecture prompts with `Release` and `x64` reaches the CLI — a `win-x64` Release build appears and the Debug default does not |
 
 Notes for anyone changing this spec:
 
