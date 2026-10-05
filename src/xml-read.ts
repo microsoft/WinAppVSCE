@@ -3,25 +3,67 @@ import type { Document, Element } from '@xmldom/xmldom';
 
 /** Real XML parsing avoids regex mistakes with comments, quote style, and entities. */
 
-/** Malformed workspace XML degrades to unknown and suppresses parser log noise. */
-export function tryParseXml(content: string): Document | undefined {
-	let failed = false;
+/** An XML parse error with location information. */
+export interface XmlParseError {
+	message: string;
+	/** 0-based line number. */
+	line: number;
+	/** 0-based column number. */
+	col: number;
+}
+
+/** Result of parsing XML text. */
+export interface XmlParseResult {
+	/** The parsed DOM document (may be partial if errors were encountered). */
+	doc: Document;
+	/** Any non-warning errors encountered during parsing. */
+	errors: XmlParseError[];
+}
+
+/** xmldom reports positions in prose, so they have to be scraped back out. */
+function toParseError(message: string): XmlParseError {
+	const lineMatch = /line[:\s]+(\d+)/i.exec(message);
+	const colMatch = /col(?:umn)?[:\s]+(\d+)/i.exec(message);
+	return {
+		message,
+		line: lineMatch ? parseInt(lineMatch[1], 10) - 1 : 0,
+		col: colMatch ? parseInt(colMatch[1], 10) - 1 : 0
+	};
+}
+
+/**
+ * The single DOMParser entry point. Collects non-warning errors instead of
+ * throwing, and always returns a document so callers can inspect both.
+ */
+export function parseXml(xmlText: string): XmlParseResult {
+	const errors: XmlParseError[] = [];
 	const parser = new DOMParser({
-		onError: (level: string) => {
-			if (level !== 'warning') {
-				failed = true;
-			}
+		onError: (errorLevel: string, message: string) => {
+			if (errorLevel === 'warning') { return; }
+			errors.push(toParseError(message));
 		}
 	});
 
-	let doc: Document | undefined;
+	let doc: Document;
 	try {
-		doc = parser.parseFromString(content, 'text/xml');
-	} catch {
-		return undefined;
+		doc = parser.parseFromString(xmlText, 'application/xml');
+	} catch (e: unknown) {
+		// fatalError (e.g. unclosed elements) throws after calling onError.
+		// The error is already captured via onError above; if not, add it now.
+		if (errors.length === 0) {
+			errors.push(toParseError(e instanceof Error ? e.message : String(e)));
+		}
+		// Return a minimal empty document so callers can still inspect errors
+		doc = new DOMParser().parseFromString('<_/>', 'application/xml');
 	}
 
-	if (failed || !doc?.documentElement) {
+	return { doc, errors };
+}
+
+/** Malformed workspace XML degrades to unknown and suppresses parser log noise. */
+export function tryParseXml(content: string): Document | undefined {
+	const { doc, errors } = parseXml(content);
+	if (errors.length > 0 || !doc.documentElement) {
 		return undefined;
 	}
 	return doc;
