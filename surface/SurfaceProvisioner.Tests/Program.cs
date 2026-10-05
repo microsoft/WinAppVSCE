@@ -211,6 +211,7 @@ try
     Directory.CreateDirectory(nativeRoot);
     File.Copy(Path.Combine(source, "Microsoft.WinUI.dll"), Path.Combine(componentRoot, "Microsoft.WinUI.dll"));
     File.Copy(Path.Combine(source, "Microsoft.ui.xaml.dll"), Path.Combine(nativeRoot, "Microsoft.ui.xaml.dll"));
+    var restoreCalls = 0;
     string FakeTool(string exe, IEnumerable<string> arguments)
     {
         var toolArgs = arguments.ToArray();
@@ -219,6 +220,7 @@ try
         var projectDir = Path.GetDirectoryName(project)!;
         if (toolArgs[0] == "restore")
         {
+            restoreCalls++;
             Directory.CreateDirectory(Path.Combine(projectDir, "obj"));
             File.WriteAllText(Path.Combine(projectDir, "obj", "project.assets.json"), graph);
         }
@@ -305,6 +307,36 @@ try
             Check(HostPayload.Validate(Path.Combine(entry, "host")).Files.Count == 8,
                 "--build " + phase + " retains only complete immutable generations");
     }
+
+    // Identity memo: a verified cache hit skips staging/restore/deep package hashing; any witnessed
+    // input change (or an unusable memo) falls back to the full identity path.
+    (string status, int restores, string key) BuildOnce()
+    {
+        restoreCalls = 0;
+        using var output = new StringWriter();
+        var exit = ProvisionerCommand.Run(buildArgs, CancellationToken.None, output, _ => { }, FakeTool);
+        using var json = JsonDocument.Parse(output.ToString());
+        Check(exit == 0, "memo scenario exits 0");
+        return (json.RootElement.GetProperty("status").GetString()!, restoreCalls,
+            json.RootElement.GetProperty("cacheKey").GetString()!);
+    }
+    var memoBaseline = BuildOnce();
+    Check(memoBaseline.status == "cached" && memoBaseline.restores == 0, "memo cache hit skips restore");
+    var memoFile = Directory.GetFiles(Path.Combine(fixtureV2, "memo"), "*.json").Single();
+    File.WriteAllText(Path.Combine(pkg, "Themes.pri"), "resources-changed-in-place");
+    var afterPackage = BuildOnce();
+    Check(afterPackage.restores == 2 && afterPackage.status == "built" && afterPackage.key != memoBaseline.key,
+        "memo invalidated by restored package file change");
+    var rehit = BuildOnce();
+    Check(rehit.status == "cached" && rehit.restores == 0 && rehit.key == afterPackage.key, "memo refreshed after rebuild");
+    File.WriteAllText(Path.Combine(Path.GetDirectoryName(fixtureSurface)!, "NewSource.cs"), "// added");
+    var afterSource = BuildOnce();
+    Check(afterSource.restores == 2 && afterSource.key != rehit.key, "memo invalidated by engine source addition");
+    File.WriteAllText(memoFile, "{ not json");
+    var afterCorrupt = BuildOnce();
+    Check(afterCorrupt.status == "cached" && afterCorrupt.restores == 2 && afterCorrupt.key == afterSource.key,
+        "unreadable memo falls back to full identity");
+    Check(BuildOnce().restores == 0, "memo rewritten after full-identity cache hit");
 
     var lockPath = Path.Combine(root, "locks", "shared");
     var psi = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardInput = true, UseShellExecute = false };

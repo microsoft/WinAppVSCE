@@ -100,7 +100,7 @@ the editor and toolbar, cleared on its own). Tracked under WS8.
 | ID | Task | Evidence | Depends on |
 |----|------|----------|------------|
 | P0 ✅ | Instrument latency baseline: PERF markers for open→first paint (split: identity / run-copy / start→Ready / Ready→paint), edit→paint, theme→paint, crash→recovered, upgrade→swap; capture an ARM64 baseline with the mock project | baseline above | — |
-| P1a ⭐ | Fast cache-hit path: memoize the identity per input fingerprint (package dir + file size/mtime, assets.json hashes) so a hit skips staging, restore and the deep package hash; keep full hashing for builds | 37–68 s `upgrade.build` on a cache hit | P0 |
+| P1a ✅ | Fast cache-hit path: memoize the identity per input fingerprint (package dir + file size/mtime, assets.json hashes) so a hit skips staging, restore and the deep package hash; keep full hashing for builds. **Done:** `BuildStorage.Recall/Remember` (`v2\memo\*.json`). On the real 2.5.1 cache, standalone time went from 15.4 s to 1.2–1.9 s with the same key. The cached payload is still fully validated and matched-host verified | 37–68 s `upgrade.build` on a cache hit | P0 |
 | P1 | Collapse the double matched run-copy to one per process | `PreviewControl` ~1027 + `SurfaceClient` ~119-131 | P0 |
 | P2 🧭 | Make run-copy cheap: validate the pristine cache once per session, single-pass copy+hash, hardlink immutable files and copy only the mutable PRI | `HostPayload.cs` `Validate`/`CreateRunCopy` | P1 |
 | P3 | GC orphaned run-copies (`%TEMP%\wsr-v2`, `%TEMP%\WinUIXamlPreview\run`) + bounded cache-generation GC | 0.62 GB observed | P0 |

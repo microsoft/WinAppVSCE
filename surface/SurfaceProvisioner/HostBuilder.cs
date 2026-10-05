@@ -75,30 +75,62 @@ public static class HostBuilder
             // Versions enter MSBuild command-line properties; reject expressions/ranges rather than guessing.
             if (!System.Text.RegularExpressions.Regex.IsMatch(version, @"^\d+\.\d+\.\d+([.-][0-9A-Za-z.-]+)?$"))
                 throw new InvalidDataException("A concrete resolved WindowsAppSDK version is required: " + version);
-            using var stage = new BuildStage(opt.StagingRoot);
-            var surface = Path.Combine(stage.Root, "s");
-            var template = Path.Combine(stage.Root, "d");
-            BuildStorage.CopySource(Path.GetDirectoryName(Path.GetFullPath(opt.SurfaceProjectPath))!, surface, cancellation);
-            BuildStorage.CopySource(Path.GetDirectoryName(Path.GetFullPath(opt.DesignHostPriProjectPath))!, template, cancellation);
-            var sp = Path.Combine(surface, Path.GetFileName(opt.SurfaceProjectPath));
-            var dp = Path.Combine(template, Path.GetFileName(opt.DesignHostPriProjectPath));
+            var surfaceSource = Path.GetDirectoryName(Path.GetFullPath(opt.SurfaceProjectPath))!;
+            var templateSource = Path.GetDirectoryName(Path.GetFullPath(opt.DesignHostPriProjectPath))!;
             string RunTool(IEnumerable<string> args) => runTool == null
                 ? Run("dotnet", args, opt, log, cancellation) : runTool("dotnet", args);
             var toolchain = RunTool(new[] { "--version" }).Trim();
+            // Namespace v2 leaves all legacy user cache entries untouched.
+            var cache = Path.Combine(Path.GetFullPath(opt.CacheRoot), "v2");
+            var memoPath = BuildStorage.MemoPath(cache, opt.ProjectPath, surfaceSource, templateSource,
+                version, opt.Platform, opt.Rid, opt.EngineStamp ?? "", opt.NuGetCache);
+            if (!opt.ForceRebuild)
+            {
+                var (knownComponent, _) = Provisioner.ResolveComponent(version, opt.NuGetCache, log);
+                var recalled = knownComponent == null ? null
+                    : BuildStorage.Recall(memoPath, surfaceSource, templateSource, knownComponent, toolchain, log, cancellation);
+                if (recalled != null)
+                {
+                    r.WinUiComponent = knownComponent; r.CacheKey = recalled;
+                    using var fastLock = BuildStorage.AcquireLock(Path.Combine(cache, "locks", recalled), cancellation);
+                    var fast = BuildStorage.FindCompleted(cache, recalled, cancellation, log);
+                    if (fast != null)
+                    {
+                        VerifyMatched(fast, knownComponent!, opt, r, cancellation);
+                        log("CACHE HIT " + recalled + " (identity memo)");
+                        cancellation.ThrowIfCancellationRequested();
+                        SetHost(r, fast);
+                        r.CacheHit = true; r.Success = true; r.Status = "cached";
+                        return r;
+                    }
+                    log("Identity memo key has no completed cache entry; resolving fully.");
+                }
+            }
+            var engineWitnesses = BuildStorage.SourceWitnesses(surfaceSource, cancellation);
+            var templateWitnesses = BuildStorage.SourceWitnesses(templateSource, cancellation);
+            using var stage = new BuildStage(opt.StagingRoot);
+            var surface = Path.Combine(stage.Root, "s");
+            var template = Path.Combine(stage.Root, "d");
+            BuildStorage.CopySource(surfaceSource, surface, cancellation);
+            BuildStorage.CopySource(templateSource, template, cancellation);
+            var sp = Path.Combine(surface, Path.GetFileName(opt.SurfaceProjectPath));
+            var dp = Path.Combine(template, Path.GetFileName(opt.DesignHostPriProjectPath));
             foreach (var project in new[] { sp, dp })
                 RunTool(BuildArgs("restore", project, version, opt));
             var (component, _) = Provisioner.ResolveComponent(version, opt.NuGetCache, log);
             r.WinUiComponent = component ?? throw new InvalidDataException("Resolved WinUI component missing after restore.");
+            var inputWitnesses = new List<BuildStorage.Witness>();
             var key = BuildStorage.Identity(surface, template, opt.ProjectPath, version, component,
-                opt.Platform, opt.Rid, opt.EngineStamp ?? "", toolchain, cancellation);
+                opt.Platform, opt.Rid, opt.EngineStamp ?? "", toolchain, cancellation, inputWitnesses);
             r.CacheKey = key;
-            // Namespace v2 leaves all legacy user cache entries untouched.
-            var cache = Path.Combine(Path.GetFullPath(opt.CacheRoot), "v2");
+            void RememberKey() => BuildStorage.Remember(memoPath, key, component, toolchain,
+                engineWitnesses, templateWitnesses, inputWitnesses, log);
             using var cacheLock = BuildStorage.AcquireLock(Path.Combine(cache, "locks", key), cancellation);
             var existing = opt.ForceRebuild ? null : BuildStorage.FindCompleted(cache, key, cancellation, log);
             if (existing != null)
             {
                 VerifyMatched(existing, component, opt, r, cancellation);
+                RememberKey();
                 log("CACHE HIT " + key);
                 cancellation.ThrowIfCancellationRequested();
                 SetHost(r, existing);
@@ -123,6 +155,7 @@ public static class HostBuilder
                 throw new IOException("Resolved inputs changed during build; no cache entry published. Retry after inputs stabilize.");
             cancellation.ThrowIfCancellationRequested();
             var published = BuildStorage.Publish(cache, key, host, cancellation, log);
+            RememberKey();
             cancellation.ThrowIfCancellationRequested();
             SetHost(r, published);
             r.Success = true; r.Status = "built";
