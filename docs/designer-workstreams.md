@@ -69,13 +69,38 @@ Measured facts (ARM64 dev machine):
   SHA-256 every copied file (3 full passes).
 - The matched upgrade runs it **twice** (`PrepareMatchedRunCopy`, then again in
   `SurfaceClient` because `userPri` is set) ≈ 6 passes / ~900 MB before the process
-  starts. That's the likely cause of the ~13 s cache hit. Each warm spare on a
-  matched host repeats one copy.
+  starts. Each warm spare on a matched host repeats one copy.
 - **10 orphaned run-copies / 0.62 GB** found in `%TEMP%\wsr-v2`.
+
+### P0 baseline (ARM64, mock project, cold VS open, 2.5.1 cache already present)
+
+Collected with PERF markers via `scripts/designer-perf-summary.ps1 -ByOutcome`.
+
+| Span | Time |
+|------|------|
+| Open → first paint (bundled host) | 17.0 s (identity 6.4 s; Surface spawn → Ready 8.5 s, ~5 s of it is app resource scope) |
+| `upgrade.build`: provisioner on a **cache hit** | **37.3 s** (68 s in an earlier session) |
+| Matched run-copy (each of 2 copies) | 0.7–0.9 s |
+| Matched spawn → Ready | 3.3–6.4 s |
+| Upgrade swap → paint | 4.8 s |
+| Live edit → paint (pre-warmed spare) | 1.5 s |
+
+**Finding: run-copy is not the bottleneck. The provisioner cache-hit path is.**
+It doesn't short-circuit. On every open it stages sources, runs `dotnet --version`
+and two `dotnet restore`s, then `BuildStorage.Identity` SHA-256s **every file of
+every restored NuGet package** in three dependency graphs, including the
+multi-arch WinAppSDK packages. Only after that does it check the cache. Standalone
+and warm, that's 8.4 s (restores ~2.7 s, identity hash ~4.7 s). Inside VS, with
+cold disk caches, Defender and concurrent Surface startup, it's 37–68 s. The P2
+decision is therefore lower priority; P1a is the new top item.
+
+Also observed: a one-off VS repaint glitch after a live-spare swap (white block over
+the editor and toolbar, cleared on its own). Tracked under WS8.
 
 | ID | Task | Evidence | Depends on |
 |----|------|----------|------------|
-| P0 | Instrument latency baseline: PERF markers for open→first paint (split: identity / run-copy / start→Ready / Ready→paint), edit→paint, theme→paint, crash→recovered, upgrade→swap; capture an ARM64 baseline with the mock project | no timings logged today | — |
+| P0 ✅ | Instrument latency baseline: PERF markers for open→first paint (split: identity / run-copy / start→Ready / Ready→paint), edit→paint, theme→paint, crash→recovered, upgrade→swap; capture an ARM64 baseline with the mock project | baseline above | — |
+| P1a ⭐ | Fast cache-hit path: memoize the identity per input fingerprint (package dir + file size/mtime, assets.json hashes) so a hit skips staging, restore and the deep package hash; keep full hashing for builds | 37–68 s `upgrade.build` on a cache hit | P0 |
 | P1 | Collapse the double matched run-copy to one per process | `PreviewControl` ~1027 + `SurfaceClient` ~119-131 | P0 |
 | P2 🧭 | Make run-copy cheap: validate the pristine cache once per session, single-pass copy+hash, hardlink immutable files and copy only the mutable PRI | `HostPayload.cs` `Validate`/`CreateRunCopy` | P1 |
 | P3 | GC orphaned run-copies (`%TEMP%\wsr-v2`, `%TEMP%\WinUIXamlPreview\run`) + bounded cache-generation GC | 0.62 GB observed | P0 |
