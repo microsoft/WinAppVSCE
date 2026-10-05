@@ -62,6 +62,12 @@ namespace WinUIXamlPreview.UI
         // (one that fail-fasts on its 2nd render in a warm process) in a fresh, unarmed process without a
         // visible cold-restart blip. A document is learned to be risky the first time it crashes the
         // surface, then recycled proactively on every subsequent edit.
+        // WS3-P0 latency markers: one pending "action → paint" span, closed by the next Hwnd/Frame/Error.
+        // Emits greppable "PERF <label>.paint ms=<n> outcome=<x>" lines (see scripts\designer-perf-summary.ps1).
+        private System.Diagnostics.Stopwatch? _perfSw;
+        private string? _perfLabel;
+        private string _perfNextOpenLabel = "open";
+
         private SurfaceClient? _spareClient;
         private bool _spareReady;
         private bool _spareWarming;
@@ -215,6 +221,8 @@ namespace WinUIXamlPreview.UI
             _hasFrame = false;
             FrameImage.Source = null;
             SetStatus("Starting preview…", spinner: true, detail: Path.GetFileName(path));
+            PerfBegin(_perfNextOpenLabel);
+            _perfNextOpenLabel = "open";
 
             _ = StartPreviewAsync(path).ContinueWith(
                 t => Log.Write("StartPreviewAsync faulted: " + t.Exception),
@@ -277,7 +285,9 @@ namespace WinUIXamlPreview.UI
             {
                 SetStatus("Preparing packaged preview…", spinner: true, detail: Path.GetFileName(path));
                 var exeForReg = surfaceExe;
+                var idSw = System.Diagnostics.Stopwatch.StartNew();
                 var registered = await System.Threading.Tasks.Task.Run(() => SurfaceIdentity.EnsureRegistered(exeForReg, Log.Write));
+                Log.Write($"PERF open.identity ms={idSw.ElapsedMilliseconds} registered={registered}");
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 if (_disposed)
                 {
@@ -511,6 +521,7 @@ namespace WinUIXamlPreview.UI
             _currentPath = null; // force a full restart so the surface relaunches with the new SURFACE_THEME env
             if (!string.IsNullOrEmpty(path))
             {
+                _perfNextOpenLabel = "theme";
                 ShowDocument(path);
             }
         }
@@ -724,10 +735,16 @@ namespace WinUIXamlPreview.UI
                 // cold process start — no visible restart blip.
                 if ((_riskyDocs.Contains(_currentPath) || EffectiveLiveMode(_currentPath)) && TryPromoteSpare(xaml))
                 {
+                    PerfBegin(EffectiveLiveMode(_currentPath) ? "edit.livespare" : "edit.riskyspare");
                     Log.Write(EffectiveLiveMode(_currentPath)
                         ? "Live-mode edit: rendered on a fresh spare process (per-render isolation)."
                         : "Risky doc edit: recycled onto the warm spare (skipped in-place re-render).");
                     return;
+                }
+
+                if (_client != null)
+                {
+                    PerfBegin(EffectiveLiveMode(_currentPath) ? "edit.live-nospare" : "edit.inplace");
                 }
 
                 _client?.UpdateXaml(xaml);
@@ -997,6 +1014,7 @@ namespace WinUIXamlPreview.UI
 
             _ = System.Threading.Tasks.Task.Run(async () =>
             {
+                var upSw = System.Diagnostics.Stopwatch.StartNew();
                 string? completedHost = null;
                 // 1. Wait for the shared build (if any).
                 if (build != null)
@@ -1021,10 +1039,13 @@ namespace WinUIXamlPreview.UI
                     }
                     completedHost = outcome.HostDir;
                 }
+                Log.Write($"PERF upgrade.build ms={upSw.ElapsedMilliseconds} kind={kind}");
 
                 // 2. Run-copy the verified cached host into a transient per-session dir (never mutate the cache).
                 var runRoot = Path.Combine(Path.GetTempPath(), "WinUIXamlPreview", "run", Guid.NewGuid().ToString("N"));
+                var rcSw = System.Diagnostics.Stopwatch.StartNew();
                 var prepared = completedHost == null ? null : MatchedHostResolver.PrepareMatchedRunCopy(completedHost, runRoot, Log.Write);
+                Log.Write($"PERF upgrade.runcopy ms={rcSw.ElapsedMilliseconds} ok={prepared != null}");
                 if (prepared == null)
                 {
                     TryDeleteDir(runRoot);
@@ -1064,6 +1085,7 @@ namespace WinUIXamlPreview.UI
 
                 // 4. Promote on the UI thread (generation-checked: never swap into a document that moved on).
                 var readyMatched = matched;
+                Log.Write($"PERF upgrade.ready ms={upSw.ElapsedMilliseconds}");
                 await MarshalAsync(() =>
                 {
                     if (_disposed || gen != _upgradeGeneration)
@@ -1149,6 +1171,7 @@ namespace WinUIXamlPreview.UI
             try
             {
                 matched.SetMode(PreviewOptions.DesignMode);
+                PerfBegin("upgrade.swap");
                 if (PreferNative && _nativeSupported)
                 {
                     matched.EnterNative(xaml, 0, 0, 1.0);
@@ -1322,6 +1345,7 @@ namespace WinUIXamlPreview.UI
                     }
 
                     _hasFrame = true;
+                    PerfEnd("frame");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
                     MaybeShowLiveFallbackBanner();
@@ -1382,6 +1406,7 @@ namespace WinUIXamlPreview.UI
                     NativeHostHolder.Visibility = Visibility.Visible;
 
                     _hasNative = true;
+                    PerfEnd("hwnd");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
                     MaybeShowLiveFallbackBanner();
@@ -1400,6 +1425,29 @@ namespace WinUIXamlPreview.UI
             Log.Write("Surface acknowledged ExitNative (window re-cloaked off-screen).");
         }
 
+        private void PerfBegin(string label)
+        {
+            if (_perfSw != null)
+            {
+                Log.Write($"PERF {_perfLabel}.paint ms={_perfSw.ElapsedMilliseconds} outcome=superseded");
+            }
+
+            _perfLabel = label;
+            _perfSw = System.Diagnostics.Stopwatch.StartNew();
+        }
+
+        private void PerfEnd(string outcome)
+        {
+            if (_perfSw == null)
+            {
+                return;
+            }
+
+            Log.Write($"PERF {_perfLabel}.paint ms={_perfSw.ElapsedMilliseconds} outcome={outcome}");
+            _perfSw = null;
+            _perfLabel = null;
+        }
+
         private void OnError(ErrorMsg err)
         {
             _ = Dispatcher.InvokeAsync(() =>
@@ -1408,6 +1456,8 @@ namespace WinUIXamlPreview.UI
                 {
                     return;
                 }
+
+                PerfEnd(err.NotDesignable ? "notdesignable" : "error");
 
                 // P1 (VE1): a structurally non-designable root — a ResourceDictionary (styles/themes/
                 // control-template dictionary), a Window/WindowEx, or a $safeprojectname$ project-template
@@ -1481,6 +1531,7 @@ namespace WinUIXamlPreview.UI
                     Log.Write($"Live preview could not activate '{Path.GetFileName(path)}' (crashed with no frame); falling back to a static parse-mode preview.");
                     SetStatus("Live preview unavailable — showing static preview…", spinner: true, detail: Path.GetFileName(path!));
                     _currentPath = null; // force a full re-init in parse mode
+                    _perfNextOpenLabel = "recover.livefallback";
                     ShowDocument(path);
                     return;
                 }
@@ -1502,6 +1553,7 @@ namespace WinUIXamlPreview.UI
 
                     if (xaml != null && TryPromoteSpare(xaml))
                     {
+                        PerfBegin("recover.spare");
                         Log.Write($"Surface died; recovered via warm spare (attempt {_restartAttempts}/{MaxAutoRestarts}).");
                         SetStatus("Recycling surface…", spinner: true, detail: Path.GetFileName(path!));
                         return;
@@ -1511,6 +1563,7 @@ namespace WinUIXamlPreview.UI
                     Log.Write($"Surface died; cold-restarting preview (attempt {_restartAttempts}/{MaxAutoRestarts}).");
                     SetStatus("Surface restarted; reloading…", spinner: true, detail: Path.GetFileName(path!));
                     _currentPath = null; // force ShowDocument to fully re-init rather than short-circuit
+                    _perfNextOpenLabel = "recover.cold";
                     ShowDocument(path);
                     return;
                 }

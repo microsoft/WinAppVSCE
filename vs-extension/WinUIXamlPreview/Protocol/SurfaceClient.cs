@@ -47,6 +47,8 @@ namespace WinUIXamlPreview.Protocol
         private readonly LineDecoder _decoder = new LineDecoder();
         private readonly StringBuilder _stdout = new StringBuilder();
         private TaskCompletionSource<ReadyMsg>? _ready;
+        private Stopwatch? _startSw;
+        private long _spawnMs;
         private bool _started;
         private bool _disposed;
         private bool _connecting;
@@ -95,6 +97,7 @@ namespace WinUIXamlPreview.Protocol
 
             _started = true;
             _ready = new TaskCompletionSource<ReadyMsg>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _startSw = Stopwatch.StartNew();
 
             var args = new StringBuilder();
             if (!string.IsNullOrEmpty(_userDll))
@@ -128,7 +131,9 @@ namespace WinUIXamlPreview.Protocol
                     if (!string.Equals(Path.GetFullPath(_userPri!), Path.Combine(source, "Surface.designtime.pri"), StringComparison.OrdinalIgnoreCase))
                         throw new InvalidDataException("Matched PRI must belong to the supplied payload.");
                     _privateRun = Path.Combine(Path.GetTempPath(), "wsr-v2", Guid.NewGuid().ToString("N"));
+                    var rcSw = Stopwatch.StartNew();
                     HostPayload.CreateRunCopy(source, _privateRun);
+                    _log($"PERF client.runcopy ms={rcSw.ElapsedMilliseconds}");
                 }
                 catch (Exception ex) { Fault("Failed to stage the matched-host PRI run-copy.", ex); return _ready.Task; }
                 if (args.Length > 0)
@@ -188,6 +193,7 @@ namespace WinUIXamlPreview.Protocol
                 _proc.ErrorDataReceived += OnStderr;
                 _proc.Exited += OnExited;
                 _proc.Start();
+                _spawnMs = _startSw.ElapsedMilliseconds;
                 _proc.BeginOutputReadLine();
                 _proc.BeginErrorReadLine();
             }
@@ -356,6 +362,10 @@ namespace WinUIXamlPreview.Protocol
             {
                 case "Ready":
                     _timeoutCts?.Cancel();
+                    if (_startSw != null)
+                    {
+                        _log($"PERF client.ready ms={_startSw.ElapsedMilliseconds} spawnAt={_spawnMs} privateRun={(_privateRun != null ? "yes" : "no")}");
+                    }
                     var ready = JsonSerializer.Deserialize<ReadyMsg>(json, ReadOptions);
                     if (ready != null)
                     {
