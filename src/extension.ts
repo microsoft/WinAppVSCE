@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { spawn, execFile } from 'child_process';
 import {
@@ -9,6 +10,7 @@ import {
 	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
 	decideElevatedWinappCommand,
+	extractJsonObject,
 	resolveWorkingDirectory
 } from './winapp-cli-utils';
 import { detectProjects, deduplicateBuildOutputFolders, BUILD_OUTPUT_EXCLUDE_GLOB, BUILD_OUTPUT_MAX_RESULTS } from './project-detection';
@@ -28,12 +30,23 @@ import {
 import {
 	findWorkspaceArtifacts,
 	buildSignCommand,
-	CERTIFICATE_GLOBS,
-	EXECUTABLE_GLOBS,
+	CERTIFICATE_TIERS,
+	MAX_QUICKPICK_RESULTS,
+	SIGNABLE_ARTIFACT_TIERS,
 	executeSignFlow,
 	type SignFlowAdapter
 } from './sign-utils';
-import { ARTIFACT_DIALOG_FILTER, ARTIFACT_GLOBS } from './artifact-types';
+import { ARTIFACT_DIALOG_FILTER } from './artifact-types';
+import {
+	buildCertGenerateArgs,
+	decideCertGenerateOutcome,
+	executeCertGenerateFlow,
+	resolveCertPublisherSourceDecision,
+	selectCanonicalManifest,
+	type CertGenerateFlowAdapter,
+	type CertIfExists,
+	type CertPublisherSource
+} from './cert-utils';
 import {
 	detectArchFromPath,
 	getMachineArch,
@@ -48,6 +61,13 @@ import {
 	validateInputFolder
 } from './debugger-resolver';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
+import { registerWinappNewCommand } from './new-command';
+import {
+	disposeWinappOutputChannel,
+	getWinappOutputChannel,
+	runWinappCapture,
+	selectFolder
+} from './winapp-host';
 import {
 	createWinappToolTaskSpec,
 	executeWinappToolTask,
@@ -58,7 +78,38 @@ import {
 
 const WINAPP_DEBUG_TYPE = 'winapp';
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
-const MAX_SIGNABLE_FILES = 10;
+const FILE_PICKER_DETAIL = 'Open a file picker';
+
+/**
+ * A file offered in a sign QuickPick. No `detail` — that second line would
+ * double row height and only repeat the workspace root already implied by
+ * `description`. `filePath` is a non-rendered payload; "Browse…" omits it.
+ */
+type SignableFileItem = vscode.QuickPickItem & { filePath?: string };
+
+/**
+ * Build the trailing "Browse…" QuickPick entry, which reaches anything the
+ * capped discovery list omits. `alwaysShow` keeps it past the typed filter —
+ * it matches no filename, so without it the escape hatch disappears exactly
+ * when a user types the name of a file that was capped out.
+ */
+function createBrowseItem(): SignableFileItem {
+	return {
+		label: '$(folder-opened) Browse…',
+		description: FILE_PICKER_DETAIL,
+		alwaysShow: true
+	};
+}
+
+/**
+ * Append a truncation hint to `placeholder` when discovery filled every slot.
+ * The hint rides the placeholder rather than a list row so it costs no entry.
+ */
+function withTruncationHint(placeholder: string, resultCount: number): string {
+	return resultCount >= MAX_QUICKPICK_RESULTS
+		? `${placeholder} (showing ${MAX_QUICKPICK_RESULTS} most recent — use Browse… for others)`
+		: placeholder;
+}
 
 /**
  * Output channel for debugger-related activity (e.g. auto-installed extensions),
@@ -258,137 +309,20 @@ async function runWinappTool(spec: WinappToolTaskSpec): Promise<vscode.TaskExecu
 }
 
 /**
- * Shared output channel for capture-based winapp commands (e.g. pack). Created
- * lazily and reused so repeated runs don't leak channels.
- */
-let winappOutputChannel: vscode.OutputChannel | undefined;
-
-function getWinappOutputChannel(): vscode.OutputChannel {
-	if (!winappOutputChannel) {
-		winappOutputChannel = vscode.window.createOutputChannel('WinApp');
-	}
-	return winappOutputChannel;
-}
-
-/**
- * Run a winapp CLI command via `spawn` (shell: false) while capturing its
- * combined stdout/stderr, streaming it to the WinApp output channel and a
- * progress notification. Unlike {@link runWinappCommand}, this waits for the
- * command to finish so callers can inspect the output (e.g. the produced
- * package path).
- *
- * @returns The process exit code and the full captured output.
- */
-async function runWinappCapture(
-	extensionPath: string,
-	args: string[],
-	cwd: string,
-	progressTitle: string
-): Promise<{ code: number | null; output: string; cancelled?: boolean }> {
-	const cliPath = getWinappCliPath(extensionPath);
-	const outputChannel = getWinappOutputChannel();
-	outputChannel.appendLine(`> winapp ${args.join(' ')}`);
-
-	return vscode.window.withProgress(
-		{
-			location: vscode.ProgressLocation.Notification,
-			title: progressTitle,
-			cancellable: true
-		},
-		(_progress, token) =>
-			new Promise<{ code: number | null; output: string; cancelled?: boolean }>((resolve) => {
-				const child = spawn(cliPath, args, {
-					cwd,
-					env: { ...process.env, WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE },
-					shell: false
-				});
-
-				let output = '';
-				let settled = false;
-				let cancelled = false;
-				const finish = (result: { code: number | null; output: string; cancelled?: boolean }) => {
-					if (!settled) {
-						settled = true;
-						resolve(result);
-					}
-				};
-
-				const cancellation = token.onCancellationRequested(() => {
-					if (cancelled || settled) {
-						return;
-					}
-					cancelled = true;
-					outputChannel.appendLine('\nPackaging cancelled.');
-					if (child.pid) {
-						// On Windows, winapp pack may spawn helper processes; taskkill /t
-						// terminates the whole tree instead of only the direct child.
-						const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
-							windowsHide: true
-						});
-						killer.on('error', () => child.kill());
-						killer.on('close', (code) => {
-							if (code !== 0) {
-								child.kill();
-							}
-						});
-					} else {
-						child.kill();
-					}
-				});
-
-				child.stdout!.on('data', (data: Buffer) => {
-					const text = data.toString();
-					output += text;
-					outputChannel.append(text);
-				});
-
-				child.stderr!.on('data', (data: Buffer) => {
-					const text = data.toString();
-					output += text;
-					outputChannel.append(text);
-				});
-
-				child.on('error', (err) => {
-					cancellation.dispose();
-					if (cancelled) {
-						finish({ code: null, output, cancelled: true });
-						return;
-					}
-					outputChannel.appendLine(`\nFailed to run winapp: ${err.message}`);
-					finish({ code: null, output });
-				});
-
-				child.on('close', (code) => {
-					cancellation.dispose();
-					finish({ code, output, cancelled });
-				});
-			})
-	);
-}
-
-/**
  * Search the workspace for signable packages, executables, and libraries and
  * let the user pick one via
- * a QuickPick. When no artifacts are found the function falls back directly to
- * a native file dialog; a "Browse…" entry is always appended so the user can
- * opt into the dialog even when artifacts *are* discovered.
+ * a QuickPick. Discovery is tiered and capped: MSIX packages are searched
+ * first, then remaining package types, then executables and libraries, stopping
+ * as soon as the QuickPick result cap is reached. When no artifacts are
+ * found the function falls back directly to a native file dialog; a "Browse…"
+ * entry is always appended so the user can reach anything the capped list omits.
  *
  * @returns The selected file path, or `undefined` if cancelled.
  */
 async function pickSignableFile(workspacePath: string): Promise<string | undefined> {
 	const artifactPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for signable artifacts...', cancellable: true },
-		async (_progress, token) => {
-			const packagePaths = await findWorkspaceArtifactsWithCancellation(workspacePath, ARTIFACT_GLOBS, token);
-			if (!packagePaths) {
-				return undefined;
-			}
-			const executablePaths = await findWorkspaceArtifactsWithCancellation(workspacePath, EXECUTABLE_GLOBS, token);
-			if (!executablePaths) {
-				return undefined;
-			}
-			return [...packagePaths, ...executablePaths].slice(0, MAX_SIGNABLE_FILES);
-		}
+		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, SIGNABLE_ARTIFACT_TIERS, token)
 	);
 
 	if (!artifactPaths) {
@@ -403,26 +337,26 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		});
 	}
 
-	const items: vscode.QuickPickItem[] = artifactPaths.map((p) => {
+	const items: SignableFileItem[] = artifactPaths.map((p) => {
 		const relDir = path.dirname(path.relative(workspacePath, p));
 		return {
 			label: path.basename(p),
 			description: relDir === '.' ? '' : relDir,
-			detail: p
+			filePath: p
 		};
 	});
 
-	items.push({ label: '$(folder-opened) Browse…', detail: 'Open a file picker' });
+	items.push(createBrowseItem());
 
 	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select a file to sign'
+		placeHolder: withTruncationHint('Select a file to sign', artifactPaths.length)
 	});
 
 	if (!picked) {
 		return undefined;
 	}
 
-	if (picked.detail === 'Open a file picker') {
+	if (!picked.filePath) {
 		return selectFile('Select file to sign', {
 			...ARTIFACT_DIALOG_FILTER,
 			'Executables': ['exe', 'dll'],
@@ -430,12 +364,13 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 		});
 	}
 
-	return picked.detail;
+	return picked.filePath;
 }
 
 /**
  * Search the workspace for PFX certificate files and let the user pick one
- * via a QuickPick. Falls back to a native file dialog when none are found;
+ * via a QuickPick. Discovery is capped to the newest certificates. Falls back
+ * to a native file dialog when none are found;
  * a "Browse…" entry is always appended.
  *
  * @returns The selected certificate path, or `undefined` if cancelled.
@@ -443,7 +378,7 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
 async function pickCertificateFile(workspacePath: string): Promise<string | undefined> {
 	const certPaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for certificates...', cancellable: true },
-		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, CERTIFICATE_GLOBS, token)
+		(_progress, token) => findWorkspaceArtifactsWithCancellation(workspacePath, CERTIFICATE_TIERS, token)
 	);
 
 	if (!certPaths) {
@@ -456,37 +391,37 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 		});
 	}
 
-	const items: vscode.QuickPickItem[] = certPaths.map((p) => {
+	const items: SignableFileItem[] = certPaths.map((p) => {
 		const relDir = path.dirname(path.relative(workspacePath, p));
 		return {
 			label: path.basename(p),
 			description: relDir === '.' ? '' : relDir,
-			detail: p
+			filePath: p
 		};
 	});
 
-	items.push({ label: '$(folder-opened) Browse…', detail: 'Open a file picker' });
+	items.push(createBrowseItem());
 
 	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select a signing certificate'
+		placeHolder: withTruncationHint('Select a signing certificate', certPaths.length)
 	});
 
 	if (!picked) {
 		return undefined;
 	}
 
-	if (picked.detail === 'Open a file picker') {
+	if (!picked.filePath) {
 		return selectFile('Select signing certificate', {
 			'Certificates': ['pfx']
 		});
 	}
 
-	return picked.detail;
+	return picked.filePath;
 }
 
 async function findWorkspaceArtifactsWithCancellation(
 	workspacePath: string,
-	patterns: string[],
+	tiers: readonly (readonly string[])[],
 	token: vscode.CancellationToken
 ): Promise<string[] | undefined> {
 	const abortController = new AbortController();
@@ -496,24 +431,176 @@ async function findWorkspaceArtifactsWithCancellation(
 	}
 
 	try {
-		const paths = await findWorkspaceArtifacts(
-			workspacePath,
-			async includePattern => {
-				const matches = await vscode.workspace.findFiles(
-					new vscode.RelativePattern(workspacePath, includePattern),
-					null,
-					undefined,
-					token
-				);
-				return matches.map(uri => uri.fsPath);
-			},
-			patterns,
-			abortController.signal
-		);
+		const paths = await findWorkspaceArtifacts(workspacePath, {
+			tiers,
+			signal: abortController.signal
+		});
 		return token.isCancellationRequested ? undefined : paths;
 	} finally {
 		cancellation.dispose();
 	}
+}
+
+/**
+ * Resolve the publisher source, supplying VS Code UI to the decision logic in
+ * `resolveCertPublisherSourceDecision`.
+ *
+ * @returns The resolved source, or `undefined` if the user cancelled.
+ */
+async function resolveCertPublisherSource(
+	projectDir: string
+): Promise<CertPublisherSource | undefined> {
+	return resolveCertPublisherSourceDecision({
+		findCanonicalManifest: async () => {
+			// A plain directory read, not a workspace glob: the CLI only ever looks
+			// for its manifest beside the project file, so recursing would surface
+			// templates and sibling projects it would never have used.
+			let entries: fs.Dirent[];
+			try {
+				entries = await fs.promises.readdir(projectDir, { withFileTypes: true });
+			} catch {
+				return undefined;
+			}
+
+			return selectCanonicalManifest(
+				entries
+					.filter(entry => entry.isFile())
+					.map(entry => path.join(projectDir, entry.name)),
+				projectDir
+			);
+		},
+
+		promptPublisher: async () => {
+			// The value is passed to the CLI as typed; it owns what a valid
+			// publisher is.
+			const publisher = await vscode.window.showInputBox({
+				title: 'Certificate publisher',
+				prompt: `Enter the publisher for the certificate in ${path.basename(projectDir)} — it must match your package's Identity/@Publisher.`,
+				placeHolder: 'Contoso or CN=Contoso, O=Contoso Ltd, C=US',
+				ignoreFocusOut: true
+			});
+
+			return publisher?.trim();
+		}
+	});
+}
+
+/** Build the `cert generate` arguments for a resolved publisher source. */
+function certGenerateArgsFor(source: CertPublisherSource, ifExists: CertIfExists): string[] {
+	return buildCertGenerateArgs(
+		source.kind === 'manifest'
+			? { manifestPath: source.manifestPath, ifExists }
+			: { publisher: source.publisher, ifExists }
+	);
+}
+
+/**
+ * Report the outcome, offering to reveal the certificate.
+ *
+ * @param created `false` when an existing certificate was reused rather than
+ *   generated, so the message does not claim work that did not happen.
+ * @param installing `true` when an elevated `cert install` was handed off; the
+ *   install runs in a separate window, so its own result is reported there.
+ */
+async function showCertGenerateSuccess(
+	certificatePath: string,
+	{ created, installing }: { created: boolean; installing: boolean }
+): Promise<void> {
+	const lead = created
+		? `Certificate created at ${certificatePath}.`
+		: `Using the existing certificate at ${certificatePath}.`;
+	const message = installing
+		? `${lead} Approve the UAC prompt in the elevated window to finish installing it.`
+		: lead;
+
+	const action = await vscode.window.showInformationMessage(message, 'Reveal in Explorer');
+	if (action === 'Reveal in Explorer') {
+		await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(certificatePath));
+	}
+}
+
+/**
+ * Where `cert generate` writes by default.
+ *
+ * The extension does not pass `--output`, so the CLI writes `devcert.pfx` into
+ * the working directory it is spawned in. Knowing the path up front means the
+ * result does not have to be parsed back out of the CLI's output.
+ */
+function defaultCertificatePath(projectDir: string): string {
+	return path.join(projectDir, 'devcert.pfx');
+}
+
+/**
+ * Build the VS Code adapter for the certificate-generation flow.
+ *
+ * The decision logic lives in `executeCertGenerateFlow` (cert-utils); this only
+ * supplies the UI and process operations it delegates to.
+ */
+function createCertGenerateFlowAdapter(
+	extensionPath: string,
+	projectDir: string,
+	source: CertPublisherSource
+): CertGenerateFlowAdapter {
+	const certificatePath = defaultCertificatePath(projectDir);
+
+	return {
+		runGenerate: async (ifExists: CertIfExists) => {
+			const { code, output, cancelled } = await runWinappCapture(
+				extensionPath,
+				certGenerateArgsFor(source, ifExists),
+				projectDir,
+				'Generating certificate...'
+			);
+			return decideCertGenerateOutcome(code, output, certificatePath, cancelled);
+		},
+
+		confirmOverwrite: async (existingPath) => {
+			const choice = await vscode.window.showWarningMessage(
+				`A certificate already exists at ${existingPath}. Overwriting it invalidates packages already signed with it, and the new certificate must be trusted again.`,
+				'Overwrite Existing Cert',
+				'Use Existing Cert'
+			);
+
+			if (choice === 'Overwrite Existing Cert') {
+				return 'overwrite';
+			}
+			if (choice === 'Use Existing Cert') {
+				return 'reuse';
+			}
+			return 'dismiss';
+		},
+
+		installCertificate: async (certificatePath: string) => {
+			// Installing trusts the certificate in the machine store, which needs
+			// administrator rights. VS Code cannot elevate the integrated terminal,
+			// so this runs in a separate UAC-elevated window.
+			await runWinappCommandElevated(
+				extensionPath,
+				`cert install ${escapePowerShellArg(certificatePath)}`,
+				projectDir
+			);
+		},
+
+		reportSuccess: async (certPath, context) => {
+			await showCertGenerateSuccess(certPath, context);
+		},
+
+		reportFailure: (message?: string) => {
+			const outputChannel = getWinappOutputChannel();
+			outputChannel.show(true);
+			vscode.window.showErrorMessage(
+				message
+					? `Certificate generation failed: ${message}`
+					: 'Certificate generation failed. See the WinApp output channel for details.'
+			);
+		},
+
+		reportKeptExisting: (existingPath: string) => {
+			vscode.window.showInformationMessage(
+				`Kept the existing certificate at ${existingPath}. No certificate was generated or installed.`
+			);
+		}
+	};
 }
 
 const FOLDER_PICKER_DETAIL = 'Open a folder picker';
@@ -836,21 +923,6 @@ async function selectFile(title: string, filters?: { [name: string]: string[] })
 	return result?.[0]?.fsPath;
 }
 
-/**
- * Prompt user to select a folder
- */
-async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<string | undefined> {
-	const result = await vscode.window.showOpenDialog({
-		canSelectFiles: false,
-		canSelectFolders: true,
-		canSelectMany: false,
-		title: title,
-		defaultUri: defaultUri
-	});
-
-	return result?.[0]?.fsPath;
-}
-
 class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
 	private extensionPath: string;
 
@@ -1156,7 +1228,7 @@ export function activate(context: vscode.ExtensionContext) {
 	const provider = new WinAppDebugConfigurationProvider(extensionPath);
 
 	// Dispose the shared WinApp output channel when the extension unloads.
-	context.subscriptions.push({ dispose: () => winappOutputChannel?.dispose() });
+	context.subscriptions.push({ dispose: () => disposeWinappOutputChannel() });
 
 	context.subscriptions.push(
 		vscode.debug.registerDebugConfigurationProvider(WINAPP_DEBUG_TYPE, provider)
@@ -1266,6 +1338,8 @@ export function activate(context: vscode.ExtensionContext) {
 			await vscode.commands.executeCommand('vscode.openWith', manifestUri, ManifestEditorProvider.viewType);
 		})
 	);
+
+	registerWinappNewCommand(context, extensionPath);
 
 	// Register winapp.init command
 	context.subscriptions.push(
@@ -1515,15 +1589,19 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			// Installing trusts the certificate in the machine store, which needs
-			// administrator rights. When VS Code isn't elevated we can't install
-			// from the integrated terminal, so run the whole generate+install in a
-			// separate UAC-elevated window instead of failing with "Access denied".
-			if (install === 'Generate and install (requires admin)') {
-				await runWinappCommandElevated(extensionPath, 'cert generate --install', projectDir);
-			} else {
-				await runWinappCommand(extensionPath, 'cert generate', projectDir);
+			const source = await resolveCertPublisherSource(projectDir);
+			if (!source) {
+				return;
 			}
+
+			// Generation runs un-elevated so its exit code is visible here: a bad
+			// publisher or an existing certificate can then be reported in VS Code
+			// instead of scrolling past inside a UAC window. Only the install step
+			// needs administrator rights, and it is elevated separately.
+			await executeCertGenerateFlow(
+				createCertGenerateFlowAdapter(extensionPath, projectDir, source),
+				install === 'Generate and install (requires admin)'
+			);
 		})
 	);
 
@@ -1738,16 +1816,9 @@ export function activate(context: vscode.ExtensionContext) {
  * Expects a JSON object with a processId (or pid) field.
  */
 function parseProcessIdFromJson(output: string): number | undefined {
-	try {
-		const json = JSON.parse(output.trim());
-		const pid = json.processId ?? json.pid ?? json.ProcessId ?? json.PID;
-		if (typeof pid === 'number' && pid > 0) {
-			return pid;
-		}
-	} catch {
-		// JSON not complete yet or invalid
-	}
-	return undefined;
+	const json = extractJsonObject(output);
+	const pid = json?.processId ?? json?.pid ?? json?.ProcessId ?? json?.PID;
+	return typeof pid === 'number' && pid > 0 ? pid : undefined;
 }
 
 export async function deactivate(): Promise<void> {

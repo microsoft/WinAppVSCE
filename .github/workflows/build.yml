@@ -16,12 +16,12 @@ jobs:
     runs-on: windows-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         fetch-depth: 0
 
     - name: Setup Node.js
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: '24'
 
@@ -90,12 +90,37 @@ jobs:
         }
         "VSCODE_PATH=$code" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+    - name: Install WinUI template pack
+      shell: pwsh
+      run: |
+        # The winapp.new E2E specs skip unless a template pack is installed. A CI
+        # runner is ephemeral, so install one up front and let those specs run.
+        $cli = "bin/win-x64/winapp.exe"
+        if (-not (Test-Path $cli)) {
+          throw "WinApp CLI not found at $cli. Did the 'Download CLI binaries' step run?"
+        }
+
+        # Run from a neutral directory: a global.json in the repo would make
+        # dotnet resolve no SDK and the CLI would report one as missing.
+        Push-Location $env:RUNNER_TEMP
+        try {
+          & (Join-Path $env:GITHUB_WORKSPACE $cli) new --list --json --template-version latest
+          $exit = $LASTEXITCODE
+        } finally {
+          Pop-Location
+        }
+
+        if ($exit -ne 0) {
+          throw "Failed to install the WinUI template pack (winapp new --list exited $exit)."
+        }
+        Write-Host "WinUI template pack installed."
+
     - name: Run E2E tests
       run: npm run test:e2e -- --grep-invert "adding empty custom capability|adding invalid format custom capability|adding valid custom capability|custom capability appears in the custom capabilities list|invalid inputFolder|cancelling the artifact QuickPick|selecting Browse|cancelling the certificate QuickPick"
 
     - name: Upload Playwright report
       if: ${{ !cancelled() }}
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: playwright-report
         path: |
@@ -126,8 +151,8 @@ jobs:
         Write-Host "VSIX size: $([math]::Round($bytes / 1MB, 2)) MB ($bytes bytes)"
 
     - name: Upload VSIX artifact
-      if: ${{ success() }}
-      uses: actions/upload-artifact@v7
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: vscode-extension
         path: artifacts/*.vsix
@@ -156,7 +181,7 @@ jobs:
 
     - name: Save VSIX baseline cache
       if: github.ref == 'refs/heads/main'
-      uses: actions/cache/save@v6
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: vsix-baseline
         key: winappvsce-vsix-baseline
@@ -170,7 +195,7 @@ jobs:
     - name: Restore VSIX baseline cache
       if: github.event_name == 'pull_request'
       id: vsix-baseline
-      uses: actions/cache/restore@v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: vsix-baseline
         key: winappvsce-vsix-baseline
@@ -208,7 +233,7 @@ jobs:
 
     - name: Upload metrics-data artifact
       if: github.event_name == 'pull_request'
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: metrics-data
         path: metrics-data
