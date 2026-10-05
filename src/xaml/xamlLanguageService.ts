@@ -1068,26 +1068,28 @@ function resolveServerPath(context: vscode.ExtensionContext): string | undefined
     return undefined;
   }
   const configured = process.env.WINUI_XAML_SERVER_PATH;
+  const bundled = bundledServer(context);
   const candidates =
     process.env.WINUI_XAML_REQUIRE_BUNDLED === "1"
-      ? [bundledServer(context)]
+      ? [bundled]
       : configured
-        ? [configured, bundledServer(context)]
-        : [bundledServer(context)];
+        ? [configured, bundled]
+        : [bundled];
   // The bundled server is a native .exe; an override may still be a framework-dependent .dll,
   // which is how local debug builds and the smoke harness run it.
   return firstExistingPath(
-    candidates.filter((candidate) =>
-      [".exe", ".dll"].includes(path.extname(candidate).toLowerCase())
+    candidates.filter(
+      (candidate): candidate is string =>
+        candidate !== undefined && [".exe", ".dll"].includes(path.extname(candidate).toLowerCase())
     )
   );
 }
 
-/** Returns the architecture-specific Native AOT server executable carried under dist/server/win-<arch>/. */
-function bundledServer(context: vscode.ExtensionContext): string {
-  return path.join(context.extensionPath, "dist", "server", serverRid(), "WinUiXaml.LanguageServer.exe");
-}
-
-function serverRid(): string {
-  return serverRidFor(process.platform, process.arch) ?? "win-x64";
+/** The architecture-specific Native AOT server under dist/server/win-<arch>/, or undefined when
+ * this host has no bundled binary: an override must not fall back to a foreign-architecture exe. */
+function bundledServer(context: vscode.ExtensionContext): string | undefined {
+  const rid = serverRidFor(process.platform, process.arch);
+  return rid === undefined
+    ? undefined
+    : path.join(context.extensionPath, "dist", "server", rid, "WinUiXaml.LanguageServer.exe");
 }

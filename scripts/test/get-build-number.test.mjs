@@ -20,6 +20,40 @@ function commit(root, message) {
   );
 }
 
+test("build number without a version commit stays monotonic against local artifacts", () => {
+  const root = mkdtempSync(join(tmpdir(), "winapp-build-number-fallback-"));
+  try {
+    mkdirSync(join(root, "scripts"));
+    mkdirSync(join(root, "artifacts"));
+    cpSync(script, join(root, "scripts", "get-build-number.ps1"));
+    // Untracked package.json: no commit ever touched the version line, which is also what a
+    // shallow clone looks like. This branch must not skip the artifact monotonicity guard.
+    writeFileSync(
+      join(root, "package.json"),
+      '{\n  "name": "probe",\n  "version": "1.2.3",\n  "private": true\n}\n'
+    );
+    writeFileSync(join(root, "artifacts", "winapp-1.2.3-prerelease.8.vsix"), "");
+
+    run("git", ["init", "--quiet"], root);
+    run("git", ["config", "user.email", "test@example.invalid"], root);
+    run("git", ["config", "user.name", "Build Number Test"], root);
+
+    assert.equal(
+      run("pwsh", ["-NoProfile", "-File", join(root, "scripts", "get-build-number.ps1")], root),
+      "9"
+    );
+
+    writeFileSync(join(root, "one.txt"), "one\n");
+    commit(root, "First change");
+    assert.equal(
+      run("pwsh", ["-NoProfile", "-File", join(root, "scripts", "get-build-number.ps1")], root),
+      "9"
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("build number tracks version history and local artifacts", () => {
   const root = mkdtempSync(join(tmpdir(), "winapp-build-number-"));
   try {

@@ -16,7 +16,7 @@ namespace WinUiXaml.Xaml
 
         private XamlParser(string text)
         {
-            _text = text ?? string.Empty;
+            _text = text;
         }
 
         /// <summary>Parses <paramref name="text"/> into a fully-linked <see cref="XamlDocument"/>.</summary>

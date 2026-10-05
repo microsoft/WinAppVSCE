@@ -33,10 +33,11 @@ try {
     $lastVersionCommit = git log -1 --format="%H" -G '^\s*"version"\s*:' -- $PackageJsonPath 2>$null
 
     if ([string]::IsNullOrEmpty($lastVersionCommit)) {
+        # No commit touched the version line (a shallow clone, or a brand-new package.json), so
+        # commits-since-that-change is unknowable and total history is the closest stand-in.
         $buildNumber = git rev-list --count HEAD 2>$null
         if ([string]::IsNullOrEmpty($buildNumber)) {
-            Write-Output "1"
-            exit 0
+            $buildNumber = 1
         }
     } else {
         $buildNumber = git rev-list --count "$lastVersionCommit..HEAD" 2>$null

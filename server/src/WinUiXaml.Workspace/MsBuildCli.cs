@@ -737,12 +737,21 @@ namespace WinUiXaml.Workspace
                 return Fallback(projectPath, workingDirectory);
             }
 
-            static string Fallback(string? projectPath, string? workingDirectory) =>
-                !string.IsNullOrEmpty(projectPath)
-                    ? projectPath!
-                    : !string.IsNullOrEmpty(workingDirectory)
+            static string Fallback(string? projectPath, string? workingDirectory)
+            {
+                if (string.IsNullOrEmpty(projectPath))
+                {
+                    return !string.IsNullOrEmpty(workingDirectory)
                         ? workingDirectory!
                         : Environment.CurrentDirectory;
+                }
+
+                // Keep the success path's directory shape: keying the gate by the project file would
+                // let a caller that passed the directory run in the same obj tree concurrently.
+                var separator = projectPath!.LastIndexOfAny(
+                    new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar });
+                return separator > 0 ? projectPath.Substring(0, separator) : projectPath;
+            }
         }
 
         /// <summary>Whether MSBuild reported an English file-in-use failure worth retrying; calls force <c>DOTNET_CLI_UI_LANGUAGE=en</c>.</summary>

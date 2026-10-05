@@ -234,22 +234,22 @@ try
     $ReadmePath = "README.md"
     Copy-Item $ReadmePath "$ReadmePath.backup" -Force
 
-    # Get CLI version from the bundled x64 binary
+    # Get CLI version from the bundled x64 binary. It was validated above and copied into bin/,
+    # so an unreadable version here means the package is broken rather than merely unlabelled.
     $CliExe = Join-Path $VscBinPath "win-x64\winapp.exe"
-    $CliVersion = "unknown"
-    if (Test-Path $CliExe) {
-        try {
-            $RawOutput = & $CliExe --version 2>$null
-            # Output may contain ASCII banner art; find the line matching semver pattern
-            $VersionLine = $RawOutput | Where-Object { $_ -match '^\d+\.\d+\.\d+' } | Select-Object -First 1
-            if (-not [string]::IsNullOrWhiteSpace($VersionLine)) {
-                # Strip git hash suffix (e.g., "1.0.0+abc123" -> "1.0.0")
-                $CliVersion = ($VersionLine.Trim() -split '\+')[0]
-            }
-        } catch {
-            Write-Warning "Could not determine CLI version from binary"
-        }
+    if (-not (Test-Path $CliExe)) {
+        Write-Error "Bundled CLI not found for version stamping: $CliExe"
+        exit 1
     }
+    $RawOutput = & $CliExe --version 2>$null
+    # Output may contain ASCII banner art; find the line matching semver pattern
+    $VersionLine = $RawOutput | Where-Object { $_ -match '^\d+\.\d+\.\d+' } | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($VersionLine)) {
+        Write-Error "Could not determine CLI version from $CliExe. Refusing to stamp an unknown version into README.md."
+        exit 1
+    }
+    # Strip git hash suffix (e.g., "1.0.0+abc123" -> "1.0.0")
+    $CliVersion = ($VersionLine.Trim() -split '\+')[0]
     Write-Host "[VERSION] Bundled CLI version: $CliVersion" -ForegroundColor Cyan
 
     # Replace version placeholders in README
