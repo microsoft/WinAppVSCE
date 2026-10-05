@@ -593,12 +593,16 @@ namespace WinUIXamlPreview.Protocol
                     try { proc?.Dispose(); } catch { }
                     if (runDir != null)
                     {
-                        try
+                        // The image and its DLLs can stay locked briefly after exit (notably under x64
+                        // emulation). Retry for a few seconds; whatever remains is reclaimed by the next
+                        // session's SweepRunRoot.
+                        for (var attempt = 0; attempt < 10 && Directory.Exists(runDir); attempt++)
                         {
-                            if (Directory.Exists(runDir)) Directory.Delete(runDir, true);
+                            if (attempt > 0) Thread.Sleep(500);
+                            try { if (HostPayload.TryRetire(runDir, _log, deleteAttempts: 10)) break; }
+                            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
                         }
-                        catch (IOException ex) { _log($"Private Surface run cleanup failed for '{runDir}': {ex.Message}"); }
-                        catch (UnauthorizedAccessException ex) { _log($"Private Surface run cleanup denied for '{runDir}': {ex.Message}"); }
+                        if (Directory.Exists(runDir)) _log($"Private Surface run cleanup deferred for '{runDir}'.");
                     }
                 });
             }

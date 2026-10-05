@@ -175,4 +175,56 @@ internal static class HostPayload
         }
         Directory.Delete(path);
     }
+
+    public const string TrashPrefix = ".trash-";
+
+    // Atomically claims a directory by renaming it to a sibling trash name, then deletes it. A Surface
+    // process uses its run directory as its working directory, which blocks the rename, so a directory
+    // in use is never touched. Returns false (and leaves the directory) when the claim fails. A delete
+    // interrupted by a late-released file leaves a trash directory that the next sweep retries.
+    public static bool TryRetire(string path, Action<string>? log = null, int deleteAttempts = 1)
+    {
+        string claimed;
+        if (Path.GetFileName(path).StartsWith(TrashPrefix, StringComparison.Ordinal)) claimed = path;
+        else
+        {
+            claimed = Path.Combine(Path.GetDirectoryName(path)!, TrashPrefix + Guid.NewGuid().ToString("N"));
+            try { Directory.Move(path, claimed); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        }
+        for (var attempt = 1; ; attempt++)
+        {
+            try { DeleteOwnedDirectory(claimed); return true; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= deleteAttempts)
+                {
+                    log?.Invoke("Deferred cleanup of '" + claimed + "': " + ex.Message);
+                    return true;
+                }
+                Thread.Sleep(500);
+            }
+        }
+    }
+
+    // Removes run-copies (and abandoned staging/trash directories) under a run root that are older than
+    // minAge and not in use. Age protects a copy between creation and process launch.
+    public static int SweepRunRoot(string root, TimeSpan minAge, Action<string>? log = null)
+    {
+        if (!Directory.Exists(root)) return 0;
+        var cutoff = DateTime.UtcNow - minAge;
+        var removed = 0;
+        foreach (var dir in Directory.GetDirectories(root))
+        {
+            try
+            {
+                var info = new DirectoryInfo(dir);
+                var trash = info.Name.StartsWith(TrashPrefix, StringComparison.Ordinal);
+                if (!trash && (info.CreationTimeUtc > cutoff || info.LastWriteTimeUtc > cutoff)) continue;
+                if (TryRetire(dir, log)) removed++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return removed;
+    }
 }

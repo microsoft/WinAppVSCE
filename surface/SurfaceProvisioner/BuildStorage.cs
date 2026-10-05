@@ -230,7 +230,84 @@ internal static class BuildStorage
         log?.Invoke("Validating cached payload.");
         HostPayload.Validate(host, key, cancellation, log); // Corruption fails explicitly; never overwrite a completed entry.
         cancellation.ThrowIfCancellationRequested();
+        try { File.SetLastWriteTimeUtc(index, DateTime.UtcNow); } catch (IOException) { } catch (UnauthorizedAccessException) { } // last-use stamp for Collect
         return host;
+    }
+
+    public const int KeepRecentKeys = 3;
+    public static readonly TimeSpan UnusedKeyLifetime = TimeSpan.FromDays(1);
+    public static readonly TimeSpan OrphanGrace = TimeSpan.FromHours(1);
+
+    private static bool IsKeyName(string name) => name.Length == 64 && name.All(char.IsAsciiHexDigit);
+
+    // Bounded cache GC, run after a successful provision. Every extension update changes the engine stamp
+    // and therefore the key, so without this each update leaves a ~150 MB generation behind forever.
+    // A key is retired only if it is not the current key, not among the KeepRecentKeys most recently
+    // used, unused for UnusedKeyLifetime, and its build lock is free. A generation is removed only when
+    // no pointer references it, it is older than OrphanGrace, and no process has files open in it.
+    public static int Collect(string root, string currentKey, Action<string> log)
+    {
+        var keysDir = Path.Combine(root, "keys");
+        var entriesDir = Path.Combine(root, "entries");
+        if (!Directory.Exists(keysDir) || !Directory.Exists(entriesDir)) return 0;
+        var now = DateTime.UtcNow;
+        var removed = 0;
+        var pointers = Directory.GetFiles(keysDir).Where(p => IsKeyName(Path.GetFileName(p)))
+            .OrderByDescending(File.GetLastWriteTimeUtc).ToList();
+        for (var i = KeepRecentKeys; i < pointers.Count; i++)
+        {
+            var key = Path.GetFileName(pointers[i]);
+            if (key == currentKey || now - File.GetLastWriteTimeUtc(pointers[i]) < UnusedKeyLifetime) continue;
+            FileStream? held = null;
+            try { held = new FileStream(Path.Combine(root, "locks", key), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
+            using (held)
+            {
+                try { File.Delete(pointers[i]); log("Cache GC: retired key " + key + "."); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+
+        var live = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var pointer in Directory.GetFiles(keysDir))
+        {
+            var name = Path.GetFileName(pointer);
+            if (IsKeyName(name)) { try { live.Add(File.ReadAllText(pointer)); } catch (IOException) { return removed; } }
+            else if (name.StartsWith(".") && now - File.GetLastWriteTimeUtc(pointer) > OrphanGrace)
+                try { File.Delete(pointer); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        foreach (var entry in Directory.GetDirectories(entriesDir))
+        {
+            var name = Path.GetFileName(entry);
+            if (live.Contains(name)) continue;
+            if (!name.StartsWith(HostPayload.TrashPrefix, StringComparison.Ordinal) &&
+                now - Directory.GetLastWriteTimeUtc(entry) < OrphanGrace) continue;
+            if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0) continue;
+            if (HostPayload.TryRetire(entry, log)) { removed++; log("Cache GC: removed generation " + name + "."); }
+        }
+
+        var memoDir = Path.Combine(root, "memo");
+        if (Directory.Exists(memoDir))
+            foreach (var memo in Directory.GetFiles(memoDir, "*.json"))
+            {
+                try
+                {
+                    var key = JsonSerializer.Deserialize<IdentityMemo>(File.ReadAllText(memo))?.Key ?? "";
+                    if (!IsKeyName(key) || !File.Exists(Path.Combine(keysDir, key))) File.Delete(memo);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+            }
+        var locksDir = Path.Combine(root, "locks");
+        if (Directory.Exists(locksDir))
+            foreach (var lockFile in Directory.GetFiles(locksDir))
+            {
+                if (File.Exists(Path.Combine(keysDir, Path.GetFileName(lockFile)))) continue;
+                if (now - File.GetLastWriteTimeUtc(lockFile) < OrphanGrace) continue;
+                try { File.Delete(lockFile); } // fails while held by an in-progress build
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        return removed;
     }
 
     public static string Publish(string root, string key, string host, CancellationToken cancellation = default,

@@ -62,6 +62,7 @@ public static class HostBuilder
         log ??= _ => { };
         var sw = Stopwatch.StartNew();
         var r = new BuildResult { EngineStamp = opt.EngineStamp };
+        string? gcRoot = null;
         try
         {
             cancellation.ThrowIfCancellationRequested();
@@ -82,6 +83,7 @@ public static class HostBuilder
             var toolchain = RunTool(new[] { "--version" }).Trim();
             // Namespace v2 leaves all legacy user cache entries untouched.
             var cache = Path.Combine(Path.GetFullPath(opt.CacheRoot), "v2");
+            gcRoot = cache;
             var memoPath = BuildStorage.MemoPath(cache, opt.ProjectPath, surfaceSource, templateSource,
                 version, opt.Platform, opt.Rid, opt.EngineStamp ?? "", opt.NuGetCache);
             if (!opt.ForceRebuild)
@@ -188,6 +190,12 @@ public static class HostBuilder
             {
                 r.Success = false; r.Status = "failed"; r.Cancelled = true; r.Error = "Provisioning cancelled.";
                 r.HostDir = null; r.HostExePath = null; r.MergedPriPath = null; r.CacheHit = false;
+            }
+            // P3: bounded cache GC, only after a success (never on a failure path that may be mid-publish).
+            if (r.Success && gcRoot != null && r.CacheKey != null)
+            {
+                try { BuildStorage.Collect(gcRoot, r.CacheKey, log); }
+                catch (Exception ex) { log("Cache GC skipped: " + ex.Message); }
             }
             r.TotalSeconds = sw.Elapsed.TotalSeconds;
         }

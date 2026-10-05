@@ -338,6 +338,73 @@ try
         "unreadable memo falls back to full identity");
     Check(BuildOnce().restores == 0, "memo rewritten after full-identity cache hit");
 
+    // P3 bounded cache GC + in-use-safe directory retirement.
+    var gc = Path.Combine(root, "gc");
+    var payloadFiles = new[] { "Surface.exe", "Surface.dll", "Surface.pri", "Surface.designtime.pri",
+        "Surface.deps.json", "Surface.runtimeconfig.json", "Microsoft.WinUI.dll", "Microsoft.ui.xaml.dll" };
+    string Gen(string k)
+    {
+        var s = Path.Combine(root, "gcsrc-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(s);
+        foreach (var f in payloadFiles) File.WriteAllText(Path.Combine(s, f), f);
+        HostPayload.Seal(s, k, "2.2.0", "engine");
+        return Path.GetDirectoryName(BuildStorage.Publish(gc, k, s))!;
+    }
+    string K(char c) => new string(c, 64);
+    var old = DateTime.UtcNow.AddDays(-2);
+    var gens = new Dictionary<string, string>();
+    foreach (var c in "123456") gens[K(c)] = Gen(K(c));
+    var supersededOld = gens[K('4')]; gens[K('4')] = Gen(K('4'));
+    var supersededFresh = gens[K('5')]; gens[K('5')] = Gen(K('5'));
+    void Age(string pointerKey, DateTime when) => File.SetLastWriteTimeUtc(Path.Combine(gc, "keys", pointerKey), when);
+    Age(K('1'), old); Age(K('2'), old); Age(K('3'), DateTime.UtcNow.AddHours(-2)); Age(K('6'), DateTime.UtcNow.AddHours(-3));
+    foreach (var c in "12") Directory.SetLastWriteTimeUtc(gens[K(c)], old);
+    Directory.SetLastWriteTimeUtc(supersededOld, DateTime.UtcNow.AddHours(-2));
+    var gcMemo = Path.Combine(gc, "memo");
+    Directory.CreateDirectory(gcMemo);
+    File.WriteAllText(Path.Combine(gcMemo, "m1.json"), "{\"Format\":1,\"Key\":\"" + K('1') + "\"}");
+    File.WriteAllText(Path.Combine(gcMemo, "m4.json"), "{\"Format\":1,\"Key\":\"" + K('4') + "\"}");
+    int collected;
+    using (BuildStorage.AcquireLock(Path.Combine(gc, "locks", K('2')), CancellationToken.None))
+        collected = BuildStorage.Collect(gc, K('5'), _ => { });
+    bool Pointer(char c) => File.Exists(Path.Combine(gc, "keys", K(c)));
+    Check(!Pointer('1') && !Directory.Exists(gens[K('1')]), "GC retires a stale key beyond the recent set and its generation");
+    Check(Pointer('2') && Directory.Exists(gens[K('2')]), "GC skips a key whose build lock is held");
+    Check(Pointer('3') && Pointer('4') && Pointer('5') && Pointer('6') &&
+        new[] { '3', '4', '5', '6' }.All(c => Directory.Exists(gens[K(c)])),
+        "GC keeps recent keys and keys used within the lifetime");
+    Check(!Directory.Exists(supersededOld) && Directory.Exists(supersededFresh), "GC removes old orphans, keeps fresh ones");
+    Check(collected == 2, "GC reports removed generations");
+    Check(!File.Exists(Path.Combine(gcMemo, "m1.json")) && File.Exists(Path.Combine(gcMemo, "m4.json")), "GC drops memos of retired keys");
+    Age(K('3'), old);
+    BuildStorage.FindCompleted(gc, K('3'));
+    Check(File.GetLastWriteTimeUtc(Path.Combine(gc, "keys", K('3'))) > DateTime.UtcNow.AddMinutes(-1), "cache hit stamps last use");
+
+    var runRoot = Path.Combine(root, "runroot");
+    var busy = Path.Combine(runRoot, "busy");
+    var stale = Path.Combine(runRoot, "stale");
+    var fresh = Path.Combine(runRoot, "fresh");
+    var trash = Path.Combine(runRoot, HostPayload.TrashPrefix + "x");
+    foreach (var d in new[] { busy, stale, fresh, trash }) { Directory.CreateDirectory(d); File.WriteAllText(Path.Combine(d, "f"), "x"); }
+    foreach (var d in new[] { busy, stale })
+    {
+        Directory.SetCreationTimeUtc(d, old); Directory.SetLastWriteTimeUtc(d, old);
+    }
+    var holder = Process.Start(new ProcessStartInfo("cmd.exe", "/c ping -n 30 127.0.0.1 >nul")
+        { WorkingDirectory = busy, UseShellExecute = false, CreateNoWindow = true })!;
+    try
+    {
+        Thread.Sleep(500);
+        var swept = HostPayload.SweepRunRoot(runRoot, TimeSpan.FromMinutes(10));
+        Check(Directory.Exists(busy) && File.Exists(Path.Combine(busy, "f")), "sweep never touches a run dir in use");
+        Check(!Directory.Exists(stale) && !Directory.Exists(trash) && Directory.Exists(fresh) && swept == 2,
+            "sweep removes stale and trash dirs, keeps fresh ones");
+    }
+    finally { holder.Kill(true); holder.WaitForExit(); }
+    var retired = false;
+    for (var i = 0; i < 20 && !retired; i++) { retired = HostPayload.TryRetire(busy, deleteAttempts: 10); if (!retired) Thread.Sleep(250); }
+    Check(retired && !Directory.Exists(busy), "run dir retired once its process exits");
+
     var lockPath = Path.Combine(root, "locks", "shared");
     var psi = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardInput = true, UseShellExecute = false };
     psi.ArgumentList.Add(typeof(HostBuilder).Assembly.Location); psi.ArgumentList.Add("--lock"); psi.ArgumentList.Add(lockPath);

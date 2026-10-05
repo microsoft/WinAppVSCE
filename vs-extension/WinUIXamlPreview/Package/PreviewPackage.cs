@@ -34,6 +34,25 @@ namespace WinUIXamlPreview
             await Log.InitializeAsync(this);
             Log.Write("WinUI XAML Preview package initializing…");
 
+            // P3: reclaim private Surface run-copies left by earlier sessions (crash, VS kill, or a file
+            // still locked at cleanup time). Delayed and off the UI thread so it never competes with startup;
+            // copies still in use by any running preview are skipped by TryRetire.
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    await System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(30), DisposalToken);
+                    var temp = System.IO.Path.GetTempPath();
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var removed = 0;
+                    foreach (var root in new[] { System.IO.Path.Combine(temp, "wsr-v2"), System.IO.Path.Combine(temp, "WinUIXamlPreview", "run") })
+                        removed += WinUISurface.Shared.HostPayload.SweepRunRoot(root, TimeSpan.FromMinutes(10), Log.Write);
+                    Log.Write($"PERF runcopy.sweep ms={sw.ElapsedMilliseconds} removed={removed}");
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { Log.Write("Run-copy sweep failed: " + ex.Message); }
+            });
+
             await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
             var rdt = await GetServiceAsync(typeof(SVsRunningDocumentTable)) as IVsRunningDocumentTable;
