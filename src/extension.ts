@@ -22,14 +22,16 @@ import {
 } from './run-options';
 import {
 	FOLDER_PICKER_DETAIL,
+	pickBuildOutputFolder,
+	selectFolder
+} from './folder-picker';
+import {
 	getRunSettings,
 	getWorkspaceRoots,
 	NO_WORKSPACE_MESSAGE,
-	pickBuildOutputFolder,
 	pickRunTarget,
 	pickSolutionProject,
-	resolveRunOptions,
-	selectFolder
+	resolveRunOptions
 } from './run-utils';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';

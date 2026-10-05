@@ -2,10 +2,13 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-	BUILD_OUTPUT_EXCLUDE_GLOB,
-	BUILD_OUTPUT_MAX_RESULTS,
-	deduplicateBuildOutputFolders
-} from './project-detection';
+	FOLDER_PICKER_DETAIL,
+	NO_BUILD_OUTPUT_MESSAGE,
+	scanBuildOutputFolders,
+	selectFolder,
+	SELECT_BUILD_OUTPUT_PLACEHOLDER,
+	withBuildOutputProgress
+} from './folder-picker';
 import {
 	classifyRunTarget,
 	classifyRunTargetFile,
@@ -34,108 +37,13 @@ import {
 
 /** VS Code layer for `winapp run`, shared by commands and the debug adapter. */
 
-export const FOLDER_PICKER_DETAIL = 'Open a folder picker';
-
 /** Marks the run-target picker entry that opens a file dialog for projects. */
 const PROJECT_PICKER_DETAIL = 'Open a file picker for .csproj, .sln, or .slnx';
 
 const BUILD_OUTPUT_SEARCH_DETAIL = 'Scan the workspace for folders containing .exe files';
 
-/** Shown whenever an executable scan comes up empty, in either picker. */
-const NO_BUILD_OUTPUT_MESSAGE =
-	'No folders containing .exe files were found. Build your project first, or browse to a folder.';
-
-/** Title of the native folder dialog used as the build-output fallback. */
-const SELECT_BUILD_OUTPUT_TITLE = 'Select build output folder';
-
-/** Placeholder for every build-output QuickPick. */
-const SELECT_BUILD_OUTPUT_PLACEHOLDER = 'Select the build output folder containing your app';
-
 /** Every run entry point reports a missing workspace identically. */
 export const NO_WORKSPACE_MESSAGE = 'No workspace folder open';
-
-/**
- * Prompt the user to select a folder.
- */
-export async function selectFolder(title: string, defaultUri?: vscode.Uri): Promise<string | undefined> {
-	const result = await vscode.window.showOpenDialog({
-		canSelectFiles: false,
-		canSelectFolders: true,
-		canSelectMany: false,
-		title,
-		defaultUri
-	});
-
-	return result?.[0]?.fsPath;
-}
-
-/** Shown by both the single-root and multi-root build-output scans. */
-const BUILD_OUTPUT_PROGRESS_TITLE = 'Searching for build output folders...';
-
-/** Scans one root; the caller owns the progress UI and the cancellation token. */
-async function scanBuildOutputFolders(
-	workspacePath: string,
-	token: vscode.CancellationToken
-): Promise<string[] | undefined> {
-	// The token must reach findFiles itself: cancelling only a flag we
-	// read afterwards leaves the (expensive) scan running to completion,
-	// so the Cancel button appears to do nothing.
-	const exeMatches = await vscode.workspace.findFiles(
-		new vscode.RelativePattern(workspacePath, '**/*.exe'),
-		BUILD_OUTPUT_EXCLUDE_GLOB,
-		BUILD_OUTPUT_MAX_RESULTS,
-		token
-	);
-
-	if (token.isCancellationRequested) {
-		return undefined;
-	}
-
-	return deduplicateBuildOutputFolders(exeMatches.map(m => m.fsPath), workspacePath);
-}
-
-/** Find build-output folders with cancellable VS Code progress. */
-export async function findBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
-	return vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title: BUILD_OUTPUT_PROGRESS_TITLE, cancellable: true },
-		(_progress, token) => scanBuildOutputFolders(workspacePath, token)
-	);
-}
-
-/** Pick build output, always leaving Browse available. */
-export async function pickBuildOutputFolder(workspacePath: string): Promise<string | undefined> {
-	const outputFolders = await findBuildOutputFolders(workspacePath);
-	if (!outputFolders) {
-		return undefined;
-	}
-
-	if (outputFolders.length === 0) {
-		vscode.window.showWarningMessage(NO_BUILD_OUTPUT_MESSAGE);
-		return selectFolder(SELECT_BUILD_OUTPUT_TITLE, vscode.Uri.file(workspacePath));
-	}
-
-	const items: Array<vscode.QuickPickItem & { directory?: string }> = outputFolders.map((folderPath) => ({
-		label: path.relative(workspacePath, folderPath) || '.',
-		detail: folderPath,
-		directory: folderPath
-	}));
-
-	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL });
-
-	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: SELECT_BUILD_OUTPUT_PLACEHOLDER
-	});
-
-	if (!picked) {
-		return undefined;
-	}
-
-	if (picked.detail === FOLDER_PICKER_DETAIL) {
-		return selectFolder(SELECT_BUILD_OUTPUT_TITLE, vscode.Uri.file(workspacePath));
-	}
-
-	return picked.directory;
-}
 
 /** Returns all workspace roots; never collapses multi-root workspaces. */
 export function getWorkspaceRoots(): WorkspaceRoot[] {
@@ -189,24 +97,21 @@ async function findBuildOutputTargets(roots: readonly WorkspaceRoot[]): Promise<
 	// One progress notification for the whole sweep. Calling the single-root
 	// helper per root would stack a separate popup, and a separate Cancel
 	// button, on every folder in a multi-root workspace.
-	return vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title: BUILD_OUTPUT_PROGRESS_TITLE, cancellable: true },
-		async (_progress, token) => {
-			const candidates: RunTargetCandidate[] = [];
+	return withBuildOutputProgress(async (token) => {
+		const candidates: RunTargetCandidate[] = [];
 
-			for (const root of roots) {
-				const folders = await scanBuildOutputFolders(root.path, token);
-				if (!folders) {
-					return undefined;
-				}
-				for (const folder of folders) {
-					candidates.push({ kind: 'folder', path: folder, root });
-				}
+		for (const root of roots) {
+			const folders = await scanBuildOutputFolders(root.path, token);
+			if (!folders) {
+				return undefined;
 			}
-
-			return candidates;
+			for (const folder of folders) {
+				candidates.push({ kind: 'folder', path: folder, root });
+			}
 		}
-	);
+
+		return candidates;
+	});
 }
 
 /** Map each discovered solution to its member projects. */
