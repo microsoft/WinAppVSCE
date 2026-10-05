@@ -3,11 +3,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
 	FOLDER_PICKER_DETAIL,
+	findBuildOutputFolders,
 	NO_BUILD_OUTPUT_MESSAGE,
-	scanBuildOutputFolders,
 	selectFolder,
-	SELECT_BUILD_OUTPUT_PLACEHOLDER,
-	withBuildOutputProgress
+	SELECT_BUILD_OUTPUT_PLACEHOLDER
 } from './folder-picker';
 import {
 	classifyRunTarget,
@@ -94,24 +93,24 @@ async function findProjectTargets(
 
 /** Find `.exe` output folders across every workspace root. */
 async function findBuildOutputTargets(roots: readonly WorkspaceRoot[]): Promise<RunTargetCandidate[] | undefined> {
-	// One progress notification for the whole sweep. Calling the single-root
-	// helper per root would stack a separate popup, and a separate Cancel
-	// button, on every folder in a multi-root workspace.
-	return withBuildOutputProgress(async (token) => {
-		const candidates: RunTargetCandidate[] = [];
+	// Attribute each folder back to the root it came from; the run picker
+	// labels candidates by root in a multi-root workspace.
+	const rootsByPath = new Map(roots.map(root => [root.path, root]));
 
-		for (const root of roots) {
-			const folders = await scanBuildOutputFolders(root.path, token);
-			if (!folders) {
-				return undefined;
-			}
-			for (const folder of folders) {
-				candidates.push({ kind: 'folder', path: folder, root });
-			}
+	const found = await findBuildOutputFolders(roots.map(root => root.path));
+	if (!found) {
+		return undefined;
+	}
+
+	const candidates: RunTargetCandidate[] = [];
+	for (const { rootPath, path: folder } of found) {
+		const root = rootsByPath.get(rootPath);
+		if (root) {
+			candidates.push({ kind: 'folder', path: folder, root });
 		}
+	}
 
-		return candidates;
-	});
+	return candidates;
 }
 
 /** Map each discovered solution to its member projects. */

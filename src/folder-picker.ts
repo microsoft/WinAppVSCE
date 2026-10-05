@@ -26,8 +26,14 @@ export const SELECT_BUILD_OUTPUT_TITLE = 'Select build output folder';
 /** Placeholder for every build-output QuickPick. */
 export const SELECT_BUILD_OUTPUT_PLACEHOLDER = 'Select the build output folder containing your app';
 
-/** Shown by both the single-root and multi-root build-output scans. */
 const BUILD_OUTPUT_PROGRESS_TITLE = 'Searching for build output folders...';
+
+/** A folder containing `.exe` files, tagged with the root it was found under. */
+export interface BuildOutputFolder {
+	/** The scanned root, so multi-root callers can attribute the result. */
+	rootPath: string;
+	path: string;
+}
 
 /**
  * Prompt the user to select a folder.
@@ -44,49 +50,52 @@ export async function selectFolder(title: string, defaultUri?: vscode.Uri): Prom
 	return result?.[0]?.fsPath;
 }
 
-/** Scans one root; the caller owns the progress UI and the cancellation token. */
-export async function scanBuildOutputFolders(
-	workspacePath: string,
-	token: vscode.CancellationToken
-): Promise<string[] | undefined> {
-	// The token must reach findFiles itself: cancelling only a flag we
-	// read afterwards leaves the (expensive) scan running to completion,
-	// so the Cancel button appears to do nothing.
-	const exeMatches = await vscode.workspace.findFiles(
-		new vscode.RelativePattern(workspacePath, '**/*.exe'),
-		BUILD_OUTPUT_EXCLUDE_GLOB,
-		BUILD_OUTPUT_MAX_RESULTS,
-		token
-	);
-
-	if (token.isCancellationRequested) {
-		return undefined;
-	}
-
-	return deduplicateBuildOutputFolders(exeMatches.map(m => m.fsPath), workspacePath);
-}
-
-/** Scan a single root with cancellable VS Code progress. */
-export async function findBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
+/**
+ * Scan every root for folders containing `.exe` files, under one cancellable
+ * progress notification. Returns undefined if the user cancelled.
+ *
+ * A single root is just the one-element case, so both the pack picker and the
+ * multi-root run picker share this; a per-root wrapper would stack a separate
+ * popup, and a separate Cancel button, on every folder in a multi-root
+ * workspace.
+ */
+export async function findBuildOutputFolders(
+	rootPaths: readonly string[]
+): Promise<BuildOutputFolder[] | undefined> {
 	return vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: BUILD_OUTPUT_PROGRESS_TITLE, cancellable: true },
-		(_progress, token) => scanBuildOutputFolders(workspacePath, token)
-	);
-}
+		async (_progress, token) => {
+			const found: BuildOutputFolder[] = [];
 
-/** Open a progress-reporting multi-root scan; the caller fans out over roots. */
-export async function withBuildOutputProgress<T>(
-	scan: (token: vscode.CancellationToken) => Promise<T>
-): Promise<T> {
-	return vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title: BUILD_OUTPUT_PROGRESS_TITLE, cancellable: true },
-		(_progress, token) => scan(token)
+			for (const rootPath of rootPaths) {
+				// The token must reach findFiles itself: cancelling only a flag
+				// we read afterwards leaves the (expensive) scan running to
+				// completion, so the Cancel button appears to do nothing.
+				const exeMatches = await vscode.workspace.findFiles(
+					new vscode.RelativePattern(rootPath, '**/*.exe'),
+					BUILD_OUTPUT_EXCLUDE_GLOB,
+					BUILD_OUTPUT_MAX_RESULTS,
+					token
+				);
+
+				if (token.isCancellationRequested) {
+					return undefined;
+				}
+
+				const folders = deduplicateBuildOutputFolders(exeMatches.map(m => m.fsPath), rootPath);
+				for (const folder of folders) {
+					found.push({ rootPath, path: folder });
+				}
+			}
+
+			return found;
+		}
 	);
 }
 
 /** Pick build output, always leaving Browse available. */
 export async function pickBuildOutputFolder(workspacePath: string): Promise<string | undefined> {
-	const outputFolders = await findBuildOutputFolders(workspacePath);
+	const outputFolders = await findBuildOutputFolders([workspacePath]);
 	if (!outputFolders) {
 		return undefined;
 	}
@@ -96,7 +105,7 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 		return selectFolder(SELECT_BUILD_OUTPUT_TITLE, vscode.Uri.file(workspacePath));
 	}
 
-	const items: Array<vscode.QuickPickItem & { directory?: string }> = outputFolders.map((folderPath) => ({
+	const items: Array<vscode.QuickPickItem & { directory?: string }> = outputFolders.map(({ path: folderPath }) => ({
 		label: path.relative(workspacePath, folderPath) || '.',
 		detail: folderPath,
 		directory: folderPath
