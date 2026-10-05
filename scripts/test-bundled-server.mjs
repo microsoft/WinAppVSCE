@@ -1,10 +1,6 @@
-// Smokes the bundled Native AOT server in dist/server.
-//
-// The bundle is prepared first so the suite can never silently validate a stale build. Which
-// bundle that is comes from WINUI_XAML_SERVER_BUNDLE_MODE, shared with ensure-server-bundle.mjs:
-//   source   (default, local dev) - publish a fresh bundle from server/src, then smoke it.
-//   artifact (CI)                 - validate the already-downloaded SIGNED bundle and smoke that,
-//                                   never rebuilding over it.
+// Smokes the bundled Native AOT server in dist/server. The bundle is prepared first so the suite can
+// never silently validate a stale build. WINUI_XAML_SERVER_BUNDLE_MODE (shared with
+// ensure-server-bundle.mjs) picks which: `source` republishes from server/src, `artifact` (CI) validates the downloaded SIGNED bundle without rebuilding over it.
 
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";

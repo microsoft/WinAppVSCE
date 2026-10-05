@@ -2,11 +2,7 @@ import { XAML_COMMANDS } from "./xamlConstants";
 
 export const PROJECT_CONTEXT_STATUS_NOTIFICATION = "winui-xaml/projectContextStatus";
 
-/**
- * The single source of truth for project-context states. The runtime array and
- * the type are derived from one another, so a new state cannot be added to one
- * without the other.
- */
+/** The single source of truth for project-context states. The runtime array and the type are derived from one another, so a new state cannot be added to one without the other. */
 export const PROJECT_CONTEXT_STATES = [
   "loading",
   "framework-ready",
@@ -28,11 +24,7 @@ export function isProjectContextState(
   return PROJECT_CONTEXT_STATES.includes(value as ProjectContextState);
 }
 
-/**
- * Shared wording for the project-context states. The status bar and the
- * `winui-xaml.showInfo` summary describe the same conditions, so they compose
- * these sentences rather than each spelling them out.
- */
+/** Shared wording for the project-context states. The status bar and the `winui-xaml.showInfo` summary describe the same conditions, so they compose these sentences rather than each spelling them out. */
 export const PROJECT_CONTEXT_LOADING_MESSAGE =
   "Loading the WinUI and package types for this project.";
 export const PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE =

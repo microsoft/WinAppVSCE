@@ -31,10 +31,8 @@
                       Private="false" />
   </ItemGroup>
 
-  <!--
-    Mirror the shipped layout (dist/server/<rid>/../generator-host/) so the integration tests
-    resolve the helper exactly the way the product does, instead of through a test-only override.
-  -->
+  <!-- Mirror the shipped layout (dist/server/<rid>/../generator-host/) so the integration tests
+    resolve the helper exactly the way the product does, not through a test-only override. -->
   <Target Name="CopyGeneratorHostForTests" AfterTargets="Build">
     <ItemGroup>
       <_GeneratorHostFiles Include="$(MSBuildThisFileDirectory)..\..\src\WinUiXaml.GeneratorHost\bin\$(Configuration)\net10.0\**\*.*" />

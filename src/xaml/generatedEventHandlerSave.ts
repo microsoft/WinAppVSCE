@@ -65,11 +65,7 @@ export interface ApplyGeneratedHandlerHost<TEdit> {
   showInformationMessage(message: string): void;
 }
 
-/**
- * Applies a server-generated handler stub, but only against the exact code-behind the server read.
- * The server computes offsets from the file on disk, so an unsaved or newer buffer would place the
- * stub in the wrong spot: those cases save or report instead of applying a stale edit.
- */
+/** Applies a server-generated handler stub, but only against the exact code-behind the server read. The server computes offsets from the file on disk, so an unsaved or newer buffer would place the stub in the wrong spot: those cases save or report instead of applying a stale edit. */
 export async function applyGeneratedEventHandlerEdit<TEdit>(
   documentUri: string,
   edit: TEdit,

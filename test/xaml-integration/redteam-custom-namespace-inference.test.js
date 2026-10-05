@@ -29,10 +29,9 @@ function titles(r) {
   return r.actions.map((a) => a.title);
 }
 
-// The server offers a manual-entry prompt ("Add xmlns:zzz...") for any undeclared prefix whose
-// namespace it cannot resolve. That action supplies no URI of its own — it asks the user — so it
-// is not inference. These assertions guard against the server *guessing* a namespace, so only
-// concrete `Add xmlns:prefix="uri"` actions are forbidden.
+// The server offers a manual-entry prompt ("Add xmlns:zzz...") for any undeclared prefix it cannot
+// resolve. That asks the user for the URI rather than supplying one, so it is not inference; these
+// assertions guard against *guessing*, and so forbid only concrete `Add xmlns:prefix="uri"` actions.
 function addXmlnsActions(r) {
   return r.actions.filter((a) => /^Add xmlns:[^ ]+=/.test(a.title));
 }

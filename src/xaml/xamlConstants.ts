@@ -1,8 +1,6 @@
-// Identifiers that must stay in step with package.json, plus the action labels
-// shared by the status summary and the degraded-state warning.
-//
-// This module holds no logic and imports nothing, so any file can depend on it
-// without creating a cycle.
+// Identifiers that must stay in step with package.json, plus the action labels shared by the status
+// summary and the degraded-state warning. This module holds no logic and imports nothing, so any
+// file can depend on it without creating a cycle.
 
 /** Configuration section owning every XAML setting. */
 export const XAML_SETTINGS_SECTION = "winapp.xaml";
@@ -35,10 +33,7 @@ export const EXTERNAL_COMMANDS = {
 export const DOTNET_DOWNLOAD_URL =
   "https://dotnet.microsoft.com/download/dotnet/10.0";
 
-/**
- * Prefix for the status summary. The error case gets its own prefix so the
- * reason reads as the sentence after the colon instead of a second clause.
- */
+/** Prefix for the status summary. The error case gets its own prefix so the reason reads as the sentence after the colon instead of a second clause. */
 export const XAML_STATUS_PREFIX = "WinUI XAML Tools:";
 export const XAML_INTELLISENSE_UNAVAILABLE_PREFIX =
   "WinUI XAML IntelliSense Unavailable:";
@@ -58,11 +53,7 @@ export type XamlStatusAction =
 /** Shared dismiss button label, used by every one-time XAML notification. */
 export const DISMISS_ACTION_LABEL = "Don't Show Again";
 
-/**
- * Buttons offered by the degraded-state warning. It shares the status actions
- * and adds a few of its own, so typing the label catches a mismatch between the
- * two surfaces at compile time.
- */
+/** Buttons offered by the degraded-state warning. It shares the status actions and adds a few of its own, so typing the label catches a mismatch between the two surfaces at compile time. */
 export type DegradedActionLabel =
   | XamlStatusAction
   | typeof DISMISS_ACTION_LABEL

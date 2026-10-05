@@ -2,10 +2,7 @@ using Microsoft.CodeAnalysis;
 
 namespace WinUiXaml.Workspace
 {
-    /// <summary>
-    /// Immutable framework symbols resolved once for a project compilation. A missing symbol means
-    /// that capability is unavailable; callers must not substitute a handwritten semantic catalog.
-    /// </summary>
+    /// <summary>Immutable framework symbols resolved once for a project compilation. A missing symbol means that capability is unavailable; callers must not substitute a handwritten semantic catalog.</summary>
     public sealed class WinUiSdkCapabilities
     {
         internal WinUiSdkCapabilities(Compilation compilation)
@@ -63,10 +60,7 @@ namespace WinUiXaml.Workspace
         public INamedTypeSymbol? RowDefinitionCollection { get; }
         public INamedTypeSymbol? ColumnDefinitionCollection { get; }
 
-        /// <summary>
-        /// Whether every SDK type needed to identify x:Name reference forms is available. Rename must
-        /// not emit a partial edit when any of these semantic classifiers is unavailable.
-        /// </summary>
+        /// <summary>Whether every SDK type needed to identify x:Name reference forms is available. Rename must not emit a partial edit when any of these semantic classifiers is unavailable.</summary>
         public bool HasCompleteNameReferenceSemantics =>
             RelativePanel is not null &&
             UIElement is not null &&

@@ -244,10 +244,9 @@ internal sealed class JsonRpcConnection
             {
                 var value = line.Substring(ContentLengthHeader.Length).Trim();
 
-                // LSP specifies digits only. NumberStyles.None rejects a sign, so a negative
-                // length cannot parse and the result is always non-negative here. Falling through
-                // on failure would instead leave contentLength at 0 and frame an empty body,
-                // desynchronizing the stream against body bytes that were never consumed.
+                // LSP specifies digits only, and NumberStyles.None rejects a sign, so the result is
+                // always non-negative. Falling through on failure would leave contentLength at 0 and
+                // frame an empty body, desynchronizing the stream against unconsumed body bytes.
                 if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out contentLength))
                 {
                     Log($"invalid Content-Length header: '{value}'");

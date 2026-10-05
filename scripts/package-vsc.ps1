@@ -175,10 +175,9 @@ try
         exit 1
     }
 
-    # Ensure the WinUI XAML language server (.NET) is published into dist/server so it ships in the VSIX.
-    # The single local publish path is vscode:prepublish -> ensure-server-bundle.mjs (triggered by
-    # `vsce package` below). In release builds, -SkipServerBuild requires the downloaded, signed
-    # pipeline artifact and switches ensure-server-bundle.mjs to artifact mode.
+    # Ensure the WinUI XAML language server (.NET) is published into dist/server so it ships in the
+    # VSIX. The single local publish path is vscode:prepublish -> ensure-server-bundle.mjs (via the
+    # `vsce package` below); in release builds -SkipServerBuild switches it to signed-artifact mode.
     if ($SkipServerBuild) {
         Write-Host "[VSC] Skipping server build; reusing pre-published dist/server..." -ForegroundColor Blue
         # Preserve the downloaded ESRP signatures instead of rebuilding over them. The mode is

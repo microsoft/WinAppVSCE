@@ -66,10 +66,7 @@ namespace WinUiXaml.Workspace
         /// </summary>
         public string? GeneratorFailure { get; }
 
-        /// <summary>
-        /// Rebinds the document's in-memory <c>x:Class</c> against the same immutable project
-        /// compilation. This avoids rebuilding project-wide XAML metadata for an XML-only edit.
-        /// </summary>
+        /// <summary>Rebinds the document's in-memory <c>x:Class</c> against the same immutable project compilation. This avoids rebuilding project-wide XAML metadata for an XML-only edit.</summary>
         public XamlResolution WithClassName(string? className) =>
             new(
                 XamlPath,

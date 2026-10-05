@@ -572,10 +572,7 @@ namespace WinUiXaml.Workspace
             }
         }
 
-        /// <summary>
-        /// Public, non-abstract runtime markup extensions available through an XML namespace.
-        /// Results are cached for the lifetime of this immutable project compilation.
-        /// </summary>
+        /// <summary>Public, non-abstract runtime markup extensions available through an XML namespace. Results are cached for the lifetime of this immutable project compilation.</summary>
         public IReadOnlyList<INamedTypeSymbol> GetMarkupExtensionTypes(string xmlnsUri)
         {
             var canonicalUri = CanonicalizeNamespaceUri(xmlnsUri);
@@ -685,12 +682,7 @@ namespace WinUiXaml.Workspace
         /// <summary>True when the xmlns URI is understood by this type system — it maps to at least one CLR namespace that actually contains usable types.</summary>
         public bool IsKnownNamespace(string xmlnsUri) => GetAllTypes(xmlnsUri).Any();
 
-        /// <summary>
-        /// True when framework resources were discovered successfully and every XAML-bearing
-        /// referenced assembly belongs to the platform catalog.
-        /// Third-party libraries can contribute runtime resources that are not discoverable from
-        /// project dictionaries, so their absence cannot be treated as authoritative.
-        /// </summary>
+        /// <summary>True when framework resources were discovered successfully and every XAML-bearing referenced assembly belongs to the platform catalog. Third-party libraries can contribute runtime resources that are not discoverable from project dictionaries, so their absence cannot be treated as authoritative.</summary>
         public bool IsResourceCatalogAuthoritative =>
             GetThemeResources().Count > 0 &&
             _themeResourceCatalogDiscovered &&
@@ -1156,10 +1148,7 @@ namespace WinUiXaml.Workspace
             return null;
         }
 
-        /// <summary>
-        /// True for RelativePanel attached properties whose SDK getter signature marks an
-        /// element-name alignment target rather than a boolean *WithPanel flag.
-        /// </summary>
+        /// <summary>True for RelativePanel attached properties whose SDK getter signature marks an element-name alignment target rather than a boolean *WithPanel flag.</summary>
         public bool IsRelativePanelElementReference(INamedTypeSymbol owner, string member)
         {
             var relativePanel = Capabilities.RelativePanel;
@@ -1270,10 +1259,7 @@ namespace WinUiXaml.Workspace
             return null;
         }
 
-        /// <summary>
-        /// Returns the XAML child type for an array or generic collection.
-        /// Dictionary content consists of keyed values rather than CLR KeyValuePair entries.
-        /// </summary>
+        /// <summary>Returns the XAML child type for an array or generic collection. Dictionary content consists of keyed values rather than CLR KeyValuePair entries.</summary>
         public static ITypeSymbol? GetCollectionElementType(ITypeSymbol? type)
         {
             if (type is null)

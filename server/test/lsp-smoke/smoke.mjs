@@ -696,18 +696,9 @@ async function main() {
     '<Project><ItemGroup><Compile Remove="SmokePage.xaml.cs" /></ItemGroup></Project>',
     "utf8"
   );
-  // Definition is non-blocking (issue #220), so synchronize on the same status notification the
-  // real client uses. Registered before the change is sent so the reload's notification cannot be
-  // missed.
-  //
-  // Matching a bare `state === "ready"` is not enough. The obj/bin watched-file check just above can
-  // still emit a trailing `ready` for the context that is already loaded, and dispatch resolves the
-  // first matching waiter, so that stale notification satisfies the barrier instantly and the
-  // authoritative assertions below then race a reload that has not started yet. Gate on the reload's
-  // own `loading` transition (LoadContextAsync publishes it before every load) so only a `ready`
-  // that follows it can release the barrier. The flag is set inside the matcher rather than in a
-  // `.then`, because `loading` and `ready` can arrive in the same stdout chunk and be dispatched
-  // synchronously, before any microtask would run.
+  // Definition is non-blocking (issue #220), so synchronize on the same status notification the real
+  // client uses, registered before the change is sent. A bare `state === "ready"` is not enough: the
+  // obj/bin check above can emit a trailing `ready` for the already-loaded context, and dispatch resolves the first matching waiter, so that stale notification would satisfy the barrier instantly and the assertions below would race a reload that has not started. Gate on the reload's own `loading` transition (LoadContextAsync publishes it before every load). The flag is set inside the matcher, not in a `.then`, because `loading` and `ready` can arrive in one stdout chunk and dispatch synchronously.
   const statusIs = (state) => (message) =>
     message.method === "winui-xaml/projectContextStatus" &&
     message.params?.uri === xamlUri &&

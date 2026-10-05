@@ -10,11 +10,7 @@ namespace WinUiXaml.LanguageServer;
 /// <summary>Provides LSP color support for complete XAML hex and named attribute values.</summary>
 internal static class XamlColor
 {
-    /// <summary>
-    /// Named-color tables, cached per <see cref="XamlTypeSystem.GetNamedColors"/> result instance.
-    /// That method caches its list on the (immutable) compilation, so the list reference is a safe
-    /// and self-invalidating cache key.
-    /// </summary>
+    /// <summary>Named-color tables keyed on the <see cref="XamlTypeSystem.GetNamedColors"/> result instance, which that method caches on the immutable compilation and so is a safe, self-invalidating cache key.</summary>
     private static readonly ConditionalWeakTable<object, NamedColorTable> Tables = new();
 
     public static List<ColorInformation> Collect(TextDocument doc, XamlTypeSystem typeSystem)
@@ -55,12 +51,7 @@ internal static class XamlColor
         return result;
     }
 
-    /// <summary>
-    /// Offers write-backs for a picked color, over the exact range of the existing literal.
-    /// When the picked color is exactly a WinUI named color, that name is offered too; if the literal
-    /// being replaced was itself a name, the name is offered FIRST so that accepting the default does
-    /// not silently rewrite a symbolic <c>Red</c> into <c>#FFFF0000</c>.
-    /// </summary>
+    /// <summary>Offers write-backs for a picked color over the existing literal's exact range. An exact WinUI named-color match is offered too, and FIRST when the replaced literal was itself a name, so accepting the default does not silently rewrite a symbolic <c>Red</c> into <c>#FFFF0000</c>.</summary>
     public static List<ColorPresentation> Present(
         Lsp.Color color,
         Lsp.Range range,
@@ -105,18 +96,8 @@ internal static class XamlColor
         return list;
     }
 
-    /// <summary>
-    /// Resolves a WinUI named color (<c>Red</c>, <c>CornflowerBlue</c>, <c>Transparent</c>, …) to its ARGB.
-    /// </summary>
-    /// <remarks>
-    /// Membership is gated on <see cref="XamlTypeSystem.GetNamedColors"/>, which discovers the real
-    /// <c>Microsoft.UI.Colors</c> surface from the referenced SDK. <see cref="System.Drawing.Color.FromName"/>
-    /// is used ONLY to look up the channel values of a name that already passed that gate: it also resolves
-    /// .NET *system* colors (<c>Control</c>, <c>Desktop</c>, <c>ActiveBorder</c>, <c>Highlight</c>, …) that
-    /// WinUI does not have and that throw <c>XamlParseException</c> at runtime, so it must never decide validity.
-    /// Matching is case-insensitive because the WinUI XAML parser accepts <c>red</c> and <c>RED</c> as readily
-    /// as <c>Red</c>, matching <see cref="XamlValueConverter"/>'s validation.
-    /// </remarks>
+    /// <summary>Resolves a WinUI named color (<c>Red</c>, <c>CornflowerBlue</c>, <c>Transparent</c>, …) to its ARGB.</summary>
+    /// <remarks>Validity is decided ONLY by <see cref="XamlTypeSystem.GetNamedColors"/>, which discovers the real <c>Microsoft.UI.Colors</c> surface from the referenced SDK; <see cref="System.Drawing.Color.FromName"/> supplies channel values for a name that already passed that gate, because it also resolves .NET *system* colors (<c>Control</c>, <c>Desktop</c>, <c>ActiveBorder</c>, <c>Highlight</c>, …) that WinUI lacks and that throw <c>XamlParseException</c> at runtime. Matching is case-insensitive because the WinUI XAML parser accepts <c>red</c> and <c>RED</c> as readily as <c>Red</c>, matching <see cref="XamlValueConverter"/>'s validation.</remarks>
     public static bool TryParseNamedColor(
         string text,
         XamlTypeSystem typeSystem,
@@ -198,11 +179,7 @@ internal static class XamlColor
         return !string.IsNullOrEmpty(text) && GetTable(typeSystem).ByName.TryGetValue(text, out packed);
     }
 
-    /// <summary>
-    /// The WinUI color name whose ARGB is exactly the given channels, or null. Several names can share a
-    /// value (Aqua/Cyan, Fuchsia/Magenta); the caller's existing spelling wins so a picked color that did
-    /// not change keeps the exact token the user wrote, otherwise the first declared name is used.
-    /// </summary>
+    /// <summary>The WinUI color name whose ARGB is exactly the given channels, or null. Names can share a value (Aqua/Cyan, Fuchsia/Magenta), so the caller's existing spelling wins and an unchanged pick keeps the exact token the user wrote; otherwise the first declared name is used.</summary>
     private static string? FindColorName(
         byte a,
         byte r,

@@ -37,11 +37,7 @@ namespace WinUiXaml.Workspace
             _globalProperties = globalProperties ?? DefaultGlobalProperties;
         }
 
-        /// <summary>
-        /// One cached project load. Tracks the invalidations that arrived while the load was still in
-        /// flight, because its project graph does not exist until it completes and so cannot be tested
-        /// with <c>ContainsProject</c> at invalidate time.
-        /// </summary>
+        /// <summary>One cached project load. Tracks invalidations that arrived while the load was still in flight, because its project graph does not exist until it completes and so cannot be tested with <c>ContainsProject</c> at invalidate time.</summary>
         private sealed class CacheEntry
         {
             public CacheEntry(Task<RoslynProjectWorkspace> task) => Task = task;
@@ -171,10 +167,7 @@ namespace WinUiXaml.Workspace
                 workspace.GeneratorFailure);
         }
 
-        /// <summary>
-        /// Resolves framework metadata from the owning project's exact MSBuild-selected references
-        /// without compiling project sources or running source generators.
-        /// </summary>
+        /// <summary>Resolves framework metadata from the owning project's exact MSBuild-selected references without compiling project sources or running source generators.</summary>
         public async Task<XamlResolution?> ResolveFrameworkAsync(
             string xamlPath,
             string? searchRoot = null,
@@ -327,14 +320,8 @@ namespace WinUiXaml.Workspace
             }
         }
 
-        /// <summary>
-        /// Returns the cached load for a project, starting one if needed.
-        /// </summary>
-        /// <remarks>
-        /// The returned workspace stays readable after <see cref="RoslynProjectWorkspace.Dispose"/>,
-        /// because every read goes through the immutable Roslyn <c>Project</c> snapshot captured at
-        /// load time. An eviction therefore cannot break a resolve that is already in flight.
-        /// </remarks>
+        /// <summary>Returns the cached load for a project, starting one if needed.</summary>
+        /// <remarks>The returned workspace stays readable after <see cref="RoslynProjectWorkspace.Dispose"/>, because every read goes through the immutable Roslyn <c>Project</c> snapshot captured at load time. An eviction therefore cannot break a resolve that is already in flight.</remarks>
         private Task<RoslynProjectWorkspace> GetOrLoadAsync(string projectPath)
         {
             var key = Path.GetFullPath(projectPath);

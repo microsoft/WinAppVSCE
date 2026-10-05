@@ -250,10 +250,9 @@ public class XamlColorTests
             }
             namespace Microsoft.UI
             {
-                // Mirrors the shape of the real Microsoft.UI.Colors: static public properties whose
-                // names GetNamedColors() discovers. Deliberately omits the .NET *system* colors
-                // (Control, Desktop, ActiveBorder, Highlight) that System.Drawing also resolves, so
-                // tests can prove those never produce a swatch.
+                // Mirrors the real Microsoft.UI.Colors: static public properties whose names
+                // GetNamedColors() discovers. Deliberately omits the .NET *system* colors (Control,
+                // Desktop, ActiveBorder, Highlight) so tests can prove those never produce a swatch.
                 public static class Colors
                 {
                     public static Windows.UI.Color Red { get; }
@@ -359,12 +358,7 @@ public class XamlColorTests
         Assert.Equal(0x00, b);
     }
 
-    /// <summary>
-    /// The load-bearing guard. System.Drawing.Color.FromName resolves these .NET *system* colors with
-    /// IsKnownColor == true, but WinUI has no such colors and throws XamlParseException at runtime. If
-    /// FromName were allowed to decide validity we would paint a swatch on markup that crashes the app.
-    /// Validity must come from GetNamedColors(), which does not contain them.
-    /// </summary>
+    /// <summary>The load-bearing guard. System.Drawing.Color.FromName resolves these .NET *system* colors with IsKnownColor == true, but WinUI has no such colors and throws XamlParseException at runtime, so letting FromName decide validity would paint a swatch on markup that crashes the app. Validity must come from GetNamedColors(), which does not contain them.</summary>
     [Theory]
     [InlineData("Control")]
     [InlineData("Desktop")]

@@ -7,11 +7,7 @@ using Microsoft.CodeAnalysis;
 
 namespace WinUiXaml.Workspace
 {
-    /// <summary>
-    /// Reads the WinUI SDK's shipped <c>generic.xaml</c> to build the framework theme-resource
-    /// catalog. This is file/XML work over the package layout, deliberately kept out of
-    /// <see cref="XamlTypeSystem"/>, which resolves symbols through Roslyn.
-    /// </summary>
+    /// <summary>Reads the WinUI SDK's shipped <c>generic.xaml</c> to build the framework theme-resource catalog. This is file/XML work over the package layout, deliberately kept out of <see cref="XamlTypeSystem"/>, which resolves symbols through Roslyn.</summary>
     internal static class ThemeResourceCatalog
     {
         /// <summary>Loads the catalog for a compilation, or an empty list when no generic.xaml is reachable.</summary>
