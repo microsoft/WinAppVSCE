@@ -27,7 +27,7 @@
     <CreateVsixContainer>true</CreateVsixContainer>
     <DeployExtension>false</DeployExtension>
     <IsAotCompatible>false</IsAotCompatible>
-    <NoWarn>$(NoWarn);VSTHRD002;VSTHRD010;VSTHRD012;VSTHRD109</NoWarn>
+    <NoWarn>$(NoWarn);VSTHRD010;VSTHRD012;VSTHRD109</NoWarn>
 
     <NuGetPackageRoot Condition="'$(NuGetPackageRoot)' == ''">$(UserProfile)\.nuget\packages\</NuGetPackageRoot>
 

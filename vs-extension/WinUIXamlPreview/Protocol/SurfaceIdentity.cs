@@ -180,8 +180,14 @@ namespace WinUIXamlPreview.Protocol
                         return false;
                     }
 
+                    // VSTHRD002: these synchronous waits are safe — WaitForExit above has already returned,
+                    // so the child has exited and both read tasks are complete; GetResult() returns
+                    // immediately and cannot deadlock. The method is inherently synchronous, and the async
+                    // reads exist only to drain stdout/stderr concurrently so a full pipe can't stall exit.
+#pragma warning disable VSTHRD002 // Synchronous wait on an already-completed task; see note above.
                     var stdout = stdoutTask.GetAwaiter().GetResult();
                     var stderr = stderrTask.GetAwaiter().GetResult();
+#pragma warning restore VSTHRD002
                     var outText = (stdout ?? string.Empty).Trim();
                     if (proc.ExitCode == 0 && outText == "WXP:ALREADY")
                     {
