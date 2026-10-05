@@ -72,6 +72,11 @@ namespace WinUIXamlPreview.UI
         private bool _spareReady;
         private bool _spareWarming;
         private int _spareGeneration;
+        private bool _editAwaitingSpare;
+        private int _editAwaitGen;
+        private int _editAwaitSeq;
+        private bool _promotedRenderPending; // a promoted spare's first render is in flight; the next spare follows it
+        private System.Diagnostics.Stopwatch? _editAwaitSw;
         private SurfaceClient? _retiringClient;
         private readonly System.Collections.Generic.HashSet<string> _riskyDocs =
             new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -732,12 +737,21 @@ namespace WinUIXamlPreview.UI
                 // fail-fast this one. Promote the pre-warmed spare instead of re-hosting in place (which
                 // would risk a crash). The spare is already up, so the swap costs about one render, not a
                 // cold process start — no visible restart blip.
-                if ((_riskyDocs.Contains(_currentPath) || EffectiveLiveMode(_currentPath)) && TryPromoteSpare(xaml))
+                bool isolate = _riskyDocs.Contains(_currentPath) || EffectiveLiveMode(_currentPath);
+                if (isolate && TryPromoteSpare(xaml))
                 {
                     PerfBegin(EffectiveLiveMode(_currentPath) ? "edit.livespare" : "edit.riskyspare");
                     Log.Write(EffectiveLiveMode(_currentPath)
                         ? "Live-mode edit: rendered on a fresh spare process (per-render isolation)."
                         : "Risky doc edit: recycled onto the warm spare (skipped in-place re-render).");
+                    return;
+                }
+
+                // No spare ready yet, but one is on its way: hold the edit for it rather than re-rendering in
+                // the already-used process (the exact crash risk isolation exists to avoid). The spare renders
+                // whatever the document says when it arrives, so a burst of edits costs one render.
+                if (isolate && AwaitSpareForEdit())
+                {
                     return;
                 }
 
@@ -793,6 +807,10 @@ namespace WinUIXamlPreview.UI
                     {
                         _spareWarming = false;
                         try { dead?.Dispose(); } catch { }
+                        if (gen == _spareGeneration && EditAwaitingSpare)
+                        {
+                            RenderAwaitedEditInPlace("the spare failed to start");
+                        }
                     });
                     return;
                 }
@@ -813,8 +831,108 @@ namespace WinUIXamlPreview.UI
                     _spareReady = true;
                     ready!.Closed += OnSpareClosed;
                     Log.Write("Warm spare ready.");
+                    if (EditAwaitingSpare)
+                    {
+                        DrainAwaitedEdit();
+                    }
                 });
             });
+        }
+
+        // ---- held edit (waiting for a spare) --------------------------------
+        //
+        // An isolated edit (live mode / risky doc) that finds no ready spare waits for the next one instead
+        // of re-rendering in a used process. Only a flag is held: the drain re-reads the document, so the
+        // spare always renders the newest text. Bounded by SpareWaitLimit, then the old in-place render.
+
+        private static readonly TimeSpan SpareWaitLimit = TimeSpan.FromSeconds(15);
+
+        private bool EditAwaitingSpare => _editAwaitingSpare && _editAwaitGen == _spareGeneration;
+
+        private bool AwaitSpareForEdit()
+        {
+            // A spare is on its way if one is warming, or a promoted render is in flight (the next spare is
+            // warmed when it paints). A process that has not rendered yet is still fresh, so the edit can
+            // render in it directly, as before.
+            if (!_promotedRenderPending)
+            {
+                if (!_activeProcessRendered)
+                {
+                    return false;
+                }
+
+                WarmSpare();
+                if (!_spareWarming)
+                {
+                    return false; // nothing is coming (no launch config) — render in place as before
+                }
+            }
+
+            if (EditAwaitingSpare)
+            {
+                Log.Write("Isolated edit: still waiting for the spare; it will render the latest text.");
+                return true;
+            }
+
+            _editAwaitingSpare = true;
+            _editAwaitGen = _spareGeneration;
+            _editAwaitSw = System.Diagnostics.Stopwatch.StartNew();
+            var seq = ++_editAwaitSeq;
+            Log.Write("Isolated edit: no spare ready yet; holding the edit until the next spare is up.");
+
+            _ = System.Threading.Tasks.Task.Delay(SpareWaitLimit).ContinueWith(_ =>
+                Dispatcher.InvokeAsync(() =>
+                {
+                    if (!_disposed && seq == _editAwaitSeq && EditAwaitingSpare)
+                    {
+                        RenderAwaitedEditInPlace($"the spare took longer than {SpareWaitLimit.TotalSeconds:0} s");
+                    }
+                }), System.Threading.Tasks.TaskScheduler.Default);
+            return true;
+        }
+
+        private void EndHold(string result)
+        {
+            _editAwaitingSpare = false;
+            if (_editAwaitSw != null)
+            {
+                Log.Write($"PERF edit.hold ms={_editAwaitSw.ElapsedMilliseconds} result={result}");
+                _editAwaitSw = null;
+            }
+            PerfBegin(EffectiveLiveMode(_currentPath) ? "edit.livewait" : "edit.riskywait");
+        }
+
+        private void DrainAwaitedEdit()
+        {
+            if (_disposed || _currentPath == null)
+            {
+                _editAwaitingSpare = false;
+                return;
+            }
+
+            string xaml;
+            try { xaml = ReadDocumentText(_currentPath); }
+            catch (Exception ex) { _editAwaitingSpare = false; Log.Write("Re-read for held edit failed: " + ex.Message); return; }
+
+            EndHold("spare");
+            if (TryPromoteSpare(xaml))
+            {
+                Log.Write("Held edit rendered on the newly ready spare (latest text).");
+            }
+        }
+
+        private void RenderAwaitedEditInPlace(string why)
+        {
+            if (_disposed || _client == null || _currentPath == null)
+            {
+                _editAwaitingSpare = false;
+                return;
+            }
+
+            EndHold("inplace");
+            Log.Write($"Held edit: {why}; rendering in place instead.");
+            try { _client.UpdateXaml(ReadDocumentText(_currentPath)); }
+            catch (Exception ex) { Log.Write("Held edit in-place render failed: " + ex.Message); }
         }
 
         private void OnSpareClosed(string reason)
@@ -904,6 +1022,11 @@ namespace WinUIXamlPreview.UI
                 Log.Write("TryPromoteSpare render send failed: " + ex.Message);
             }
 
+            // Any held edit is satisfied: this render used the document text read just before promotion.
+            _editAwaitingSpare = false;
+            // The replacement spare is warmed by OnRenderSucceeded, after this render paints. Starting it now
+            // was measured to be slower: startup and the render compete (spare ready 9.7-11.2 s vs 5.5 s).
+            _promotedRenderPending = true;
             return true;
         }
 
@@ -912,6 +1035,7 @@ namespace WinUIXamlPreview.UI
         {
             _restartAttempts = 0;
             _activeProcessRendered = true; // this process produced a frame — a later crash is a 2nd-render case
+            _promotedRenderPending = false;
 
             var retiring = _retiringClient;
             if (retiring != null)
@@ -1444,6 +1568,17 @@ namespace WinUIXamlPreview.UI
 
                 PerfEnd(err.NotDesignable ? "notdesignable" : "error");
 
+                // A promoted spare that answered with an error never rendered, so it is still fresh: a held
+                // edit (often the fix for a half-typed tag) can safely render in it now instead of waiting.
+                if (_promotedRenderPending)
+                {
+                    _promotedRenderPending = false;
+                    if (EditAwaitingSpare && !_activeProcessRendered)
+                    {
+                        RenderAwaitedEditInPlace("the previous render failed, so this process is still fresh");
+                    }
+                }
+
                 // P1 (VE1): a structurally non-designable root — a ResourceDictionary (styles/themes/
                 // control-template dictionary), a Window/WindowEx, or a $safeprojectname$ project-template
                 // placeholder — is not a broken preview. The surface classifies it distinctly (NotDesignable
@@ -1845,6 +1980,7 @@ namespace WinUIXamlPreview.UI
             // the spare + any surface we were mid-swap retiring.
             _spareGeneration++;
             _spareWarming = false;
+            _promotedRenderPending = false;
             if (_spareClient != null)
             {
                 _spareClient.Closed -= OnSpareClosed;
