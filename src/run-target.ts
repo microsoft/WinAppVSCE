@@ -311,6 +311,8 @@ export function sortRunTargets(
 		const rankDelta = kindRank(left.kind) - kindRank(right.kind);
 		if (rankDelta !== 0) { return rankDelta; }
 
+		// findFiles does not guarantee an order, so sort by path to keep the
+		// picker alphabetical within each kind.
 		return left.path.localeCompare(right.path);
 	});
 }
