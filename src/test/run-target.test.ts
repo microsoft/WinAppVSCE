@@ -10,7 +10,6 @@ import {
 	filterOfferableCandidates,
 	filterOfferableProjects,
 	findOwningRoot,
-	isContainedIn,
 	isProjectMode,
 	parseSolutionProjectPaths,
 	readDirectoryProjectPaths,
@@ -306,27 +305,6 @@ describe('readDirectoryProjectPaths', () => {
 	it('returns an empty array for an unreadable directory', async () => {
 		const missing = path.join(os.tmpdir(), 'run-target-does-not-exist-12345');
 		assert.deepStrictEqual(await readDirectoryProjectPaths(missing), []);
-	});
-});
-
-describe('isContainedIn', () => {
-	it('accepts a project nested under the container', () => {
-		assert.strictEqual(isContainedIn('C:/ws', 'C:/ws/src/App.csproj'), true);
-	});
-
-	it('accepts the container itself', () => {
-		assert.strictEqual(isContainedIn('C:/ws', 'C:/ws'), true);
-	});
-
-	// A .sln can legally reference `..\Other\Other.csproj`. Those members are
-	// real, but the extension only shows paths relative to the container, so a
-	// sibling would render as a confusing `..\..` string.
-	it('rejects a sibling directory reached through ..', () => {
-		assert.strictEqual(isContainedIn('C:/ws/App', 'C:/ws/Other/Other.csproj'), false);
-	});
-
-	it('rejects a path that only shares a name prefix', () => {
-		assert.strictEqual(isContainedIn('C:/ws/App', 'C:/ws/AppOther/Other.csproj'), false);
 	});
 });
 

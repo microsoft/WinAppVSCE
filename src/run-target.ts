@@ -1,6 +1,6 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
-import { isContainedInReal, isOfferableProject, PROJECT_SCAN_SKIP_DIRS, readProjectRunnability } from './project-detection';
+import { isContainedIn, isContainedInReal, isOfferableProject, PROJECT_SCAN_SKIP_DIRS, readProjectRunnability } from './project-detection';
 import { attributeValue, findElementsByLocalName, tryParseXml } from './xml-read';
 
 /** The extension-only target classification is never passed to the CLI. */
@@ -181,12 +181,6 @@ export async function readSolutionProjectPaths(solutionPath: string): Promise<st
 	return resolved.filter((_, index) => contained[index]);
 }
 
-/** True when `candidate` is inside `container` (or is `container` itself). */
-export function isContainedIn(container: string, candidate: string): boolean {
-	const relative = path.relative(path.resolve(container), path.resolve(candidate));
-	return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
 /** Reads only top-level projects, matching the CLI's directory-input rule. */
 export async function readDirectoryProjectPaths(directoryPath: string): Promise<string[]> {
 	return readDirectoryEntriesWithExtensions(directoryPath, PROJECT_FILE_EXTENSIONS);
@@ -345,8 +339,7 @@ export function findOwningRoot(
 
 	let best: WorkspaceRoot | undefined;
 	for (const root of roots) {
-		const relative = path.relative(root.path, filePath);
-		if (relative.startsWith('..') || path.isAbsolute(relative)) { continue; }
+		if (!isContainedIn(root.path, filePath)) { continue; }
 		if (!best || root.path.length > best.path.length) {
 			best = root;
 		}

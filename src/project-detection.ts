@@ -39,21 +39,22 @@ export const ALWAYS_SKIP_DIRS = [
 /** Real-path containment rejects symlink/junction escapes; absent paths cannot. */
 export async function isContainedInReal(container: string, candidate: string): Promise<boolean> {
 	const resolved = path.resolve(container, candidate);
-	if (!isLexicallyContained(path.resolve(container), resolved)) {
+	if (!isContainedIn(container, resolved)) {
 		return false;
 	}
 
 	try {
 		const realContainer = await fsp.realpath(container);
 		const realResolved = await fsp.realpath(resolved);
-		return isLexicallyContained(realContainer, realResolved);
+		return isContainedIn(realContainer, realResolved);
 	} catch {
 		return true;
 	}
 }
 
-function isLexicallyContained(container: string, candidate: string): boolean {
-	const relative = path.relative(container, candidate);
+/** True when `candidate` is inside `container` (or is `container` itself). */
+export function isContainedIn(container: string, candidate: string): boolean {
+	const relative = path.relative(path.resolve(container), path.resolve(candidate));
 	return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 

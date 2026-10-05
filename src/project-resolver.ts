@@ -52,10 +52,11 @@ export async function resolveProjectDirectory(
 	// 1) Explicit appDirectories setting.
 	const appDirs = deps.getAppDirectories();
 	if (appDirs.length > 0) {
-		// Validate that each entry stays within the workspace (see isContainedInWorkspace).
+		// Validate that each entry stays within the workspace, rejecting
+		// symlink and junction escapes as well as lexical ones.
 		const validDirs: string[] = [];
 		for (const dir of appDirs) {
-			if (await isContainedInWorkspace(workspacePath, dir)) {
+			if (await isContainedInReal(workspacePath, dir)) {
 				validDirs.push(dir);
 			}
 		}
@@ -115,9 +116,4 @@ export async function resolveProjectDirectory(
 		: 'Which project would you like to target?';
 
 	return deps.pickDirectory(items, placeHolder);
-}
-
-/** Uses {@link isContainedInReal} for workspace containment. */
-function isContainedInWorkspace(workspacePath: string, dir: string): Promise<boolean> {
-	return isContainedInReal(workspacePath, dir);
 }
