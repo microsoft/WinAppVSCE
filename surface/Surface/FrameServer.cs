@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -108,16 +109,55 @@ internal sealed class FrameServer
         }
     }
 
-    /// <summary>Reads newline-delimited JSON messages until the client closes the stream.</summary>
+    /// <summary>
+    /// Reads newline-delimited JSON messages until the client closes the stream. A dedicated receive thread
+    /// queues lines so the socket keeps draining while a render blocks this thread; this loop handles them in
+    /// order. P4: an UpdateXaml that is immediately followed by another queued UpdateXaml is superseded and
+    /// skipped (latest wins), so a typing burst that outpaces rendering renders only the newest text instead
+    /// of every stale intermediate state. Only adjacent UpdateXaml runs collapse; every other message
+    /// (Resize, SetCanvasSize, native transitions, selection, property edits) keeps its exact order.
+    /// </summary>
     private void ReadLoop(NetworkStream stream)
     {
-        using var reader = new StreamReader(stream, new UTF8Encoding(false), false, 64 * 1024, leaveOpen: true);
-        string? line;
-        while ((line = reader.ReadLine()) != null)
+        var inbox = new Queue<string>();
+        var gate = new object();
+        var closed = false;
+        Exception? fault = null;
+
+        var receiver = new Thread(() =>
         {
-            line = line.Trim();
-            if (line.Length == 0)
+            try
             {
+                using var reader = new StreamReader(stream, new UTF8Encoding(false), false, 64 * 1024, leaveOpen: true);
+                string? received;
+                while ((received = reader.ReadLine()) != null)
+                {
+                    received = received.Trim();
+                    if (received.Length == 0) continue;
+                    lock (gate) { inbox.Enqueue(received); Monitor.Pulse(gate); }
+                }
+            }
+            catch (Exception ex) { lock (gate) fault = ex; }
+            finally { lock (gate) { closed = true; Monitor.PulseAll(gate); } }
+        }) { IsBackground = true, Name = "surface-recv" };
+        receiver.Start();
+
+        while (true)
+        {
+            string line;
+            string? next;
+            lock (gate)
+            {
+                while (inbox.Count == 0 && !closed) Monitor.Wait(gate);
+                if (fault != null) ExceptionDispatchInfo.Capture(fault).Throw();
+                if (inbox.Count == 0) break;
+                line = inbox.Dequeue();
+                next = inbox.Count > 0 ? inbox.Peek() : null;
+            }
+
+            if (next != null && IsUpdateXaml(line) && IsUpdateXaml(next))
+            {
+                App.Log("<- UpdateXaml superseded by a newer queued edit; skipped.");
                 continue;
             }
 
@@ -132,6 +172,21 @@ internal sealed class FrameServer
             }
         }
         App.Log("Client stream reached EOF.");
+    }
+
+    // A well-formed UpdateXaml (string type + string xaml). Malformed ones are never skipped, so their
+    // parse error is still reported.
+    private static bool IsUpdateXaml(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == "UpdateXaml" &&
+                root.TryGetProperty("xaml", out var x) && x.ValueKind == JsonValueKind.String;
+        }
+        catch (JsonException) { return false; }
     }
 
     private void HandleMessage(string json)

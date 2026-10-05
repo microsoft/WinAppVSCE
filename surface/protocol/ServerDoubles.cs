@@ -36,6 +36,8 @@ namespace Surface
         public (int Id, string Name, string Value)? Property;
         public int Renders;
         public int Hosts;
+        public List<string> Rendered = new();
+        public ManualResetEventSlim? RenderGate;
         public RenderResult Render = new()
         {
             Success = true,
@@ -49,8 +51,10 @@ namespace Surface
         };
         public Task<RenderResult> RenderAsync(string xaml, double width, double height, double scale)
         {
+            RenderGate?.Wait(TimeSpan.FromSeconds(10)); // test seam: hold the render so later input queues
             LastRender = (xaml, width, height, scale);
             Renders++;
+            Rendered.Add(xaml);
             return Task.FromResult(Render);
         }
         public Task<LiveResult> HostLiveAsync(string xaml, bool prepareWindow)

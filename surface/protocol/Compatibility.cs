@@ -250,6 +250,33 @@ internal static class Compatibility
         Silent("{\"type\":\"SetCanvasSize\",\"width\":400,\"height\":300}");
         Check(host.Canvas == (400d, 300d), "canvas override stored without frame reply");
 
+        // P4 latest-wins: while a render is in flight, adjacent queued UpdateXaml collapse to the newest;
+        // a non-UpdateXaml message between edits is a barrier and nothing crosses it.
+        string Upd(string x) => "{\"type\":\"UpdateXaml\",\"xaml\":\"" + x + "\"}";
+        List<string> Burst(params string[] lines)
+        {
+            host.Rendered.Clear();
+            using var gate = new ManualResetEventSlim(false);
+            host.RenderGate = gate;
+            server.Write(lines[0]);
+            Thread.Sleep(200); // first edit is now blocked inside RenderAsync
+            foreach (var l in lines.Skip(1)) server.Write(l);
+            server.Write("{\"type\":\"Ping\"}");
+            Thread.Sleep(300); // remaining input queued behind the in-flight render
+            gate.Set();
+            var replies = server.ReadUntilPong();
+            host.RenderGate = null;
+            Check(replies.Count(r => (string?)r["type"] != "Error") == host.Rendered.Count, "one frame reply per performed render");
+            return new List<string>(host.Rendered);
+        }
+        Check(Burst(Upd("e1"), Upd("e2"), Upd("e3"), Upd("e4")).SequenceEqual(new[] { "e1", "e4" }),
+            "queued edits collapse to the newest");
+        Check(Burst(Upd("b1"), Upd("b2"), "{\"type\":\"Resize\",\"width\":300,\"height\":200}", Upd("b3"), Upd("b4"))
+            .SequenceEqual(new[] { "b1", "b2", "b2", "b4" }), "Resize is an ordering barrier for coalescing");
+        Check(host.LastRender == ("b4", 300d, 200d, 2d), "latest edit renders at the latest size");
+        Check(Burst(Upd("m1"), "{\"type\":\"UpdateXaml\"}", Upd("m2")).SequenceEqual(new[] { "m1", "m2" }),
+            "malformed UpdateXaml is never coalesced away");
+
         Silent("{\"type\":\"SetMode\",\"design\":true}");
         Check(host.Design, "design true");
         Silent("{\"type\":\"SetMode\",\"design\":\"true\"}");
@@ -345,8 +372,14 @@ internal static class Compatibility
         {
             _writer.WriteLine(json);
             _writer.WriteLine("{\"type\":\"Ping\"}");
+            return ReadUntilPong(json == "{\"type\":\"Ping\"}");
+        }
+
+        public void Write(string json) => _writer.WriteLine(json);
+
+        public JsonNode[] ReadUntilPong(bool commandIsPing = false)
+        {
             var replies = new List<JsonNode>();
-            var commandIsPing = json == "{\"type\":\"Ping\"}";
             while (true)
             {
                 var line = _reader.ReadLine() ?? throw new InvalidOperationException("Server unexpectedly closed");
