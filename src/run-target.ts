@@ -2,6 +2,7 @@ import * as fsp from 'fs/promises';
 import * as path from 'path';
 import { isContainedIn, isContainedInReal, isOfferableProject, PROJECT_SCAN_SKIP_DIRS, readProjectRunnability } from './project-detection';
 import { attributeValue, findElementsByLocalName, tryParseXml } from './xml-read';
+import type { WorkspaceRoot } from './workspace';
 
 /** The extension-only target classification is never passed to the CLI. */
 export type RunTargetKind = 'project' | 'solution' | 'folder' | 'unknown';
@@ -31,14 +32,6 @@ export const RUN_TARGET_DISPLAY_LIMIT = 10;
 /** VS Code-compatible exclude glob for project-file discovery. */
 export const PROJECT_FILE_EXCLUDE_GLOB =
 	`{${[...PROJECT_SCAN_SKIP_DIRS].map(d => `**/${d}/**`).join(',')}}`;
-
-/** A workspace folder, reduced to what target discovery needs. */
-export interface WorkspaceRoot {
-	/** The folder's display name (`vscode.WorkspaceFolder.name`). */
-	name: string;
-	/** Absolute filesystem path of the folder. */
-	path: string;
-}
 
 /** A candidate target for `winapp run`. */
 export interface RunTargetCandidate {

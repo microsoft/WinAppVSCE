@@ -27,12 +27,11 @@ import {
 } from './folder-picker';
 import {
 	getRunSettings,
-	getWorkspaceRoots,
-	NO_WORKSPACE_MESSAGE,
 	pickRunTarget,
 	pickSolutionProject,
 	resolveRunOptions
 } from './run-utils';
+import { getWorkspaceRoots, NO_WORKSPACE_MESSAGE } from './workspace';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';

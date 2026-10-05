@@ -25,9 +25,9 @@ import {
 	RUN_TARGET_DISPLAY_LIMIT,
 	sortRunTargets,
 	type RunTargetCandidate,
-	type RunTargetKind,
-	type WorkspaceRoot
+	type RunTargetKind
 } from './run-target';
+import { getWorkspaceRoots, NO_WORKSPACE_MESSAGE, type WorkspaceRoot } from './workspace';
 import {
 	COMMON_CONFIGURATIONS,
 	SUPPORTED_ARCHITECTURES,
@@ -40,17 +40,6 @@ import {
 const PROJECT_PICKER_DETAIL = 'Open a file picker for .csproj, .sln, or .slnx';
 
 const BUILD_OUTPUT_SEARCH_DETAIL = 'Scan the workspace for folders containing .exe files';
-
-/** Every run entry point reports a missing workspace identically. */
-export const NO_WORKSPACE_MESSAGE = 'No workspace folder open';
-
-/** Returns all workspace roots; never collapses multi-root workspaces. */
-export function getWorkspaceRoots(): WorkspaceRoot[] {
-	return (vscode.workspace.workspaceFolders ?? []).map(folder => ({
-		name: folder.name,
-		path: folder.uri.fsPath
-	}));
-}
 
 /** Root owning the active editor, used only as a sort hint. */
 function getPreferredRootPath(roots: readonly WorkspaceRoot[]): string | undefined {

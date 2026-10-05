@@ -16,9 +16,9 @@ import {
 	readSolutionProjectPaths,
 	readTargetProjects,
 	sortRunTargets,
-	type RunTargetCandidate,
-	type WorkspaceRoot
+	type RunTargetCandidate
 } from '../run-target';
+import type { WorkspaceRoot } from '../workspace';
 
 const rootA: WorkspaceRoot = { name: 'AppA', path: path.resolve('C:/ws/AppA') };
 const rootB: WorkspaceRoot = { name: 'AppB', path: path.resolve('C:/ws/AppB') };
