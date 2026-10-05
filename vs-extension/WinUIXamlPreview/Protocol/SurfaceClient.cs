@@ -118,9 +118,9 @@ namespace WinUIXamlPreview.Protocol
             // Matched-host (version-matched) launch stages a pre-built MERGED core+toolkit design-time
             // resources.pri (host-side StageUserPri copies it over <host>\Surface.pri) so third-party
             // component templates resolve at the target WASDK version. Only the version-matched leg passes
-            // this; the bundled 2.2.0 leg leaves it null so its launch is byte-for-byte unchanged. The path
-            // must point INTO a per-session run-copy of the cached host (StageUserPri overwrites in place),
-            // never the pristine cache — see MatchedHostResolver.
+            // this; the bundled 2.2.0 leg leaves it null so its launch is byte-for-byte unchanged. The supplied
+            // exe/pri belong to the pristine, read-only cache entry; StageUserPri overwrites in place, so it
+            // only ever runs against the per-process run-copy made below.
             if (!string.IsNullOrEmpty(_userPri))
             {
                 // Every PROCESS gets its own mutable PRI, including warmed spares for the same document.

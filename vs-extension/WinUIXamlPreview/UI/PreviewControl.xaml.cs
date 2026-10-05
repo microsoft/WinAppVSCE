@@ -95,7 +95,6 @@ namespace WinUIXamlPreview.UI
         private bool _upgradeInProgress;
         private bool _fullFidelityCancelled;   // user cancelled the upgrade for the current document
         private MatchedHostBuild? _upgradeBuild; // shared per-version build we hold interest in (release on cancel/dispose/promote)
-        private string? _upgradeRunRoot;        // transient per-session run-copy dir of the matched host (deleted on teardown)
         private DispatcherTimer? _fidelityHideTimer;
         // Versions whose background build already FAILED this VS session — don't auto-retry (no retry loop).
         private static readonly System.Collections.Generic.HashSet<string> FailedVersions =
@@ -1009,7 +1008,7 @@ namespace WinUIXamlPreview.UI
             }
             else
             {
-                ShowFidelityBuilding(version!, building: false); // verified cache present — just a quick run-copy
+                ShowFidelityBuilding(version!, building: false); // verified cache present — quick validate + launch
             }
 
             _ = System.Threading.Tasks.Task.Run(async () =>
@@ -1041,29 +1040,24 @@ namespace WinUIXamlPreview.UI
                 }
                 Log.Write($"PERF upgrade.build ms={upSw.ElapsedMilliseconds} kind={kind}");
 
-                // 2. Run-copy the verified cached host into a transient per-session dir (never mutate the cache).
-                var runRoot = Path.Combine(Path.GetTempPath(), "WinUIXamlPreview", "run", Guid.NewGuid().ToString("N"));
-                var rcSw = System.Diagnostics.Stopwatch.StartNew();
-                var prepared = completedHost == null ? null : MatchedHostResolver.PrepareMatchedRunCopy(completedHost, runRoot, Log.Write);
-                Log.Write($"PERF upgrade.runcopy ms={rcSw.ElapsedMilliseconds} ok={prepared != null}");
-                if (prepared == null)
+                // 2. Launch straight from the verified, read-only cache entry. SurfaceClient makes the one
+                //    validated per-process run-copy that gets the mutable merged PRI (the cache is never mutated).
+                if (completedHost == null)
                 {
-                    TryDeleteDir(runRoot);
                     await MarshalAsync(() => { if (gen == _upgradeGeneration) EndUpgrade(gen, note: null); });
                     return;
                 }
 
-                var matchedExe = prepared.Value.exe;
-                var matchedPri = prepared.Value.pri;
+                var matchedExe = Path.Combine(completedHost, "Surface.exe");
+                var matchedPri = Path.Combine(completedHost, "Surface.designtime.pri");
 
                 // Cancellation/supersession guard BEFORE we spawn the matched host (the WarmSpare-on-matched
-                // checkpoint): if the user cancelled or switched documents during the build/run-copy, don't spend
+                // checkpoint): if the user cancelled or switched documents during the build, don't spend
                 // a Surface.exe on it. The promote guard below is the second, authoritative checkpoint.
                 bool superseded = false;
                 await MarshalAsync(() => superseded = _disposed || gen != _upgradeGeneration || _fullFidelityCancelled);
                 if (superseded)
                 {
-                    TryDeleteDir(runRoot);
                     return;
                 }
 
@@ -1078,7 +1072,6 @@ namespace WinUIXamlPreview.UI
                 {
                     Log.Write("Fidelity upgrade: matched host failed to start: " + ex.Message);
                     try { matched?.Dispose(); } catch { }
-                    TryDeleteDir(runRoot);
                     await MarshalAsync(() => { if (gen == _upgradeGeneration) EndUpgrade(gen, note: null); });
                     return;
                 }
@@ -1091,11 +1084,10 @@ namespace WinUIXamlPreview.UI
                     if (_disposed || gen != _upgradeGeneration)
                     {
                         try { readyMatched!.Dispose(); } catch { }
-                        TryDeleteDir(runRoot);
                         return;
                     }
 
-                    PromoteMatched(readyMatched!, matchedExe, matchedPri, runRoot, version!);
+                    PromoteMatched(readyMatched!, matchedExe, matchedPri, version!);
                 });
             });
         }
@@ -1105,7 +1097,7 @@ namespace WinUIXamlPreview.UI
         /// but for the matched host + its merged pri). The old bundled client is silenced and retired once the
         /// matched render lands; future crash-recycle spares now match the matched host. UI thread only.
         /// </summary>
-        private void PromoteMatched(SurfaceClient matched, string matchedExe, string matchedPri, string runRoot, string version)
+        private void PromoteMatched(SurfaceClient matched, string matchedExe, string matchedPri, string version)
         {
             string xaml;
             try
@@ -1117,7 +1109,6 @@ namespace WinUIXamlPreview.UI
             {
                 Log.Write("PromoteMatched: could not read current document (" + ex.Message + "); staying on bundled.");
                 try { matched.Dispose(); } catch { }
-                TryDeleteDir(runRoot);
                 EndUpgrade(_upgradeGeneration, note: null);
                 return;
             }
@@ -1166,7 +1157,6 @@ namespace WinUIXamlPreview.UI
             _suppressAutoRestart = false;
             _activeSurfaceExe = matchedExe;
             _activeUserPri = matchedPri;
-            _upgradeRunRoot = runRoot;
 
             try
             {
@@ -1218,11 +1208,6 @@ namespace WinUIXamlPreview.UI
         }
 
         private System.Threading.Tasks.Task MarshalAsync(Action action) => Dispatcher.InvokeAsync(action).Task;
-
-        private static void TryDeleteDir(string dir)
-        {
-            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch { }
-        }
 
         // ---- fidelity banner (subtle, bottom-docked, non-blocking) ---------
 
@@ -1893,14 +1878,8 @@ namespace WinUIXamlPreview.UI
                 client.Dispose();
             }
 
-            // Now that every client rooted in the matched run-copy is gone, delete the transient run-copy dir.
-            var runRoot = _upgradeRunRoot;
-            _upgradeRunRoot = null;
+            // Every client is gone; each removed its own private run-copy on Dispose.
             _activeUserPri = null;
-            if (runRoot != null)
-            {
-                TryDeleteDir(runRoot);
-            }
         }
 
         public void Dispose()

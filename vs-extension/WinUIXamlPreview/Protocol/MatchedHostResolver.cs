@@ -54,16 +54,6 @@ internal static class MatchedHostResolver
         };
     }
 
-    public static (string exe, string pri)? PrepareMatchedRunCopy(string host, string runRoot, Action<string>? log = null)
-    {
-        try
-        {
-            HostPayload.CreateRunCopy(host, runRoot);
-            return (Path.Combine(runRoot, "Surface.exe"), Path.Combine(runRoot, "Surface.designtime.pri"));
-        }
-        catch (Exception ex) { log?.Invoke("Matched run-copy failed: " + ex); return null; }
-    }
-
     // Missing source identity is an error, never a silently accepted old cache marker.
     public static string ShippedEngineStamp
     {
