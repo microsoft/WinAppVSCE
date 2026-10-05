@@ -69,30 +69,37 @@ export async function selectFolder(title: string, defaultUri?: vscode.Uri): Prom
 	return result?.[0]?.fsPath;
 }
 
-/** Find build-output folders with cancellable VS Code progress. */
-export async function findBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
-	const outputFolders = await vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title: 'Searching for build output folders...', cancellable: true },
-		async (_progress, token) => {
-			// The token must reach findFiles itself: cancelling only a flag we
-			// read afterwards leaves the (expensive) scan running to completion,
-			// so the Cancel button appears to do nothing.
-			const exeMatches = await vscode.workspace.findFiles(
-				new vscode.RelativePattern(workspacePath, '**/*.exe'),
-				BUILD_OUTPUT_EXCLUDE_GLOB,
-				BUILD_OUTPUT_MAX_RESULTS,
-				token
-			);
+/** Shown by both the single-root and multi-root build-output scans. */
+const BUILD_OUTPUT_PROGRESS_TITLE = 'Searching for build output folders...';
 
-			if (token.isCancellationRequested) {
-				return undefined;
-			}
-
-			return deduplicateBuildOutputFolders(exeMatches.map(m => m.fsPath), workspacePath);
-		}
+/** Scans one root; the caller owns the progress UI and the cancellation token. */
+async function scanBuildOutputFolders(
+	workspacePath: string,
+	token: vscode.CancellationToken
+): Promise<string[] | undefined> {
+	// The token must reach findFiles itself: cancelling only a flag we
+	// read afterwards leaves the (expensive) scan running to completion,
+	// so the Cancel button appears to do nothing.
+	const exeMatches = await vscode.workspace.findFiles(
+		new vscode.RelativePattern(workspacePath, '**/*.exe'),
+		BUILD_OUTPUT_EXCLUDE_GLOB,
+		BUILD_OUTPUT_MAX_RESULTS,
+		token
 	);
 
-	return outputFolders;
+	if (token.isCancellationRequested) {
+		return undefined;
+	}
+
+	return deduplicateBuildOutputFolders(exeMatches.map(m => m.fsPath), workspacePath);
+}
+
+/** Find build-output folders with cancellable VS Code progress. */
+export async function findBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
+	return vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: BUILD_OUTPUT_PROGRESS_TITLE, cancellable: true },
+		(_progress, token) => scanBuildOutputFolders(workspacePath, token)
+	);
 }
 
 /** Pick build output, always leaving Browse available. */
@@ -179,19 +186,27 @@ async function findProjectTargets(
 
 /** Find `.exe` output folders across every workspace root. */
 async function findBuildOutputTargets(roots: readonly WorkspaceRoot[]): Promise<RunTargetCandidate[] | undefined> {
-	const candidates: RunTargetCandidate[] = [];
+	// One progress notification for the whole sweep. Calling the single-root
+	// helper per root would stack a separate popup, and a separate Cancel
+	// button, on every folder in a multi-root workspace.
+	return vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: BUILD_OUTPUT_PROGRESS_TITLE, cancellable: true },
+		async (_progress, token) => {
+			const candidates: RunTargetCandidate[] = [];
 
-	for (const root of roots) {
-		const folders = await findBuildOutputFolders(root.path);
-		if (!folders) {
-			return undefined;
-		}
-		for (const folder of folders) {
-			candidates.push({ kind: 'folder', path: folder, root });
-		}
-	}
+			for (const root of roots) {
+				const folders = await scanBuildOutputFolders(root.path, token);
+				if (!folders) {
+					return undefined;
+				}
+				for (const folder of folders) {
+					candidates.push({ kind: 'folder', path: folder, root });
+				}
+			}
 
-	return candidates;
+			return candidates;
+		}
+	);
 }
 
 /** Map each discovered solution to its member projects. */
