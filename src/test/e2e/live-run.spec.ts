@@ -397,15 +397,28 @@ async function runCommandPalette(page: Page, commandLabel: string): Promise<void
     await page.keyboard.press('Enter');
 }
 
+/** Rows, not the widget, signal that a QuickPick has finished populating. */
+async function waitForQuickPickRows(page: Page): Promise<void> {
+    await expect(page.locator('.quick-input-widget .quick-input-list .monaco-list-row').first())
+        .toBeVisible({ timeout: 60_000 });
+}
+
+/** Take whatever a QuickPick already has highlighted. */
+async function acceptQuickPick(page: Page): Promise<void> {
+    await waitForQuickPickRows(page);
+    await page.waitForTimeout(500);
+    await page.keyboard.press('Enter');
+}
+
 /**
  * Answer an open QuickPick by filtering to `label` and accepting it.
  *
- * Typing rather than clicking a row keeps this independent of where the item
- * lands in the list, which varies with the architectures the host reports.
+ * Filtering rather than clicking a row keeps this independent of where the
+ * item lands in the list, which varies with the architectures the host reports.
  */
 async function pickQuickItem(page: Page, label: string): Promise<void> {
+    await waitForQuickPickRows(page);
     const input = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
-    await expect(input).toBeVisible({ timeout: 30_000 });
     await input.fill(label);
     await page.waitForTimeout(500);
     await page.keyboard.press('Enter');
@@ -570,10 +583,13 @@ test.describe('live winapp run (project mode)', () => {
 
             await runCommandPalette(page, 'WinApp: Run Application With Options');
 
+            // With Options always prompts for the target, even when the
+            // workspace holds exactly one project.
+            await acceptQuickPick(page);
             await pickQuickItem(page, 'Release');
             await pickQuickItem(page, 'x64');
             // The toggle picker is multi-select; accept it with nothing chosen.
-            await page.keyboard.press('Enter');
+            await acceptQuickPick(page);
 
             await waitForCliTerminal(page);
 
