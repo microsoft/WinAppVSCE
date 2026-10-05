@@ -12,7 +12,6 @@ import {
 	resolveWorkingDirectory
 } from './winapp-cli-utils';
 import { detectProjects, BUILD_OUTPUT_EXCLUDE_GLOB } from './project-detection';
-import { classifyRunTarget } from './run-target';
 import {
 	buildRunArgs,
 	resolveDebugInput,
@@ -829,16 +828,6 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 			return undefined;
 		}
 
-		// Classification must use the *resolved* path. `classifyRunTarget`
-		// stats the path, and an unresolved relative path would stat against
-		// the extension host's process cwd instead of the workspace — a
-		// relative project directory would then classify as `unknown` and be
-		// rejected by the folder-mode rule for having no .exe in it.
-		const resolvedInput = input
-			? (path.isAbsolute(input) ? input : path.resolve(cwd, input))
-			: undefined;
-		const kind = resolvedInput ? await classifyRunTarget(resolvedInput) : 'unknown';
-
 		// The CLI reports bad option values itself; these three are rejected
 		// here because they break the debug session, so it never sees them.
 		const optionErrors = validateDebugRunOptions(runOptionsFromDebugConfig(config, input ?? ''));
@@ -848,7 +837,7 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		}
 
 		if (input) {
-			const result = await validateRunInput(input, cwd, kind, config.input ? 'input' : 'inputFolder');
+			const result = await validateRunInput(input, cwd, config.input ? 'input' : 'inputFolder');
 			if (!result.valid) {
 				const openDebugConfigurationAction = 'Open debug configuration';
 				void vscode.window.showErrorMessage(result.message, openDebugConfigurationAction).then(

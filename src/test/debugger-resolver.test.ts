@@ -93,12 +93,12 @@ describe('validateRunInput (folder mode)', () => {
 	});
 
 	it('returns valid for a directory containing an .exe file', async () => {
-		const result = await validateRunInput(validDir, tmpDir, 'folder');
+		const result = await validateRunInput(validDir, tmpDir);
 		assert.equal(result.valid, true);
 	});
 
 	it('returns not-found when the path does not exist', async () => {
-		const result = await validateRunInput('C:\\does\\not\\exist', tmpDir, 'folder');
+		const result = await validateRunInput('C:\\does\\not\\exist', tmpDir);
 		assert.equal(result.valid, false);
 		if (!result.valid) {
 			assert.equal(result.reason, 'not-found');
@@ -111,65 +111,34 @@ describe('validateRunInput (folder mode)', () => {
 		}
 	});
 
-	it('returns not-directory when the path is a file', async () => {
-		const result = await validateRunInput(aFile, tmpDir, 'folder');
-		assert.equal(result.valid, false);
-		if (!result.valid) {
-			assert.equal(result.reason, 'not-directory');
-			assert.equal(
-				result.message,
-				`The configured "input" is not a directory or a project file: ${aFile}. `
-					+ 'Update "input" in launch.json to point to a project, a solution, or the folder containing your built application.'
-			);
-		}
+	// The CLI rejects a file it cannot build with a better message than a
+	// guess here would, so a file input is passed straight through.
+	it('accepts a file input and defers the verdict to the CLI', async () => {
+		const result = await validateRunInput(aFile, tmpDir);
+		assert.equal(result.valid, true);
 	});
 
-	it('returns no-exe when the directory has no .exe files', async () => {
-		const result = await validateRunInput(emptyDir, tmpDir, 'folder');
+	it('returns nothing-runnable when the directory holds no project or .exe', async () => {
+		const result = await validateRunInput(emptyDir, tmpDir);
 		assert.equal(result.valid, false);
 		if (!result.valid) {
-			assert.equal(result.reason, 'no-exe');
+			assert.equal(result.reason, 'nothing-runnable');
 			assert.equal(
 				result.message,
-				`The configured "input" does not contain any .exe files: ${emptyDir}. `
+				`The configured "input" contains no project or .exe files: ${emptyDir}. `
 					+ 'Build your project first, or update "input" in launch.json to point to '
 					+ 'a project, a solution, or the folder containing your built application.'
 			);
 		}
 	});
 
-	// 'unknown' — not 'folder' — is the kind that reaches the no-exe branch in
-	// production: classifyRunTarget only returns 'folder' for a directory that
-	// already contains an .exe, so a real no-exe directory arrives as 'unknown'.
-	it('returns no-exe for an unknown-kind directory with no .exe files', async () => {
-		const result = await validateRunInput(emptyDir, tmpDir, 'unknown');
-		assert.equal(result.valid, false);
-		if (!result.valid) {
-			assert.equal(result.reason, 'no-exe');
-			assert.ok(result.message.includes('does not contain any .exe files'));
-		}
-	});
-
-	it('accepts an unknown-kind directory that does contain an .exe', async () => {
-		const result = await validateRunInput(validDir, tmpDir, 'unknown');
-		assert.equal(result.valid, true);
-	});
-
-	it('returns not-found for an unknown-kind path that does not exist', async () => {
-		const result = await validateRunInput('nonexistent-subdir', tmpDir, 'unknown');
-		assert.equal(result.valid, false);
-		if (!result.valid) {
-			assert.equal(result.reason, 'not-found');
-		}
-	});
-
 	it('resolves relative paths against the provided cwd', async () => {
-		const result = await validateRunInput('with-exe', tmpDir, 'folder');
+		const result = await validateRunInput('with-exe', tmpDir);
 		assert.equal(result.valid, true);
 	});
 
 	it('rejects relative paths that do not exist against the cwd', async () => {
-		const result = await validateRunInput('nonexistent-subdir', tmpDir, 'folder');
+		const result = await validateRunInput('nonexistent-subdir', tmpDir);
 		assert.equal(result.valid, false);
 		if (!result.valid) {
 			assert.equal(result.reason, 'not-found');
@@ -177,7 +146,7 @@ describe('validateRunInput (folder mode)', () => {
 	});
 
 	it('uses the legacy property name in messages when asked', async () => {
-		const result = await validateRunInput('nonexistent-subdir', tmpDir, 'folder', 'inputFolder');
+		const result = await validateRunInput('nonexistent-subdir', tmpDir, 'inputFolder');
 		assert.equal(result.valid, false);
 		if (!result.valid) {
 			assert.ok(result.message.includes('"inputFolder"'));
@@ -207,41 +176,41 @@ describe('validateRunInput (project mode)', () => {
 	});
 
 	// The whole point of project mode is that build output does not exist yet,
-	// so the folder-mode .exe requirement must not be applied.
+	// so an unbuilt project must never be rejected for lacking an .exe.
 	it('accepts a project file with no build output', async () => {
-		const result = await validateRunInput(projectFile, tmpDir, 'project');
+		const result = await validateRunInput(projectFile, tmpDir);
 		assert.equal(result.valid, true);
 	});
 
 	it('accepts a solution file', async () => {
-		const result = await validateRunInput(solutionFile, tmpDir, 'solution');
+		const result = await validateRunInput(solutionFile, tmpDir);
 		assert.equal(result.valid, true);
 	});
 
-	it('accepts a directory containing a project', async () => {
-		const result = await validateRunInput(projectDir, tmpDir, 'project');
+	it('accepts a directory containing a project but no build output', async () => {
+		const result = await validateRunInput(projectDir, tmpDir);
 		assert.equal(result.valid, true);
 	});
 
 	it('resolves relative project paths against the provided cwd', async () => {
-		const result = await validateRunInput('MyApp\\MyApp.csproj', tmpDir, 'project');
+		const result = await validateRunInput('MyApp\\MyApp.csproj', tmpDir);
 		assert.equal(result.valid, true);
 	});
 
 	it('rejects a project that does not exist', async () => {
-		const result = await validateRunInput('Missing\\Missing.csproj', tmpDir, 'project');
+		const result = await validateRunInput('Missing\\Missing.csproj', tmpDir);
 		assert.equal(result.valid, false);
 		if (!result.valid) {
 			assert.equal(result.reason, 'not-found');
-			assert.ok(result.message.includes('project does not exist'));
+			assert.ok(result.message.includes('path does not exist'));
 		}
 	});
 
-	it('names the solution in the error when a solution is missing', async () => {
-		const result = await validateRunInput('Missing.sln', tmpDir, 'solution');
-		assert.equal(result.valid, false);
-		if (!result.valid) {
-			assert.ok(result.message.includes('solution does not exist'));
-		}
+	it('accepts a directory holding only a file-based app', async () => {
+		const fileBasedDir = path.join(tmpDir, 'script-app');
+		await fs.promises.mkdir(fileBasedDir);
+		await fs.promises.writeFile(path.join(fileBasedDir, 'app.cs'), '');
+		const result = await validateRunInput(fileBasedDir, tmpDir);
+		assert.equal(result.valid, true);
 	});
 });

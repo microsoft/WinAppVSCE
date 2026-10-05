@@ -196,9 +196,9 @@ describe('buildRunArgs matches the real winapp run schema', { skip: skipReason }
 
 	// The CLI grew `.cs` file-based apps after this extension shipped its
 	// classifier, and nothing caught it: a `.cs` input classified as `unknown`,
-	// which made launch.json reject it as "not a directory or a project file"
-	// before the CLI ever saw the path. Deriving the list from the CLI's own
-	// help text means the next extension is a test failure, not a bug report.
+	// so launch.json rejected the path before the CLI ever saw it. Deriving the
+	// list from the CLI's own help text means the next extension is a test
+	// failure, not a bug report.
 	it('classifies every input kind the CLI documents', () => {
 		const description = requireSchema().inputDescription;
 		// Extensions are written lowercase in the help text; the case-sensitive

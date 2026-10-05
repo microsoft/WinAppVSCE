@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { glob } from 'glob';
+import { classifyRunTargetEntries } from './run-target';
 
 export interface DebuggerExtensionRequirement {
 	id: string;
@@ -11,7 +11,7 @@ export type RunInputValidation = {
 	valid: true;
 } | {
 	valid: false;
-	reason: 'not-found' | 'not-directory' | 'no-exe';
+	reason: 'not-found' | 'nothing-runnable';
 	message: string;
 };
 
@@ -24,34 +24,18 @@ function pointAt(propertyName: string, target: string): string {
 	return `update "${propertyName}" in launch.json to point to ${target}.`;
 }
 
-function capitalize(text: string): string {
-	return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-/** Only folder-mode input must already contain an executable. */
+/**
+ * The CLI decides project vs folder mode, so this only catches the one
+ * launch.json mistake it cannot report well: a path that exists but holds
+ * nothing runnable, which is almost always a stale or unbuilt directory.
+ */
 export async function validateRunInput(
 	input: string,
 	cwd: string,
-	kind: 'project' | 'solution' | 'folder' | 'unknown',
 	propertyName: string = 'input'
 ): Promise<RunInputValidation> {
 	const resolved = path.isAbsolute(input) ? input : path.resolve(cwd, input);
 	const stat = await fs.promises.stat(resolved).catch(() => undefined);
-
-	if (kind === 'project' || kind === 'solution') {
-		if (!stat) {
-			const noun = kind === 'solution' ? 'solution' : 'project';
-			return {
-				valid: false,
-				reason: 'not-found',
-				message: `The configured "${propertyName}" ${noun} does not exist: ${input}. `
-					+ capitalize(pointAt(propertyName, `your ${noun} file`))
-			};
-		}
-		// A project/solution input may be the file itself or a directory
-		// containing one; both are valid and the CLI resolves the difference.
-		return { valid: true };
-	}
 
 	if (!stat) {
 		return {
@@ -62,21 +46,22 @@ export async function validateRunInput(
 		};
 	}
 
+	// A file input names a project or an executable; the CLI reports anything
+	// else it cannot build far better than a guess here would.
 	if (!stat.isDirectory()) {
-		return {
-			valid: false,
-			reason: 'not-directory',
-			message: `The configured "${propertyName}" is not a directory or a project file: ${input}. `
-				+ capitalize(pointAt(propertyName, RUNNABLE_TARGET))
-		};
+		return { valid: true };
 	}
 
-	const exesInFolder = await glob('*.exe', { cwd: resolved, absolute: true, nocase: true });
-	if (exesInFolder.length === 0) {
+	const entries = await fs.promises.readdir(resolved).catch(() => undefined);
+	if (!entries) {
+		return { valid: true };
+	}
+
+	if (classifyRunTargetEntries(entries) === 'unknown') {
 		return {
 			valid: false,
-			reason: 'no-exe',
-			message: `The configured "${propertyName}" does not contain any .exe files: ${input}. `
+			reason: 'nothing-runnable',
+			message: `The configured "${propertyName}" contains no project or .exe files: ${input}. `
 				+ BUILD_FIRST + pointAt(propertyName, RUNNABLE_TARGET)
 		};
 	}
