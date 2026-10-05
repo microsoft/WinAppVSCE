@@ -38,6 +38,15 @@ describe('classifyRunTargetFile', () => {
 		assert.strictEqual(classifyRunTargetFile('C:/ws/MyApp.slnx'), 'solution');
 	});
 
+	// `winapp run --cli-schema` documents `input` as "a build-output folder, a
+	// .cs .NET file-based app, a .csproj project, a .sln/.slnx solution, or a
+	// directory containing one of those". A .cs path reaches project mode in
+	// the CLI, so launch.json must not reject it as "not a project file".
+	it('treats a .cs file-based app as project mode', () => {
+		assert.strictEqual(classifyRunTargetFile('C:/ws/App.cs'), 'project');
+		assert.strictEqual(classifyRunTargetFile('C:/ws/App.CS'), 'project');
+	});
+
 	it('is case-insensitive', () => {
 		assert.strictEqual(classifyRunTargetFile('C:/ws/MyApp.CSPROJ'), 'project');
 		assert.strictEqual(classifyRunTargetFile('C:/ws/MyApp.SLN'), 'solution');
@@ -56,6 +65,16 @@ describe('classifyRunTargetEntries', () => {
 
 	it('prefers a project over loose executables', () => {
 		assert.strictEqual(classifyRunTargetEntries(['MyApp.csproj', 'MyApp.exe']), 'project');
+	});
+
+	it('treats a directory holding only a file-based app as project mode', () => {
+		assert.strictEqual(classifyRunTargetEntries(['App.cs']), 'project');
+	});
+
+	// Ranking .cs below .exe keeps build-output folders that happen to ship
+	// sources in folder mode, which is how they classified before .cs support.
+	it('still prefers an executable over loose sources', () => {
+		assert.strictEqual(classifyRunTargetEntries(['App.cs', 'MyApp.exe']), 'folder');
 	});
 
 	it('falls back to folder mode for executables only', () => {

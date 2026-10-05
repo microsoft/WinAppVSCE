@@ -9,6 +9,13 @@ export type RunTargetKind = 'project' | 'solution' | 'folder' | 'unknown';
 /** Project file extensions the CLI can build in project mode. */
 export const PROJECT_FILE_EXTENSIONS = ['.csproj'] as const;
 
+/**
+ * .NET file-based apps run in project mode but are deliberately excluded from
+ * discovery and from the `--project` list: every C# source file has this
+ * extension, so offering them would bury real projects.
+ */
+export const FILE_BASED_APP_EXTENSIONS = ['.cs'] as const;
+
 /** Solution file extensions the CLI can build in project mode. */
 export const SOLUTION_FILE_EXTENSIONS = ['.sln', '.slnx'] as const;
 
@@ -51,6 +58,9 @@ export function classifyRunTargetFile(filePath: string): RunTargetKind | undefin
 	if ((PROJECT_FILE_EXTENSIONS as readonly string[]).includes(extension)) {
 		return 'project';
 	}
+	if ((FILE_BASED_APP_EXTENSIONS as readonly string[]).includes(extension)) {
+		return 'project';
+	}
 	return undefined;
 }
 
@@ -58,6 +68,7 @@ export function classifyRunTargetFile(filePath: string): RunTargetKind | undefin
 export function classifyRunTargetEntries(entryNames: readonly string[]): RunTargetKind {
 	let hasProject = false;
 	let hasExecutable = false;
+	let hasFileBasedApp = false;
 
 	for (const name of entryNames) {
 		const extension = path.extname(name).toLowerCase();
@@ -68,11 +79,16 @@ export function classifyRunTargetEntries(entryNames: readonly string[]): RunTarg
 			hasProject = true;
 		} else if (extension === '.exe') {
 			hasExecutable = true;
+		} else if ((FILE_BASED_APP_EXTENSIONS as readonly string[]).includes(extension)) {
+			hasFileBasedApp = true;
 		}
 	}
 
 	if (hasProject) { return 'project'; }
 	if (hasExecutable) { return 'folder'; }
+	// Ranked below .exe so a build-output folder that happens to ship sources
+	// keeps classifying as folder mode, exactly as it did before.
+	if (hasFileBasedApp) { return 'project'; }
 	return 'unknown';
 }
 
@@ -110,8 +126,11 @@ export function parseSolutionProjectPaths(content: string, solutionPath: string)
 	const paths = isXml ? parseSlnxProjectPaths(content) : parseSlnProjectPaths(content);
 
 	// Solution folders appear alongside real projects in both formats; keep only
-	// entries that name a buildable project file.
-	return paths.filter(p => classifyRunTargetFile(p) === 'project');
+	// entries that name a buildable project file. File-based apps are never
+	// solution members, so the project-file list is the right filter here.
+	return paths.filter(p =>
+		(PROJECT_FILE_EXTENSIONS as readonly string[]).includes(path.extname(p).toLowerCase())
+	);
 }
 
 function parseSlnProjectPaths(content: string): string[] {

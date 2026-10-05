@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { buildRunArgs, WinAppRunOptions } from '../run-options';
+import { classifyRunTargetFile } from '../run-target';
 
 /**
  * Flag names are checked against the CLI --cli-schema; reads bin/ and skips when absent.
@@ -19,6 +20,8 @@ interface RunSchemaOption {
 interface RunSchema {
 	cliVersion: string;
 	arguments: string[];
+	/** The `input` argument's help text, which enumerates the accepted kinds. */
+	inputDescription: string;
 	options: Record<string, RunSchemaOption>;
 }
 
@@ -51,7 +54,12 @@ function readRunSchema(): RunSchema | undefined {
 		.sort((a, b) => (a[1] as { order: number }).order - (b[1] as { order: number }).order)
 		.map(([name]) => name);
 
-	return { cliVersion: parsed.version, arguments: args, options };
+	return {
+		cliVersion: parsed.version,
+		arguments: args,
+		inputDescription: String(run.arguments?.input?.description ?? ''),
+		options
+	};
 }
 
 const schema = readRunSchema();
@@ -184,5 +192,31 @@ describe('buildRunArgs matches the real winapp run schema', { skip: skipReason }
 
 		const args = buildRunArgs({ input: 'C:\\src\\App' });
 		assert.deepEqual(args, ['run', 'C:\\src\\App']);
+	});
+
+	// The CLI grew `.cs` file-based apps after this extension shipped its
+	// classifier, and nothing caught it: a `.cs` input classified as `unknown`,
+	// which made launch.json reject it as "not a directory or a project file"
+	// before the CLI ever saw the path. Deriving the list from the CLI's own
+	// help text means the next extension is a test failure, not a bug report.
+	it('classifies every input kind the CLI documents', () => {
+		const description = requireSchema().inputDescription;
+		// Extensions are written lowercase in the help text; the case-sensitive
+		// class skips prose like ".NET". PROSE keeps a mixed-case variant from
+		// silently becoming a false failure.
+		const PROSE = new Set(['.net']);
+		const documented = [...new Set(
+			[...description.matchAll(/(?:^|[\s(/])(\.[a-z][a-z0-9]*)\b/g)].map(m => m[1])
+		)].filter(extension => !PROSE.has(extension));
+
+		assert.ok(documented.length > 0, `found no extensions in: ${description}`);
+
+		for (const extension of documented) {
+			assert.notEqual(
+				classifyRunTargetFile(`C:\\src\\App${extension}`),
+				undefined,
+				`the CLI accepts "${extension}" as run input but classifyRunTargetFile does not recognize it`
+			);
+		}
 	});
 });
