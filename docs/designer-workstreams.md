@@ -55,27 +55,44 @@ blank/default unless live activation works.
 
 ---
 
-## WS3 — Performance & startup latency  🔜
+## WS3 — Performance & startup latency  🔜 (in progress)
 
-- **P1 — Matched-host cache-hit latency.** ~13 s in the IDE demo before the
-  version-matched host swaps in (`docs/designer-migration.md` continuation #4).
-  Profile the provision/cache-hit path and cut the hot cost.
-- **P2 — Host-side render debounce/coalescing.** Every accepted `UpdateXaml`
-  enqueues a full reparse + GPU→CPU PNG readback; there's no host debounce
-  (`FrameServer.cs:183-201`, `RenderHost.cs:473-550`). Coalesce bursts so fast
-  typing doesn't queue stale renders.
-- **P3 — Parsed-XAML / visual-tree caching.** No parsed-XAML cache: each keystroke
-  re-cleans and re-parses. Cache by content hash where safe.
-- **P4 — ARM64 x64-emulation launch cost.** Surface/test exes run emulated, so
-  process start is slow and every relaunch (crash recycle, theme switch, matched
-  swap) is visible. Reduce relaunch triggers (see F2) and tune spare warming
-  (`PreviewControl.xaml.cs` spare/upgrade generations).
-- **P5 — Cache generation GC.** Retained immutable generations and orphaned run
-  copies have no automatic cleanup; abrupt IDE termination leaks temp dirs
-  (`designer-migration.md` limitations). Add bounded GC.
+Context that shapes the plan: VS defaults to **native-HWND mode** (`PreferNative`),
+so the PNG encode/readback path matters less here than **process launch, run-copy,
+and re-host** cost. The margin already debounces edits (500 ms) and resizes (180 ms).
+On ARM64 every Surface process runs under x64 emulation, so each relaunch is
+expensive.
+
+Measured facts (ARM64 dev machine):
+- Matched self-contained host = **327 files / 151 MB**.
+- `HostPayload.CreateRunCopy` = SHA-256 every source file → copy every file →
+  SHA-256 every copied file (3 full passes).
+- The matched upgrade runs it **twice** (`PrepareMatchedRunCopy`, then again in
+  `SurfaceClient` because `userPri` is set) ≈ 6 passes / ~900 MB before the process
+  starts. That's the likely cause of the ~13 s cache hit. Each warm spare on a
+  matched host repeats one copy.
+- **10 orphaned run-copies / 0.62 GB** found in `%TEMP%\wsr-v2`.
+
+| ID | Task | Evidence | Depends on |
+|----|------|----------|------------|
+| P0 | Instrument latency baseline: PERF markers for open→first paint (split: identity / run-copy / start→Ready / Ready→paint), edit→paint, theme→paint, crash→recovered, upgrade→swap; capture an ARM64 baseline with the mock project | no timings logged today | — |
+| P1 | Collapse the double matched run-copy to one per process | `PreviewControl` ~1027 + `SurfaceClient` ~119-131 | P0 |
+| P2 🧭 | Make run-copy cheap: validate the pristine cache once per session, single-pass copy+hash, hardlink immutable files and copy only the mutable PRI | `HostPayload.cs` `Validate`/`CreateRunCopy` | P1 |
+| P3 | GC orphaned run-copies (`%TEMP%\wsr-v2`, `%TEMP%\WinUIXamlPreview\run`) + bounded cache-generation GC | 0.62 GB observed | P0 |
+| P4 | Host latest-wins render coalescing (drop superseded `UpdateXaml`; keep resize/canvas/native ordering) | `FrameServer.ReadLoop` blocks per render via `GetResult` | P0 |
+| P5 | Spare pool for live edits: warm the next spare immediately; depth-2 in live mode | live mode = fresh process per edit | P0 |
+| P6 | Theme switch as a warm swap (keep old frame, swap to a pre-warmed new-theme process) | `PreviewControl.SetTheme` cold relaunch; overlaps F2 | P5 |
+| P7 | Keep the matched host across crash recovery (verify first) | cold restart resets `_activeUserPri = null` (~270) | P0 |
+| P8 | Prewarm packaged identity at package load / solution open | `EnsureRegistered` PowerShell awaited before first launch (~276-290) | P0 |
+| P9 | Re-measure vs baseline, record results; fault harness stays 9/9 | — | all |
+
+Deferred (lower value in native mode): parsed-XAML caching, PNG supersampling cost.
+
+**Open decision (P2):** hardlinking is fast but shares files with the pristine cache;
+a process that wrote to a linked file would corrupt it. Options are read-only
+attributes + verify-on-use, copy-only with trust-once validation, or both.
 
 ---
-
 ## WS4 — Properties & interaction (designer parity)  🔜
 
 - **I1 — Properties-to-XAML writeback.** 🧭 Continuation priority #1. Property
