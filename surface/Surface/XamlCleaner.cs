@@ -126,10 +126,10 @@ internal static class XamlCleaner
     /// markup on any failure so the caller's parse-error path still fires with original positions.
     /// </summary>
     /// <param name="rawXaml">The real project XAML document.</param>
-    /// <param name="knownResourceKeys">
-    /// Keys available in the surface's application resource scope (Layer 2). Supplied so Rule 6 can
-    /// tell a genuinely-undefined <c>{StaticResource}</c> from a resolvable one. May be null (Rule 6
-    /// then only trusts keys defined inside the document).
+    /// <param name="isKnownResourceKey">
+    /// Returns true when a key resolves in the surface's application resource scope (Layer 2). Supplied
+    /// so Rule 6 can tell a genuinely-undefined <c>{StaticResource}</c> from a resolvable one. May be
+    /// null (Rule 6 then only trusts keys defined inside the document).
     /// </param>
     /// <param name="providerMapsFullName">
     /// Rule 7 (T2) predicate: returns true when the runtime <c>IXamlMetadataProvider</c> chain that
@@ -148,7 +148,7 @@ internal static class XamlCleaner
     /// </param>
     public static string Clean(
         string rawXaml,
-        ISet<string>? knownResourceKeys = null,
+        Func<string, bool>? isKnownResourceKey = null,
         Func<string, bool>? providerMapsFullName = null,
         ISet<string>? forcePlaceholderTypes = null)
     {
@@ -228,7 +228,7 @@ internal static class XamlCleaner
             // Attribute pass over every surviving element.
             foreach (var el in root.DescendantsAndSelf().ToList())
             {
-                CleanElementAttributes(el, root, knownResourceKeys, docKeys, droppedKeys, providerMapsFullName);
+                CleanElementAttributes(el, root, isKnownResourceKey, docKeys, droppedKeys, providerMapsFullName);
             }
 
             // Drop the now-unused Blend/markup-compat namespace declarations for tidiness (all their
@@ -256,7 +256,7 @@ internal static class XamlCleaner
     private static void CleanElementAttributes(
         XElement el,
         XElement root,
-        ISet<string>? knownKeys,
+        Func<string, bool>? isKnownKey,
         HashSet<string> docKeys,
         HashSet<string> droppedKeys,
         Func<string, bool>? providerMapsFullName)
@@ -335,7 +335,7 @@ internal static class XamlCleaner
             if (TryGetResourceKey(value, out var resKey))
             {
                 bool resolvable =
-                    (docKeys.Contains(resKey) || (knownKeys?.Contains(resKey) ?? false)) &&
+                    (docKeys.Contains(resKey) || (isKnownKey?.Invoke(resKey) ?? false)) &&
                     !droppedKeys.Contains(resKey);
                 if (!resolvable)
                 {

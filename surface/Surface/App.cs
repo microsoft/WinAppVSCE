@@ -252,16 +252,44 @@ public partial class App : Application, IXamlMetadataProvider
     // Application.Current.Resources, tracked so a re-establish can remove them without leaking.
     private readonly List<ResourceDictionary> _userDictionaries = new();
 
-    // Snapshot of every string key reachable from the surface's application resource scope
-    // (framework + user), captured after the scope is established. Handed to the design-time
-    // cleaner so it can tell a resolvable {StaticResource} from a genuinely-undefined one.
-    private HashSet<string>? _knownResourceKeys;
+    // Rule 6 asks per key whether the application resource scope (framework + user) resolves it.
+    // Answers come from a direct ResourceDictionary.ContainsKey lookup (which searches merged and
+    // theme dictionaries) and are memoized until the scope changes. Enumerating every key up front
+    // instead cost seconds of startup, because WinRT enumeration marshals each resource VALUE.
+    private bool _resourceScopeEstablished;
+    private readonly Dictionary<string, bool> _resourceKeyCache = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// String resource keys reachable in the application scope (Layer 2), or null before the scope
-    /// is established. Consumed by <see cref="XamlCleaner"/> Rule 6 via <see cref="RenderHost.CleanXaml"/>.
+    /// Predicate telling whether a string resource key resolves in the application scope (Layer 2),
+    /// or null before the scope is established. Must be called on the UI thread. Consumed by
+    /// <see cref="XamlCleaner"/> Rule 6 via <see cref="RenderHost.CleanXaml"/>.
     /// </summary>
-    internal static ISet<string>? KnownResourceKeys => (Current as App)?._knownResourceKeys;
+    internal static Func<string, bool>? ResourceKeyResolver =>
+        Current is App { _resourceScopeEstablished: true } app ? app.IsResourceKeyResolvable : null;
+
+    private void ResetResourceKeyScope()
+    {
+        _resourceKeyCache.Clear();
+        _resourceScopeEstablished = true;
+    }
+
+    private bool IsResourceKeyResolvable(string key)
+    {
+        if (_resourceKeyCache.TryGetValue(key, out var known))
+        {
+            return known;
+        }
+        try
+        {
+            known = Resources.ContainsKey(key);
+        }
+        catch
+        {
+            known = false;
+        }
+        _resourceKeyCache[key] = known;
+        return known;
+    }
 
     public App()
     {
@@ -1149,10 +1177,8 @@ public partial class App : Application, IXamlMetadataProvider
             Log($"No staged resource tree at '{stagedRoot}' and no App.xaml merged — no user resource scope to establish.");
         }
 
-        // Cache the full set of reachable string keys for the cleaner's Rule 6.
-        _knownResourceKeys = CollectResourceKeys(Resources);
-        Log($"Resource scope established: {_userDictionaries.Count} user dictionary(ies), " +
-            $"{_knownResourceKeys.Count} known key(s).");
+        ResetResourceKeyScope();
+        Log($"Resource scope established: {_userDictionaries.Count} user dictionary(ies).");
     }
 
     private static readonly XNamespace PresentationNs = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
@@ -1328,8 +1354,8 @@ public partial class App : Application, IXamlMetadataProvider
         }
         _userDictionaries.Clear();
 
-        _knownResourceKeys = CollectResourceKeys(Resources);
-        Log($"Framework-only resource scope established: {_knownResourceKeys.Count} known key(s).");
+        ResetResourceKeyScope();
+        Log("Framework-only resource scope established.");
     }
 
     /// <summary>
@@ -1376,66 +1402,6 @@ public partial class App : Application, IXamlMetadataProvider
         return false;
     }
 
-    /// <summary>
-    /// Collects every <see cref="string"/> key reachable from <paramref name="root"/>, recursing its
-    /// <c>MergedDictionaries</c> and <c>ThemeDictionaries</c>. Non-string keys (the <see cref="Type"/>
-    /// keys of implicit styles) are ignored. Best-effort and defensive.
-    /// </summary>
-    private static HashSet<string> CollectResourceKeys(ResourceDictionary root)
-    {
-        var keys = new HashSet<string>(StringComparer.Ordinal);
-        var seen = new HashSet<ResourceDictionary>();
-        var stack = new Stack<ResourceDictionary>();
-        stack.Push(root);
-
-        while (stack.Count > 0)
-        {
-            var rd = stack.Pop();
-            if (rd is null || !seen.Add(rd))
-            {
-                continue;
-            }
-
-            try
-            {
-                foreach (var k in rd.Keys)
-                {
-                    if (k is string s)
-                    {
-                        keys.Add(s);
-                    }
-                }
-            }
-            catch { /* some native dictionaries throw on Keys enumeration */ }
-
-            try
-            {
-                foreach (var merged in rd.MergedDictionaries)
-                {
-                    if (merged is not null)
-                    {
-                        stack.Push(merged);
-                    }
-                }
-            }
-            catch { /* ignore */ }
-
-            try
-            {
-                foreach (var value in rd.ThemeDictionaries.Values)
-                {
-                    if (value is ResourceDictionary themed)
-                    {
-                        stack.Push(themed);
-                    }
-                }
-            }
-            catch { /* ignore */ }
-        }
-
-        return keys;
-    }
-
     // ---------------------------------------------------------------------------
     // IXamlMetadataProvider — consulted by XamlReader.Load through Application.Current.
     // Each call first consults the surface's own metadata, then the user provider.
@@ -1465,7 +1431,7 @@ public partial class App : Application, IXamlMetadataProvider
         }
         // If a provider threw AND no provider could resolve the type, re-throw the original (managed,
         // catchable) exception rather than returning null. Swallowing it is unsafe: when the caller is
-        // WinRT resource enumeration (CollectResourceKeys → IMap.First marshaling a KeyValuePair), a
+        // WinRT resource enumeration (IMap.First marshaling a KeyValuePair), a
         // null-typed value drives native code into an UNCATCHABLE access violation (0xC0000005) that
         // fast-fails the whole process before it can emit SURFACE_PORT. Callers already guard the throw.
         firstThrow?.Throw();
@@ -1496,7 +1462,7 @@ public partial class App : Application, IXamlMetadataProvider
         }
         // No provider resolved it but one threw: re-throw (managed/catchable) instead of returning null.
         // A swallowed resolution-throw becomes an uncatchable native AV in WinRT resource-key enumeration
-        // (CollectResourceKeys' managed catch relies on GetXamlType surfacing the throw). See GetXamlType(Type).
+        // (callers' managed catch relies on GetXamlType surfacing the throw). See GetXamlType(Type).
         firstThrow?.Throw();
         return null!;
     }

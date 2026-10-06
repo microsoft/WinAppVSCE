@@ -116,11 +116,11 @@ internal sealed class RenderHost
     /// The design-time XAML cleaning hook (S4 §10). Delegates to <see cref="XamlCleaner"/> to turn a
     /// real project document (with <c>x:Class</c>, <c>{x:Bind}</c>, event handlers, <c>d:</c>/<c>mc:</c>
     /// design attributes, …) into markup the runtime <c>XamlReader.Load</c> accepts. The application
-    /// resource-scope keys (Layer 2) are passed through so the cleaner can distinguish a resolvable
+    /// resource-scope key resolver (Layer 2) is passed through so the cleaner can distinguish a resolvable
     /// <c>{StaticResource}</c> from a genuinely-undefined one.
     /// </summary>
     internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null) =>
-        XamlCleaner.Clean(xaml, App.KnownResourceKeys, ProviderMapsFullName, forcePlaceholderTypes);
+        XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes);
 
     /// <summary>
     /// Rule 7 (T2) predicate for <see cref="XamlCleaner"/>: true when the runtime provider chain that
