@@ -11,6 +11,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
 using WinUIXamlPreview.Logging;
+using WinUIXamlPreview.Protocol;
 using WinUIXamlPreview.UI;
 
 namespace WinUIXamlPreview
@@ -101,7 +102,75 @@ namespace WinUIXamlPreview
             // reopened any time via View -> Other Windows -> WinUI XAML Preview (OnShowPreviewCommand).
             // ShowPreviewPaneDeferred();
 
+            // P8: register the packaged-preview identity in the background as soon as a solution with a
+            // packaged-only WinUI build is open, so the first preview doesn't pay the 3–18 s PowerShell cost.
+            Microsoft.VisualStudio.Shell.Events.SolutionEvents.OnAfterOpenSolution += (_, __) => ScheduleIdentityPrewarm(dte);
+            if (dte?.Solution?.IsOpen == true)
+            {
+                ScheduleIdentityPrewarm(dte);
+            }
+
             Log.Write("WinUI XAML Preview package ready.");
+        }
+
+        private void ScheduleIdentityPrewarm(DTE? dte)
+        {
+            if (dte == null)
+            {
+                return;
+            }
+
+            JoinableTaskFactory.RunAsync(async () =>
+            {
+                try
+                {
+                    // Let the solution finish loading (and VS settle) before touching the disk.
+                    await System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(3), DisposalToken);
+                    await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
+                    var projects = new System.Collections.Generic.List<string>();
+                    foreach (Project p in dte.Solution.Projects)
+                    {
+                        CollectCsprojPaths(p, projects, 0);
+                    }
+
+                    await TaskScheduler.Default;
+                    await IdentityPrewarm.ForProjectsAsync(projects, "solution", Log.Write);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { Log.Write("Identity prewarm failed: " + ex.Message); }
+            }).FileAndForget("winuixamlpreview/identity-prewarm");
+        }
+
+        private static void CollectCsprojPaths(Project? project, System.Collections.Generic.List<string> into, int depth)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (project == null || depth > 8)
+            {
+                return;
+            }
+
+            try
+            {
+                var file = project.FullName;
+                if (!string.IsNullOrEmpty(file) && file.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+                {
+                    into.Add(file);
+                    return;
+                }
+
+                // Solution folders nest their projects as ProjectItem.SubProject.
+                if (project.ProjectItems != null)
+                {
+                    foreach (ProjectItem item in project.ProjectItems)
+                    {
+                        CollectCsprojPaths(item.SubProject, into, depth + 1);
+                    }
+                }
+            }
+            catch
+            {
+                // Unloaded / unavailable projects throw from FullName or ProjectItems; skip them.
+            }
         }
 
         private void OnShowPreviewCommand(object sender, EventArgs e)

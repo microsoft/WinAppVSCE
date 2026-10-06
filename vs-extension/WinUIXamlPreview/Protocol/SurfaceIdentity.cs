@@ -3,6 +3,9 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace WinUIXamlPreview.Protocol
 {
@@ -45,6 +48,45 @@ namespace WinUIXamlPreview.Protocol
 
         private static readonly object Gate = new object();
         private static string? _registeredForDir;
+        private static Task<bool>? _pending;
+        private static string? _pendingDir;
+
+        /// <summary>
+        /// Shared, de-duplicated <see cref="EnsureRegistered"/>: a background prewarm and the preview open path
+        /// await the SAME in-flight registration for a folder instead of running PowerShell twice. A failed
+        /// attempt is not cached, so the next caller retries.
+        /// </summary>
+        public static Task<bool> EnsureRegisteredAsync(string surfaceExePath, Action<string>? log = null)
+        {
+            string dir;
+            try
+            {
+                dir = Path.GetDirectoryName(Path.GetFullPath(surfaceExePath))!;
+            }
+            catch
+            {
+                return Task.Run(() => EnsureRegistered(surfaceExePath, log));
+            }
+
+            lock (Gate)
+            {
+                if (_pending != null && string.Equals(_pendingDir, dir, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!_pending.IsCompleted)
+                    {
+                        return _pending;
+                    }
+                    if (!IsExperimental && _pending.Status == TaskStatus.RanToCompletion && _pending.Result)
+                    {
+                        return _pending;
+                    }
+                }
+
+                _pendingDir = dir;
+                _pending = Task.Run(() => EnsureRegistered(surfaceExePath, log));
+                return _pending;
+            }
+        }
 
         /// <summary>
         /// True when the surface next to <paramref name="surfaceExePath"/> ships with the sparse-identity
@@ -101,6 +143,18 @@ namespace WinUIXamlPreview.Protocol
                 return false;
             }
 
+            // Fast path: ask the OS directly (milliseconds) instead of spawning PowerShell and loading the
+            // Appx module (~5 s+) just to learn the package is already registered at this folder.
+            if (!IsExperimental && IsRegisteredAt(surfaceDir))
+            {
+                lock (Gate)
+                {
+                    _registeredForDir = surfaceDir;
+                }
+                log($"Identity: sparse package already registered for {surfaceDir} (fast check).");
+                return true;
+            }
+
             var ok = RunRegister(surfaceDir, manifest, log);
             if (ok)
             {
@@ -111,6 +165,78 @@ namespace WinUIXamlPreview.Protocol
             }
 
             return ok;
+        }
+
+        private const int ErrorInsufficientBuffer = 122;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern int GetPackagesByPackageFamily(
+            string packageFamilyName, ref uint count, IntPtr packageFullNames, ref uint bufferLength, IntPtr buffer);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern int GetPackagePathByFullName(string packageFullName, ref uint pathLength, StringBuilder? path);
+
+        /// <summary>
+        /// True when a package of <see cref="FamilyName"/> is registered for the current user with its
+        /// (external) location equal to <paramref name="surfaceDir"/>. Any API failure returns false so the
+        /// caller falls back to the authoritative PowerShell check-then-register.
+        /// </summary>
+        private static bool IsRegisteredAt(string surfaceDir)
+        {
+            IntPtr names = IntPtr.Zero, buffer = IntPtr.Zero;
+            try
+            {
+                uint count = 0, bufferLength = 0;
+                int rc = GetPackagesByPackageFamily(FamilyName, ref count, IntPtr.Zero, ref bufferLength, IntPtr.Zero);
+                if (rc != ErrorInsufficientBuffer || count == 0)
+                {
+                    return false;
+                }
+
+                names = Marshal.AllocHGlobal((int)count * IntPtr.Size);
+                buffer = Marshal.AllocHGlobal((int)bufferLength * sizeof(char));
+                if (GetPackagesByPackageFamily(FamilyName, ref count, names, ref bufferLength, buffer) != 0)
+                {
+                    return false;
+                }
+
+                var want = Path.GetFullPath(surfaceDir).TrimEnd('\\');
+                for (int i = 0; i < count; i++)
+                {
+                    var fullName = Marshal.PtrToStringUni(Marshal.ReadIntPtr(names, i * IntPtr.Size));
+                    if (string.IsNullOrEmpty(fullName))
+                    {
+                        continue;
+                    }
+
+                    uint len = 0;
+                    if (GetPackagePathByFullName(fullName, ref len, null) != ErrorInsufficientBuffer || len == 0)
+                    {
+                        continue;
+                    }
+                    var path = new StringBuilder((int)len);
+                    if (GetPackagePathByFullName(fullName, ref len, path) != 0)
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(Path.GetFullPath(path.ToString()).TrimEnd('\\'), want, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (names != IntPtr.Zero) Marshal.FreeHGlobal(names);
+                if (buffer != IntPtr.Zero) Marshal.FreeHGlobal(buffer);
+            }
         }
 
         private static bool RunRegister(string surfaceDir, string manifest, Action<string> log)

@@ -89,6 +89,47 @@ namespace WinUIXamlPreview.Protocol
         }
 
         /// <summary>
+        /// True when the project's newest-build choice (as made by <see cref="FindUserDll"/>) would be a
+        /// packaged (MSIX) build, i.e. at least one <c>&lt;project&gt;.dll</c> exists under <c>bin</c> and none
+        /// is unpackaged. That's exactly when opening one of its pages will need the surface's sparse identity,
+        /// so the package uses it to decide whether to prewarm registration. Never throws.
+        /// </summary>
+        public static bool NeedsPackagedIdentity(string csprojPath)
+        {
+            try
+            {
+                var projectDir = Path.GetDirectoryName(csprojPath);
+                if (projectDir == null)
+                {
+                    return false;
+                }
+
+                var binDir = Path.Combine(projectDir, "bin");
+                if (!Directory.Exists(binDir))
+                {
+                    return false;
+                }
+
+                var assemblyName = Path.GetFileNameWithoutExtension(csprojPath);
+                var any = false;
+                foreach (var dll in Directory.EnumerateFiles(binDir, assemblyName + ".dll", SearchOption.AllDirectories))
+                {
+                    if (!IsPackagedBuild(dll))
+                    {
+                        return false;
+                    }
+                    any = true;
+                }
+
+                return any;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// A packaged (MSIX) build emits a generated <c>AppxManifest.xml</c> next to the output assembly.
         /// Presence of that file is a reliable, build-system-agnostic signal that the assembly was built
         /// packaged — and therefore that its module initializer will demand package identity. The preview
@@ -199,6 +240,20 @@ namespace WinUIXamlPreview.Protocol
             }
         }
 
+        /// <summary>True when the project file (or a parent Directory.Build.props) carries WinUI 3 markers.</summary>
+        public static bool IsWinUiProject(string csprojPath)
+        {
+            try
+            {
+                return Classify(SafeRead(csprojPath)) == FrameworkKind.WinUi
+                    || ScanParentProps(Path.GetDirectoryName(csprojPath)) == FrameworkKind.WinUi;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private enum FrameworkKind { Unknown, WinUi, Wpf, Uwp }
 
         private static FrameworkKind Classify(string? projectText)
@@ -303,7 +358,7 @@ namespace WinUIXamlPreview.Protocol
             }
         }
 
-        private static string? FindOwningCsproj(string startPath)
+        internal static string? FindOwningCsproj(string startPath)
         {
             DirectoryInfo? dir;
             try

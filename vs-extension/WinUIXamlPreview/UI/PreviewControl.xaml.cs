@@ -290,7 +290,7 @@ namespace WinUIXamlPreview.UI
                 SetStatus("Preparing packaged preview…", spinner: true, detail: Path.GetFileName(path));
                 var exeForReg = surfaceExe;
                 var idSw = System.Diagnostics.Stopwatch.StartNew();
-                var registered = await System.Threading.Tasks.Task.Run(() => SurfaceIdentity.EnsureRegistered(exeForReg, Log.Write));
+                var registered = await SurfaceIdentity.EnsureRegisteredAsync(exeForReg, Log.Write);
                 Log.Write($"PERF open.identity ms={idSw.ElapsedMilliseconds} registered={registered}");
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 if (_disposed)

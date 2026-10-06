@@ -140,6 +140,10 @@ namespace WinUIXamlPreview.Editor
                     return null;
                 }
 
+                // P8: the margin can come up minutes before the background-loaded package, so kick identity
+                // prewarm here too (deduped per project; the preview open joins the in-flight attempt).
+                Protocol.IdentityPrewarm.ForDocument(path, "margin", Log.Write);
+
                 // Leak-safe singleton: one margin (one surface) per view even under re-entrant CreateMargin.
                 return host.TextView.Properties.GetOrCreateSingletonProperty(
                     typeof(XamlPreviewMargin),
