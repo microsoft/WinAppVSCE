@@ -142,6 +142,10 @@ try
     }
     File.WriteAllText(Path.Combine(second, "Surface.dll"), "tampered!");
     Reject(() => BuildStorage.FindCompleted(cache, key), "cache serve hashes managed payload");
+    var tamperedRun = Path.Combine(root, "tampered-run");
+    Reject(() => HostPayload.CreateRunCopy(second, tamperedRun), "run-copy hashes each member while copying");
+    Check(!Directory.Exists(tamperedRun) && !Directory.EnumerateDirectories(root, "tampered-run.preparing-*").Any(),
+        "tampered run-copy publishes nothing and removes its staging");
     File.WriteAllText(Path.Combine(first, "rogue.dll"), "extra");
     Reject(() => HostPayload.Validate(first), "unknown assembly contamination fails");
     File.Delete(Path.Combine(first, "rogue.dll"));
@@ -265,18 +269,16 @@ try
         var pointer = Directory.GetFiles(Path.Combine(fixtureV2, "keys")).Single();
         var previousPointer = File.ReadAllText(pointer);
         var validatingCache = false;
-        var validatingPublication = false;
         var triggered = false;
         var exit = ProvisionerCommand.Run(phaseArgs, cancellation.Token, output, message =>
         {
             if (message == "Validating cached payload.") validatingCache = true;
-            if (message == "Validating prepared run payload.") validatingPublication = true;
             var cancelNow = phase switch
             {
                 "cache-validation" => validatingCache && message.StartsWith("Validated payload member: ", StringComparison.Ordinal),
                 "cache-success" => message.StartsWith("CACHE HIT ", StringComparison.Ordinal),
                 "publication-copy" => message.StartsWith("Copied run payload: ", StringComparison.Ordinal),
-                "publication-validation" => validatingPublication && message.StartsWith("Validated payload member: ", StringComparison.Ordinal),
+                "publication-validation" => message == "Validating prepared run payload.",
                 "before-commit" => message == "Committing completed cache generation.",
                 "after-commit" => message == "Committed completed cache generation.",
                 "after-pointer" => message == "Published cache pointer.",

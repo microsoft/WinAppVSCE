@@ -56,24 +56,38 @@ internal static class HostPayload
     public static PayloadManifest Validate(string host, string? key = null, CancellationToken cancellation = default,
         Action<string>? log = null)
     {
+        var m = ReadManifest(File.ReadAllText(Path.Combine(host, ManifestName)), key, cancellation);
+        foreach (var pair in m.Files)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (Hash(Path.Combine(host, pair.Key), cancellation) != pair.Value)
+                throw new InvalidDataException("Payload hash mismatch: " + pair.Key);
+            log?.Invoke("Validated payload member: " + pair.Key);
+        }
+        RejectUnexpectedFiles(host, m, cancellation);
+        return m;
+    }
+
+    // Structural checks only (identity, required members, safe relative paths); no file content is read.
+    private static PayloadManifest ReadManifest(string text, string? key, CancellationToken cancellation)
+    {
         cancellation.ThrowIfCancellationRequested();
-        var m = JsonSerializer.Deserialize<PayloadManifest>(File.ReadAllText(Path.Combine(host, ManifestName)))
+        var m = JsonSerializer.Deserialize<PayloadManifest>(text)
             ?? throw new InvalidDataException("Missing payload manifest.");
         if (m.Format != 2 || string.IsNullOrEmpty(m.Key) || (key != null && m.Key != key))
             throw new InvalidDataException("Payload identity mismatch.");
         foreach (var required in new[] { "Surface.exe", "Surface.dll", "Surface.pri", "Surface.designtime.pri",
             "Surface.deps.json", "Surface.runtimeconfig.json", "Microsoft.WinUI.dll", "Microsoft.ui.xaml.dll" })
             if (!m.Files.ContainsKey(required)) throw new InvalidDataException("Incomplete payload: " + required);
-        foreach (var pair in m.Files)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            if (Path.IsPathRooted(pair.Key) || pair.Key.Split('\\', '/').Any(p => p == ".."))
+        foreach (var rel in m.Files.Keys)
+            if (Path.IsPathRooted(rel) || rel.Split('\\', '/').Any(p => p == ".."))
                 throw new InvalidDataException("Unsafe payload member.");
-            if (Hash(Path.Combine(host, pair.Key), cancellation) != pair.Value)
-                throw new InvalidDataException("Payload hash mismatch: " + pair.Key);
-            log?.Invoke("Validated payload member: " + pair.Key);
-        }
-        // Unknown payload files could shadow assemblies/resources; run ownership marker is the only extra.
+        return m;
+    }
+
+    // Unknown payload files could shadow assemblies/resources; run ownership marker is the only extra.
+    private static void RejectUnexpectedFiles(string host, PayloadManifest m, CancellationToken cancellation)
+    {
         foreach (var path in Directory.EnumerateFiles(host, "*", SearchOption.AllDirectories))
         {
             cancellation.ThrowIfCancellationRequested();
@@ -82,7 +96,6 @@ internal static class HostPayload
                 throw new InvalidDataException("Unexpected payload file.");
         }
         cancellation.ThrowIfCancellationRequested();
-        return m;
     }
 
     // Caller supplies a NEW, private path; no mirrors/deletions of caller-owned existing directories.
@@ -97,7 +110,10 @@ internal static class HostPayload
         // Check both paths before any filesystem writes, including creation of staging parents.
         if (IsWithin(destination, host) || IsWithin(staging, host))
             throw new IOException("Run-copy destination and staging must be outside the pristine host.");
-        var m = Validate(host, cancellation: cancellation);
+        // One pass: each member is hashed while it is copied and must match the manifest, so every byte
+        // the run uses is verified without separately re-reading the pristine host or the finished copy.
+        var manifestText = File.ReadAllText(Path.Combine(host, ManifestName));
+        var m = ReadManifest(manifestText, null, cancellation);
         if (Directory.Exists(destination) || File.Exists(destination))
             throw new IOException("Run-copy destination must not exist: " + destination);
         // Publish without replacing an existing destination. Cancellation owns only this unique sibling,
@@ -107,16 +123,19 @@ internal static class HostPayload
         Directory.CreateDirectory(staging);
         try
         {
-            foreach (var rel in m.Files.Keys.Concat(new[] { ManifestName }))
+            foreach (var pair in m.Files)
             {
                 cancellation.ThrowIfCancellationRequested();
-                var dest = Path.Combine(staging, rel);
+                var dest = Path.Combine(staging, pair.Key);
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                CopyFile(Path.Combine(host, rel), dest, cancellation);
-                log?.Invoke("Copied run payload: " + rel);
+                if (CopyAndHash(Path.Combine(host, pair.Key), dest, cancellation) != pair.Value)
+                    throw new InvalidDataException("Payload hash mismatch: " + pair.Key);
+                log?.Invoke("Copied run payload: " + pair.Key);
             }
+            File.WriteAllText(Path.Combine(staging, ManifestName), manifestText);
+            log?.Invoke("Copied run payload: " + ManifestName);
             log?.Invoke("Validating prepared run payload.");
-            Validate(staging, m.Key, cancellation, log);
+            RejectUnexpectedFiles(staging, m, cancellation);
             File.WriteAllText(Path.Combine(staging, RunMarker), Guid.NewGuid().ToString("N"));
             cancellation.ThrowIfCancellationRequested();
             Directory.Move(staging, destination);
@@ -128,7 +147,18 @@ internal static class HostPayload
         }
     }
 
-    public static void CopyFile(string source, string destination, CancellationToken cancellation = default)
+    public static void CopyFile(string source, string destination, CancellationToken cancellation = default) =>
+        Copy(source, destination, null, cancellation);
+
+    private static string CopyAndHash(string source, string destination, CancellationToken cancellation)
+    {
+        using var sha = SHA256.Create();
+        Copy(source, destination, sha, cancellation);
+        sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+        return BitConverter.ToString(sha.Hash!).Replace("-", "").ToLowerInvariant();
+    }
+
+    private static void Copy(string source, string destination, HashAlgorithm? hash, CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();
         using var input = File.OpenRead(source);
@@ -138,6 +168,7 @@ internal static class HostPayload
         while ((read = input.Read(buffer, 0, buffer.Length)) != 0)
         {
             cancellation.ThrowIfCancellationRequested();
+            hash?.TransformBlock(buffer, 0, read, buffer, 0);
             output.Write(buffer, 0, read);
         }
         cancellation.ThrowIfCancellationRequested();
