@@ -1,7 +1,9 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.Linq;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -93,6 +95,14 @@ namespace WinUIXamlPreview.Editor
         private Button? _selectButton;
         private Button? _themeButton;
         private Button? _sizeButton;
+        private DockPanel? _toolbarBar;
+        private StackPanel? _toolbarButtons;
+        private TextBlock? _toolbarTitle;
+        private Button? _overflowButton;
+        private readonly List<List<ToolbarItem>> _toolbarGroups = new List<List<ToolbarItem>>();
+        private readonly List<FrameworkElement> _toolbarSeparators = new List<FrameworkElement>();
+        private bool _compactLabels;
+        private int _toolbarLevel = -1;
         private string? _path;
         private bool _disposed;
 
@@ -234,9 +244,28 @@ namespace WinUIXamlPreview.Editor
 
         // ---- toolbar --------------------------------------------------------
 
+        // A toolbar entry and how it degrades when the margin is narrow. OverflowRank 0 = always on the bar;
+        // otherwise entries move into the "⋯" menu in ascending rank order (1 = first to go).
+        private sealed class ToolbarItem
+        {
+            public ToolbarItem(FrameworkElement element, int overflowRank, Func<MenuItem>? makeOverflowItem)
+            {
+                Element = element;
+                OverflowRank = overflowRank;
+                MakeOverflowItem = makeOverflowItem;
+            }
+
+            public FrameworkElement Element { get; }
+            public int OverflowRank { get; }
+            public Func<MenuItem>? MakeOverflowItem { get; }
+            public bool Overflowed { get; set; }
+        }
+
+        private const int MaxOverflowRank = 7;
+
         private FrameworkElement BuildToolbar()
         {
-            var bar = new DockPanel { LastChildFill = true, Height = 28 };
+            var bar = new DockPanel { LastChildFill = true, Height = 28, ClipToBounds = true };
             bar.SetResourceReference(Panel.BackgroundProperty, EnvironmentColors.CommandShelfBackgroundGradientBrushKey);
 
             var buttons = new StackPanel
@@ -248,25 +277,57 @@ namespace WinUIXamlPreview.Editor
 
             var toggleTarget = _location == PreviewLocation.Right ? "Bottom" : "Right";
             var dockMoniker = _location == PreviewLocation.Right ? KnownMonikers.DockBottom : KnownMonikers.DockRight;
-            buttons.Children.Add(MakeButton(KnownMonikers.Refresh, "Reload", "Re-render the preview", OnReloadClick, "PreviewReloadButton"));
-            buttons.Children.Add(MakeSeparator());
+            var dockLabel = $"Dock {toggleTarget}";
+            var reload = MakeButton(KnownMonikers.Refresh, "Reload", "Re-render the preview", OnReloadClick, "PreviewReloadButton");
             _selectButton = MakeButton(SelectMoniker(), SelectLabel(), SelectTooltip(), OnToggleSelectClick, "PreviewSelectToggle");
-            buttons.Children.Add(_selectButton);
-            buttons.Children.Add(MakeButton(KnownMonikers.Property, "Properties", "Show the design-time Properties panel", OnPropertiesClick, "PreviewPropertiesButton"));
-            buttons.Children.Add(MakeSeparator());
+            var properties = MakeButton(KnownMonikers.Property, "Properties", "Show the design-time Properties panel", OnPropertiesClick, "PreviewPropertiesButton");
             _themeButton = MakeMenuButton(KnownMonikers.DarkTheme, ThemeLabel(), ThemeTooltip(), "PreviewThemeButton", BuildThemeMenu());
-            buttons.Children.Add(_themeButton);
             _sizeButton = MakeMenuButton(KnownMonikers.Monitor, SizeLabel(), SizeTooltip(), "PreviewSizeButton", BuildSizeMenu());
-            buttons.Children.Add(_sizeButton);
-            buttons.Children.Add(MakeSeparator());
             _liveButton = MakeButton(LiveMoniker(), LiveLabel(), LiveTooltip(), OnToggleLiveClick, "PreviewLiveToggle");
-            buttons.Children.Add(_liveButton);
             _dtdButton = MakeButton(DtdMoniker(), DtdLabel(), DtdTooltip(), OnToggleDtdClick, "PreviewDtdToggle");
-            buttons.Children.Add(_dtdButton);
-            buttons.Children.Add(MakeSeparator());
-            buttons.Children.Add(MakeButton(dockMoniker, $"Dock {toggleTarget}", $"Move the preview to the {toggleTarget.ToLowerInvariant()} (reopens this file)", OnToggleLayoutClick, "PreviewDockToggle"));
-            buttons.Children.Add(MakeButton(KnownMonikers.NewWindow, "Window", "Open the preview in a separate tool window", OnPopOutClick, "PreviewWindowButton"));
-            buttons.Children.Add(MakeButton(KnownMonikers.Collapse, "Hide", "Collapse the preview to a thin strip — click the strip to reopen it", OnHideClick, "PreviewHideButton"));
+            var dock = MakeButton(dockMoniker, dockLabel, $"Move the preview to the {toggleTarget.ToLowerInvariant()} (reopens this file)", OnToggleLayoutClick, "PreviewDockToggle");
+            var window = MakeButton(KnownMonikers.NewWindow, "Window", "Open the preview in a separate tool window", OnPopOutClick, "PreviewWindowButton");
+            var hide = MakeButton(KnownMonikers.Collapse, "Hide", "Collapse the preview to a thin strip — click the strip to reopen it", OnHideClick, "PreviewHideButton");
+
+            _toolbarGroups.Add(new List<ToolbarItem> { new ToolbarItem(reload, 0, null) });
+            _toolbarGroups.Add(new List<ToolbarItem>
+            {
+                new ToolbarItem(_selectButton, 0, null),
+                new ToolbarItem(properties, 5, () => MakeOverflowCommand(KnownMonikers.Property, "Properties", OnPropertiesClick, "PreviewOverflowProperties")),
+            });
+            _toolbarGroups.Add(new List<ToolbarItem>
+            {
+                new ToolbarItem(_themeButton, 7, () => MakeOverflowSubmenu(KnownMonikers.DarkTheme, "Theme: " + ThemeLabel(), BuildThemeMenu(), "PreviewOverflowTheme")),
+                new ToolbarItem(_sizeButton, 6, () => MakeOverflowSubmenu(KnownMonikers.Monitor, "Size: " + SizeLabel(), BuildSizeMenu(), "PreviewOverflowSize")),
+            });
+            _toolbarGroups.Add(new List<ToolbarItem>
+            {
+                new ToolbarItem(_liveButton, 4, () => MakeOverflowCommand(LiveMoniker(), LiveLabel(), OnToggleLiveClick, "PreviewOverflowLive")),
+                new ToolbarItem(_dtdButton, 3, () => MakeOverflowCommand(DtdMoniker(), DtdLabel(), OnToggleDtdClick, "PreviewOverflowDtd")),
+            });
+            _toolbarGroups.Add(new List<ToolbarItem>
+            {
+                new ToolbarItem(dock, 2, () => MakeOverflowCommand(dockMoniker, dockLabel, OnToggleLayoutClick, "PreviewOverflowDock")),
+                new ToolbarItem(window, 1, () => MakeOverflowCommand(KnownMonikers.NewWindow, "Window", OnPopOutClick, "PreviewOverflowWindow")),
+                new ToolbarItem(hide, 0, null),
+            });
+
+            for (var i = 0; i < _toolbarGroups.Count; i++)
+            {
+                if (i > 0)
+                {
+                    var sep = MakeSeparator();
+                    _toolbarSeparators.Add(sep);
+                    buttons.Children.Add(sep);
+                }
+                foreach (var item in _toolbarGroups[i])
+                {
+                    buttons.Children.Add(item.Element);
+                }
+            }
+
+            _overflowButton = MakeOverflowButton();
+            buttons.Children.Add(_overflowButton);
 
             var title = new TextBlock
             {
@@ -274,6 +335,7 @@ namespace WinUIXamlPreview.Editor
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(8, 0, 0, 0),
                 FontSize = 12,
+                TextTrimming = TextTrimming.CharacterEllipsis,
             };
             title.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
             AutomationProperties.SetAutomationId(title, "PreviewMarginTitle");
@@ -281,7 +343,196 @@ namespace WinUIXamlPreview.Editor
             DockPanel.SetDock(buttons, Dock.Right);
             bar.Children.Add(buttons); // right-docked first so the title fills the remainder
             bar.Children.Add(title);
+
+            _toolbarBar = bar;
+            _toolbarButtons = buttons;
+            _toolbarTitle = title;
+            bar.SizeChanged += (s, e) => { if (e.WidthChanged) { UpdateToolbarLayout(); } };
             return bar;
+        }
+
+        // Progressive narrow-width layout: drop the title, then the button labels (icon + tooltip), then move
+        // buttons into the "⋯" overflow menu least-used first. Picks the first level whose buttons fit.
+        private void UpdateToolbarLayout()
+        {
+            if (_toolbarBar == null || _toolbarButtons == null || _toolbarTitle == null)
+            {
+                return;
+            }
+
+            var available = _toolbarBar.ActualWidth;
+            if (available <= 0)
+            {
+                return;
+            }
+
+            var unbounded = new Size(double.PositiveInfinity, double.PositiveInfinity);
+            var level = 0;
+            for (; ; level++)
+            {
+                var showTitle = level == 0;
+                var overflowCount = Math.Max(0, level - 2);
+                ApplyToolbarState(showTitle, showLabels: level <= 1, overflowCount);
+                if (overflowCount >= MaxOverflowRank)
+                {
+                    break;
+                }
+
+                _toolbarButtons.Measure(unbounded);
+                var needed = _toolbarButtons.DesiredSize.Width;
+                if (showTitle)
+                {
+                    _toolbarTitle.Measure(unbounded);
+                    needed += _toolbarTitle.DesiredSize.Width;
+                }
+                Log.Write($"TOOLBAR-DBG avail={available:0} level={level} needed={needed:0} kids=" + string.Join(",", _toolbarButtons.Children.OfType<FrameworkElement>().Select(c => $"{c.Visibility.ToString()[0]}{c.DesiredSize.Width:0}")));
+                if (needed <= available)
+                {
+                    break;
+                }
+            }
+
+            if (level != _toolbarLevel)
+            {
+                _toolbarLevel = level;
+                Log.Write($"Toolbar layout: width={available:0} level={level} (0 full, 1 no title, 2 icons only, 3+ overflow).");
+            }
+        }
+
+        private void ApplyToolbarState(bool showTitle, bool showLabels, int overflowCount)
+        {
+            _toolbarTitle!.Visibility = showTitle ? Visibility.Visible : Visibility.Collapsed;
+            _compactLabels = !showLabels;
+
+            var anyOverflowed = false;
+            foreach (var item in _toolbarGroups.SelectMany(g => g))
+            {
+                item.Overflowed = item.OverflowRank > 0 && item.OverflowRank <= overflowCount;
+                anyOverflowed |= item.Overflowed;
+                item.Element.Visibility = item.Overflowed ? Visibility.Collapsed : Visibility.Visible;
+                SetLabelVisible(item.Element, showLabels);
+            }
+
+            // A separator shows only between two groups that both still have a button on the bar.
+            var seenVisible = _toolbarGroups[0].Any(i => !i.Overflowed);
+            for (var g = 1; g < _toolbarGroups.Count; g++)
+            {
+                var groupVisible = _toolbarGroups[g].Any(i => !i.Overflowed);
+                _toolbarSeparators[g - 1].Visibility = seenVisible && groupVisible ? Visibility.Visible : Visibility.Collapsed;
+                seenVisible |= groupVisible;
+            }
+
+            _overflowButton!.Visibility = anyOverflowed ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private const string ButtonLabelTag = "PreviewToolbarLabel";
+
+        private void SetLabelVisible(FrameworkElement element, bool visible)
+        {
+            if (element is ContentControl { Content: Panel panel })
+            {
+                foreach (var tb in panel.Children.OfType<TextBlock>().Where(t => Equals(t.Tag, ButtonLabelTag)))
+                {
+                    var target = visible ? Visibility.Visible : Visibility.Collapsed;
+                    if (tb.Visibility == target)
+                    {
+                        continue;
+                    }
+                    tb.Visibility = target;
+
+                    // The cached DesiredSize of every ancestor up to the button row is stale until the next layout
+                    // pass, so invalidate the chain to make the trial Measure in UpdateToolbarLayout see the change.
+                    for (DependencyObject? node = tb; node != null && node != _toolbarButtons; node = VisualTreeHelper.GetParent(node) ?? LogicalTreeHelper.GetParent(node))
+                    {
+                        (node as UIElement)?.InvalidateMeasure();
+                    }
+                    _toolbarButtons?.InvalidateMeasure();
+                }
+            }
+        }
+
+        private Button MakeOverflowButton()
+        {
+            var b = new Button
+            {
+                Style = FlatButtonStyle,
+                ToolTip = "More preview options",
+                Padding = new Thickness(6, 1, 6, 1),
+                Margin = new Thickness(0, 3, 2, 3),
+                MinWidth = 0,
+                Cursor = Cursors.Hand,
+                Focusable = false,
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed,
+                Content = new CrispImage { Moniker = KnownMonikers.Ellipsis, Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Center },
+            };
+            b.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            AutomationProperties.SetName(b, "More options");
+            AutomationProperties.SetAutomationId(b, "PreviewOverflowButton");
+            b.Click += OnOverflowClick;
+            return b;
+        }
+
+        // Built fresh on every open so toggle labels and checked states are current.
+        private void OnOverflowClick(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var menu = ThemeMenu(new ContextMenu());
+                foreach (var group in _toolbarGroups)
+                {
+                    var overflowed = group.Where(i => i.Overflowed && i.MakeOverflowItem != null).ToList();
+                    if (overflowed.Count == 0)
+                    {
+                        continue;
+                    }
+                    if (menu.Items.Count > 0)
+                    {
+                        menu.Items.Add(new Separator());
+                    }
+                    foreach (var item in overflowed)
+                    {
+                        menu.Items.Add(item.MakeOverflowItem!());
+                    }
+                }
+
+                menu.PlacementTarget = _overflowButton;
+                menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+                menu.IsOpen = true;
+            }
+            catch (Exception ex) { Log.Write("Toolbar overflow menu failed: " + ex); }
+        }
+
+        private MenuItem MakeOverflowCommand(ImageMoniker moniker, string header, RoutedEventHandler onClick, string automationId)
+        {
+            var item = new MenuItem
+            {
+                Header = header,
+                Icon = new CrispImage { Moniker = moniker, Width = 16, Height = 16 },
+            };
+            item.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.CommandBarTextActiveBrushKey);
+            AutomationProperties.SetName(item, header);
+            AutomationProperties.SetAutomationId(item, automationId);
+            item.Click += onClick;
+            return item;
+        }
+
+        private MenuItem MakeOverflowSubmenu(ImageMoniker moniker, string header, ContextMenu source, string automationId)
+        {
+            var item = new MenuItem
+            {
+                Header = header,
+                Icon = new CrispImage { Moniker = moniker, Width = 16, Height = 16 },
+            };
+            item.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.CommandBarTextActiveBrushKey);
+            AutomationProperties.SetName(item, header);
+            AutomationProperties.SetAutomationId(item, automationId);
+            foreach (var child in source.Items.OfType<MenuItem>().ToList())
+            {
+                source.Items.Remove(child);
+                item.Items.Add(child);
+            }
+            return item;
         }
 
         // Flat, theme-aware chrome for the toolbar buttons. The stock WPF Button template paints an opaque
@@ -371,6 +622,7 @@ namespace WinUIXamlPreview.Editor
                     FontSize = 11,
                     Margin = new Thickness(5, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center,
+                    Tag = ButtonLabelTag,
                 };
                 tb.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
                 panel.Children.Add(tb);
@@ -379,12 +631,20 @@ namespace WinUIXamlPreview.Editor
         }
 
         // Updates a toggle button's icon + label + UIA Name + tooltip together.
-        private static void SetButton(Button? b, ImageMoniker moniker, string label, string tooltip)
+        private void SetButton(Button? b, ImageMoniker moniker, string label, string tooltip)
         {
             if (b == null) { return; }
             b.Content = BuildButtonContent(moniker, label);
             b.ToolTip = tooltip;
             AutomationProperties.SetName(b, label);
+            OnToolbarButtonContentChanged(b);
+        }
+
+        // A relabelled button can change width, so honour the current compact state and re-fit the bar.
+        private void OnToolbarButtonContentChanged(Button b)
+        {
+            SetLabelVisible(b, !_compactLabels);
+            UpdateToolbarLayout();
         }
 
         // Thin themed group separator between toolbar button clusters.
@@ -455,7 +715,7 @@ namespace WinUIXamlPreview.Editor
         {
             var panel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             panel.Children.Add(new CrispImage { Moniker = moniker, Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Center });
-            var tb = new TextBlock { Text = label, FontSize = 11, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            var tb = new TextBlock { Text = label, FontSize = 11, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Tag = ButtonLabelTag };
             tb.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
             panel.Children.Add(tb);
             var caret = new TextBlock { Text = "\u25BE", FontSize = 9, Margin = new Thickness(4, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center };
@@ -558,7 +818,7 @@ namespace WinUIXamlPreview.Editor
         }
 
         // Updates a dropdown button's icon + label + UIA Name + tooltip + menu (with refreshed checks).
-        private static void SetMenuButton(Button? b, ImageMoniker moniker, string label, string tooltip, ContextMenu menu)
+        private void SetMenuButton(Button? b, ImageMoniker moniker, string label, string tooltip, ContextMenu menu)
         {
             if (b == null) { return; }
             b.Content = BuildMenuButtonContent(moniker, label);
@@ -567,6 +827,7 @@ namespace WinUIXamlPreview.Editor
             menu.PlacementTarget = b;
             menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
             b.ContextMenu = menu;
+            OnToolbarButtonContentChanged(b);
         }
 
         private void OnReloadClick(object sender, RoutedEventArgs e)
