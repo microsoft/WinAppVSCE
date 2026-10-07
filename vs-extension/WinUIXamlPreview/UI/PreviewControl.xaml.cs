@@ -93,6 +93,11 @@ namespace WinUIXamlPreview.UI
         // the background upgrade (2–400+ s of cache validation / build). Consumed once by StartPreviewAsync for
         // the same document; a failed matched relaunch falls back to the normal bundled + upgrade path.
         private (string Path, string Exe, string Pri)? _recoverMatchedHost;
+        // P6: a theme change warms a spare in the new theme (same exe/pri) while the old frame stays on screen,
+        // then promotes it. Valid only while _themeSwapGen == _spareGeneration (a doc switch / dispose bumps it).
+        private bool _themeSwapPending;
+        private int _themeSwapGen;
+        private System.Diagnostics.Stopwatch? _themeSwapSw;
 
         // ---- version-matched fidelity upgrade (nov-vsix-wire) --------------
         // The instant launch is ALWAYS the bundled 2.2.0 host. When the target project references a different
@@ -519,8 +524,9 @@ namespace WinUIXamlPreview.UI
         /// provider chain), a runtime <c>RequestedTheme</c> flip does NOT re-resolve <c>{ThemeResource}</c>
         /// brushes (plan §47). The only reliable mechanism is the app-global <c>Application.RequestedTheme</c>,
         /// which is immutable after the first window content — so a theme change is a per-process decision baked
-        /// at launch via the <c>SURFACE_THEME</c> env. We therefore persist the preference and RELAUNCH the
-        /// surface (mirroring the live-mode toggle), rather than sending a live message. UI thread only.
+        /// at launch via the <c>SURFACE_THEME</c> env. We persist the preference and, when a surface is running,
+        /// warm a spare in the new theme on the SAME host (bundled or version-matched) and swap to it, keeping
+        /// the old frame on screen meanwhile (P6). Otherwise we relaunch the surface. UI thread only.
         /// </summary>
         public void SetTheme(string theme)
         {
@@ -535,6 +541,85 @@ namespace WinUIXamlPreview.UI
             }
 
             PreviewOptions.Theme = theme;
+            if (TryBeginThemeSwap(theme))
+            {
+                return;
+            }
+
+            RestartForTheme(theme);
+        }
+
+        /// <summary>
+        /// P6: start a warm swap to <paramref name="theme"/>: drop the old-theme spare, warm a new-theme spare
+        /// on the active host, and promote it once Ready (see <see cref="WarmSpare"/>). Returns false when there
+        /// is nothing to swap from or a fidelity upgrade is still in flight (it would promote the old theme).
+        /// </summary>
+        private bool TryBeginThemeSwap(string theme)
+        {
+            if (_client == null || _currentPath == null || string.IsNullOrEmpty(_activeSurfaceExe) || _upgradeInProgress)
+            {
+                return false;
+            }
+
+            _activeTheme = theme;
+            _spareGeneration++; // the old-theme spare (ready or warming) is now stale
+            _spareWarming = false;
+            if (_spareClient != null)
+            {
+                _spareClient.Closed -= OnSpareClosed;
+                try { _spareClient.Dispose(); } catch { }
+                _spareClient = null;
+                _spareReady = false;
+            }
+
+            _themeSwapPending = true;
+            _themeSwapGen = _spareGeneration;
+            _themeSwapSw = System.Diagnostics.Stopwatch.StartNew();
+            WarmSpare();
+            if (!_spareWarming)
+            {
+                _themeSwapPending = false;
+                _themeSwapSw = null;
+                return false;
+            }
+
+            Log.Write($"Preview theme set to {theme} — warming a {theme} surface; the current frame stays until it swaps in.");
+            return true;
+        }
+
+        private bool ThemeSwapPendingFor(int gen) => _themeSwapPending && _themeSwapGen == gen && gen == _spareGeneration;
+
+        /// <summary>The ready spare is in the new theme: render the latest text on it and swap it in.</summary>
+        private void CompleteThemeSwap()
+        {
+            _themeSwapPending = false;
+            var sw = _themeSwapSw;
+            _themeSwapSw = null;
+            string xaml;
+            try { xaml = ReadDocumentText(_currentPath ?? string.Empty); }
+            catch (Exception ex)
+            {
+                Log.Write("Theme swap: could not read the document (" + ex.Message + "); restarting instead.");
+                RestartForTheme(PreviewOptions.Theme);
+                return;
+            }
+
+            Log.Write($"PERF theme.spare ms={sw?.ElapsedMilliseconds ?? 0}");
+            if (TryPromoteSpare(xaml))
+            {
+                PerfBegin("theme.swap");
+            }
+            else
+            {
+                RestartForTheme(PreviewOptions.Theme);
+            }
+        }
+
+        /// <summary>The cold path: tear down and relaunch the surface with the new <c>SURFACE_THEME</c>.</summary>
+        private void RestartForTheme(string theme)
+        {
+            _themeSwapPending = false;
+            _themeSwapSw = null;
             Log.Write($"Preview theme set to {theme} — restarting preview (per-process app theme).");
 
             var path = _pinnedPath ?? _currentPath;
@@ -826,8 +911,18 @@ namespace WinUIXamlPreview.UI
                     var dead = spare;
                     _ = Dispatcher.InvokeAsync(() =>
                     {
-                        _spareWarming = false;
+                        if (gen == _spareGeneration)
+                        {
+                            _spareWarming = false; // a stale warm must not clear the flag for a newer one
+                        }
+
                         try { dead?.Dispose(); } catch { }
+                        if (ThemeSwapPendingFor(gen))
+                        {
+                            RestartForTheme(PreviewOptions.Theme);
+                            return;
+                        }
+
                         if (gen == _spareGeneration && EditAwaitingSpare)
                         {
                             RenderAwaitedEditInPlace("the spare failed to start");
@@ -839,8 +934,6 @@ namespace WinUIXamlPreview.UI
                 var ready = spare;
                 _ = Dispatcher.InvokeAsync(() =>
                 {
-                    _spareWarming = false;
-
                     // A doc switch (or dispose) happened while warming — this spare is for a stale config.
                     if (_disposed || gen != _spareGeneration)
                     {
@@ -848,11 +941,16 @@ namespace WinUIXamlPreview.UI
                         return;
                     }
 
+                    _spareWarming = false;
                     _spareClient = ready;
                     _spareReady = true;
                     ready!.Closed += OnSpareClosed;
                     Log.Write("Warm spare ready.");
-                    if (EditAwaitingSpare)
+                    if (ThemeSwapPendingFor(gen))
+                    {
+                        CompleteThemeSwap(); // also satisfies any held edit (renders the latest text)
+                    }
+                    else if (EditAwaitingSpare)
                     {
                         DrainAwaitedEdit();
                     }
