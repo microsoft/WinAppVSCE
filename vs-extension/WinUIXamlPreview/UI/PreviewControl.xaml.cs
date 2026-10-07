@@ -88,6 +88,11 @@ namespace WinUIXamlPreview.UI
         // the bundled 2.2.0 leg (which launches byte-clean, no --user-pri). Kept in sync with _activeSurfaceExe
         // so a crash-recycle spare of a matched host also stages the pri and preserves toolkit chrome.
         private string? _activeUserPri;
+        // P7: when a matched host is active and the surface dies with no warm spare, the cold restart relaunches
+        // straight onto that matched host (exe + merged pri) instead of dropping to bundled 2.2.0 and re-running
+        // the background upgrade (2–400+ s of cache validation / build). Consumed once by StartPreviewAsync for
+        // the same document; a failed matched relaunch falls back to the normal bundled + upgrade path.
+        private (string Path, string Exe, string Pri)? _recoverMatchedHost;
 
         // ---- version-matched fidelity upgrade (nov-vsix-wire) --------------
         // The instant launch is ALWAYS the bundled 2.2.0 host. When the target project references a different
@@ -262,6 +267,18 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
+            string? recoverPri = null;
+            var recover = _recoverMatchedHost;
+            _recoverMatchedHost = null;
+            if (recover.HasValue
+                && string.Equals(recover.Value.Path, path, StringComparison.OrdinalIgnoreCase)
+                && File.Exists(recover.Value.Exe))
+            {
+                surfaceExe = recover.Value.Exe;
+                recoverPri = recover.Value.Pri;
+                Log.Write($"Recovery: relaunching on the active version-matched host ({surfaceExe}); skipping the bundled leg + upgrade.");
+            }
+
             if (surfaceExe == null)
             {
                 SetStatus(
@@ -277,15 +294,15 @@ namespace WinUIXamlPreview.UI
             _activeTheme = PreviewOptions.Theme;
             // The instant launch is the bundled 2.2.0 host — always byte-clean (no --user-pri). A version-
             // matched host (with its merged pri) is swapped in later by the background upgrade, which updates
-            // _activeUserPri at promote time.
-            _activeUserPri = null;
+            // _activeUserPri at promote time. A P7 matched recovery launches the matched host + pri directly.
+            _activeUserPri = recoverPri;
             _fullFidelityCancelled = false;
 
             // Packaged (MSIX) user builds require the surface to run with package identity (plan §38). When the
             // chosen assembly is a packaged build and this surface ships the sparse-identity payload, register
             // the sparse package (external location = the surface folder) before launching. Off the UI thread
             // (spawns PowerShell); non-fatal on failure — we still launch and render framework types.
-            if (userDll != null && ProjectDllLocator.IsPackagedBuild(userDll) && SurfaceIdentity.HasIdentityPayload(surfaceExe))
+            if (recoverPri == null && userDll != null && ProjectDllLocator.IsPackagedBuild(userDll) && SurfaceIdentity.HasIdentityPayload(surfaceExe))
             {
                 SetStatus("Preparing packaged preview…", spinner: true, detail: Path.GetFileName(path));
                 var exeForReg = surfaceExe;
@@ -309,7 +326,7 @@ namespace WinUIXamlPreview.UI
             // §51 M3 reflection accelerator only runs after real-type activation, so it is armed only when this
             // document is actually going live (keeps the parse/default path byte-clean — no SURFACE_DTD_REFLECT).
             var reflect = live && PreviewOptions.DesignTimeData;
-            var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, live, PreviewOptions.Theme, reflectionFallback: reflect);
+            var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, live, PreviewOptions.Theme, reflectionFallback: reflect, userPri: recoverPri);
             client.Frame += OnFrame;
             client.Error += OnError;
             client.Hwnd += OnHwnd;
@@ -355,7 +372,11 @@ namespace WinUIXamlPreview.UI
 
                 // Instant bundled preview is now on its way. If this project needs a version-matched host, kick
                 // the background upgrade (run-copy a cached host, or provisioner --build) → hot-swap when ready.
-                KickFidelityUpgrade(plan);
+                // A P7 matched recovery is already on the matched host, so there's nothing to upgrade.
+                if (recoverPri == null)
+                {
+                    KickFidelityUpgrade(plan);
+                }
             }
             catch (Exception ex)
             {
@@ -1652,6 +1673,7 @@ namespace WinUIXamlPreview.UI
                     SetStatus("Live preview unavailable — showing static preview…", spinner: true, detail: Path.GetFileName(path!));
                     _currentPath = null; // force a full re-init in parse mode
                     _perfNextOpenLabel = "recover.livefallback";
+                    RememberMatchedHostForRecovery(path!);
                     ShowDocument(path);
                     return;
                 }
@@ -1684,6 +1706,7 @@ namespace WinUIXamlPreview.UI
                     SetStatus("Surface restarted; reloading…", spinner: true, detail: Path.GetFileName(path!));
                     _currentPath = null; // force ShowDocument to fully re-init rather than short-circuit
                     _perfNextOpenLabel = "recover.cold";
+                    RememberMatchedHostForRecovery(path!);
                     ShowDocument(path);
                     return;
                 }
@@ -1705,6 +1728,14 @@ namespace WinUIXamlPreview.UI
         }
 
         // ---- viewport / sizing ---------------------------------------------
+
+        /// <summary>P7: if the dying surface was a version-matched host, have the cold relaunch reuse it.</summary>
+        private void RememberMatchedHostForRecovery(string path)
+        {
+            _recoverMatchedHost = !string.IsNullOrEmpty(_activeUserPri) && !string.IsNullOrEmpty(_activeSurfaceExe)
+                ? (path, _activeSurfaceExe!, _activeUserPri!)
+                : ((string, string, string)?)null;
+        }
 
         private async System.Threading.Tasks.Task<(int w, int h, double scale)> GetViewportAsync()
         {
