@@ -4,9 +4,7 @@ import * as path from 'path';
 import {
 	FOLDER_PICKER_DETAIL,
 	findBuildOutputFolders,
-	NO_BUILD_OUTPUT_MESSAGE,
-	selectFolder,
-	SELECT_BUILD_OUTPUT_PLACEHOLDER
+	selectFolder
 } from './folder-picker';
 import {
 	classifyRunTarget,
@@ -36,10 +34,11 @@ import {
 
 /** VS Code layer for `winapp run`, shared by commands and the debug adapter. */
 
-/** Marks the run-target picker entry that opens a file dialog for projects. */
-const PROJECT_PICKER_DETAIL = 'Open a file picker for .csproj, .sln, or .slnx';
+/** Marks the run-target picker entry that opens the browse sub-prompt. */
+const BROWSE_DETAIL = 'Pick a project, solution, or build output folder yourself';
 
-const BUILD_OUTPUT_SEARCH_DETAIL = 'Scan the workspace for folders containing .exe files';
+/** Marks the browse sub-prompt entry that opens a file dialog for projects. */
+const PROJECT_PICKER_DETAIL = 'Open a file picker for .csproj, .sln, or .slnx';
 
 /** Prefer project globbing; reserve executable scans for fallback or explicit use. */
 async function findProjectTargets(
@@ -155,7 +154,6 @@ function buildRunTargetItems(
 
 /** Pick what to run; the selection derives the CLI mode. */
 export async function pickRunTarget(
-	alwaysPrompt: boolean = false,
 	scope?: vscode.WorkspaceFolder
 ): Promise<RunTargetSelection | undefined> {
 	const roots = scope
@@ -182,7 +180,6 @@ export async function pickRunTarget(
 	// build-output scan, which is the only way to run in folder mode.
 	let candidates = projects;
 	let solutionMembers = new Map<string, string[]>();
-	let buildOutputScanned = false;
 
 	if (candidates.length > 0) {
 		solutionMembers = await mapSolutionMembers(candidates);
@@ -203,7 +200,6 @@ export async function pickRunTarget(
 			return undefined;
 		}
 		candidates = folders;
-		buildOutputScanned = true;
 	}
 
 	if (candidates.length === 0) {
@@ -214,13 +210,14 @@ export async function pickRunTarget(
 				? 'Only library and test projects were found in this workspace, and winapp run needs an executable app project. Browse to the project or folder you want to run.'
 				: 'No projects, solutions, or build output folders were found in this workspace. Browse to the project or folder you want to run.'
 		);
-		return browseForRunTarget(roots, 'folder');
+		return browseForRunTarget(roots);
 	}
 
 	const sorted = sortRunTargets(candidates);
 
-	// A single unambiguous target needs no prompt at all.
-	if (sorted.length === 1 && !alwaysPrompt) {
+	// A single unambiguous target needs no prompt at all, in either run
+	// command — With Options varies how a target is built, not which one.
+	if (sorted.length === 1) {
 		return { target: sorted[0], members: solutionMembers.get(sorted[0].path) };
 	}
 
@@ -228,21 +225,14 @@ export async function pickRunTarget(
 	const items = buildRunTargetItems(shown, roots.length > 1);
 
 	// A separator immediately followed by another is collapsed by VS Code, so
-	// the cap notice doubles as the divider before the browse entries.
+	// the cap notice doubles as the divider before the browse entry.
 	const capped = sorted.length > shown.length;
 	items.push({
 		label: capped ? `Showing ${shown.length} of ${sorted.length} — browse to reach the rest` : '',
 		kind: vscode.QuickPickItemKind.Separator
 	});
 
-	if (!buildOutputScanned) {
-		items.push({
-			label: '$(search) Search for build output folders…',
-			detail: BUILD_OUTPUT_SEARCH_DETAIL
-		});
-	}
-	items.push({ label: '$(file-code) Browse for a project or solution…', detail: PROJECT_PICKER_DETAIL });
-	items.push({ label: '$(folder-opened) Browse for a folder…', detail: FOLDER_PICKER_DETAIL });
+	items.push({ label: '$(folder-opened) Browse…', detail: BROWSE_DETAIL });
 
 	const picked = await vscode.window.showQuickPick(items, {
 		placeHolder: 'Select the project, solution, or build output folder to run',
@@ -253,32 +243,8 @@ export async function pickRunTarget(
 		return undefined;
 	}
 
-	if (picked.detail === PROJECT_PICKER_DETAIL) {
-		return browseForRunTarget(roots, 'file');
-	}
-
-	if (picked.detail === FOLDER_PICKER_DETAIL) {
-		return browseForRunTarget(roots, 'folder');
-	}
-
-	if (picked.detail === BUILD_OUTPUT_SEARCH_DETAIL) {
-		const folders = await findBuildOutputTargets(roots);
-		if (!folders) {
-			return undefined;
-		}
-		if (folders.length === 0) {
-			vscode.window.showWarningMessage(NO_BUILD_OUTPUT_MESSAGE);
-			return browseForRunTarget(roots, 'folder');
-		}
-		const folderItems = buildRunTargetItems(
-			sortRunTargets(folders).slice(0, RUN_TARGET_DISPLAY_LIMIT),
-			roots.length > 1
-		);
-		const pickedFolder = await vscode.window.showQuickPick(folderItems, {
-			placeHolder: SELECT_BUILD_OUTPUT_PLACEHOLDER,
-			matchOnDescription: true
-		});
-		return pickedFolder?.candidate ? { target: pickedFolder.candidate } : undefined;
+	if (picked.detail === BROWSE_DETAIL) {
+		return browseForRunTarget(roots);
 	}
 
 	return picked.candidate
@@ -286,11 +252,33 @@ export async function pickRunTarget(
 		: undefined;
 }
 
-/** Native fallback; Windows cannot select files and folders in one dialog. */
+/**
+ * Ask what to browse for, then open that dialog.
+ *
+ * Windows cannot select files and folders in one native dialog, so the kind
+ * has to be settled before one opens. Passing `kind` skips the question where
+ * the caller already knows the answer.
+ */
 async function browseForRunTarget(
 	roots: readonly WorkspaceRoot[],
-	mode: 'file' | 'folder'
+	kind?: 'file' | 'folder'
 ): Promise<RunTargetSelection | undefined> {
+	let mode = kind;
+
+	if (!mode) {
+		const picked = await vscode.window.showQuickPick(
+			[
+				{ label: '$(file-code) Project or solution…', detail: PROJECT_PICKER_DETAIL, mode: 'file' as const },
+				{ label: '$(folder) Build output folder…', detail: FOLDER_PICKER_DETAIL, mode: 'folder' as const }
+			],
+			{ placeHolder: 'What would you like to browse for?' }
+		);
+		if (!picked) {
+			return undefined;
+		}
+		mode = picked.mode;
+	}
+
 	const defaultUri = vscode.Uri.file(roots[0].path);
 	let selected: string | undefined;
 
@@ -453,7 +441,7 @@ export async function resolveRunOptions(
 	withOptions: boolean,
 	scope?: vscode.WorkspaceFolder
 ): Promise<{ options: WinAppRunOptions; target: RunTargetCandidate } | undefined> {
-	const selection = await pickRunTarget(withOptions, scope);
+	const selection = await pickRunTarget(scope);
 	if (!selection) {
 		return undefined;
 	}

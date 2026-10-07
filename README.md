@@ -56,7 +56,7 @@ When you run a project-context WinApp command — such as **Initialize Project**
 
 Commands that already take an explicit target — such as **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
 
-**Run Application and F5** use their own target discovery rather than the project detection above. They auto-discover runnable `.csproj` and `.sln` files for .NET apps and prompt if several are found. If none is found, they fall back to discovering build output folders. You can always pick something that wasn't listed with **Browse for a project or solution…** or **Browse for a folder…**. Running a build output folder needs a `Package.appxmanifest` (or `AppxManifest.xml`) in it. Run **WinApp: Generate Manifest** if you don't have one.
+**Run Application and F5** use their own target discovery rather than the project detection above. They auto-discover runnable `.csproj` and `.sln` files for .NET apps and prompt only if several are found. If none is found, they fall back to discovering build output folders. You can always pick something that wasn't listed with **Browse…**, which then asks whether you want a project or solution file or a build output folder. Running a build output folder needs a `Package.appxmanifest` (or `AppxManifest.xml`) in it. Run **WinApp: Generate Manifest** if you don't have one.
 
 **Configuration (optional):**
 

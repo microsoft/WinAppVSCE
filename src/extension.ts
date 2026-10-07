@@ -1009,7 +1009,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			let pickedProject: string | undefined;
 
 			if (!input) {
-				const selection = await pickRunTarget(false, folder);
+				const selection = await pickRunTarget(folder);
 				if (!selection) {
 					throw new Error('No run target selected, cancelling debug session.');
 				}
