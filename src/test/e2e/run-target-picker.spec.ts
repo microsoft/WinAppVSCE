@@ -128,12 +128,36 @@ async function openCommandPalette(page: Page) {
     throw new Error('unreachable');
 }
 
+/**
+ * Run a command by its full palette label.
+ *
+ * Pressing Enter takes whatever VS Code highlights, which is ordered by recent
+ * use. "WinApp: Run Application" is a strict prefix of "WinApp: Run Application
+ * With Options...", so the highlighted row is not reliably the one asked for.
+ * Clicking the shortest row that starts with the label picks the exact command.
+ */
 async function runCommandPalette(page: Page, commandLabel: string): Promise<void> {
-    const input = await openCommandPalette(page);
+    await openCommandPalette(page);
     await page.keyboard.type(commandLabel, { delay: 30 });
     await page.waitForTimeout(1_500);
-    await expect(input).toBeFocused({ timeout: 5_000 });
-    await page.keyboard.press('Enter');
+
+    const rows = quickPickRows(page);
+    await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+
+    const count = await rows.count();
+    let best: { index: number; length: number } | undefined;
+    for (let index = 0; index < count; index += 1) {
+        const text = ((await rows.nth(index).textContent()) ?? '').replace(/\s+/g, ' ').trim();
+        if (text.startsWith(commandLabel) && (!best || text.length < best.length)) {
+            best = { index, length: text.length };
+        }
+    }
+
+    if (!best) {
+        throw new Error(`The command palette never offered "${commandLabel}".`);
+    }
+
+    await rows.nth(best.index).click();
 }
 
 /** Write a project file, creating intermediate directories. */
@@ -187,6 +211,9 @@ test.describe('run target picker', () => {
     test('hides class libraries and test projects', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-filter-e2e-'));
         writeProject(tmpDir, path.join('AppOne', 'AppOne.csproj'));
+        // A second runnable app keeps the picker on screen; a lone survivor
+        // would be auto-selected and the CLI invoked, which this suite avoids.
+        writeProject(tmpDir, path.join('AppTwo', 'AppTwo.csproj'));
         writeProject(tmpDir, path.join('CoreLib', 'CoreLib.csproj'), `<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Library</OutputType>
@@ -210,15 +237,15 @@ test.describe('run target picker', () => {
             app = launched.app;
             const page = launched.page;
 
-            // Only one runnable project survives filtering, which "Run
-            // Application" would auto-select and launch. The With Options command
-            // always shows the picker without invoking the CLI.
+            // Only runnable projects survive filtering; the library and test
+            // projects must not appear next to the two apps.
             await runCommandPalette(page, 'WinApp: Run Application With Options');
 
             const rows = await readRunTargetPicker(page);
             const joined = rows.join('\n');
 
             expect(joined).toContain('AppOne.csproj');
+            expect(joined).toContain('AppTwo.csproj');
             expect(joined).not.toContain('CoreLib.csproj');
             expect(joined).not.toContain('AppOne.Tests.csproj');
 
@@ -246,6 +273,11 @@ test.describe('run target picker', () => {
         const outputDir = path.join(tmpDir, 'CoreLib', 'bin', 'Debug', 'net8.0');
         fs.mkdirSync(outputDir, { recursive: true });
         fs.writeFileSync(path.join(outputDir, 'CoreLib.Sample.exe'), '');
+        // A second build output keeps the picker on screen; a lone candidate
+        // is auto-selected and handed straight to the CLI.
+        const extraOutput = path.join(tmpDir, 'dist', 'win-unpacked');
+        fs.mkdirSync(extraOutput, { recursive: true });
+        fs.writeFileSync(path.join(extraOutput, 'Sample.exe'), '');
 
         let app: ElectronApplication | undefined;
         try {
@@ -278,6 +310,8 @@ test.describe('run target picker', () => {
     test('prefers the project over its own build output folder', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-prefer-e2e-'));
         writeProject(tmpDir, path.join('App', 'App.csproj'));
+        // A second project keeps the picker on screen so its rows can be read.
+        writeProject(tmpDir, path.join('Other', 'Other.csproj'));
         const outputDir = path.join(tmpDir, 'App', 'bin', 'Debug', 'net8.0-windows10.0.19041.0');
         fs.mkdirSync(outputDir, { recursive: true });
         fs.writeFileSync(path.join(outputDir, 'App.exe'), '');
@@ -320,6 +354,12 @@ test.describe('run target picker', () => {
         fs.mkdirSync(vendored, { recursive: true });
         fs.writeFileSync(path.join(vendored, 'electron.exe'), '');
 
+        // A second real output folder keeps the picker on screen; one candidate
+        // would be auto-selected and run.
+        const toolOutput = path.join(tmpDir, 'build', 'release');
+        fs.mkdirSync(toolOutput, { recursive: true });
+        fs.writeFileSync(path.join(toolOutput, 'Tool.exe'), '');
+
         let app: ElectronApplication | undefined;
         try {
             const launched = await launchVSCode(tmpDir);
@@ -343,9 +383,10 @@ test.describe('run target picker', () => {
         }
     });
 
-    // The second prompt, which supplies `--project`. Selecting the solution
-    // from the first picker must lead to a project prompt listing both apps,
-    // because `winapp run` cannot resolve a multi-app solution on its own.
+    // The second prompt, which supplies `--project`. The solution is the only
+    // run target, so it is auto-selected and the flow must land on a project
+    // prompt listing both apps: `winapp run` cannot resolve a multi-app
+    // solution on its own.
     test('asks which project to run inside a multi-app solution', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-sln-project-e2e-'));
         writeProject(tmpDir, path.join('Alpha', 'Alpha.csproj'));
@@ -365,12 +406,8 @@ test.describe('run target picker', () => {
 
             await runCommandPalette(page, 'WinApp: Run Application With Options');
 
-            // Solutions sort ahead of projects, so the first row is the
-            // solution and its members are already folded into it.
-            const targets = await readRunTargetPicker(page);
-            expect(targets.join('\n')).toContain('MySln.sln');
-            await page.keyboard.press('Enter');
-
+            // Solutions fold their members in, so the solution is the single
+            // candidate and selection is skipped entirely.
             const projects = (await readPickerRows(page, PROJECT_PICKER_PLACEHOLDER)).join('\n');
             expect(projects).toContain('Alpha.csproj');
             expect(projects).toContain('Beta.csproj');
@@ -413,11 +450,8 @@ test.describe('run target picker', () => {
 
             await runCommandPalette(page, 'WinApp: Run Application With Options');
 
-            const targets = await readRunTargetPicker(page);
-            expect(targets.join('\n')).toContain('MySln.sln');
-            await page.keyboard.press('Enter');
-
-            // The project prompt precedes build settings, so landing on the
+            // The solution is the only run target, so it is auto-selected. The
+            // project prompt precedes build settings, so landing on the
             // configuration prompt proves it never appeared.
             const options = await readPickerRows(page, BUILD_CONFIG_PLACEHOLDER);
             expect(options.join('\n')).toContain('Debug');
@@ -463,7 +497,7 @@ test.describe('run target picker', () => {
 
             expect(projectNames.size).toBeLessThanOrEqual(10);
             expect(joined).toContain(`Showing 10 of ${total}`);
-            expect(joined).toContain('Browse for a project or solution');
+            expect(joined).toContain('Browse');
 
             await page.keyboard.press('Escape');
             console.log('✅ PASS: project list capped at 10 with a browse hint');
@@ -493,13 +527,13 @@ test.describe('run target picker', () => {
 
             expect(joined).toContain('AppOne.csproj');
             expect(joined).toContain('AppTwo.csproj');
-            // The expensive .exe scan is offered, not performed up front.
-            expect(joined).toContain('Search for build output folders');
-            expect(joined).toContain('Browse for a project or solution');
-            expect(joined).toContain('Browse for a folder');
+            // One browse entry, not a separate line per dialog kind; the kind
+            // is settled by a sub-prompt after it is chosen.
+            expect(joined).toContain('Browse');
+            expect(joined).not.toContain('Search for build output folders');
 
             await page.keyboard.press('Escape');
-            console.log('✅ PASS: both projects listed with search and browse entries');
+            console.log('✅ PASS: both projects listed with a single browse entry');
         } finally {
             if (app) {
                 await app.close().catch(() => {});
@@ -511,6 +545,9 @@ test.describe('run target picker', () => {
     test('shows a solution once rather than also listing its member projects', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-sln-e2e-'));
         writeProject(tmpDir, path.join('AppOne', 'AppOne.csproj'));
+        // A standalone app outside the solution keeps the picker on screen; a
+        // lone candidate is auto-selected and handed straight to the CLI.
+        writeProject(tmpDir, path.join('Standalone', 'Standalone.csproj'));
         fs.writeFileSync(
             path.join(tmpDir, 'MySolution.sln'),
             'Microsoft Visual Studio Solution File, Format Version 12.00\r\n'
@@ -524,15 +561,15 @@ test.describe('run target picker', () => {
             app = launched.app;
             const page = launched.page;
 
-            // Deduplication leaves a single candidate, which "Run Application"
-            // would auto-select and launch. Use the With Options command so the
-            // picker is always shown and the CLI is never invoked.
+            // Deduplication folds AppOne into the solution, leaving it beside
+            // the standalone app.
             await runCommandPalette(page, 'WinApp: Run Application With Options');
 
             const rows = await readRunTargetPicker(page);
             const joined = rows.join('\n');
 
             expect(joined).toContain('MySolution.sln');
+            expect(joined).toContain('Standalone.csproj');
             // The member project is reachable through the solution, so listing
             // it separately would just be a duplicate of the same app.
             expect(joined).not.toContain('AppOne.csproj');
@@ -586,7 +623,9 @@ test.describe('run target picker', () => {
         }
     });
 
-    test('With Options command prompts even when a single project would auto-select', async () => {
+    // The two run commands must agree on which target to run; With Options
+    // varies how that target is built, not which one is chosen.
+    test('With Options command skips the target prompt for a single project', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-with-options-e2e-'));
         writeProject(tmpDir, path.join('OnlyApp', 'OnlyApp.csproj'));
 
@@ -598,11 +637,13 @@ test.describe('run target picker', () => {
 
             await runCommandPalette(page, 'WinApp: Run Application With Options');
 
-            const rows = await readRunTargetPicker(page);
-            expect(rows.join('\n')).toContain('OnlyApp.csproj');
+            // Landing on the build prompt proves the target was auto-selected:
+            // it is the prompt that follows target selection.
+            const rows = await readPickerRows(page, BUILD_CONFIG_PLACEHOLDER);
+            expect(rows.join('\n')).toContain('Release');
 
             await page.keyboard.press('Escape');
-            console.log('✅ PASS: With Options command prompted for a single candidate');
+            console.log('✅ PASS: With Options auto-selected the only project');
         } finally {
             if (app) {
                 await app.close().catch(() => {});
@@ -645,15 +686,18 @@ test.describe('run target picker', () => {
             await runCommandPalette(page, 'Debug: Start Debugging');
 
             // With no configuration yet selected in the Run and Debug view,
-            // VS Code first asks which one to start. The workspace has exactly
-            // one, so Enter accepts it.
+            // VS Code may first ask which one to start. The workspace has
+            // exactly one, so accept it when the prompt appears; some builds
+            // start it outright and go straight to the run-target picker.
             const quickInput = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
-            await expect(quickInput).toHaveAttribute(
-                'placeholder',
-                /Type the name of a launch configuration to run/,
-                { timeout: 30_000 }
-            );
-            await page.keyboard.press('Enter');
+            try {
+                await expect(quickInput).toHaveAttribute(
+                    'placeholder',
+                    /Type the name of a launch configuration to run/,
+                    { timeout: 5_000 }
+                );
+                await page.keyboard.press('Enter');
+            } catch { /* the configuration was started without asking */ }
 
             const rows = await readRunTargetPicker(page);
             expect(rows.join('\n')).toContain('AppOne.csproj');

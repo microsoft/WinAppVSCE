@@ -27,10 +27,13 @@ const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
     : ['--disable-extensions', `--extensionDevelopmentPath=${EXTENSION_ROOT}`];
 
 /** A build, deploy, and launch takes far longer than the suite's default. */
-const LIVE_RUN_TIMEOUT_MS = 8 * 60 * 1000;
+const LIVE_RUN_TIMEOUT_MS = 12 * 60 * 1000;
 
-/** How long to wait for the app to appear after the command is dispatched. */
-const LAUNCH_TIMEOUT_MS = 6 * 60 * 1000;
+/**
+ * How long to wait for the app to appear after the command is dispatched.
+ * A cold NuGet restore plus a full Release build can run past six minutes.
+ */
+const LAUNCH_TIMEOUT_MS = 10 * 60 * 1000;
 
 // ──────────────────────────────────────────────────────
 // Shell helpers
@@ -386,15 +389,37 @@ async function openCommandPalette(page: Page) {
 }
 
 /** Wait for the palette placeholder so typed commands cannot land in an editor. */
+/**
+ * Run a command by its full palette label.
+ *
+ * Pressing Enter takes whatever VS Code highlights, which is ordered by recent
+ * use. "WinApp: Run Application" is a strict prefix of "WinApp: Run Application
+ * With Options...", so the highlighted row is not reliably the one asked for.
+ * Clicking the shortest row that starts with the label picks the exact command.
+ */
 async function runCommandPalette(page: Page, commandLabel: string): Promise<void> {
-    const input = await openCommandPalette(page);
+    await openCommandPalette(page);
 
     await page.keyboard.type(commandLabel, { delay: 30 });
     await page.waitForTimeout(1_500);
 
-    // Guard against the palette being dismissed mid-type.
-    await expect(input).toBeFocused({ timeout: 5_000 });
-    await page.keyboard.press('Enter');
+    const rows = page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
+    await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+
+    const count = await rows.count();
+    let best: { index: number; length: number } | undefined;
+    for (let index = 0; index < count; index += 1) {
+        const text = ((await rows.nth(index).textContent()) ?? '').replace(/\s+/g, ' ').trim();
+        if (text.startsWith(commandLabel) && (!best || text.length < best.length)) {
+            best = { index, length: text.length };
+        }
+    }
+
+    if (!best) {
+        throw new Error(`The command palette never offered "${commandLabel}".`);
+    }
+
+    await rows.nth(best.index).click();
 }
 
 /** Rows, not the widget, signal that a QuickPick has finished populating. */
@@ -583,9 +608,6 @@ test.describe('live winapp run (project mode)', () => {
 
             await runCommandPalette(page, 'WinApp: Run Application With Options');
 
-            // With Options always prompts for the target, even when the
-            // workspace holds exactly one project.
-            await acceptQuickPick(page);
             await pickQuickItem(page, 'Release');
             await pickQuickItem(page, 'x64');
             // The toggle picker is multi-select; accept it with nothing chosen.

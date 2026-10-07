@@ -92,13 +92,13 @@ Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which de
 | 2 | falls back to build output when the only project is a library | With nothing runnable found, the build-output scan still supplies targets |
 | 3 | prefers the project over its own build output folder | A project and its `bin` output collapse to the project entry |
 | 4 | finds output for a project-less app without surfacing node_modules | Electron/Rust-shaped workspaces reach the `.exe` scan, and excluded directories stay excluded |
-| 5 | asks which project to run inside a multi-app solution | A multi-app `.sln` raises the second prompt that supplies `--project` |
+| 5 | asks which project to run inside a multi-app solution | A multi-app `.sln` is auto-selected, then raises the second prompt that supplies `--project` |
 | 6 | skips the project prompt when a solution holds one runnable app | A single-app solution goes straight on, landing on the build-configuration prompt |
 | 7 | caps the list and points at browse when many projects are found | Beyond the cap the picker truncates and surfaces the browse entry instead of hundreds of rows |
-| 8 | lists every discovered project in the workspace | Both `.csproj` files appear, alongside the build-output search and the two browse entries |
+| 8 | lists every discovered project in the workspace | Both `.csproj` files appear alongside a single browse entry, with no separate build-output search row |
 | 9 | shows a solution once rather than also listing its member projects | A `.sln` and its member `.csproj` collapse to a single entry |
 | 10 | discovers projects in every folder of a multi-root workspace | Projects from *both* folders of a `.code-workspace` appear — previously only `workspaceFolders[0]` was searched |
-| 11 | With Options command prompts even when a single project would auto-select | `winapp.runWithOptions` always shows the picker |
+| 11 | With Options command skips the target prompt for a single project | `winapp.runWithOptions` auto-selects the only candidate, matching `winapp.run`, and goes straight to the build prompt |
 | 12 | F5 with no input in launch.json prompts for a run target | A `winapp` launch configuration that omits `input` falls through to the picker instead of failing with a missing-argument error |
 
 > When matching the picker, assert on the full placeholder. The command palette's own placeholder is "Type the name of a command **to run**", so a loose `/to run/` match silently reads the palette's rows instead of the picker's.
