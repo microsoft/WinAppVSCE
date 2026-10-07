@@ -1047,6 +1047,35 @@ public partial class App : Application, IXamlMetadataProvider
     /// supplied. This avoids staging the full app <c>.pri</c>, which crashes WinUI's MRT at startup on large
     /// real-app PRIs.
     /// </summary>
+    /// <summary>
+    /// Copies a user resource into the host's base directory. The bundled host's base directory is shared by
+    /// every surface process launched from it (active + warm spare, other VS instances), so two processes can
+    /// stage the same file concurrently: an identical copy (CopyFile preserves size + last-write time) is
+    /// skipped, and a transient sharing violation is retried briefly before giving up.
+    /// </summary>
+    private static void StageFile(string src, string dest)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                var s = new FileInfo(src);
+                var d = new FileInfo(dest);
+                if (d.Exists && d.Length == s.Length && d.LastWriteTimeUtc == s.LastWriteTimeUtc)
+                {
+                    return;
+                }
+
+                File.Copy(src, dest, overwrite: true);
+                return;
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                Thread.Sleep(50);
+            }
+        }
+    }
+
     private static void StageLooseXamlResources(string userAssemblyPath)
     {
         var dllDir = Path.GetDirectoryName(userAssemblyPath)!;
@@ -1064,7 +1093,7 @@ public partial class App : Application, IXamlMetadataProvider
                 var rel = Path.GetRelativePath(srcTree, src);
                 var dest = Path.Combine(destTree, rel);
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                File.Copy(src, dest, overwrite: true);
+                StageFile(src, dest);
                 libCount++;
             }
             Log($"Staged {libCount} loose class-lib resource file(s): {srcTree} -> {destTree}");
@@ -1095,7 +1124,7 @@ public partial class App : Application, IXamlMetadataProvider
             var dest = Path.Combine(AppContext.BaseDirectory, rel);
             // Do not overwrite the host's own resources (defensive; the surface ships no .xbf of its own).
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            File.Copy(src, dest, overwrite: true);
+            StageFile(src, dest);
             appCount++;
         }
         if (appCount > 0)

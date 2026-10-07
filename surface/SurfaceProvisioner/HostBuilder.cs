@@ -66,8 +66,8 @@ public static class HostBuilder
         try
         {
             cancellation.ThrowIfCancellationRequested();
-            if (opt.Platform != "x64" || opt.Rid != "win-x64")
-                throw new NotSupportedException("This build lane supports only x64 / win-x64.");
+            if (!((opt.Platform == "x64" && opt.Rid == "win-x64") || (opt.Platform == "ARM64" && opt.Rid == "win-arm64")))
+                throw new NotSupportedException("This build lane supports only x64 / win-x64 and ARM64 / win-arm64.");
             foreach (var file in new[] { opt.SurfaceProjectPath, opt.DesignHostPriProjectPath })
                 if (!File.Exists(file)) throw new FileNotFoundException("Required source project missing.", file);
             var (version, source, path) = Provisioner.DiscoverVersion(opt.ProjectPath, log);

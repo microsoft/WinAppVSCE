@@ -145,6 +145,8 @@
   <PropertyGroup>
     <SurfaceOutDir Condition="'$(SurfaceOutDir)' == '' and '$(WinUISurfaceIdentity)' == 'Migration24e47e37'">$(MSBuildProjectDirectory)\obj\IdentityPayload-Migration24e47e37</SurfaceOutDir>
     <SurfaceOutDir Condition="'$(SurfaceOutDir)' == ''">$(MSBuildProjectDirectory)\obj\IdentityPayload</SurfaceOutDir>
+    <!-- Native ARM64 surface (Surface-arm64\): picked by HostArch on ARM64 Windows instead of the emulated x64 one. -->
+    <SurfaceArm64OutDir Condition="'$(SurfaceArm64OutDir)' == ''">$(SurfaceOutDir)-arm64</SurfaceArm64OutDir>
   </PropertyGroup>
   <Target Name="AddSurfaceToVsix" AfterTargets="GetVsixSourceItems" Condition="'$(DotnetVsixBuild)' != 'true'">
     <ItemGroup Condition="Exists('$(SurfaceOutDir)\Surface.exe')">
@@ -153,10 +155,20 @@
         <VSIXSubPath>Surface\%(RecursiveDir)</VSIXSubPath>
       </VSIXSourceItem>
     </ItemGroup>
+    <ItemGroup Condition="Exists('$(SurfaceArm64OutDir)\Surface.exe')">
+      <_SurfaceArm64Payload Include="$(SurfaceArm64OutDir)\**\*" />
+      <VSIXSourceItem Include="@(_SurfaceArm64Payload)">
+        <VSIXSubPath>Surface-arm64\%(RecursiveDir)</VSIXSubPath>
+      </VSIXSourceItem>
+    </ItemGroup>
     <Message Importance="high" Condition="Exists('$(SurfaceOutDir)\Surface.exe')"
              Text="WinUIXamlPreview: bundled Surface.exe closure into VSIX (Surface\) from $(SurfaceOutDir)." />
+    <Message Importance="high" Condition="Exists('$(SurfaceArm64OutDir)\Surface.exe')"
+             Text="WinUIXamlPreview: bundled ARM64 Surface.exe closure into VSIX (Surface-arm64\) from $(SurfaceArm64OutDir)." />
     <Error Condition="!Exists('$(SurfaceOutDir)\Surface.exe')"
              Text="WinUIXamlPreview: Surface.exe not found at '$(SurfaceOutDir)'. Run Build-Vsix.ps1 -NoDeploy to build and stage the complete payload." />
+    <Error Condition="!Exists('$(SurfaceArm64OutDir)\Surface.exe')"
+             Text="WinUIXamlPreview: ARM64 Surface.exe not found at '$(SurfaceArm64OutDir)'. Run Build-Vsix.ps1 -NoDeploy to build and stage the complete payload." />
   </Target>
 
   <!--
@@ -187,6 +199,7 @@
     <ItemGroup>
       <_RequiredDesignerFile Include="$(SurfaceOutDir)\Surface.wasdk.version;$(HostSdkStageDir)\LICENSE.winui-vsc.txt;$(MSBuildProjectDirectory)\..\LICENSE.winui-vsc.txt" />
       <_RequiredDesignerFile Include="$(SurfaceOutDir)\Surface.exe;$(SurfaceOutDir)\Surface.dll;$(SurfaceOutDir)\Surface.pri;$(SurfaceOutDir)\Surface.deps.json;$(SurfaceOutDir)\Surface.runtimeconfig.json;$(SurfaceOutDir)\Microsoft.WinUI.dll;$(SurfaceOutDir)\AppxManifest.xml;$(SurfaceOutDir)\Assets\StoreLogo.png;$(SurfaceOutDir)\Assets\MedTile.png;$(SurfaceOutDir)\Assets\AppList.png" />
+      <_RequiredDesignerFile Include="$(SurfaceArm64OutDir)\Surface.wasdk.version;$(SurfaceArm64OutDir)\Surface.exe;$(SurfaceArm64OutDir)\Surface.dll;$(SurfaceArm64OutDir)\Surface.pri;$(SurfaceArm64OutDir)\Surface.deps.json;$(SurfaceArm64OutDir)\Surface.runtimeconfig.json;$(SurfaceArm64OutDir)\Microsoft.WinUI.dll;$(SurfaceArm64OutDir)\AppxManifest.xml;$(SurfaceArm64OutDir)\Assets\StoreLogo.png;$(SurfaceArm64OutDir)\Assets\MedTile.png;$(SurfaceArm64OutDir)\Assets\AppList.png" />
       <_RequiredDesignerFile Include="$(HostSdkStageDir)\engine.stamp;$(HostSdkStageDir)\surface\Surface\Surface.csproj;$(HostSdkStageDir)\surface\Surface\App.cs;$(HostSdkStageDir)\DesignHost\DesignHost.csproj;$(HostSdkStageDir)\DesignHost\Package.appxmanifest;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.exe;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.dll;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.runtimeconfig.json;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.deps.json" />
     </ItemGroup>
     <Error Condition="!Exists('%(_RequiredDesignerFile.Identity)')" Text="Required designer payload missing: %(_RequiredDesignerFile.Identity). Run Build-Vsix.ps1 -NoDeploy." />

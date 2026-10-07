@@ -60,8 +60,8 @@ blank/default unless live activation works.
 Context that shapes the plan: VS defaults to **native-HWND mode** (`PreferNative`),
 so the PNG encode/readback path matters less here than **process launch, run-copy,
 and re-host** cost. The margin already debounces edits (500 ms) and resizes (180 ms).
-On ARM64 every Surface process runs under x64 emulation, so each relaunch is
-expensive.
+Until P9 every Surface process on ARM64 ran under x64 emulation, which made each
+relaunch expensive. P9 now ships a native ARM64 Surface.
 
 Measured facts (ARM64 dev machine):
 - Matched self-contained host = **327 files / 151 MB**.
@@ -116,7 +116,53 @@ stamp gives a new cache key.
 | P6 ✅ | Theme switch as a warm swap (keep old frame, swap to a new-theme process) | **Done:** a theme change previously tore the preview down and cold-relaunched on bundled 2.2.0, then re-ran the matched upgrade (two repaints, placeholder interim, 4 processes). Now `SetTheme` drops the old-theme spare, warms a spare in the new theme on the *same* host (bundled or matched exe + pri) and promotes it via `TryPromoteSpare`; the old frame stays up until the swap. Falls back to the cold relaunch if no surface is running, a fidelity upgrade is still in flight, or the spare fails. Also fixed a stale-spare race (a superseded warm could clear `_spareWarming` for a newer one). No always-on opposite-theme spare (memory). Live (matched 2.5.1 host, quiet machine): cold baseline 1.6 s to a bundled paint + 3.7 s to matched (≈5.3 s total); warm swap 2.8–5.5 s (`theme.spare` 1.8–4.6 s + `theme.swap.paint` 0.9–1.1 s) straight to matched with no intermediate repaint; PrintWindow luma Dark 46 / Light 154 | `PreviewControl.SetTheme`/`TryBeginThemeSwap`/`CompleteThemeSwap`; `WarmSpare` | P5 |
 | P7 ✅ | Keep the matched host across crash recovery | Verified: warm-spare recovery already kept the matched host, but cold/live-fallback recovery reset to the bundled exe and re-ran the fidelity upgrade (`upgrade.build` 2–400 s of placeholder fallback). Now `OnClosed` remembers the active matched exe/pri and `StartPreviewAsync` relaunches directly on it (no identity move, no `KickFidelityUpgrade`); a failed matched relaunch falls back to the normal path on the next attempt. Live: killed active + spare → `recover.livefallback.paint` 6.3 s on the 2.5.1 host, no re-upgrade (that session's initial `upgrade.build` was 206 s). | P0 |
 | P8 ✅ | Prewarm packaged identity + fast already-registered check | **Done:** `SurfaceIdentity.EnsureRegistered` ran a PowerShell script (`Get-AppxPackage`, then `Add-AppxPackage -Register`) on every VS session's first packaged preview, costing 2.5–12.4 s even when the package was already registered (11–18 s for a real registration). Now: (1) a native check (`GetPackagesByPackageFamily` + `GetPackagePathByFullName`, ~10–40 ms) skips PowerShell when the package is already registered at this Surface folder; (2) `IdentityPrewarm` starts registration in the background from the first WinUI editor margin (which can come up minutes before the background-loaded package) and on solution open, for projects with only a packaged build; (3) `EnsureRegisteredAsync` de-dupes so the open path joins an in-flight prewarm instead of running PowerShell twice. **Measured (live VS, MockWinUIPreview):** repeat session `open.identity` 0 ms (fast check 11 ms), open→paint 7.2 s; after a reinstall (real registration) the open joined the prewarm and waited 10.9 s instead of ~17 s. | P0 |
-| P9 | Re-measure vs baseline, record results; fault harness stays 9/9 | — | all |
+| P9 ✅ | Re-measure vs baseline, record results; fault harness stays 9/9. Added a native ARM64 Surface | See "P9: x64-emulated vs native ARM64 Surface" below. Fault harness 9/9; provisioner fixtures 131/131 | all |
+
+### P9: x64-emulated vs native ARM64 Surface
+
+The VSIX now carries two Surface payloads: `Surface\` (x64) and `Surface-arm64\`
+(arm64). Each has its own sparse-identity AppxManifest.
+
+How the arch is chosen:
+- `HostArch` reads the OS native machine (`IsWow64Process2`).
+- It picks the matching bundled Surface, falling back to `Surface\`.
+- The provisioner builds matched hosts with `--platform ARM64 --rid win-arm64`; platform and RID are part of the cache key.
+- `ProjectDllLocator` only picks user DLLs that the host can load: same machine, AnyCPU, or I386.
+- Only one arch of the sparse package can be registered per user. The first open on a new arch re-registers it (about 3–4 s).
+
+Costs:
+- VSIX size is 80.3 MB, of which about 39 MB is the arm64 payload.
+- The first ARM64 matched build takes 60–75 s (the cache is per arch).
+
+Bench method: Snapdragon X Elite, MockWinUIPreview, cache warm, live VS with a scripted sequence.
+- Steps: open HomePage, upgrade, 6 edits, Dark/Light theme swaps, then kill active + spare.
+- A = x64 Surface (emulated): 3 runs.
+- B = ARM64 Surface: 4 runs.
+- Medians:
+
+| Metric | A: x64 emulated | B: native ARM64 |
+|--------|----------------:|----------------:|
+| Live edit → paint (`edit.livespare.paint`) | 1618 ms | **543 ms** |
+| Theme swap → paint (`theme.swap.paint`) | 988 ms | **390 ms** |
+| Theme spare ready (`theme.spare`) | 2012 ms | 1631 ms |
+| Upgrade swap → paint (`upgrade.swap.paint`) | 1017 ms | **417 ms** |
+| Crash → recovered (`recover.livefallback.paint`) | 2847 ms | 2214 ms |
+| Bundled spawn → Ready | 868 ms | 755 ms |
+| Matched spawn → Ready (private run) | 1223 ms | 933 ms |
+| Open → first paint (`open.paint`) | 2196 ms | 2904 ms |
+| `upgrade.build` (cache hit) | 1502 ms | 1629 ms |
+| `client.runcopy` | 589 ms | 923 ms |
+
+Notes on the comparison:
+- **A did less work.** The mock's user DLL is ARM64-only, so under the x64 Surface it failed with `FileLoadException` and A rendered without user code. B loads and runs it. Real x64 machines are unaffected; they were not measured here.
+- `open.paint` is higher on B partly for that reason.
+- `client.runcopy` is a file copy done by the native extension, so arch shouldn't matter. It is higher on B and varies widely (340–4041 ms). The likely cause is AV scanning of the new binaries, but this is unconfirmed. Spares copy in the background, so it rarely affects the user.
+
+Issues found and fixed during P9:
+- **xbf staging race.** A bundled host (no private run) copies user `.xbf`/`.xaml` into its own install directory, and an active process and its spare could do this at the same time, causing an IOException. The bug was latent on x64 because the user DLL load failed first. `App.StageFile` now skips the copy if the destination already has the same size and mtime, and retries an IOException briefly.
+- **Transient access denied on run-copy publish.** About once in 120 copies, the final `Directory.Move` of the staging dir failed. When that happened there was no spare until the next edit, which waited about 60 s. `CreateRunCopy` now retries the rename (up to 10 times, with backoff) as long as the destination still doesn't exist.
+
+Open item (not fixed): matched spares run from `%TEMP%\wsr-v2`, which has no sparse identity. When they load a packaged user build they log "The process has no package identity". This was not visible under x64 because the DLL never loaded there.
 
 Deferred (lower value in native mode): parsed-XAML caching, PNG supersampling cost.
 

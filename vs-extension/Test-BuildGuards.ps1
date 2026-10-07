@@ -14,7 +14,7 @@ try {
     [IO.Compression.ZipFile]::ExtractToDirectory((Resolve-Path $vsix).Path, $check)
     foreach ($missing in @("Surface\Surface.exe", "Surface\AppxManifest.xml",
         "HostSDK\SurfaceProvisioner\SurfaceProvisioner.dll", "HostSDK\LICENSE.winui-vsc.txt",
-        "Surface\Surface.wasdk.version")) {
+        "Surface\Surface.wasdk.version", "Surface-arm64\Surface.exe", "Surface-arm64\AppxManifest.xml")) {
         $path = Join-Path $check $missing
         Move-Item $path "$path.hidden"
         try {

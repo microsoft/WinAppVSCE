@@ -52,7 +52,7 @@ namespace WinUIXamlPreview.Protocol
 
         /// <summary>
         /// The <c>Surface.exe</c> shipped inside the extension, next to this assembly under
-        /// <c>Surface\</c>. Uses the assembly's own location (NOT
+        /// <c>Surface\</c> (x64) or <c>Surface-arm64\</c> (ARM64, see <see cref="HostArch"/>). Uses the assembly's own location (NOT
         /// <see cref="AppDomain.BaseDirectory"/>, which for an in-proc VS package is devenv's
         /// directory, not the extension install folder).
         /// </summary>
@@ -67,8 +67,9 @@ namespace WinUIXamlPreview.Protocol
                     return null;
                 }
 
-                var exe = Path.Combine(asmDir, "Surface", "Surface.exe");
-                return File.Exists(exe) ? exe : null;
+                var dir = HostArch.BundledSurfaceDir(asmDir!);
+                var exe = dir == null ? null : Path.Combine(dir, "Surface.exe");
+                return exe;
             }
             catch
             {

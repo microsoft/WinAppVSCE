@@ -28,7 +28,8 @@ internal static class MatchedHostResolver
         get
         {
             var directory = Path.GetDirectoryName(typeof(MatchedHostResolver).Assembly.Location)!;
-            return File.ReadAllText(Path.Combine(directory, "Surface", "Surface.wasdk.version")).Trim();
+            var surfaceDir = HostArch.BundledSurfaceDir(directory) ?? Path.Combine(directory, "Surface");
+            return File.ReadAllText(Path.Combine(surfaceDir, "Surface.wasdk.version")).Trim();
         }
     }
     public static string CacheRoot => Path.Combine(

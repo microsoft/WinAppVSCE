@@ -56,6 +56,19 @@ namespace WinUIXamlPreview.Protocol
                     return null;
                 }
 
+                // Prefer a build whose architecture the (arch-native) host can load: an ARM64 surface can't
+                // load an x64 assembly and vice versa (FileLoadException → custom controls don't resolve).
+                var loadable = dlls.Where(HostArch.CanHostLoad).ToList();
+                if (loadable.Count == 0)
+                {
+                    log($"No {HostArch.Platform} build of {assemblyName} found under {binDir}; build the project for " +
+                        $"{HostArch.Platform} so custom controls resolve. Trying the newest build anyway.");
+                }
+                else
+                {
+                    dlls = loadable;
+                }
+
                 // Prefer an UNPACKAGED build. A packaged (MSIX) build emits AppxManifest.xml next to the
                 // assembly and compiles in the Windows App SDK DeploymentManager auto-initializer, whose
                 // module initializer calls DeploymentManager.Initialize() — that requires package identity

@@ -283,6 +283,7 @@ namespace WinUIXamlPreview.Protocol
                 args.Append(" --designhostpri-project ").Append(Quote(env.DesignHostProject!));
                 args.Append(" --cache ").Append(Quote(cache));
                 args.Append(" --engine-stamp ").Append(Quote(stamp));
+                args.Append(" --platform ").Append(HostArch.Platform).Append(" --rid ").Append(HostArch.Rid);
                 if (bundledHostDir != null)
                 {
                     args.Append(" --bundled-host ").Append(Quote(bundledHostDir));
@@ -421,8 +422,7 @@ namespace WinUIXamlPreview.Protocol
             {
                 var asmDir = Path.GetDirectoryName(typeof(HostProvisionerRunner).Assembly.Location);
                 if (string.IsNullOrEmpty(asmDir)) return null;
-                var dir = Path.Combine(asmDir!, "Surface");
-                return File.Exists(Path.Combine(dir, "Surface.exe")) ? dir : null;
+                return HostArch.BundledSurfaceDir(asmDir!);
             }
             catch
             {

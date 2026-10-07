@@ -137,8 +137,23 @@ internal static class HostPayload
             log?.Invoke("Validating prepared run payload.");
             RejectUnexpectedFiles(staging, m, cancellation);
             File.WriteAllText(Path.Combine(staging, RunMarker), Guid.NewGuid().ToString("N"));
-            cancellation.ThrowIfCancellationRequested();
-            Directory.Move(staging, destination);
+            // A freshly written tree can be briefly held open by AV/indexer scans, which surfaces as a transient
+            // access-denied/sharing failure on the rename. Retry briefly; never over an existing destination.
+            for (var attempt = 0; ; attempt++)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                try
+                {
+                    Directory.Move(staging, destination);
+                    break;
+                }
+                catch (Exception ex) when (attempt < 10 && (ex is IOException or UnauthorizedAccessException)
+                    && Directory.Exists(staging) && !Directory.Exists(destination) && !File.Exists(destination))
+                {
+                    log?.Invoke($"Run-copy publish retry {attempt + 1}: {ex.Message}");
+                    Thread.Sleep(50 * (attempt + 1));
+                }
+            }
             return m;
         }
         finally

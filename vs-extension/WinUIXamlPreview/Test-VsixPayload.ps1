@@ -18,6 +18,11 @@ try {
         "Surface/Surface.deps.json", "Surface/Surface.runtimeconfig.json", "Surface/Microsoft.WinUI.dll",
         "Surface/AppxManifest.xml", "Surface/Assets/StoreLogo.png",
         "Surface/Assets/MedTile.png", "Surface/Assets/AppList.png",
+        "Surface-arm64/Surface.exe", "Surface-arm64/Surface.dll", "Surface-arm64/Surface.pri",
+        "Surface-arm64/Surface.wasdk.version", "Surface-arm64/Surface.deps.json",
+        "Surface-arm64/Surface.runtimeconfig.json", "Surface-arm64/Microsoft.WinUI.dll",
+        "Surface-arm64/AppxManifest.xml", "Surface-arm64/Assets/StoreLogo.png",
+        "Surface-arm64/Assets/MedTile.png", "Surface-arm64/Assets/AppList.png",
         "HostSDK/engine.stamp", "HostSDK/LICENSE.winui-vsc.txt",
         "HostSDK/surface/Surface/Surface.csproj", "HostSDK/surface/Surface/App.cs",
         "HostSDK/DesignHost/DesignHost.csproj", "HostSDK/DesignHost/Package.appxmanifest",
@@ -59,7 +64,7 @@ try {
     $bad = @($names | Where-Object {
         $_ -match '(?i)(^|/)(bin|obj|TestResults|qa-results|TestUserApp|WinUIGallery|AIDevGallery|Spike[^/]*)(/|\.|$)' -or
         $_ -match '(?i)(\.bak|\.log|\.user|launchSettings\.json)$' -or
-        $_ -match '(?i)^Surface/.*\.(xaml|xbf)$'
+        $_ -match '(?i)^Surface(-arm64)?/.*\.(xaml|xbf)$'
     })
     if ($bad) { throw "Contaminated VSIX payload: $($bad -join ', ')" }
     $reader = New-Object IO.StreamReader ($zip.Entries[[Array]::IndexOf($names, "WinUIXamlPreview.handcrafted.pkgdef")].Open())
@@ -76,26 +81,32 @@ try {
     $check = Join-Path $PSScriptRoot "obj\IdentityCheck-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $check | Out-Null
     try {
-        [IO.Compression.ZipFileExtensions]::ExtractToFile(
-            $zip.Entries[[Array]::IndexOf($names, "Surface/Surface.exe")], "$check\Surface.exe")
-        & $mt -nologo -inputresource:"$check\Surface.exe;#1" -out:"$check\embedded.manifest"
-        if ($LASTEXITCODE -ne 0) { throw "Cannot extract packaged Surface identity." }
-        [xml]$embedded = Get-Content "$check\embedded.manifest" -Raw
-        $msix = $embedded.SelectSingleNode("//*[local-name()='msix']")
-        $reader = New-Object IO.StreamReader ($zip.Entries[[Array]::IndexOf($names, "Surface/AppxManifest.xml")].Open())
-        try { [xml]$appx = $reader.ReadToEnd() } finally { $reader.Dispose() }
-        $identity = $appx.SelectSingleNode("//*[local-name()='Identity']")
-        $application = $appx.SelectSingleNode("//*[local-name()='Application']")
         $expectedName = "WinUIXamlPreviewSurface"
         if ($SurfaceIdentity -ne "Shipping") { $expectedName += ".Migration24e47e37" }
-        if ($identity.Name -cne $expectedName -or $identity.Publisher -cne "CN=WinUIXamlPreview" -or
-            $application.Id -cne "Surface" -or $application.Executable -cne "Surface.exe" -or
-            $identity.Version -cne "1.0.0.0" -or $identity.ProcessorArchitecture -cne "x64") {
-            throw "Packaged identity does not match the explicitly selected $SurfaceIdentity configuration."
-        }
-        if (-not $msix -or $msix.packageName -ne $identity.Name -or
-            $msix.publisher -ne $identity.Publisher -or $msix.applicationId -ne $application.Id) {
-            throw "Packaged executable sparse identity is absent or inconsistent with AppxManifest.xml."
+        foreach ($surface in @(@("Surface", "x64", 0x8664), @("Surface-arm64", "arm64", 0xAA64))) {
+            $dir = $surface[0]
+            [IO.Compression.ZipFileExtensions]::ExtractToFile(
+                $zip.Entries[[Array]::IndexOf($names, "$dir/Surface.exe")], "$check\$dir.exe")
+            $bytes = [IO.File]::ReadAllBytes("$check\$dir.exe")
+            $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+            if ($machine -ne $surface[2]) { throw "$dir/Surface.exe is not a $($surface[1]) image (machine 0x$('{0:X}' -f $machine))." }
+            & $mt -nologo -inputresource:"$check\$dir.exe;#1" -out:"$check\$dir.manifest"
+            if ($LASTEXITCODE -ne 0) { throw "Cannot extract packaged $dir identity." }
+            [xml]$embedded = Get-Content "$check\$dir.manifest" -Raw
+            $msix = $embedded.SelectSingleNode("//*[local-name()='msix']")
+            $reader = New-Object IO.StreamReader ($zip.Entries[[Array]::IndexOf($names, "$dir/AppxManifest.xml")].Open())
+            try { [xml]$appx = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            $identity = $appx.SelectSingleNode("//*[local-name()='Identity']")
+            $application = $appx.SelectSingleNode("//*[local-name()='Application']")
+            if ($identity.Name -cne $expectedName -or $identity.Publisher -cne "CN=WinUIXamlPreview" -or
+                $application.Id -cne "Surface" -or $application.Executable -cne "Surface.exe" -or
+                $identity.Version -cne "1.0.0.0" -or $identity.ProcessorArchitecture -cne $surface[1]) {
+                throw "$dir packaged identity does not match the explicitly selected $SurfaceIdentity configuration."
+            }
+            if (-not $msix -or $msix.packageName -ne $identity.Name -or
+                $msix.publisher -ne $identity.Publisher -or $msix.applicationId -ne $application.Id) {
+                throw "$dir packaged executable sparse identity is absent or inconsistent with AppxManifest.xml."
+            }
         }
         [IO.Compression.ZipFileExtensions]::ExtractToFile(
             $zip.Entries[[Array]::IndexOf($names, "WinUIXamlPreview.dll")], "$check\WinUIXamlPreview.dll")
@@ -122,7 +133,7 @@ try {
             $resource.Dispose()
             throw "Shipping adapter unexpectedly embeds the experimental registration."
         }
-        Write-Host "Packaged sparse identity verified: $($msix.packageName); no registration performed."
+        Write-Host "Packaged sparse identity verified (x64 + arm64): $($msix.packageName); no registration performed."
     } finally { Remove-Item -LiteralPath $check -Recurse -Force }
     Write-Host "Payload verified: $($names.Count) entries; $($required.Count) required files; no Gallery/test/build contamination."
 } finally { $zip.Dispose() }

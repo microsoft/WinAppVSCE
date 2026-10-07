@@ -19,8 +19,9 @@ function Invoke-ExperimentalSurfaceRegistration {
     [xml]$xml = Get-Content -LiteralPath $Manifest -Raw
     $identity = $xml.SelectSingleNode("//*[local-name()='Identity']")
     $apps = $xml.SelectNodes("//*[local-name()='Application']")
+    $arch = $identity.ProcessorArchitecture
     if ($identity.Name -cne $name -or $identity.Publisher -cne $publisher -or
-        $identity.Version -cne '1.0.0.0' -or $identity.ProcessorArchitecture -cne 'x64' -or
+        $identity.Version -cne '1.0.0.0' -or ($arch -cne 'x64' -and $arch -cne 'arm64') -or
         $apps.Count -ne 1 -or $apps[0].Id -cne 'Surface' -or $apps[0].Executable -cne 'Surface.exe') {
         throw 'Experimental payload identity does not match the compiled adapter.'
     }
@@ -29,7 +30,7 @@ function Invoke-ExperimentalSurfaceRegistration {
     if ($packages.Count -gt 0) {
         if ($packages.Count -ne 1 -or $packages[0].Name -cne $name -or
             $packages[0].Publisher -cne $publisher -or
-            $packages[0].PackageFullName -cne ($name + '_1.0.0.0_x64__p47s87298xgjw') -or
+            $packages[0].PackageFullName -cne ($name + "_1.0.0.0_$($arch)__p47s87298xgjw") -or
             -not $packages[0].InstallLocation -or
             ([IO.Path]::GetFullPath($packages[0].InstallLocation)).TrimEnd('\') -ine $loc -or
             "$($packages[0].Status)" -ne 'Ok') {
@@ -40,7 +41,7 @@ function Invoke-ExperimentalSurfaceRegistration {
     Add-AppxPackage -Register $Manifest -ExternalLocation $loc -ErrorAction Stop
     $registered = @(Get-AppxPackage -Name $name -ErrorAction Stop)
     if ($registered.Count -ne 1 -or $registered[0].Publisher -cne $publisher -or
-        $registered[0].PackageFullName -cne ($name + '_1.0.0.0_x64__p47s87298xgjw') -or
+        $registered[0].PackageFullName -cne ($name + "_1.0.0.0_$($arch)__p47s87298xgjw") -or
         -not $registered[0].InstallLocation -or
         ([IO.Path]::GetFullPath($registered[0].InstallLocation)).TrimEnd('\') -ine $loc -or
         "$($registered[0].Status)" -ne 'Ok') {

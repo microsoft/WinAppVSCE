@@ -34,13 +34,19 @@ try {
     Copy-SourceTree "$PSScriptRoot\Surface" "$work\Surface"
     Copy-SourceTree "$PSScriptRoot\SurfaceProvisioner" "$work\SurfaceProvisioner"
     Copy-SourceTree "$PSScriptRoot\Shared" "$work\Shared"
-    & dotnet build "$work\Surface\Surface.csproj" -c $Configuration -p:Platform=x64 `
-        -p:RuntimeIdentifier=win-x64 "-p:WinUISurfaceWasdkVersion=$WinUISurfaceWasdkVersion" --nologo -v minimal | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "Surface build failed (exit $LASTEXITCODE)." }
-    $raw = "$work\Surface\bin\x64\$Configuration\net10.0-windows10.0.26100.0\win-x64"
-    foreach ($file in @("Surface.exe", "Surface.dll", "Surface.deps.json", "Surface.runtimeconfig.json",
-        "Surface.pri", "Microsoft.WinUI.dll")) { Assert-File "$raw\$file" }
-    Set-Content "$raw\Surface.wasdk.version" $WinUISurfaceWasdkVersion -NoNewline -Encoding ASCII
+    # One bundled surface per supported architecture: an x64 surface on an ARM64 machine runs under
+    # emulation (slow) and cannot load the user's ARM64 build, so ARM64 gets its own native copy.
+    $rawDirs = @{}
+    foreach ($arch in @(@{ Platform = "x64"; Rid = "win-x64" }, @{ Platform = "ARM64"; Rid = "win-arm64" })) {
+        & dotnet build "$work\Surface\Surface.csproj" -c $Configuration "-p:Platform=$($arch.Platform)" `
+            "-p:RuntimeIdentifier=$($arch.Rid)" "-p:WinUISurfaceWasdkVersion=$WinUISurfaceWasdkVersion" --nologo -v minimal | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Surface $($arch.Platform) build failed (exit $LASTEXITCODE)." }
+        $raw = "$work\Surface\bin\$($arch.Platform)\$Configuration\net10.0-windows10.0.26100.0\$($arch.Rid)"
+        foreach ($file in @("Surface.exe", "Surface.dll", "Surface.deps.json", "Surface.runtimeconfig.json",
+            "Surface.pri", "Microsoft.WinUI.dll")) { Assert-File "$raw\$file" }
+        Set-Content "$raw\Surface.wasdk.version" $WinUISurfaceWasdkVersion -NoNewline -Encoding ASCII
+        $rawDirs[$arch.Platform] = $raw
+    }
     # Installed SDK layout is deliberately backward compatible, NOT source ownership.
     Copy-SourceTree "$PSScriptRoot\Surface" "$sdk\surface\Surface"
     Copy-SourceTree "$PSScriptRoot\DesignHost" "$sdk\DesignHost"
@@ -65,5 +71,6 @@ try {
             (($lines | Sort-Object) -join "`n")))).Replace('-', '').ToLowerInvariant()
     } finally { $sha.Dispose() }
     Set-Content "$sdk\engine.stamp" $stamp -NoNewline -Encoding ASCII
-    [pscustomobject]@{ SurfaceOutDir = $raw; HostSdkStageDir = $sdk; EngineStamp = $stamp }
+    [pscustomobject]@{ SurfaceOutDir = $rawDirs["x64"]; SurfaceArm64OutDir = $rawDirs["ARM64"]
+        HostSdkStageDir = $sdk; EngineStamp = $stamp }
 } finally { $lock.Dispose() }
