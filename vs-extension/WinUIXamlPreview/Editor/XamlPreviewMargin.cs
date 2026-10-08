@@ -92,7 +92,6 @@ namespace WinUIXamlPreview.Editor
         private readonly DockPanel _content;
         private readonly Border _grip;
         private readonly FrameworkElement _collapsedBar;
-        private Button? _liveButton;
         private Button? _dtdButton;
         private Button? _selectButton;
         private Button? _themeButton;
@@ -285,7 +284,6 @@ namespace WinUIXamlPreview.Editor
             var properties = MakeButton(KnownMonikers.Property, "Properties", "Show the design-time Properties panel", OnPropertiesClick, "PreviewPropertiesButton");
             _themeButton = MakeMenuButton(KnownMonikers.DarkTheme, ThemeLabel(), ThemeTooltip(), "PreviewThemeButton", BuildThemeMenu());
             _sizeButton = MakeMenuButton(KnownMonikers.Monitor, SizeLabel(), SizeTooltip(), "PreviewSizeButton", BuildSizeMenu());
-            _liveButton = MakeButton(LiveMoniker(), LiveLabel(), LiveTooltip(), OnToggleLiveClick, "PreviewLiveToggle");
             _dtdButton = MakeButton(DtdMoniker(), DtdLabel(), DtdTooltip(), OnToggleDtdClick, "PreviewDtdToggle");
             var dock = MakeButton(dockMoniker, dockLabel, $"Move the preview to the {toggleTarget.ToLowerInvariant()} (reopens this file)", OnToggleLayoutClick, "PreviewDockToggle");
             var window = MakeButton(KnownMonikers.NewWindow, "Window", "Open the preview in a separate tool window", OnPopOutClick, "PreviewWindowButton");
@@ -304,7 +302,6 @@ namespace WinUIXamlPreview.Editor
             });
             _toolbarGroups.Add(new List<ToolbarItem>
             {
-                new ToolbarItem(_liveButton, 4, () => MakeOverflowCommand(LiveMoniker(), LiveLabel(), OnToggleLiveClick, "PreviewOverflowLive")),
                 new ToolbarItem(_dtdButton, 3, () => MakeOverflowCommand(DtdMoniker(), DtdLabel(), OnToggleDtdClick, "PreviewOverflowDtd")),
             });
             _toolbarGroups.Add(new List<ToolbarItem>
@@ -597,7 +594,7 @@ namespace WinUIXamlPreview.Editor
             b.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
             // Content is now an icon+text panel, so the UIA Name no longer defaults to the label. Set it
             // explicitly so scripted UIA (winapp) can still read a toggle button's current state; SetButton
-            // keeps it in sync when a toggle flips (Select/Interact, Live: On/Off, Dock Right/Bottom).
+            // keeps it in sync when a toggle flips (Select/Interact, Sample data: On/Off, Dock Right/Bottom).
             AutomationProperties.SetName(b, label);
             AutomationProperties.SetAutomationId(b, automationId);
             b.Click += onClick;
@@ -996,46 +993,19 @@ namespace WinUIXamlPreview.Editor
             catch (Exception ex) { Log.Write("Reload failed: " + ex); }
         }
 
-        // ---- live-mode toggle ----------------------------------------------
-        //
-        // Flips the global opt-in (PreviewOptions.LiveMode) and restarts THIS tab's preview so its surface
-        // relaunches in the new mode. Live = instantiate the real page type so {x:Bind}/code-behind state
-        // render (plan §39); off = the robust static parse path. The preview auto-falls back to parse per
-        // page when a page can't activate live, so this can only add fidelity, never leave a dead preview.
-
-        private static string LiveLabel() => PreviewOptions.LiveMode ? "Live: On" : "Live: Off";
-
-        private static ImageMoniker LiveMoniker() => PreviewOptions.LiveMode ? KnownMonikers.Play : KnownMonikers.Stop;
-
-        private static string LiveTooltip() => PreviewOptions.LiveMode
-            ? "Live preview is ON — runs the real page so x:Bind and code-behind state render. Click to switch to the static (parse) preview."
-            : "Live preview is OFF — static parse preview (x:Bind and code-behind state are blank). Click to enable live preview.";
-
-        private void OnToggleLiveClick(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                _preview.SetLiveMode(!PreviewOptions.LiveMode);
-                SetButton(_liveButton, LiveMoniker(), LiveLabel(), LiveTooltip());
-            }
-            catch (Exception ex) { Log.Write("Toggle live mode failed: " + ex); }
-        }
-
         // ---- design-time data (sample data) toggle -------------------------
         //
-        // Flips the global opt-in (PreviewOptions.DesignTimeData) and restarts THIS tab's preview so its surface
-        // relaunches with SURFACE_DTD_REFLECT set. This is the §51 M3 reflection accelerator: it fills empty
-        // {x:Bind}-backed collections with reflected sample items so otherwise-blank live pages show representative
-        // content. It only takes effect together with live mode (it runs after real-type activation); the M1
-        // (d:DesignData) and M2 (DesignMode contract) sample-data paths are automatic and need no toggle.
+        // Flips the persisted PreviewOptions.DesignTimeData flag. Currently a no-op: it used to arm the live-mode
+        // reflection fallback (removed with live mode) and is reserved for placeholder sample data for {x:Bind}
+        // pages (WS2-F6). The M1 (d:DesignData) and M2 (DesignMode signal) paths are automatic and need no toggle.
 
         private static string DtdLabel() => PreviewOptions.DesignTimeData ? "Sample data: On" : "Sample data: Off";
 
         private static ImageMoniker DtdMoniker() => KnownMonikers.Table;
 
         private static string DtdTooltip() => PreviewOptions.DesignTimeData
-            ? "Design-time sample data is ON — empty x:Bind collections are filled with reflected sample items (takes effect in live mode). Click to turn it off."
-            : "Design-time sample data is OFF. Click to fill empty x:Bind collections with sample items in live preview (design-time data accelerator).";
+            ? "Sample data for x:Bind pages is ON (not yet active). Click to turn it off."
+            : "Sample data for x:Bind pages is OFF (not yet active). Click to turn it on.";
 
         private void OnToggleDtdClick(object sender, RoutedEventArgs e)
         {

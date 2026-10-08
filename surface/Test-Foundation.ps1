@@ -98,7 +98,7 @@ try {
         if (-not (Test-Path $smoke)) { throw "Run vs-extension\Test-Migration.ps1 first." }
         $saved = @{}
         foreach ($name in @("WINUI_SURFACE_EXE", "WINUI_SURFACE_USER_PRI", "WINUI_GALLERY_PAGE", "SURFACE_GUARDS",
-            "SURFACE_LIVE_MODE", "SURFACE_DTD_REFLECT", "SURFACE_RENDER_SETTLE")) {
+            "SURFACE_RENDER_SETTLE")) {
             $saved[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
             [Environment]::SetEnvironmentVariable($name, $null, "Process")
         }

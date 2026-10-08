@@ -111,34 +111,18 @@ namespace WinUIXamlPreview.UI
         private bool _upgradeInProgress;
         private bool _fullFidelityCancelled;   // user cancelled the upgrade for the current document
         private MatchedHostBuild? _upgradeBuild; // shared per-version build we hold interest in (release on cancel/dispose/promote)
-        // U2 top banners: the message bar carries the XAML-error-over-last-good-render and static-preview notes;
+        // U2 top banners: the message bar carries the XAML-error-over-last-good-render note;
         // the fidelity bar carries the background full-fidelity upgrade. Both live in BannerHost (row 0).
         private readonly PreviewInfoBar _messageBar = new PreviewInfoBar("PreviewMessageBar");
         private readonly PreviewInfoBar _fidelityBar = new PreviewInfoBar("PreviewFidelityBar");
-        private bool _messageBarIsFallback;
         private bool _reconnectShown;
-        private readonly HashSet<string> _fallbackNoteDismissed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Versions whose background build already FAILED this VS session — don't auto-retry (no retry loop).
         private static readonly System.Collections.Generic.HashSet<string> FailedVersions =
             new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Live mode (plan §39): opt-in real-type activation for {x:Bind}/code-behind fidelity. It rides the
-        // same process-isolation infra as the crash recycler. Two rules keep it safe:
-        //  1. Per-render isolation — in live mode every re-render lands on a FRESH (never-rendered) spare, so
-        //     one render's leftover animations/timers/backdrops can't fail-fast the next (the cross-
-        //     contamination measured across the Gallery: 22% of pages crashed in a shared warm process, only
-        //     ~3% in isolation).
-        //  2. Auto-fallback — a document that crashes a FRESH live process before producing any frame is an
-        //     inherent crasher (composition backdrop / animated-visual / App-window coupling). It is demoted
-        //     to the robust parse path for the session, so the preview degrades to a static render instead of
-        //     a dead pane. Toggling live mode re-arms all demotions.
-        private readonly System.Collections.Generic.HashSet<string> _liveFallbackDocs =
-            new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // Whether the CURRENT active surface process has produced at least one frame/native host. Distinguishes
-        // an inherent first-render crash in a fresh process (=> demote to parse) from a 2nd-render fail-fast in
-        // a warm process that already rendered (=> recycle to a fresh process). Reset whenever a new active
-        // surface is wired; set on the first successful render.
+        // Whether the CURRENT active surface process has produced at least one frame/native host. A process
+        // that hasn't rendered yet is still fresh, so an isolated edit can render in it directly. Reset whenever
+        // a new active surface is wired; set on the first successful render.
         private bool _activeProcessRendered;
 
         public PreviewControl()
@@ -147,14 +131,6 @@ namespace WinUIXamlPreview.UI
 
             BannerHost.Children.Add(_messageBar);
             BannerHost.Children.Add(_fidelityBar);
-            _messageBar.Dismissed += (_, __) =>
-            {
-                // The static-preview note is informational; once dismissed it stays away for that document.
-                if (_messageBarIsFallback && _currentPath != null)
-                {
-                    _fallbackNoteDismissed.Add(_currentPath);
-                }
-            };
 
             _resizeDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
             _resizeDebounce.Tick += OnResizeDebounceTick;
@@ -345,12 +321,7 @@ namespace WinUIXamlPreview.UI
             }
 
             Log.Write($"Constructing surface client (surfaceExe='{surfaceExe}', userDll='{userDll ?? "(none)"}', appXaml='{userAppXaml ?? "(none)"}', xaml={xaml.Length} chars)…");
-            var live = EffectiveLiveMode(path);
-            Log.Write($"Live mode for '{Path.GetFileName(path)}': {(live ? "ON — real-type activation" : "off — parse path")}.");
-            // §51 M3 reflection accelerator only runs after real-type activation, so it is armed only when this
-            // document is actually going live (keeps the parse/default path byte-clean — no SURFACE_DTD_REFLECT).
-            var reflect = live && PreviewOptions.DesignTimeData;
-            var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, live, PreviewOptions.Theme, reflectionFallback: reflect, userPri: recoverPri);
+            var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, PreviewOptions.Theme, userPri: recoverPri);
             client.Frame += OnFrame;
             client.Error += OnError;
             client.Hwnd += OnHwnd;
@@ -447,39 +418,8 @@ namespace WinUIXamlPreview.UI
         }
 
         /// <summary>
-        /// Apply a live-mode toggle at runtime. Persists the new preference, re-arms any per-document parse
-        /// fallbacks (so the user can retry live on a page that previously couldn't activate), and restarts the
-        /// current preview so the surface relaunches with the new <c>SURFACE_LIVE_MODE</c> env. UI thread only.
-        /// </summary>
-        public void SetLiveMode(bool on)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            PreviewOptions.LiveMode = on;
-            _liveFallbackDocs.Clear();
-            Log.Write($"Live mode toggled {(on ? "ON (real-type activation)" : "off (parse)")} — restarting preview.");
-
-            var path = _pinnedPath ?? _currentPath;
-            if (string.IsNullOrEmpty(path))
-            {
-                path = PreviewPackageState.GetActiveXamlPath();
-            }
-
-            _currentPath = null; // force a full restart so the surface relaunches with the new env
-            if (!string.IsNullOrEmpty(path))
-            {
-                ShowDocument(path);
-            }
-        }
-
-        /// <summary>
-        /// Apply a design-time-data (sample data) toggle at runtime. Persists the preference and restarts the
-        /// current preview so the surface relaunches with the new <c>SURFACE_DTD_REFLECT</c> env. Only has an
-        /// effect together with live mode (the §51 M3 reflection fallback runs after real-type activation). UI
-        /// thread only.
+        /// Persist the "Sample data" toggle. Currently a no-op for rendering: it previously armed the live-mode
+        /// reflection fallback (removed with live mode) and is reserved for placeholder sample data (WS2-F6).
         /// </summary>
         public void SetDesignTimeData(bool on)
         {
@@ -489,29 +429,8 @@ namespace WinUIXamlPreview.UI
             }
 
             PreviewOptions.DesignTimeData = on;
-            Log.Write($"Design-time sample data toggled {(on ? "ON (reflection fallback)" : "off")} — restarting preview.");
-
-            var path = _pinnedPath ?? _currentPath;
-            if (string.IsNullOrEmpty(path))
-            {
-                path = PreviewPackageState.GetActiveXamlPath();
-            }
-
-            _currentPath = null; // force a full restart so the surface relaunches with the new env
-            if (!string.IsNullOrEmpty(path))
-            {
-                ShowDocument(path);
-            }
+            Log.Write($"Sample data toggled {(on ? "ON" : "off")} (no effect yet; reserved for WS2-F6).");
         }
-
-        /// <summary>
-        /// Whether the surface for <paramref name="path"/> should launch in live mode: the user's global
-        /// opt-in is on AND this document hasn't been demoted to the parse path after failing to activate live.
-        /// </summary>
-        private bool EffectiveLiveMode(string? path) =>
-            PreviewOptions.LiveMode &&
-            !string.IsNullOrEmpty(path) &&
-            !_liveFallbackDocs.Contains(path!);
 
         /// <summary>
         /// Apply a design/interact-mode toggle at runtime (plan §41). Persists the preference and sends
@@ -857,18 +776,16 @@ namespace WinUIXamlPreview.UI
                 var xaml = ReadDocumentText(_currentPath);
 
                 // Proactive recycle: a document known to fail-fast the surface on its 2nd render (plan
-                // §36), OR any document in live mode (plan §39), must render in a process that has not
+                // §36) must render in a process that has not
                 // rendered it yet — so leftover animations/timers/backdrops from the previous render can't
                 // fail-fast this one. Promote the pre-warmed spare instead of re-hosting in place (which
                 // would risk a crash). The spare is already up, so the swap costs about one render, not a
                 // cold process start — no visible restart blip.
-                bool isolate = _riskyDocs.Contains(_currentPath) || EffectiveLiveMode(_currentPath);
+                bool isolate = _riskyDocs.Contains(_currentPath);
                 if (isolate && TryPromoteSpare(xaml))
                 {
-                    PerfBegin(EffectiveLiveMode(_currentPath) ? "edit.livespare" : "edit.riskyspare");
-                    Log.Write(EffectiveLiveMode(_currentPath)
-                        ? "Live-mode edit: rendered on a fresh spare process (per-render isolation)."
-                        : "Risky doc edit: recycled onto the warm spare (skipped in-place re-render).");
+                    PerfBegin("edit.riskyspare");
+                    Log.Write("Risky doc edit: recycled onto the warm spare (skipped in-place re-render).");
                     return;
                 }
 
@@ -882,7 +799,7 @@ namespace WinUIXamlPreview.UI
 
                 if (_client != null)
                 {
-                    PerfBegin(EffectiveLiveMode(_currentPath) ? "edit.live-nospare" : "edit.inplace");
+                    PerfBegin("edit.inplace");
                 }
 
                 _client?.UpdateXaml(xaml);
@@ -912,8 +829,7 @@ namespace WinUIXamlPreview.UI
             var exe = _activeSurfaceExe!;
             var dll = _activeUserDll;
             var appx = _activeUserAppXaml;
-            var live = EffectiveLiveMode(_currentPath); // spare must match the active launch mode
-            var theme = _activeTheme; // …and the active theme (baked at launch, per-process)
+            var theme = _activeTheme; // spare must match the active theme (baked at launch, per-process)
             var userPri = _activeUserPri; // …and the matched-host merged pri, if a matched host is active
 
             _ = System.Threading.Tasks.Task.Run(async () =>
@@ -921,7 +837,7 @@ namespace WinUIXamlPreview.UI
                 SurfaceClient? spare = null;
                 try
                 {
-                    spare = new SurfaceClient(exe, dll, Log.Write, appx, live, theme, userPri: userPri);
+                    spare = new SurfaceClient(exe, dll, Log.Write, appx, theme, userPri: userPri);
                     await spare.StartAsync(TimeSpan.FromSeconds(25));
                 }
                 catch (Exception ex)
@@ -981,7 +897,7 @@ namespace WinUIXamlPreview.UI
 
         // ---- held edit (waiting for a spare) --------------------------------
         //
-        // An isolated edit (live mode / risky doc) that finds no ready spare waits for the next one instead
+        // An isolated edit (risky doc) that finds no ready spare waits for the next one instead
         // of re-rendering in a used process. Only a flag is held: the drain re-reads the document, so the
         // spare always renders the newest text. Bounded by SpareWaitLimit, then the old in-place render.
 
@@ -1039,7 +955,7 @@ namespace WinUIXamlPreview.UI
                 Log.Write($"PERF edit.hold ms={_editAwaitSw.ElapsedMilliseconds} result={result}");
                 _editAwaitSw = null;
             }
-            PerfBegin(EffectiveLiveMode(_currentPath) ? "edit.livewait" : "edit.riskywait");
+            PerfBegin("edit.riskywait");
         }
 
         private void DrainAwaitedEdit()
@@ -1278,8 +1194,6 @@ namespace WinUIXamlPreview.UI
             var userDll = _activeUserDll;
             var userAppXaml = _activeUserAppXaml;
             var theme = _activeTheme;
-            var live = EffectiveLiveMode(_currentPath);
-            var reflect = live && PreviewOptions.DesignTimeData;
 
             // Acquire (start or join) the shared per-version build on the UI thread so _upgradeBuild is owned
             // here (de-dupe: two docs of the same version share ONE build).
@@ -1356,7 +1270,7 @@ namespace WinUIXamlPreview.UI
                 SurfaceClient? matched = null;
                 try
                 {
-                    matched = new SurfaceClient(matchedExe, userDll, Log.Write, userAppXaml, live, theme, reflectionFallback: reflect, userPri: matchedPri);
+                    matched = new SurfaceClient(matchedExe, userDll, Log.Write, userAppXaml, theme, userPri: matchedPri);
                     await matched.StartAsync(TimeSpan.FromSeconds(25));
                 }
                 catch (Exception ex)
@@ -1602,7 +1516,6 @@ namespace WinUIXamlPreview.UI
                     PerfEnd("frame");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
-                    MaybeShowLiveFallbackBanner();
                     Log.Write($"Frame rendered: {frame.Width}x{frame.Height}px ({frame.DipWidth}x{frame.DipHeight} dip).");
                 }
                 catch (Exception ex)
@@ -1663,7 +1576,6 @@ namespace WinUIXamlPreview.UI
                     PerfEnd("hwnd");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
-                    MaybeShowLiveFallbackBanner();
                     Log.Write($"Native surface hosted: hwnd=0x{msg.Hwnd:X} px={pxW}x{pxH} dip={dipW:0}x{dipH:0} scale={msg.Scale}.");
                 }
                 catch (Exception ex)
@@ -1781,26 +1693,6 @@ namespace WinUIXamlPreview.UI
                 if (!string.IsNullOrEmpty(path))
                 {
                     _riskyDocs.Add(path!);
-                }
-
-                // Live-mode auto-fallback (plan §39): a FRESH live process died before producing any frame —
-                // an inherent crasher (Acrylic backdrop / animated-visual realization / App-window coupling)
-                // that a fresh live process can't render either. Retrying live is futile, so demote THIS
-                // document to the robust parse path for the session and relaunch. The preview degrades to a
-                // static (no-x:Bind) render instead of a dead pane; toggling live mode re-arms it.
-                if (!string.IsNullOrEmpty(path) && EffectiveLiveMode(path) && !_activeProcessRendered)
-                {
-                    _liveFallbackDocs.Add(path!);
-                    _restartAttempts = 0; // a mode change, not a retry — give the parse relaunch a fresh budget
-                    _hasFrame = false;
-                    _hasNative = false;
-                    Log.Write($"Live preview could not activate '{Path.GetFileName(path)}' (crashed with no frame); falling back to a static parse-mode preview.");
-                    SetStatus("Live preview unavailable — showing static preview…", spinner: true, detail: Path.GetFileName(path!));
-                    _currentPath = null; // force a full re-init in parse mode
-                    _perfNextOpenLabel = "recover.livefallback";
-                    RememberMatchedHostForRecovery(path!);
-                    ShowDocument(path);
-                    return;
                 }
 
                 // Self-heal, bounded (the counter resets on any successful render, so ordinary edit-crashes
@@ -2029,13 +1921,11 @@ namespace WinUIXamlPreview.UI
         private void SetDetailBanner(string text)
         {
             HideStatusCard();
-            _messageBarIsFallback = false;
             _messageBar.Show(BannerSeverity.Error, "XAML error", text + "  (showing the last successful render)");
         }
 
         private void HideMessageBar()
         {
-            _messageBarIsFallback = false;
             _messageBar.Hide();
         }
 
@@ -2124,22 +2014,6 @@ namespace WinUIXamlPreview.UI
             ShowDocument(path!);
         }
 
-        private void MaybeShowLiveFallbackBanner()
-        {
-            // A document demoted from live to parse (plan §39): a quiet, dismissible note up top so the user knows
-            // x:Bind/state won't render for this page, without hiding the (successful) static render. Only appears
-            // when live mode is globally on but this page couldn't activate.
-            if (_currentPath == null || !_liveFallbackDocs.Contains(_currentPath) || _fallbackNoteDismissed.Contains(_currentPath))
-            {
-                return;
-            }
-
-            _messageBar.Show(
-                BannerSeverity.Info,
-                "Static preview",
-                "Live preview isn't available for this page; x:Bind and code-behind state won't render.");
-            _messageBarIsFallback = true;
-        }
         private void TeardownNativeHost(bool surfaceDead = false)
         {
             var host = _nativeHost;

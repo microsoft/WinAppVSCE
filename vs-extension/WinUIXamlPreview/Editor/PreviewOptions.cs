@@ -27,7 +27,6 @@ namespace WinUIXamlPreview.Editor
         private const string LocationKey = "PreviewLocation";
         private const string RightWidthKey = "RightWidth";
         private const string BottomHeightKey = "BottomHeight";
-        private const string LiveModeKey = "LiveMode";
         private const string DesignTimeDataKey = "DesignTimeData";
         private const string DesignModeKey = "DesignMode";
         private const string CollapsedKey = "Collapsed";
@@ -49,8 +48,7 @@ namespace WinUIXamlPreview.Editor
         private static PreviewLocation _location = PreviewLocation.Right;
         private static double _rightWidth = DefaultWidth;
         private static double _bottomHeight = DefaultHeight;
-        private static bool _liveMode; // default OFF — parse mode is the robust, no-crash floor (plan §39)
-        private static bool _designTimeData; // default OFF — §51 M3 reflection sample-data accelerator, opt-in
+        private static bool _designTimeData; // default OFF — reserved for placeholder sample data (WS2-F6)
         private static bool _designMode = true; // default ON — the designer selects, it doesn't interact (plan §41)
         private static bool _collapsed; // default expanded — the preview shows when a WinUI xaml opens
         private static string _theme = "Light"; // preview theme: Light (default, historical) | Dark | Default
@@ -110,34 +108,10 @@ namespace WinUIXamlPreview.Editor
         }
 
         /// <summary>
-        /// When true, the surface instantiates the real compiled page type (running the genuine
-        /// <c>InitializeComponent</c>/<c>Connect</c>) so <c>{x:Bind}</c> and code-behind-populated state render
-        /// with full fidelity (plan §39). Opt-in: default OFF, because the default parse path never runs user
-        /// code and never crashes. The preview auto-falls back to parse mode per-document when a page can't be
-        /// activated live, so turning this on can only add fidelity, never leave a dead preview.
-        /// </summary>
-        public static bool LiveMode
-        {
-            get { EnsureLoaded(); return _liveMode; }
-            set
-            {
-                EnsureLoaded();
-                if (_liveMode == value)
-                {
-                    return;
-                }
-
-                _liveMode = value;
-                Save();
-            }
-        }
-
-        /// <summary>
-        /// When true, the surface's opportunistic reflection fallback (§51 M3) fills empty <c>{x:Bind}</c>-backed
-        /// collections with reflected sample data so otherwise-blank live pages show representative content. Sets
-        /// <c>SURFACE_DTD_REFLECT</c>. Opt-in, default OFF; only has an effect together with <see cref="LiveMode"/>
-        /// (it runs after real-type activation). The M1 (<c>d:DesignData</c>) and M2 (DesignMode contract) sample-
-        /// data paths are automatic host behavior and need no flag — this toggle only arms the M3 accelerator.
+        /// The "Sample data" toggle. Persisted, but currently has no effect: it previously armed the live-mode
+        /// reflection fallback (removed with live mode) and is reserved for placeholder sample data for
+        /// <c>{x:Bind}</c> pages (WS2-F6). The M1 (<c>d:DesignData</c>) and M2 (DesignMode signal) sample-data
+        /// paths are automatic host behavior and need no flag.
         /// </summary>
         public static bool DesignTimeData
         {
@@ -330,11 +304,6 @@ namespace WinUIXamlPreview.Editor
                         _bottomHeight = Clamp(ParseD(store.GetString(Collection, BottomHeightKey), DefaultHeight), MinHeight, MaxHeight);
                     }
 
-                    if (store.PropertyExists(Collection, LiveModeKey))
-                    {
-                        _liveMode = string.Equals(store.GetString(Collection, LiveModeKey), "1", StringComparison.Ordinal);
-                    }
-
                     if (store.PropertyExists(Collection, DesignTimeDataKey))
                     {
                         _designTimeData = string.Equals(store.GetString(Collection, DesignTimeDataKey), "1", StringComparison.Ordinal);
@@ -400,7 +369,6 @@ namespace WinUIXamlPreview.Editor
                 store.SetString(Collection, LocationKey, _location == PreviewLocation.Bottom ? "Bottom" : "Right");
                 store.SetString(Collection, RightWidthKey, _rightWidth.ToString(CultureInfo.InvariantCulture));
                 store.SetString(Collection, BottomHeightKey, _bottomHeight.ToString(CultureInfo.InvariantCulture));
-                store.SetString(Collection, LiveModeKey, _liveMode ? "1" : "0");
                 store.SetString(Collection, DesignTimeDataKey, _designTimeData ? "1" : "0");
                 store.SetString(Collection, DesignModeKey, _designMode ? "1" : "0");
                 store.SetString(Collection, CollapsedKey, _collapsed ? "1" : "0");

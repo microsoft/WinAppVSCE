@@ -647,8 +647,8 @@ New-Item -ItemType Directory -Path $run -Force | Out-Null
 Copy-Item "$cache\*" $run -Recurse -Force
 Copy-Item "$run\Surface.designtime.pri" "$run\Surface.pri" -Force
 $env:WINUI_SURFACE_EXE = "$run\Surface.exe"
-Remove-Item Env:WINUI_GALLERY_PAGE,Env:SURFACE_GUARDS,Env:SURFACE_LIVE_MODE,`
-  Env:SURFACE_DTD_REFLECT,Env:SURFACE_RENDER_SETTLE -ErrorAction SilentlyContinue
+Remove-Item Env:WINUI_GALLERY_PAGE,Env:SURFACE_GUARDS,`
+  Env:SURFACE_RENDER_SETTLE -ErrorAction SilentlyContinue
 & .\vs-extension\SurfaceClient.Smoke\bin\x64\Debug\net472\SurfaceClient.Smoke.exe
 if ((Get-FileHash "$cache\Surface.pri").Hash -ne $before) { throw 'Cached PRI changed' }
 ```

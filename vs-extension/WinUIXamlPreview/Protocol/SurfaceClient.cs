@@ -35,8 +35,6 @@ namespace WinUIXamlPreview.Protocol
         private readonly string? _userDll;
         private readonly string? _userAppXaml;
         private readonly string? _userPri;
-        private readonly bool _liveMode;
-        private readonly bool _reflectionFallback;
         private readonly bool _renderSettle;
         private readonly string? _theme;
         private readonly Action<string> _log;
@@ -64,14 +62,12 @@ namespace WinUIXamlPreview.Protocol
         private int _faulted;
         private volatile bool _intentionalStop;
 
-        public SurfaceClient(string surfaceExe, string? userDll, Action<string> log, string? userAppXaml = null, bool liveMode = false, string? theme = null, bool reflectionFallback = false, bool renderSettle = false, string? userPri = null)
+        public SurfaceClient(string surfaceExe, string? userDll, Action<string> log, string? userAppXaml = null, string? theme = null, bool renderSettle = false, string? userPri = null)
         {
             _surfaceExe = surfaceExe;
             _userDll = userDll;
             _userAppXaml = userAppXaml;
             _userPri = userPri;
-            _liveMode = liveMode;
-            _reflectionFallback = reflectionFallback;
             _renderSettle = renderSettle;
             _theme = theme;
             _log = log ?? (_ => { });
@@ -162,17 +158,6 @@ namespace WinUIXamlPreview.Protocol
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
-
-            // Live mode is a launch-time decision: the surface reads SURFACE_LIVE_MODE once at startup and
-            // (when "1") activates the real compiled page type so {x:Bind} wires up (plan §39). Set it
-            // explicitly either way so an inherited value from the VS process can never flip the mode.
-            psi.EnvironmentVariables["SURFACE_LIVE_MODE"] = _liveMode ? "1" : "0";
-
-            // §51 M3: the opportunistic reflection fallback is likewise a launch-time opt-in — the surface
-            // reads SURFACE_DTD_REFLECT once at startup. It only has any effect together with live mode (it
-            // runs after real-type activation), and is off unless explicitly requested. Set explicitly so an
-            // inherited value can never leak in.
-            psi.EnvironmentVariables["SURFACE_DTD_REFLECT"] = _reflectionFallback ? "1" : "0";
 
             // Coverage-hardening P3: the design-time render-settle sweep is likewise a launch-time opt-in — the
             // surface reads SURFACE_RENDER_SETTLE once at startup. It is off unless explicitly requested so the

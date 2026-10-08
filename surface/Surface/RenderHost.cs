@@ -198,25 +198,6 @@ internal sealed class RenderHost
     }
 
     /// <summary>
-    /// Extract the root <c>x:Class</c> (the CLR type name to activate in live mode) from raw project
-    /// markup. Returns null when absent — e.g. a loose markup snippet with no code-behind — so the caller
-    /// uses the parse path. Defensive: any failure yields null.
-    /// </summary>
-    private static string? TryGetXClass(string rawXaml)
-    {
-        if (string.IsNullOrEmpty(rawXaml)) return null;
-        try
-        {
-            var m = Regex.Match(rawXaml, "x:Class\\s*=\\s*\"([^\"]+)\"");
-            return m.Success ? m.Groups[1].Value.Trim() : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
     /// Shared design-time parse: clean the markup then <see cref="XamlReader.Load"/> it, categorising
     /// any failure into a <c>(phase, message, line, column)</c> exactly as the render path reports it.
     /// Returns a non-null <c>root</c> on success; otherwise the phase/message describe the failure.
@@ -240,46 +221,6 @@ internal sealed class RenderHost
             {
                 App.Log($"NONPAGE: {nonPageReason}");
                 return (null, NonPagePhase, nonPageReason, null, null);
-            }
-
-            // LIVE MODE (spike, env SURFACE_LIVE_MODE=1): before the parse path, try to instantiate the
-            // real x:Class type from the user assembly. That runs the genuine compiled
-            // InitializeComponent()/Connect(), so {x:Bind} bindings and code-behind state come alive —
-            // impossible via XamlReader.Load (which strips x:Bind). Any failure (no x:Class, missing type,
-            // no parameterless ctor, ctor threw) logs LIVE-FALLBACK and drops through to the parse path, so
-            // live mode can only ever ADD fidelity, never regress a page that already rendered.
-            if (App.LiveModeEnabled)
-            {
-                var xClass = TryGetXClass(rawXaml);
-                if (!string.IsNullOrEmpty(xClass))
-                {
-                    long tLive = Stopwatch.GetTimestamp();
-                    var live = App.ActivatePage(xClass!, out var liveReason);
-                    if (live is not null)
-                    {
-                        if (timings is not null) timings.ParseMs = ElapsedMs(tLive);
-                        App.Log($"LIVE-OK: activated {xClass}");
-
-                        // §51 M3: OPPORTUNISTIC REFLECTION FALLBACK (opt-in env SURFACE_DTD_REFLECT=1). For a
-                        // page that opts into neither d:DesignData (M1) nor the DesignMode contract (M2), best-
-                        // effort populate its empty x:Bind-backed collections with a bounded sample dataset so
-                        // an otherwise-BLANK live page shows content. Live-only + explicit opt-in + never
-                        // throws → it can never touch the certified default parse path or regress this render.
-                        if (App.ReflectionFallbackEnabled)
-                        {
-                            try { DesignDataInjector.TryPopulate(live); }
-                            catch (Exception dex) { App.Log($"DTD-INJECT threw {dex.GetType().Name}: {dex.Message}"); }
-                        }
-
-                        return (live, null, null, null, null);
-                    }
-
-                    App.Log($"LIVE-FALLBACK: {xClass} — {liveReason}");
-                }
-                else
-                {
-                    App.Log("LIVE-FALLBACK: (document has no x:Class) — using parse path");
-                }
             }
 
             long tClean = Stopwatch.GetTimestamp();
@@ -348,8 +289,7 @@ internal sealed class RenderHost
                 }
 
                 // §51 M1: honor the Blend design namespace's d:DataContext (d:DesignInstance / d:DesignData)
-                // so a classic {Binding} page renders real sample data. Runs ONLY on the parse path (live mode
-                // already gets the real runtime DataContext from the activated page's code-behind), and never
+                // so a classic {Binding} page renders real sample data. Never
                 // throws — a bad design hint can only fail to add data, never fail an otherwise-good render.
                 ApplyDesignTimeData(fe, rawXaml);
 

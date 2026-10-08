@@ -28,12 +28,12 @@ namespace Surface;
 /// </code>
 /// The built-in <c>DesignModeEnabled</c> flag is NOT true in this unpackaged host (see the probe logged by
 /// <see cref="Establish"/>), so the surface additionally sets the process environment variable
-/// <see cref="EnvVarName"/>=1. Because the user assembly is loaded and activated IN-PROCESS (live mode,
-/// §39), the app's code reads the same process environment and sees the signal.
+/// <see cref="EnvVarName"/>=1. Because the user assembly is loaded IN-PROCESS and its custom controls are
+/// constructed during the parse render, the app's code reads the same process environment and sees the signal.
 /// </para>
 ///
 /// <para>
-/// POPULATION PATTERN (what the app does under design mode — see <c>DesignModeDemoControl</c>):
+/// POPULATION PATTERN (what the app does under design mode):
 /// <code>
 /// public MyPage() {
 ///     if (DesignModeContract.IsDesignMode &amp;&amp; App.Services is null)
