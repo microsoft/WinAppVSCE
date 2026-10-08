@@ -22,6 +22,7 @@
     <Compile Include="..\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Protocol\LineDecoder.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceClient.cs" Link="Protocol\SurfaceClient.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceResolver.cs" Link="Protocol\SurfaceResolver.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\HostArch.cs" Link="Protocol\HostArch.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\ProjectDllLocator.cs" Link="Protocol\ProjectDllLocator.cs" />
   </ItemGroup>
 
