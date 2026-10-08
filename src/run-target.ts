@@ -22,11 +22,21 @@ export const FILE_BASED_APP_EXTENSIONS = ['.cs'] as const;
 /** Solution file extensions the CLI can build in project mode. */
 export const SOLUTION_FILE_EXTENSIONS = ['.sln', '.slnx'] as const;
 
-/** Extensions the workspace scan looks for; file-based apps are excluded. */
+/**
+ * Extensions the extension offers on its own, via the workspace scan and the
+ * Browse dialog's filter. File-based apps are excluded; see
+ * {@link FILE_BASED_APP_EXTENSIONS}.
+ */
 export const DISCOVERABLE_TARGET_EXTENSIONS = [
 	...SOLUTION_FILE_EXTENSIONS,
 	...PROJECT_FILE_EXTENSIONS
 ] as const;
+
+/** True for extensions the picker and Browse dialog offer. */
+export function isDiscoverableTargetExtension(filePath: string): boolean {
+	const extension = path.extname(filePath).toLowerCase();
+	return (DISCOVERABLE_TARGET_EXTENSIONS as readonly string[]).includes(extension);
+}
 
 /** Bounds the project-file scan; display is capped separately. */
 export const PROJECT_FILE_MAX_RESULTS = 200;
@@ -56,19 +66,6 @@ export function classifyRunTargetFile(filePath: string): RunTargetKind | undefin
 		return 'project';
 	}
 	return undefined;
-}
-
-/**
- * Classifies a file found by the workspace scan, ignoring kinds the picker
- * never offers. Keeping this separate from {@link classifyRunTargetFile} is
- * what stops every `.cs` source file in the workspace from becoming a run
- * target while an explicitly named one still works.
- */
-export function classifyDiscoveredTargetFile(filePath: string): RunTargetKind | undefined {
-	const extension = path.extname(filePath).toLowerCase();
-	return (DISCOVERABLE_TARGET_EXTENSIONS as readonly string[]).includes(extension)
-		? classifyRunTargetFile(filePath)
-		: undefined;
 }
 
 /** Mirrors CLI precedence; `unknown` still goes to the CLI for final handling. */

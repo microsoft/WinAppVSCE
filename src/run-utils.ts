@@ -9,12 +9,14 @@ import { walkDirectoryTree } from './directory-walk';
 import { PROJECT_SCAN_SKIP_DIRS } from './project-detection';
 import {
 	classifyRunTarget,
-	classifyDiscoveredTargetFile,
+	classifyRunTargetFile,
 	dedupeSolutionMembers,
+	DISCOVERABLE_TARGET_EXTENSIONS,
 	filterOfferableCandidates,
 	filterOfferableProjects,
 	findOwningRoot,
 	isDirectory,
+	isDiscoverableTargetExtension,
 	isProjectMode,
 	PROJECT_FILE_MAX_RESULTS,
 	readSolutionProjectPaths,
@@ -70,7 +72,9 @@ async function findProjectTargets(
 					for (const entry of entries) {
 						if (!entry.isFile()) { continue; }
 
-						const kind = classifyDiscoveredTargetFile(entry.name);
+						const kind = isDiscoverableTargetExtension(entry.name)
+							? classifyRunTargetFile(entry.name)
+							: undefined;
 						if (!kind) { continue; }
 
 						candidates.push({ kind, path: path.join(directory, entry.name), root });
@@ -307,7 +311,9 @@ async function browseForRunTarget(
 			canSelectMany: false,
 			title: 'Select a project or solution to run',
 			defaultUri,
-			filters: { 'Projects and solutions': ['csproj', 'sln', 'slnx'] }
+			filters: {
+				'Projects and solutions': DISCOVERABLE_TARGET_EXTENSIONS.map(extension => extension.slice(1))
+			}
 		});
 		selected = result?.[0]?.fsPath;
 	} else {
