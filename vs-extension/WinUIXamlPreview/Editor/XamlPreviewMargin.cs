@@ -7,6 +7,8 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.VisualStudio;
@@ -731,7 +733,166 @@ namespace WinUIXamlPreview.Editor
             menu.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.CommandBarTextActiveBrushKey);
             menu.SetResourceReference(Control.BorderBrushProperty, EnvironmentColors.CommandBarMenuBorderBrushKey);
             menu.BorderThickness = new Thickness(1);
+
+            // The stock (Aero2) ContextMenu/MenuItem templates paint a light icon gutter and separator that ignore
+            // the VS theme. Swap in theme-aware templates; the implicit styles reach submenu items too.
+            menu.Template = MenuPopupTemplate;
+            menu.Resources[typeof(MenuItem)] = ThemedMenuItemStyle;
+            menu.Resources[MenuItem.SeparatorStyleKey] = ThemedSeparatorStyle;
             return menu;
+        }
+
+        private const double MenuGutterWidth = 28;
+
+        private static ControlTemplate? _menuPopupTemplate;
+        private static ControlTemplate MenuPopupTemplate => _menuPopupTemplate ??= BuildMenuPopupTemplate(typeof(ContextMenu));
+
+        private static ControlTemplate BuildMenuPopupTemplate(Type targetType)
+        {
+            var template = new ControlTemplate(targetType);
+            var border = new FrameworkElementFactory(typeof(Border));
+            border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
+            border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
+            border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
+            border.SetValue(Border.PaddingProperty, new Thickness(2));
+            border.SetValue(UIElement.SnapsToDevicePixelsProperty, true);
+            border.AppendChild(MenuItemsHost());
+            template.VisualTree = border;
+            return template;
+        }
+
+        private static FrameworkElementFactory MenuItemsHost()
+        {
+            var scroll = new FrameworkElementFactory(typeof(ScrollViewer));
+            scroll.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
+            scroll.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
+            var items = new FrameworkElementFactory(typeof(ItemsPresenter));
+            items.SetValue(KeyboardNavigation.DirectionalNavigationProperty, KeyboardNavigationMode.Cycle);
+            items.SetValue(Grid.IsSharedSizeScopeProperty, true);
+            scroll.AppendChild(items);
+            return scroll;
+        }
+
+        private static Style? _themedSeparatorStyle;
+        private static Style ThemedSeparatorStyle => _themedSeparatorStyle ??= BuildThemedSeparatorStyle();
+
+        private static Style BuildThemedSeparatorStyle()
+        {
+            var style = new Style(typeof(Separator));
+            var template = new ControlTemplate(typeof(Separator));
+            var line = new FrameworkElementFactory(typeof(Border));
+            line.SetValue(FrameworkElement.HeightProperty, 1.0);
+            line.SetValue(FrameworkElement.MarginProperty, new Thickness(MenuGutterWidth + 2, 3, 2, 3));
+            line.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarMenuSeparatorBrushKey);
+            template.VisualTree = line;
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            return style;
+        }
+
+        private static Style? _themedMenuItemStyle;
+        private static Style ThemedMenuItemStyle => _themedMenuItemStyle ??= BuildThemedMenuItemStyle();
+
+        // One template for leaf and submenu-header items (context menus have no top-level items).
+        private static Style BuildThemedMenuItemStyle()
+        {
+            var style = new Style(typeof(MenuItem));
+            style.Setters.Add(new Setter(UIElement.SnapsToDevicePixelsProperty, true));
+            style.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 24.0));
+
+            var template = new ControlTemplate(typeof(MenuItem));
+            var root = new FrameworkElementFactory(typeof(Grid), "Bd");
+            root.SetValue(Panel.BackgroundProperty, Brushes.Transparent);
+            root.SetResourceReference(TextElement.ForegroundProperty, EnvironmentColors.CommandBarTextActiveBrushKey);
+
+            var gutter = new FrameworkElementFactory(typeof(ColumnDefinition));
+            gutter.SetValue(ColumnDefinition.WidthProperty, new GridLength(MenuGutterWidth));
+            var header = new FrameworkElementFactory(typeof(ColumnDefinition));
+            header.SetValue(ColumnDefinition.WidthProperty, new GridLength(1, GridUnitType.Star));
+            header.SetValue(DefinitionBase.SharedSizeGroupProperty, "MenuItemHeader");
+            var arrowCol = new FrameworkElementFactory(typeof(ColumnDefinition));
+            arrowCol.SetValue(ColumnDefinition.WidthProperty, new GridLength(20));
+            root.AppendChild(gutter);
+            root.AppendChild(header);
+            root.AppendChild(arrowCol);
+
+            var highlight = new FrameworkElementFactory(typeof(Border), "Hl");
+            highlight.SetValue(Grid.ColumnSpanProperty, 3);
+            highlight.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            highlight.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            highlight.SetValue(Border.BorderBrushProperty, Brushes.Transparent);
+            root.AppendChild(highlight);
+
+            var icon = new FrameworkElementFactory(typeof(ContentPresenter), "Icon");
+            icon.SetValue(ContentPresenter.ContentSourceProperty, "Icon");
+            icon.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            icon.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            root.AppendChild(icon);
+
+            var check = new FrameworkElementFactory(typeof(System.Windows.Shapes.Path), "Check");
+            check.SetValue(System.Windows.Shapes.Path.DataProperty, Geometry.Parse("M 0,5 L 3.5,8.5 L 10,1.5"));
+            check.SetValue(System.Windows.Shapes.Shape.StrokeThicknessProperty, 1.6);
+            check.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, EnvironmentColors.CommandBarTextActiveBrushKey);
+            check.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            check.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            check.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            root.AppendChild(check);
+
+            var content = new FrameworkElementFactory(typeof(ContentPresenter));
+            content.SetValue(Grid.ColumnProperty, 1);
+            content.SetValue(ContentPresenter.ContentSourceProperty, "Header");
+            content.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+            content.SetValue(FrameworkElement.MarginProperty, new Thickness(6, 3, 12, 3));
+            content.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            root.AppendChild(content);
+
+            var arrow = new FrameworkElementFactory(typeof(System.Windows.Shapes.Path), "Arrow");
+            arrow.SetValue(Grid.ColumnProperty, 2);
+            arrow.SetValue(System.Windows.Shapes.Path.DataProperty, Geometry.Parse("M 0,0 L 4,4 L 0,8 Z"));
+            arrow.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, EnvironmentColors.CommandBarMenuSubmenuGlyphBrushKey);
+            arrow.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            arrow.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            arrow.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            root.AppendChild(arrow);
+
+            var popup = new FrameworkElementFactory(typeof(System.Windows.Controls.Primitives.Popup), "PART_Popup");
+            popup.SetValue(System.Windows.Controls.Primitives.Popup.PlacementProperty, System.Windows.Controls.Primitives.PlacementMode.Right);
+            popup.SetValue(System.Windows.Controls.Primitives.Popup.HorizontalOffsetProperty, -2.0);
+            popup.SetValue(System.Windows.Controls.Primitives.Popup.AllowsTransparencyProperty, true);
+            popup.SetValue(System.Windows.Controls.Primitives.Popup.FocusableProperty, false);
+            popup.SetValue(System.Windows.Controls.Primitives.Popup.PopupAnimationProperty, System.Windows.Controls.Primitives.PopupAnimation.None);
+            popup.SetBinding(System.Windows.Controls.Primitives.Popup.IsOpenProperty, new Binding(nameof(MenuItem.IsSubmenuOpen)) { RelativeSource = RelativeSource.TemplatedParent, Mode = BindingMode.TwoWay });
+            var sub = new FrameworkElementFactory(typeof(Border));
+            sub.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarMenuBackgroundGradientBrushKey);
+            sub.SetResourceReference(Border.BorderBrushProperty, EnvironmentColors.CommandBarMenuBorderBrushKey);
+            sub.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            sub.SetValue(Border.PaddingProperty, new Thickness(2));
+            sub.AppendChild(MenuItemsHost());
+            popup.AppendChild(sub);
+            root.AppendChild(popup);
+
+            template.VisualTree = root;
+
+            var hasItems = new Trigger { Property = ItemsControl.HasItemsProperty, Value = true };
+            hasItems.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "Arrow"));
+            template.Triggers.Add(hasItems);
+
+            var isChecked = new Trigger { Property = MenuItem.IsCheckedProperty, Value = true };
+            isChecked.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "Check"));
+            isChecked.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Collapsed, "Icon"));
+            template.Triggers.Add(isChecked);
+
+            var highlighted = new Trigger { Property = MenuItem.IsHighlightedProperty, Value = true };
+            highlighted.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuItemMouseOverBrushKey), "Hl"));
+            highlighted.Setters.Add(new Setter(Border.BorderBrushProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuItemMouseOverBorderBrushKey), "Hl"));
+            highlighted.Setters.Add(new Setter(TextElement.ForegroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarMenuItemMouseOverTextBrushKey), "Bd"));
+            template.Triggers.Add(highlighted);
+
+            var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(TextElement.ForegroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarTextInactiveBrushKey), "Bd"));
+            template.Triggers.Add(disabled);
+
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            return style;
         }
 
         private MenuItem MakeMenuItem(string header, bool isChecked, string automationId, RoutedEventHandler onClick)
