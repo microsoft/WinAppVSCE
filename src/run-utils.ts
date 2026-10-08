@@ -28,7 +28,9 @@ import {
 } from './run-target';
 import { getWorkspaceRoots, NO_WORKSPACE_MESSAGE, type WorkspaceRoot } from './workspace';
 import {
+	availableRunToggles,
 	COMMON_CONFIGURATIONS,
+	resolveRunToggles,
 	SUPPORTED_ARCHITECTURES,
 	type WinAppRunOptions
 } from './run-options';
@@ -124,7 +126,7 @@ async function mapSolutionMembers(
 		candidates
 			.filter(candidate => candidate.kind === 'solution')
 			.map(async candidate => {
-				members.set(candidate.path, await readSolutionProjectPaths(candidate.path));
+				members.set(candidate.path, await readSolutionProjectPaths(candidate.path, candidate.root.path));
 			})
 	);
 
@@ -382,32 +384,11 @@ export async function pickSolutionProject(
 	return { cancelled: false, project: picked.projectPath };
 }
 
-/** A toggle offered by the With Options run command. */
-interface RunToggle {
-	key: keyof WinAppRunOptions;
-	label: string;
-	detail: string;
-	/** Only offered when the target is a project or solution. */
-	projectOnly?: boolean;
-}
-
-/** With Options toggles; omit `--without-alias` to avoid conflicting aliases. */
-const RUN_TOGGLES: RunToggle[] = [
-	{ key: 'clean', label: 'Clean application data', detail: 'Remove the existing package\'s LocalState and settings before deploying (--clean)' },
-	{ key: 'noBuild', label: 'Skip build', detail: 'Run the existing build output without rebuilding (--no-build)', projectOnly: true },
-	{ key: 'noRestore', label: 'Skip restore', detail: 'Do not restore the project before building (--no-restore)', projectOnly: true },
-	{ key: 'aot', label: 'Native AOT publish', detail: 'Run the project\'s configured Native AOT publish; requires PublishAot=true (--aot)', projectOnly: true },
-	{ key: 'detach', label: 'Launch and return immediately', detail: 'Do not wait for the app to exit (--detach)' },
-	{ key: 'noLaunch', label: 'Register only, do not launch', detail: 'Create the debug identity and register the package without starting the app (--no-launch)' },
-	{ key: 'withAlias', label: 'Launch via execution alias', detail: 'Run in the terminal with stdin/stdout inherited; requires an execution alias in the manifest (--with-alias)' },
-	{ key: 'unregisterOnExit', label: 'Unregister on exit', detail: 'Remove the development package after the app exits (--unregister-on-exit)' }
-];
-
 /** Omit target-inapplicable toggles; everything starts unchecked. */
 export async function pickRunToggles(
 	kind: RunTargetKind
 ): Promise<Partial<WinAppRunOptions> | undefined> {
-	const available = RUN_TOGGLES.filter(toggle => !toggle.projectOnly || isProjectMode(kind));
+	const available = availableRunToggles(isProjectMode(kind));
 	const items = available.map(toggle => ({
 		label: toggle.label,
 		detail: toggle.detail,
@@ -423,11 +404,7 @@ export async function pickRunToggles(
 		return undefined;
 	}
 
-	const selected: Partial<WinAppRunOptions> = {};
-	for (const toggle of available) {
-		(selected as Record<string, unknown>)[toggle.key] = picked.some(item => item.toggle.key === toggle.key);
-	}
-	return selected;
+	return resolveRunToggles(available, picked.map(item => item.toggle.key));
 }
 
 /** Build prompts for the With Options flow; the CLI owns the defaults. */

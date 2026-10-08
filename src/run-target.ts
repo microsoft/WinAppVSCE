@@ -167,8 +167,18 @@ function parseSlnxProjectPaths(content: string): string[] {
 	return results;
 }
 
-/** Drops solution entries that escape the solution directory via reparse points. */
-export async function readSolutionProjectPaths(solutionPath: string): Promise<string[]> {
+/**
+ * Drops solution entries that escape `containmentRoot` via reparse points.
+ *
+ * A solution may legitimately reference projects through `..` — a `solutions/`
+ * directory alongside `src/` is a common layout — so containment is checked
+ * against the owning workspace root when the caller knows it. Callers without
+ * a root (the Browse flow) fall back to the solution's own directory.
+ */
+export async function readSolutionProjectPaths(
+	solutionPath: string,
+	containmentRoot?: string
+): Promise<string[]> {
 	let content: string;
 	try {
 		content = await fsp.readFile(solutionPath, 'utf-8');
@@ -177,10 +187,11 @@ export async function readSolutionProjectPaths(solutionPath: string): Promise<st
 	}
 
 	const solutionDir = path.dirname(solutionPath);
+	const container = containmentRoot ?? solutionDir;
 	const resolved = parseSolutionProjectPaths(content, solutionPath)
 		.map(relative => path.resolve(solutionDir, relative.replace(/\\/g, path.sep)));
 	const contained = await Promise.all(
-		resolved.map(candidate => isContainedInReal(solutionDir, candidate))
+		resolved.map(candidate => isContainedInReal(container, candidate))
 	);
 	return resolved.filter((_, index) => contained[index]);
 }
@@ -235,7 +246,7 @@ export async function readTargetProjects(
 		const solutions = await readDirectorySolutionPaths(target.path);
 		if (solutions.length === 1) {
 			return {
-				projects: await readSolutionProjectPaths(solutions[0]),
+				projects: await readSolutionProjectPaths(solutions[0], target.root.path),
 				containerPath: path.dirname(solutions[0])
 			};
 		}
@@ -254,7 +265,7 @@ export async function readTargetProjects(
 
 	if (target.kind === 'solution') {
 		return {
-			projects: await readSolutionProjectPaths(target.path),
+			projects: await readSolutionProjectPaths(target.path, target.root.path),
 			containerPath: path.dirname(target.path)
 		};
 	}

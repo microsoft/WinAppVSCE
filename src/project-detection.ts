@@ -56,7 +56,11 @@ export async function isContainedInReal(container: string, candidate: string): P
 /** True when `candidate` is inside `container` (or is `container` itself). */
 export function isContainedIn(container: string, candidate: string): boolean {
 	const relative = path.relative(path.resolve(container), path.resolve(candidate));
-	return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+	if (relative === '' ) { return true; }
+	// Compare whole segments: a sibling named `..generated` is contained, while
+	// `..` and `../x` are not.
+	const escapes = relative === '..' || relative.startsWith(`..${path.sep}`);
+	return !escapes && !path.isAbsolute(relative);
 }
 
 /** Directories excluded from project-file discovery, by BFS and by glob. */

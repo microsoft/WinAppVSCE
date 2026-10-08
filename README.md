@@ -187,7 +187,7 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 | `args` | string | | Command-line arguments to pass to the application. |
 | `outputAppxDirectory` | string | | Output directory for the loose-layout package. Defaults to an `AppX` folder inside the input folder. |
 
-> The `--detach` and `--no-launch` CLI options are deliberately not available in `launch.json`: both leave no running process for the debugger to attach to. Use **WinApp: Run Application With Options...** if you need them.
+> The `--detach` and `--no-launch` CLI options are deliberately not available in `launch.json`: both leave no running process for the debugger to attach to. Use **WinApp: Run Application With Options...** if you need them. The same applies to `--debug-output` and `--symbols` — `--debug-output` attaches the CLI's own debugger, and only one debugger can attach to a process at a time.
 
 **Choosing build settings:**
 

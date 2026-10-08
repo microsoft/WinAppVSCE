@@ -320,7 +320,7 @@
               },
               "workingDirectory": {
                 "type": "string",
-                "description": "Both modes. Working directory for the launched application. Defaults to the input folder."
+                "description": "Both modes. Working directory for the launched application. Defaults to the workspace folder."
               },
               "args": {
                 "type": "string",

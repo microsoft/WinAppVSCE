@@ -64,6 +64,66 @@ export const COMMON_CONFIGURATIONS = ['Debug', 'Release'] as const;
 /** Every run option except the positional `input`. */
 export type RunOptionKey = Exclude<keyof WinAppRunOptions, 'input'>;
 
+/** A boolean run option offered by the With Options palette command. */
+export interface RunToggle {
+	key: RunOptionKey;
+	label: string;
+	detail: string;
+	/** Only offered when the target is a project or solution. */
+	projectOnly?: boolean;
+	/** Dropped unless this toggle is also on; the CLI ignores it otherwise. */
+	requires?: RunOptionKey;
+}
+
+/**
+ * Toggles offered by With Options, in prompt order.
+ *
+ * `--without-alias` is omitted to avoid offering two conflicting aliases.
+ * `debugOutput` and `symbols` live here rather than in `launch.json` because
+ * `--debug-output` attaches the CLI's own debugger, and only one debugger can
+ * attach to a process at a time.
+ */
+export const RUN_TOGGLES: readonly RunToggle[] = [
+	{ key: 'clean', label: 'Clean application data', detail: 'Remove the existing package\'s LocalState and settings before deploying (--clean)' },
+	{ key: 'noBuild', label: 'Skip build', detail: 'Run the existing build output without rebuilding (--no-build)', projectOnly: true },
+	{ key: 'noRestore', label: 'Skip restore', detail: 'Do not restore the project before building (--no-restore)', projectOnly: true },
+	{ key: 'aot', label: 'Native AOT publish', detail: 'Run the project\'s configured Native AOT publish; requires PublishAot=true (--aot)', projectOnly: true },
+	{ key: 'detach', label: 'Launch and return immediately', detail: 'Do not wait for the app to exit (--detach)' },
+	{ key: 'noLaunch', label: 'Register only, do not launch', detail: 'Create the debug identity and register the package without starting the app (--no-launch)' },
+	{ key: 'withAlias', label: 'Launch via execution alias', detail: 'Run in the terminal with stdin/stdout inherited; requires an execution alias in the manifest (--with-alias)' },
+	{ key: 'unregisterOnExit', label: 'Unregister on exit', detail: 'Remove the development package after the app exits (--unregister-on-exit)' },
+	{ key: 'debugOutput', label: 'Capture debug output', detail: 'Capture OutputDebugString and first-chance exceptions; no other debugger can attach while this is on (--debug-output)' },
+	{ key: 'symbols', label: 'Download symbols for crash analysis', detail: 'Use the Microsoft Symbol Server for richer native stacks; only applies with Capture debug output (--symbols)', requires: 'debugOutput' }
+];
+
+/** Toggles applicable to a target; project-only ones need project mode. */
+export function availableRunToggles(projectMode: boolean): RunToggle[] {
+	return RUN_TOGGLES.filter(toggle => !toggle.projectOnly || projectMode);
+}
+
+/**
+ * Resolves checked toggle keys into run options.
+ *
+ * A dependent toggle checked on its own is cleared rather than passed through,
+ * so the CLI never receives a flag it would ignore.
+ */
+export function resolveRunToggles(
+	available: readonly RunToggle[],
+	checkedKeys: readonly RunOptionKey[]
+): Partial<WinAppRunOptions> {
+	const checked = new Set(checkedKeys);
+	const selected: Record<string, boolean> = {};
+	for (const toggle of available) {
+		selected[toggle.key] = checked.has(toggle.key);
+	}
+	for (const toggle of available) {
+		if (toggle.requires && !selected[toggle.requires]) {
+			selected[toggle.key] = false;
+		}
+	}
+	return selected as Partial<WinAppRunOptions>;
+}
+
 /** How an option is spelled on the command line. */
 type RunOptionKind =
 	/** `--flag value`, emitted only when the trimmed value is non-empty. */

@@ -332,6 +332,42 @@ describe('readSolutionProjectPaths containment', () => {
 		}
 	});
 
+	// A `solutions/App.sln` referencing `..\src\App` is a normal layout. Without
+	// the workspace root as the container the member is dropped, the --project
+	// prompt never appears, and the CLI is handed an ambiguous solution.
+	it('keeps a .. member that stays inside the given containment root', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-root-'));
+		try {
+			const solutionDir = path.join(root, 'solutions');
+			const projectDir = path.join(root, 'src', 'App');
+			fs.mkdirSync(solutionDir);
+			fs.mkdirSync(projectDir, { recursive: true });
+			fs.writeFileSync(path.join(projectDir, 'App.csproj'), '<Project />');
+
+			const solutionPath = writeSolution(solutionDir, ['..\\src\\App\\App.csproj']);
+
+			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), []);
+			assert.deepStrictEqual(
+				await readSolutionProjectPaths(solutionPath, root),
+				[path.join(projectDir, 'App.csproj')]
+			);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it('still drops a member that escapes the containment root', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-escape-'));
+		try {
+			const solutionDir = path.join(root, 'solutions');
+			fs.mkdirSync(solutionDir);
+			const solutionPath = writeSolution(solutionDir, ['..\\..\\Outside\\Outside.csproj']);
+			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath, root), []);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	// The lexical check alone passes this: "link\Outside.csproj" contains no
 	// `..`, so nothing in the string reveals that `link` redirects out of the
 	// solution directory. Only resolving the reparse point catches it.

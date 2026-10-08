@@ -1,13 +1,18 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import {
+	availableRunToggles,
 	buildRunArgs,
 	COMMON_CONFIGURATIONS,
 	parseProcessIdFromJson,
 	resolveDebugInput,
+	resolveRunToggles,
+	RUN_OPTIONS,
+	RUN_TOGGLES,
 	runOptionsFromDebugConfig,
 	SUPPORTED_ARCHITECTURES,
 	validateDebugRunOptions,
+	type RunOptionKey,
 	type WinAppDebugConfiguration,
 	type WinAppRunOptions
 } from '../run-options';
@@ -246,5 +251,63 @@ describe('parseProcessIdFromJson', () => {
 		assert.strictEqual(parseProcessIdFromJson('{"processId": "4242"}'), undefined);
 		assert.strictEqual(parseProcessIdFromJson('{"processId": 0}'), undefined);
 		assert.strictEqual(parseProcessIdFromJson('{"processId": -1}'), undefined);
+	});
+});
+
+describe('run toggles', () => {
+	it('offers only switch options that exist in the run surface', () => {
+		for (const toggle of RUN_TOGGLES) {
+			const descriptor = RUN_OPTIONS.find(option => option.key === toggle.key);
+			assert.ok(descriptor, `${toggle.key} is not a known run option`);
+			assert.strictEqual(descriptor.kind, 'switch', `${toggle.key} is not a switch`);
+		}
+	});
+
+	it('surfaces the debugging toggles that launch.json cannot express', () => {
+		const keys = RUN_TOGGLES.map(toggle => toggle.key);
+		assert.ok(keys.includes('debugOutput'));
+		assert.ok(keys.includes('symbols'));
+	});
+
+	it('hides project-only toggles in folder mode', () => {
+		const folderKeys = availableRunToggles(false).map(toggle => toggle.key);
+		assert.ok(!folderKeys.includes('noBuild'));
+		assert.ok(folderKeys.includes('clean'));
+		assert.ok(availableRunToggles(true).map(toggle => toggle.key).includes('noBuild'));
+	});
+
+	it('emits false for every unchecked toggle', () => {
+		const available = availableRunToggles(false);
+		const resolved = resolveRunToggles(available, []);
+		for (const toggle of available) {
+			assert.strictEqual(resolved[toggle.key], false);
+		}
+	});
+
+	it('drops a dependent toggle when its prerequisite is unchecked', () => {
+		const available = availableRunToggles(true);
+		const resolved = resolveRunToggles(available, ['symbols', 'clean'] as RunOptionKey[]);
+		assert.strictEqual(resolved.symbols, false);
+		assert.strictEqual(resolved.debugOutput, false);
+		assert.strictEqual(resolved.clean, true);
+	});
+
+	it('keeps a dependent toggle when its prerequisite is checked', () => {
+		const available = availableRunToggles(true);
+		const resolved = resolveRunToggles(available, ['symbols', 'debugOutput'] as RunOptionKey[]);
+		assert.strictEqual(resolved.symbols, true);
+		assert.strictEqual(resolved.debugOutput, true);
+	});
+
+	it('round-trips the gated toggles into argv', () => {
+		const available = availableRunToggles(true);
+		const resolved = resolveRunToggles(available, ['symbols', 'debugOutput'] as RunOptionKey[]);
+		const args = buildRunArgs(options(resolved));
+		assert.ok(args.includes('--debug-output'));
+		assert.ok(args.includes('--symbols'));
+
+		const without = buildRunArgs(options(resolveRunToggles(available, ['symbols'] as RunOptionKey[])));
+		assert.ok(!without.includes('--symbols'));
+		assert.ok(!without.includes('--debug-output'));
 	});
 });

@@ -1015,11 +1015,15 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				}
 				input = selection.target.path;
 
-				const projectSelection = await pickSolutionProject(selection);
-				if (projectSelection.cancelled) {
-					throw new Error('No project selected, cancelling debug session.');
+				// An explicit launch.json "project" wins below, so prompting for
+				// one here would only discard the answer.
+				if (!config.project) {
+					const projectSelection = await pickSolutionProject(selection);
+					if (projectSelection.cancelled) {
+						throw new Error('No project selected, cancelling debug session.');
+					}
+					pickedProject = projectSelection.project;
 				}
-				pickedProject = projectSelection.project;
 			}
 
 			const cliPath = getWinappCliPath(this.extensionPath);

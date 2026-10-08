@@ -404,4 +404,10 @@ describe('isContainedIn', () => {
 	it('rejects a path that only shares a name prefix', () => {
 		assert.strictEqual(isContainedIn('C:/ws/App', 'C:/ws/AppOther/Other.csproj'), false);
 	});
+
+	// `path.relative` returns `..generated/x` here, which a naive
+	// `startsWith('..')` would mistake for an escape.
+	it('accepts a contained directory whose name starts with ..', () => {
+		assert.strictEqual(isContainedIn('C:/ws', 'C:/ws/..generated/App.csproj'), true);
+	});
 });

@@ -120,8 +120,10 @@ function findMissingPrerequisite(): string | undefined {
     return undefined;
 }
 
-const missingPrerequisite = findMissingPrerequisite();
 const liveRunEnabled = process.env.E2E_LIVE_RUN === '1';
+// Probing costs several PowerShell round-trips, including a 90s-timeout
+// `dotnet new list`. Only pay it when the opt-in suite will actually run.
+const missingPrerequisite = liveRunEnabled ? findMissingPrerequisite() : undefined;
 
 // ──────────────────────────────────────────────────────
 // Fixture scaffolding
@@ -429,10 +431,29 @@ async function waitForQuickPickRows(page: Page): Promise<void> {
 }
 
 /** Take whatever a QuickPick already has highlighted. */
-async function acceptQuickPick(page: Page): Promise<void> {
-    await waitForQuickPickRows(page);
+async function acceptQuickPick(page: Page, expectedLabel?: string): Promise<void> {
+    if (expectedLabel) {
+        await waitForQuickPickItem(page, expectedLabel);
+    } else {
+        await waitForQuickPickRows(page);
+    }
     await page.waitForTimeout(500);
     await page.keyboard.press('Enter');
+}
+
+/**
+ * Wait until a QuickPick is offering `label`.
+ *
+ * A closing QuickPick keeps its rows on screen while the next one opens, so
+ * waiting for rows alone can land a keystroke on the picker that is going
+ * away. Waiting for an item only the expected picker has avoids that race.
+ */
+async function waitForQuickPickItem(page: Page, label: string): Promise<void> {
+    await expect(
+        page.locator('.quick-input-widget .quick-input-list .monaco-list-row')
+            .filter({ hasText: label })
+            .first()
+    ).toBeVisible({ timeout: 60_000 });
 }
 
 /**
@@ -442,9 +463,10 @@ async function acceptQuickPick(page: Page): Promise<void> {
  * item lands in the list, which varies with the architectures the host reports.
  */
 async function pickQuickItem(page: Page, label: string): Promise<void> {
-    await waitForQuickPickRows(page);
+    await waitForQuickPickItem(page, label);
     const input = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
     await input.fill(label);
+    await waitForQuickPickItem(page, label);
     await page.waitForTimeout(500);
     await page.keyboard.press('Enter');
 }
@@ -611,7 +633,8 @@ test.describe('live winapp run (project mode)', () => {
             await pickQuickItem(page, 'Release');
             await pickQuickItem(page, 'x64');
             // The toggle picker is multi-select; accept it with nothing chosen.
-            await acceptQuickPick(page);
+            // Naming a toggle confirms the arch prompt has already closed.
+            await acceptQuickPick(page, 'Clean application data');
 
             await waitForCliTerminal(page);
 
