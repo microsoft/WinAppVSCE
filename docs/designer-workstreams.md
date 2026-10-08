@@ -269,8 +269,12 @@ Wire v1 has no request/document correlation and no real version negotiation
     surface kills always recover. Not exercised live: the give-up "Preview disconnected"
     card. The restart budget resets on each successful render, so kills spaced 6 s apart
     never exhaust it.
-- **U3 — Frame-mode zoom/pan.** Add zoom/pan to the streamed-image path (native
-  mode already scrolls via the holder).
+- **U3 — Frame-mode zoom/pan.** ⏸️ Dropped for now. Native mode already has
+  in-surface zoom (`DesignSurface`: zoom bar, Ctrl+scroll, fit-to-pane, 10–800%), and
+  the image path is effectively unreachable today (`PreferNative` is hard-coded on and
+  the bundled surface always advertises `native-hwnd`). Possible follow-ups if
+  revisited: surface zoom controls in the VS toolbar, and preserve zoom across surface
+  restarts.
 
 ---
 
