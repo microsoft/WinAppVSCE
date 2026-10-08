@@ -385,7 +385,6 @@ namespace WinUIXamlPreview.Editor
                     _toolbarTitle.Measure(unbounded);
                     needed += _toolbarTitle.DesiredSize.Width;
                 }
-                Log.Write($"TOOLBAR-DBG avail={available:0} level={level} needed={needed:0} kids=" + string.Join(",", _toolbarButtons.Children.OfType<FrameworkElement>().Select(c => $"{c.Visibility.ToString()[0]}{c.DesiredSize.Width:0}")));
                 if (needed <= available)
                 {
                     break;

@@ -55,7 +55,7 @@ blank/default unless live activation works.
 
 ---
 
-## WS3 — Performance & startup latency  🔜 (in progress)
+## WS3 — Performance & startup latency  ✅
 
 Context that shapes the plan: VS defaults to **native-HWND mode** (`PreferNative`),
 so the PNG encode/readback path matters less here than **process launch, run-copy,
@@ -228,12 +228,22 @@ Wire v1 has no request/document correlation and no real version negotiation
 
 ---
 
-## WS8 — UX polish  🔜
+## WS8 — UX polish  🔜 (in progress)
 
-- **U1 — Narrow-toolbar overflow.** The in-tab toolbar has ~11 buttons with no
-  overflow handling, so it clips in a narrow margin (`XamlPreviewMargin.cs`
-  `BuildToolbar` ~231-265; known baseline issue in `designer-migration.md:365`).
-  Add overflow/wrap or an overflow menu.
+- **U1 — Narrow-toolbar overflow.** ✅ The in-tab toolbar now collapses in stages
+  as the margin narrows (`XamlPreviewMargin.UpdateToolbarLayout`, run on every
+  toolbar width change): (1) hide the "WinUI Preview" title, (2) drop button labels
+  (icon + tooltip only), (3+) move buttons into a "⋯" overflow menu least-used first —
+  Window, Dock, Sample data, Live, Properties, Size, Theme. Reload, Select and Hide
+  never overflow. The menu is rebuilt on each open so toggle labels ("Live: On") are
+  current; Theme/Size appear as submenus. Separators hide between empty groups.
+  Gotcha fixed along the way: after collapsing a label, every ancestor's cached
+  `DesiredSize` must be invalidated or the trial `Measure` still sees the old width.
+  Verified live (VS 2022, 1.5× scale) by dragging the margin 1000 → 240 → 1000 DIP:
+  full toolbar ≥ ~950, icons-only down to ~400, then one button per ~25–45 DIP into
+  the menu; Live toggled on/off from the menu; reopen/close repeatedly. Not yet
+  exercised live: picking a Theme/Size entry from the overflow submenus (Theme only
+  overflows below ~260 DIP).
 - **U2 — Error-presentation consistency.** Continue the WS1 banner unification:
   fold `SetDetailBanner` / live-fallback / not-designable states into one coherent
   visual language.
