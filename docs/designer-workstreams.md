@@ -228,7 +228,7 @@ Wire v1 has no request/document correlation and no real version negotiation
 
 ---
 
-## WS8 — UX polish  🔜 (in progress)
+## WS8 — UX polish  ✅ (U3 deferred)
 
 - **U1 — Narrow-toolbar overflow.** ✅ The in-tab toolbar now collapses in stages
   as the margin narrows (`XamlPreviewMargin.UpdateToolbarLayout`, run on every
