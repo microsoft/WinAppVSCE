@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { SUPPORTED_ARCHITECTURES } from '../run-options';
+import { RUN_OPTIONS, SUPPORTED_ARCHITECTURES } from '../run-options';
 
 const packageJsonPath = path.resolve(__dirname, '..', '..', 'package.json');
 const raw = fs.readFileSync(packageJsonPath, 'utf8');
@@ -135,6 +135,32 @@ describe('package.json contributions', () => {
 		}
 	});
 
+	// package.json cannot import the run-option table, so this test is the
+	// link between them: every row marked `inLaunchSchema` must be declared,
+	// and nothing marked otherwise may leak in.
+	it('declares exactly the run options the table marks as launch.json keys', () => {
+		const properties = manifest.contributes.debuggers[0].configurationAttributes.launch.properties;
+
+		// Not run options: the positional input, its deprecated alias, and the
+		// two keys the adapter itself consumes.
+		const adapterOwned = new Set(['input', 'inputFolder', 'debuggerType', 'workingDirectory', 'port']);
+		const declared = new Set(Object.keys(properties).filter(name => !adapterOwned.has(name)));
+
+		for (const option of RUN_OPTIONS) {
+			if (option.inLaunchSchema) {
+				assert.ok(declared.delete(option.key), `launch.json is missing the "${option.key}" run option`);
+			} else {
+				assert.equal(
+					properties[option.key],
+					undefined,
+					`"${option.key}" should not be offered in launch.json`
+				);
+			}
+		}
+
+		assert.deepEqual([...declared], [], 'launch.json declares keys that are not run options');
+	});
+
 	it('keeps inputFolder as a deprecated alias for input', () => {
 		const properties = manifest.contributes.debuggers[0].configurationAttributes.launch.properties;
 		assert.ok(properties.input, 'input should be declared');
@@ -144,8 +170,8 @@ describe('package.json contributions', () => {
 	it('does not expose options the debug adapter rejects', () => {
 		const properties = manifest.contributes.debuggers[0].configurationAttributes.launch.properties;
 		// Each of these leaves no running process for the debugger to attach to.
-		for (const name of ['detach', 'noLaunch', 'debugOutput']) {
-			assert.equal(properties[name], undefined, `${name} should not be offered in launch.json`);
+		for (const option of RUN_OPTIONS.filter(entry => entry.debugUnsupported)) {
+			assert.equal(properties[option.key], undefined, `${option.key} should not be offered in launch.json`);
 		}
 	});
 });

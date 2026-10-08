@@ -2,21 +2,20 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-	FOLDER_PICKER_DETAIL,
 	findBuildOutputFolders,
 	selectFolder
 } from './folder-picker';
+import { walkDirectoryTree } from './directory-walk';
+import { PROJECT_SCAN_SKIP_DIRS } from './project-detection';
 import {
 	classifyRunTarget,
-	classifyRunTargetFile,
+	classifyDiscoveredTargetFile,
 	dedupeSolutionMembers,
 	filterOfferableCandidates,
 	filterOfferableProjects,
 	findOwningRoot,
 	isDirectory,
 	isProjectMode,
-	PROJECT_FILE_EXCLUDE_GLOB,
-	PROJECT_FILE_GLOB,
 	PROJECT_FILE_MAX_RESULTS,
 	readSolutionProjectPaths,
 	readTargetProjects,
@@ -40,34 +39,53 @@ const BROWSE_DETAIL = 'Pick a project, solution, or build output folder yourself
 /** Marks the browse sub-prompt entry that opens a file dialog for projects. */
 const PROJECT_PICKER_DETAIL = 'Open a file picker for .csproj, .sln, or .slnx';
 
-/** Prefer project globbing; reserve executable scans for fallback or explicit use. */
+/** Marks the browse sub-prompt entry that opens a folder dialog. */
+const FOLDER_BROWSE_DETAIL = 'Open a folder picker for a project directory or a build output folder';
+
+/**
+ * Prefer project discovery; reserve executable scans for fallback or explicit use.
+ *
+ * Walks the tree directly rather than using `vscode.workspace.findFiles`,
+ * which silently honours the user's `files.exclude` and `search.exclude`
+ * settings — a workspace that hides `src/**` would hide its own app project
+ * from the run picker.
+ */
 async function findProjectTargets(
 	roots: readonly WorkspaceRoot[],
 	token: vscode.CancellationToken
 ): Promise<RunTargetCandidate[]> {
 	const candidates: RunTargetCandidate[] = [];
+	const controller = new AbortController();
+	const subscription = token.onCancellationRequested(() => controller.abort());
 
-	for (const root of roots) {
-		const matches = await vscode.workspace.findFiles(
-			new vscode.RelativePattern(root.path, PROJECT_FILE_GLOB),
-			PROJECT_FILE_EXCLUDE_GLOB,
-			PROJECT_FILE_MAX_RESULTS,
-			token
-		);
-
-		if (token.isCancellationRequested) {
-			return [];
-		}
-
-		for (const match of matches) {
-			const kind = classifyRunTargetFile(match.fsPath);
-			if (kind) {
-				candidates.push({ kind, path: match.fsPath, root });
+	try {
+		for (const root of roots) {
+			if (token.isCancellationRequested || candidates.length >= PROJECT_FILE_MAX_RESULTS) {
+				break;
 			}
+
+			await walkDirectoryTree(
+				root.path,
+				(directory, entries) => {
+					for (const entry of entries) {
+						if (!entry.isFile()) { continue; }
+
+						const kind = classifyDiscoveredTargetFile(entry.name);
+						if (!kind) { continue; }
+
+						candidates.push({ kind, path: path.join(directory, entry.name), root });
+						if (candidates.length >= PROJECT_FILE_MAX_RESULTS) { return 'stop'; }
+					}
+					return 'descend';
+				},
+				{ skipDirs: PROJECT_SCAN_SKIP_DIRS, signal: controller.signal }
+			);
 		}
+	} finally {
+		subscription.dispose();
 	}
 
-	return candidates;
+	return token.isCancellationRequested ? [] : candidates;
 }
 
 /** Find `.exe` output folders across every workspace root. */
@@ -268,8 +286,8 @@ async function browseForRunTarget(
 	if (!mode) {
 		const picked = await vscode.window.showQuickPick(
 			[
-				{ label: '$(file-code) Project or solution…', detail: PROJECT_PICKER_DETAIL, mode: 'file' as const },
-				{ label: '$(folder) Build output folder…', detail: FOLDER_PICKER_DETAIL, mode: 'folder' as const }
+				{ label: '$(file-code) Project or solution file…', detail: PROJECT_PICKER_DETAIL, mode: 'file' as const },
+				{ label: '$(folder) Project directory or build output folder…', detail: FOLDER_BROWSE_DETAIL, mode: 'folder' as const }
 			],
 			{ placeHolder: 'What would you like to browse for?' }
 		);
@@ -293,7 +311,7 @@ async function browseForRunTarget(
 		});
 		selected = result?.[0]?.fsPath;
 	} else {
-		selected = await selectFolder('Select project or build output folder', defaultUri);
+		selected = await selectFolder('Select a project directory or build output folder', defaultUri);
 	}
 
 	if (!selected) {

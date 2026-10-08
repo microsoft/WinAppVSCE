@@ -82,7 +82,7 @@ they never wrote.
 |---|------|-----------|
 | 1 | invalid inputFolder offers to open its debug configuration | Validation cancels debugging, shows the resource-neutral action, and opens the correct folder `launch.json` with its unique configuration content |
 
-### `run-target-picker.spec.ts` — 12 tests
+### `run-target-picker.spec.ts` — 13 tests
 
 Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which depends on VS Code's own `findFiles` indexing and workspace-folder resolution and so cannot be unit tested. Every test dismisses the picker with `Escape`, so the CLI is never invoked and nothing is built or deployed.
 
@@ -96,10 +96,11 @@ Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which de
 | 6 | skips the project prompt when a solution holds one runnable app | A single-app solution goes straight on, landing on the build-configuration prompt |
 | 7 | caps the list and points at browse when many projects are found | Beyond the cap the picker truncates and surfaces the browse entry instead of hundreds of rows |
 | 8 | lists every discovered project in the workspace | Both `.csproj` files appear alongside a single browse entry, with no separate build-output search row |
-| 9 | shows a solution once rather than also listing its member projects | A `.sln` and its member `.csproj` collapse to a single entry |
-| 10 | discovers projects in every folder of a multi-root workspace | Projects from *both* folders of a `.code-workspace` appear — previously only `workspaceFolders[0]` was searched |
-| 11 | With Options command skips the target prompt for a single project | `winapp.runWithOptions` auto-selects the only candidate, matching `winapp.run`, and goes straight to the build prompt |
-| 12 | F5 with no input in launch.json prompts for a run target | A `winapp` launch configuration that omits `input` falls through to the picker instead of failing with a missing-argument error |
+| 9 | Browse opens a sub-prompt that chooses between a file and a folder dialog | Selecting the single browse entry raises the "What would you like to browse for?" sub-prompt offering both a project/solution *file* dialog and a project-directory-or-build-output *folder* dialog, and Escape unwinds without opening a native dialog |
+| 10 | shows a solution once rather than also listing its member projects | A `.sln` and its member `.csproj` collapse to a single entry |
+| 11 | discovers projects in every folder of a multi-root workspace | Projects from *both* folders of a `.code-workspace` appear — previously only `workspaceFolders[0]` was searched |
+| 12 | With Options command skips the target prompt for a single project | `winapp.runWithOptions` auto-selects the only candidate, matching `winapp.run`, and goes straight to the build prompt |
+| 13 | F5 with no input in launch.json prompts for a run target | A `winapp` launch configuration that omits `input` falls through to the picker instead of failing with a missing-argument error |
 
 > When matching the picker, assert on the full placeholder. The command palette's own placeholder is "Type the name of a command **to run**", so a loose `/to run/` match silently reads the palette's rows instead of the picker's.
 

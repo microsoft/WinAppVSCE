@@ -1,6 +1,6 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
-import { isContainedIn, isContainedInReal, isOfferableProject, PROJECT_SCAN_SKIP_DIRS, readProjectRunnability } from './project-detection';
+import { isContainedIn, isContainedInReal, isOfferableProject, readProjectRunnability } from './project-detection';
 import { attributeValue, findElementsByLocalName, tryParseXml } from './xml-read';
 import type { WorkspaceRoot } from './workspace';
 
@@ -12,26 +12,27 @@ export const PROJECT_FILE_EXTENSIONS = ['.csproj'] as const;
 
 /**
  * .NET file-based apps run in project mode but are deliberately excluded from
- * discovery and from the `--project` list: every C# source file has this
- * extension, so offering them would bury real projects.
+ * discovery, from the Browse dialog's filters, and from the `--project` list:
+ * every C# source file has this extension, so offering them would bury real
+ * projects. A `.cs` path the user names explicitly — in `launch.json` or as a
+ * debug input — is still accepted, because the CLI accepts it.
  */
 export const FILE_BASED_APP_EXTENSIONS = ['.cs'] as const;
 
 /** Solution file extensions the CLI can build in project mode. */
 export const SOLUTION_FILE_EXTENSIONS = ['.sln', '.slnx'] as const;
 
-/** Primary discovery glob; executable scanning is only a fallback. */
-export const PROJECT_FILE_GLOB = '**/*.{sln,slnx,csproj}';
+/** Extensions the workspace scan looks for; file-based apps are excluded. */
+export const DISCOVERABLE_TARGET_EXTENSIONS = [
+	...SOLUTION_FILE_EXTENSIONS,
+	...PROJECT_FILE_EXTENSIONS
+] as const;
 
-/** Bounds project-file glob work; display is capped separately. */
+/** Bounds the project-file scan; display is capped separately. */
 export const PROJECT_FILE_MAX_RESULTS = 200;
 
 /** Caps picker entries while Browse keeps all targets reachable. */
 export const RUN_TARGET_DISPLAY_LIMIT = 10;
-
-/** VS Code-compatible exclude glob for project-file discovery. */
-export const PROJECT_FILE_EXCLUDE_GLOB =
-	`{${[...PROJECT_SCAN_SKIP_DIRS].map(d => `**/${d}/**`).join(',')}}`;
 
 /** A candidate target for `winapp run`. */
 export interface RunTargetCandidate {
@@ -55,6 +56,19 @@ export function classifyRunTargetFile(filePath: string): RunTargetKind | undefin
 		return 'project';
 	}
 	return undefined;
+}
+
+/**
+ * Classifies a file found by the workspace scan, ignoring kinds the picker
+ * never offers. Keeping this separate from {@link classifyRunTargetFile} is
+ * what stops every `.cs` source file in the workspace from becoming a run
+ * target while an explicitly named one still works.
+ */
+export function classifyDiscoveredTargetFile(filePath: string): RunTargetKind | undefined {
+	const extension = path.extname(filePath).toLowerCase();
+	return (DISCOVERABLE_TARGET_EXTENSIONS as readonly string[]).includes(extension)
+		? classifyRunTargetFile(filePath)
+		: undefined;
 }
 
 /** Mirrors CLI precedence; `unknown` still goes to the CLI for final handling. */
@@ -311,8 +325,8 @@ export function sortRunTargets(
 		const rankDelta = kindRank(left.kind) - kindRank(right.kind);
 		if (rankDelta !== 0) { return rankDelta; }
 
-		// findFiles does not guarantee an order, so sort by path to keep the
-		// picker alphabetical within each kind.
+		// The directory walk visits roots in queue order, so sort by path to
+		// keep the picker alphabetical within each kind.
 		return left.path.localeCompare(right.path);
 	});
 }

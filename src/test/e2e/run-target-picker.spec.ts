@@ -185,6 +185,9 @@ const PROJECT_PICKER_PLACEHOLDER = /Which project in .+ would you like to run\?/
 /** The placeholder of the With Options command's first build-settings prompt. */
 const BUILD_CONFIG_PLACEHOLDER = /^Build configuration$/;
 
+/** The placeholder of the sub-prompt that picks which browse dialog to open. */
+const BROWSE_KIND_PLACEHOLDER = /^What would you like to browse for\?$/;
+
 /** Placeholder matching avoids reading stale command-palette rows. */
 async function readPickerRows(page: Page, placeholder: RegExp): Promise<string[]> {
     const input = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
@@ -534,6 +537,49 @@ test.describe('run target picker', () => {
 
             await page.keyboard.press('Escape');
             console.log('✅ PASS: both projects listed with a single browse entry');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    test('Browse opens a sub-prompt that chooses between a file and a folder dialog', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-browse-e2e-'));
+        writeProject(tmpDir, path.join('AppOne', 'AppOne.csproj'));
+        writeProject(tmpDir, path.join('AppTwo', 'AppTwo.csproj'));
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application');
+            await readRunTargetPicker(page);
+
+            // The browse entry is last; ArrowUp from the first row wraps to it.
+            await page.keyboard.press('ArrowUp');
+            await page.waitForTimeout(500);
+            await page.keyboard.press('Enter');
+
+            const subRows = await readPickerRows(page, BROWSE_KIND_PLACEHOLDER);
+            const joined = subRows.join('\n');
+
+            // Both dialog kinds are reachable, and the folder entry names
+            // project directories — the CLI accepts a directory containing a
+            // project, not only a build-output folder.
+            expect(joined).toContain('Project or solution file');
+            expect(joined).toContain('Project directory or build output folder');
+
+            // Escaping the sub-prompt must unwind the whole flow without
+            // opening a native dialog or invoking the CLI.
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(1_000);
+            await expect(page.locator('.quick-input-widget')).toBeHidden({ timeout: 10_000 });
+
+            console.log('✅ PASS: Browse sub-prompt offers both dialog kinds and cancels cleanly');
         } finally {
             if (app) {
                 await app.close().catch(() => {});

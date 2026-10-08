@@ -61,100 +61,145 @@ export const SUPPORTED_ARCHITECTURES = ['x64', 'arm64', 'x86'] as const;
 /** Build configurations offered in the UI. `--configuration` accepts any value. */
 export const COMMON_CONFIGURATIONS = ['Debug', 'Release'] as const;
 
+/** Every run option except the positional `input`. */
+export type RunOptionKey = Exclude<keyof WinAppRunOptions, 'input'>;
+
+/** How an option is spelled on the command line. */
+type RunOptionKind =
+	/** `--flag value`, emitted only when the trimmed value is non-empty. */
+	| 'value'
+	/** `--flag`, emitted only when truthy. */
+	| 'switch'
+	/** `--flag Name=Value`, repeated once per entry. */
+	| 'properties';
+
+/**
+ * The single source of truth for the `winapp run` surface.
+ *
+ * Argv emission, the launch.json mapping, and debug-session validation are all
+ * derived from this table, and `package-contributions.test.ts` holds the
+ * launch.json schema in `package.json` to it. Adding a CLI option means adding
+ * one row plus one schema entry, rather than editing four parallel lists.
+ */
+interface RunOptionDescriptor {
+	readonly key: RunOptionKey;
+	readonly flag: string;
+	readonly kind: RunOptionKind;
+	/** Whether `package.json` declares this option in the launch.json schema. */
+	readonly inLaunchSchema: boolean;
+	/** Whether {@link runOptionsFromDebugConfig} copies it from a launch.json entry. */
+	readonly fromDebugConfig: boolean;
+	/** Why a WinApp debug session cannot honour it, when it cannot. */
+	readonly debugUnsupported?: string;
+}
+
+/** Declaration order is argv order, so command lines are reproducible. */
+export const RUN_OPTIONS: readonly RunOptionDescriptor[] = [
+	{ key: 'project', flag: '--project', kind: 'value', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'configuration', flag: '--configuration', kind: 'value', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'arch', flag: '--arch', kind: 'value', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'framework', flag: '--framework', kind: 'value', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'runtime', flag: '--runtime', kind: 'value', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'properties', flag: '--property', kind: 'properties', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'noRestore', flag: '--no-restore', kind: 'switch', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'noBuild', flag: '--no-build', kind: 'switch', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'aot', flag: '--aot', kind: 'switch', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'clean', flag: '--clean', kind: 'switch', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'manifest', flag: '--manifest', kind: 'value', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'outputAppxDirectory', flag: '--output-appx-directory', kind: 'value', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'executable', flag: '--executable', kind: 'value', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'withAlias', flag: '--with-alias', kind: 'switch', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'withoutAlias', flag: '--without-alias', kind: 'switch', inLaunchSchema: true, fromDebugConfig: true },
+	{ key: 'unregisterOnExit', flag: '--unregister-on-exit', kind: 'switch', inLaunchSchema: true, fromDebugConfig: true },
+	{
+		key: 'noLaunch',
+		flag: '--no-launch',
+		kind: 'switch',
+		inLaunchSchema: false,
+		fromDebugConfig: true,
+		debugUnsupported: '"noLaunch" is not supported in a WinApp debug configuration, because there is no launched process to attach to.'
+	},
+	{
+		key: 'detach',
+		flag: '--detach',
+		kind: 'switch',
+		inLaunchSchema: false,
+		fromDebugConfig: true,
+		debugUnsupported: '"detach" is not supported in a WinApp debug configuration, because WinApp must stay attached to manage the debug session.'
+	},
+	{
+		key: 'debugOutput',
+		flag: '--debug-output',
+		kind: 'switch',
+		inLaunchSchema: false,
+		fromDebugConfig: true,
+		// Windows allows one debugger per process, so the CLI cannot capture
+		// debug output while VS Code is attached.
+		debugUnsupported: '"debugOutput" is not supported in a WinApp debug configuration, because VS Code is already attached as the debugger.'
+	},
+	// Only meaningful alongside --debug-output, so launch.json does not offer
+	// it; it is still mapped so a hand-written config round-trips.
+	{ key: 'symbols', flag: '--symbols', kind: 'switch', inLaunchSchema: false, fromDebugConfig: true },
+	// The adapter composes --args itself (it prepends --inspect for node), and
+	// --json is always on for a debug session, so neither is copied blindly.
+	{ key: 'args', flag: '--args', kind: 'value', inLaunchSchema: true, fromDebugConfig: false },
+	{ key: 'json', flag: '--json', kind: 'switch', inLaunchSchema: false, fromDebugConfig: false }
+];
+
 /** Builds argv for shell-free spawn; project-only options stay for validation. */
 export function buildRunArgs(options: WinAppRunOptions): string[] {
 	const args = ['run', options.input];
 
-	if (options.project) { args.push('--project', options.project); }
-	if (options.configuration) { args.push('--configuration', options.configuration); }
-	if (options.arch) { args.push('--arch', options.arch); }
-	if (options.framework) { args.push('--framework', options.framework); }
-	if (options.runtime) { args.push('--runtime', options.runtime); }
+	for (const option of RUN_OPTIONS) {
+		const value = options[option.key];
 
-	for (const [name, value] of Object.entries(options.properties ?? {})) {
-		args.push('--property', `${name}=${value}`);
+		switch (option.kind) {
+			case 'switch':
+				if (value) { args.push(option.flag); }
+				break;
+
+			case 'value': {
+				const text = typeof value === 'string' ? value.trim() : '';
+				if (text) { args.push(option.flag, text); }
+				break;
+			}
+
+			case 'properties':
+				for (const [name, entry] of Object.entries((value as Record<string, string> | undefined) ?? {})) {
+					args.push(option.flag, `${name}=${entry}`);
+				}
+				break;
+		}
 	}
-
-	if (options.noRestore) { args.push('--no-restore'); }
-	if (options.noBuild) { args.push('--no-build'); }
-	if (options.aot) { args.push('--aot'); }
-	if (options.clean) { args.push('--clean'); }
-
-	if (options.manifest) { args.push('--manifest', options.manifest); }
-	if (options.outputAppxDirectory) { args.push('--output-appx-directory', options.outputAppxDirectory); }
-	if (options.executable) { args.push('--executable', options.executable); }
-
-	if (options.withAlias) { args.push('--with-alias'); }
-	if (options.withoutAlias) { args.push('--without-alias'); }
-	if (options.unregisterOnExit) { args.push('--unregister-on-exit'); }
-	if (options.noLaunch) { args.push('--no-launch'); }
-	if (options.detach) { args.push('--detach'); }
-
-	if (options.debugOutput) { args.push('--debug-output'); }
-	if (options.symbols) { args.push('--symbols'); }
-
-	const trimmedArgs = options.args?.trim();
-	if (trimmedArgs) { args.push('--args', trimmedArgs); }
-
-	if (options.json) { args.push('--json'); }
 
 	return args;
 }
 
 /**
- * Options the debug adapter cannot honour. The CLI accepts all three; it is
+ * Options the debug adapter cannot honour. The CLI accepts all of them; it is
  * the VS Code debug session they break, so the CLI never reports them.
  */
 export function validateDebugRunOptions(options: WinAppRunOptions): string[] {
-	const errors: string[] = [];
-
-	if (options.noLaunch) {
-		errors.push('"noLaunch" is not supported in a WinApp debug configuration, because there is no launched process to attach to.');
-	}
-
-	if (options.detach) {
-		errors.push('"detach" is not supported in a WinApp debug configuration, because WinApp must stay attached to manage the debug session.');
-	}
-
-	// Windows allows one debugger per process, so the CLI cannot capture debug
-	// output while VS Code is attached.
-	if (options.debugOutput) {
-		errors.push('"debugOutput" is not supported in a WinApp debug configuration, because VS Code is already attached as the debugger.');
-	}
-
-	return errors;
+	return RUN_OPTIONS
+		.filter(option => option.debugUnsupported && options[option.key])
+		.map(option => option.debugUnsupported!);
 }
 
-/** Typed view of a `winapp` launch.json entry; `vscode.DebugConfiguration` is all `any`. */
-export interface WinAppDebugConfiguration {
+/**
+ * Typed view of a `winapp` launch.json entry; `vscode.DebugConfiguration` is
+ * all `any`. Every run option is accepted here so a hand-written config is
+ * still type-checked, including the ones {@link validateDebugRunOptions}
+ * rejects by name.
+ */
+export type WinAppDebugConfiguration = {
 	/** Keeps this assignable from `vscode.DebugConfiguration`. */
 	[key: string]: unknown;
 
-	/** Positional input. Supersedes {@link inputFolder}. */
+	/** Positional input. Supersedes `inputFolder`. */
 	input?: string;
-	/** Deprecated alias for {@link input}, kept so existing launch.json files keep working. */
+	/** Deprecated alias for `input`, kept so existing launch.json files keep working. */
 	inputFolder?: string;
-	project?: string;
-	configuration?: string;
-	arch?: string;
-	framework?: string;
-	runtime?: string;
-	properties?: Record<string, string>;
-	noBuild?: boolean;
-	noRestore?: boolean;
-	aot?: boolean;
-	clean?: boolean;
-	detach?: boolean;
-	noLaunch?: boolean;
-	unregisterOnExit?: boolean;
-	withAlias?: boolean;
-	withoutAlias?: boolean;
-	executable?: string;
-	manifest?: string;
-	outputAppxDirectory?: string;
-	debugOutput?: boolean;
-	symbols?: boolean;
-}
+} & Partial<Omit<WinAppRunOptions, 'input' | 'json'>>;
 
 /** `input` supersedes the deprecated `inputFolder` alias. */
 export function resolveDebugInput(config: WinAppDebugConfiguration): string | undefined {
@@ -170,30 +215,19 @@ export function runOptionsFromDebugConfig(
 	config: WinAppDebugConfiguration,
 	input: string
 ): WinAppRunOptions {
-	return {
-		input,
-		project: config.project,
-		configuration: config.configuration,
-		arch: config.arch,
-		framework: config.framework,
-		runtime: config.runtime,
-		properties: config.properties,
-		noBuild: config.noBuild,
-		noRestore: config.noRestore,
-		aot: config.aot,
-		clean: config.clean,
-		detach: config.detach,
-		noLaunch: config.noLaunch,
-		unregisterOnExit: config.unregisterOnExit,
-		withAlias: config.withAlias,
-		withoutAlias: config.withoutAlias,
-		executable: config.executable,
-		manifest: config.manifest,
-		outputAppxDirectory: config.outputAppxDirectory,
-		debugOutput: config.debugOutput,
-		symbols: config.symbols,
-		json: true
-	};
+	const options: WinAppRunOptions = { input };
+	const writable = options as unknown as Record<string, unknown>;
+
+	for (const option of RUN_OPTIONS) {
+		if (option.fromDebugConfig) {
+			writable[option.key] = config[option.key];
+		}
+	}
+
+	// The adapter reads the launched process ID out of `--json` output, so this
+	// is never the caller's to opt out of.
+	options.json = true;
+	return options;
 }
 
 /**
