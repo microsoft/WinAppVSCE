@@ -67,11 +67,69 @@ Validates that `winapp.sign` discovers signable files and certificates in worksp
 
 ### `input-folder-validation.spec.ts` — 1 test
 
-Validates that an invalid configured `inputFolder` offers to open its owning debug configuration.
+Validates that an invalid configured run input offers to open its owning debug configuration.
+
+The `winapp` launch.json property is called `input`. `inputFolder` is its older
+name, kept working so launch.json files written before project mode still run.
+Error messages quote whichever of the two the user actually set —
+`validateRunInput` takes the name as a parameter and `extension.ts` passes
+`config.input ? 'input' : 'inputFolder'` — so this test sets the old name and
+asserts the message says `inputFolder`. Quoting `"input"` at someone whose
+launch.json does not contain that word would send them hunting for a property
+they never wrote.
 
 | # | Test | Validates |
 |---|------|-----------|
 | 1 | invalid inputFolder offers to open its debug configuration | Validation cancels debugging, shows the resource-neutral action, and opens the correct folder `launch.json` with its unique configuration content |
+
+### `run-target-picker.spec.ts` — 13 tests
+
+Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which depends on VS Code's own `findFiles` indexing and workspace-folder resolution and so cannot be unit tested. Every test dismisses the picker with `Escape`, so the CLI is never invoked and nothing is built or deployed.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | hides class libraries and test projects | Non-runnable projects are filtered out rather than offered as targets the CLI would reject |
+| 2 | falls back to build output when the only project is a library | With nothing runnable found, the build-output scan still supplies targets |
+| 3 | prefers the project over its own build output folder | A project and its `bin` output collapse to the project entry |
+| 4 | finds output for a project-less app without surfacing node_modules | Electron/Rust-shaped workspaces reach the `.exe` scan, and excluded directories stay excluded |
+| 5 | asks which project to run inside a multi-app solution | A multi-app `.sln` is auto-selected, then raises the second prompt that supplies `--project` |
+| 6 | skips the project prompt when a solution holds one runnable app | A single-app solution goes straight on, landing on the build-configuration prompt |
+| 7 | caps the list and points at browse when many projects are found | Beyond the cap the picker truncates and surfaces the browse entry instead of hundreds of rows |
+| 8 | lists every discovered project in the workspace | Both `.csproj` files appear alongside a single browse entry, with no separate build-output search row |
+| 9 | Browse opens a sub-prompt that chooses between a file and a folder dialog | Selecting the single browse entry raises the "What would you like to browse for?" sub-prompt offering both a project/solution *file* dialog and a project-directory-or-build-output *folder* dialog, and Escape unwinds without opening a native dialog |
+| 10 | shows a solution once rather than also listing its member projects | A `.sln` and its member `.csproj` collapse to a single entry |
+| 11 | discovers projects in every folder of a multi-root workspace | Projects from *both* folders of a `.code-workspace` appear — previously only `workspaceFolders[0]` was searched |
+| 12 | With Options command skips the target prompt for a single project | `winapp.runWithOptions` auto-selects the only candidate, matching `winapp.run`, and goes straight to the build prompt |
+| 13 | F5 with no input in launch.json prompts for a run target | A `winapp` launch configuration that omits `input` falls through to the picker instead of failing with a missing-argument error |
+
+> When matching the picker, assert on the full placeholder. The command palette's own placeholder is "Type the name of a command **to run**", so a loose `/to run/` match silently reads the palette's rows instead of the picker's.
+
+### `live-run.spec.ts` — 2 tests (opt-in)
+
+The only tests that actually execute the CLI. Everything else stops at the argument vector: the unit tests assert `buildRunArgs` emits what was intended, `run-cli-contract.test.ts` checks those flags against the CLI's schema, and `run-target-picker.spec.ts` escapes out before anything runs. These scaffold a real WinUI app with `dotnet new winui` and drive a full build, deploy, and launch through the command palette.
+
+This also covers the only unverified layer in the palette path: `runWinappRun` joins the argv with `escapePowerShellArg` and sends it to a PowerShell terminal, so the arguments are re-parsed by a shell between the array under test and the process that runs.
+
+**Opt-in**, because unlike the rest of the suite it mutates the machine — registering an MSIX package and launching a GUI app — and takes minutes:
+
+```powershell
+$env:E2E_LIVE_RUN=1; npx playwright test live-run
+```
+
+It skips with a diagnostic when the .NET SDK, WinUI templates, or the winapp CLI are unavailable. Assertions read the OS (`Get-AppxPackage`, `Get-Process`) rather than terminal text, so they verify what happened rather than what was printed.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | builds, deploys, and launches a WinUI project | A single `.csproj` auto-selects, builds, registers in development mode, and the process starts |
+| 2 | applies the With Options build prompts to a project-mode build | Answering the configuration and architecture prompts with `Release` and `x64` reaches the CLI — a `win-x64` Release build appears and the Debug default does not |
+
+Notes for anyone changing this spec:
+
+- Launch with `--disable-extensions`. C# Dev Kit otherwise recognises the scaffolded project, opens an announcement tab that steals focus from the palette, and builds the project itself, which corrupts the build-output assertions. The extension under test still loads via `--extensionDevelopmentPath`.
+- Seed `User/settings.json` in the temp profile. A fresh profile opens the Welcome tab and focuses the chat input, and either swallows the palette shortcut; no CLI flag covers this.
+- `terminal.integrated.gpuAcceleration: "off"` is required for the failure diagnostic. xterm renders to a canvas when accelerated, so `.xterm-rows` is empty and the diagnostic reports "no terminal was opened" even when one is open — actively misleading.
+- Each scaffold generates a **new GUID package identity**, so a leaked package cannot be overwritten by a later run; it accumulates. Cleanup kills the app and waits for it to exit, waits for deregistration, then deletes — in that order, because each step holds handles the next one needs released.
+- Cleanup is **verified, not best-effort**. If the run cannot remove its own app, package, or directory, `afterAll` throws and names what survived, so a leak fails the suite rather than printing a warning nobody reads. Residue from *earlier* runs is swept too, but only warns: a crashed run can leave VS Code holding its profile directory, which the current run cannot remove and is not responsible for.
 
 ### `editor-launch.spec.ts` — 11 tests
 

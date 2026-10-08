@@ -1,16 +1,14 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
 import { walkDirectoryTree } from './directory-walk';
+import { attributeValue, elementText, findElementsByLocalName, tryParseXml } from './xml-read';
 
 /**
  * Mirrors the C# DetectedProjectType enum from WinApp.Cli.
  */
 export type DetectedProjectType = 'Tauri' | 'Electron' | 'Flutter' | '.NET' | 'Rust' | 'C++';
 
-/**
- * Represents a project detected during directory scanning.
- * Mirrors the C# DetectedProject record from WinApp.Cli.
- */
+/** Mirrors the C# DetectedProject record from WinApp.Cli. */
 export interface DetectedProject {
 	type: DetectedProjectType;
 	directory: string;
@@ -34,22 +32,48 @@ export function getProjectLabel(project: DetectedProject): string {
 	return `${project.type} project (${getDisplayFilePath(project)})`;
 }
 
-/**
- * Directories skipped when scanning for *project roots*. Tuned for source
- * discovery — it deliberately skips build output (`bin`, `obj`, `dist`), so it
- * is the wrong list for artifact discovery, which searches those folders.
- */
-export const SKIP_DIRS = new Set([
-	'node_modules', '.git', 'bin', 'obj', 'debug', 'release',
-	'.vs', '.vscode', '.idea', 'packages', 'dist', 'build', 'out',
-	'target', '.winapp', 'artifacts', 'testresults',
-	'__pycache__', '.gradle', '.dart_tool', '.pub-cache', '.nuget', '.cargo'
+/** Shared scan exclusions; build-output discovery keeps `bin` searchable. */
+export const ALWAYS_SKIP_DIRS = [
+	'node_modules', '.git', '.vs', '.vscode', '.idea', 'packages', '.winapp'
+] as const;
+
+/** Real-path containment rejects symlink/junction escapes; absent paths cannot. */
+export async function isContainedInReal(container: string, candidate: string): Promise<boolean> {
+	const resolved = path.resolve(container, candidate);
+	if (!isContainedIn(container, resolved)) {
+		return false;
+	}
+
+	try {
+		const realContainer = await fsp.realpath(container);
+		const realResolved = await fsp.realpath(resolved);
+		return isContainedIn(realContainer, realResolved);
+	} catch {
+		return true;
+	}
+}
+
+/** True when `candidate` is inside `container` (or is `container` itself). */
+export function isContainedIn(container: string, candidate: string): boolean {
+	const relative = path.relative(path.resolve(container), path.resolve(candidate));
+	if (relative === '' ) { return true; }
+	// Compare whole segments: a sibling named `..generated` is contained, while
+	// `..` and `../x` are not.
+	const escapes = relative === '..' || relative.startsWith(`..${path.sep}`);
+	return !escapes && !path.isAbsolute(relative);
+}
+
+/** Directories excluded from project-file discovery, by BFS and by glob. */
+export const PROJECT_SCAN_SKIP_DIRS = new Set<string>([
+	...ALWAYS_SKIP_DIRS,
+	// Build inputs/outputs and language caches: a project file found under
+	// these is a copy, not a source.
+	'bin', 'obj', 'debug', 'release', 'dist', 'build', 'out', 'target',
+	'artifacts', 'testresults', 'appx', '__pycache__',
+	'.gradle', '.dart_tool', '.pub-cache', '.nuget', '.cargo'
 ]);
 
-/**
- * Detects a project at a single directory (does not recurse).
- * Mirrors ProjectDetectionService.DetectProject from WinApp.Cli.
- */
+/** Mirrors ProjectDetectionService.DetectProject from WinApp.Cli. */
 export async function detectProjectAt(directory: string, searchRoot: string): Promise<DetectedProject | undefined> {
 	const displayPath = getRelativeDisplayPath(directory, searchRoot);
 
@@ -88,11 +112,7 @@ export async function detectProjectAt(directory: string, searchRoot: string): Pr
 	return undefined;
 }
 
-/**
- * Performs a breadth-first search of the directory tree to find compatible projects.
- * Mirrors ProjectDetectionService.DetectProjectsAsync from WinApp.Cli.
- * Uses async I/O with periodic yielding to keep the UI responsive.
- */
+/** Breadth-first project detection with periodic yielding for UI responsiveness. */
 export async function detectProjects(root: string, maxProjects: number = 10): Promise<DetectedProject[]> {
 	const results: DetectedProject[] = [];
 
@@ -105,14 +125,18 @@ export async function detectProjects(root: string, maxProjects: number = 10): Pr
 		results.push(detected);
 		// Don't recurse into detected project directories.
 		return results.length >= maxProjects ? 'stop' : 'skip';
-	}, { skipDirs: SKIP_DIRS });
+	}, { skipDirs: PROJECT_SCAN_SKIP_DIRS });
 
 	return results;
 }
 
 /** Directories to exclude from build-output scanning. */
-export const BUILD_OUTPUT_SKIP_DIRS = new Set([
-	'node_modules', '.git', 'appx', '.winapp', 'obj', '.vs', 'packages'
+export const BUILD_OUTPUT_SKIP_DIRS = new Set<string>([
+	...ALWAYS_SKIP_DIRS,
+	// `bin`, the configuration folders under it, and `artifacts` (the .NET 8+
+	// artifacts output layout) are deliberately absent: build-output discovery
+	// is looking for exactly what lives there.
+	'appx', 'obj'
 ]);
 
 /**
@@ -125,14 +149,7 @@ export const BUILD_OUTPUT_MAX_DEPTH = 8;
  */
 export const BUILD_OUTPUT_MAX_RESULTS = 10;
 
-/**
- * Given a list of absolute file paths (typically .exe matches) and a workspace
- * root, returns the unique parent directories sorted by relative path. Filters
- * out directories deeper than `maxDepth` segments from the root.
- *
- * This is the pure logic extracted from the VS Code build-output scan so it
- * can be unit tested without the VS Code API.
- */
+/** Deduplicates executable parent folders and enforces `maxDepth`. */
 export function deduplicateBuildOutputFolders(
 	filePaths: string[],
 	workspacePath: string,
@@ -232,28 +249,68 @@ async function findExecutableCsproj(directory: string): Promise<string | undefin
 	return undefined;
 }
 
-/**
- * Parses csproj XML content to determine if it's an executable, non-test project.
- * Simplified heuristic inspired by the CLI's IsExecutableProject logic — uses regex
- * to match the first <OutputType> and <IsTestProject> elements. Does not handle
- * multiple/conditional PropertyGroups or values inside XML comments.
- */
+/** `unknown` stays visible because only the CLI can fully evaluate MSBuild. */
+export type ProjectRunnability = 'app' | 'test' | 'library' | 'unknown';
+
+/** Only explicit `test`/`library` markers demote; pending microsoft/winappCli#957. */
+export function classifyProjectRunnability(content: string): ProjectRunnability {
+	const doc = tryParseXml(content);
+	if (!doc) {
+		// Malformed or half-written. Falling back to `unknown` keeps the
+		// project visible, which is the safe direction for this heuristic.
+		return 'unknown';
+	}
+
+	for (const element of findElementsByLocalName(doc, 'IsTestProject')) {
+		if (elementText(element).toLowerCase() === 'true') {
+			return 'test';
+		}
+	}
+
+	// The test SDK is what actually makes a project a test project; projects
+	// relying on it rarely set IsTestProject themselves.
+	for (const element of findElementsByLocalName(doc, 'PackageReference')) {
+		if (attributeValue(element, 'Include')?.toLowerCase() === 'microsoft.net.test.sdk') {
+			return 'test';
+		}
+	}
+
+	// A conditioned OutputType is exactly the "can't tell without MSBuild"
+	// case this heuristic must not guess at, so it is left to the CLI.
+	const outputTypes = findElementsByLocalName(doc, 'OutputType')
+		.filter(element => attributeValue(element, 'Condition') === undefined);
+	if (outputTypes.length === 0) {
+		// No explicit OutputType. It may still build an executable (WinUI and
+		// WPF templates usually set it, but SDK defaults and shared props
+		// files can supply it too), so defer to the CLI.
+		return 'unknown';
+	}
+
+	const outputType = elementText(outputTypes[0]).toLowerCase();
+	if (outputType === 'exe' || outputType === 'winexe') {
+		return 'app';
+	}
+	if (outputType === 'library') {
+		return 'library';
+	}
+	return 'unknown';
+}
+
+/** Unreadable project files are `unknown` so I/O hiccups never hide them. */
+export async function readProjectRunnability(projectPath: string): Promise<ProjectRunnability> {
+	try {
+		return classifyProjectRunnability(await fsp.readFile(projectPath, 'utf-8'));
+	} catch {
+		return 'unknown';
+	}
+}
+
+/** True when a project should be offered as a run target. */
+export function isOfferableProject(runnability: ProjectRunnability): boolean {
+	return runnability === 'app' || runnability === 'unknown';
+}
+
+/** Strict wrapper: `unknown` is not an app here; offerable projects may include it. */
 function isExecutableCsproj(content: string): boolean {
-	// Extract OutputType value from PropertyGroup elements
-	const outputTypeMatch = content.match(/<OutputType>\s*(.*?)\s*<\/OutputType>/i);
-	if (!outputTypeMatch) {
-		return false;
-	}
-	const outputType = outputTypeMatch[1].toLowerCase();
-	if (outputType !== 'exe' && outputType !== 'winexe') {
-		return false;
-	}
-
-	// Check IsTestProject property
-	const isTestMatch = content.match(/<IsTestProject>\s*(.*?)\s*<\/IsTestProject>/i);
-	if (isTestMatch && isTestMatch[1].toLowerCase() === 'true') {
-		return false;
-	}
-
-	return true;
+	return classifyProjectRunnability(content) === 'app';
 }

@@ -13,7 +13,25 @@ import {
 	extractJsonObject,
 	resolveWorkingDirectory
 } from './winapp-cli-utils';
-import { detectProjects, deduplicateBuildOutputFolders, BUILD_OUTPUT_EXCLUDE_GLOB, BUILD_OUTPUT_MAX_RESULTS } from './project-detection';
+import { detectProjects, BUILD_OUTPUT_EXCLUDE_GLOB } from './project-detection';
+import {
+	buildRunArgs,
+	resolveDebugInput,
+	runOptionsFromDebugConfig,
+	validateDebugRunOptions,
+	type WinAppRunOptions
+} from './run-options';
+import {
+	FOLDER_PICKER_DETAIL,
+	pickBuildOutputFolder
+} from './folder-picker';
+import {
+	pickRunTarget,
+	pickSolutionProject,
+	resolveRunOptions
+} from './run-utils';
+import { getWorkspaceRoots, NO_WORKSPACE_MESSAGE } from './workspace';
+import { launchRunProcess, WinAppRunFailure } from './run-launch';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
@@ -57,7 +75,7 @@ import {
 	chooseInstalledDebuggerType,
 	getDebuggerExtensionRequirement,
 	getDebuggerTypeFromChoice,
-	validateInputFolder
+	validateRunInput
 } from './debugger-resolver';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
 import { registerWinappNewCommand } from './new-command';
@@ -602,80 +620,6 @@ function createCertGenerateFlowAdapter(
 	};
 }
 
-const FOLDER_PICKER_DETAIL = 'Open a folder picker';
-
-/**
- * Scan the workspace for build output folders (directories containing .exe
- * files). Shows a progress notification with cancel support.
- *
- * @returns The discovered folder paths sorted by relative path, or undefined if cancelled.
- */
-async function findBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
-	let cancelled = false;
-	const outputFolders = await vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title: 'Searching for build output folders...', cancellable: true },
-		async (_progress, token) => {
-			token.onCancellationRequested(() => { cancelled = true; });
-			const exeMatches = await vscode.workspace.findFiles(
-				new vscode.RelativePattern(workspacePath, '**/*.exe'),
-				BUILD_OUTPUT_EXCLUDE_GLOB,
-				BUILD_OUTPUT_MAX_RESULTS
-			);
-
-			return deduplicateBuildOutputFolders(
-				exeMatches.map(m => m.fsPath),
-				workspacePath
-			);
-		}
-	);
-
-	if (cancelled) {
-		return undefined;
-	}
-
-	return outputFolders;
-}
-
-/**
- * Search the workspace for build output folders and let the user pick one via
- * a QuickPick. Falls back to a native folder dialog when none are found; a
- * "Browse…" entry is always appended.
- *
- * @returns The selected folder path, or `undefined` if cancelled.
- */
-async function pickBuildOutputFolder(workspacePath: string): Promise<string | undefined> {
-	const outputFolders = await findBuildOutputFolders(workspacePath);
-	if (!outputFolders) {
-		return undefined;
-	}
-
-	if (outputFolders.length === 0) {
-		return selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
-	}
-
-	const items: Array<vscode.QuickPickItem & { directory?: string }> = outputFolders.map((folderPath) => ({
-		label: path.relative(workspacePath, folderPath) || '.',
-		detail: folderPath,
-		directory: folderPath
-	}));
-
-	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL });
-
-	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select the build output folder containing your app'
-	});
-
-	if (!picked) {
-		return undefined;
-	}
-
-	if (picked.detail === FOLDER_PICKER_DETAIL) {
-		return selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
-	}
-
-	return picked.directory;
-}
-
 /**
  * Run the code-signing flow for an MSIX/executable. Prompts for the file to
  * sign (unless one is supplied) and the signing certificate, then invokes
@@ -901,7 +845,7 @@ async function resolveProjectDirectory(workspacePath: string): Promise<string | 
 function getWorkspacePath(): string | undefined {
 	const workspaceFolders = vscode.workspace.workspaceFolders;
 	if (!workspaceFolders || workspaceFolders.length === 0) {
-		vscode.window.showErrorMessage('No workspace folder open');
+		vscode.window.showErrorMessage(NO_WORKSPACE_MESSAGE);
 		return undefined;
 	}
 	return workspaceFolders[0].uri.fsPath;
@@ -920,6 +864,21 @@ async function selectFile(title: string, filters?: { [name: string]: string[] })
 	});
 
 	return result?.[0]?.fsPath;
+}
+
+/** Escapes each argument separately so PowerShell preserves boundaries. */
+async function runWinappRun(extensionPath: string, options: WinAppRunOptions, cwd: string): Promise<void> {
+	const command = buildRunArgs(options).map(escapePowerShellArg).join(' ');
+	await runWinappCommand(extensionPath, command, cwd);
+}
+
+async function executeRunCommand(extensionPath: string, withOptions: boolean): Promise<void> {
+	const resolved = await resolveRunOptions(withOptions);
+	if (!resolved) {
+		return;
+	}
+
+	await runWinappRun(extensionPath, resolved.options, resolved.target.root.path);
 }
 
 class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
@@ -961,26 +920,35 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		_token?: vscode.CancellationToken
 	): Promise<vscode.DebugConfiguration | undefined> {
 		if (!folder) {
-			vscode.window.showErrorMessage('No workspace folder open');
+			vscode.window.showErrorMessage(NO_WORKSPACE_MESSAGE);
 			return undefined;
 		}
 
-		// Validate a user-specified inputFolder early so we can cleanly
+		// Validate a user-specified input early so we can cleanly
 		// cancel the session (return undefined) before the adapter factory
 		// runs — this avoids showing the debugger toolbar on failure.
-		const inputFolder: string | undefined = config.inputFolder;
-		if (inputFolder) {
-			let cwd: string;
-			try {
-				cwd = resolveWorkingDirectory(folder.uri.fsPath, config.workingDirectory);
-			} catch (error) {
-				// An unusable workingDirectory is a launch.json authoring problem, so
-				// surface it here and cancel the session rather than letting the
-				// adapter factory fail later with the debugger toolbar already shown.
-				vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
-				return undefined;
-			}
-			const result = await validateInputFolder(inputFolder, cwd);
+		const input = resolveDebugInput(config);
+		let cwd: string;
+		try {
+			cwd = resolveWorkingDirectory(folder.uri.fsPath, config.workingDirectory);
+		} catch (error) {
+			// An unusable workingDirectory is a launch.json authoring problem, so
+			// surface it here and cancel the session rather than letting the
+			// adapter factory fail later with the debugger toolbar already shown.
+			vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+			return undefined;
+		}
+
+		// The CLI reports bad option values itself; these three are rejected
+		// here because they break the debug session, so it never sees them.
+		const optionErrors = validateDebugRunOptions(runOptionsFromDebugConfig(config, input ?? ''));
+		if (optionErrors.length > 0) {
+			vscode.window.showErrorMessage(optionErrors.join(' '));
+			return undefined;
+		}
+
+		if (input) {
+			const result = await validateRunInput(input, cwd, config.input ? 'input' : 'inputFolder');
 			if (!result.valid) {
 				const openDebugConfigurationAction = 'Open debug configuration';
 				void vscode.window.showErrorMessage(result.message, openDebugConfigurationAction).then(
@@ -998,7 +966,7 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 					},
 					error => {
 						void vscode.window.showErrorMessage(
-							`Failed to show inputFolder validation error: ${error instanceof Error ? error.message : String(error)}`
+							`Failed to show input validation error: ${error instanceof Error ? error.message : String(error)}`
 						).then(undefined, () => {});
 					}
 				);
@@ -1025,53 +993,40 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 		const folder = session.workspaceFolder;
 
 		if (!folder) {
-			throw new Error('No workspace folder open');
+			throw new Error(NO_WORKSPACE_MESSAGE);
 		}
 
 		try {
-			// The run command requires an input-folder positional argument.
-			// If not set in launch.json, search for folders containing .exe
-			// files and let the user pick one.
-			let inputFolder: string | undefined = config.inputFolder;
+			// The run command requires an input positional argument. If not set
+			// in launch.json, discover projects and build output folders in the
+			// workspace and let the user pick one.
+			let input = resolveDebugInput(config);
 			const cwd = resolveWorkingDirectory(folder.uri.fsPath, config.workingDirectory);
+			// A target chosen interactively may still be ambiguous (a solution
+			// or directory holding several runnable apps). The palette flow
+			// disambiguates in the same way; without this, F5 would launch
+			// `winapp run <sln>` with no --project and the CLI would refuse.
+			let pickedProject: string | undefined;
 
-			if (!inputFolder) {
-				const dirs = await findBuildOutputFolders(folder.uri.fsPath);
-
-				if (!dirs || dirs.length === 0) {
-					throw new Error('No folders containing .exe files found in the workspace. Build your project first, or set "inputFolder" in launch.json.');
+			if (!input) {
+				const selection = await pickRunTarget(folder);
+				if (!selection) {
+					throw new Error('No run target selected, cancelling debug session.');
 				}
+				input = selection.target.path;
 
-				if (dirs.length === 1) {
-					inputFolder = dirs[0];
-				} else {
-					const items = dirs.map(d => ({
-						label: path.relative(folder.uri.fsPath, d),
-						description: d,
-						fsPath: d
-					}));
-					const picked = await vscode.window.showQuickPick(items, {
-						placeHolder: 'Select the build output folder containing your app'
-					});
-					if (!picked) {
-						throw new Error('No build output folder selected, cancelling debug session.');
+				// An explicit launch.json "project" wins below, so prompting for
+				// one here would only discard the answer.
+				if (!config.project) {
+					const projectSelection = await pickSolutionProject(selection);
+					if (projectSelection.cancelled) {
+						throw new Error('No project selected, cancelling debug session.');
 					}
-					inputFolder = picked.fsPath;
+					pickedProject = projectSelection.project;
 				}
 			}
 
 			const cliPath = getWinappCliPath(this.extensionPath);
-			const baseSpawnArgs = ['run', inputFolder];
-
-			// Optional explicit manifest path; when omitted the CLI
-			// auto-detects from the input folder or current directory.
-			if (config.manifest) {
-				baseSpawnArgs.push('--manifest', config.manifest);
-			}
-
-			if (config.outputAppxDirectory) {
-				baseSpawnArgs.push('--output-appx-directory', config.outputAppxDirectory);
-			}
 
 			// Determine the debugger type based on config or default to coreclr
 			const debuggerType = config.debuggerType || 'coreclr';
@@ -1088,64 +1043,20 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				args = '--inspect' + (config.port ? `=${config.port}` : '') + ' ' + args;
 			}
 
-			if (args.trim()) {
-				baseSpawnArgs.push('--args', args.trim());
-			}
+			const runOptions = runOptionsFromDebugConfig(config, input);
+			runOptions.args = args.trim() || undefined;
+			// An explicit launch.json "project" always wins; this only fills in
+			// what the interactive picker resolved.
+			runOptions.project = runOptions.project ?? pickedProject;
 
-			baseSpawnArgs.push('--json');
+			const baseSpawnArgs = buildRunArgs(runOptions);
 
-			// Spawn winapp run --json. The process stays alive while the app runs,
-			// so we stream stdout to parse the JSON with the PID before waiting for exit.
-			const { processId, runProcess } = await vscode.window.withProgress({
-				location: vscode.ProgressLocation.Notification,
-				title: 'Launching package...',
-				cancellable: false
-			}, async (progress) => {
-				progress.report({ message: 'Running winapp run...' });
-
-				return new Promise<{ processId: number; runProcess: ReturnType<typeof spawn> }>((resolve, reject) => {
-					const child = spawn(cliPath, baseSpawnArgs, {
-						cwd,
-						env: { ...process.env, WINAPP_CLI_CALLER: WINAPP_CLI_CALLER_VALUE },
-						shell: false
-					});
-
-					let stdout = '';
-					let stderr = '';
-					let resolved = false;
-
-					child.stdout!.on('data', (data: Buffer) => {
-						stdout += data.toString();
-						if (resolved) { return; }
-
-						const pid = parseProcessIdFromJson(stdout);
-						if (pid) {
-							resolved = true;
-							resolve({ processId: pid, runProcess: child });
-						}
-					});
-
-					child.stderr!.on('data', (data: Buffer) => {
-						stderr += data.toString();
-						console.warn('winapp run stderr:', data.toString());
-					});
-
-					child.on('error', (err) => {
-						if (!resolved) {
-							reject(new Error(`Failed to start winapp run: ${err.message}`));
-						}
-					});
-
-					child.on('close', (code) => {
-						if (!resolved) {
-							if (code !== 0) {
-								reject(new Error(`winapp run exited with code ${code}. stderr: ${stderr}\nstdout: ${stdout}`));
-							} else {
-								reject(new Error(`winapp run exited before returning a process ID. stdout: ${stdout}`));
-							}
-						}
-					});
-				});
+			const outputChannel = getWinappOutputChannel();
+			const { processId, runProcess } = await launchRunProcess({
+				cliPath,
+				args: baseSpawnArgs,
+				cwd,
+				outputChannel
 			});
 
 			// Build the attach debug configuration
@@ -1216,7 +1127,21 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			vscode.window.showErrorMessage(`Failed to launch and attach: ${message}`);
+
+			// A run failure has already written the full CLI output to the
+			// channel; point the user at it instead of pasting a build log into
+			// a toast that truncates it.
+			if (error instanceof WinAppRunFailure) {
+				const showOutput = 'Show Output';
+				void vscode.window.showErrorMessage(`Failed to launch and attach: ${message}`, showOutput)
+					.then(action => {
+						if (action === showOutput) {
+							getWinappOutputChannel().show(true);
+						}
+					}, () => { });
+			} else {
+				vscode.window.showErrorMessage(`Failed to launch and attach: ${message}`);
+			}
 			throw error;
 		}
 	}
@@ -1475,17 +1400,14 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register winapp.run command
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.run', async () => {
-			const workspacePath = getWorkspacePath();
-			if (!workspacePath) {
-				return;
-			}
+			await executeRunCommand(extensionPath, false);
+		})
+	);
 
-			const inputFolder = await pickBuildOutputFolder(workspacePath);
-			if (!inputFolder) {
-				return;
-			}
-
-			await runWinappCommand(extensionPath, `run ${escapePowerShellArg(inputFolder)}`, workspacePath);
+	// Register winapp.runWithOptions command
+	context.subscriptions.push(
+		vscode.commands.registerCommand('winapp.runWithOptions', async () => {
+			await executeRunCommand(extensionPath, true);
 		})
 	);
 
@@ -1805,16 +1727,6 @@ export function activate(context: vscode.ExtensionContext) {
 			});
 		})
 	);
-}
-
-/**
- * Parse the process ID from the winapp run --json output.
- * Expects a JSON object with a processId (or pid) field.
- */
-function parseProcessIdFromJson(output: string): number | undefined {
-	const json = extractJsonObject(output);
-	const pid = json?.processId ?? json?.pid ?? json?.ProcessId ?? json?.PID;
-	return typeof pid === 'number' && pid > 0 ? pid : undefined;
 }
 
 export function deactivate() {
