@@ -244,9 +244,31 @@ Wire v1 has no request/document correlation and no real version negotiation
   the menu; Live toggled on/off from the menu; reopen/close repeatedly. Not yet
   exercised live: picking a Theme/Size entry from the overflow submenus (Theme only
   overflows below ~260 DIP).
-- **U2 — Error-presentation consistency.** Continue the WS1 banner unification:
-  fold `SetDetailBanner` / live-fallback / not-designable states into one coherent
-  visual language.
+- **U2 — Error-presentation consistency.** ✅ One VS-themed visual language for every
+  preview message:
+  - **Info bars** (`UI/PreviewInfoBar.cs`) in their own row at the top of the preview,
+    below the toolbar. They use `InfoBarColors` and severity monikers, and have an
+    optional action and a close button. Bars: XAML error over the last good render,
+    static (live-fallback) preview note, and full-fidelity progress/ready/unavailable.
+    Because they sit in a separate Grid row, the native HWND shrinks below them. The old
+    bottom overlays were drawn *under* the reparented HWND and were invisible in native
+    mode (airspace).
+  - **One blocking status card** (themed with `EnvironmentColors`) for loading,
+    not-designable, failures and disconnect. It replaces the separate reconnect overlay.
+    Failure cards (read/start/decode/host failures) now offer **Reload preview**.
+  - XAML error text is cleaned up: `Line X, col Y — <message>` on one line, without the
+    WinUI placeholder text or the duplicated `[Line: n Position: m]`.
+  - Resilience fix found by a surface kill storm: when the active surface and the warm
+    spare died together, the spare's death notice could arrive after it had been
+    promoted. It was then treated as an idle spare dying, and the pane spun on
+    "Recycling surface…" forever. The spare's Closed handler now carries the client's
+    identity and routes a promoted spare's death to the active-death path.
+    `TryPromoteSpare` also refuses an already-dead spare.
+  - Verified live (native mode): error bar shows without a blocking card, the HWND moves
+    below it and reclaims the space when fixed, dismiss and re-show work, and repeated
+    surface kills always recover. Not exercised live: the give-up "Preview disconnected"
+    card. The restart budget resets on each successful render, so kills spaced 6 s apart
+    never exhaust it.
 - **U3 — Frame-mode zoom/pan.** Add zoom/pan to the streamed-image path (native
   mode already scrolls via the holder).
 

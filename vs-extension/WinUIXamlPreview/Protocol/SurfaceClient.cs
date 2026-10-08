@@ -87,6 +87,9 @@ namespace WinUIXamlPreview.Protocol
         public event Action<ContentPropsMsg>? ContentProps;
         public event Action<string>? Closed;
 
+        /// <summary>True once the connection has faulted (process died / socket failed); Closed is raised at most once.</summary>
+        public bool IsFaulted => Volatile.Read(ref _faulted) != 0;
+
         /// <summary>Launches the surface, connects, and completes once Ready is received.</summary>
         public Task<ReadyMsg> StartAsync(TimeSpan timeout)
         {

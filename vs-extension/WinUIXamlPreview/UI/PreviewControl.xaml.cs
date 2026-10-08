@@ -69,6 +69,7 @@ namespace WinUIXamlPreview.UI
         private string _perfNextOpenLabel = "open";
 
         private SurfaceClient? _spareClient;
+        private Action<string>? _spareClosedSub; // the spare's Closed subscription (carries which client died)
         private bool _spareReady;
         private bool _spareWarming;
         private int _spareGeneration;
@@ -110,7 +111,13 @@ namespace WinUIXamlPreview.UI
         private bool _upgradeInProgress;
         private bool _fullFidelityCancelled;   // user cancelled the upgrade for the current document
         private MatchedHostBuild? _upgradeBuild; // shared per-version build we hold interest in (release on cancel/dispose/promote)
-        private DispatcherTimer? _fidelityHideTimer;
+        // U2 top banners: the message bar carries the XAML-error-over-last-good-render and static-preview notes;
+        // the fidelity bar carries the background full-fidelity upgrade. Both live in BannerHost (row 0).
+        private readonly PreviewInfoBar _messageBar = new PreviewInfoBar("PreviewMessageBar");
+        private readonly PreviewInfoBar _fidelityBar = new PreviewInfoBar("PreviewFidelityBar");
+        private bool _messageBarIsFallback;
+        private bool _reconnectShown;
+        private readonly HashSet<string> _fallbackNoteDismissed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Versions whose background build already FAILED this VS session — don't auto-retry (no retry loop).
         private static readonly System.Collections.Generic.HashSet<string> FailedVersions =
             new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -137,6 +144,17 @@ namespace WinUIXamlPreview.UI
         public PreviewControl()
         {
             InitializeComponent();
+
+            BannerHost.Children.Add(_messageBar);
+            BannerHost.Children.Add(_fidelityBar);
+            _messageBar.Dismissed += (_, __) =>
+            {
+                // The static-preview note is informational; once dismissed it stays away for that document.
+                if (_messageBarIsFallback && _currentPath != null)
+                {
+                    _fallbackNoteDismissed.Add(_currentPath);
+                }
+            };
 
             _resizeDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
             _resizeDebounce.Tick += OnResizeDebounceTick;
@@ -268,7 +286,7 @@ namespace WinUIXamlPreview.UI
             }
             catch (Exception ex)
             {
-                SetStatus("Failed to read document.", spinner: false, detail: ex.Message);
+                SetStatus("Failed to read document.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
                 return;
             }
 
@@ -289,7 +307,8 @@ namespace WinUIXamlPreview.UI
                 SetStatus(
                     "Surface.exe not found.",
                     spinner: false,
-                    detail: "Set the WINUI_SURFACE_EXE environment variable to the built Surface.exe, then reopen the preview.");
+                    detail: "Set the WINUI_SURFACE_EXE environment variable to the built Surface.exe, then reopen the preview.",
+                    severity: BannerSeverity.Error);
                 return;
             }
 
@@ -388,7 +407,7 @@ namespace WinUIXamlPreview.UI
                 Log.Write("StartPreviewAsync failed: " + ex);
                 if (ReferenceEquals(_client, client))
                 {
-                    SetStatus("Could not start the surface.", spinner: false, detail: ex.Message);
+                    SetStatus("Could not start the surface.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
                 }
             }
         }
@@ -566,7 +585,7 @@ namespace WinUIXamlPreview.UI
             _spareWarming = false;
             if (_spareClient != null)
             {
-                _spareClient.Closed -= OnSpareClosed;
+                _spareClient.Closed -= _spareClosedSub;
                 try { _spareClient.Dispose(); } catch { }
                 _spareClient = null;
                 _spareReady = false;
@@ -944,7 +963,9 @@ namespace WinUIXamlPreview.UI
                     _spareWarming = false;
                     _spareClient = ready;
                     _spareReady = true;
-                    ready!.Closed += OnSpareClosed;
+                    var spareSub = new Action<string>(r => OnSpareClosed(ready!, r));
+                    _spareClosedSub = spareSub;
+                    ready!.Closed += spareSub;
                     Log.Write("Warm spare ready.");
                     if (ThemeSwapPendingFor(gen))
                     {
@@ -1054,16 +1075,31 @@ namespace WinUIXamlPreview.UI
             catch (Exception ex) { Log.Write("Held edit in-place render failed: " + ex.Message); }
         }
 
-        private void OnSpareClosed(string reason)
+        private void OnSpareClosed(SurfaceClient dead, string reason)
         {
             _ = Dispatcher.InvokeAsync(() =>
             {
-                var spare = _spareClient;
-                if (spare != null)
+                if (_disposed)
                 {
-                    spare.Closed -= OnSpareClosed;
+                    return;
                 }
 
+                // The spare died after an OnClosed recovery had already promoted it to active (both processes
+                // died together, so its single Closed event was routed here rather than to OnClosed). Without
+                // this, the active death is never reported and the pane spins on "Recycling surface…".
+                if (ReferenceEquals(dead, _client))
+                {
+                    Log.Write("Promoted spare had already died; handling as an active-surface death.");
+                    OnClosed(reason);
+                    return;
+                }
+
+                if (!ReferenceEquals(dead, _spareClient))
+                {
+                    return; // stale notice for a spare that was already discarded
+                }
+
+                dead.Closed -= _spareClosedSub;
                 _spareClient = null;
                 _spareReady = false;
                 Log.Write("Warm spare died while idle: " + reason);
@@ -1085,9 +1121,21 @@ namespace WinUIXamlPreview.UI
             }
 
             var spare = _spareClient;
+            if (spare.IsFaulted)
+            {
+                // Already dead (its OnSpareClosed notice may still be queued) — never promote a dead spare;
+                // the caller falls back to a cold restart.
+                Log.Write("Warm spare is already dead; not promoting.");
+                spare.Closed -= _spareClosedSub;
+                _spareClient = null;
+                _spareReady = false;
+                try { spare.Dispose(); } catch { }
+                return false;
+            }
+
             _spareClient = null;
             _spareReady = false;
-            spare.Closed -= OnSpareClosed;
+            spare.Closed -= _spareClosedSub;
 
             // Silence the old active so its imminent (intentional) death can't drive the UI or trigger an
             // auto-restart. Keep its native window on screen until the new render swaps it in; pre-mark the
@@ -1379,7 +1427,7 @@ namespace WinUIXamlPreview.UI
             _spareWarming = false;
             if (_spareClient != null)
             {
-                _spareClient.Closed -= OnSpareClosed;
+                _spareClient.Closed -= _spareClosedSub;
                 try { _spareClient.Dispose(); } catch { }
                 _spareClient = null;
                 _spareReady = false;
@@ -1452,63 +1500,41 @@ namespace WinUIXamlPreview.UI
 
         private System.Threading.Tasks.Task MarshalAsync(Action action) => Dispatcher.InvokeAsync(action).Task;
 
-        // ---- fidelity banner (subtle, bottom-docked, non-blocking) ---------
+        // ---- fidelity banner (top info bar, non-blocking) -------------------
 
         private void ShowFidelityBuilding(string version, bool building)
         {
-            _fidelityHideTimer?.Stop();
-            FidelityBanner.Visibility = Visibility.Visible;
-            FidelityProgress.Visibility = Visibility.Visible;
-            FidelityProgress.IsIndeterminate = true;
-            FidelityIcon.Visibility = Visibility.Collapsed;
-            FidelityCancel.Visibility = Visibility.Visible;
-            FidelityText.Text = building
-                ? $"Preparing full-fidelity WinAppSDK {version} preview — checking shared inputs and cache…"
-                : $"Preparing full-fidelity WinAppSDK {version} preview…";
+            _fidelityBar.Show(
+                BannerSeverity.Progress,
+                "Preparing full-fidelity preview",
+                building
+                    ? $"Matching WinAppSDK {version} — checking shared inputs and cache…"
+                    : $"Matching WinAppSDK {version}…",
+                actionText: "Cancel",
+                onAction: OnFidelityCancel,
+                dismissible: false);
         }
 
         private void ShowFidelityReady(string version)
         {
-            FidelityBanner.Visibility = Visibility.Visible;
-            FidelityProgress.Visibility = Visibility.Collapsed;
-            FidelityProgress.IsIndeterminate = false;
-            FidelityIcon.Visibility = Visibility.Visible;
-            FidelityCancel.Visibility = Visibility.Collapsed;
-            FidelityText.Text = $"Full-fidelity preview ready (WinAppSDK {version}).";
-            ScheduleFidelityAutoHide(TimeSpan.FromSeconds(4));
+            _fidelityBar.Show(
+                BannerSeverity.Success,
+                "Full-fidelity preview ready",
+                $"Now rendering with WinAppSDK {version}.",
+                autoHide: TimeSpan.FromSeconds(4));
         }
 
         private void ShowFidelityNote(string note)
         {
-            FidelityBanner.Visibility = Visibility.Visible;
-            FidelityProgress.Visibility = Visibility.Collapsed;
-            FidelityProgress.IsIndeterminate = false;
-            FidelityIcon.Visibility = Visibility.Collapsed;
-            FidelityCancel.Visibility = Visibility.Collapsed;
-            FidelityText.Text = note;
-            ScheduleFidelityAutoHide(TimeSpan.FromSeconds(7));
+            _fidelityBar.Show(BannerSeverity.Info, "Full-fidelity preview unavailable", note, autoHide: TimeSpan.FromSeconds(10));
         }
 
         private void HideFidelityBanner()
         {
-            _fidelityHideTimer?.Stop();
-            FidelityBanner.Visibility = Visibility.Collapsed;
+            _fidelityBar.Hide();
         }
 
-        private void ScheduleFidelityAutoHide(TimeSpan after)
-        {
-            if (_fidelityHideTimer == null)
-            {
-                _fidelityHideTimer = new DispatcherTimer();
-                _fidelityHideTimer.Tick += (_, __) => { _fidelityHideTimer!.Stop(); HideFidelityBanner(); };
-            }
-
-            _fidelityHideTimer.Stop();
-            _fidelityHideTimer.Interval = after;
-            _fidelityHideTimer.Start();
-        }
-
-        private void OnFidelityCancelClick(object sender, RoutedEventArgs e)
+        private void OnFidelityCancel()
         {
             // Supersede any in-flight upgrade (the background task's generation check will make it abandon the
             // promote) and release our build interest — cancelling the shared build if no other preview wants it.
@@ -1581,7 +1607,7 @@ namespace WinUIXamlPreview.UI
                 }
                 catch (Exception ex)
                 {
-                    SetStatus("Failed to decode frame.", spinner: false, detail: ex.Message);
+                    SetStatus("Failed to decode frame.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
                 }
             });
         }
@@ -1643,7 +1669,7 @@ namespace WinUIXamlPreview.UI
                 catch (Exception ex)
                 {
                     Log.Write("OnHwnd failed: " + ex);
-                    SetStatus("Failed to host native surface.", spinner: false, detail: ex.Message);
+                    SetStatus("Failed to host native surface.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
                 }
             });
         }
@@ -1717,15 +1743,16 @@ namespace WinUIXamlPreview.UI
                 var where = err.Line.HasValue ? $" (line {err.Line}, col {err.Column})" : "";
                 var text = $"{err.Phase}: {err.Message}{where}";
                 Log.Write("Surface error — " + text);
+                var display = FormatXamlError(err);
 
                 if (_hasFrame || _hasNative)
                 {
                     // Keep the last good frame / native view; surface a compact banner.
-                    SetDetailBanner(text);
+                    SetDetailBanner(display);
                 }
                 else
                 {
-                    SetStatus("XAML error", spinner: false, detail: text);
+                    SetStatus("XAML error", spinner: false, detail: display, severity: BannerSeverity.Error);
                 }
             });
         }
@@ -1919,14 +1946,63 @@ namespace WinUIXamlPreview.UI
             return File.ReadAllText(path);
         }
 
-        private void SetStatus(string text, bool spinner, string? detail = null)
+        /// <summary>
+        /// U2: show the single blocking status card (nothing useful to preview yet / any more). A spinner means
+        /// work in progress; otherwise the severity moniker says whether this is information or a failure.
+        /// Clears the top message bar and any terminal reconnect state — the card supersedes them.
+        /// </summary>
+        private void SetStatus(string text, bool spinner, string? detail = null, BannerSeverity severity = BannerSeverity.Info, bool offerReload = false)
         {
             HideReconnectBanner();
+            HideMessageBar();
+            Button? action = null;
+            if (offerReload && !spinner)
+            {
+                action = PreviewChrome.MakeButton("Reload preview", OnReloadClick);
+                System.Windows.Automation.AutomationProperties.SetAutomationId(action, "PreviewStatusReload");
+            }
+
+            ShowStatusCard(text, detail, spinner ? (BannerSeverity?)null : severity, action);
+        }
+
+        /// <summary>
+        /// User-facing XAML error text: "Line 3, col 5 — message", whitespace collapsed to one line, without the
+        /// internal phase tag, WinUI's placeholder "text associated with this error code could not be found"
+        /// line, or the parser's duplicate "[Line: n Position: m]" suffix. The log keeps the raw form.
+        /// </summary>
+        private static string FormatXamlError(ErrorMsg err)
+        {
+            var msg = err.Message ?? "";
+            msg = msg.Replace("The text associated with this error code could not be found.", "");
+            msg = System.Text.RegularExpressions.Regex.Replace(msg, @"\s*\[Line:\s*\d+\s+Position:\s*\d+\]", "");
+            msg = System.Text.RegularExpressions.Regex.Replace(msg, @"\s+", " ").Trim();
+            if (msg.Length == 0)
+            {
+                msg = "The XAML could not be loaded.";
+            }
+
+            return err.Line.HasValue ? $"Line {err.Line}, col {err.Column} — {msg}" : msg;
+        }
+
+        private void ShowStatusCard(string title, string? detail, BannerSeverity? icon, Button? action)
+        {
             StatusOverlay.Visibility = Visibility.Visible;
-            StatusIcon.Visibility = Visibility.Collapsed;
-            Spinner.Visibility = spinner ? Visibility.Visible : Visibility.Collapsed;
-            Spinner.IsIndeterminate = spinner;
-            StatusText.Text = text;
+
+            if (icon.HasValue)
+            {
+                StatusIcon.Moniker = PreviewChrome.MonikerFor(icon.Value);
+                StatusIcon.Visibility = Visibility.Visible;
+                Spinner.Visibility = Visibility.Collapsed;
+                Spinner.IsIndeterminate = false;
+            }
+            else
+            {
+                StatusIcon.Visibility = Visibility.Collapsed;
+                Spinner.Visibility = Visibility.Visible;
+                Spinner.IsIndeterminate = true;
+            }
+
+            StatusText.Text = title;
             if (string.IsNullOrEmpty(detail))
             {
                 StatusDetail.Visibility = Visibility.Collapsed;
@@ -1936,18 +2012,31 @@ namespace WinUIXamlPreview.UI
                 StatusDetail.Text = detail;
                 StatusDetail.Visibility = Visibility.Visible;
             }
+
+            StatusActionHost.Content = action;
+            StatusActionHost.Visibility = action != null ? Visibility.Visible : Visibility.Collapsed;
         }
 
+        private void HideStatusCard()
+        {
+            StatusOverlay.Visibility = Visibility.Collapsed;
+            Spinner.IsIndeterminate = false;
+            StatusActionHost.Content = null;
+            StatusActionHost.Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>A XAML error while a previous render is still on screen: keep it, flag the error up top.</summary>
         private void SetDetailBanner(string text)
         {
-            // Non-blocking: overlay stays hidden (frame visible), detail shown briefly at bottom.
-            StatusOverlay.Visibility = Visibility.Visible;
-            StatusOverlay.VerticalAlignment = VerticalAlignment.Bottom;
-            StatusIcon.Visibility = Visibility.Collapsed;
-            Spinner.Visibility = Visibility.Collapsed;
-            StatusText.Text = "XAML error (showing last good frame)";
-            StatusDetail.Text = text;
-            StatusDetail.Visibility = Visibility.Visible;
+            HideStatusCard();
+            _messageBarIsFallback = false;
+            _messageBar.Show(BannerSeverity.Error, "XAML error", text + "  (showing the last successful render)");
+        }
+
+        private void HideMessageBar()
+        {
+            _messageBarIsFallback = false;
+            _messageBar.Hide();
         }
 
         /// <summary>
@@ -1969,53 +2058,43 @@ namespace WinUIXamlPreview.UI
             _hasFrame = false;
             _hasNative = false;
 
-            StatusOverlay.Visibility = Visibility.Visible;
-            StatusOverlay.VerticalAlignment = VerticalAlignment.Center;
-            StatusIcon.Visibility = Visibility.Visible;
-            Spinner.Visibility = Visibility.Collapsed;
-            Spinner.IsIndeterminate = false;
-            StatusText.Text = "Not a designable page";
-            StatusDetail.Text = reason;
-            StatusDetail.Visibility = Visibility.Visible;
+            HideReconnectBanner();
+            HideMessageBar();
+            ShowStatusCard("Not a designable page", reason, BannerSeverity.Info, action: null);
         }
 
         private void HideStatus()
         {
             HideReconnectBanner();
-            StatusOverlay.Visibility = Visibility.Collapsed;
-            StatusOverlay.VerticalAlignment = VerticalAlignment.Center;
+            HideStatusCard();
+            HideMessageBar();
         }
 
         /// <summary>
         /// T11/T12 terminal recovery state: the surface has died and auto-restart is exhausted (or there is
         /// nothing to relaunch). Dim any stale frame with a full-pane scrim and present the single, persistent,
-        /// explicit "Reload preview" affordance. This is the one give-up sink for all fault paths; a working
-        /// state (SetStatus) or a successful render (HideStatus) clears it again.
+        /// explicit "Reload preview" affordance in the status card. This is the one give-up sink for all fault
+        /// paths; a working state (SetStatus) or a successful render (HideStatus) clears it again.
         /// </summary>
         private void ShowReconnectBanner(string? reason)
         {
-            // Not a working status — collapse the spinner overlay so only the scrim + Reload card show.
-            StatusOverlay.Visibility = Visibility.Collapsed;
-            StatusOverlay.VerticalAlignment = VerticalAlignment.Center;
-
-            if (string.IsNullOrEmpty(reason))
-            {
-                ReconnectDetail.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                ReconnectDetail.Text = reason;
-                ReconnectDetail.Visibility = Visibility.Visible;
-            }
-
-            ReconnectOverlay.Visibility = Visibility.Visible;
+            HideMessageBar();
+            var reload = PreviewChrome.MakeButton("Reload preview", OnReloadClick);
+            System.Windows.Automation.AutomationProperties.SetAutomationId(reload, "PreviewReconnectReload");
+            ShowStatusCard("Preview disconnected", reason, BannerSeverity.Warning, reload);
+            ReconnectScrim.Visibility = Visibility.Visible;
+            _reconnectShown = true;
         }
 
         private void HideReconnectBanner()
         {
-            ReconnectOverlay.Visibility = Visibility.Collapsed;
+            ReconnectScrim.Visibility = Visibility.Collapsed;
+            if (_reconnectShown)
+            {
+                _reconnectShown = false;
+                HideStatusCard();
+            }
         }
-
         private void OnReloadClick(object sender, System.Windows.RoutedEventArgs e)
         {
             if (_disposed)
@@ -2047,23 +2126,20 @@ namespace WinUIXamlPreview.UI
 
         private void MaybeShowLiveFallbackBanner()
         {
-            // A document demoted from live to parse (plan §39): keep a quiet, non-blocking note pinned to the
-            // bottom so the user knows x:Bind/state won't render for this page, without hiding the (successful)
-            // static frame. Only appears when live mode is globally on but this page couldn't activate.
-            if (_currentPath == null || !_liveFallbackDocs.Contains(_currentPath))
+            // A document demoted from live to parse (plan §39): a quiet, dismissible note up top so the user knows
+            // x:Bind/state won't render for this page, without hiding the (successful) static render. Only appears
+            // when live mode is globally on but this page couldn't activate.
+            if (_currentPath == null || !_liveFallbackDocs.Contains(_currentPath) || _fallbackNoteDismissed.Contains(_currentPath))
             {
                 return;
             }
 
-            StatusOverlay.Visibility = Visibility.Visible;
-            StatusOverlay.VerticalAlignment = VerticalAlignment.Bottom;
-            StatusIcon.Visibility = Visibility.Collapsed;
-            Spinner.Visibility = Visibility.Collapsed;
-            StatusText.Text = "Static preview";
-            StatusDetail.Text = "Live preview isn't available for this page; x:Bind and code-behind state won't render.";
-            StatusDetail.Visibility = Visibility.Visible;
+            _messageBar.Show(
+                BannerSeverity.Info,
+                "Static preview",
+                "Live preview isn't available for this page; x:Bind and code-behind state won't render.");
+            _messageBarIsFallback = true;
         }
-
         private void TeardownNativeHost(bool surfaceDead = false)
         {
             var host = _nativeHost;
@@ -2112,7 +2188,7 @@ namespace WinUIXamlPreview.UI
             _promotedRenderPending = false;
             if (_spareClient != null)
             {
-                _spareClient.Closed -= OnSpareClosed;
+                _spareClient.Closed -= _spareClosedSub;
                 try { _spareClient.Dispose(); } catch { }
                 _spareClient = null;
                 _spareReady = false;

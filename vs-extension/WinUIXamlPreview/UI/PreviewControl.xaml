@@ -1,13 +1,28 @@
-<UserControl x:Class="WinUIXamlPreview.UI.PreviewControl"
+﻿<UserControl x:Class="WinUIXamlPreview.UI.PreviewControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vsui="clr-namespace:Microsoft.VisualStudio.PlatformUI;assembly=Microsoft.VisualStudio.Shell.15.0"
+             xmlns:imaging="clr-namespace:Microsoft.VisualStudio.Imaging;assembly=Microsoft.VisualStudio.Imaging"
              mc:Ignorable="d"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              d:DesignHeight="450" d:DesignWidth="600">
     <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- U2: non-blocking banners (XAML error over the last good render, static-preview note, full-fidelity
+             upgrade) are VS-style info bars docked at the TOP of the pane in their own row. Being a separate
+             layout row (not an overlay) is what makes them visible in native mode: the reparented WinUI HWND
+             lives in row 1 and shrinks below them, whereas a WPF overlay would be painted over (airspace).
+             Populated in code (PreviewInfoBar). -->
+        <StackPanel x:Name="BannerHost" Grid.Row="0" Orientation="Vertical" />
+
         <!-- Image path: streamed PNG frame, scrollable + centered. -->
-        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+        <ScrollViewer Grid.Row="1"
+                      HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
                       Background="#3C3C3C">
             <Grid Margin="16">
@@ -21,12 +36,13 @@
             </Grid>
         </ScrollViewer>
 
-        <!-- Native path: the reparented live WinUI window is inserted here as Child. It FILLS the tool
-             window and clips to it. A native HWND ignores WPF ScrollViewer/visual clips (airspace), so it
-             must be sized to the pane, not the design canvas — otherwise it paints over neighboring VS
-             panes. The surface hosts a FIXED-size design canvas anchored top-left, so filling the pane
-             yields a 1:1 viewport onto that canvas, clipped to the pane (no reflow, no overlap). -->
+        <!-- Native path: the reparented live WinUI window is inserted here as Child. It FILLS the content row
+             and clips to it. A native HWND ignores WPF ScrollViewer/visual clips (airspace), so it must be
+             sized to the pane, not the design canvas — otherwise it paints over neighboring VS panes. The
+             surface hosts a FIXED-size design canvas anchored top-left, so filling the pane yields a 1:1
+             viewport onto that canvas, clipped to the pane (no reflow, no overlap). -->
         <Border x:Name="NativeHostHolder"
+                Grid.Row="1"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Stretch"
                 Background="#3C3C3C"
@@ -35,137 +51,61 @@
                 UseLayoutRounding="True"
                 Visibility="Collapsed" />
 
-        <!-- Status / loading overlay. -->
+        <!-- Terminal recovery scrim (T11/T12): dims whatever stale frame remains behind the "Preview
+             disconnected" status card so it reads as disconnected. -->
+        <Border x:Name="ReconnectScrim"
+                Grid.Row="1"
+                Background="#A6000000"
+                Visibility="Collapsed" />
+
+        <!-- U2: the single BLOCKING status card — shown only when there is nothing (useful) to preview:
+             loading, failed to start, XAML error with no prior render, not a designable page, and the
+             terminal "Preview disconnected" state (with its Reload action). Themed with VS tool-window
+             brushes; severity is shown with the same status monikers as the info bars. -->
         <Border x:Name="StatusOverlay"
-                Background="#CC1E1E1E"
+                Grid.Row="1"
+                Background="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowBackgroundBrushKey}}"
+                BorderBrush="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowBorderBrushKey}}"
+                BorderThickness="1"
                 Padding="24,18"
+                Margin="16"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
-                CornerRadius="6">
-            <StackPanel Orientation="Vertical" MinWidth="220" MaxWidth="380">
-                <!-- P1: shown only for the "not a designable page" state (ResourceDictionary / Window /
-                     project-template roots) so it reads as calm information, not a red error. Info glyph. -->
-                <TextBlock x:Name="StatusIcon"
-                           FontFamily="Segoe MDL2 Assets"
-                           FontSize="30"
-                           Foreground="#FFB0B0B0"
-                           HorizontalAlignment="Center"
-                           Margin="0,0,0,12"
-                           Text="&#xE946;"
-                           Visibility="Collapsed" />
+                CornerRadius="4">
+            <StackPanel Orientation="Vertical" MinWidth="220" MaxWidth="400">
+                <imaging:CrispImage x:Name="StatusIcon"
+                                    Width="32"
+                                    Height="32"
+                                    HorizontalAlignment="Center"
+                                    Margin="0,0,0,12"
+                                    Visibility="Collapsed" />
                 <ProgressBar x:Name="Spinner"
                              IsIndeterminate="True"
-                             Height="4"
+                             Height="3"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             Foreground="{DynamicResource {x:Static vsui:EnvironmentColors.SystemHighlightBrushKey}}"
                              Margin="0,0,0,12" />
                 <TextBlock x:Name="StatusText"
-                           Foreground="#FFF0F0F0"
+                           Foreground="{DynamicResource {x:Static vsui:EnvironmentColors.ToolWindowTextBrushKey}}"
                            FontSize="13"
+                           FontWeight="SemiBold"
                            TextWrapping="Wrap"
                            TextAlignment="Center"
                            Text="Starting preview…" />
                 <TextBlock x:Name="StatusDetail"
-                           Foreground="#FFB0B0B0"
-                           FontSize="11"
+                           Foreground="{DynamicResource {x:Static vsui:EnvironmentColors.SystemGrayTextBrushKey}}"
+                           FontSize="12"
                            Margin="0,6,0,0"
                            TextWrapping="Wrap"
                            TextAlignment="Center"
                            Visibility="Collapsed" />
+                <ContentControl x:Name="StatusActionHost"
+                                HorizontalAlignment="Center"
+                                Margin="0,14,0,0"
+                                Focusable="False"
+                                Visibility="Collapsed" />
             </StackPanel>
-        </Border>
-
-        <!-- Fidelity-upgrade banner (nov-vsix-wire): a subtle, bottom-docked, non-blocking strip shown while a
-             version-matched host is produced in the background, so the instant bundled preview stays fully
-             visible. Collapsed by default; a small indeterminate bar + message while building, a check + auto-
-             hide when the matched host swaps in, and a Cancel to stop the (once-per-version) build. -->
-        <Border x:Name="FidelityBanner"
-                Background="#E6252526"
-                BorderBrush="#3F3F46"
-                BorderThickness="1"
-                Padding="12,8"
-                Margin="0,0,0,14"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Bottom"
-                CornerRadius="4"
-                Visibility="Collapsed">
-            <StackPanel Orientation="Horizontal" MaxWidth="560">
-                <ProgressBar x:Name="FidelityProgress"
-                             IsIndeterminate="True"
-                             Width="90"
-                             Height="4"
-                             VerticalAlignment="Center"
-                             Margin="0,0,10,0" />
-                <TextBlock x:Name="FidelityIcon"
-                           FontFamily="Segoe MDL2 Assets"
-                           FontSize="13"
-                           Foreground="#FF6DBE45"
-                           VerticalAlignment="Center"
-                           Margin="0,0,8,0"
-                           Text="&#xE73E;"
-                           Visibility="Collapsed" />
-                <TextBlock x:Name="FidelityText"
-                           Foreground="#FFE6E6E6"
-                           FontSize="12"
-                           VerticalAlignment="Center"
-                           TextWrapping="Wrap"
-                           Text="Building full-fidelity preview…" />
-                <Button x:Name="FidelityCancel"
-                        Content="Cancel"
-                        Margin="12,0,0,0"
-                        Padding="8,2"
-                        FontSize="11"
-                        VerticalAlignment="Center"
-                        Click="OnFidelityCancelClick" />
-            </StackPanel>
-        </Border>
-
-        <!-- Terminal recovery overlay (T11/T12): shown only when the surface has died AND auto-restart is
-             exhausted (or there's nothing left to relaunch). A full-pane scrim dims whatever stale frame
-             remains so it reads as disconnected, and a single, persistent, explicit "Reload preview" button
-             is the one actionable recovery affordance. All give-up fault paths funnel here (OnClosed exhausted
-             branches) instead of silently freezing on a stale frame or showing a dead-end status line. -->
-        <Border x:Name="ReconnectOverlay"
-                Background="#A6000000"
-                HorizontalAlignment="Stretch"
-                VerticalAlignment="Stretch"
-                Visibility="Collapsed">
-            <Border Background="#F22D2D30"
-                    BorderBrush="#555558"
-                    BorderThickness="1"
-                    CornerRadius="6"
-                    Padding="24,20"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center">
-                <StackPanel Orientation="Vertical" MinWidth="240" MaxWidth="420">
-                    <TextBlock x:Name="ReconnectIcon"
-                               FontFamily="Segoe MDL2 Assets"
-                               FontSize="28"
-                               Foreground="#FFE6A23C"
-                               HorizontalAlignment="Center"
-                               Margin="0,0,0,12"
-                               Text="&#xE7BA;" />
-                    <TextBlock x:Name="ReconnectText"
-                               Foreground="#FFF0F0F0"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               TextWrapping="Wrap"
-                               TextAlignment="Center"
-                               Text="Preview disconnected" />
-                    <TextBlock x:Name="ReconnectDetail"
-                               Foreground="#FFB0B0B0"
-                               FontSize="11"
-                               Margin="0,6,0,0"
-                               TextWrapping="Wrap"
-                               TextAlignment="Center"
-                               Visibility="Collapsed" />
-                    <Button x:Name="ReconnectButton"
-                            Content="Reload preview"
-                            HorizontalAlignment="Center"
-                            Margin="0,14,0,0"
-                            Padding="14,4"
-                            FontSize="12"
-                            Click="OnReloadClick" />
-                </StackPanel>
-            </Border>
         </Border>
     </Grid>
 </UserControl>
