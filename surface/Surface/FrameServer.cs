@@ -227,6 +227,7 @@ internal sealed class FrameServer
                     break;
                 }
                 _lastXaml = xaml;
+                ApplySampleData(root);
                 _lastWidth = GetPositiveDouble(root, "width", _lastWidth);
                 _lastHeight = GetPositiveDouble(root, "height", _lastHeight);
                 _lastScale = GetPositiveDouble(root, "scale", _lastScale);
@@ -244,6 +245,7 @@ internal sealed class FrameServer
                     break;
                 }
                 _lastXaml = xaml;
+                ApplySampleData(root);
                 if (_nativeMode)
                 {
                     App.Log($"<- UpdateXaml ({xaml.Length} chars, native re-host)");
@@ -268,6 +270,7 @@ internal sealed class FrameServer
                     break;
                 }
                 _lastXaml = xaml;
+                ApplySampleData(root);
                 _lastWidth = GetPositiveDouble(root, "width", _lastWidth);
                 _lastHeight = GetPositiveDouble(root, "height", _lastHeight);
                 _lastScale = GetPositiveDouble(root, "scale", _lastScale);
@@ -703,6 +706,15 @@ internal sealed class FrameServer
     }
 
     // ---- JSON field helpers --------------------------------------------------
+
+    /// <summary>WS2-F6: apply the optional <c>sampleData</c> field; absent leaves the current setting.</summary>
+    private void ApplySampleData(JsonElement root)
+    {
+        if (root.TryGetProperty("sampleData", out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            _host.SampleData = v.GetBoolean();
+        }
+    }
 
     private static string? GetString(JsonElement el, string name)
         => el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;

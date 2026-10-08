@@ -16,7 +16,7 @@ const serverTypes = ['Ready', 'Frame', 'Error', 'Hwnd', 'NativeExited', 'Selecte
 const typedClients = [
     { type: 'Hello', client: 'vscode', caps: ['frame-stream', 'future-cap'], protocol: 1 },
     { type: 'LoadXaml', xaml: '<Grid />', width: 800, height: 600, scale: 1.5 },
-    { type: 'UpdateXaml', xaml: '' }, { type: 'Resize' },
+    { type: 'UpdateXaml', xaml: '', sampleData: false }, { type: 'Resize' },
     { type: 'EnterNative', xaml: '<Page />', width: 640.5 },
     { type: 'ExitNative' }, { type: 'SetMode', design: false },
     { type: 'SelectByPath', path: null }, { type: 'PickAt', x: 0, y: 0 },
@@ -72,8 +72,9 @@ function assertWire(value: unknown): asserts value is WireMessage {
         case 'LoadXaml': case 'EnterNative':
             string('xaml');
             for (const key of ['width', 'height', 'scale']) number(key, true);
+            boolean('sampleData', true);
             break;
-        case 'UpdateXaml': string('xaml'); break;
+        case 'UpdateXaml': string('xaml'); boolean('sampleData', true); break;
         case 'Resize':
             for (const key of ['width', 'height', 'scale']) number(key, true);
             break;

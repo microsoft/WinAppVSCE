@@ -995,17 +995,17 @@ namespace WinUIXamlPreview.Editor
 
         // ---- design-time data (sample data) toggle -------------------------
         //
-        // Flips the persisted PreviewOptions.DesignTimeData flag. Currently a no-op: it used to arm the live-mode
-        // reflection fallback (removed with live mode) and is reserved for placeholder sample data for {x:Bind}
-        // pages (WS2-F6). The M1 (d:DesignData) and M2 (DesignMode signal) paths are automatic and need no toggle.
+        // Flips the persisted PreviewOptions.DesignTimeData flag: placeholder text and dummy list rows for
+        // {x:Bind} pages (WS2-F6). The M1 (d:DesignData) and M2 (DesignMode signal) paths are automatic and
+        // need no toggle.
 
         private static string DtdLabel() => PreviewOptions.DesignTimeData ? "Sample data: On" : "Sample data: Off";
 
         private static ImageMoniker DtdMoniker() => KnownMonikers.Table;
 
         private static string DtdTooltip() => PreviewOptions.DesignTimeData
-            ? "Sample data for x:Bind pages is ON (not yet active). Click to turn it off."
-            : "Sample data for x:Bind pages is OFF (not yet active). Click to turn it on.";
+            ? "Sample data is ON: x:Bind text shows placeholders and bound lists show sample rows. Click to turn it off."
+            : "Sample data is OFF: x:Bind values are left empty. Click to turn it on.";
 
         private void OnToggleDtdClick(object sender, RoutedEventArgs e)
         {

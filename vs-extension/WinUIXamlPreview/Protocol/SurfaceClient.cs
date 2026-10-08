@@ -443,18 +443,24 @@ namespace WinUIXamlPreview.Protocol
             }
         }
 
+        /// <summary>
+        /// WS2-F6: placeholder sample data for <c>{x:Bind}</c> pages. Sent with every document message; null
+        /// omits the field so the surface keeps its default (on).
+        /// </summary>
+        public bool? SampleData { get; set; }
+
         public bool LoadXaml(string xaml, int width, int height, double scale)
-            => Send(new LoadXamlMsg { Xaml = xaml, Width = width, Height = height, Scale = scale });
+            => Send(new LoadXamlMsg { Xaml = xaml, Width = width, Height = height, Scale = scale, SampleData = SampleData });
 
         public bool UpdateXaml(string xaml)
-            => Send(new UpdateXamlMsg { Xaml = xaml });
+            => Send(new UpdateXamlMsg { Xaml = xaml, SampleData = SampleData });
 
         public bool Resize(int width, int height, double scale)
             => Send(new ResizeMsg { Width = width, Height = height, Scale = scale });
 
         /// <summary>Enter native-HWND mode; the surface replies with an <see cref="HwndMsg"/> to reparent.</summary>
         public bool EnterNative(string xaml, double width, double height, double scale)
-            => Send(new EnterNativeMsg { Xaml = xaml, Width = width, Height = height, Scale = scale });
+            => Send(new EnterNativeMsg { Xaml = xaml, Width = width, Height = height, Scale = scale, SampleData = SampleData });
 
         /// <summary>Leave native mode; the surface re-cloaks its window and replies <c>NativeExited</c>.</summary>
         public bool ExitNative()

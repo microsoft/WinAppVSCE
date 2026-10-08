@@ -119,8 +119,14 @@ internal sealed class RenderHost
     /// resource-scope key resolver (Layer 2) is passed through so the cleaner can distinguish a resolvable
     /// <c>{StaticResource}</c> from a genuinely-undefined one.
     /// </summary>
-    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null) =>
-        XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes);
+    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false) =>
+        XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData);
+
+    /// <summary>
+    /// WS2-F6: when true, <c>{x:Bind}</c> text properties render a placeholder and bound lists get dummy
+    /// rows (see <see cref="SampleListFiller"/>). Set by the client's <c>sampleData</c> message field.
+    /// </summary>
+    public bool SampleData { get; set; } = true;
 
     /// <summary>
     /// Rule 7 (T2) predicate for <see cref="XamlCleaner"/>: true when the runtime provider chain that
@@ -236,7 +242,7 @@ internal sealed class RenderHost
             const int maxSafetyNetRetries = 5;
             for (int attempt = 0; ; attempt++)
             {
-                var xaml = CleanXaml(rawXaml, forced);
+                var xaml = CleanXaml(rawXaml, forced, SampleData);
                 if (attempt == 0 && timings is not null) timings.CleanMs = ElapsedMs(tClean);
 
                 object? parsed;
@@ -292,6 +298,10 @@ internal sealed class RenderHost
                 // so a classic {Binding} page renders real sample data. Never
                 // throws — a bad design hint can only fail to add data, never fail an otherwise-good render.
                 ApplyDesignTimeData(fe, rawXaml);
+                if (SampleData && xaml.Contains(SampleListFiller.TagPrefix, StringComparison.Ordinal))
+                {
+                    SampleListFiller.Attach(fe);
+                }
 
                 return (fe, null, null, null, null);
             }

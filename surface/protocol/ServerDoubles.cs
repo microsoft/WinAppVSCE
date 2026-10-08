@@ -31,6 +31,7 @@ namespace Surface
         public (double, double)? Canvas;
         public bool Design;
         public bool Restored;
+        public bool SampleData { get; set; } = true;
         public string? Path;
         public (double X, double Y)? Point;
         public (int Id, string Name, string Value)? Property;

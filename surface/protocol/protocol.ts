@@ -20,10 +20,10 @@ export interface Hello {
     caps?: Capability[];
     protocol?: number;
 }
-export interface LoadXaml extends Size { type: 'LoadXaml'; xaml: string }
-export interface UpdateXaml { type: 'UpdateXaml'; xaml: string }
+export interface LoadXaml extends Size { type: 'LoadXaml'; xaml: string; sampleData?: boolean }
+export interface UpdateXaml { type: 'UpdateXaml'; xaml: string; sampleData?: boolean }
 export interface Resize extends Size { type: 'Resize' }
-export interface EnterNative extends Size { type: 'EnterNative'; xaml: string }
+export interface EnterNative extends Size { type: 'EnterNative'; xaml: string; sampleData?: boolean }
 export interface ExitNative { type: 'ExitNative' }
 export interface Ping { type: 'Ping' }
 export interface SetMode { type: 'SetMode'; design?: boolean }

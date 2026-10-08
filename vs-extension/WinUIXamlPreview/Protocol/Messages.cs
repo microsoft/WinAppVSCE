@@ -32,12 +32,16 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("width")] public int Width { get; set; }
         [JsonPropertyName("height")] public int Height { get; set; }
         [JsonPropertyName("scale")] public double Scale { get; set; }
+        /// <summary>WS2-F6: placeholder sample data for {x:Bind}; null omits the field (server keeps its setting).</summary>
+        [JsonPropertyName("sampleData"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? SampleData { get; set; }
     }
 
     internal sealed class UpdateXamlMsg
     {
         [JsonPropertyName("type")] public string Type => "UpdateXaml";
         [JsonPropertyName("xaml")] public string Xaml { get; set; } = "";
+        /// <summary>WS2-F6: placeholder sample data for {x:Bind}; null omits the field (server keeps its setting).</summary>
+        [JsonPropertyName("sampleData"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? SampleData { get; set; }
     }
 
     internal sealed class ResizeMsg
@@ -59,6 +63,8 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("width")] public double Width { get; set; }
         [JsonPropertyName("height")] public double Height { get; set; }
         [JsonPropertyName("scale")] public double Scale { get; set; }
+        /// <summary>WS2-F6: placeholder sample data for {x:Bind}; null omits the field (server keeps its setting).</summary>
+        [JsonPropertyName("sampleData"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? SampleData { get; set; }
     }
 
     /// <summary>Leave native mode: the surface re-cloaks its window off-screen and resumes frame mode.</summary>

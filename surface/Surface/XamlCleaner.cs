@@ -146,11 +146,16 @@ internal static class XamlCleaner
     /// does not fail the whole page. May be null (no forced substitutions beyond the built-in
     /// heavy-constructor pre-swap list).
     /// </param>
+    /// <param name="sampleData">
+    /// WS2-F6: instead of dropping every <c>{x:Bind}</c>, write a placeholder into known text properties and
+    /// mark bound lists for <see cref="SampleListFiller"/>. False keeps the plain Rule 2 drop.
+    /// </param>
     public static string Clean(
         string rawXaml,
         Func<string, bool>? isKnownResourceKey = null,
         Func<string, bool>? providerMapsFullName = null,
-        ISet<string>? forcePlaceholderTypes = null)
+        ISet<string>? forcePlaceholderTypes = null,
+        bool sampleData = false)
     {
         if (string.IsNullOrWhiteSpace(rawXaml))
         {
@@ -228,7 +233,7 @@ internal static class XamlCleaner
             // Attribute pass over every surviving element.
             foreach (var el in root.DescendantsAndSelf().ToList())
             {
-                CleanElementAttributes(el, root, isKnownResourceKey, docKeys, droppedKeys, providerMapsFullName);
+                CleanElementAttributes(el, root, isKnownResourceKey, docKeys, droppedKeys, providerMapsFullName, sampleData);
             }
 
             // Drop the now-unused Blend/markup-compat namespace declarations for tidiness (all their
@@ -259,7 +264,8 @@ internal static class XamlCleaner
         Func<string, bool>? isKnownKey,
         HashSet<string> docKeys,
         HashSet<string> droppedKeys,
-        Func<string, bool>? providerMapsFullName)
+        Func<string, bool>? providerMapsFullName,
+        bool sampleData)
     {
         var toRemove = new List<XAttribute>();
         var toAdd = new List<(XName name, string value)>();
@@ -323,9 +329,21 @@ internal static class XamlCleaner
 
             // Rule 2: {x:Bind ...} — drop so the property takes its default. (Classic {Binding} stays;
             // it binds to a null DataContext and renders empty, which is intended.)
+            // WS2-F6 (sample data on): a text property gets a placeholder instead, and a bound list is
+            // marked so SampleListFiller can give it dummy rows. A d: value on the same property still wins.
             if (IsMarkupExtension(el, value, "Bind", Xaml))
             {
+                if (sampleData && TryBindPlaceholder(el, a, out var placeholder))
+                {
+                    toRewrite.Add((a, placeholder));
+                    continue;
+                }
+
                 toRemove.Add(a);
+                if (sampleData && TryBindListMarker(el, a, out var marker))
+                {
+                    toAdd.Add(("Tag", marker));
+                }
                 continue;
             }
 
@@ -412,13 +430,278 @@ internal static class XamlCleaner
 
         // Only map when the runtime property genuinely exists on the element's type — this prevents
         // Blend-only attributes (d:LayoutOverrides, d:IsHidden, ...) from becoming invalid properties.
+        // An {x:Bind} on the same property is about to be dropped, so it doesn't block the mapping.
         var type = ResolveElementType(el);
+        var existing = el.Attribute(local);
         if (type is not null &&
             type.GetProperty(local, BindingFlags.Public | BindingFlags.Instance) is not null &&
-            el.Attribute(local) is null)
+            (existing is null || IsMarkupExtension(el, existing.Value, "Bind", Xaml)))
         {
             toAdd.Add((local, value));
         }
+    }
+
+    // ---- WS2-F6 sample data for {x:Bind} -------------------------------------
+
+    /// <summary>Properties that may receive a text placeholder (and only when string- or object-typed).</summary>
+    private static readonly HashSet<string> PlaceholderTextProperties = new(StringComparer.Ordinal)
+    {
+        "Text", "Content", "Header", "PlaceholderText", "Title", "Subtitle", "Description", "Label",
+        "OnContent", "OffContent", "Message", "Footer",
+    };
+
+    /// <summary>
+    /// The placeholder value for an <c>{x:Bind}</c> on a known text property: <c>FallbackValue</c> /
+    /// <c>TargetNullValue</c> when given, else <c>{LastPathSegment}</c>, or <c>Func(…)</c> for a function
+    /// binding. False (drop as usual) when the property isn't an allow-listed string/object property, a
+    /// <c>d:</c> value exists for it, or the binding can't be parsed confidently.
+    /// </summary>
+    private static bool TryBindPlaceholder(XElement el, XAttribute a, out string placeholder)
+    {
+        placeholder = string.Empty;
+        var local = a.Name.LocalName;
+        if (a.Name.Namespace != XNamespace.None || !PlaceholderTextProperties.Contains(local) ||
+            el.Attribute(Design + local) is not null)
+        {
+            return false;
+        }
+
+        PropertyInfo? prop;
+        try
+        {
+            prop = ResolveElementType(el)?.GetProperty(local, BindingFlags.Public | BindingFlags.Instance);
+        }
+        catch (AmbiguousMatchException)
+        {
+            return false;
+        }
+
+        if (prop is null || !prop.CanWrite || (prop.PropertyType != typeof(string) && prop.PropertyType != typeof(object)))
+        {
+            return false;
+        }
+
+        if (!TryParseBind(a.Value, out var path, out var named))
+        {
+            return false;
+        }
+
+        foreach (var key in new[] { "FallbackValue", "TargetNullValue" })
+        {
+            if (named.TryGetValue(key, out var literal) && literal.Length > 0 && literal[0] != '{')
+            {
+                placeholder = literal;
+                return true;
+            }
+        }
+
+        var label = BindPathLabel(path);
+        if (label is null)
+        {
+            return false;
+        }
+
+        // "{}" escapes a literal that starts with '{' so XamlReader doesn't read it as a markup extension.
+        placeholder = label[0] == '{' ? "{}" + label : label;
+        return true;
+    }
+
+    /// <summary>Marker for a list whose <c>ItemsSource</c> is an <c>{x:Bind}</c>; consumed by <see cref="SampleListFiller"/>.</summary>
+    private static bool TryBindListMarker(XElement el, XAttribute a, out string marker)
+    {
+        marker = string.Empty;
+        if (a.Name.Namespace != XNamespace.None || a.Name.LocalName != "ItemsSource" || el.Attribute("Tag") is not null)
+        {
+            return false;
+        }
+
+        var type = ResolveElementType(el);
+        if (type is null || !typeof(Microsoft.UI.Xaml.FrameworkElement).IsAssignableFrom(type) ||
+            type.GetProperty("ItemsSource", BindingFlags.Public | BindingFlags.Instance) is null)
+        {
+            return false;
+        }
+
+        var path = TryParseBind(a.Value, out var p, out _) ? p : null;
+        marker = SampleListFiller.TagPrefix + (BindPathLabel(path) ?? "item");
+        return true;
+    }
+
+    /// <summary>
+    /// Parses <c>{x:Bind Path, Name=Value, …}</c> into its path (positional or <c>Path=</c>) and named
+    /// arguments, honoring quotes and nested braces/parentheses. Single-quoted values are unquoted.
+    /// </summary>
+    internal static bool TryParseBind(string value, out string? path, out Dictionary<string, string> named)
+    {
+        path = null;
+        named = new Dictionary<string, string>(StringComparer.Ordinal);
+        var trimmed = value.Trim();
+        var head = MarkupExtensionHead.Match(trimmed);
+        if (!head.Success || trimmed[^1] != '}')
+        {
+            return false;
+        }
+
+        var body = trimmed[head.Length..^1];
+        var parts = SplitTopLevel(body, ',');
+        if (parts is null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < parts.Count; i++)
+        {
+            var part = parts[i].Trim();
+            if (part.Length == 0)
+            {
+                continue;
+            }
+
+            int eq = IndexOfTopLevel(part, '=');
+            if (eq < 0)
+            {
+                if (i != 0)
+                {
+                    return false; // only the first argument may be positional
+                }
+                path = part;
+                continue;
+            }
+
+            var name = part[..eq].Trim();
+            var val = Unquote(part[(eq + 1)..].Trim());
+            if (name == "Path")
+            {
+                path = val;
+            }
+            else
+            {
+                named[name] = val;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Display label for a binding path: <c>{LastSegment}</c> (casts and indexers stripped) or <c>Func(…)</c>
+    /// for a function binding. Null when there is nothing meaningful to show.
+    /// </summary>
+    internal static string? BindPathLabel(string? path)
+    {
+        var p = path?.Trim();
+        while (!string.IsNullOrEmpty(p) && p[0] == '(')
+        {
+            int close = MatchingParen(p, 0);
+            if (close < 0 || close == p.Length - 1)
+            {
+                return null; // unbalanced, or a bare attached-property path like (Grid.Row)
+            }
+            p = p[(close + 1)..].TrimStart('.', ' ');
+        }
+
+        if (string.IsNullOrEmpty(p))
+        {
+            return null;
+        }
+
+        int call = IndexOfTopLevel(p, '(');
+        if (call > 0)
+        {
+            var func = LastSegment(p[..call].Trim());
+            return func.Length == 0 ? null : func + "(…)";
+        }
+
+        var seg = LastSegment(p);
+        int bracket = seg.IndexOf('[');
+        if (bracket >= 0)
+        {
+            seg = seg[..bracket];
+        }
+
+        seg = seg.Trim();
+        return seg.Length == 0 ? null : "{" + seg + "}";
+    }
+
+    private static string LastSegment(string path)
+    {
+        var parts = SplitTopLevel(path, '.');
+        return parts is null || parts.Count == 0 ? string.Empty : parts[^1].Trim();
+    }
+
+    private static string Unquote(string s)
+        => s.Length >= 2 && s[0] == '\'' && s[^1] == '\''
+            ? s[1..^1].Replace("\\'", "'")
+            : s;
+
+    private static int MatchingParen(string s, int open)
+    {
+        int depth = 0;
+        for (int i = open; i < s.Length; i++)
+        {
+            if (s[i] == '(') depth++;
+            else if (s[i] == ')' && --depth == 0) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>Index of <paramref name="c"/> outside quotes, braces, parentheses and brackets; -1 if none.</summary>
+    private static int IndexOfTopLevel(string s, char c)
+    {
+        int depth = 0;
+        bool quoted = false;
+        for (int i = 0; i < s.Length; i++)
+        {
+            char ch = s[i];
+            if (quoted)
+            {
+                if (ch == '\\') i++;
+                else if (ch == '\'') quoted = false;
+                continue;
+            }
+            if (depth == 0 && ch == c) return i;
+            if (ch == '\'') quoted = true;
+            else if (ch is '{' or '(' or '[') depth++;
+            else if (ch is '}' or ')' or ']') depth--;
+        }
+        return -1;
+    }
+
+    /// <summary>Splits on <paramref name="sep"/> outside quotes and nesting; null when unbalanced.</summary>
+    private static List<string>? SplitTopLevel(string s, char sep)
+    {
+        var parts = new List<string>();
+        int depth = 0, start = 0;
+        bool quoted = false;
+        for (int i = 0; i < s.Length; i++)
+        {
+            char ch = s[i];
+            if (quoted)
+            {
+                if (ch == '\\') i++;
+                else if (ch == '\'') quoted = false;
+                continue;
+            }
+            if (ch == '\'') quoted = true;
+            else if (ch is '{' or '(' or '[') depth++;
+            else if (ch is '}' or ')' or ']')
+            {
+                if (--depth < 0) return null;
+            }
+            else if (ch == sep && depth == 0)
+            {
+                parts.Add(s[start..i]);
+                start = i + 1;
+            }
+        }
+
+        if (depth != 0 || quoted)
+        {
+            return null;
+        }
+
+        parts.Add(s[start..]);
+        return parts;
     }
 
     // ---- markup-extension / resource helpers ---------------------------------

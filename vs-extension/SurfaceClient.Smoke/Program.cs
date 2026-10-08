@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using WinUIXamlPreview.Protocol;
@@ -124,6 +125,7 @@ namespace WinUIXamlPreview.Smoke
 
             await RunFrameworkClient(surfaceExe);
             await RunDesignEditClient(surfaceExe);
+            await RunSampleDataClient(surfaceExe);
             await RunNonPageClient(surfaceExe);
             if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WINUI_SURFACE_USER_PRI")))
                 await RunPriIsolationAsync(surfaceExe);
@@ -305,6 +307,68 @@ namespace WinUIXamlPreview.Smoke
             Check("enum property carries dropdown Options", visRow?.Options != null && visRow.Options.Count >= 2);
         }
 
+        private const string SampleDataXaml =
+            "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+            "xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" " +
+            "xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\" " +
+            "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"d\" " +
+            "Width=\"400\" Height=\"400\">" +
+            "<StackPanel Padding=\"24\" Spacing=\"8\">" +
+            "<TextBlock Text=\"{x:Bind ViewModel.UserName, Mode=OneWay}\"/>" +
+            "<TextBlock Text=\"{x:Bind ViewModel.Status, FallbackValue='Loading status'}\"/>" +
+            "<TextBlock Text=\"{x:Bind ViewModel.Title}\" d:Text=\"Designer title\"/>" +
+            "<Button Content=\"{x:Bind local:Fmt.Greeting(ViewModel.UserName)}\"/>" +
+            "<ListView ItemsSource=\"{x:Bind ViewModel.Orders}\" Height=\"150\"/>" +
+            "</StackPanel></Page>";
+
+        /// <summary>
+        /// WS2-F6: with sample data on (the surface default) an {x:Bind} text property renders a placeholder —
+        /// FallbackValue when given, a d: value when present, else {PathName} / Func(…) — and a bound list gets
+        /// dummy rows. Toggling it off (UpdateXaml with sampleData=false) re-hosts with bindings simply dropped.
+        /// </summary>
+        private static async Task RunSampleDataClient(string surfaceExe)
+        {
+            Console.WriteLine();
+            Console.WriteLine("--- sample data for {x:Bind} (WS2-F6) ---");
+            var logs = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            using var client = CreateClient(surfaceExe, null, s => { logs.Enqueue(s); Console.Error.WriteLine("  " + s); });
+            var box = new FrameBox(client);
+            await client.StartAsync(TimeSpan.FromSeconds(20));
+
+            var hwndTask = box.NextHwnd(TimeSpan.FromSeconds(20));
+            client.EnterNative(SampleDataXaml, 400, 400, 1.0);
+            var hwnd = await hwndTask;
+            Check("sample-data EnterNative -> Hwnd", hwnd != null && hwnd.Hwnd != 0);
+            client.SetMode(true);
+
+            async Task<string?> ReadText(string path, string prop)
+            {
+                var t = box.NextProps(TimeSpan.FromSeconds(20));
+                client.SelectByPath(path);
+                return FindProp(await t, prop)?.Value;
+            }
+
+            Check("x:Bind path renders {LastSegment}", await ReadText("0.0.0", "Text") == "{UserName}");
+            Check("x:Bind FallbackValue wins", await ReadText("0.0.1", "Text") == "Loading status");
+            Check("d:Text wins over x:Bind placeholder", await ReadText("0.0.2", "Text") == "Designer title");
+            Check("function binding renders Func(…)", await ReadText("0.0.3", "Content") == "Greeting(…)");
+
+            bool filled = false;
+            for (int i = 0; i < 40 && !filled; i++)
+            {
+                filled = logs.Any(l => l.Contains("SAMPLE: filled ListView with 3"));
+                if (!filled) await Task.Delay(100);
+            }
+            Check("bound ListView filled with 3 sample rows", filled);
+
+            // Toggle off: the client sends the flag with the re-host; the binding is dropped (empty text).
+            client.SampleData = false;
+            var rehost = box.NextHwnd(TimeSpan.FromSeconds(20));
+            client.UpdateXaml(SampleDataXaml);
+            await rehost;
+            Check("sample data off: x:Bind text left empty", string.IsNullOrEmpty(await ReadText("0.0.0", "Text")));
+            Check("sample data off: d:Text still applies", await ReadText("0.0.2", "Text") == "Designer title");
+        }
         private static PropItemMsg? FindProp(ElementPropsMsg? msg, string name)
         {
             if (msg?.Props == null)

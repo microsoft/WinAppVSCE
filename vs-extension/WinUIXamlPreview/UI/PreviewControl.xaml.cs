@@ -321,7 +321,7 @@ namespace WinUIXamlPreview.UI
             }
 
             Log.Write($"Constructing surface client (surfaceExe='{surfaceExe}', userDll='{userDll ?? "(none)"}', appXaml='{userAppXaml ?? "(none)"}', xaml={xaml.Length} chars)…");
-            var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, PreviewOptions.Theme, userPri: recoverPri);
+            var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, PreviewOptions.Theme, userPri: recoverPri) { SampleData = PreviewOptions.DesignTimeData };
             client.Frame += OnFrame;
             client.Error += OnError;
             client.Hwnd += OnHwnd;
@@ -418,8 +418,9 @@ namespace WinUIXamlPreview.UI
         }
 
         /// <summary>
-        /// Persist the "Sample data" toggle. Currently a no-op for rendering: it previously armed the live-mode
-        /// reflection fallback (removed with live mode) and is reserved for placeholder sample data (WS2-F6).
+        /// Apply the "Sample data" toggle (WS2-F6). Persists the preference, sends it with every later document
+        /// message, and re-renders the current document so <c>{x:Bind}</c> placeholders and dummy list rows
+        /// appear or disappear right away. UI thread only.
         /// </summary>
         public void SetDesignTimeData(bool on)
         {
@@ -429,7 +430,17 @@ namespace WinUIXamlPreview.UI
             }
 
             PreviewOptions.DesignTimeData = on;
-            Log.Write($"Sample data toggled {(on ? "ON" : "off")} (no effect yet; reserved for WS2-F6).");
+            Log.Write($"Sample data toggled {(on ? "ON" : "off")}; re-rendering.");
+            if (_client != null)
+            {
+                _client.SampleData = on;
+            }
+            if (_spareClient != null)
+            {
+                _spareClient.SampleData = on;
+            }
+
+            ReloadCurrent();
         }
 
         /// <summary>
@@ -837,7 +848,7 @@ namespace WinUIXamlPreview.UI
                 SurfaceClient? spare = null;
                 try
                 {
-                    spare = new SurfaceClient(exe, dll, Log.Write, appx, theme, userPri: userPri);
+                    spare = new SurfaceClient(exe, dll, Log.Write, appx, theme, userPri: userPri) { SampleData = PreviewOptions.DesignTimeData };
                     await spare.StartAsync(TimeSpan.FromSeconds(25));
                 }
                 catch (Exception ex)
@@ -1052,6 +1063,7 @@ namespace WinUIXamlPreview.UI
             _spareClient = null;
             _spareReady = false;
             spare.Closed -= _spareClosedSub;
+            spare.SampleData = PreviewOptions.DesignTimeData; // the toggle may have flipped while it warmed
 
             // Silence the old active so its imminent (intentional) death can't drive the UI or trigger an
             // auto-restart. Keep its native window on screen until the new render swaps it in; pre-mark the
@@ -1270,7 +1282,7 @@ namespace WinUIXamlPreview.UI
                 SurfaceClient? matched = null;
                 try
                 {
-                    matched = new SurfaceClient(matchedExe, userDll, Log.Write, userAppXaml, theme, userPri: matchedPri);
+                    matched = new SurfaceClient(matchedExe, userDll, Log.Write, userAppXaml, theme, userPri: matchedPri) { SampleData = PreviewOptions.DesignTimeData };
                     await matched.StartAsync(TimeSpan.FromSeconds(25));
                 }
                 catch (Exception ex)

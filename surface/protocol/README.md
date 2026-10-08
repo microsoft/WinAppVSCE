@@ -81,10 +81,10 @@ spelled out rather than inferred from C# property types.
 | --- | --- | --- |
 | `Hello` | `client?: string`, `caps?: string[]`, `protocol?: integer` | Fixed `Ready`; fields ignored. |
 | `Ping` | none | `Pong`. No production C# Ping DTO/public send method. |
-| `LoadXaml` | `xaml: string`, `width?: number`, `height?: number`, `scale?: number` | Save XAML and viewport; `Frame` or `Error`. **Always uses frame rendering, even while native mode is set**, and does not clear the native flag. |
-| `UpdateXaml` | `xaml: string` | Save XAML; reuse saved viewport. Frame mode: `Frame`/`Error`. Native mode: rehost with `prepareWindow=false`, then `Hwnd` + `ContentProps`, or `Error`. Extra size fields are ignored. A prior LoadXaml is not required. |
+| `LoadXaml` | `xaml: string`, `width?: number`, `height?: number`, `scale?: number`, `sampleData?: boolean` | Save XAML and viewport; `Frame` or `Error`. **Always uses frame rendering, even while native mode is set**, and does not clear the native flag. |
+| `UpdateXaml` | `xaml: string`, `sampleData?: boolean` | Save XAML; reuse saved viewport. Frame mode: `Frame`/`Error`. Native mode: rehost with `prepareWindow=false`, then `Hwnd` + `ContentProps`, or `Error`. Extra size fields are ignored. A prior LoadXaml is not required. |
 | `Resize` | `width?: number`, `height?: number`, `scale?: number` | Update saved viewport. Render a `Frame`/`Error` only when a document exists and native mode is off. With no document, store silently. Native mode stores values but sends no reply and does not resize the live child. |
-| `EnterNative` | `xaml: string`, `width?: number`, `height?: number`, `scale?: number` | Save document/viewport, set native flag **before** hosting, call host with `prepareWindow=true`. Success: `Hwnd` then `ContentProps`; failure: `Error` (native flag remains set). |
+| `EnterNative` | `xaml: string`, `width?: number`, `height?: number`, `scale?: number`, `sampleData?: boolean` | Save document/viewport, set native flag **before** hosting, call host with `prepareWindow=true`. Success: `Hwnd` then `ContentProps`; failure: `Error` (native flag remains set). |
 | `ExitNative` | none | Clear native flag, enqueue offscreen restoration, send `NativeExited`. No automatic frame. Ack is sent even if dispatcher rejects restoration; it is not proof the window was restored. |
 | `SetMode` | `design?: boolean` | Only JSON `true` enables design selection; everything else disables it. Enqueue runtime mode change; no ack/frame. |
 | `SelectByPath` | `path?: string \| null` | String forwarded; absent/null/non-string becomes null. A newly resolved selection can emit `Selected` then `ElementProps`. Unresolved, empty, stale, or already-selected paths need not emit anything. |
@@ -101,6 +101,12 @@ number independently replaces its saved value. Missing, null, wrong-kind, zero,
 or negative values preserve it. Fractional sizes are accepted by the server.
 Send finite numbers; the helper only checks `> 0`, not `IsFinite`, so very large
 JSON exponents are not a supported validation/normalization mechanism.
+
+`sampleData` (WS2-F6) on LoadXaml, UpdateXaml, and EnterNative is sticky server state,
+initially **true**. A JSON boolean replaces it before the document is hosted; absent or
+non-boolean values keep it. When true, `{x:Bind}` text properties render a placeholder
+and bound lists get dummy rows; when false, `{x:Bind}` attributes are dropped. The C#
+DTOs use `bool?` and omit the field when null.
 
 These are **server state defaults**, not DTO construction defaults:
 

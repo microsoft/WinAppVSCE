@@ -48,7 +48,7 @@ namespace WinUIXamlPreview.Editor
         private static PreviewLocation _location = PreviewLocation.Right;
         private static double _rightWidth = DefaultWidth;
         private static double _bottomHeight = DefaultHeight;
-        private static bool _designTimeData; // default OFF — reserved for placeholder sample data (WS2-F6)
+        private static bool _designTimeData = true; // default ON — placeholder sample data for {x:Bind} pages (WS2-F6)
         private static bool _designMode = true; // default ON — the designer selects, it doesn't interact (plan §41)
         private static bool _collapsed; // default expanded — the preview shows when a WinUI xaml opens
         private static string _theme = "Light"; // preview theme: Light (default, historical) | Dark | Default
@@ -108,10 +108,10 @@ namespace WinUIXamlPreview.Editor
         }
 
         /// <summary>
-        /// The "Sample data" toggle. Persisted, but currently has no effect: it previously armed the live-mode
-        /// reflection fallback (removed with live mode) and is reserved for placeholder sample data for
-        /// <c>{x:Bind}</c> pages (WS2-F6). The M1 (<c>d:DesignData</c>) and M2 (DesignMode signal) sample-data
-        /// paths are automatic host behavior and need no flag.
+        /// The "Sample data" toggle (default on). When on, <c>{x:Bind}</c> text properties render a placeholder
+        /// (the binding's FallbackValue/TargetNullValue, else <c>{PathName}</c>) and bound lists show a few
+        /// dummy rows (WS2-F6). When off, <c>{x:Bind}</c> attributes are simply dropped. The M1
+        /// (<c>d:DesignData</c>) and M2 (DesignMode signal) sample-data paths are automatic and need no flag.
         /// </summary>
         public static bool DesignTimeData
         {
