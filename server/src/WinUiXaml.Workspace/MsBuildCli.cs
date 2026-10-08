@@ -76,12 +76,73 @@ namespace WinUiXaml.Workspace
             public string? CustomAfterCSharpTargets { get; }
         }
 
-        /// <summary>The MSBuild host; preferring DOTNET_HOST_PATH keeps the server on the SDK the extension resolved.</summary>
-        internal static string DotnetPath =>
-            Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") is { Length: > 0 } host &&
-            File.Exists(host)
-                ? host
-                : "dotnet";
+        /// <summary>The MSBuild host as an absolute path, or null when no dotnet host can be found.</summary>
+        /// <remarks>Never a bare name: the child runs with the project directory as its working directory, and
+        /// Windows <c>CreateProcess</c> searches that directory before PATH, so a planted dotnet.exe would win.</remarks>
+        internal static string? DotnetPath => ResolveDotnetHost(
+            Environment.GetEnvironmentVariable("DOTNET_HOST_PATH"),
+            EnumerateHostSearchDirectories(),
+            File.Exists);
+
+        /// <summary>Picks DOTNET_HOST_PATH when it still exists, else the first search directory holding a host.</summary>
+        internal static string? ResolveDotnetHost(
+            string? hostPathVariable, IEnumerable<string> searchDirectories, Func<string, bool> exists)
+        {
+            if (hostPathVariable is { Length: > 0 } host && exists(host))
+            {
+                return host;
+            }
+
+            var executable = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+            foreach (var directory in searchDirectories)
+            {
+                string candidate;
+                try
+                {
+                    candidate = Path.Combine(directory, executable);
+                }
+                catch (ArgumentException)
+                {
+                    continue;
+                }
+
+                if (Path.IsPathRooted(candidate) && exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
+
+        internal static IEnumerable<string> EnumerateHostSearchDirectories()
+        {
+            foreach (var entry in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                .Split(Path.PathSeparator))
+            {
+                var trimmed = entry.Trim().Trim('"');
+                if (trimmed.Length > 0)
+                {
+                    yield return trimmed;
+                }
+            }
+
+            if (Environment.GetEnvironmentVariable("DOTNET_ROOT") is { Length: > 0 } root)
+            {
+                yield return root;
+            }
+
+            if (OperatingSystem.IsWindows())
+            {
+                yield return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet");
+            }
+            else
+            {
+                yield return "/usr/share/dotnet";
+                yield return "/usr/local/share/dotnet";
+            }
+        }
 
         /// <summary>Evaluates without targets to pick an inner build when needed, then design-time-builds one framework for XAML items and csc args; this avoids MSB4057 from outer builds while preserving single-target projects.</summary>
         internal static (
@@ -768,7 +829,8 @@ namespace WinUiXaml.Workspace
         {
             var startInfo = new ProcessStartInfo
             {
-                FileName = DotnetPath,
+                FileName = DotnetPath ?? throw MissingSdk(
+                    "No 'dotnet' host was found on PATH.", hostMissing: true),
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,

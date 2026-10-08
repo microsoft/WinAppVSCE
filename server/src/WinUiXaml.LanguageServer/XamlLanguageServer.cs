@@ -524,6 +524,7 @@ internal sealed partial class XamlLanguageServer
 
         var projectsToInvalidate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var invalidateAllProjects = false;
+        var refreshResourceConsumers = false;
         foreach (var change in p.Changes)
         {
             var path = UriToPath(change.Uri);
@@ -558,6 +559,9 @@ internal sealed partial class XamlLanguageServer
             if (isXaml && change.Type == FileChangeType.Changed)
             {
                 InvalidateIfSavedClassChanged(canonicalPath);
+
+                // A saved resource dictionary changes the keys OTHER open documents resolve against.
+                refreshResourceConsumers |= _resourceGraph.Contains(canonicalPath);
                 continue;
             }
 
@@ -607,7 +611,16 @@ internal sealed partial class XamlLanguageServer
         {
             _resourceGraph.Clear();
         }
-
+        else if (refreshResourceConsumers)
+        {
+            // The project graph is unchanged, so skip the (expensive) context restart and just drop the
+            // stale key set, then recompute diagnostics for every open document against the new keys.
+            _resourceGraph.Clear();
+            foreach (var document in _documents.Values)
+            {
+                await PublishDiagnosticsAsync(document).ConfigureAwait(false);
+            }
+        }
     }
 
     internal static bool IsGeneratedBuildPath(string path, string root)

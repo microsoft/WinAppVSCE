@@ -570,17 +570,22 @@ internal sealed partial class XamlLanguageServer
 
     private Task NotifyMsBuildUnavailableAsync(MsBuildUnavailableException exception)
     {
+        // Every open document retries the project load, so latch the log with the toast: otherwise the
+        // same "requires the .NET SDK" line is written to the output channel once per document.
+        if (Interlocked.Exchange(ref _msbuildUnavailableNotified, 1) != 0)
+        {
+            return Task.CompletedTask;
+        }
+
         Console.Error.WriteLine($"[winui-xaml-ls] {exception.Message}");
-        return Interlocked.Exchange(ref _msbuildUnavailableNotified, 1) == 0
-            ? _connection.SendNotificationAsync(
-                "window/showMessage",
-                new ShowMessageParams
-                {
-                    Type = 2,
-                    Message = exception.Message +
-                        " The language server remains available for project-independent XAML features.",
-                })
-            : Task.CompletedTask;
+        return _connection.SendNotificationAsync(
+            "window/showMessage",
+            new ShowMessageParams
+            {
+                Type = 2,
+                Message = exception.Message +
+                    " The language server remains available for project-independent XAML features.",
+            });
     }
 
     private Task NotifyProjectRestoreRequiredAsync(ProjectRestoreRequiredException exception)

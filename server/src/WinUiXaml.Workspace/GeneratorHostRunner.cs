@@ -282,9 +282,14 @@ namespace WinUiXaml.Workspace
 
         private static HostRunResult Invoke(string host, string requestPath, CancellationToken cancellationToken)
         {
+            if (MsBuildCli.DotnetPath is not { } dotnet)
+            {
+                return new HostRunResult(HostRunOutcome.FailedToStart, 0);
+            }
+
             var startInfo = new ProcessStartInfo
             {
-                FileName = MsBuildCli.DotnetPath,
+                FileName = dotnet,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,

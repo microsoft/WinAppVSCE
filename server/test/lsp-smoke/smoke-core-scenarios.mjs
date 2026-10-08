@@ -5,6 +5,9 @@ export async function runCoreScenarios(ctx) {
     definitionWith, codeActionAtCaret, referencesWith, highlightWith,
     send, waitFor, responseFor, nextVersion, resCaret, publishedDiagnostics,
   } = ctx;
+  const { readFileSync, writeFileSync } = await import("node:fs");
+  const { resolve, dirname } = await import("node:path");
+  const { pathToFileURL } = await import("node:url");
 
   const emptyElementLabels = await completeWith(5, `<Page ${NS}>\n  <|\n</Page>`, "element-name-empty");
   for (const want of ["Button", "TextBlock", "TitleBar"]) {
@@ -836,6 +839,28 @@ export async function runCoreScenarios(ctx) {
   }
   console.log(`[ok] validation(resource keys): misspelled SDK ThemeResource -> WXAML0013; exact key remains valid`);
 
+  // 18b) SystemAccentColor* are platform Color resources that generic.xaml consumes but does not declare,
+  //      so the catalog supplements them; a sentinel proves diagnostics actually arrived.
+  const accentColors = await validateDoc(
+    `<Page ${NS} x:Class="SmokeFixture.SmokePage">
+  <Page.Resources>
+    <SolidColorBrush x:Key="SmokeAccent1" Color="{ThemeResource SystemAccentColor}" />
+    <SolidColorBrush x:Key="SmokeAccent2" Color="{ThemeResource SystemAccentColorLight2}" />
+    <SolidColorBrush x:Key="SmokeAccent3" Color="{ThemeResource SystemAccentColorDark3}" />
+  </Page.Resources>
+  <TextBlock Foreground="{ThemeResource SystemAccentColorBogus}" />
+</Page>`,
+    (d) => d.some((x) => x.code === "WXAML0013" && x.message.includes("SystemAccentColorBogus")),
+    "system accent color keys"
+  );
+  const accentFalsePositives = accentColors.filter(
+    (x) => x.code === "WXAML0013" && !x.message.includes("SystemAccentColorBogus")
+  );
+  if (accentFalsePositives.length !== 0) {
+    fail(`SystemAccentColor* keys must not produce WXAML0013: ${JSON.stringify(accentFalsePositives)}`);
+  }
+  console.log(`[ok] validation(SystemAccentColor*): 3 accent keys clean, unknown accent key still WXAML0013`);
+
   // 19) Round-7 regressions: function-binding F12, x:Bind completion noise, invalid-member diagnostic, unquoted value.
   const fnF12 = await definitionWith(210, pageCls('<Button Click="{x:Bind OnGo_Cl|ick()}" />'), "fn-binding-f12");
   if (!fnF12?.uri || !fnF12.uri.endsWith("SmokePage.xaml.cs")) {
@@ -1195,6 +1220,24 @@ export async function runCoreScenarios(ctx) {
   if (idxDiag.length !== 1) fail(`expected only the bogus indexer path diagnostic, got ${idxDiag.length}`);
   console.log(`[ok] validation(x:Bind indexer base): 'Bogus[0]' -> WXAML0005; int Length -> string Text uses built-in conversion`);
 
+  // 23b) REGRESSION: binding a Nullable<T> source to an `object` target is legal C# boxing, so it must NOT
+  // raise WXAML0030. CheckBox.IsChecked is bool? and FrameworkElement.Tag is object — the shape that produced
+  // 6 false errors in WinUI Gallery. The bogus path is the sentinel that proves diagnostics actually arrived.
+  const boxDiag = await validateDoc(
+    `<Page ${NS} x:Class="SmokeFixture.SmokePage">\n  <StackPanel>\n` +
+    `    <CheckBox x:Name="ForecastCheckBox" />\n` +
+    `    <TextBlock Tag="{x:Bind ForecastCheckBox.IsChecked, Mode=OneWay}" />\n` +
+    `    <TextBlock Text="{x:Bind Bogus[0].Length}" />\n  </StackPanel>\n</Page>`,
+    (d) => d.some((x) => x.code === "WXAML0005"),
+    "nullable-boxing-diagnostic");
+  if (boxDiag.some((x) => x.code === "WXAML0030")) {
+    fail(`bool? bound to an object target is valid boxing and must not raise WXAML0030: ${JSON.stringify(boxDiag.map((x) => `${x.code}:${x.message}`))}`);
+  }
+  if (boxDiag.length !== 1) {
+    fail(`expected only the bogus-path diagnostic, got ${boxDiag.length}: ${JSON.stringify(boxDiag.map((x) => `${x.code}:${x.message}`))}`);
+  }
+  console.log(`[ok] validation(x:Bind bool? -> object Tag): no false WXAML0030 (Nullable<T> boxes into object)`);
+
   // 23c) Property-element member validation (WXAML0006): a mis-cased property element (<Grid.rowDefinitions>)
   // is flagged, while a correctly-cased instance property element (<Grid.RowDefinitions>) and an attached
   // property used in element form (<Grid.Row>) stay silent — proving no false positives on valid forms.
@@ -1490,6 +1533,40 @@ export async function runCoreScenarios(ctx) {
   }
   console.log(`[ok] references(cross-file, includeDecl=false): 4 usages, App.xaml declaration excluded`);
 
+  // 27g) Cross-file resource-key RENAME (regression): renaming SmokeAccentBrush from one of its USAGES in
+  // SmokePage must rewrite every project file — the declaration in App.xaml too — not just the open document.
+  // Previously rename emitted a single-document edit and refused outright at a usage whose x:Key lives elsewhere.
+  send({ id: 1801, method: "textDocument/prepareRename", params: { textDocument: { uri: xamlUri }, position: resCaret } });
+  const xprep = await waitFor(responseFor(1801), 30000, "xref-prepareRename");
+  if (xprep.error) fail(`cross-file prepareRename errored: ${JSON.stringify(xprep.error)}`);
+  if (!xprep.result || xprep.result.placeholder !== "SmokeAccentBrush") {
+    fail(`prepareRename at a cross-file resource USAGE must be renameable with placeholder "SmokeAccentBrush", got ${JSON.stringify(xprep.result)}`);
+  }
+  send({ id: 1802, method: "textDocument/rename", params: { textDocument: { uri: xamlUri }, position: resCaret, newName: "SmokeRenamedBrush" } });
+  const xrename = await waitFor(responseFor(1802), 30000, "xref-rename");
+  if (xrename.error) fail(`cross-file rename errored: ${JSON.stringify(xrename.error)}`);
+  const xrChanges = xrename.result && xrename.result.changes;
+  if (!xrChanges) fail(`cross-file rename returned no changes: ${JSON.stringify(xrename.result)}`);
+  const xrFiles = Object.keys(xrChanges);
+  const editsIn = (needle) => {
+    const key = xrFiles.find((f) => f.toLowerCase().endsWith(needle));
+    return key ? xrChanges[key].length : 0;
+  };
+  if (xrFiles.length !== 3) {
+    fail(`cross-file rename: expected edits in 3 files (SmokePage + App.xaml + DiPage), got ${JSON.stringify(xrFiles)}`);
+  }
+  if (editsIn("smokepage.xaml") !== 3) fail(`cross-file rename: expected 3 SmokePage edits, got ${editsIn("smokepage.xaml")}`);
+  if (editsIn("app.xaml") !== 1) fail(`cross-file rename: expected 1 App.xaml declaration edit, got ${editsIn("app.xaml")}`);
+  if (editsIn("dipage.xaml") !== 1) fail(`cross-file rename: expected 1 DiPage edit, got ${editsIn("dipage.xaml")}`);
+  const xrAll = xrFiles.flatMap((f) => xrChanges[f]);
+  if (!xrAll.every((e) => e.newText === "SmokeRenamedBrush")) {
+    fail(`cross-file rename: every edit must set newText "SmokeRenamedBrush", got ${JSON.stringify(xrAll)}`);
+  }
+  if (xrFiles.some((f) => /[\\/]obj[\\/]/i.test(decodeURIComponent(f)))) {
+    fail(`cross-file rename leaked a build-output (obj) copy: ${JSON.stringify(xrFiles)}`);
+  }
+  console.log(`[ok] rename(cross-file SmokeAccentBrush from a usage): 5 edits across SmokePage(3)+App.xaml(1 decl)+DiPage(1)`);
+
   // 28) Document Highlights (textDocument/documentHighlight): the same occurrences as references, rendered
   //     as editor highlights. Declaration is a Write highlight (kind 3); usages are Read highlights (kind 2).
   // 28a) x:Name: caret on a usage highlights declaration (Write) + both usages (Read) = 3, all "GoButton".
@@ -1511,6 +1588,70 @@ export async function runCoreScenarios(ctx) {
   const noHl = await highlightWith(337, nameBase.replace("<StackPanel>", "<StackPa|nel>"), "no-highlight");
   if (noHl.highlights.length !== 0) fail(`highlight(non-symbol caret): expected 0, got ${noHl.highlights.length}: ${JSON.stringify(noHl.texts)}`);
   console.log(`[ok] highlight(non-symbol caret): 0 highlights`);
+
+  // 29) Saving a resource dictionary must refresh the OTHER open documents that resolve against it.
+  //     SmokePage is not edited here: its new WXAML0013 can only come from the App.xaml watcher event.
+  {
+    const appXamlPath = resolve(dirname(XAML), "App.xaml");
+    const appOriginal = readFileSync(appXamlPath, "utf8");
+    if (!appOriginal.includes('x:Key="SmokeAccentBrush"')) {
+      fail(`App.xaml fixture no longer declares SmokeAccentBrush`);
+    }
+    const restoreApp = () => writeFileSync(appXamlPath, appOriginal, "utf8");
+    process.on("exit", restoreApp);
+
+    // Re-seat the pristine SmokePage buffer so the only pending change is the dictionary edit.
+    send({
+      method: "textDocument/didChange",
+      params: {
+        textDocument: { uri: xamlUri, version: nextVersion() },
+        contentChanges: [{ text: xamlText }],
+      },
+    });
+
+    const staleKeyReported = waitFor(
+      (message) =>
+        message.method === "textDocument/publishDiagnostics" &&
+        message.params.uri === xamlUri &&
+        message.params.diagnostics.some(
+          (d) => d.code === "WXAML0013" && d.message.includes("SmokeAccentBrush")
+        ),
+      60000,
+      "SmokePage refreshed after App.xaml resource rename"
+    );
+    try {
+      writeFileSync(
+        appXamlPath,
+        appOriginal.replace('x:Key="SmokeAccentBrush"', 'x:Key="SmokeAccentBrushMoved"'),
+        "utf8"
+      );
+      send({
+        method: "workspace/didChangeWatchedFiles",
+        params: { changes: [{ uri: pathToFileURL(appXamlPath).href, type: 2 }] },
+      });
+      await staleKeyReported;
+    } finally {
+      restoreApp();
+      process.removeListener("exit", restoreApp);
+      send({
+        method: "workspace/didChangeWatchedFiles",
+        params: { changes: [{ uri: pathToFileURL(appXamlPath).href, type: 2 }] },
+      });
+    }
+
+    const keyResolvesAgain = waitFor(
+      (message) =>
+        message.method === "textDocument/publishDiagnostics" &&
+        message.params.uri === xamlUri &&
+        !message.params.diagnostics.some(
+          (d) => d.code === "WXAML0013" && d.message.includes("SmokeAccentBrush")
+        ),
+      60000,
+      "SmokePage cleared after App.xaml was restored"
+    );
+    await keyResolvesAgain;
+  }
+  console.log(`[ok] watched App.xaml save refreshes diagnostics in other open documents (no edit to SmokePage)`);
 
   Object.assign(ctx, { pageRes, pageCls, ev, sb, docSymbols, outline, validateDoc, undeclared });
 }

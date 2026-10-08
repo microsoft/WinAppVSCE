@@ -103,6 +103,9 @@ internal sealed class XamlResourceGraph
 
     public void Clear() => _cache.Clear();
 
+    /// <summary>True when this file is cached in the graph, i.e. it is reachable from App.xaml and so contributes resource keys that other documents resolve against.</summary>
+    public bool Contains(string canonicalPath) => _cache.ContainsKey(canonicalPath);
+
     internal static string? ResolveSourcePath(string ownerPath, string projectRoot, string source)
     {
         source = source.Trim();

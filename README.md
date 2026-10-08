@@ -225,7 +225,7 @@ Full IntelliSense for C++/WinRT is planned. [Let us know](https://github.com/mic
 
 Features light up in stages so editing stays responsive: formatting, folding, outline, and syntax diagnostics work immediately, then WinUI SDK and package types, then your own types and semantic diagnostics. The status bar tracks the active document and clears once it reports **WinApp: XAML IntelliSense Ready**.
 
-Other statuses appear only when something needs attention — unrestored packages, a reference that failed to build, or a missing .NET SDK — and selecting one offers the fix. A project that has never been built still resolves, and packages are restored for you in a trusted workspace. If the server cannot start at all, XAML editing falls back to syntax highlighting and a notification names the cause. Use **WinApp: Show XAML Language Server Status** for server status and **WinApp: Restart Language Server** to restart it.
+Other statuses appear only when something needs attention — unrestored packages, a reference that failed to build, or a missing .NET SDK. A notification offers the fix (restore, build, or install the SDK); selecting the status item itself shows the details in the output channel. A project that has never been built still resolves, and packages are restored for you in a trusted workspace. If the server cannot start at all, XAML editing falls back to syntax highlighting and a notification names the cause. Use **WinApp: Show XAML Language Server Status** for server status and **WinApp: Restart Language Server** to restart it.
 
 | Setting | Default | Description |
 |---------|---------|-------------|

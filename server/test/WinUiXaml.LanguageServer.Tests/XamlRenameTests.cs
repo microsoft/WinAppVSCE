@@ -181,9 +181,48 @@ public class XamlRenameTests
     }
 
     [Fact]
-    public void Rename_NameDoesNotCrossTemplateNameScope()
+    public void Rename_Name_RewritesXBindPathRoot()
     {
         const string buffer = """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Grid x:Name="Contact|sCVS" />
+              <controls:TextBox Text="{x:Bind ContactsCVS.View, Mode=OneWay}" />
+            </Page>
+            """;
+
+        var (doc, offset) = Caret(buffer);
+        var edits = RenameEdits(buffer, "Contacts", CreateFrameworkTypeSystem());
+
+        Assert.Equal(2, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("Contacts", edit.NewText));
+
+        // The x:Bind edit must cover only the leading path segment, leaving ".View" intact.
+        Assert.All(edits, edit => Assert.Equal("ContactsCVS", Covered(doc, edit.Range)));
+    }
+
+    [Fact]
+    public void Rename_Name_IgnoresXBindNonRootSegmentsAndFunctionRoots()
+    {
+        const string buffer = """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:controls="using:Microsoft.UI.Xaml.Controls">
+              <controls:Grid x:Name="Ro|ot" />
+              <controls:TextBox Text="{x:Bind Other.Root, Mode=OneWay}" />
+              <controls:TextBox Tag="{x:Bind Root(), Mode=OneWay}" />
+            </Page>
+            """;
+
+        var edits = RenameEdits(buffer, "Panel", CreateFrameworkTypeSystem());
+
+        Assert.Single(edits);
+    }
+
+    [Fact]
+    public void Rename_NameDoesNotCrossTemplateNameScope()
+    {        const string buffer = """
             <Page xmlns="using:Microsoft.UI.Xaml"
                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                   xmlns:controls="using:Microsoft.UI.Xaml.Controls">

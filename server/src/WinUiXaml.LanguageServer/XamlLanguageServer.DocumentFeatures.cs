@@ -137,7 +137,26 @@ internal sealed partial class XamlLanguageServer
         string currentUri,
         string key,
         bool includeDeclaration,
-        List<Lsp.Location> locations)
+        List<Lsp.Location> locations) =>
+        ForEachCrossFileResourceOccurrence(context, currentUri, key, (fileDoc, occurrences) =>
+        {
+            foreach (var occurrence in occurrences)
+            {
+                if (!includeDeclaration && occurrence.IsDeclaration)
+                {
+                    continue;
+                }
+
+                locations.Add(new Lsp.Location { Uri = fileDoc.Uri, Range = occurrence.Range });
+            }
+        });
+
+    /// <summary>Invokes visit with every OTHER project XAML document that mentions key, plus that document's deduped occurrences of it. Shared by Find All References and rename.</summary>
+    private void ForEachCrossFileResourceOccurrence(
+        XamlProjectContext? context,
+        string currentUri,
+        string key,
+        Action<TextDocument, List<(Lsp.Range Range, bool IsDeclaration)>> visit)
     {
         if (context == null)
         {
@@ -201,15 +220,7 @@ internal sealed partial class XamlLanguageServer
 
             var fileOccurrences = new List<(Lsp.Range Range, bool IsDeclaration)>();
             CollectResourceOccurrences(fileRoot, key, fileDoc, fileOccurrences);
-            foreach (var occurrence in DedupeAndSort(fileOccurrences))
-            {
-                if (!includeDeclaration && occurrence.IsDeclaration)
-                {
-                    continue;
-                }
-
-                locations.Add(new Lsp.Location { Uri = fileDoc.Uri, Range = occurrence.Range });
-            }
+            visit(fileDoc, DedupeAndSort(fileOccurrences));
         }
     }
 
@@ -249,12 +260,18 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        int offset = doc.OffsetAt(p.Position);
+        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var typeSystem = context?.TypeSystem;
         EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
-        return XamlRename.PrepareRename(doc, doc.OffsetAt(p.Position), typeSystem);
+        return XamlRename.PrepareRename(
+            doc,
+            offset,
+            typeSystem,
+            IsResourceKeyDeclaredElsewhere(context, p.TextDocument.Uri, doc, offset, typeSystem));
     }
 
-    /// <summary>Handles textDocument/rename — renames the x:Name/Name or x:Key resource key under the caret and every reference to it in the document, returning a single-document WorkspaceEdit.</summary>
+    /// <summary>Handles textDocument/rename — renames the x:Name/Name or x:Key under the caret and every reference to it. Resource keys are project-wide, so those produce a multi-document WorkspaceEdit.</summary>
     private async Task<object?> RenameAsync(RenameParams p)
     {
         if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc))
@@ -262,9 +279,74 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        int offset = doc.OffsetAt(p.Position);
+        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var typeSystem = context?.TypeSystem;
         EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
-        return XamlRename.Rename(doc, doc.OffsetAt(p.Position), p.NewName, typeSystem);
+
+        // A resource key is declared in one file and used across the project, so renaming only the open document would leave every other use dangling.
+        if (DetectSymbolAt(doc, offset, typeSystem) is not { Kind: XamlRenameKind.Key, Name: { Length: > 0 } key })
+        {
+            return XamlRename.Rename(doc, offset, p.NewName, typeSystem);
+        }
+
+        var (crossFileEdits, declaredElsewhere) = CollectCrossFileResourceRenameEdits(
+            context, p.TextDocument.Uri, key, (p.NewName ?? string.Empty).Trim());
+        if (XamlRename.Rename(doc, offset, p.NewName ?? string.Empty, typeSystem, declaredElsewhere)
+            is not { Changes: { } changes } edit)
+        {
+            return null;
+        }
+
+        foreach (var pair in crossFileEdits)
+        {
+            changes[pair.Key] = pair.Value;
+        }
+
+        return edit;
+    }
+
+    /// <summary>True when the caret sits on a resource key that some OTHER project document declares — the proof rename needs before it will rewrite a key from one of its usages.</summary>
+    private bool IsResourceKeyDeclaredElsewhere(
+        XamlProjectContext? context,
+        string currentUri,
+        TextDocument doc,
+        int offset,
+        XamlTypeSystem? typeSystem)
+    {
+        if (DetectSymbolAt(doc, offset, typeSystem) is not { Kind: XamlRenameKind.Key, Name: { Length: > 0 } key })
+        {
+            return false;
+        }
+
+        bool found = false;
+        ForEachCrossFileResourceOccurrence(
+            context, currentUri, key, (_, occurrences) => found |= occurrences.Any(o => o.IsDeclaration));
+        return found;
+    }
+
+    /// <summary>The per-file rename edits for a resource key in the project's OTHER XAML documents, plus whether any of them declares it.</summary>
+    private (Dictionary<string, List<TextEdit>> Edits, bool HasDeclaration) CollectCrossFileResourceRenameEdits(
+        XamlProjectContext? context,
+        string currentUri,
+        string key,
+        string newName)
+    {
+        var edits = new Dictionary<string, List<TextEdit>>(System.StringComparer.Ordinal);
+        bool hasDeclaration = false;
+        ForEachCrossFileResourceOccurrence(context, currentUri, key, (fileDoc, occurrences) =>
+        {
+            if (occurrences.Count == 0)
+            {
+                return;
+            }
+
+            hasDeclaration |= occurrences.Any(o => o.IsDeclaration);
+            edits[fileDoc.Uri] = occurrences
+                .Select(o => new TextEdit { Range = o.Range, NewText = newName })
+                .ToList();
+        });
+        return (edits, hasDeclaration);
     }
 
     private static void EnsureCompleteNameRenameSemantics(

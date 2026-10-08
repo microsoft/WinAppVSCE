@@ -584,9 +584,9 @@ internal static partial class XamlValidator
         ITypeSymbol target,
         XamlTypeSystem typeSystem)
     {
-        bool sourceNullable = IsNullableType(source);
-        bool targetNullable = IsNullableType(target);
-        if (sourceNullable && !targetNullable)
+        // A Nullable<T> boxes cleanly into any reference-type target (object, string, a class).
+        // Only a non-nullable VALUE-type target genuinely cannot accept it.
+        if (IsNullableType(source) && !IsNullableType(target) && target.IsValueType)
         {
             return false;
         }

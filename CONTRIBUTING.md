@@ -67,8 +67,9 @@ To produce a VSIX package locally:
 .\scripts\build-vsce.ps1 -Package
 ```
 
-Local packaging publishes a Native AOT server binary for each requested RID (defaults to the host
-architecture; set `WINUI_XAML_SERVER_RIDS=win-x64,win-arm64` to build both) plus the shared
+Local packaging publishes a Native AOT server binary for every supported RID (`win-x64` and
+`win-arm64`), because `scripts/validate-vsix-server.ps1` requires both in the VSIX. Set
+`WINUI_XAML_SERVER_RIDS=win-arm64` to build just one while iterating. Packaging also emits the shared
 framework-dependent generator host under `dist/server/generator-host/`. The
 official release pipeline instead downloads the separately built and ESRP-signed server artifact,
 which must contain binaries for every shipping architecture.

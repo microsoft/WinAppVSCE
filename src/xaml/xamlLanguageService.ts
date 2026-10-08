@@ -1011,7 +1011,9 @@ async function doStop(): Promise<void> {
     return;
   }
   try {
-    await current.stop();
+    // dispose(), not stop(): stop() leaves the document-sync features registered, so a debounced
+    // didChange can still fire against the torn-down client and throw inside its Delayer.
+    await current.dispose();
   } catch (err) {
     log(`Error stopping language server: ${err instanceof Error ? err.message : String(err)}`);
   }

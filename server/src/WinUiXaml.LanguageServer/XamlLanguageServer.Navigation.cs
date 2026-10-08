@@ -296,11 +296,23 @@ internal sealed partial class XamlLanguageServer
                 results.Add((doc.RangeOf(target.Span), false));
             }
 
-            // {Binding ElementName=Foo}.
+            // {Binding ElementName=Foo} and {x:Bind Foo.Bar} — both can name an element.
             if (attr.Value?.MarkupExtension is { } ext)
             {
                 ForEachExtension(ext, e =>
                 {
+                    // An {x:Bind} path rooted at an x:Name'd element binds through the generated field, so the leading segment is a reference to that name.
+                    if (XamlSemanticFacts.IsXBind(e, element.NamespaceScope))
+                    {
+                        if (BindPathRootSpan(e) is { } rootSpan &&
+                            string.Equals(doc.Text.Substring(rootSpan.Start, rootSpan.End - rootSpan.Start), name, StringComparison.Ordinal))
+                        {
+                            results.Add((doc.RangeOf(rootSpan), false));
+                        }
+
+                        return;
+                    }
+
                     if (typeSystem is null ||
                         !XamlSemanticFacts.IsBindingMarkupExtension(e, element.NamespaceScope, typeSystem))
                     {
@@ -404,6 +416,43 @@ internal sealed partial class XamlLanguageServer
                     resourceIndex);
             }
         }
+    }
+
+    /// <summary>The document span of the leading identifier of an {x:Bind} path, or null when the path is absent, a cast/attached step, a global:: alias, or a function call — none of which root at an x:Name.</summary>
+    private static TextSpan? BindPathRootSpan(XamlMarkupExtension extension)
+    {
+        var pathArg = extension.Arguments.FirstOrDefault(
+            a => (!a.IsNamed && a.NestedExtension is null && a.Value is not null) ||
+                 (a.IsNamed && a.Name?.LocalName == "Path" && a.Value is not null));
+        if (pathArg?.Value is not { } path || pathArg.ValueSpan is not { } valueSpan)
+        {
+            return null;
+        }
+
+        int i = 0;
+        while (i < path.Length && (char.IsWhiteSpace(path[i]) || path[i] == '!'))
+        {
+            i++;
+        }
+
+        if (i >= path.Length || !(char.IsLetter(path[i]) || path[i] == '_'))
+        {
+            return null;
+        }
+
+        int start = i;
+        while (i < path.Length && (char.IsLetterOrDigit(path[i]) || path[i] == '_'))
+        {
+            i++;
+        }
+
+        // '(' is a function call and ':' a global::/xmlns alias; neither names an element.
+        if (i < path.Length && (path[i] == '(' || path[i] == ':'))
+        {
+            return null;
+        }
+
+        return new TextSpan(valueSpan.Start + start, valueSpan.Start + i);
     }
 
     /// <summary>Invokes action on extension and each nested extension, but prunes any unterminated (malformed / still-being-typed) extension subtree</summary>

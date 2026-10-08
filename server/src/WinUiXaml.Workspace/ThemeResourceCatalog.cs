@@ -125,6 +125,13 @@ namespace WinUiXaml.Workspace
 
         private static readonly string[] IntrinsicSystemColorResources =
         {
+            "SystemAccentColor",
+            "SystemAccentColorDark1",
+            "SystemAccentColorDark2",
+            "SystemAccentColorDark3",
+            "SystemAccentColorLight1",
+            "SystemAccentColorLight2",
+            "SystemAccentColorLight3",
             "SystemColorButtonFaceColor",
             "SystemColorButtonTextColor",
             "SystemColorGrayTextColor",

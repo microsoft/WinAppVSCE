@@ -34,7 +34,8 @@ internal static class XamlRename
     internal static PrepareRenameResult? PrepareRename(
         TextDocument doc,
         int offset,
-        XamlTypeSystem? typeSystem = null)
+        XamlTypeSystem? typeSystem = null,
+        bool allowExternalDeclaration = false)
     {
         if (doc.Parsed.Root is not { } root)
         {
@@ -54,7 +55,7 @@ internal static class XamlRename
 
         var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
         if (occurrences is null ||
-            ((symbol.Kind == XamlRenameKind.Key || symbol.Kind == XamlRenameKind.Name) &&
+            (RequiresLocalDeclaration(symbol.Kind, allowExternalDeclaration) &&
              !occurrences.Any(occurrence => occurrence.IsDeclaration)))
         {
             return null;
@@ -72,12 +73,13 @@ internal static class XamlRename
         return null;
     }
 
-    /// <summary>Builds a single-document WorkspaceEdit renaming the symbol under the caret and every reference to it.</summary>
+    /// <summary>Builds a WorkspaceEdit renaming the symbol under the caret and every reference to it IN THIS DOCUMENT. Cross-file resource-key uses are added by the caller.</summary>
     internal static WorkspaceEdit? Rename(
         TextDocument doc,
         int offset,
         string newName,
-        XamlTypeSystem? typeSystem = null)
+        XamlTypeSystem? typeSystem = null,
+        bool allowExternalDeclaration = false)
     {
         if (doc.Parsed.Root is not { } root)
         {
@@ -99,7 +101,7 @@ internal static class XamlRename
         var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
         if (occurrences is null ||
             occurrences.Count == 0 ||
-            ((symbol.Kind == XamlRenameKind.Key || symbol.Kind == XamlRenameKind.Name) &&
+            (RequiresLocalDeclaration(symbol.Kind, allowExternalDeclaration) &&
              !occurrences.Any(occurrence => occurrence.IsDeclaration)))
         {
             return null;
@@ -126,6 +128,11 @@ internal static class XamlRename
             },
         };
     }
+
+    /// <summary>An x:Name is file-scoped, so it must be declared here. A resource key may be declared in another project file; the caller proves that via allowExternalDeclaration so an undeclared (e.g. SDK) key stays unrenameable.</summary>
+    private static bool RequiresLocalDeclaration(XamlRenameKind kind, bool allowExternalDeclaration) =>
+        kind == XamlRenameKind.Name ||
+        (kind == XamlRenameKind.Key && !allowExternalDeclaration);
 
     /// <summary>Rejects a new name that would corrupt the markup (or, for a name, the generated field).</summary>
     private static void ValidateNewName(XamlRenameKind kind, string newName)
