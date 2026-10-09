@@ -39,57 +39,118 @@ internal static class DesignInspector
 {
     private const int MaxProps = 120;
 
-    // Well-known property -> category buckets. Anything not listed falls into "Misc".
-    private static readonly Dictionary<string, string> CategoryMap = new(StringComparer.Ordinal)
+    // Category display order (lower = earlier). "Misc" sinks to the bottom.
+    private static readonly string[] Categories =
     {
-        // Common
-        ["Name"] = "Common",
-        ["Tag"] = "Common",
-        ["IsEnabled"] = "Common",
-        ["IsTabStop"] = "Common",
-        ["Visibility"] = "Common",
-        ["Opacity"] = "Common",
-        // Layout
-        ["Width"] = "Layout",
-        ["Height"] = "Layout",
-        ["MinWidth"] = "Layout",
-        ["MinHeight"] = "Layout",
-        ["MaxWidth"] = "Layout",
-        ["MaxHeight"] = "Layout",
-        ["ActualWidth"] = "Layout",
-        ["ActualHeight"] = "Layout",
-        ["Margin"] = "Layout",
-        ["Padding"] = "Layout",
-        ["HorizontalAlignment"] = "Layout",
-        ["VerticalAlignment"] = "Layout",
-        ["HorizontalContentAlignment"] = "Layout",
-        ["VerticalContentAlignment"] = "Layout",
-        // Appearance
-        ["Background"] = "Appearance",
-        ["Foreground"] = "Appearance",
-        ["BorderBrush"] = "Appearance",
-        ["BorderThickness"] = "Appearance",
-        ["CornerRadius"] = "Appearance",
-        ["FontFamily"] = "Appearance",
-        ["FontSize"] = "Appearance",
-        ["FontWeight"] = "Appearance",
-        ["FontStyle"] = "Appearance",
-        // Text/content
-        ["Text"] = "Text",
-        ["Content"] = "Text",
-        ["Header"] = "Text",
-        ["PlaceholderText"] = "Text",
+        "Common", "Content", "Layout", "Appearance", "Text", "Interaction", "Focus & Keyboard", "Transform",
+        "Theme & Language", "Misc",
     };
 
-    // Category display order (lower = earlier). "Misc" sinks to the bottom.
-    private static readonly Dictionary<string, int> CategoryOrder = new(StringComparer.Ordinal)
+    // Exact property -> category. Checked before the pattern rules in Categorize.
+    private static readonly Dictionary<string, string> CategoryMap = BuildCategoryMap();
+
+    private static Dictionary<string, string> BuildCategoryMap()
     {
-        ["Common"] = 0,
-        ["Layout"] = 1,
-        ["Appearance"] = 2,
-        ["Text"] = 3,
-        ["Misc"] = 9,
-    };
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        void Add(string category, params string[] names)
+        {
+            foreach (var n in names)
+            {
+                map[n] = category;
+            }
+        }
+
+        Add("Common", "Name", "Tag", "IsEnabled", "Visibility", "Opacity", "IsLoaded");
+        Add("Content",
+            "Text", "Content", "Header", "PlaceholderText", "Description", "Title", "Subtitle", "Label", "Message",
+            "Glyph", "Symbol", "OnContent", "OffContent", "IsOn", "IsChecked", "IsThreeState", "IsReadOnly",
+            "Value", "Minimum", "Maximum", "SmallChange", "LargeChange", "StepFrequency", "SelectedIndex",
+            "SelectedValue", "SelectedValuePath", "DisplayMemberPath", "IsOpen", "IsActive", "IsIndeterminate",
+            "ShowPaused", "ShowError", "MaxLength", "GroupName", "IsExpanded", "ExpandDirection", "Severity",
+            "IsClosable", "IsIconVisible", "PlaceholderValue", "Date", "Time", "ClockIdentifier", "MinuteIncrement",
+            "IsSelected", "IsDropDownOpen", "IsEditable", "Stretch", "StretchDirection");
+        Add("Layout",
+            "Width", "Height", "MinWidth", "MinHeight", "MaxWidth", "MaxHeight", "ActualWidth", "ActualHeight",
+            "Margin", "Padding", "HorizontalAlignment", "VerticalAlignment", "HorizontalContentAlignment",
+            "VerticalContentAlignment", "Orientation", "Spacing", "RowSpacing", "ColumnSpacing", "UseLayoutRounding",
+            "BackgroundSizing", "FlowDirection");
+        Add("Appearance",
+            "Background", "Foreground", "BorderBrush", "BorderThickness", "CornerRadius", "Fill", "Stroke",
+            "StrokeThickness", "OpacityTransition", "ElementSoundMode");
+        Add("Text",
+            "CharacterSpacing", "LineHeight", "LineStackingStrategy", "MaxLines", "IsTextSelectionEnabled",
+            "IsTextScaleFactorEnabled", "IsColorFontEnabled", "HorizontalTextAlignment", "OpticalMarginAlignment",
+            "SelectionHighlightColor", "IsSpellCheckEnabled", "IsTextPredictionEnabled", "AcceptsReturn",
+            "PreventKeyboardDisplayOnProgrammaticFocus", "DesiredCandidateWindowAlignment", "SelectionStart",
+            "SelectionLength", "SelectedText", "InputScope");
+        Add("Interaction",
+            "IsHitTestVisible", "AllowDrop", "CanDrag", "ManipulationMode", "IsTapEnabled", "IsDoubleTapEnabled",
+            "IsRightTapEnabled", "IsHoldingEnabled", "RequiresPointer", "ClickMode", "CanBeScrollAnchor",
+            "IsPointerOver", "IsPressed");
+        Add("Focus & Keyboard",
+            "IsTabStop", "TabIndex", "TabNavigation", "TabFocusNavigation", "UseSystemFocusVisuals",
+            "AllowFocusOnInteraction", "AllowFocusWhenDisabled", "IsFocusEngaged", "IsFocusEngagementEnabled",
+            "IsAccessKeyScope", "ExitDisplayModeOnAccessKeyInvoked", "KeyboardAcceleratorPlacementMode",
+            "IsTemplateFocusTarget", "IsTemplateKeyTipTarget");
+        Add("Transform",
+            "Rotation", "RotationAxis", "Scale", "Translation", "CenterPoint", "RenderTransformOrigin",
+            "TransformMatrix");
+        Add("Theme & Language", "RequestedTheme", "ActualTheme", "HighContrastAdjustment", "Language");
+        return map;
+    }
+
+    /// <summary>Exact map first, then naming-pattern rules (Font*, XYFocus*, KeyTip*, *Brush, …), else Misc.</summary>
+    private static string Categorize(string name)
+    {
+        if (CategoryMap.TryGetValue(name, out var cat))
+        {
+            return cat;
+        }
+
+        if (name.StartsWith("Focus", StringComparison.Ordinal) || name.StartsWith("XYFocus", StringComparison.Ordinal) ||
+            name.StartsWith("AccessKey", StringComparison.Ordinal) || name.StartsWith("KeyTip", StringComparison.Ordinal) ||
+            name.StartsWith("KeyboardAccelerator", StringComparison.Ordinal))
+        {
+            return "Focus & Keyboard";
+        }
+
+        if (name.StartsWith("Font", StringComparison.Ordinal) || name.StartsWith("Text", StringComparison.Ordinal))
+        {
+            return "Text";
+        }
+
+        if (name.StartsWith("Manipulation", StringComparison.Ordinal) || name.StartsWith("IsDrag", StringComparison.Ordinal))
+        {
+            return "Interaction";
+        }
+
+        if (name.EndsWith("Brush", StringComparison.Ordinal) || name.EndsWith("Color", StringComparison.Ordinal) ||
+            name.EndsWith("ground", StringComparison.Ordinal) ||
+            name.StartsWith("Border", StringComparison.Ordinal) || name.StartsWith("Stroke", StringComparison.Ordinal))
+        {
+            return "Appearance";
+        }
+
+        if (name.EndsWith("Width", StringComparison.Ordinal) || name.EndsWith("Height", StringComparison.Ordinal) ||
+            name.EndsWith("Alignment", StringComparison.Ordinal) || name.EndsWith("Spacing", StringComparison.Ordinal))
+        {
+            return "Layout";
+        }
+
+        if (name.EndsWith("Content", StringComparison.Ordinal) || name.EndsWith("Text", StringComparison.Ordinal) ||
+            name.EndsWith("Header", StringComparison.Ordinal) || name.EndsWith("Label", StringComparison.Ordinal))
+        {
+            return "Content";
+        }
+
+        return "Misc";
+    }
+
+    private static int CategoryRank(string category)
+    {
+        int i = Array.IndexOf(Categories, category);
+        return i < 0 ? Categories.Length : i;
+    }
 
     public static List<DesignPropInfo> Describe(FrameworkElement element)
     {
@@ -134,7 +195,7 @@ internal static class DesignInspector
             result.Add(new DesignPropInfo
             {
                 Name = p.Name,
-                Category = CategoryMap.TryGetValue(p.Name, out var cat) ? cat : "Misc",
+                Category = Categorize(p.Name),
                 TypeName = typeName,
                 Value = text,
                 ReadOnly = !p.CanWrite,
@@ -144,8 +205,8 @@ internal static class DesignInspector
 
         result.Sort((a, b) =>
         {
-            int oa = CategoryOrder.TryGetValue(a.Category, out var va) ? va : 9;
-            int ob = CategoryOrder.TryGetValue(b.Category, out var vb) ? vb : 9;
+            int oa = CategoryRank(a.Category);
+            int ob = CategoryRank(b.Category);
             if (oa != ob)
             {
                 return oa.CompareTo(ob);

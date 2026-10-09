@@ -1,53 +1,51 @@
 #nullable enable
 
 using System;
-using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Input;
-using System.Windows.Media;
+using System.Windows.Shapes;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 
 namespace WinUIXamlPreview.UI
 {
     /// <summary>
-    /// The design-time property panel (plan §41, Phase B — read-only). A code-built WPF control that shows
-    /// the currently-selected element's type/name header and a category-grouped Name/Value list, themed with
-    /// VS environment colors. Subscribes to <see cref="DesignerSelection"/> and repopulates on each selection.
+    /// The design-time property panel (plan §41) — read-only. A code-built WPF control that shows the
+    /// currently-selected element's type/name header and a category-grouped Name/Value list. Everything is
+    /// themed via VS environment colors/fonts (no stock ListView/GridView/ComboBox chrome, which renders light
+    /// in dark themes). Subscribes to <see cref="DesignerSelection"/> and rebuilds on each selection.
     /// </summary>
     internal sealed class PropertyPanelControl : UserControl
     {
+        private const string NameColumnGroup = "PropName";
+
         private readonly TextBlock _typeText;
         private readonly TextBlock _nameText;
         private readonly TextBlock _emptyText;
-        private readonly ListView _list;
-        private readonly ObservableCollection<PropRow> _rows = new ObservableCollection<PropRow>();
-
-        // The element id behind the current snapshot; edits route back to this id (Phase C). -1 = no selection.
-        private int _currentId = -1;
+        private readonly ScrollViewer _scroller;
+        private readonly StackPanel _rowsPanel;
 
         public PropertyPanelControl()
         {
+            SetResourceReference(FontFamilyProperty, VsFonts.EnvironmentFontFamilyKey);
+            SetResourceReference(FontSizeProperty, VsFonts.EnvironmentFontSizeKey);
+
             var root = new DockPanel { LastChildFill = true };
             root.SetResourceReference(BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
 
             // ---- header (element type + name) ----
-            var header = new StackPanel { Margin = new Thickness(8, 6, 8, 6) };
+            var header = new StackPanel { Margin = new Thickness(12, 10, 12, 8) };
             _typeText = new TextBlock
             {
                 Text = "No selection",
-                FontSize = 13,
+                FontSize = 15,
                 FontWeight = FontWeights.SemiBold,
                 TextTrimming = TextTrimming.CharacterEllipsis,
             };
             _typeText.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
             _nameText = new TextBlock
             {
-                Text = "",
-                FontSize = 11,
-                Margin = new Thickness(0, 1, 0, 0),
+                Margin = new Thickness(0, 2, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis,
             };
             _nameText.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
@@ -56,46 +54,33 @@ namespace WinUIXamlPreview.UI
             DockPanel.SetDock(header, Dock.Top);
             root.Children.Add(header);
 
+            var divider = new Rectangle { Height = 1, Margin = new Thickness(12, 0, 12, 0) };
+            divider.SetResourceReference(Shape.FillProperty, EnvironmentColors.ToolWindowBorderBrushKey);
+            DockPanel.SetDock(divider, Dock.Top);
+            root.Children.Add(divider);
+
             // ---- empty-state hint ----
             _emptyText = new TextBlock
             {
                 Text = "Select an element in the preview to inspect its properties.",
                 TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(10, 8, 10, 8),
-                FontSize = 11,
-                Visibility = Visibility.Visible,
+                Margin = new Thickness(12, 10, 12, 10),
             };
             _emptyText.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
             DockPanel.SetDock(_emptyText, Dock.Top);
             root.Children.Add(_emptyText);
 
             // ---- property list (category-grouped Name | Value) ----
-            _list = new ListView { BorderThickness = new Thickness(0), Visibility = Visibility.Collapsed };
-            _list.SetResourceReference(BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
-            _list.SetResourceReference(ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
-            ScrollViewer.SetHorizontalScrollBarVisibility(_list, ScrollBarVisibility.Disabled);
-
-            var grid = new GridView { AllowsColumnReorder = false };
-            grid.Columns.Add(new GridViewColumn { Header = "Property", Width = 150, DisplayMemberBinding = new Binding("Name") });
-            grid.Columns.Add(new GridViewColumn
+            _rowsPanel = new StackPanel { Margin = new Thickness(12, 4, 12, 12) };
+            Grid.SetIsSharedSizeScope(_rowsPanel, true);
+            _scroller = new ScrollViewer
             {
-                Header = "Value",
-                Width = 220,
-                CellTemplateSelector = new ValueTemplateSelector
-                {
-                    ReadOnlyTemplate = BuildReadOnlyValueTemplate(),
-                    TextTemplate = BuildTextValueTemplate(),
-                    ComboTemplate = BuildComboValueTemplate(),
-                },
-            });
-            _list.View = grid;
-
-            var view = new CollectionViewSource { Source = _rows };
-            view.GroupDescriptions.Add(new PropertyGroupDescription("Category"));
-            _list.ItemsSource = view.View;
-            _list.GroupStyle.Add(BuildGroupStyle());
-
-            root.Children.Add(_list);
+                Content = _rowsPanel,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Visibility = Visibility.Collapsed,
+            };
+            root.Children.Add(_scroller);
 
             Content = root;
 
@@ -127,157 +112,86 @@ namespace WinUIXamlPreview.UI
 
         private void Render(SelectionSnapshot? snapshot)
         {
-            _rows.Clear();
-            _currentId = snapshot?.Id ?? -1;
+            _rowsPanel.Children.Clear();
 
             if (snapshot == null)
             {
                 _typeText.Text = "No selection";
                 _nameText.Text = "";
+                _nameText.Visibility = Visibility.Collapsed;
+                _emptyText.Text = "Select an element in the preview to inspect its properties.";
                 _emptyText.Visibility = Visibility.Visible;
-                _list.Visibility = Visibility.Collapsed;
+                _scroller.Visibility = Visibility.Collapsed;
                 return;
             }
 
             _typeText.Text = snapshot.ElementType;
             _nameText.Text = string.IsNullOrEmpty(snapshot.Name) ? "(unnamed)" : snapshot.Name;
+            _nameText.Visibility = Visibility.Visible;
 
-            foreach (var row in snapshot.Props)
+            string? lastCategory = null;
+            foreach (var row in snapshot.Props) // already grouped/sorted by category on the surface side
             {
-                _rows.Add(row);
-            }
-
-            bool any = _rows.Count > 0;
-            _emptyText.Visibility = any ? Visibility.Collapsed : Visibility.Visible;
-            _emptyText.Text = any
-                ? ""
-                : "No inspectable properties for this element.";
-            _list.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
-        }
-
-        // ---- Phase C: editable value cells -----------------------------------
-
-        /// <summary>Read-only value: a trimmed text block (used for properties with no setter).</summary>
-        private static DataTemplate BuildReadOnlyValueTemplate()
-        {
-            var f = new FrameworkElementFactory(typeof(TextBlock));
-            f.SetBinding(TextBlock.TextProperty, new Binding("Value"));
-            f.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
-            f.SetValue(TextBlock.ToolTipProperty, new Binding("Value"));
-            f.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
-            return new DataTemplate(typeof(PropRow)) { VisualTree = f };
-        }
-
-        /// <summary>Free-text value: an inline text box committed on Enter or focus loss.</summary>
-        private DataTemplate BuildTextValueTemplate()
-        {
-            var f = new FrameworkElementFactory(typeof(TextBox));
-            f.SetBinding(TextBox.TextProperty, new Binding("Value") { Mode = BindingMode.OneWay });
-            f.SetValue(TextBox.BorderThicknessProperty, new Thickness(0));
-            f.SetValue(TextBox.BackgroundProperty, Brushes.Transparent);
-            f.SetValue(TextBox.PaddingProperty, new Thickness(0));
-            f.SetResourceReference(TextBox.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
-            f.AddHandler(TextBox.LostFocusEvent, new RoutedEventHandler(OnValueTextCommitted));
-            f.AddHandler(TextBox.KeyDownEvent, new KeyEventHandler(OnValueTextKeyDown));
-            return new DataTemplate(typeof(PropRow)) { VisualTree = f };
-        }
-
-        /// <summary>Closed-set value (enum/bool): a dropdown committed on selection change.</summary>
-        private DataTemplate BuildComboValueTemplate()
-        {
-            var f = new FrameworkElementFactory(typeof(ComboBox));
-            f.SetBinding(ComboBox.ItemsSourceProperty, new Binding("Options"));
-            f.SetBinding(ComboBox.SelectedItemProperty, new Binding("Value") { Mode = BindingMode.OneWay });
-            f.SetValue(ComboBox.IsEditableProperty, false);
-            f.AddHandler(ComboBox.SelectionChangedEvent, new SelectionChangedEventHandler(OnValueComboCommitted));
-            return new DataTemplate(typeof(PropRow)) { VisualTree = f };
-        }
-
-        private void OnValueTextKeyDown(object sender, KeyEventArgs e)
-        {
-            // Enter commits by moving focus off the box, which triggers the single LostFocus commit below.
-            if (e.Key == Key.Enter && sender is TextBox tb)
-            {
-                e.Handled = true;
-                _list.Focus();
-                tb.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
-            }
-        }
-
-        private void OnValueTextCommitted(object sender, RoutedEventArgs e)
-        {
-            if (sender is TextBox tb)
-            {
-                Commit(tb.DataContext as PropRow, tb.Text);
-            }
-        }
-
-        private void OnValueComboCommitted(object sender, SelectionChangedEventArgs e)
-        {
-            if (sender is ComboBox cb && cb.SelectedItem is string s)
-            {
-                Commit(cb.DataContext as PropRow, s);
-            }
-        }
-
-        /// <summary>
-        /// Route a committed edit back to the surface (Phase C). No-ops on read-only rows, no-change edits, or
-        /// when there's no live selection. The surface echoes fresh <c>ElementProps</c>, which re-renders the
-        /// panel — so a rejected value visibly reverts.
-        /// </summary>
-        private void Commit(PropRow? row, string newValue)
-        {
-            if (row == null || row.ReadOnly || _currentId < 0)
-            {
-                return;
-            }
-
-            newValue ??= "";
-            if (newValue == row.Value)
-            {
-                return; // no change (also skips the ComboBox's initial programmatic selection)
-            }
-
-            row.Value = newValue; // optimistic; the surface echo confirms or reverts
-            DesignerSelection.RequestSetProperty(_currentId, row.Name, newValue);
-        }
-
-        /// <summary>Picks the editor for a row: read-only text, enum/bool dropdown, or free-text box.</summary>
-        private sealed class ValueTemplateSelector : DataTemplateSelector
-        {
-            public DataTemplate? ReadOnlyTemplate { get; set; }
-            public DataTemplate? TextTemplate { get; set; }
-            public DataTemplate? ComboTemplate { get; set; }
-
-            public override DataTemplate? SelectTemplate(object item, DependencyObject container)
-            {
-                if (item is PropRow r)
+                if (!string.Equals(row.Category, lastCategory, StringComparison.Ordinal))
                 {
-                    if (r.ReadOnly)
-                    {
-                        return ReadOnlyTemplate;
-                    }
-
-                    return r.Options != null && r.Options.Count > 0 ? ComboTemplate : TextTemplate;
+                    lastCategory = row.Category;
+                    _rowsPanel.Children.Add(BuildCategoryHeader(row.Category, first: _rowsPanel.Children.Count == 0));
                 }
 
-                return base.SelectTemplate(item, container);
+                _rowsPanel.Children.Add(BuildRow(row));
             }
+
+            bool any = _rowsPanel.Children.Count > 0;
+            _emptyText.Text = "No inspectable properties for this element.";
+            _emptyText.Visibility = any ? Visibility.Collapsed : Visibility.Visible;
+            _scroller.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+            _scroller.ScrollToTop();
         }
 
-        private static GroupStyle BuildGroupStyle()
+        private static FrameworkElement BuildCategoryHeader(string category, bool first)
         {
-            // A simple bold category header row above each group.
-            var headerTemplate = new DataTemplate();
-            var textFactory = new FrameworkElementFactory(typeof(TextBlock));
-            textFactory.SetBinding(TextBlock.TextProperty, new Binding("Name"));
-            textFactory.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
-            textFactory.SetValue(TextBlock.MarginProperty, new Thickness(4, 6, 0, 2));
-            textFactory.SetValue(TextBlock.FontSizeProperty, 11.0);
-            textFactory.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
-            headerTemplate.VisualTree = textFactory;
+            var panel = new StackPanel { Margin = new Thickness(0, first ? 6 : 10, 0, 4) };
+            if (!first)
+            {
+                var separator = new Rectangle { Height = 1, Margin = new Thickness(0, 0, 0, 10), Opacity = 0.8 };
+                separator.SetResourceReference(Shape.FillProperty, EnvironmentColors.ToolWindowBorderBrushKey);
+                panel.Children.Add(separator);
+            }
 
-            return new GroupStyle { HeaderTemplate = headerTemplate };
+            var text = new TextBlock { Text = category, FontWeight = FontWeights.Bold, FontSize = 13 };
+            text.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            panel.Children.Add(text);
+            return panel;
+        }
+
+        private static FrameworkElement BuildRow(PropRow row)
+        {
+            var grid = new Grid { Margin = new Thickness(0, 3, 0, 3) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition
+            {
+                Width = GridLength.Auto,
+                MinWidth = 120,
+                SharedSizeGroup = NameColumnGroup,
+            });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var name = new TextBlock { Text = row.Name };
+            name.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
+
+            var value = new TextBlock
+            {
+                Text = row.Value,
+                FontWeight = FontWeights.SemiBold,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                ToolTip = string.IsNullOrEmpty(row.Value) ? null : row.Value,
+            };
+            value.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            Grid.SetColumn(value, 2);
+
+            grid.Children.Add(name);
+            grid.Children.Add(value);
+            return grid;
         }
     }
 }

@@ -70,7 +70,6 @@ internal sealed class DesignSurface
 
     private readonly Rectangle _selectRect;
     private readonly Border _hoverOutline;
-    private readonly Rectangle[] _handles = new Rectangle[8];
 
     private readonly Dictionary<FrameworkElement, int> _elToId = new();
     private readonly Dictionary<int, WeakReference<FrameworkElement>> _idToEl = new();
@@ -173,22 +172,6 @@ internal sealed class DesignSurface
             Visibility = Visibility.Collapsed,
         };
         _adornerCanvas.Children.Add(_selectRect);
-
-        for (int i = 0; i < _handles.Length; i++)
-        {
-            var h = new Rectangle
-            {
-                Width = 6,
-                Height = 6,
-                Fill = new SolidColorBrush(Microsoft.UI.Colors.White),
-                Stroke = new SolidColorBrush(AccentColor),
-                StrokeThickness = 1,
-                IsHitTestVisible = false,
-                Visibility = Visibility.Collapsed,
-            };
-            _handles[i] = h;
-            _adornerCanvas.Children.Add(h);
-        }
 
         _inputOverlay = new Border { Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
         _inputOverlay.PointerPressed += OnPointerPressed;
@@ -1117,20 +1100,43 @@ internal sealed class DesignSurface
 
     private static FrameworkElement BuildPropsFlyoutContent(DesignSelectionPayload p)
     {
-        var panel = new StackPanel { Spacing = 1, MinWidth = 260 };
+        // One grid for every row so the name column auto-sizes to the longest property name (no collisions
+        // with values), with a fixed gutter. Values trim within the remaining width and are selectable.
+        var grid = new Grid { ColumnSpacing = 20, RowSpacing = 6, MinWidth = 280, MaxWidth = 420, Padding = new Thickness(0, 0, 16, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 0, 0, 6) };
-        header.Children.Add(new TextBlock { Text = p.TypeName, FontWeight = FontWeights.SemiBold });
-        if (!string.IsNullOrEmpty(p.Name))
+        int rowIndex = 0;
+        void AddRow(FrameworkElement el, int column, int columnSpan = 1)
         {
-            header.Children.Add(new TextBlock { Text = p.Name, Opacity = 0.7 });
+            Grid.SetRow(el, rowIndex);
+            Grid.SetColumn(el, column);
+            Grid.SetColumnSpan(el, columnSpan);
+            grid.Children.Add(el);
         }
 
-        panel.Children.Add(header);
+        void NextRow()
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            rowIndex = grid.RowDefinitions.Count - 1;
+        }
+
+        NextRow();
+        var header = new StackPanel { Spacing = 2, Margin = new Thickness(0, 0, 0, 4) };
+        header.Children.Add(new TextBlock { Text = p.TypeName, FontSize = 16, FontWeight = FontWeights.SemiBold });
+        header.Children.Add(new TextBlock
+        {
+            Text = string.IsNullOrEmpty(p.Name) ? "(unnamed)" : p.Name,
+            FontSize = 12,
+            Opacity = 0.6,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        });
+        AddRow(header, 0, 2);
 
         if (p.Props.Count == 0)
         {
-            panel.Children.Add(new TextBlock { Text = "No inspectable properties.", Opacity = 0.6, FontSize = 12 });
+            NextRow();
+            AddRow(new TextBlock { Text = "No inspectable properties.", Opacity = 0.6, FontSize = 12 }, 0, 2);
         }
 
         string? lastCategory = null;
@@ -1138,33 +1144,51 @@ internal sealed class DesignSurface
         {
             if (!string.Equals(pr.Category, lastCategory, StringComparison.Ordinal))
             {
+                bool first = lastCategory is null;
                 lastCategory = pr.Category;
-                panel.Children.Add(new TextBlock
+                NextRow();
+                var section = new StackPanel { Spacing = 8, Margin = new Thickness(0, first ? 4 : 8, 0, 2) };
+                if (!first)
+                {
+                    section.Children.Add(new Border
+                    {
+                        Height = 1,
+                        Background = new SolidColorBrush(Microsoft.UI.Colors.Gray),
+                        Opacity = 0.35,
+                    });
+                }
+
+                section.Children.Add(new TextBlock
                 {
                     Text = pr.Category,
-                    FontSize = 11,
-                    Opacity = 0.6,
-                    FontWeight = FontWeights.SemiBold,
-                    Margin = new Thickness(0, 6, 0, 2),
+                    FontSize = 13,
+                    FontWeight = FontWeights.Bold,
                 });
+                AddRow(section, 0, 2);
             }
 
-            var row = new Grid { Margin = new Thickness(0, 1, 0, 1) };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.45, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.55, GridUnitType.Star) });
+            NextRow();
+            AddRow(new TextBlock { Text = pr.Name, FontSize = 12, Opacity = 0.7 }, 0);
+            var value = new TextBlock
+            {
+                Text = pr.Value,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                IsTextSelectionEnabled = true,
+            };
+            if (!string.IsNullOrEmpty(pr.Value))
+            {
+                ToolTipService.SetToolTip(value, pr.Value);
+            }
 
-            var name = new TextBlock { Text = pr.Name, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis };
-            var value = new TextBlock { Text = pr.Value, FontSize = 12, Opacity = 0.85, TextTrimming = TextTrimming.CharacterEllipsis };
-            Grid.SetColumn(value, 1);
-            row.Children.Add(name);
-            row.Children.Add(value);
-            panel.Children.Add(row);
+            AddRow(value, 1);
         }
 
         return new ScrollViewer
         {
-            Content = panel,
-            MaxHeight = 420,
+            Content = grid,
+            MaxHeight = 460,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
@@ -1191,41 +1215,13 @@ internal sealed class DesignSurface
         _selectRect.Width = Math.Max(0, r.Width);
         _selectRect.Height = Math.Max(0, r.Height);
         _selectRect.Visibility = Visibility.Visible;
-        PositionHandles(r);
         return r;
-    }
-
-    private void PositionHandles(Rect r)
-    {
-        // 8 handles: 4 corners + 4 edge midpoints, centered on the selection border.
-        double[] xs = { r.Left, r.Left + r.Width / 2, r.Right };
-        double[] ys = { r.Top, r.Top + r.Height / 2, r.Bottom };
-        int i = 0;
-        for (int yi = 0; yi < 3; yi++)
-        {
-            for (int xi = 0; xi < 3; xi++)
-            {
-                if (xi == 1 && yi == 1)
-                {
-                    continue; // skip the center
-                }
-
-                var h = _handles[i++];
-                Canvas.SetLeft(h, xs[xi] - h.Width / 2);
-                Canvas.SetTop(h, ys[yi] - h.Height / 2);
-                h.Visibility = Visibility.Visible;
-            }
-        }
     }
 
     private void ClearAdorner()
     {
         _selectRect.Visibility = Visibility.Collapsed;
         _selectionTag.Visibility = Visibility.Collapsed;
-        foreach (var h in _handles)
-        {
-            h.Visibility = Visibility.Collapsed;
-        }
     }
 
     private int GetOrAssignId(FrameworkElement fe)

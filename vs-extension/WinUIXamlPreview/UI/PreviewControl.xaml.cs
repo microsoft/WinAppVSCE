@@ -670,22 +670,6 @@ namespace WinUIXamlPreview.UI
             catch (Exception ex) { Log.Write("SelectByPath send failed: " + ex.Message); }
         }
 
-        /// <summary>
-        /// Apply a live property edit from the panel to the surface behind this preview (plan §41 Phase C).
-        /// Registered as the write-back setter via <see cref="DesignerSelection.Set"/> on each selection, so the
-        /// edit reaches the same surface that produced the current selection. No-op if the surface is gone.
-        /// </summary>
-        public void SetProperty(int id, string name, string value)
-        {
-            if (_disposed || string.IsNullOrEmpty(name) || !PreviewOptions.DesignMode)
-            {
-                return;
-            }
-
-            try { _client?.SetProperty(id, name, value); }
-            catch (Exception ex) { Log.Write("SetProperty send failed: " + ex.Message); }
-        }
-
         // The most recent Selected message, held until its ElementProps arrives so the panel updates once with
         // a complete snapshot (header + properties). Correlated by element id.
         private SelectedMsg? _lastSelected;
@@ -700,14 +684,13 @@ namespace WinUIXamlPreview.UI
 
             _lastSelected = sel;
 
-            // Show the header immediately; the properties follow in ElementProps (usually same tick). Register
-            // this control as the write-back target so panel edits reach the surface that raised the selection.
+            // Show the header immediately; the properties follow in ElementProps (usually same tick).
             DesignerSelection.Set(new SelectionSnapshot
             {
                 Id = sel.Id,
                 ElementType = sel.ElementType ?? "",
                 Name = sel.Name,
-            }, SetProperty);
+            });
 
             // Notify the in-editor margin so it can move the caret to this element's source span (#1).
             try { ElementSelected?.Invoke(sel); }
@@ -754,8 +737,6 @@ namespace WinUIXamlPreview.UI
                         Category = string.IsNullOrEmpty(p.Category) ? "Misc" : p.Category!,
                         TypeName = p.Type ?? "",
                         Value = p.Value ?? "",
-                        ReadOnly = p.ReadOnly,
-                        Options = p.Options != null && p.Options.Count > 0 ? p.Options : null,
                     });
                 }
             }
@@ -766,7 +747,7 @@ namespace WinUIXamlPreview.UI
                 ElementType = sel.ElementType ?? "",
                 Name = sel.Name,
                 Props = rows,
-            }, SetProperty);
+            });
         }
 
         private void ReloadCurrent()
