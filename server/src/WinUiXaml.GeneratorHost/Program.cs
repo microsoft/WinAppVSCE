@@ -122,6 +122,19 @@ internal static class Program
             optionsProvider: AnalyzerConfigOptionsProviderFactory.Create(analyzerConfigs));
         var runResult = driver.RunGenerators(compilation).GetRunResult();
 
+        // Roslyn captures generator exceptions into the result rather than throwing. Without this
+        // the host would exit 0 with partial output, so the server would report a healthy project
+        // while the generated members an x:Bind path needs are silently absent.
+        var failures = runResult.Results
+            .Where(result => result.Exception is not null)
+            .Select(result => $"{result.Generator.GetGeneratorType().Name}: {result.Exception!.Message}")
+            .ToList();
+        if (failures.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "Source generators failed: " + string.Join("; ", failures));
+        }
+
         var written = new List<string>();
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var tree in runResult.GeneratedTrees)

@@ -133,6 +133,23 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
         Assert.DoesNotContain("MISSING", text);
     }
 
+    /// <summary>Roslyn captures a throwing generator into the run result rather than propagating it, so the host once wrote a manifest and exited 0. The project then looked healthy while the generated members an x:Bind path needs were absent -- the exact silent gap the failure channel exists to prevent.</summary>
+    [Fact]
+    public void Run_WithThrowingGenerator_ReportsFailureInsteadOfSucceedingWithNoFiles()
+    {
+        var project = CreateProject("ThrowingProbe");
+        var analyzer = CompileGenerator(
+            project,
+            """
+            throw new System.InvalidOperationException("probe generator exploded");
+            """);
+
+        var result = RunHostForResult(project, analyzer);
+
+        Assert.Empty(result.Files);
+        Assert.NotNull(result.FailureReason);
+    }
+
     private string CreateProject(string name)
     {
         var directory = Path.Combine(_root, name);
@@ -151,6 +168,12 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
     }
 
     private ImmutableArray<string> RunHost(
+        string projectDirectory,
+        string analyzerPath,
+        params string[] extraArguments) =>
+        RunHostForResult(projectDirectory, analyzerPath, extraArguments).Files;
+
+    private GeneratorHostRunner.GeneratorRunResult RunHostForResult(
         string projectDirectory,
         string analyzerPath,
         params string[] extraArguments)
@@ -183,8 +206,9 @@ public sealed class GeneratorHostIntegrationTests : IDisposable
             Path.Combine(projectDirectory, "Probe.csproj"),
             "Probe",
             commandLine,
-            cts.Token).Files;
+            cts.Token);
     }
+
 
     /// <summary>
     /// A generator observing the analyzer config, which is where <c>build_property.*</c> arrives.
