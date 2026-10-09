@@ -13,11 +13,17 @@ cd src/winapp-VSC
 # Install dependencies (first time only)
 npm install
 
-# Run the full E2E suite
+# Download the AppxManifest XSD schemas (first time only).
+# Without these the editor's validation throws before the form is populated,
+# and specs fail with confusing "element not found" errors.
+npm run sync-schemas
+
+# Run the full E2E suite. The `pretest:e2e` hook verifies schemas/ and installs the
+# Chromium build that webview-state.spec.ts renders the webview document in.
 npm run test:e2e
 ```
 
-> **Prerequisites** – VS Code must be installed at the default location and all other VS Code windows must be closed before running (Playwright needs exclusive access to the Electron process).
+> **Prerequisites** – VS Code must be installed at the default location. Each run creates its own throwaway VS Code profile (`--user-data-dir` / `--extensions-dir`), so other VS Code windows can stay open.
 
 > **`@playwright/test` version** – pinned with a caret range starting at `1.61.1` (not `1.62.1`) because the approved package feed does not mirror a stable `1.62.1` for `@playwright/test`/`playwright`/`playwright-core` (only prereleases). `^1.61.1` still resolves through that feed and picks up newer compatible stable releases (e.g. `1.62.0`) as they land, without requiring a version the feed can't serve.
 
@@ -47,7 +53,46 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (140 tests)
+## Test inventory (164 tests)
+
+### `webview-state.spec.ts` — 18 tests
+
+Renders the generated webview document directly in Chromium (with a stubbed `acquireVsCodeApi`), so
+UI-state behaviour can be verified without launching VS Code. Regression coverage for #192.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | external updates preserve the active tab, app sub-tab and scroll position | A force-update from the extension keeps the selected tab, per-app sub-tab and scroll offset |
+| 2 | a parse error is shown as an overlay without discarding the editor or its state | `parseError` shows the in-place overlay, leaves the editor document intact, and `update` clears it |
+| 3 | UI state is restored after the webview document is rebuilt | State persisted via `vscode.setState()` restores the tab, sub-tab and scroll offset in a fresh script context |
+| 4 | a saved tab that is hidden on the first update is restored once it becomes available | Restoration stays pending while the saved tab is hidden, instead of being consumed and lost |
+| 5 | the parse-error overlay is modal, so the form behind it is inert | The overlay exposes "Open in Text Editor" and inerts/hides the form behind it until recovery, handing `aria-hidden` back to the tab system afterwards |
+| 6 | the overlay never moves focus, whether or not the webview is focused | The XML usually breaks while the user types in the text editor, so neither showing nor clearing the overlay may pull the caret into the webview |
+| 7 | a parse error discards input still sitting in the debounce | In-flight webview input is dropped when the XML stops parsing, so the extension is never asked to rewrite unparseable XML |
+| 8 | an external document change discards input still sitting in the debounce | Queued input typed against the pre-edit text is dropped as soon as the document changes, so it can't replay over the newer text-editor edit |
+| 9 | a save flushes extension-field input still sitting in the debounce | Extension-field edits share the common debounce queue, so Ctrl+S captures them like any other field |
+| 10 | two extension inputs sharing a field path queue independently | Two `<Host>` inputs bound to the same `data-ext-field` get distinct debounce keys, so neither keystroke silently replaces the other |
+| 11 | a background re-render keeps an open dropdown open | A force-update landing while a dropdown menu is open reopens it, so the item the user is about to click is still there |
+| 12 | a background re-render keeps an open custom select open | App-card selects use `.custom-select-options`, a different class from the dropdown above, and must survive a re-render the same way |
+| 13 | only the select that was open is reopened after a re-render | Sibling selects in one card share a class and have no id, so each needs a distinct key or restoring reopens all of them |
+| 14 | the parse-error overlay is announced without taking focus | The overlay never moves focus, so an `aria-live` region is what tells a screen-reader user that editing paused and resumed |
+| 15 | a parse error discards extension-field input still sitting in the debounce | The same queue means extension-field edits are also dropped when the XML stops parsing |
+| 16 | Tab stays inside the parse-error dialog while it is open | Tab/Shift+Tab cycle between the dialog and its button instead of escaping the modal |
+| 17 | a saved tab that never becomes available leaves a valid fallback selected | Endless restore retries don't strand an invalid selection or override a manual tab change |
+| 18 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
+
+### `external-edit-state.spec.ts` — 5 tests
+
+Full VS Code coverage for #192: edits made to the manifest outside the webview must not reset the
+visual editor. Launches its own VS Code instance.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | keeps the selected tab, app sub-tab and scroll position across an external edit that breaks the XML mid-way | Transiently-invalid XML (as produced by typing an element in the text editor) doesn't reset the editor |
+| 2 | exactly one top-level tab button is marked active after an external edit | Tab button/panel selection stays in sync |
+| 3 | shows an in-place overlay — not a rebuilt document — while the XML is invalid | Invalid XML shows the overlay, and recovering restores the previous view |
+| 4 | a save flushes webview input that is still inside the debounce window | Ctrl+S before the 300 ms debounce elapses reaches the provider's flush handler and the value lands in the saved file |
+| 5 | saving while the XML is unparseable stores the raw text instead of rewriting the document | The save-flush guard resolves with no edits when the document can't be parsed, so Ctrl+S persists the user's raw text and never hangs |
 
 ### `sign-quickpick.spec.ts` — 9 tests
 
@@ -231,13 +276,14 @@ Validates MRT-aware resolution of visual asset paths (issue #191). Uses the `mrt
 | 6 | a non-variant sibling does not satisfy the reference | `OnlyBackup.backup.png` is not treated as a variant of `OnlyBackup.png` |
 | 7 | a genuinely missing asset still warns | A reference with neither literal file nor variants still warns |
 
-### `parse-error.spec.ts` — 1 test
+### `parse-error.spec.ts` — 2 tests
 
 Validates error handling for malformed manifests. This spec launches its own VS Code instance with broken XML.
 
 | # | Test | Validates |
 |---|------|-----------|
-| 1 | shows error view for malformed XML | Malformed manifest XML opens the error view with expected message and "Open in Text Editor" action |
+| 1 | shows the parse-error overlay for malformed XML | Malformed manifest XML raises the shared parse-error overlay with its message and "Open in Text Editor" action |
+| 2 | recovers into the editor once the XML is fixed | Repairing the file on disk clears the overlay and populates the form |
 
 ### `open-manifest-editor-command.spec.ts` — 2 tests
 
@@ -296,4 +342,4 @@ These tests occasionally fail on the first attempt but pass on retry (Playwright
 | Test | Reason |
 |------|--------|
 | `background-task-fixture.spec.ts` › identity fields are populated correctly | Timing — editor may not have fully reloaded after fixture swap |
-| `parse-error.spec.ts` › shows error view for malformed XML | Launches its own VS Code instance — sensitive to startup timing |
+| `parse-error.spec.ts` › both tests | Shared `beforeAll` launches its own VS Code instance — sensitive to startup timing, so a slow launch fails both tests |
