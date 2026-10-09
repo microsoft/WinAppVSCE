@@ -2,9 +2,9 @@
 
 Apply `_shared-contract.md`. Set `Domain: necessity-and-simplicity`.
 
-Feature necessity and scope are normally settled in the issue or design
-discussion before implementation. Reopen that question here only when the
-implementation reveals unexpected cost, overengineering, or review-driven creep.
+`spec-review` owns feature necessity and scope before implementation. Reopen that
+question here only when the implementation reveals unexpected cost,
+overengineering, or review-driven creep.
 *Can merge* does not mean *should merge*.
 
 ## When you apply

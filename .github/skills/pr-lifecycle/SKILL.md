@@ -26,8 +26,8 @@ a merge.
 - [pr-review](../pr-review/SKILL.md) owns independent, practical review of
   correctness, compatibility and performance. Use it for a full feature review;
   keep a narrow docs/fix review proportional rather than copying its entire
-  orchestration. Unresolved design questions belong in the linked issue before
-  implementation, not in another mandatory post-code ceremony.
+  orchestration. [spec-review](../spec-review/SKILL.md) is for unresolved design
+  questions before implementation, not another mandatory post-code ceremony.
 - [vsce-testing](../vsce-testing/SKILL.md) is the way to exercise the packaged
   extension in a real, isolated VS Code instance.
 - Fix findings **in the existing PR** by default. Create a follow-up fix PR only

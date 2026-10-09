@@ -51,9 +51,9 @@ as re-openable, not settled design."*
 (command, setting, `launch.json` field, editor tab, contribution point), adds new
 internal structure (module / class / abstraction / config knob), **or** this is
 a re-review. Skip it for small fixes, refactors, perf, docs, tests, and CI on a
-first review. Scope is normally settled in the issue or design discussion before
-implementation; this pass reopens it only when the implementation reveals
-unexpected cost, overengineering, or review-driven creep.
+first review. `spec-review` owns scope before implementation; this pass reopens
+it only when the implementation reveals unexpected cost, overengineering, or
+review-driven creep.
 
 Then, after those return, launch **multi-model** (`dimensions/multi-model.md`)
 with a `model` override selecting the latest model from a different family than
