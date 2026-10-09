@@ -319,6 +319,7 @@ namespace WinUIXamlPreview.Smoke
             "<TextBlock Text=\"{x:Bind ViewModel.Title}\" d:Text=\"Designer title\"/>" +
             "<Button Content=\"{x:Bind local:Fmt.Greeting(ViewModel.UserName)}\"/>" +
             "<ListView ItemsSource=\"{x:Bind ViewModel.Orders}\" Height=\"150\"/>" +
+            "<TextBlock Text=\"{StaticResource KeyAddedInAppCode}\"/>" +
             "</StackPanel></Page>";
 
         /// <summary>
@@ -352,6 +353,7 @@ namespace WinUIXamlPreview.Smoke
             Check("x:Bind FallbackValue wins", await ReadText("0.0.1", "Text") == "Loading status");
             Check("d:Text wins over x:Bind placeholder", await ReadText("0.0.2", "Text") == "Designer title");
             Check("function binding renders Func(…)", await ReadText("0.0.3", "Content") == "Greeting(…)");
+            Check("unresolved StaticResource renders {Key} (WS2-F5)", await ReadText("0.0.5", "Text") == "{KeyAddedInAppCode}");
 
             bool filled = false;
             for (int i = 0; i < 40 && !filled; i++)
@@ -368,6 +370,7 @@ namespace WinUIXamlPreview.Smoke
             await rehost;
             Check("sample data off: x:Bind text left empty", string.IsNullOrEmpty(await ReadText("0.0.0", "Text")));
             Check("sample data off: d:Text still applies", await ReadText("0.0.2", "Text") == "Designer title");
+            Check("sample data off: unresolved StaticResource left empty", string.IsNullOrEmpty(await ReadText("0.0.5", "Text")));
         }
         private static PropItemMsg? FindProp(ElementPropsMsg? msg, string name)
         {

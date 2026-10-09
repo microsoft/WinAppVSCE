@@ -150,12 +150,14 @@ internal static class XamlCleaner
     /// WS2-F6: instead of dropping every <c>{x:Bind}</c>, write a placeholder into known text properties and
     /// mark bound lists for <see cref="SampleListFiller"/>. False keeps the plain Rule 2 drop.
     /// </param>
+    /// <param name="missingResourceKeys">Receives every <c>{StaticResource}</c>/<c>{ThemeResource}</c> key Rule 6 could not resolve. May be null.</param>
     public static string Clean(
         string rawXaml,
         Func<string, bool>? isKnownResourceKey = null,
         Func<string, bool>? providerMapsFullName = null,
         ISet<string>? forcePlaceholderTypes = null,
-        bool sampleData = false)
+        bool sampleData = false,
+        ISet<string>? missingResourceKeys = null)
     {
         if (string.IsNullOrWhiteSpace(rawXaml))
         {
@@ -233,7 +235,7 @@ internal static class XamlCleaner
             // Attribute pass over every surviving element.
             foreach (var el in root.DescendantsAndSelf().ToList())
             {
-                CleanElementAttributes(el, root, isKnownResourceKey, docKeys, droppedKeys, providerMapsFullName, sampleData);
+                CleanElementAttributes(el, root, isKnownResourceKey, docKeys, droppedKeys, providerMapsFullName, sampleData, missingResourceKeys);
             }
 
             // Drop the now-unused Blend/markup-compat namespace declarations for tidiness (all their
@@ -265,7 +267,8 @@ internal static class XamlCleaner
         HashSet<string> docKeys,
         HashSet<string> droppedKeys,
         Func<string, bool>? providerMapsFullName,
-        bool sampleData)
+        bool sampleData,
+        ISet<string>? missingResourceKeys)
     {
         var toRemove = new List<XAttribute>();
         var toAdd = new List<(XName name, string value)>();
@@ -357,7 +360,17 @@ internal static class XamlCleaner
                     !droppedKeys.Contains(resKey);
                 if (!resolvable)
                 {
-                    toRemove.Add(a);
+                    missingResourceKeys?.Add(resKey);
+                    // WS2-F5: a key the preview can't see (typically added in App.xaml.cs code) keeps a
+                    // visible {Key} placeholder on text properties instead of silently rendering empty.
+                    if (sampleData && IsPlaceholderTextAttribute(el, a))
+                    {
+                        toRewrite.Add((a, "{}{" + resKey + "}"));
+                    }
+                    else
+                    {
+                        toRemove.Add(a);
+                    }
                 }
                 continue; // resolvable resource reference: keep as-is
             }
@@ -459,24 +472,7 @@ internal static class XamlCleaner
     private static bool TryBindPlaceholder(XElement el, XAttribute a, out string placeholder)
     {
         placeholder = string.Empty;
-        var local = a.Name.LocalName;
-        if (a.Name.Namespace != XNamespace.None || !PlaceholderTextProperties.Contains(local) ||
-            el.Attribute(Design + local) is not null)
-        {
-            return false;
-        }
-
-        PropertyInfo? prop;
-        try
-        {
-            prop = ResolveElementType(el)?.GetProperty(local, BindingFlags.Public | BindingFlags.Instance);
-        }
-        catch (AmbiguousMatchException)
-        {
-            return false;
-        }
-
-        if (prop is null || !prop.CanWrite || (prop.PropertyType != typeof(string) && prop.PropertyType != typeof(object)))
+        if (!IsPlaceholderTextAttribute(el, a))
         {
             return false;
         }
@@ -504,6 +500,32 @@ internal static class XamlCleaner
         // "{}" escapes a literal that starts with '{' so XamlReader doesn't read it as a markup extension.
         placeholder = label[0] == '{' ? "{}" + label : label;
         return true;
+    }
+
+    /// <summary>
+    /// True for an allow-listed, writable string/object text property with no <c>d:</c> override — the
+    /// attributes that may receive a sample-data placeholder.
+    /// </summary>
+    private static bool IsPlaceholderTextAttribute(XElement el, XAttribute a)
+    {
+        var local = a.Name.LocalName;
+        if (a.Name.Namespace != XNamespace.None || !PlaceholderTextProperties.Contains(local) ||
+            el.Attribute(Design + local) is not null)
+        {
+            return false;
+        }
+
+        PropertyInfo? prop;
+        try
+        {
+            prop = ResolveElementType(el)?.GetProperty(local, BindingFlags.Public | BindingFlags.Instance);
+        }
+        catch (AmbiguousMatchException)
+        {
+            return false;
+        }
+
+        return prop is not null && prop.CanWrite && (prop.PropertyType == typeof(string) || prop.PropertyType == typeof(object));
     }
 
     /// <summary>Marker for a list whose <c>ItemsSource</c> is an <c>{x:Bind}</c>; consumed by <see cref="SampleListFiller"/>.</summary>

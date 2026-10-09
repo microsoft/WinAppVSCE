@@ -125,8 +125,21 @@ internal sealed class RenderHost
     /// resource-scope key resolver (Layer 2) is passed through so the cleaner can distinguish a resolvable
     /// <c>{StaticResource}</c> from a genuinely-undefined one.
     /// </summary>
-    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false) =>
-        XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData);
+    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false)
+    {
+        var missing = new SortedSet<string>(StringComparer.Ordinal);
+        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing);
+        // WS2-F5: name keys the preview can't resolve (e.g. added in App.xaml.cs), once per distinct set.
+        var summary = string.Join(", ", missing);
+        if (missing.Count > 0 && summary != _lastMissingKeys)
+        {
+            App.Log($"Unresolved resource key(s) (defined in code or outside App.xaml?): {summary}");
+        }
+        _lastMissingKeys = summary;
+        return cleaned;
+    }
+
+    private static string? _lastMissingKeys;
 
     /// <summary>
     /// WS2-F6: when true, <c>{x:Bind}</c> text properties render a placeholder and bound lists get dummy
