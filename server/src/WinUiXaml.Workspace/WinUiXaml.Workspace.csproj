@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>WinUiXaml.Workspace</AssemblyName>
+    <RootNamespace>WinUiXaml.Workspace</RootNamespace>
+    <!-- Native AOT is enabled on the entry point, not here. This assembly is still analyzed for
+         AOT safety through the server's publish, and IsAotCompatible turns the analyzers on
+         during an ordinary build so violations surface without a publish. -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The tolerant XAML parser (#2): reads x:Class and other directives out of .xaml files. -->
+    <ProjectReference Include="..\WinUiXaml.Xaml\WinUiXaml.Xaml.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Roslyn's compiler layer only. Microsoft.CodeAnalysis.Workspaces is deliberately absent: every
+         entry point initializes MefHostServices.DefaultHost, whose composition fails once trimmed.
+         Microsoft.Build and Build.Locator are gone too; MSBuild runs out-of-process (see MsBuildCli). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\GeneratorRequestFields.cs" Link="GeneratorRequestFields.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WinUiXaml.Workspace.Tests" />
+  </ItemGroup>
+
+</Project>

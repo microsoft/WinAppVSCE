@@ -1,0 +1,364 @@
+using System.Buffers;
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
+
+namespace WinUiXaml.LanguageServer.Lsp;
+
+/// <summary>Signals JSON-RPC error -32601.</summary>
+internal sealed class MethodNotFoundException : Exception
+{
+    public MethodNotFoundException(string method) : base($"Method not found: {method}") { }
+}
+
+/// <summary>Signals LSP RequestFailed (-32803) for expected request-specific failures.</summary>
+internal class RequestFailedException : Exception
+{
+    public RequestFailedException(string message) : base(message) { }
+}
+
+/// <summary>Provides concurrent JSON-RPC 2.0 requests over LSP framing.</summary>
+internal sealed class JsonRpcConnection
+{
+    private const string ContentLengthHeader = "Content-Length:";
+
+    /// <summary>
+    /// Framing limits for trusted extension-host pipes: malformed or truncated frames become logged protocol errors instead of unbounded allocations or endless reads.
+    /// </summary>
+    private const int MaxContentLength = 32 * 1024 * 1024;
+    private const int MaxHeaderLineLength = 8 * 1024;
+    private const int MaxHeaderBlockLength = 64 * 1024;
+    private const int InputBufferSize = 16 * 1024;
+
+    private readonly Stream _input;
+    private readonly Stream _output;
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _requestCancellations = new();
+    private readonly ConcurrentDictionary<long, Task> _inflightRequests = new();
+    private long _nextRequestSequence;
+
+    public JsonRpcConnection(Stream input, Stream output)
+    {
+        // Headers have no length prefix, so unbuffered pipes cost one syscall per byte.
+        // Wrap only non-seekable stdio pipes; seekable streams are test doubles where read-ahead
+        // could consume data the owner still expects to write.
+        _input = input.CanSeek ? input : new BufferedStream(input, InputBufferSize);
+        _output = output;
+    }
+
+    /// <summary>Handles a request (id + method). Return value is serialized as the JSON-RPC result.</summary>
+    public Func<string, JsonElement?, CancellationToken, Task<object?>>? OnRequest { get; set; }
+
+    /// <summary>Handles a notification (method, no id).</summary>
+    public Func<string, JsonElement?, Task>? OnNotification { get; set; }
+
+    /// <summary>Reads and dispatches messages until the input stream ends.</summary>
+    public async Task RunAsync(CancellationToken cancellationToken = default)
+    {
+        using var connectionCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        while (!connectionCancellation.IsCancellationRequested)
+        {
+            var body = await ReadMessageAsync(connectionCancellation.Token).ConfigureAwait(false);
+            if (body == null)
+            {
+                connectionCancellation.Cancel();
+                break;
+            }
+
+            await DispatchAsync(body, connectionCancellation.Token).ConfigureAwait(false);
+        }
+
+        if (_inflightRequests.Count > 0)
+        {
+            await Task.WhenAll(_inflightRequests.Values).ConfigureAwait(false);
+        }
+    }
+
+    public Task SendNotificationAsync(string method, object @params) =>
+        WriteMessageAsync(writer =>
+        {
+            writer.WriteString("method", method);
+            writer.WritePropertyName("params");
+            WriteValue(writer, @params);
+        });
+
+    private async Task DispatchAsync(byte[] body, CancellationToken connectionToken)
+    {
+        IncomingMessage? message;
+        try
+        {
+            message = JsonSerializer.Deserialize(body, LspJsonContext.Default.IncomingMessage);
+        }
+        catch (JsonException ex)
+        {
+            Log($"malformed message: {ex.Message}");
+            return;
+        }
+
+        if (message?.Method == null)
+        {
+            return; // a response to a server->client request; nothing to do yet
+        }
+
+        if (message.Id is { } id)
+        {
+            var sequence = Interlocked.Increment(ref _nextRequestSequence);
+            var task = HandleRequestAsync(id, message.Method, message.Params, connectionToken);
+            _inflightRequests[sequence] = task;
+            _ = task.ContinueWith(
+                completed => _inflightRequests.TryRemove(sequence, out _),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+        else if (message.Method == "$/cancelRequest")
+        {
+            CancelRequest(message.Params);
+        }
+        else if (OnNotification != null)
+        {
+            try
+            {
+                await OnNotification(message.Method, message.Params).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log($"notification '{message.Method}' failed: {ex}");
+            }
+        }
+    }
+
+    private async Task HandleRequestAsync(
+        JsonElement id,
+        string method,
+        JsonElement? @params,
+        CancellationToken connectionToken)
+    {
+        object? result = null;
+        ResponseError? error = null;
+        var requestKey = RequestKey(id);
+        using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(connectionToken);
+        _requestCancellations[requestKey] = requestCancellation;
+
+        try
+        {
+            result = OnRequest != null
+                ? await OnRequest(method, @params, requestCancellation.Token).ConfigureAwait(false)
+                : throw new MethodNotFoundException(method);
+        }
+        catch (MethodNotFoundException)
+        {
+            error = new ResponseError(-32601, $"Method not found: {method}");
+        }
+        catch (OperationCanceledException) when (requestCancellation.IsCancellationRequested)
+        {
+            error = new ResponseError(-32800, $"Request cancelled: {method}");
+        }
+        catch (RequestFailedException ex)
+        {
+            error = new ResponseError(-32803, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            Log($"request '{method}' failed: {ex}");
+            error = new ResponseError(-32603, ex.Message);
+        }
+
+        finally
+        {
+            _requestCancellations.TryRemove(requestKey, out _);
+        }
+
+        var capturedResult = result;
+        var capturedError = error;
+        await WriteMessageAsync(writer =>
+        {
+            writer.WritePropertyName("id");
+            id.WriteTo(writer);
+            if (capturedError != null)
+            {
+                writer.WritePropertyName("error");
+                WriteValue(writer, capturedError);
+            }
+            else
+            {
+                writer.WritePropertyName("result");
+                WriteValue(writer, capturedResult);
+            }
+        }).ConfigureAwait(false);
+    }
+
+    private void CancelRequest(JsonElement? @params)
+    {
+        if (@params is not { ValueKind: JsonValueKind.Object } value
+            || !value.TryGetProperty("id", out var id))
+        {
+            return;
+        }
+
+        if (_requestCancellations.TryGetValue(RequestKey(id), out var cancellation))
+        {
+            cancellation.Cancel();
+        }
+    }
+
+    /// <summary>
+    /// Normalizes JSON-RPC ids so numeric ids and their string spelling share a cancellation key; raw tokens would drop common stringified cancels.
+    /// </summary>
+    private static string RequestKey(JsonElement id) => id.ValueKind switch
+    {
+        JsonValueKind.Number when id.TryGetInt64(out var number) =>
+            number.ToString(CultureInfo.InvariantCulture),
+        JsonValueKind.String => id.GetString() ?? string.Empty,
+        _ => id.GetRawText(),
+    };
+
+    private async Task<byte[]?> ReadMessageAsync(CancellationToken cancellationToken)
+    {
+        int contentLength = -1;
+        int headerBlockLength = 0;
+
+        while (true)
+        {
+            var line = await ReadHeaderLineAsync(cancellationToken).ConfigureAwait(false);
+            if (line == null)
+            {
+                return null; // stream closed, or the header line exceeded its limit
+            }
+
+            if (line.Length == 0)
+            {
+                break; // blank line ends the header block
+            }
+
+            headerBlockLength += line.Length;
+            if (headerBlockLength > MaxHeaderBlockLength)
+            {
+                Log($"header block exceeds the {MaxHeaderBlockLength} byte maximum");
+                return null;
+            }
+
+            if (line.StartsWith(ContentLengthHeader, StringComparison.OrdinalIgnoreCase))
+            {
+                var value = line.Substring(ContentLengthHeader.Length).Trim();
+
+                // LSP specifies digits only, and NumberStyles.None rejects a sign, so the result is
+                // always non-negative. Falling through on failure would leave contentLength at 0 and
+                // frame an empty body, desynchronizing the stream against unconsumed body bytes.
+                if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out contentLength))
+                {
+                    Log($"invalid Content-Length header: '{value}'");
+                    return null;
+                }
+
+                if (contentLength > MaxContentLength)
+                {
+                    Log($"Content-Length {contentLength} exceeds the {MaxContentLength} byte maximum");
+                    return null;
+                }
+            }
+        }
+
+        if (contentLength < 0)
+        {
+            Log("missing Content-Length header");
+            return null;
+        }
+
+        var buffer = new byte[contentLength];
+        int read = 0;
+        while (read < contentLength)
+        {
+            int n = await _input.ReadAsync(buffer.AsMemory(read, contentLength - read), cancellationToken).ConfigureAwait(false);
+            if (n == 0)
+            {
+                return null; // truncated
+            }
+
+            read += n;
+        }
+
+        return buffer;
+    }
+
+    private async Task<string?> ReadHeaderLineAsync(CancellationToken cancellationToken)
+    {
+        var bytes = new ArrayBufferWriter<byte>(64);
+        var one = new byte[1];
+        int prev = -1;
+
+        while (true)
+        {
+            int n = await _input.ReadAsync(one.AsMemory(0, 1), cancellationToken).ConfigureAwait(false);
+            if (n == 0)
+            {
+                return bytes.WrittenCount == 0 ? null : Encoding.ASCII.GetString(bytes.WrittenSpan);
+            }
+
+            int b = one[0];
+            if (b == '\n')
+            {
+                var span = bytes.WrittenSpan;
+                int length = span.Length;
+                if (prev == '\r' && length > 0)
+                {
+                    length--; // drop the trailing CR
+                }
+
+                return Encoding.ASCII.GetString(span.Slice(0, length));
+            }
+
+            bytes.Write(one.AsSpan(0, 1));
+            prev = b;
+            if (bytes.WrittenCount > MaxHeaderLineLength)
+            {
+                Log($"header line exceeds the {MaxHeaderLineLength} byte maximum");
+                return null;
+            }
+        }
+    }
+
+    /// <summary>Writes a JSON-RPC frame, resolving payload runtime types through LspJsonContext instead of reflection fallback.</summary>
+    private async Task WriteMessageAsync(Action<Utf8JsonWriter> writeBody)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc", "2.0");
+            writeBody(writer);
+            writer.WriteEndObject();
+        }
+
+        var json = buffer.WrittenMemory;
+        var header = Encoding.ASCII.GetBytes($"Content-Length: {json.Length}\r\n\r\n");
+
+        await _writeLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await _output.WriteAsync(header).ConfigureAwait(false);
+            await _output.WriteAsync(json).ConfigureAwait(false);
+            await _output.FlushAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <summary>Serializes an LSP payload by its runtime type through the source-generated context.</summary>
+    private static void WriteValue(Utf8JsonWriter writer, object? value)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        JsonSerializer.Serialize(writer, value, value.GetType(), LspJsonContext.Default);
+    }
+
+    private static void Log(string message) => Console.Error.WriteLine($"[winui-xaml-ls] {message}");
+}

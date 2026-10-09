@@ -1,0 +1,468 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import {
+  PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE,
+  PROJECT_CONTEXT_STATES,
+  PROJECT_CONTEXT_STATUS_NOTIFICATION,
+  ProjectContextStatus,
+  getRelevantProjectContextStatuses,
+  getProjectContextStatusPresentation,
+  isProjectContextState,
+  selectProjectContextStatus,
+  shouldReplaceProjectContextStatus,
+} from "../xaml/projectContextStatus";
+
+test("a starting reload does not erase a reference-build-failed the developer has not fixed", () => {
+  // Every save restarts the load, so an unbuilt project re-sends `loading` indefinitely.
+  const current: ProjectContextStatus = {
+    uri: "file:///a.xaml",
+    state: "reference-build-failed",
+    message: "PlainLib has not been built",
+  };
+  assert.equal(
+    shouldReplaceProjectContextStatus(current, {
+      uri: "file:///a.xaml",
+      state: "loading",
+    }),
+    false
+  );
+  assert.equal(
+    shouldReplaceProjectContextStatus(
+      { uri: "file:///a.xaml", state: "packages-not-restored" },
+      { uri: "file:///a.xaml", state: "loading" }
+    ),
+    false
+  );
+});
+
+test("recovery after a real build still lands immediately", () => {
+  // The suppression must be narrow: only `loading` is held off. If any terminal state were
+  // suppressed too, a developer who built would be stuck reading "build required" forever --
+  // strictly worse than the flapping this fixes.
+  const current: ProjectContextStatus = {
+    uri: "file:///a.xaml",
+    state: "reference-build-failed",
+  };
+  for (const state of PROJECT_CONTEXT_STATES.filter((s) => s !== "loading")) {
+    assert.equal(
+      shouldReplaceProjectContextStatus(current, {
+        uri: "file:///a.xaml",
+        state,
+      }),
+      true,
+      `${state} must replace reference-build-failed`
+    );
+  }
+});
+
+test("a reload replaces any state that is not a durable fact about the project", () => {
+  assert.equal(
+    shouldReplaceProjectContextStatus(undefined, {
+      uri: "file:///a.xaml",
+      state: "loading",
+    }),
+    true
+  );
+  for (const state of ["ready", "framework-ready", "error"] as const) {
+    assert.equal(
+      shouldReplaceProjectContextStatus(
+        { uri: "file:///a.xaml", state },
+        { uri: "file:///a.xaml", state: "loading" }
+      ),
+      true,
+      `loading must replace ${state}`
+    );
+  }
+});
+
+// The server sends states as bare strings and the client narrows with `isProjectContextState`; unknown states are dropped, so the bar shows nothing.
+// Neither suite covers this seam because server states are private literals and client tests normally feed known states.
+// Read C# literals back so a server-side state added without a client counterpart fails the build.
+test("every state the server can emit is one the client knows", () => {
+  const source = readFileSync(
+    path.join(
+      __dirname,
+      "..",
+      "..",
+      "server",
+      "src",
+      "WinUiXaml.LanguageServer",
+      "XamlLanguageServer.CompletionAndResources.cs"
+    ),
+    "utf8"
+  );
+
+  const emitted = [
+    ...source.matchAll(
+      /NotifyProjectContextStatusAsync\(\s*(?:uri|\w+)\s*,\s*"([a-z-]+)"/g
+    ),
+  ].map((match) => match[1]);
+
+  // A regex that silently stopped matching would turn this into a tautology, so the harvest
+  // itself is asserted before it is used.
+  assert.ok(
+    emitted.length >= 5,
+    `Expected to find the server's status literals, found ${emitted.length}. ` +
+      "The call shape probably changed and this test is no longer reading anything."
+  );
+  assert.ok(emitted.includes("packages-not-restored"));
+  assert.ok(emitted.includes("reference-build-failed"));
+
+  const unknown = [...new Set(emitted)].filter(
+    (state) => !PROJECT_CONTEXT_STATES.includes(state as never)
+  );
+
+  assert.deepEqual(
+    unknown,
+    [],
+    `The server emits these states but the client drops them, so the status bar goes blank: ${unknown.join(", ")}`
+  );
+});
+
+test("uses the project-context status notification contract", () => {
+  assert.equal(PROJECT_CONTEXT_STATUS_NOTIFICATION, "winui-xaml/projectContextStatus");
+});
+
+test("prioritizes actionable errors over loading and ready states", () => {
+  const statuses: ProjectContextStatus[] = [
+    { uri: "file:///Ready.xaml", state: "ready" },
+    { uri: "file:///Framework.xaml", state: "framework-ready" },
+    { uri: "file:///Loading.xaml", state: "loading" },
+    { uri: "file:///Failed.xaml", state: "error", message: "Restore required." },
+  ];
+
+  assert.deepEqual(selectProjectContextStatus(statuses), statuses[3]);
+});
+
+test("shows loading ahead of ready and ignores idle-only state", () => {
+  const ready: ProjectContextStatus = { uri: "file:///Ready.xaml", state: "ready" };
+  const loading: ProjectContextStatus = { uri: "file:///Loading.xaml", state: "loading" };
+
+  assert.deepEqual(selectProjectContextStatus([ready, loading]), loading);
+  assert.equal(
+    selectProjectContextStatus([{ uri: "file:///Closed.xaml", state: "idle" }]),
+    undefined
+  );
+});
+
+test("shows framework readiness while project symbols continue loading", () => {
+  const frameworkReady: ProjectContextStatus = {
+    uri: "file:///Framework.xaml",
+    state: "framework-ready",
+  };
+  const ready: ProjectContextStatus = { uri: "file:///Ready.xaml", state: "ready" };
+
+  assert.deepEqual(selectProjectContextStatus([ready, frameworkReady]), frameworkReady);
+  assert.deepEqual(getProjectContextStatusPresentation(frameworkReady), {
+    text: "$(sync~spin) WinApp: WinUI Types Ready \u00b7 Loading Project Symbols and Diagnostics",
+    tooltip:
+      "WinUI and package types are available. Your project's own types, x:Bind members, and diagnostics are still loading. Click to show the WinUI XAML output.",
+    transient: false,
+  });
+
+  test("scopes status to the active XAML document", () => {
+    const statuses: ProjectContextStatus[] = [
+      { uri: "file:///Preloaded.xaml", state: "error", message: "Restore required." },
+      { uri: "file:///Active.xaml", state: "ready" },
+    ];
+
+    assert.deepEqual(
+      getRelevantProjectContextStatuses(statuses, "file:///Active.xaml"),
+      [statuses[1]]
+    );
+    assert.deepEqual(getRelevantProjectContextStatuses(statuses, null), []);
+    assert.deepEqual(getRelevantProjectContextStatuses(statuses, undefined), statuses);
+  });
+});
+
+test("presents persistent loading and actionable error status", () => {
+  assert.deepEqual(
+    getProjectContextStatusPresentation({
+      uri: "file:///Loading.xaml",
+      state: "loading",
+    }),
+    {
+      text: "$(sync~spin) WinApp: Loading XAML IntelliSense",
+      tooltip:
+        "Loading the WinUI and package types for this project. Click to show the WinUI XAML output.",
+      transient: false,
+    }
+  );
+  assert.deepEqual(
+    getProjectContextStatusPresentation({
+      uri: "file:///Failed.xaml",
+      state: "error",
+      // Deliberately not a restore or build message: both of those have their own states now, so
+      // using one here would imply this generic wording is still where they land.
+      message: "The owning project could not be compiled.",
+    }),
+    {
+      text: "$(warning) WinApp: XAML IntelliSense Unavailable",
+      tooltip:
+        "The owning project could not be compiled. Click to show the WinUI XAML output.",
+      transient: false,
+    }
+  );
+});
+
+test("reports the restore as work in flight while the extension is running it", () => {
+  // The extension restores without being asked, so during that window "restore required" would
+  // tell the developer to run a command the extension is at that moment running.
+  assert.deepEqual(
+    getProjectContextStatusPresentation(
+      {
+        uri: "file:///Fresh.xaml",
+        state: "packages-not-restored",
+        message: "Restore required: App.csproj.",
+      },
+      { restoreInFlight: true }
+    ),
+    {
+      text: "$(sync~spin) WinApp: Restoring Packages",
+      tooltip:
+        "Restoring the project's packages. Project-aware IntelliSense resumes when it " +
+        "completes. Click to show the WinUI XAML output.",
+      transient: false,
+    }
+  );
+
+  // Once it finishes without fixing the condition -- a restore that failed -- the state is an
+  // outstanding demand again, so the instruction comes back. The error notification that reported
+  // the failure is transient; the bar is what the developer still sees a minute later.
+  assert.match(
+    getProjectContextStatusPresentation(
+      {
+        uri: "file:///Fresh.xaml",
+        state: "packages-not-restored",
+        message: "Restore required: App.csproj.",
+      },
+      { restoreInFlight: false }
+    )?.text ?? "",
+    /Restore Required/
+  );
+
+  // The flag describes the restore only; the build-side state is untouched by it.
+  assert.match(
+    getProjectContextStatusPresentation(
+      { uri: "file:///Fresh.xaml", state: "reference-build-failed", message: "build me" },
+      { restoreInFlight: true }
+    )?.text ?? "",
+    /Failed to Build/
+  );
+});
+
+test("names the restore in the bar itself, and outranks the build", () => {
+  // A never-restored project is as user-fixable as a never-built one, and reached earlier on a
+  // clean clone, so it gets its own bar text rather than "XAML IntelliSense unavailable", which
+  // describes a broken extension rather than a one-command fix.
+  assert.deepEqual(
+    getProjectContextStatusPresentation({
+      uri: "file:///Fresh.xaml",
+      state: "packages-not-restored",
+      message: "Restore required: App.csproj.",
+    }),
+    {
+      text: "$(package) WinApp: Restore Required for XAML IntelliSense",
+      tooltip: "Restore required: App.csproj. Click to show the WinUI XAML output.",
+      transient: false,
+    }
+  );
+
+  // Restore is the prerequisite for build, so naming the build while packages are missing would
+  // point the developer at the step that fails second.
+  assert.equal(
+    selectProjectContextStatus([
+      { uri: "file:///A.xaml", state: "reference-build-failed", message: "build me" },
+      { uri: "file:///A.xaml", state: "packages-not-restored", message: "restore me" },
+    ])?.state,
+    "packages-not-restored"
+  );
+
+  assert.equal(
+    selectProjectContextStatus([
+      { uri: "file:///A.xaml", state: "error", message: "boom" },
+      { uri: "file:///A.xaml", state: "packages-not-restored", message: "restore me" },
+    ])?.state,
+    "packages-not-restored"
+  );
+
+  // The client narrows the server's notification payload, so a state the server emits but this
+  // list does not know is dropped and nothing reaches the bar at all.
+  assert.equal(isProjectContextState("packages-not-restored"), true);
+});
+
+test("names the build in the bar itself, and outranks a plain error", () => {
+  assert.deepEqual(
+    getProjectContextStatusPresentation({
+      uri: "file:///Diamond.xaml",
+      state: "reference-build-failed",
+      message: "Build required: App.csproj (unresolved: MiddleLib, SharedLib).",
+    }),
+    {
+      text: "$(tools) WinApp: Referenced Project Failed to Build",
+      tooltip:
+        "Build required: App.csproj (unresolved: MiddleLib, SharedLib). " +
+        "Click to show the WinUI XAML output.",
+      transient: false,
+    }
+  );
+
+  // A server that reports both must surface the one with a fix attached.
+  assert.equal(
+    selectProjectContextStatus([
+      { uri: "file:///A.xaml", state: "error", message: "boom" },
+      { uri: "file:///A.xaml", state: "reference-build-failed", message: "build me" },
+    ])?.state,
+    "reference-build-failed"
+  );
+
+  assert.equal(isProjectContextState("reference-build-failed"), true);
+});
+
+// A generator-host outage leaves hand-written members resolving and only the generated ones
+// missing, which reads as a partly-working project rather than a broken one -- so it has to be
+// named explicitly or it is never attributed to the extension's own helper.
+test("names a generator outage, ranks it under the fixable states, and survives a reload", () => {
+  assert.deepEqual(
+    getProjectContextStatusPresentation({
+      uri: "file:///Gen.xaml",
+      state: "generators-unavailable",
+      message: "App.csproj: generator host is missing.",
+    }),
+    {
+      text: "$(warning) WinApp: Generated Members Unavailable",
+      tooltip:
+        "App.csproj: generator host is missing. Click to show the WinUI XAML output.",
+      transient: false,
+    }
+  );
+
+  // Restore and build are both actions the developer can take; this one is not, so it must not
+  // displace them when several conditions are present at once.
+  assert.equal(
+    selectProjectContextStatus([
+      { uri: "file:///A.xaml", state: "generators-unavailable", message: "no host" },
+      { uri: "file:///A.xaml", state: "reference-build-failed", message: "build me" },
+    ])?.state,
+    "reference-build-failed"
+  );
+
+  assert.equal(
+    selectProjectContextStatus([
+      { uri: "file:///A.xaml", state: "error", message: "boom" },
+      { uri: "file:///A.xaml", state: "generators-unavailable", message: "no host" },
+    ])?.state,
+    "generators-unavailable"
+  );
+
+  // Nothing about a reload starting makes the helper appear, so a transient loading must not
+  // erase it.
+  assert.equal(
+    shouldReplaceProjectContextStatus(
+      { uri: "file:///A.xaml", state: "generators-unavailable" },
+      { uri: "file:///A.xaml", state: "loading" }
+    ),
+    false
+  );
+
+  assert.equal(isProjectContextState("generators-unavailable"), true);
+});
+
+// The server starts without .NET now, so a C# project can reach a state no other status covers:
+// everything project-aware is unavailable and no amount of restoring or building fixes it, so it
+// has to outrank the states that suggest those actions.
+test("names a missing SDK, outranks restore and build, and survives a reload", () => {
+  // The server's own message names the failed process; the actionable sentence is the one the
+  // developer can follow, so the presentation states it rather than echoing the failure.
+  assert.deepEqual(
+    getProjectContextStatusPresentation({
+      uri: "file:///Sdk.xaml",
+      state: "dotnet-sdk-required",
+      message: "Project-aware XAML features require the .NET SDK.",
+    }),
+    {
+      text: "$(cloud-download) WinApp: .NET SDK Required for XAML IntelliSense",
+      tooltip: `${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE} Click for install and restart actions.`,
+      transient: false,
+      command: "winui-xaml.showInfo",
+    }
+  );
+
+  for (const competing of [
+    "packages-not-restored",
+    "reference-build-failed",
+    "generators-unavailable",
+    "error",
+  ] as const) {
+    assert.equal(
+      selectProjectContextStatus([
+        { uri: "file:///A.xaml", state: competing },
+        { uri: "file:///A.xaml", state: "dotnet-sdk-required" },
+      ])?.state,
+      "dotnet-sdk-required",
+      `dotnet-sdk-required must outrank ${competing}`
+    );
+  }
+
+  assert.equal(
+    shouldReplaceProjectContextStatus(
+      { uri: "file:///A.xaml", state: "dotnet-sdk-required" },
+      { uri: "file:///A.xaml", state: "loading" }
+    ),
+    false
+  );
+
+  // Installing the SDK and restarting has to clear it, or the instruction outlives the fix.
+  assert.equal(
+    shouldReplaceProjectContextStatus(
+      { uri: "file:///A.xaml", state: "dotnet-sdk-required" },
+      { uri: "file:///A.xaml", state: "ready" }
+    ),
+    true
+  );
+
+  assert.equal(isProjectContextState("dotnet-sdk-required"), true);
+});
+
+// The status bar applies `presentation.command ?? showOutput` on every render, so leaving the
+// SDK-required state only restores the default click target if no other state carries a command.
+test("limits the custom status command to the SDK-required state", () => {
+  for (const state of [
+    "loading",
+    "ready",
+    "packages-not-restored",
+    "reference-build-failed",
+    "generators-unavailable",
+    "error",
+  ] as const) {
+    assert.equal(
+      getProjectContextStatusPresentation({ uri: "file:///A.xaml", state })?.command,
+      undefined,
+      `${state} must not pin a custom status command`
+    );
+  }
+});
+
+test("presents ready status briefly and hides idle status", () => {
+  assert.deepEqual(
+    getProjectContextStatusPresentation({
+      uri: "file:///Ready.xaml",
+      state: "ready",
+    }),
+    {
+      text: "$(check) WinApp: XAML IntelliSense Ready",
+      tooltip: "Project-aware XAML IntelliSense is ready.",
+      transient: true,
+    }
+  );
+  assert.equal(
+    getProjectContextStatusPresentation({
+      uri: "file:///Closed.xaml",
+      state: "idle",
+    }),
+    undefined
+  );
+});
+

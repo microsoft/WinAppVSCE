@@ -1,0 +1,282 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  DiagnosticsLevelInteraction,
+  getDiagnosticsLevelValidationMessage,
+  getXamlStatus,
+  getXamlStatusEffect,
+  normalizeDiagnosticsLevel,
+  readXamlLanguageServerConfiguration,
+  shouldRestartXamlLanguageServer,
+} from "../xaml/xamlConfiguration";
+import {
+  PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE,
+  PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE,
+  PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE,
+  PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE,
+  PROJECT_CONTEXT_LOADING_MESSAGE,
+  PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE,
+  PROJECT_CONTEXT_RESTORING_MESSAGE,
+} from "../xaml/projectContextStatus";
+import {
+  XAML_INTELLISENSE_UNAVAILABLE_PREFIX,
+  XAML_STATUS_PREFIX,
+} from "../xaml/xamlConstants";
+
+test("pins the status message prefixes", () => {
+  assert.equal(XAML_STATUS_PREFIX, "WinUI XAML Tools:");
+  assert.equal(
+    XAML_INTELLISENSE_UNAVAILABLE_PREFIX,
+    "WinUI XAML IntelliSense Unavailable:"
+  );
+});
+
+test("reports disabled, running, and degraded XAML status actions", () => {
+  assert.deepEqual(getXamlStatus(false, false, true, false), {
+    message:
+      `${XAML_STATUS_PREFIX} IntelliSense is disabled in Settings; syntax highlighting remains active.`,
+    actions: ["Open Settings"],
+  });
+
+  assert.deepEqual(getXamlStatus(true, true, true, true), {
+    message: `${XAML_STATUS_PREFIX} language server running.`,
+    actions: [],
+  });
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "loading",
+    }),
+    {
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_LOADING_MESSAGE}`,
+      actions: ["Show Output"],
+    }
+  );
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "framework-ready",
+    }),
+    {
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE}`,
+      actions: ["Show Output"],
+    }
+  );
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "error",
+      message: "Restore required.",
+    }),
+    {
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} Restore required.`,
+      actions: ["Restart Language Server", "Show Output"],
+    }
+  );
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, { state: "error" }),
+    {
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE}`,
+      actions: ["Restart Language Server", "Show Output"],
+    }
+  );
+  assert.deepEqual(getXamlStatus(true, false, true, true).actions, [
+    "Restart Language Server",
+    "Show Output",
+  ]);
+  assert.deepEqual(getXamlStatus(true, false, false, true).actions, [
+    "Manage Workspace Trust",
+    "Show Output",
+  ]);
+  assert.deepEqual(getXamlStatus(true, false, true, false), {
+    message:
+      `${XAML_STATUS_PREFIX} ready; the language server starts when a XAML file is opened.`,
+    actions: [],
+  });
+});
+
+// Each of these used to reach the "language server running" line, which told the user everything
+// was fine while the condition the status bar was reporting went unmentioned in the one place they
+// opened to find out what was wrong.
+test("Show XAML Language Server Status names the degraded conditions instead of reporting a healthy server", () => {
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "packages-not-restored",
+      message: "Restore the project's packages.",
+    }),
+    {
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} Restore the project's packages.`,
+      actions: ["Show Output"],
+    }
+  );
+
+  // Auto-restore is already running, so asking for the same work would be instructions the user
+  // cannot act on.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "packages-not-restored",
+      message: "Restore the project's packages.",
+      restoreInFlight: true,
+    }),
+    {
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_RESTORING_MESSAGE}`,
+      actions: ["Show Output"],
+    }
+  );
+
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "reference-build-failed",
+    }),
+    {
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE}`,
+      actions: ["Show Output"],
+    }
+  );
+
+  // No build or restore reaches the helper, so restarting is the only offer that can change it.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "generators-unavailable",
+    }),
+    {
+      message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_GENERATORS_UNAVAILABLE_FALLBACK_MESSAGE}`,
+      actions: ["Restart Language Server", "Show Output"],
+    }
+  );
+
+  // The server runs without .NET, so this reaches Show XAML Language Server Status while the server is healthy. Only the
+  // download link fixes it, and the restart is what applies the SDK once it is installed.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "dotnet-sdk-required",
+    }),
+    {
+      message: `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE}`,
+      actions: ["Install .NET", "Restart Language Server", "Show Output"],
+    }
+  );
+
+  // The server reports the process that failed, which names dotnet rather than the SDK the user
+  // has to install, so the requirement leads and the server detail follows it.
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "dotnet-sdk-required",
+      message: "Failed to start 'dotnet msbuild'.",
+    }),
+    {
+      message:
+        `${XAML_INTELLISENSE_UNAVAILABLE_PREFIX} ${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE}` +
+        ` Failed to start 'dotnet msbuild'.`,
+      actions: ["Install .NET", "Restart Language Server", "Show Output"],
+    }
+  );
+});
+
+test("maps every XAML status action to its recovery effect", () => {
+  assert.deepEqual(getXamlStatusEffect("Open Settings"), {
+    command: "workbench.action.openSettings",
+    args: ["winapp.xaml.intelliSense.enable"],
+  });
+  assert.deepEqual(getXamlStatusEffect("Restart Language Server"), {
+    command: "winui-xaml.restartServer",
+  });
+  assert.deepEqual(getXamlStatusEffect("Manage Workspace Trust"), {
+    command: "workbench.trust.manage",
+  });
+  assert.deepEqual(getXamlStatusEffect("Show Output"), { showOutput: true });
+  assert.deepEqual(getXamlStatusEffect("Install .NET"), {
+    url: "https://dotnet.microsoft.com/download/dotnet/10.0",
+  });
+  assert.equal(getXamlStatusEffect(undefined), undefined);
+});
+
+test("normalizes supported XAML diagnostic levels", () => {
+  assert.equal(normalizeDiagnosticsLevel("off"), "off");
+  assert.equal(normalizeDiagnosticsLevel("all"), "all");
+  assert.equal(normalizeDiagnosticsLevel("errorsOnly"), "errorsOnly");
+});
+
+test("defaults unknown XAML diagnostic levels to all", () => {
+  assert.equal(normalizeDiagnosticsLevel("unexpected"), "all");
+  assert.equal(normalizeDiagnosticsLevel(""), "all");
+  // The pre-release aliases are gone: they must fall back like any other unknown value.
+  assert.equal(normalizeDiagnosticsLevel("warning"), "all");
+  assert.equal(normalizeDiagnosticsLevel("error"), "all");
+});
+
+test("validates diagnostic levels and explains invalid values", () => {
+  for (const value of ["all", "errorsOnly", "off"]) {
+    assert.equal(getDiagnosticsLevelValidationMessage(value), undefined);
+  }
+  for (const value of ["syntax", "warning", "error"]) {
+    assert.match(
+      getDiagnosticsLevelValidationMessage(value) ?? "",
+      /Invalid winapp\.xaml\.diagnostics\.level value.*all, errorsOnly, or off/
+    );
+  }
+});
+
+test("reads startup enablement and diagnostics initialization options together", () => {
+  const values = new Map<string, unknown>([
+    ["intelliSense.enable", false],
+    ["diagnostics.level", "errorsOnly"],
+  ]);
+  const configuration = readXamlLanguageServerConfiguration(
+    <T>(section: string, defaultValue: T) =>
+      (values.has(section) ? values.get(section) : defaultValue) as T
+  );
+
+  assert.deepEqual(configuration, {
+    enabled: false,
+    initializationOptions: { diagnosticsLevel: "errorsOnly" },
+  });
+});
+
+test("transmits canonical diagnostic levels through mocked extension interactions", async () => {
+  const sent: string[] = [];
+  const interaction = new DiagnosticsLevelInteraction({
+    log: () => {},
+    showWarningMessage: async () => undefined,
+    openSettings: async () => {},
+  });
+
+  await interaction.transmit("off", async (level) => sent.push(level));
+  await interaction.transmit("errorsOnly", async (level) => sent.push(level));
+
+  assert.deepEqual(sent, ["off", "errorsOnly"]);
+});
+
+test("warns once for an invalid value, falls back, and opens settings", async () => {
+  const logs: string[] = [];
+  const warnings: string[] = [];
+  const opened: string[] = [];
+  const sent: string[] = [];
+  const interaction = new DiagnosticsLevelInteraction({
+    log: (message) => logs.push(message),
+    showWarningMessage: async (message, action) => {
+      warnings.push(`${message}|${action}`);
+      return "Open Settings";
+    },
+    openSettings: async () => {
+      opened.push("winapp.xaml.diagnostics.level");
+    },
+  });
+
+  await interaction.transmit("syntax", async (level) => sent.push(level));
+  await interaction.transmit("syntax", async (level) => sent.push(level));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(sent, ["all", "all"]);
+  assert.equal(logs.length, 2);
+  assert.equal(warnings.length, 1);
+  assert.deepEqual(opened, ["winapp.xaml.diagnostics.level"]);
+
+  interaction.resolve("all");
+  interaction.resolve("syntax");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(warnings.length, 2, "a valid value resets warning deduplication");
+});
+
+test("restarts on configuration changes only for an active or needed server", () => {
+  assert.equal(shouldRestartXamlLanguageServer(false, false), false);
+  assert.equal(shouldRestartXamlLanguageServer(true, false), true);
+  assert.equal(shouldRestartXamlLanguageServer(false, true), true);
+});

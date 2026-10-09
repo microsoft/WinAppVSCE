@@ -29,12 +29,21 @@ param(
     [switch]$Stable = $false,
 
     [Parameter(Mandatory=$false)]
-    [string]$CliBinariesPath
+    [string]$CliBinariesPath,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$SkipServerBuild = $false
 )
 
 # Ensure we're running from the project root
 $ProjectRoot = $PSScriptRoot | Split-Path -Parent
 Push-Location $ProjectRoot
+
+# Track the bundle mode so a later local package in the same shell cannot accidentally reuse an
+# existing signed artifact.
+$ServerBundleModeSet = $false
+$PriorServerBundleMode = $env:WINUI_XAML_SERVER_BUNDLE_MODE
+
 try
 {
     # Define standard paths
@@ -139,9 +148,12 @@ try
 
     Push-Location $VscProjectPath
 
-    # Clean out and dist directories (preserve bin/ which may contain downloaded CLI binaries)
+    # Clean out and dist directories (preserve bin/ which may contain downloaded CLI binaries).
+    # Under -SkipServerBuild the language server has already been published (and signed) into
+    # dist/server by a prior pipeline step, so preserve dist/ and only clean out/.
     Write-Host "[VSC] Cleaning build artifacts..." -ForegroundColor Blue
-    @("out", "dist") | ForEach-Object {
+    $CleanTargets = if ($SkipServerBuild) { @("out") } else { @("out", "dist") }
+    $CleanTargets | ForEach-Object {
         if (Test-Path $_) { Remove-Item $_ -Recurse -Force }
     }
 
@@ -161,6 +173,25 @@ try
         Write-Error "TypeScript compilation failed"
         Pop-Location
         exit 1
+    }
+
+    # Ensure the WinUI XAML language server (.NET) is published into dist/server so it ships in the
+    # VSIX. The single local publish path is vscode:prepublish -> ensure-server-bundle.mjs (via the
+    # `vsce package` below); in release builds -SkipServerBuild switches it to signed-artifact mode.
+    if ($SkipServerBuild) {
+        Write-Host "[VSC] Skipping server build; reusing pre-published dist/server..." -ForegroundColor Blue
+        # Preserve the downloaded ESRP signatures instead of rebuilding over them. The mode is
+        # restored in the finally block so it never leaks into the caller's shell. The prepublish
+        # helper is the canonical completeness check and rejects apphost or runtime payloads.
+        $env:WINUI_XAML_SERVER_BUNDLE_MODE = "artifact"
+        $ServerBundleModeSet = $true
+    } else {
+        # Normal packaging: DON'T publish the server here. The `vsce package` step below triggers
+        # vscode:prepublish -> ensure-server-bundle.mjs publishes a fresh Native AOT dist/server.
+        # Publishing here too would build the server twice for every package.
+        $env:WINUI_XAML_SERVER_BUNDLE_MODE = "source"
+        $ServerBundleModeSet = $true
+        Write-Host "[VSC] WinUI XAML language server will be published by vscode:prepublish (ensure-server-bundle)." -ForegroundColor Blue
     }
 
     # Copy CLI binaries from artifacts (skip if source and destination are the same)
@@ -203,22 +234,22 @@ try
     $ReadmePath = "README.md"
     Copy-Item $ReadmePath "$ReadmePath.backup" -Force
 
-    # Get CLI version from the bundled x64 binary
+    # Get CLI version from the bundled x64 binary. It was validated above and copied into bin/,
+    # so an unreadable version here means the package is broken rather than merely unlabelled.
     $CliExe = Join-Path $VscBinPath "win-x64\winapp.exe"
-    $CliVersion = "unknown"
-    if (Test-Path $CliExe) {
-        try {
-            $RawOutput = & $CliExe --version 2>$null
-            # Output may contain ASCII banner art; find the line matching semver pattern
-            $VersionLine = $RawOutput | Where-Object { $_ -match '^\d+\.\d+\.\d+' } | Select-Object -First 1
-            if (-not [string]::IsNullOrWhiteSpace($VersionLine)) {
-                # Strip git hash suffix (e.g., "1.0.0+abc123" -> "1.0.0")
-                $CliVersion = ($VersionLine.Trim() -split '\+')[0]
-            }
-        } catch {
-            Write-Warning "Could not determine CLI version from binary"
-        }
+    if (-not (Test-Path $CliExe)) {
+        Write-Error "Bundled CLI not found for version stamping: $CliExe"
+        exit 1
     }
+    $RawOutput = & $CliExe --version 2>$null
+    # Output may contain ASCII banner art; find the line matching semver pattern
+    $VersionLine = $RawOutput | Where-Object { $_ -match '^\d+\.\d+\.\d+' } | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($VersionLine)) {
+        Write-Error "Could not determine CLI version from $CliExe. Refusing to stamp an unknown version into README.md."
+        exit 1
+    }
+    # Strip git hash suffix (e.g., "1.0.0+abc123" -> "1.0.0")
+    $CliVersion = ($VersionLine.Trim() -split '\+')[0]
     Write-Host "[VERSION] Bundled CLI version: $CliVersion" -ForegroundColor Cyan
 
     # Replace version placeholders in README
@@ -267,6 +298,36 @@ try
     $CreatedVsix = Get-ChildItem -Path $OutputPath -Filter "winapp-*.vsix" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
     if ($CreatedVsix) {
+        $VsixArchive = [System.IO.Compression.ZipFile]::OpenRead($CreatedVsix.FullName)
+        try {
+            $ManifestEntry = $VsixArchive.Entries |
+                Where-Object { $_.FullName -eq "extension.vsixmanifest" } |
+                Select-Object -First 1
+            if (-not $ManifestEntry) {
+                Write-Error "Packaged VSIX is missing extension.vsixmanifest."
+                exit 1
+            }
+
+            $ManifestReader = [System.IO.StreamReader]::new($ManifestEntry.Open())
+            try {
+                $ManifestContent = $ManifestReader.ReadToEnd()
+            } finally {
+                $ManifestReader.Dispose()
+            }
+
+            if ($ManifestContent -notmatch '<Identity\b[^>]*\bVersion="([^"]+)"') {
+                Write-Error "Packaged VSIX manifest does not contain an extension version."
+                exit 1
+            }
+            if ($Matches[1] -ne $Version) {
+                Write-Error "Packaged VSIX version '$($Matches[1])' does not match requested version '$Version'."
+                exit 1
+            }
+            Write-Host "[VALIDATE] Embedded extension version: $($Matches[1])" -ForegroundColor Green
+        } finally {
+            $VsixArchive.Dispose()
+        }
+
         $VsixSize = [math]::Round($CreatedVsix.Length / 1MB, 2)
         Write-Host ""
         Write-Host "[SUCCESS] VS Code extension packaged successfully!" -ForegroundColor Green
@@ -276,10 +337,23 @@ try
         Write-Warning "VSIX was created but could not be located in $OutputPath"
     }
 
+    if ($CreatedVsix) {
+        & (Join-Path $PSScriptRoot "validate-vsix-server.ps1") -VsixPath $CreatedVsix.FullName
+        if (-not $?) { exit 1 }
+    }
+
     Write-Host "[DONE] VS Code extension packaging complete!" -ForegroundColor Green
 }
 finally
 {
     # Restore original working directory
     Pop-Location
+
+    if ($ServerBundleModeSet) {
+        if ($null -eq $PriorServerBundleMode) {
+            Remove-Item Env:\WINUI_XAML_SERVER_BUNDLE_MODE -ErrorAction SilentlyContinue
+        } else {
+            $env:WINUI_XAML_SERVER_BUNDLE_MODE = $PriorServerBundleMode
+        }
+    }
 }

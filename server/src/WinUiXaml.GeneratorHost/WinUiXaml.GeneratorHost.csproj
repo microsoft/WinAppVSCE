@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>WinUiXaml.GeneratorHost</AssemblyName>
+    <RootNamespace>WinUiXaml.GeneratorHost</RootNamespace>
+    <!-- Framework-dependent by necessity: running source generators means loading analyzer assemblies
+         at runtime, which Native AOT cannot do. Apphost-free keeps it architecture-neutral. -->
+    <UseAppHost>false</UseAppHost>
+    <IsPackable>false</IsPackable>
+    <!-- Localized Roslyn resources add ~5 MB to the VSIX for diagnostics we never surface. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\GeneratorRequestFields.cs" Link="GeneratorRequestFields.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+  </ItemGroup>
+
+</Project>
