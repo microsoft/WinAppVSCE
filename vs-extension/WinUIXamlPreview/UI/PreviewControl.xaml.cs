@@ -27,6 +27,10 @@ namespace WinUIXamlPreview.UI
     {
         private readonly DispatcherTimer _resizeDebounce;
         private SurfaceClient? _client;
+        // R1: per-client unsubscribe actions. Handlers are bound to their source client so a reply from a
+        // client we've swapped away from (doc switch, spare promotion, matched upgrade) — one already queued
+        // on the dispatcher when we unhooked — is recognised as stale and dropped instead of painting.
+        private readonly System.Collections.Generic.Dictionary<SurfaceClient, Action> _clientWiring = new();
         private EditorTracker? _tracker;
         private string? _currentPath;
         private bool _hasFrame;
@@ -355,15 +359,7 @@ namespace WinUIXamlPreview.UI
 
             Log.Write($"Constructing surface client (surfaceExe='{surfaceExe}', userDll='{userDll ?? "(none)"}', appXaml='{userAppXaml ?? "(none)"}', xaml={xaml.Length} chars)…");
             var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, PreviewOptions.Theme, userPri: recoverPri) { SampleData = PreviewOptions.DesignTimeData };
-            client.Frame += OnFrame;
-            client.Error += OnError;
-            client.Hwnd += OnHwnd;
-            client.NativeExited += OnNativeExited;
-            client.Selected += OnSelected;
-            client.ElementProps += OnElementProps;
-            client.ContentProps += OnContentProps;
-            client.View += OnView;
-            client.Closed += OnClosed;
+            AttachClient(client);
             _client = client;
             _activeProcessRendered = false; // a fresh process; it hasn't rendered yet
             // A fresh client is wired up; allow its (unexpected) death to trigger an auto-restart.
@@ -720,11 +716,74 @@ namespace WinUIXamlPreview.UI
         // a complete snapshot (header + properties). Correlated by element id.
         private SelectedMsg? _lastSelected;
 
-        private void OnSelected(SelectedMsg sel)
+        // R1: subscribe every reply handler bound to its source client. Each handler re-checks ownership on
+        // the UI thread (IsStale) because a reply raised on the reader thread just before DetachClient is
+        // already queued on the dispatcher — unhooking alone can't stop it.
+        private void AttachClient(SurfaceClient c)
+        {
+            DetachClient(c);
+            Action<FrameMsg> frame = m => OnFrame(c, m);
+            Action<ErrorMsg> error = m => OnError(c, m);
+            Action<HwndMsg> hwnd = m => OnHwnd(c, m);
+            Action<SelectedMsg> selected = m => OnSelected(c, m);
+            Action<ElementPropsMsg> props = m => OnElementProps(c, m);
+            Action<ContentPropsMsg> contentProps = m => OnContentProps(c, m);
+            Action<ViewMsg> view = m => OnView(c, m);
+            Action<string> closed = r => OnClosed(c, r);
+            c.Frame += frame;
+            c.Error += error;
+            c.Hwnd += hwnd;
+            c.NativeExited += OnNativeExited;
+            c.Selected += selected;
+            c.ElementProps += props;
+            c.ContentProps += contentProps;
+            c.View += view;
+            c.Closed += closed;
+            _clientWiring[c] = () =>
+            {
+                c.Frame -= frame;
+                c.Error -= error;
+                c.Hwnd -= hwnd;
+                c.NativeExited -= OnNativeExited;
+                c.Selected -= selected;
+                c.ElementProps -= props;
+                c.ContentProps -= contentProps;
+                c.View -= view;
+                c.Closed -= closed;
+            };
+        }
+
+        private void DetachClient(SurfaceClient c)
+        {
+            if (_clientWiring.TryGetValue(c, out var unwire))
+            {
+                _clientWiring.Remove(c);
+                unwire();
+            }
+        }
+
+        // True when a reply came from a client that is no longer the active one (logged, then dropped).
+        private bool IsStale(SurfaceClient source, string what)
+        {
+            if (ReferenceEquals(source, _client))
+            {
+                return false;
+            }
+
+            Log.Write($"Dropped stale {what} from a superseded surface.");
+            return true;
+        }
+
+        private void OnSelected(SurfaceClient source, SelectedMsg sel)
         {
             if (!Dispatcher.CheckAccess())
             {
-                _ = Dispatcher.BeginInvoke(new Action(() => OnSelected(sel)));
+                _ = Dispatcher.BeginInvoke(new Action(() => OnSelected(source, sel)));
+                return;
+            }
+
+            if (_disposed || IsStale(source, "Selected"))
+            {
                 return;
             }
 
@@ -751,18 +810,31 @@ namespace WinUIXamlPreview.UI
         // Bug D1: the surface reported the authored subtree's custom content-property map. Store it and notify
         // the margin so it rebuilds its XAML source map to recurse into explicit property elements. No UI
         // marshalling needed — this only swaps a reference and the margin handler just flips a dirty flag.
-        private void OnContentProps(ContentPropsMsg msg)
+        private void OnContentProps(SurfaceClient source, ContentPropsMsg msg)
         {
+            // Runs on the reader thread; a reference compare is enough (a late map from an old surface would
+            // otherwise overwrite the new document's map, which only arrives after its render).
+            if (!ReferenceEquals(source, _client))
+            {
+                Log.Write("Dropped stale ContentProps from a superseded surface.");
+                return;
+            }
+
             _contentPropMap = msg?.Map;
             try { ContentPropMapChanged?.Invoke(); }
             catch (Exception ex) { Log.Write("ContentPropMapChanged handler failed: " + ex.Message); }
         }
 
-        private void OnElementProps(ElementPropsMsg msg)
+        private void OnElementProps(SurfaceClient source, ElementPropsMsg msg)
         {
             if (!Dispatcher.CheckAccess())
             {
-                _ = Dispatcher.BeginInvoke(new Action(() => OnElementProps(msg)));
+                _ = Dispatcher.BeginInvoke(new Action(() => OnElementProps(source, msg)));
+                return;
+            }
+
+            if (_disposed || IsStale(source, "ElementProps"))
+            {
                 return;
             }
 
@@ -1044,7 +1116,7 @@ namespace WinUIXamlPreview.UI
                 if (ReferenceEquals(dead, _client))
                 {
                     Log.Write("Promoted spare had already died; handling as an active-surface death.");
-                    OnClosed(reason);
+                    OnClosed(dead, reason);
                     return;
                 }
 
@@ -1098,30 +1170,14 @@ namespace WinUIXamlPreview.UI
             var old = _client;
             if (old != null)
             {
-                old.Frame -= OnFrame;
-                old.Error -= OnError;
-                old.Hwnd -= OnHwnd;
-                old.NativeExited -= OnNativeExited;
-                old.Selected -= OnSelected;
-                old.ElementProps -= OnElementProps;
-                old.ContentProps -= OnContentProps;
-                old.View -= OnView;
-                old.Closed -= OnClosed;
+                DetachClient(old);
             }
 
             _nativeHost?.MarkSurfaceDead();
             _retiringClient = old;
 
             // Wire the spare as the new active.
-            spare.Frame += OnFrame;
-            spare.Error += OnError;
-            spare.Hwnd += OnHwnd;
-            spare.NativeExited += OnNativeExited;
-            spare.Selected += OnSelected;
-            spare.ElementProps += OnElementProps;
-            spare.ContentProps += OnContentProps;
-            spare.View += OnView;
-            spare.Closed += OnClosed;
+            AttachClient(spare);
             _client = spare;
             _activeProcessRendered = false; // the promoted spare hasn't rendered yet
             _suppressAutoRestart = false;
@@ -1370,15 +1426,7 @@ namespace WinUIXamlPreview.UI
             var old = _client;
             if (old != null)
             {
-                old.Frame -= OnFrame;
-                old.Error -= OnError;
-                old.Hwnd -= OnHwnd;
-                old.NativeExited -= OnNativeExited;
-                old.Selected -= OnSelected;
-                old.ElementProps -= OnElementProps;
-                old.ContentProps -= OnContentProps;
-                old.View -= OnView;
-                old.Closed -= OnClosed;
+                DetachClient(old);
             }
 
             _nativeHost?.MarkSurfaceDead();
@@ -1398,15 +1446,7 @@ namespace WinUIXamlPreview.UI
 
             // Wire the matched client as the new active + retarget the active launch config so crash recycling
             // reproduces the matched host (exe + merged pri).
-            matched.Frame += OnFrame;
-            matched.Error += OnError;
-            matched.Hwnd += OnHwnd;
-            matched.NativeExited += OnNativeExited;
-            matched.Selected += OnSelected;
-            matched.ElementProps += OnElementProps;
-            matched.ContentProps += OnContentProps;
-            matched.View += OnView;
-            matched.Closed += OnClosed;
+            AttachClient(matched);
             _client = matched;
             _activeProcessRendered = false;
             _suppressAutoRestart = false;
@@ -1527,11 +1567,11 @@ namespace WinUIXamlPreview.UI
 
         // ---- surface events (socket thread -> dispatcher) ------------------
 
-        private void OnFrame(FrameMsg frame)
+        private void OnFrame(SurfaceClient source, FrameMsg frame)
         {
             _ = Dispatcher.InvokeAsync(() =>
             {
-                if (_disposed || string.IsNullOrEmpty(frame.Data))
+                if (_disposed || string.IsNullOrEmpty(frame.Data) || IsStale(source, "Frame"))
                 {
                     return;
                 }
@@ -1577,11 +1617,11 @@ namespace WinUIXamlPreview.UI
             });
         }
 
-        private void OnHwnd(HwndMsg msg)
+        private void OnHwnd(SurfaceClient source, HwndMsg msg)
         {
             _ = Dispatcher.InvokeAsync(() =>
             {
-                if (_disposed || msg.Hwnd == 0)
+                if (_disposed || msg.Hwnd == 0 || IsStale(source, "Hwnd"))
                 {
                     return;
                 }
@@ -1647,8 +1687,13 @@ namespace WinUIXamlPreview.UI
             Log.Write("Surface acknowledged ExitNative (window re-cloaked off-screen).");
         }
 
-        private void OnView(ViewMsg view)
+        private void OnView(SurfaceClient source, ViewMsg view)
         {
+            if (!ReferenceEquals(source, _client))
+            {
+                return; // a superseded surface's zoom/scroll must not be carried to the new one
+            }
+
             _lastView = view;
             Log.Write($"View: fit={view.Fit} zoom={view.Zoom:0.###} offset={view.OffsetX:0},{view.OffsetY:0}");
         }
@@ -1676,11 +1721,11 @@ namespace WinUIXamlPreview.UI
             _perfLabel = null;
         }
 
-        private void OnError(ErrorMsg err)
+        private void OnError(SurfaceClient source, ErrorMsg err)
         {
             _ = Dispatcher.InvokeAsync(() =>
             {
-                if (_disposed)
+                if (_disposed || IsStale(source, "Error"))
                 {
                     return;
                 }
@@ -1731,11 +1776,17 @@ namespace WinUIXamlPreview.UI
             });
         }
 
-        private void OnClosed(string reason)
+        private void OnClosed(SurfaceClient source, string reason)
         {
             Log.Write("Surface closed: " + reason);
             _ = Dispatcher.InvokeAsync(() =>
             {
+                // A superseded surface's death must not tear down the active surface's native host.
+                if (IsStale(source, "Closed"))
+                {
+                    return;
+                }
+
                 // The surface process died: its child window is gone. Drop the native host without
                 // reparenting the dead handle.
                 if (_nativeHost != null)
@@ -2160,15 +2211,7 @@ namespace WinUIXamlPreview.UI
             _client = null;
             if (client != null)
             {
-                client.Frame -= OnFrame;
-                client.Error -= OnError;
-                client.Hwnd -= OnHwnd;
-                client.NativeExited -= OnNativeExited;
-                client.Selected -= OnSelected;
-                client.ElementProps -= OnElementProps;
-                client.ContentProps -= OnContentProps;
-                client.View -= OnView;
-                client.Closed -= OnClosed;
+                DetachClient(client);
                 client.Dispose();
             }
 
