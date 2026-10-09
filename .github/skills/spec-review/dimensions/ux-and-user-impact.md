@@ -13,10 +13,10 @@ Verify conventions against the real extension, not your assumptions — skim
 
 ## Conventions to check the proposal against
 
-- **Commands.** IDs are `winapp.<camelCase>`, `"category": "WinApp"`, titles
-  without a `WinApp:` prefix, and each command has an explicit `onCommand:`
-  activation event. New commands should be discoverable from the Command
-  Palette and, where it makes sense, the relevant context menu / editor title.
+- **Commands.** IDs are `winapp.<camelCase>`, `"category": "WinApp"`, and
+  titles without a `WinApp:` prefix. New commands should be discoverable from
+  the Command Palette and, where it makes sense, the relevant context menu /
+  editor title.
 - **Mirror the CLI, don't fork it.** Commands wrap `winapp` CLI verbs; defaults,
   names, and failure messages should match the CLI so docs for one apply to the
   other. A proposal whose UX diverges from the CLI verb it wraps needs a reason.

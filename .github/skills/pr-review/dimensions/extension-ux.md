@@ -12,18 +12,22 @@ different from what you would have designed is not a finding.
 
 - **Command contributions.** Every command in `contributes.commands` uses a
   `winapp.<camelCase>` ID, `"category": "WinApp"`, and a title *without* a
-  `WinApp:` prefix (VS Code adds the category). Each also needs an explicit
-  `onCommand:` entry in `activationEvents` — this repo lists them by hand, and a
-  missing one means the command fails with "command not found" in a workspace
-  without a manifest. That is `high`.
+  `WinApp:` prefix (VS Code adds the category). The repo also lists each
+  command as `onCommand:` in `activationEvents` for consistency; VS Code
+  (1.74+) generates these automatically, so a missing entry is not a bug.
 - **Mirror the CLI, don't fork it.** Commands wrap `winapp` CLI verbs (`init`,
   `restore`, `pack`, `cert generate`, `sign`, …). Defaults, option names, and
   failure messages should match the CLI's so docs for one apply to the other.
-  Surface the CLI's own error via `parseWinappErrorMessage`, not a generic
-  "command failed — see output".
+  When the extension captures CLI output (a child process, not a terminal),
+  surface the CLI's own error via `parseWinappErrorMessage`. Terminal-run
+  commands show CLI errors in the terminal, and `pack`'s "see the WinApp output
+  channel" message is the accepted pattern.
 - **Defaults over prompts.** A new prompt that could be answered from
   `winapp.appDirectories`, a single detected project, or an existing manifest
-  is a regression in scripted / repeated use. Single candidate → use it
+  is a regression in scripted / repeated use. Project-scoped commands resolve
+  their folder through `resolveProjectDirectory`; reading
+  `winapp.appDirectories` directly skips its workspace-containment check and is
+  a finding. Single candidate → use it
   silently; multiple → quick pick. A new **required** prompt with an obvious
   default is `high`.
 - **Cancel is not failure.** Escaping a quick pick or folder dialog must stop
@@ -47,8 +51,8 @@ elevated-terminal helpers so the user sees the UAC prompt and output.
 - **Manifest editor.** New tabs and fields follow the existing tab model and
   validate inline through `manifest-validator.ts`; an edit must never silently
   rewrite parts of the manifest the user did not touch. Keep the
-  *Open in Visual Editor* title-bar entry's `when` clause in sync with the
-  manifest file patterns.
+  `winapp.openManifestEditor` ("Open Manifest Editor") `editor/title` menu
+  `when` clause in sync with `customEditors[0].selector`.
 - **IntelliSense / diagnostics.** New diagnostics respect
   `winapp.manifest.diagnostics.level` and
   `winapp.manifest.intelliSense.enable`; a diagnostic the user cannot turn off

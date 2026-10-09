@@ -25,7 +25,7 @@ One VSIX (`publisher: Microsoft-WinAppCLI`, `name: winapp`) containing:
 ## Match the change to affected surfaces
 
 - **New or renamed command** → `contributes.commands` (ID, title, `category`),
-  a matching `onCommand:` in `activationEvents`, any `menus` entry, and the
+  any `menus` entry, and the
   README *Command Palette* list / *Scenarios* section.
 - **New setting** → `contributes.configuration` with description and default,
   and README where users would look for it.
@@ -39,8 +39,10 @@ One VSIX (`publisher: Microsoft-WinAppCLI`, `name: winapp`) containing:
   matching `package-lock.json`; dev-only tools go in `devDependencies`.
 - **Changed contributor workflow** (prereqs, build, test commands) →
   `CONTRIBUTING.md`; release steps → `docs/RELEASE.md`.
-- **New Microsoft Learn link in source** must be locale-neutral
-  (`src/test/docs-links.test.ts` enforces this).
+- **New Microsoft Learn link in source** must be locale-neutral (no `en-us`
+  segment). `src/test/docs-links.test.ts` checks this but is not in
+  `test:unit`, so CI never runs it — run
+  `npx tsx --test src/test/docs-links.test.ts` or check by hand.
 
 Internal refactors need none of these. User documentation explains what to
 click or type, what happens, and how to recover from failure; it never narrates

@@ -17,7 +17,10 @@ custom-editor webview that exchanges messages with the extension host and
 probes local image paths; reads `launch.json` fields and `winapp.*` settings
 from the workspace; and ships PowerShell build/release scripts that download
 CLI binaries (`gh release download` from `microsoft/WinAppCli`) and package
-them into the VSIX.
+them into the VSIX. Its GitHub workflows include privileged triggers that run
+on fork PRs: `pr-description.yml` (`pull_request_target`, write access, model
+token), `post-vsix-comment.yml` (`workflow_run`), and `auto-update-prs.yml`
+(`contents: write`). CodeQL scans only JavaScript/TypeScript, not workflows.
 
 The recurring shape of a real bug here is **a value from a manifest, a
 `launch.json` / settings field, a webview message, or a workspace path reaching
@@ -30,9 +33,10 @@ unvalidated.** A malicious repo the user merely opens is a realistic attacker.
 |---|---|
 | Workspace-controlled value reaching `Terminal.sendText` / `powershell -Command` / `shell: true` without `escapePowerShellArg` or an arg array | high |
 | Any change to the elevated launcher (`decideElevatedWinappCommand`, `buildElevatedTerminalCommand`) that lets workspace input into the elevated command | critical |
-| Webview HTML built from manifest/workspace content without escaping, or a CSP loosened beyond nonce scripts / `webview.cspSource` | high |
+| Workflow change that checks out or runs PR-head code, or interpolates PR-controlled `${{ }}` fields into `run:`, under `pull_request_target` / `workflow_run` / write permissions | critical |
+| Webview HTML built from manifest/workspace content without escaping, a CSP loosened beyond nonce scripts / `webview.cspSource`, or `localResourceRoots` widened beyond the extension, manifest folder, and workspace folders | high |
 | Webview message handler that acts on a path or command without validating the payload | high |
-| File read/probe outside the manifest package or workspace roots (missing `isPathWithin`) | high |
+| Directory enumeration outside the manifest package or workspace roots (missing `isPathWithin`), or a webview-supplied path reaching `fs` without going through `AssetCopyTokenStore` | high |
 | Executing or auto-running something on workspace open, without user action, in an untrusted workspace | high |
 | Hardcoded credential, token, or cert password in source, fixtures, or workflows | high |
 | Download from a new host, over non-HTTPS, or a mutable asset with no integrity check | high |

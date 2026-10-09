@@ -112,14 +112,19 @@ how simple things get complicated. Record the kept count internally.
 Static review misses what only shows up at runtime. Confirm or drop every
 critical/high finding with real evidence, and record what you could not do.
 
+If the head comes from a fork or an author outside the repository's
+maintainers, ask the user before installing dependencies, building, running
+tests, or installing the VSIX — those steps execute the PR's code with your
+privileges. Without approval, keep the review static.
+
 1. **Build** (`.\scripts\build-vsce.ps1`, or targeted `npm run compile-tsc`,
    `npm run lint`, `npm run test:unit`). A build, type-check, or lint failure is
    itself critical.
 2. **Run it as a user would, not dev mode.** Default: package the VSIX
    (`.\scripts\build-vsce.ps1 -Package`) and install it into an isolated VS Code
    using the [vsce-testing](../vsce-testing/SKILL.md) harness. An F5 Extension
-   Development Host runs from `out/` with the repo on disk, so it hides
-   esbuild-bundling, `.vscodeignore`, bundled `bin/` CLI, and synced `schemas/`
+   Development Host runs the esbuild bundle from `dist/` with the whole repo on
+   disk, so it hides `.vscodeignore`, bundled `bin/` CLI, and synced `schemas/`
    bugs. Escalate only when the change needs it — manifest-editor and
    `winapp.new` UI changes validate via the Playwright suite
    (`npm run test:e2e`); release/packaging changes validate the packaged VSIX

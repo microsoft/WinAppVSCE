@@ -27,7 +27,8 @@ confidently, and do not stop at "the code looks like it does X"; where you can
      capabilities under CSP, custom-editor save semantics, debug-configuration
      resolution order, `when`-clause context keys).
    - Activation behavior (does the command run in a workspace with no
-     manifest? does `onCommand:` need to be listed?).
+     manifest? Contributed commands activate the extension automatically
+     since VS Code 1.74; other activation events must be listed).
    - Whether a file/artifact format is what the spec assumes (AppxManifest
      schema, MSIX layout, `.pfx`, `launch.json`).
    - Whether a bundling or VSIX step works (esbuild externals, `.vscodeignore`,
@@ -76,9 +77,10 @@ code path and real consumer, then prefer a before/after experiment.
 - Commands launched through the integrated terminal (`Terminal.sendText`) give
   the extension **no exit code or output**; a design that needs the result must
   use `runWinappCapture` or another captured process path.
-- The CLI is bundled per architecture (`bin/win-x64`, `bin/win-arm64`) and
-  pinned to a specific `microsoft/WinAppCli` release; a feature that needs a
-  newer CLI verb also needs a CLI bump and release coordination.
+- The CLI is bundled per architecture (`bin/win-x64`, `bin/win-arm64`) from
+  the latest stable `microsoft/WinAppCli` release at build time (overridable via
+  `-Tag` / `CliReleaseTag`); a feature that needs a new CLI verb depends on that
+  verb shipping in a stable CLI release first.
 - Manifest schemas (`schemas/*.xsd`) are synced at build time, not committed.
 - Unit tests run outside VS Code (Node + tsx/mocha), so anything importing
   `vscode` must be mocked; behavior that only exists inside VS Code needs the
