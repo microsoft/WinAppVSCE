@@ -43,6 +43,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 | Fixture | Used by |
 |---------|---------|
 | `winui-gallery.appxmanifest` | Default – used by the 7 core tab specs and the parse-error spec |
+| `mrt-assets.appxmanifest` | `mrt-asset-resolution.spec.ts` |
 | `push-notifications-sample.appxmanifest` | `push-notifications-fixture.spec.ts` |
 | `background-task-sample.appxmanifest` | `background-task-fixture.spec.ts` |
 | `widgets-sample.appxmanifest` | Unit tests for nested Capabilities and package-level Extensions |
@@ -52,7 +53,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (154 tests)
+## Test inventory (164 tests)
 
 ### `webview-state.spec.ts` — 18 tests
 
@@ -93,7 +94,7 @@ visual editor. Launches its own VS Code instance.
 | 4 | a save flushes webview input that is still inside the debounce window | Ctrl+S before the 300 ms debounce elapses reaches the provider's flush handler and the value lands in the saved file |
 | 5 | saving while the XML is unparseable stores the raw text instead of rewriting the document | The save-flush guard resolves with no edits when the document can't be parsed, so Ctrl+S persists the user's raw text and never hangs |
 
-### `sign-quickpick.spec.ts` — 6 tests
+### `sign-quickpick.spec.ts` — 9 tests
 
 Validates that `winapp.sign` discovers signable files and certificates in workspace QuickPicks.
 
@@ -101,10 +102,13 @@ Validates that `winapp.sign` discovers signable files and certificates in worksp
 |---|------|-----------|
 | 1 | shows QuickPick with .msix file and Browse option when artifacts exist | QuickPick appears with artifact rows and Browse… fallback |
 | 2 | shows packages before executables and limits discovered files to 10 | Package-first ordering and the discovery cap |
-| 3 | shows certificate QuickPick with .pfx file after selecting a package | Certificate QuickPick appears after package selection with .pfx rows and Browse… fallback |
-| 4 | cancelling the artifact QuickPick aborts the sign flow | Cancelling before file selection stops signing |
-| 5 | selecting Browse dismisses the QuickPick in a native-dialog smoke test | Browse hands off to the native file picker |
-| 6 | cancelling the certificate QuickPick aborts the sign flow | Cancelling before certificate selection stops signing |
+| 3 | keeps Browse reachable when the typed filter matches no discovered file | Browse stays selectable when the filter excludes every discovered row |
+| 4 | ranks MSIX packages above newer APPX packages and executables | Tier order beats mtime, and Browse appears after the ranked results |
+| 5 | ignores files.exclude without showing dependency artifacts | `files.exclude` cannot hide signable output, while `node_modules` stays filtered |
+| 6 | shows certificate QuickPick with .pfx file after selecting a package | Certificate QuickPick appears after package selection with .pfx rows and Browse… fallback |
+| 7 | cancelling the artifact QuickPick aborts the sign flow | Cancelling before file selection stops signing |
+| 8 | selecting Browse dismisses the QuickPick in a native-dialog smoke test | Browse hands off to the native file picker |
+| 9 | cancelling the certificate QuickPick aborts the sign flow | Cancelling before certificate selection stops signing |
 
 ### `input-folder-validation.spec.ts` — 1 test
 
@@ -257,6 +261,20 @@ Validates all four capability categories, checkbox toggling, hover descriptions,
 | 14 | typing in input clears validation error | Typing clears the custom capability error |
 | 15 | adding valid custom capability succeeds | Valid custom capability is accepted and written to XML |
 | 16 | custom capability appears in the custom capabilities list | New custom capability appears in the list |
+
+### `mrt-asset-resolution.spec.ts` — 7 tests
+
+Validates MRT-aware resolution of visual asset paths (issue #191). Uses the `mrt-assets.appxmanifest` fixture together with qualifier-suffixed asset files written into the workspace.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | unqualified logo backed only by MRT variants is not reported as missing | `Assets\MrtLogo.png` resolves through `MrtLogo.scale-200.png`, so no not-found warning is shown |
+| 2 | logo preview falls back to the resolved MRT variant | Store logo thumbnail loads the resolved qualified variant |
+| 3 | application visual assets resolve through MRT variants | Visual asset fields on the Applications tab use the same MRT resolution |
+| 4 | application logo preview falls back to the resolved MRT variant | Applications tab thumbnail loads the resolved qualified variant |
+| 5 | an unqualified file that exists is used as-is | A literal file on disk resolves exactly, with no message |
+| 6 | a non-variant sibling does not satisfy the reference | `OnlyBackup.backup.png` is not treated as a variant of `OnlyBackup.png` |
+| 7 | a genuinely missing asset still warns | A reference with neither literal file nor variants still warns |
 
 ### `parse-error.spec.ts` — 2 tests
 

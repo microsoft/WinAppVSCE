@@ -22,6 +22,7 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 
 | Command | Description |
 |---------|-------------|
+| **WinApp: Create WinUI App** | Scaffold a new WinUI 3 app from an official Windows App SDK template. Pick a template, name it, and choose where it goes. Works with no folder open. Requires the .NET SDK. |
 | **WinApp: Initialize Project** | Set up a new project with the Windows SDK and/or Windows App SDK. Prompts for SDK channel (stable, preview, experimental, or none). |
 | **WinApp: Restore Packages** | Restore project packages and dependencies. |
 | **WinApp: Update Packages** | Update packages and dependencies to the latest versions. |
@@ -242,6 +243,17 @@ You can also disable just the diagnostic underlines while keeping completions an
 
 ## Scenarios
 
+### Create a new WinUI app
+
+Run **WinApp: Create WinUI App** to scaffold a WinUI 3 app from an official Windows App SDK template. The command:
+
+1. **Loads the templates** — Fetches the available WinUI templates, installing the template pack on first run. If a pack is already on your machine, you're asked whether to use it or install the latest (a machine-wide change that affects all `dotnet new` tooling).
+2. **Asks for a template** — Choose from the templates the CLI reports, such as the blank app, the MVVM app, or a class library.
+3. **Asks for a name and a location** — Pick the folder to create the app in; the project lands in `<folder>/<name>`. If the CLI reports that the directory already has files, you're offered the chance to create there anyway.
+4. **Confirms where it landed** — A notification names the new app and its full path.
+
+The [.NET SDK](https://dotnet.microsoft.com/download) 8.0.100 or later is required — this is the only WinApp command that needs it. If it's missing or older than 8.0.100, the command stops before prompting and offers a link to the installer.
+
 ### Initialize and set up a project
 
 Run **WinApp: Initialize Project** to configure your project with the Windows SDK and/or Windows App SDK. The command:
@@ -285,6 +297,7 @@ The winapp CLI (and this extension) works with any Windows app framework:
 
 - Windows 10 or later
 - Visual Studio Code 1.109.0 or later
+- The [.NET SDK](https://dotnet.microsoft.com/download) 8.0.100 or later — only for **WinApp: Create WinUI App**, which delegates scaffolding to `dotnet new`
 
 The winapp CLI is bundled with the extension — no separate installation required.
 

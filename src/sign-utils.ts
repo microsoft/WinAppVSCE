@@ -1,20 +1,66 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { escapePowerShellArg } from './winapp-cli-utils';
-import { ARTIFACT_GLOBS } from './artifact-types';
+import { ARTIFACT_EXTENSIONS } from './artifact-types';
+import { walkDirectoryTree } from './directory-walk';
 
-/** Glob patterns for PFX certificate files within a workspace. */
-export const CERTIFICATE_GLOBS = ['**/*.pfx'];
+/** Certificate file extensions discoverable in a workspace. */
+export const CERTIFICATE_EXTENSIONS = ['pfx'];
 
-/** Glob patterns for executable files that can be signed. */
-export const EXECUTABLE_GLOBS = ['**/*.exe', '**/*.dll'];
+/** Executable extensions that can be signed. */
+export const EXECUTABLE_EXTENSIONS = ['exe', 'dll'];
 
-const SIGNABLE_ARTIFACT_IGNORES = new Set(['node_modules', '.git']);
+/**
+ * Package extensions the QuickPick surfaces first. Everything else in
+ * {@link ARTIFACT_EXTENSIONS} falls into the tier below, so a new artifact
+ * type stays discoverable without edits here.
+ */
+const PRIMARY_PACKAGE_EXTENSIONS: ReadonlySet<string> = new Set(['msix', 'msixbundle']);
 
-export type WorkspaceFileFinder = (
-	includePattern: string,
-	signal?: AbortSignal
-) => Promise<string[]>;
+/**
+ * Signable extensions in QuickPick priority order: MSIX packages, other
+ * package types, then loose executables. A lower tier only contributes rows
+ * that higher tiers left unfilled.
+ */
+export const SIGNABLE_ARTIFACT_TIERS: readonly (readonly string[])[] = [
+	ARTIFACT_EXTENSIONS.filter((ext) => PRIMARY_PACKAGE_EXTENSIONS.has(ext)),
+	ARTIFACT_EXTENSIONS.filter((ext) => !PRIMARY_PACKAGE_EXTENSIONS.has(ext)),
+	EXECUTABLE_EXTENSIONS
+];
+
+/** Single-tier ordering used by the certificate picker. */
+export const CERTIFICATE_TIERS: readonly (readonly string[])[] = [CERTIFICATE_EXTENSIONS];
+
+/**
+ * Directories never descended into when scanning for signable files.
+ *
+ * Deliberately much smaller than `project-detection`'s `SKIP_DIRS`: build
+ * output such as `bin`, `obj`, and `Release` is exactly where artifacts live.
+ * Hidden directories (`.git`, `.vs`) are pruned by the walker itself.
+ */
+const SIGNABLE_SKIP_DIRS: ReadonlySet<string> = new Set(['node_modules']);
+
+/** Maximum number of discovered files offered in a QuickPick before "Browse…". */
+export const MAX_QUICKPICK_RESULTS = 10;
+
+/**
+ * Runaway guard on how many candidates a single scan collects. Only reachable
+ * in pathological trees; below it, newest-first ordering is exact.
+ */
+export const MAX_SCAN_CANDIDATES = 2000;
+
+/** How many `stat` calls to keep in flight while ordering candidates. */
+const STAT_CONCURRENCY = 64;
+
+export interface FindWorkspaceArtifactsOptions {
+	/** Extension tiers in priority order. Defaults to {@link SIGNABLE_ARTIFACT_TIERS}. */
+	tiers?: readonly (readonly string[])[];
+	/** Maximum paths returned. Defaults to {@link MAX_QUICKPICK_RESULTS}. */
+	limit?: number;
+	signal?: AbortSignal;
+	/** Override the runaway guard. Tests use this to force truncation. */
+	maxCandidates?: number;
+}
 
 /**
  * Build the CLI argument string for `winapp sign`.
@@ -27,59 +73,114 @@ export function buildSignCommand(filePath: string, certPath: string): string {
 }
 
 /**
- * Find files matching the given glob patterns within a workspace root.
+ * Find signable files under `workspacePath`, newest-first within each tier and
+ * capped at `limit`.
  *
- * Results are sorted by modification time (newest first) so the most recently
- * packaged artifact appears at the top of the QuickPick.
+ * A single pruned breadth-first walk collects every candidate, so ignored
+ * directories are never read rather than filtered out afterwards. Tiers are
+ * ordered one at a time, so a scan that fills up on MSIX packages never pays
+ * to `stat` the far larger `.exe`/`.dll` bucket.
  */
 export async function findWorkspaceArtifacts(
 	workspacePath: string,
-	findFiles: WorkspaceFileFinder,
-	patterns: string[] = ARTIFACT_GLOBS,
-	signal?: AbortSignal
+	options: FindWorkspaceArtifactsOptions = {}
 ): Promise<string[]> {
+	const {
+		tiers = SIGNABLE_ARTIFACT_TIERS,
+		limit = MAX_QUICKPICK_RESULTS,
+		signal,
+		maxCandidates = MAX_SCAN_CANDIDATES
+	} = options;
+
+	if (limit <= 0 || tiers.length === 0 || signal?.aborted) {
+		return [];
+	}
+
+	const tierByExtension = new Map<string, number>();
+	tiers.forEach((extensions, tier) => {
+		for (const extension of extensions) {
+			tierByExtension.set(extension.toLowerCase(), tier);
+		}
+	});
+
+	const buckets: string[][] = tiers.map(() => []);
+	let collected = 0;
+
+	await walkDirectoryTree(
+		workspacePath,
+		(directory, entries) => {
+			for (const entry of entries) {
+				if (!entry.isFile()) {
+					continue;
+				}
+				const tier = tierByExtension.get(path.extname(entry.name).slice(1).toLowerCase());
+				if (tier === undefined) {
+					continue;
+				}
+				buckets[tier].push(path.join(directory, entry.name));
+				if (++collected >= maxCandidates) {
+					return 'stop';
+				}
+			}
+			return 'descend';
+		},
+		{ skipDirs: SIGNABLE_SKIP_DIRS, signal }
+	);
+
 	if (signal?.aborted) {
 		return [];
 	}
 
-	const includePattern = patterns.length === 1 ? patterns[0] : `{${patterns.join(',')}}`;
-	let results: string[];
-	try {
-		results = await findFiles(includePattern, signal);
-	} catch (error) {
-		if (signal?.aborted && isCancellationError(error)) {
-			return [];
+	const ordered: string[] = [];
+	for (const bucket of buckets) {
+		if (ordered.length >= limit) {
+			break;
 		}
-		throw error;
-	}
 
-	// Sort by mtime descending (newest first); if stat fails, push to end.
-	const withStats: Array<{ path: string; mtime: number }> = [];
-	for (const filePath of results) {
+		const modifiedTimes = await collectModifiedTimes(bucket, signal);
 		if (signal?.aborted) {
 			return [];
 		}
-		if (isIgnoredWorkspacePath(workspacePath, filePath)) {
-			continue;
-		}
-		try {
-			const stat = await fs.promises.stat(filePath);
-			withStats.push({ path: filePath, mtime: stat.mtimeMs });
-		} catch {
-			withStats.push({ path: filePath, mtime: 0 });
-		}
+
+		bucket.sort((left, right) =>
+			(modifiedTimes.get(right) ?? 0) - (modifiedTimes.get(left) ?? 0));
+		ordered.push(...bucket.slice(0, limit - ordered.length));
 	}
 
-	withStats.sort((a, b) => b.mtime - a.mtime);
-	return withStats.map((s) => s.path);
+	return ordered;
 }
 
-function isIgnoredWorkspacePath(workspacePath: string, filePath: string): boolean {
-	return path.relative(workspacePath, filePath)
-		.split(path.sep)
-		.some(segment => SIGNABLE_ARTIFACT_IGNORES.has(
-			process.platform === 'win32' ? segment.toLowerCase() : segment
-		));
+/**
+ * Resolve modification times with bounded concurrency. Statting sequentially
+ * dominated the previous implementation's cost; unreadable files sort last.
+ */
+async function collectModifiedTimes(
+	filePaths: readonly string[],
+	signal?: AbortSignal
+): Promise<Map<string, number>> {
+	const modifiedTimes = new Map<string, number>();
+	let cursor = 0;
+
+	const workers = Array.from(
+		{ length: Math.min(STAT_CONCURRENCY, filePaths.length) },
+		async () => {
+			while (cursor < filePaths.length) {
+				if (signal?.aborted) {
+					return;
+				}
+				const filePath = filePaths[cursor++];
+				try {
+					const stat = await fs.promises.stat(filePath);
+					modifiedTimes.set(filePath, stat.mtimeMs);
+				} catch {
+					modifiedTimes.set(filePath, 0);
+				}
+			}
+		}
+	);
+
+	await Promise.all(workers);
+	return modifiedTimes;
 }
 
 function isCancellationError(error: unknown): boolean {

@@ -41,6 +41,112 @@ export function escapePowerShellArg(value: string): string {
 	return `'${value.replace(/'/g, "''")}'`;
 }
 
+/**
+ * Extract a human-readable error message from winapp CLI output.
+ *
+ * Returns the first non-empty line, which is where every `winapp` command puts
+ * its failure reason. Callers use it to replace the generic "see the output
+ * channel" message with what actually went wrong.
+ *
+ * Stripping the CLI's leading status glyph is normalization, not a match
+ * condition: plain-text errors without a glyph must still be reported.
+ *
+ * @param output Combined stdout/stderr from a command that exited non-zero.
+ * @returns The message, or `undefined` when the command printed nothing usable.
+ */
+export function parseWinappErrorMessage(output: string): string | undefined {
+	for (const rawLine of output.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) {
+			continue;
+		}
+		const cleaned = line.replace(/^(?:\[ERROR\]\s*-\s*|[❌✖✗⚠]\s*)/u, '').trim();
+		if (cleaned) {
+			return cleaned;
+		}
+	}
+
+	return undefined;
+}
+
+/**
+ * Extract the JSON object from `winapp ... --json` output. Progress or warning
+ * text can surround the payload, so scan for the first brace-balanced object
+ * rather than requiring the output to be JSON and nothing else.
+ *
+ * Brace counting ignores braces inside JSON strings, and only runs once the
+ * scan is inside a candidate: quotes in surrounding prose must not swallow the
+ * payload. A single pass keeps this linear on the growing `winapp run` buffer.
+ *
+ * @returns The parsed object, or `undefined` when the output holds no complete one.
+ */
+export function extractJsonObject(output: string): Record<string, unknown> | undefined {
+	if (!output) {
+		return undefined;
+	}
+
+	let depth = 0;
+	let start = -1;
+	let inString = false;
+	let escaped = false;
+
+	for (let i = 0; i < output.length; i++) {
+		const char = output[i];
+
+		// Outside a candidate only '{' matters, so prose cannot affect the scan.
+		if (depth === 0) {
+			if (char === '{') {
+				start = i;
+				depth = 1;
+				inString = false;
+				escaped = false;
+			}
+			continue;
+		}
+
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+			} else if (char === '\\') {
+				escaped = true;
+			} else if (char === '"') {
+				inString = false;
+			}
+			continue;
+		}
+
+		if (char === '"') {
+			inString = true;
+		} else if (char === '{') {
+			depth++;
+		} else if (char === '}') {
+			depth--;
+			if (depth === 0) {
+				const parsed = parseJsonObject(output.slice(start, i + 1));
+				if (parsed) {
+					return parsed;
+				}
+				// Balanced but not valid JSON (e.g. '{x}' in a warning): keep scanning.
+				start = -1;
+			}
+		}
+	}
+
+	return undefined;
+}
+
+/** Parse `text` as a JSON object, rejecting arrays, primitives and malformed input. */
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+	try {
+		const parsed = JSON.parse(text);
+		return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+			? parsed as Record<string, unknown>
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export function resolveWindowsPowerShellPath(systemRoot: string | undefined): string {
 	return path.join(systemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
