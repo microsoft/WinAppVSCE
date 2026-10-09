@@ -19,8 +19,9 @@ from the workspace; and ships PowerShell build/release scripts that download
 CLI binaries (`gh release download` from `microsoft/WinAppCli`) and package
 them into the VSIX. Its GitHub workflows include privileged triggers that run
 on fork PRs: `pr-description.yml` (`pull_request_target`, write access, model
-token), `post-vsix-comment.yml` (`workflow_run`), and `auto-update-prs.yml`
-(`contents: write`). CodeQL scans only JavaScript/TypeScript, not workflows.
+token), `mark-vsix-stale.yml` (`pull_request_target`, write access), and
+`post-vsix-comment.yml` (`workflow_run`). `auto-update-prs.yml` holds
+`contents: write` but runs only on pushes to `main` and skips fork PRs. CodeQL scans only JavaScript/TypeScript, not workflows.
 
 The recurring shape of a real bug here is **a value from a manifest, a
 `launch.json` / settings field, a webview message, or a workspace path reaching
