@@ -65,12 +65,18 @@ internal sealed class RenderHost
     private ElementTheme _currentTheme = ElementTheme.Light;
     private (double w, double h)? _sizeOverride;
     private FrameworkElement? _designCanvasHost;
+    // Persistent native-mode content root: successive design surfaces are cross-swapped inside it so a live
+    // edit never shows an empty/unfitted frame (see HostLiveAsync).
+    private Grid? _liveStage;
 
     /// <summary>Raised (UI thread) when the user picks an element in the mounted design surface.</summary>
     public event Action<DesignSelectionPayload>? SelectionChanged;
 
     /// <summary>Raised (UI thread) after a live property edit re-reads the selected element (Phase C).</summary>
     public event Action<DesignSelectionPayload>? PropsRefreshed;
+
+    /// <summary>Raised (UI thread) when the user's zoom/scroll on the native design surface settles.</summary>
+    public event Action<DesignSurface.ViewState>? ViewStateChanged;
 
     // Supersample bounds for the output frame. We render the tree at canvasDIP × outputScale so the
     // webview can display the frame at its logical DIP size and stay crisp on a HiDPI display. 1.0 =
@@ -764,6 +770,8 @@ internal sealed class RenderHost
 
     private void OnDesignPropsRefreshed(DesignSelectionPayload payload) => PropsRefreshed?.Invoke(payload);
 
+    private void OnDesignViewStateChanged(DesignSurface.ViewState v) => ViewStateChanged?.Invoke(v);
+
     // ---- Phase B: native HWND reparent (live design surface) ----------------
     // Instead of RTB→PNG→socket, host the parsed page LIVE in the warm window and hand its HWND to
     // the IDE client, which SetParent()s it into a tool window (zero-copy, real WinUI pixels + input).
@@ -778,7 +786,7 @@ internal sealed class RenderHost
     /// window is stripped of its border/title bar and un-cloaked; on subsequent live updates it is left
     /// as the client positioned it. No capture/encode — the pixels stay on the GPU-composed window.
     /// </summary>
-    internal async Task<LiveResult> HostLiveAsync(string rawXaml, bool prepareWindow)
+    internal async Task<LiveResult> HostLiveAsync(string rawXaml, bool prepareWindow, int panePixelW = 0, int panePixelH = 0, DesignSurface.ViewState? initialView = null)
     {
         if (_renderWindow is null)
         {
@@ -812,9 +820,12 @@ internal sealed class RenderHost
 
             if (prepareWindow)
             {
-                // First entry: the window is still a normal top-level, so AppWindow APIs apply.
+                // First entry: the window is still a normal top-level, so AppWindow APIs apply. Size it to the
+                // client's pane when known (the child is always sized to the pane once reparented), so the design
+                // surface fits the canvas to the FINAL viewport here — no visible re-fit jump after the reparent.
                 PrepareRenderWindowForReparent();
-                window.AppWindow.Resize(new SizeInt32(pixelW, pixelH));
+                bool havePane = panePixelW > 0 && panePixelH > 0;
+                window.AppWindow.Resize(havePane ? new SizeInt32(panePixelW, panePixelH) : new SizeInt32(pixelW, pixelH));
             }
             // else: live re-host of an already-reparented window. It is now a WS_CHILD whose geometry is
             // owned by the client/WPF parent — Window.AppWindow is null (Resize would NRE) and a
@@ -836,10 +847,57 @@ internal sealed class RenderHost
             };
             design.SelectionChanged += OnDesignSelectionChanged;
             design.PropsRefreshed += OnDesignPropsRefreshed;
+            design.ViewStateChanged += OnDesignViewStateChanged;
+
+            // Flicker-free re-host: mount the new surface ON TOP of the previous one (inside a persistent stage
+            // grid), invisible, let it lay out + fit/zoom, then reveal it and drop the old one. Replacing
+            // window.Content outright showed a blank frame and then the new canvas at 100% before it re-fit.
+            // The previous surface's zoom/scroll carries over (a fit-to-pane view stays fit-to-pane).
+            var previous = prepareWindow ? null : _design;
+            if (previous is not null)
+            {
+                design.InitialView = previous.CaptureViewState();
+            }
+            else if (initialView is not null)
+            {
+                design.InitialView = initialView; // same document in a new process (theme swap)
+            }
+            if (window.Content is not Grid stage || !ReferenceEquals(stage, _liveStage))
+            {
+                stage = new Grid();
+                _liveStage = stage;
+                window.Content = stage;
+            }
+            var newRoot = design.Root;
+            bool staged = previous is not null && stage.Children.Count > 0;
+            if (staged)
+            {
+                newRoot.Opacity = 0;
+                newRoot.IsHitTestVisible = false;
+            }
+            else
+            {
+                stage.Children.Clear();
+            }
+            stage.Children.Add(newRoot);
+            if (previous is not null)
+            {
+                previous.SelectionChanged -= OnDesignSelectionChanged;
+                previous.PropsRefreshed -= OnDesignPropsRefreshed;
+                previous.ViewStateChanged -= OnDesignViewStateChanged;
+            }
             _design = design;
-            window.Content = design.Root;
             host.UpdateLayout();
             await PumpFramesAsync(4);
+            if (staged)
+            {
+                newRoot.Opacity = 1;
+                newRoot.IsHitTestVisible = true;
+                for (int i = stage.Children.Count - 1; i >= 0; i--)
+                {
+                    if (!ReferenceEquals(stage.Children[i], newRoot)) { stage.Children.RemoveAt(i); }
+                }
+            }
 
             // P3 (coverage hardening): quiesce self-perpetuating churn on the live-hosted page too, so an
             // auto-advancing/animating page settles in the native design surface instead of hanging the host.

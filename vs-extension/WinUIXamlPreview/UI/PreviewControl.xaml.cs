@@ -99,6 +99,10 @@ namespace WinUIXamlPreview.UI
         private bool _themeSwapPending;
         private int _themeSwapGen;
         private System.Diagnostics.Stopwatch? _themeSwapSw;
+        // Latest zoom/scroll reported by the active native surface (socket thread writes, UI thread reads), and
+        // whether the next spare promotion is the same document (theme swap) and should restore it.
+        private volatile ViewMsg? _lastView;
+        private bool _carryViewOnPromote;
 
         // ---- version-matched fidelity upgrade (nov-vsix-wire) --------------
         // The instant launch is ALWAYS the bundled 2.2.0 host. When the target project references a different
@@ -329,6 +333,7 @@ namespace WinUIXamlPreview.UI
             client.Selected += OnSelected;
             client.ElementProps += OnElementProps;
             client.ContentProps += OnContentProps;
+            client.View += OnView;
             client.Closed += OnClosed;
             _client = client;
             _activeProcessRendered = false; // a fresh process; it hasn't rendered yet
@@ -357,7 +362,12 @@ namespace WinUIXamlPreview.UI
                     // Real-designer path: host the live surface window in the tool window (no image).
                     Log.Write("Surface supports native-hwnd; entering native reparent mode.");
                     SetStatus("Hosting native surface…", spinner: true, detail: Path.GetFileName(path));
-                    client.EnterNative(xaml, 0, 0, 1.0);
+                    SendStickyCanvasSize(client);
+                    var (paneW, paneH) = GetPanePixelSize(0, 0);
+                    var carryView = _carryViewOnPromote ? _lastView : null;
+                    _carryViewOnPromote = false;
+                    _lastView = carryView;
+                    client.EnterNative(xaml, 0, 0, 1.0, paneW, paneH, carryView);
                 }
                 else
                 {
@@ -554,12 +564,14 @@ namespace WinUIXamlPreview.UI
             }
 
             Log.Write($"PERF theme.spare ms={sw?.ElapsedMilliseconds ?? 0}");
+            _carryViewOnPromote = true;
             if (TryPromoteSpare(xaml))
             {
                 PerfBegin("theme.swap");
             }
             else
             {
+                _carryViewOnPromote = false;
                 RestartForTheme(PreviewOptions.Theme);
             }
         }
@@ -581,6 +593,7 @@ namespace WinUIXamlPreview.UI
             if (!string.IsNullOrEmpty(path))
             {
                 _perfNextOpenLabel = "theme";
+                _carryViewOnPromote = true; // same document: the cold-started surface restores the current zoom
                 ShowDocument(path);
             }
         }
@@ -606,14 +619,13 @@ namespace WinUIXamlPreview.UI
         }
 
         /// <summary>
-        /// Re-assert the sticky size preference on a freshly-hosted warm window (a new surface HWND), so it
-        /// survives file switches / surface restarts. Theme is NOT re-applied here — it is baked at launch via
-        /// the <c>SURFACE_THEME</c> env (a code-only host can't re-theme live; plan §47), so a fresh host is
-        /// already in the right theme. Loop-safe: a <c>SetCanvasSize</c> re-host returns the SAME warm HWND,
-        /// which <see cref="OnHwnd"/> routes to <c>ResizeChild</c> (not this fresh-host path) — so it never
-        /// re-fires. UI thread only.
+        /// Send the sticky canvas-size preference to a new surface process BEFORE its <c>EnterNative</c>, so it
+        /// survives file switches / restarts / theme swaps. Outside native mode the surface only stores the
+        /// override, so the first live host is already at the right size (sending it after the first host made
+        /// a visible re-host from the default size). Theme is NOT sent — it is baked at launch via the
+        /// <c>SURFACE_THEME</c> env (plan §47). UI thread only.
         /// </summary>
-        private void ReapplyStickyPreviewSettings()
+        private void SendStickyCanvasSize(SurfaceClient client)
         {
             if (_disposed)
             {
@@ -625,12 +637,12 @@ namespace WinUIXamlPreview.UI
                 double w = PreviewOptions.CanvasWidth, h = PreviewOptions.CanvasHeight;
                 if (w > 0 && h > 0)
                 {
-                    _client?.SetCanvasSize(w, h);
+                    client.SetCanvasSize(w, h);
                 }
             }
             catch (Exception ex)
             {
-                Log.Write("ReapplyStickyPreviewSettings failed: " + ex.Message);
+                Log.Write("SendStickyCanvasSize failed: " + ex.Message);
             }
         }
 
@@ -1059,6 +1071,7 @@ namespace WinUIXamlPreview.UI
                 old.Selected -= OnSelected;
                 old.ElementProps -= OnElementProps;
                 old.ContentProps -= OnContentProps;
+                old.View -= OnView;
                 old.Closed -= OnClosed;
             }
 
@@ -1073,6 +1086,7 @@ namespace WinUIXamlPreview.UI
             spare.Selected += OnSelected;
             spare.ElementProps += OnElementProps;
             spare.ContentProps += OnContentProps;
+            spare.View += OnView;
             spare.Closed += OnClosed;
             _client = spare;
             _activeProcessRendered = false; // the promoted spare hasn't rendered yet
@@ -1082,9 +1096,16 @@ namespace WinUIXamlPreview.UI
             {
                 // Match the design/interact mode before the spare's first (and only) render.
                 spare.SetMode(PreviewOptions.DesignMode);
+                // Same document in a new process (theme swap): keep the user's zoom/scroll. Otherwise (file
+                // switch) the new page starts zoom-to-fit.
+                var carryView = _carryViewOnPromote ? _lastView : null;
+                _carryViewOnPromote = false;
+                _lastView = carryView;
                 if (PreferNative && _nativeSupported)
                 {
-                    spare.EnterNative(xaml, 0, 0, 1.0);
+                    SendStickyCanvasSize(spare);
+                    var (paneW, paneH) = GetPanePixelSize(0, 0);
+                    spare.EnterNative(xaml, 0, 0, 1.0, paneW, paneH, carryView);
                 }
                 else
                 {
@@ -1322,6 +1343,7 @@ namespace WinUIXamlPreview.UI
                 old.Selected -= OnSelected;
                 old.ElementProps -= OnElementProps;
                 old.ContentProps -= OnContentProps;
+                old.View -= OnView;
                 old.Closed -= OnClosed;
             }
 
@@ -1349,6 +1371,7 @@ namespace WinUIXamlPreview.UI
             matched.Selected += OnSelected;
             matched.ElementProps += OnElementProps;
             matched.ContentProps += OnContentProps;
+            matched.View += OnView;
             matched.Closed += OnClosed;
             _client = matched;
             _activeProcessRendered = false;
@@ -1362,7 +1385,9 @@ namespace WinUIXamlPreview.UI
                 PerfBegin("upgrade.swap");
                 if (PreferNative && _nativeSupported)
                 {
-                    matched.EnterNative(xaml, 0, 0, 1.0);
+                    SendStickyCanvasSize(matched);
+                    var (paneW, paneH) = GetPanePixelSize(0, 0);
+                    matched.EnterNative(xaml, 0, 0, 1.0, paneW, paneH, _lastView);
                 }
                 else
                 {
@@ -1535,30 +1560,34 @@ namespace WinUIXamlPreview.UI
 
                 try
                 {
-                    if (_nativeHost != null && _nativeHost.SurfaceHwnd == hwnd)
-                    {
-                        // Same warm window re-hosted after an edit: resize the child in place.
-                        _nativeHost.ResizeChild(pxW, pxH);
-                    }
-                    else
-                    {
-                        // First/new HWND: build a fresh host and insert it into the holder.
-                        TeardownNativeHost();
-                        var host = new SurfaceHwndHost(hwnd, pxW, pxH);
-                        NativeHostHolder.Child = host;
-                        _nativeHost = host;
-
-                        // A fresh warm window starts at the surface's default theme (Light) + auto size;
-                        // re-assert any sticky user preference so it survives file switches / restarts.
-                        // Loop-safe: SetTheme is live (no re-host); a SetCanvasSize re-host returns THIS
-                        // same hwnd, so the next OnHwnd takes the ResizeChild branch above, not this one.
-                        ReapplyStickyPreviewSettings();
-                    }
-
                     // The holder fills the tool window (see PreviewControl.xaml); HwndHost sizes the
                     // reparented child to the holder's arranged rect — i.e. to the pane, never to the
                     // (possibly larger) design canvas — so it can't overflow into neighboring VS panes.
-                    // The surface's fixed-size canvas is anchored top-left, so this is a 1:1 viewport.
+                    // The surface zooms/fits the canvas inside that viewport, so the canvas pixel size in
+                    // msg is informational only: the child is never sized to it.
+                    if (_nativeHost == null || _nativeHost.SurfaceHwnd != hwnd)
+                    {
+                        // First/new HWND (first entry, theme swap, spare promotion): swap the new host in
+                        // directly in place of the old one — no collapse/teardown gap in between — and start
+                        // the child at the pane's size so there's no canvas-size frame before WPF's layout.
+                        var (paneW, paneH) = GetPanePixelSize(pxW, pxH);
+                        var old = _nativeHost;
+                        var host = new SurfaceHwndHost(hwnd, paneW, paneH);
+                        FrameImage.Visibility = Visibility.Collapsed;
+                        FrameImage.Source = null;
+                        NativeHostHolder.Width = double.NaN;
+                        NativeHostHolder.Height = double.NaN;
+                        NativeHostHolder.Visibility = Visibility.Visible;
+                        NativeHostHolder.Child = host;
+                        _nativeHost = host;
+                        if (old != null)
+                        {
+                            try { old.Dispose(); } catch { }
+                        }
+                        // The sticky canvas size was already sent ahead of EnterNative (SendStickyCanvasSize),
+                        // so this first host is already at the right size — no follow-up re-host needed.
+                    }
+                    // else: same warm window re-hosted after an edit — nothing to do client-side.
 
                     // Swap to the native view (hide the image path).
                     FrameImage.Visibility = Visibility.Collapsed;
@@ -1582,6 +1611,12 @@ namespace WinUIXamlPreview.UI
         private void OnNativeExited()
         {
             Log.Write("Surface acknowledged ExitNative (window re-cloaked off-screen).");
+        }
+
+        private void OnView(ViewMsg view)
+        {
+            _lastView = view;
+            Log.Write($"View: fit={view.Fit} zoom={view.Zoom:0.###} offset={view.OffsetX:0},{view.OffsetY:0}");
         }
 
         private void PerfBegin(string label)
@@ -2007,6 +2042,22 @@ namespace WinUIXamlPreview.UI
             ShowDocument(path!);
         }
 
+        /// <summary>
+        /// The native host's target size in device pixels: the content row (control minus the banner row).
+        /// Falls back to the given canvas size before the control has been laid out.
+        /// </summary>
+        private (int w, int h) GetPanePixelSize(int fallbackW, int fallbackH)
+        {
+            double dipW = ActualWidth;
+            double dipH = ActualHeight - BannerHost.ActualHeight;
+            if (dipW < 1 || dipH < 1)
+            {
+                return (fallbackW, fallbackH);
+            }
+            var dpi = VisualTreeHelper.GetDpi(this);
+            return (Math.Max(1, (int)Math.Round(dipW * dpi.DpiScaleX)), Math.Max(1, (int)Math.Round(dipH * dpi.DpiScaleY)));
+        }
+
         private void TeardownNativeHost(bool surfaceDead = false)
         {
             var host = _nativeHost;
@@ -2082,6 +2133,7 @@ namespace WinUIXamlPreview.UI
                 client.Selected -= OnSelected;
                 client.ElementProps -= OnElementProps;
                 client.ContentProps -= OnContentProps;
+                client.View -= OnView;
                 client.Closed -= OnClosed;
                 client.Dispose();
             }

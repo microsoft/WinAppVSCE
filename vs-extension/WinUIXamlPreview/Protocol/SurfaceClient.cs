@@ -81,6 +81,7 @@ namespace WinUIXamlPreview.Protocol
         public event Action<SelectedMsg>? Selected;
         public event Action<ElementPropsMsg>? ElementProps;
         public event Action<ContentPropsMsg>? ContentProps;
+        public event Action<ViewMsg>? View;
         public event Action<string>? Closed;
 
         /// <summary>True once the connection has faulted (process died / socket failed); Closed is raised at most once.</summary>
@@ -406,6 +407,13 @@ namespace WinUIXamlPreview.Protocol
                         ContentProps?.Invoke(contentProps);
                     }
                     break;
+                case "View":
+                    var view = JsonSerializer.Deserialize<ViewMsg>(json, ReadOptions);
+                    if (view != null)
+                    {
+                        View?.Invoke(view);
+                    }
+                    break;
                 case "Pong":
                     break;
                 default:
@@ -459,8 +467,14 @@ namespace WinUIXamlPreview.Protocol
             => Send(new ResizeMsg { Width = width, Height = height, Scale = scale });
 
         /// <summary>Enter native-HWND mode; the surface replies with an <see cref="HwndMsg"/> to reparent.</summary>
-        public bool EnterNative(string xaml, double width, double height, double scale)
-            => Send(new EnterNativeMsg { Xaml = xaml, Width = width, Height = height, Scale = scale, SampleData = SampleData });
+        public bool EnterNative(string xaml, double width, double height, double scale, int paneWidthPx = 0, int paneHeightPx = 0, ViewMsg? view = null)
+            => Send(new EnterNativeMsg
+            {
+                Xaml = xaml, Width = width, Height = height, Scale = scale, SampleData = SampleData,
+                PaneWidthPx = paneWidthPx > 0 ? paneWidthPx : (int?)null,
+                PaneHeightPx = paneHeightPx > 0 ? paneHeightPx : (int?)null,
+                View = view,
+            });
 
         /// <summary>Leave native mode; the surface re-cloaks its window and replies <c>NativeExited</c>.</summary>
         public bool ExitNative()

@@ -252,7 +252,7 @@ internal sealed class DesignSurface
 
         _artboard.SizeChanged += OnArtboardSizeChanged;
         _scroll.ViewChanged += OnScrollViewChanged;
-        _scroll.Loaded += (_, _) => { if (!_zoomInitialized) { ApplyFit(); } };
+        _scroll.Loaded += (_, _) => { if (!_zoomInitialized) { InitializeZoom(); } };
         _inputOverlay.PointerWheelChanged += OnOverlayWheel;
 
         ApplyMode();
@@ -339,16 +339,60 @@ internal sealed class DesignSurface
     private void OnArtboardSizeChanged(object sender, SizeChangedEventArgs e)
     {
         RebuildGrid(e.NewSize.Width, e.NewSize.Height);
-        if (!_zoomInitialized || _fitMode) { ApplyFit(); }
+        if (!_zoomInitialized) { InitializeZoom(); }
+        else if (_fitMode) { ApplyFit(); }
         else { ReflowSelectionChrome(); }
+    }
+
+    /// <summary>Zoom/scroll snapshot carried from one design surface to the next across a live re-host.</summary>
+    public readonly record struct ViewState(bool Fit, double Zoom, double OffsetX, double OffsetY);
+
+    /// <summary>The view to start in (from the previous surface). Null = zoom-to-fit.</summary>
+    internal ViewState? InitialView { get; set; }
+
+    internal ViewState CaptureViewState() =>
+        !_zoomInitialized && InitialView is { } pending
+            ? pending // not laid out yet (e.g. a quick re-host right after a restore): pass the restore along
+            : new(_fitMode || !_zoomInitialized, _scroll.ZoomFactor, _scroll.HorizontalOffset, _scroll.VerticalOffset);
+
+    private void InitializeZoom()
+    {
+        if (InitialView is { Fit: false } v && v.Zoom > 0)
+        {
+            double vw = _scroll.ViewportWidth > 0 ? _scroll.ViewportWidth : _artboard.ActualWidth;
+            if (vw <= 0) { return; }
+            _zoomInitialized = true;
+            _fitMode = false;
+            App.Log($"Restoring view: zoom {v.Zoom:0.###} offset {v.OffsetX:0},{v.OffsetY:0}");
+            _scroll.ChangeView(v.OffsetX, v.OffsetY, (float)Math.Max(MinZoom, Math.Min(MaxZoom, v.Zoom)), true);
+            UpdateZoomLabel(v.Zoom);
+            return;
+        }
+        ApplyFit();
     }
 
     private void OnScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
-        if (!_applyingFit) { _fitMode = false; }
+        // ChangeView may raise ViewChanged after ApplyFit has returned, so also treat "still at the fit zoom" as fit.
+        if (!_applyingFit && !IsAtFitZoom()) { _fitMode = false; }
         UpdateZoomLabel(_scroll.ZoomFactor);
         ReflowSelectionChrome();
+        if (!e.IsIntermediate && _zoomInitialized) { ViewStateChanged?.Invoke(CaptureViewState()); }
     }
+
+    /// <summary>Raised (UI thread) when the user's zoom/scroll settles, so the client can restore it on a new surface.</summary>
+    public event Action<ViewState>? ViewStateChanged;
+
+    private double ComputeFitZoom()
+    {
+        double vw = _scroll.ViewportWidth > 0 ? _scroll.ViewportWidth : _artboard.ActualWidth;
+        double vh = _scroll.ViewportHeight > 0 ? _scroll.ViewportHeight : _artboard.ActualHeight;
+        if (vw <= 0 || vh <= 0 || _canvasW <= 0 || _canvasH <= 0) { return double.NaN; }
+        double fit = Math.Min(vw / _canvasW, vh / _canvasH) * 0.94;
+        return Math.Max(MinZoom, Math.Min(fit, 1.0));
+    }
+
+    private bool IsAtFitZoom() => _fitMode && Math.Abs(_scroll.ZoomFactor - ComputeFitZoom()) < 0.002;
 
     private void RebuildGrid(double w, double h)
     {
@@ -364,12 +408,8 @@ internal sealed class DesignSurface
     /// <summary>Zoom-to-fit the pane (never upscales past 100%), staying in fit mode so pane resizes re-fit.</summary>
     private void ApplyFit()
     {
-        double vw = _scroll.ViewportWidth > 0 ? _scroll.ViewportWidth : _artboard.ActualWidth;
-        double vh = _scroll.ViewportHeight > 0 ? _scroll.ViewportHeight : _artboard.ActualHeight;
-        if (vw <= 0 || vh <= 0 || _canvasW <= 0 || _canvasH <= 0) { return; }
-        double fit = Math.Min(vw / _canvasW, vh / _canvasH) * 0.94;
-        fit = Math.Min(fit, 1.0);
-        fit = Math.Max(MinZoom, fit);
+        double fit = ComputeFitZoom();
+        if (double.IsNaN(fit)) { return; }
         _zoomInitialized = true;
         ChangeZoom(fit, null, keepFit: true);
     }

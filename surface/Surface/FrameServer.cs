@@ -62,6 +62,7 @@ internal sealed class FrameServer
         _uiDispatcher = DispatcherQueue.GetForCurrentThread();
         _host.SelectionChanged += OnSelection;
         _host.PropsRefreshed += OnPropsRefreshed;
+        _host.ViewStateChanged += v => Send(new { type = "View", fit = v.Fit, zoom = v.Zoom, offsetX = v.OffsetX, offsetY = v.OffsetY });
     }
 
     /// <summary>
@@ -275,8 +276,17 @@ internal sealed class FrameServer
                 _lastHeight = GetPositiveDouble(root, "height", _lastHeight);
                 _lastScale = GetPositiveDouble(root, "scale", _lastScale);
                 _nativeMode = true;
-                App.Log($"<- EnterNative ({xaml.Length} chars) — hosting live for reparent");
-                HostLiveAndReply(prepareWindow: true);
+                int paneW = (int)GetPositiveDouble(root, "paneWidthPx", 0);
+                int paneH = (int)GetPositiveDouble(root, "paneHeightPx", 0);
+                App.Log($"<- EnterNative ({xaml.Length} chars, pane {paneW}x{paneH} px) — hosting live for reparent");
+                DesignSurface.ViewState? initialView = null;
+                if (root.TryGetProperty("view", out var viewEl) && viewEl.ValueKind == JsonValueKind.Object)
+                {
+                    bool fit = viewEl.TryGetProperty("fit", out var fitEl) && fitEl.ValueKind == JsonValueKind.True;
+                    initialView = new DesignSurface.ViewState(fit, GetPositiveDouble(viewEl, "zoom", 1.0),
+                        GetPositiveDouble(viewEl, "offsetX", 0), GetPositiveDouble(viewEl, "offsetY", 0));
+                }
+                HostLiveAndReply(prepareWindow: true, paneW, paneH, initialView);
                 break;
             }
 
@@ -498,9 +508,9 @@ internal sealed class FrameServer
     /// warm window on the UI thread and write back an <c>Hwnd</c> message (the reparent target + its
     /// DIP/pixel size) on success, or an <c>Error</c> on a parse/activation failure.
     /// </summary>
-    private void HostLiveAndReply(bool prepareWindow)
+    private void HostLiveAndReply(bool prepareWindow, int panePixelW = 0, int panePixelH = 0, DesignSurface.ViewState? initialView = null)
     {
-        LiveResult result = HostLiveOnUiThreadAsync(_lastXaml!, prepareWindow)
+        LiveResult result = HostLiveOnUiThreadAsync(_lastXaml!, prepareWindow, panePixelW, panePixelH, initialView)
             .GetAwaiter().GetResult();
 
         if (result.Success)
@@ -565,14 +575,15 @@ internal sealed class FrameServer
         Send(new { type = "ContentProps", map });
     }
 
-    private Task<LiveResult> HostLiveOnUiThreadAsync(string xaml, bool prepareWindow)    {
+    private Task<LiveResult> HostLiveOnUiThreadAsync(string xaml, bool prepareWindow, int panePixelW, int panePixelH, DesignSurface.ViewState? initialView)
+    {
         var tcs = new TaskCompletionSource<LiveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         bool queued = _uiDispatcher.TryEnqueue(async void () =>
         {
             try
             {
-                var result = await _host.HostLiveAsync(xaml, prepareWindow);
+                var result = await _host.HostLiveAsync(xaml, prepareWindow, panePixelW, panePixelH, initialView);
                 tcs.TrySetResult(result);
             }
             catch (Exception ex)

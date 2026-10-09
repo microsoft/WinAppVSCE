@@ -18,6 +18,10 @@ namespace WinUIXamlPreview.UI
         private int _pixelH;
         private bool _surfaceAlive = true;
 
+        /// <param name="pixelW">Initial child width in device pixels — the PANE's size, not the design canvas.
+        /// WPF re-sizes the child to the host's arranged rect on every layout pass; starting at the pane size
+        /// avoids a visible jump (and an overdraw into neighboring VS panes) before that first pass.</param>
+        /// <param name="pixelH">Initial child height in device pixels (see <paramref name="pixelW"/>).</param>
         public SurfaceHwndHost(IntPtr surfaceHwnd, int pixelW, int pixelH)
         {
             _surfaceHwnd = surfaceHwnd;
@@ -26,25 +30,6 @@ namespace WinUIXamlPreview.UI
         }
 
         public IntPtr SurfaceHwnd => _surfaceHwnd;
-
-        /// <summary>Resize the reparented child in place (same HWND, new canvas pixel size). No-op when
-        /// the size is unchanged — the surface re-mounts new content in the same window, so a same-size
-        /// edit needs no client action (and skipping MoveWindow avoids any reposition flicker).</summary>
-        public void ResizeChild(int pixelW, int pixelH)
-        {
-            pixelW = Math.Max(1, pixelW);
-            pixelH = Math.Max(1, pixelH);
-            if (pixelW == _pixelW && pixelH == _pixelH)
-            {
-                return;
-            }
-            _pixelW = pixelW;
-            _pixelH = pixelH;
-            if (_surfaceAlive && _surfaceHwnd != IntPtr.Zero)
-            {
-                NativeMethods.MoveWindow(_surfaceHwnd, 0, 0, _pixelW, _pixelH, true);
-            }
-        }
 
         /// <summary>
         /// Mark the surface window as gone (process killed). Prevents <see cref="DestroyWindowCore"/>
@@ -69,9 +54,35 @@ namespace WinUIXamlPreview.UI
             NativeMethods.SetWindowLongPtr(_surfaceHwnd, NativeMethods.GWL_STYLE, new IntPtr(style));
 
             NativeMethods.SetParent(_surfaceHwnd, hwndParent.Handle);
-            NativeMethods.MoveWindow(_surfaceHwnd, 0, 0, _pixelW, _pixelH, true);
+            // Place the child where the holder actually is BEFORE showing it. hwndParent is the VS (main or
+            // floating) window's HwndSource, so (0,0) is VS's top-left corner: the child would flash there until
+            // WPF's first layout pass moved it into the pane (visible on every new HWND, e.g. a theme swap).
+            var (x, y) = GetInitialChildOrigin();
+            NativeMethods.MoveWindow(_surfaceHwnd, x, y, _pixelW, _pixelH, true);
             NativeMethods.ShowWindow(_surfaceHwnd, NativeMethods.SW_SHOW);
             return new HandleRef(this, _surfaceHwnd);
+        }
+
+        /// <summary>The holder's top-left in parent-HWND device pixels; far off-screen if not yet resolvable (WPF's
+        /// layout then positions the child — off-screen it's clipped by the parent, so nothing flashes).</summary>
+        private (int x, int y) GetInitialChildOrigin()
+        {
+            try
+            {
+                var anchor = System.Windows.Media.VisualTreeHelper.GetParent(this) as System.Windows.Media.Visual ?? this;
+                var source = System.Windows.PresentationSource.FromVisual(anchor);
+                if (source?.RootVisual != null && source.CompositionTarget != null)
+                {
+                    var dip = anchor.TransformToAncestor(source.RootVisual).Transform(new System.Windows.Point(0, 0));
+                    var px = source.CompositionTarget.TransformToDevice.Transform(dip);
+                    return ((int)Math.Round(px.X), (int)Math.Round(px.Y));
+                }
+            }
+            catch
+            {
+                // fall through to off-screen
+            }
+            return (-32000, -32000);
         }
 
         protected override void DestroyWindowCore(HandleRef hwnd)
@@ -80,6 +91,10 @@ namespace WinUIXamlPreview.UI
             // owns the window and re-cloaks it on ExitNative. If the process is dead, do nothing.
             if (_surfaceAlive && _surfaceHwnd != IntPtr.Zero)
             {
+                // Park the child far off-screen BEFORE detaching: SetParent(null) keeps the child's
+                // parent-relative coordinates as screen coordinates, so a child at (0,0) would flash at the
+                // desktop's top-left (e.g. the old window during a theme swap) until the surface re-cloaks it.
+                NativeMethods.MoveWindow(_surfaceHwnd, -32000, -32000, _pixelW, _pixelH, false);
                 NativeMethods.SetParent(_surfaceHwnd, IntPtr.Zero);
             }
         }

@@ -65,6 +65,12 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("scale")] public double Scale { get; set; }
         /// <summary>WS2-F6: placeholder sample data for {x:Bind}; null omits the field (server keeps its setting).</summary>
         [JsonPropertyName("sampleData"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? SampleData { get; set; }
+        /// <summary>Initial window size in device pixels — the tool-window pane the HWND will be reparented into —
+        /// so the surface fits the canvas to the final viewport before the reparent (no visible re-fit jump).</summary>
+        [JsonPropertyName("paneWidthPx"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? PaneWidthPx { get; set; }
+        [JsonPropertyName("paneHeightPx"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? PaneHeightPx { get; set; }
+        /// <summary>Initial zoom/scroll to restore (from the replaced surface); null = zoom-to-fit.</summary>
+        [JsonPropertyName("view"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public ViewMsg? View { get; set; }
     }
 
     /// <summary>Leave native mode: the surface re-cloaks its window off-screen and resumes frame mode.</summary>
@@ -255,5 +261,19 @@ namespace WinUIXamlPreview.Protocol
     {
         [JsonPropertyName("type")] public string? Type { get; set; }        // "ContentProps"
         [JsonPropertyName("map")] public Dictionary<string, string>? Map { get; set; } // simpleTypeName -> contentPropName
+    }
+
+    /// <summary>
+    /// Surface -> client: the native design surface's zoom/scroll after the user changes it (not sent per
+    /// intermediate pan frame). The client hands it back on <see cref="EnterNativeMsg"/> when a new surface
+    /// process replaces the old one for the same document (theme swap / fidelity upgrade) so the view is kept.
+    /// </summary>
+    internal sealed class ViewMsg
+    {
+        [JsonPropertyName("type")] public string? Type { get; set; }        // "View"
+        [JsonPropertyName("fit")] public bool Fit { get; set; }
+        [JsonPropertyName("zoom")] public double Zoom { get; set; }
+        [JsonPropertyName("offsetX")] public double OffsetX { get; set; }
+        [JsonPropertyName("offsetY")] public double OffsetY { get; set; }
     }
 }
