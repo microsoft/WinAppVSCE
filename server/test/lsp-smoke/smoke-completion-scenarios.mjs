@@ -1212,5 +1212,11 @@ export async function runCompletionScenarios(ctx) {
   if (!/Brush/.test(sdkHover)) {
     fail(`sdk theme resource hover missing resource type: ${sdkHover}`);
   }
-  console.log(`[ok] SDK theme resource hover: {ThemeResource SystemControlForegroundBaseHighBrush} reports its type and Windows SDK provenance (review #6)`);
+  // The hit now carries a null declaration, so F12 must still decline rather than
+  // inventing a location or erroring on the nullable field.
+  const sdkDef = await definitionWith(564, sdkHoverDoc, "sdk-theme-resource");
+  if (sdkDef && sdkDef.uri) {
+    fail(`sdk theme resource F12 returned a location: ${JSON.stringify(sdkDef)}`);
+  }
+  console.log(`[ok] SDK theme resource hover: {ThemeResource SystemControlForegroundBaseHighBrush} reports its type and Windows SDK provenance; F12 still declines (review #6)`);
 }
