@@ -226,22 +226,28 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                 const resolve = pendingSaveResolve;
                                 pendingSaveResolve = null;
                                 pendingSaveNonce = null;
-                                // Never rewrite a document we could not parse. Resolve with no
-                                // edits so the save still completes.
-                                if (!documentParses(text)) {
-                                    resolve([]);
-                                    return;
+                                // The nonce is already cleared, so the 500ms fallback can no longer
+                                // resolve this save. Guarantee it completes even if a change throws.
+                                let edits: vscode.TextEdit[] = [];
+                                try {
+                                    // Never rewrite a document we could not parse.
+                                    if (documentParses(text)) {
+                                        let result = text;
+                                        for (const change of message.changes) {
+                                            result = change.kind === 'extField'
+                                                ? updateExtensionField(result, change.appIndex, change.extIndex, change.fieldPath, change.value, change.isTextContent)
+                                                : applyFieldChange(result, change.section, change.field, change.value, change.index);
+                                        }
+                                        if (result !== text) {
+                                            edits = [vscode.TextEdit.replace(new vscode.Range(0, 0, document.lineCount, 0), result)];
+                                        }
+                                    }
+                                } catch (err) {
+                                    console.warn('[ManifestEditor] Flushing pending changes failed:', err);
+                                    edits = [];
+                                } finally {
+                                    resolve(edits);
                                 }
-                                let result = text;
-                                for (const change of message.changes) {
-                                    result = change.kind === 'extField'
-                                        ? updateExtensionField(result, change.appIndex, change.extIndex, change.fieldPath, change.value, change.isTextContent)
-                                        : applyFieldChange(result, change.section, change.field, change.value, change.index);
-                                }
-                                const edits = result !== text
-                                    ? [vscode.TextEdit.replace(new vscode.Range(0, 0, document.lineCount, 0), result)]
-                                    : [];
-                                resolve(edits);
                             }
                             return;
                         }

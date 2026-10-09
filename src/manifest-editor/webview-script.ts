@@ -512,28 +512,42 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             reopenDropdowns(openMenus);
         }
 
-        /** Identifies a dropdown menu stably enough to survive its card being re-rendered. */
-        function dropdownKeyFor(menu) {
-            if (menu.id) { return menu.id; }
-            const owner = menu.closest('[data-app-index], [data-app-idx]');
-            const appIdx = owner
-                ? (owner.getAttribute('data-app-index') || owner.getAttribute('data-app-idx'))
-                : '';
-            return menu.className.replace('open', '').trim() + '#' + appIdx;
+        // Menus that a re-render can destroy. Both classes use .open to show.
+        const DROPDOWN_SELECTOR = '.custom-dropdown-menu, .custom-select-options';
+
+        /**
+         * Keys every dropdown stably enough to survive its card being re-rendered. A card can hold
+         * several same-class menus, so an ordinal disambiguates what the class alone cannot.
+         */
+        function dropdownEntries() {
+            const seen = {};
+            const entries = [];
+            document.querySelectorAll(DROPDOWN_SELECTOR).forEach(menu => {
+                let key = menu.id;
+                if (!key) {
+                    const owner = menu.closest('[data-app-index], [data-app-idx]');
+                    const appIdx = owner
+                        ? (owner.getAttribute('data-app-index') || owner.getAttribute('data-app-idx'))
+                        : '';
+                    const base = menu.className.replace('open', '').trim() + '#' + appIdx;
+                    seen[base] = (seen[base] || 0) + 1;
+                    key = base + '@' + seen[base];
+                }
+                entries.push({ el: menu, key: key });
+            });
+            return entries;
         }
 
         function openDropdownKeys() {
-            const keys = [];
-            document.querySelectorAll('.custom-dropdown-menu.open').forEach(m => {
-                keys.push(dropdownKeyFor(m));
-            });
-            return keys;
+            return dropdownEntries()
+                .filter(e => e.el.classList.contains('open'))
+                .map(e => e.key);
         }
 
         function reopenDropdowns(keys) {
             if (!keys || !keys.length) { return; }
-            document.querySelectorAll('.custom-dropdown-menu').forEach(m => {
-                if (keys.indexOf(dropdownKeyFor(m)) !== -1) { m.classList.add('open'); }
+            dropdownEntries().forEach(e => {
+                if (keys.indexOf(e.key) !== -1) { e.el.classList.add('open'); }
             });
         }
 
@@ -675,8 +689,9 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         // the XML usually breaks while the user types in the text editor.
         function setEditorContentInert(isInert) {
             const overlay = document.getElementById('parse-error-overlay');
+            const live = document.getElementById('parse-error-live');
             Array.from(document.body.children).forEach(el => {
-                if (el === overlay || el.tagName === 'SCRIPT') { return; }
+                if (el === overlay || el === live || el.tagName === 'SCRIPT') { return; }
                 if (isInert) {
                     el.setAttribute('inert', '');
                     // Snapshot any aria-hidden owned by another system (activateTab manages it
@@ -703,6 +718,7 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             const overlay = document.getElementById('parse-error-overlay');
             if (!overlay) { return; }
             const detail = document.getElementById('parse-error-detail');
+            const live = document.getElementById('parse-error-live');
             const wasShowing = !overlay.hidden;
             if (message) {
                 if (detail) { detail.textContent = message; }
@@ -712,11 +728,14 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                     // sent: the extension would be asked to rewrite XML it cannot parse.
                     discardPendingChanges();
                     setEditorContentInert(true);
+                    // The overlay never takes focus, so announce it instead.
+                    if (live) { live.textContent = 'Unable to read the manifest. Editing is paused until the XML is fixed in the text editor.'; }
                 }
             } else {
                 overlay.hidden = true;
                 if (wasShowing) {
                     setEditorContentInert(false);
+                    if (live) { live.textContent = 'Manifest is readable again. Editing has resumed.'; }
                 }
             }
         }

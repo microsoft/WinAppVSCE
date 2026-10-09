@@ -43,10 +43,21 @@ test.afterAll(async () => {
     if (ctx) { await teardown(ctx); }
 });
 
-test('keeps the selected tab, app sub-tab and scroll position across an external edit that breaks the XML mid-way', async () => {
-    // Put the editor into a distinctive state: Applications tab, Visual Assets sub-tab, scrolled down.
+// The last test leaves the text editor focused rather than the custom editor, so these run in
+// order. Serial mode also retries the file from the top instead of resuming mid-sequence.
+test.describe.configure({ mode: 'serial' });
+
+// Each test must stand on its own: restore valid XML and re-establish the view state, so running
+// one in isolation (--grep) or retrying it in a fresh worker starts from the same place.
+test.beforeEach(async () => {
+    writeManifest(original);
+    await expect(frame.locator('#parse-error-overlay')).toBeHidden({ timeout: 20_000 });
     await switchTab(frame, 'applications');
     await switchAppSubTab(frame, 0, 'visual');
+});
+
+test('keeps the selected tab, app sub-tab and scroll position across an external edit that breaks the XML mid-way', async () => {
+    // beforeEach already selected Applications / Visual Assets; scroll down to complete the state.
     await expect(frame.locator('.app-sub-tab[data-subtab="visual"]').first()).toHaveClass(/active/);
 
     const panel = frame.locator('#tab-applications');
@@ -99,6 +110,32 @@ test('shows an in-place overlay — not a rebuilt document — while the XML is 
     await expect(frame.locator('#parse-error-overlay')).toBeHidden({ timeout: 20_000 });
     await expect(frame.locator('.tab-btn[data-tab="applications"]')).toHaveClass(/active/);
     await expect(frame.locator('.tab-bar')).not.toHaveAttribute('inert', '');
+});
+
+test('a save flushes webview input that is still inside the debounce window', async () => {
+    // The Chromium spec only proves the webview *posts* changesFlushed. This drives the provider
+    // handler that turns that message into a TextEdit, so a failure there cannot go unnoticed.
+    await switchAppSubTab(frame, 0, 'extensions');
+    await ctx.page.waitForTimeout(500);
+
+    const hostInput = frame.locator('input[data-ext-field="Host.Name"]').first();
+    await expect(hostInput).toBeVisible({ timeout: 10_000 });
+    await hostInput.click();
+    await hostInput.fill('flushed-on-save.example.com');
+
+    // Save well inside the 300 ms input debounce, so the keystroke only reaches disk if the
+    // flush path works end to end.
+    await ctx.page.keyboard.press('Control+S');
+
+    await expect.poll(
+        () => fs.readFileSync(manifestPath, 'utf-8'),
+        { timeout: 15_000, message: 'flushed value never reached the saved manifest' },
+    ).toContain('flushed-on-save.example.com');
+
+    // The save must not have corrupted the rest of the document.
+    const saved = fs.readFileSync(manifestPath, 'utf-8');
+    expect(saved).toContain('<Package');
+    expect(saved).toContain('</Package>');
 });
 
 test('saving while the XML is unparseable stores the raw text instead of rewriting the document', async () => {

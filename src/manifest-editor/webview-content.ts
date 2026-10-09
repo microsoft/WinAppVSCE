@@ -45,6 +45,7 @@ export function getWebviewContent(webview: vscode.Webview, nonce: string, manife
 ${getEditorStyles(nonce)}
 </head>
 <body>
+    <div id="parse-error-live" class="visually-hidden" aria-live="assertive" aria-atomic="true"></div>
     <div class="parse-error-overlay" id="parse-error-overlay" hidden>
         <div class="parse-error-box" role="alertdialog" aria-modal="true" aria-labelledby="parse-error-title" aria-describedby="parse-error-message parse-error-detail" tabindex="-1" id="parse-error-box">
             <div class="parse-error-title" id="parse-error-title">⚠ Unable to read the manifest</div>

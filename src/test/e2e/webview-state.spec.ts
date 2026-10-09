@@ -29,6 +29,11 @@ const manifestDataWithCapability = parseManifest(
     manifestXml.replace('  </Capabilities>', '    <Capability Name="internetClient" />\n  </Capabilities>'),
 );
 
+// trustLevel and runtimeBehavior are optional fields, so they only render once they have values.
+const dataWithAdvancedAttrs = parseManifest(
+    manifestXml.replace('<Application ', '<Application TrustLevel="mediumIL" RuntimeBehavior="win32App" '),
+);
+
 /** Loads the editor document with a stubbed VS Code webview API, optionally seeding persisted state. */
 async function loadEditor(page: Page, seedState: unknown = null): Promise<void> {
     // Injected ahead of the editor script so `acquireVsCodeApi` exists when it runs.
@@ -335,6 +340,58 @@ test('a background re-render keeps an open dropdown open', async ({ page }) => {
     // user is about to make on a menu item lands on nothing.
     await postUpdate(page, manifestData, true);
     await expect(menu).toHaveClass(/open/);
+});
+
+test('a background re-render keeps an open custom select open', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, dataWithAdvancedAttrs);
+
+    await page.locator('.tab-btn[data-tab="applications"]').click();
+    await page.locator('.app-card').first().locator('.app-sub-tab[data-subtab="info"]').click();
+
+    // App cards are rebuilt wholesale on re-render, and these render as .custom-select-options —
+    // a different class from .custom-dropdown-menu above, but the same .open contract.
+    const options = page.locator('.app-card').first().locator('.custom-select-trigger[data-field-name="trustLevel"] ~ .custom-select-options');
+    await page.locator('.app-card').first().locator('.custom-select-trigger[data-field-name="trustLevel"]').click();
+    await expect(options).toHaveClass(/open/);
+
+    await postUpdate(page, dataWithAdvancedAttrs, true);
+    await expect(options).toHaveClass(/open/);
+});
+
+test('only the select that was open is reopened after a re-render', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, dataWithAdvancedAttrs);
+    await page.locator('.tab-btn[data-tab="applications"]').click();
+    await page.locator('.app-card').first().locator('.app-sub-tab[data-subtab="info"]').click();
+
+    const runtime = page.locator('.app-card').first().locator('.custom-select-trigger[data-field-name="runtimeBehavior"] ~ .custom-select-options');
+    await page.locator('.app-card').first().locator('.custom-select-trigger[data-field-name="runtimeBehavior"]').click();
+    await expect(runtime).toHaveClass(/open/);
+
+    // These sibling selects share a class and have no id, so they must key distinctly or
+    // restoring reopens every select in the card.
+    await postUpdate(page, dataWithAdvancedAttrs, true);
+    await expect(runtime).toHaveClass(/open/);
+    expect(await page.locator('.app-card').first().locator('.custom-select-options.open').count()).toBe(1);
+});
+
+test('the parse-error overlay is announced without taking focus', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, manifestData);
+
+    const live = page.locator('#parse-error-live');
+    // The announcement region must stay outside the inert content, or it is silenced too.
+    await expect(live).toHaveAttribute('aria-live', 'assertive');
+    await expect(live).toBeEmpty();
+
+    await postParseError(page, 'unclosed tag: Package');
+    await expect(live).toContainText('Editing is paused');
+    await expect(live).not.toHaveAttribute('aria-hidden', 'true');
+    expect(await focusIsInOverlay(page)).toBe(false);
+
+    await postUpdate(page, manifestData, true);
+    await expect(live).toContainText('resumed');
 });
 
 test('a parse error discards extension-field input still sitting in the debounce', async ({ page }) => {

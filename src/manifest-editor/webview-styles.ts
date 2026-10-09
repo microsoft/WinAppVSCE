@@ -582,5 +582,13 @@ export function getEditorStyles(nonce: string): string {
             white-space: pre-wrap; word-break: break-word;
             color: var(--vscode-errorForeground, #f44747);
         }
+        /* Off-screen announcement target. The overlay deliberately never takes focus, so this
+           is what tells a screen reader that editing paused. */
+        .visually-hidden {
+            position: absolute; width: 1px; height: 1px;
+            margin: -1px; padding: 0; border: 0;
+            clip: rect(0 0 0 0); clip-path: inset(50%);
+            overflow: hidden; white-space: nowrap;
+        }
     </style>`;
 }
