@@ -195,6 +195,27 @@ try
     File.WriteAllText(Path.Combine(engine, "obj", "project.assets.json"), graph.Replace("net10.0/win-x64", "net11.0/win-x64"));
     Check(before != Identity(), "resolved TFM identity");
 
+    // F3: the template merges the target's PRI-bearing packages (not WASDK, not PRI-less ones).
+    var target = Path.Combine(root, "target");
+    Directory.CreateDirectory(Path.Combine(target, "obj"));
+    Check(TemplatePackages.Discover(target, _ => { }) == null, "template packages: no target graph keeps baseline");
+    File.WriteAllText(Path.Combine(target, "obj", "project.assets.json"), JsonSerializer.Serialize(new {
+        libraries = new Dictionary<string, object> {
+            ["Toolkit.Controls/8.2.1"] = new { type = "package", files = new[] { "lib/net8.0/Toolkit.Controls.pri" } },
+            ["Microsoft.WindowsAppSDK.WinUI/2.0.0"] = new { type = "package", files = new[] { "lib/Microsoft.UI.Xaml.Controls.pri" } },
+            ["Plain.Library/1.0.0"] = new { type = "package", files = new[] { "lib/net8.0/Plain.Library.dll" } },
+            ["SiblingProject/1.0.0"] = new { type = "project", path = "../Sibling/Sibling.csproj" } } }));
+    var discovered = TemplatePackages.Discover(target, _ => { })!;
+    Check(discovered.Count == 1 && discovered[0] == ("Toolkit.Controls", "8.2.1"), "template packages: only PRI-bearing non-WASDK packages");
+    var stagedTemplate = Path.Combine(root, "staged-template");
+    Directory.CreateDirectory(stagedTemplate);
+    TemplatePackages.Write(stagedTemplate, discovered);
+    var props = File.ReadAllText(Path.Combine(stagedTemplate, TemplatePackages.FileName));
+    Check(props.Contains("<WinUISurfaceUserPackages>true</WinUISurfaceUserPackages>") &&
+        props.Contains("<PackageReference Include=\"Toolkit.Controls\" Version=\"8.2.1\" />"), "template packages: props replace baseline");
+    TemplatePackages.Write(stagedTemplate, null);
+    Check(!File.Exists(Path.Combine(stagedTemplate, TemplatePackages.FileName)), "template packages: fallback removes props");
+
     // Only external dotnet execution is substituted. The actual --build dispatcher, HostBuilder,
     // identity, package matching, cache validation/publication and JSON/exit paths run unchanged.
     var buildFixture = Path.Combine(root, "build-fixture");

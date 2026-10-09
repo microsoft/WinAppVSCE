@@ -5,7 +5,7 @@ Source ownership:
 | Path | Responsibility |
 | --- | --- |
 | `Surface/` | Existing net10 renderer; frame-stream and optional native-HWND hosting. |
-| `DesignHost/` | Resource template, never launched. Fixed CommunityToolkit closure, not arbitrary project resources. |
+| `DesignHost/` | Resource template, never launched. Merges the target's PRI-bearing NuGet packages (`UserPackages.g.props`); falls back to a fixed CommunityToolkit closure. |
 | `SurfaceProvisioner/` | BCL-only net8 executable; resolved host build, cache identity, publication and CLI. |
 | `Shared/HostPayload.cs` | Small internal linked net8/net472 payload manifest validator/run-copy helper; no public runtime library. |
 | `protocol/` | Complete descriptive v1 wire specification, TS shapes and linked-production compatibility fixtures. |

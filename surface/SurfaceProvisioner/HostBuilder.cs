@@ -3,7 +3,7 @@ using WinUISurface.Shared;
 
 namespace SurfaceProvisioner;
 
-/// <summary>IDE-neutral matched managed/native host and fixed-template PRI builder.</summary>
+/// <summary>IDE-neutral matched managed/native host and target-package-aware template PRI builder.</summary>
 public static class HostBuilder
 {
     public sealed class BuildOptions
@@ -117,8 +117,21 @@ public static class HostBuilder
             BuildStorage.CopySource(templateSource, template, cancellation);
             var sp = Path.Combine(surface, Path.GetFileName(opt.SurfaceProjectPath));
             var dp = Path.Combine(template, Path.GetFileName(opt.DesignHostPriProjectPath));
-            foreach (var project in new[] { sp, dp })
-                RunTool(BuildArgs("restore", project, version, opt));
+            // F3: merge the target's own PRI-bearing packages (not a fixed list) so their templates resolve.
+            TemplatePackages.Write(template, TemplatePackages.Discover(opt.ProjectPath, log));
+            RunTool(BuildArgs("restore", sp, version, opt));
+            try
+            {
+                RunTool(BuildArgs("restore", dp, version, opt));
+            }
+            catch (InvalidOperationException ex) when (File.Exists(Path.Combine(template, TemplatePackages.FileName)))
+            {
+                // A target package the template can't restore must not cost the matched host: fall back to
+                // the fixed template baseline (identity is computed below, after the final restore).
+                log("Template packages: restore failed with the target's packages; retrying with the template baseline. " + ex.Message);
+                TemplatePackages.Write(template, null);
+                RunTool(BuildArgs("restore", dp, version, opt));
+            }
             var (component, _) = Provisioner.ResolveComponent(version, opt.NuGetCache, log);
             r.WinUiComponent = component ?? throw new InvalidDataException("Resolved WinUI component missing after restore.");
             var inputWitnesses = new List<BuildStorage.Witness>();

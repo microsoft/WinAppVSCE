@@ -84,7 +84,8 @@ namespace WinUIXamlPreview.FaultTests
 
                 case "crash-after-ready":
                     SendReady(writer);
-                    Thread.Sleep(750);
+                    // Long enough for a cold client (first JSON/TPL use) to process Ready before the exit races it.
+                    Thread.Sleep(2500);
                     return 4; // Healthy start, then the renderer dies — exercises Closed after Ready.
 
                 case "ready-idle":

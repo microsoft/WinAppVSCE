@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    DesignHost — merged core+toolkit PRI source for the per-version Surface host (nov-pvh-productize).
+    DesignHost — merged core+third-party PRI source for the per-version Surface host (nov-pvh-productize).
 
     WHY THIS EXISTS:
     The self-contained per-version Surface host ships its own ~2 MB Surface.pri, which is the MRT PRIMARY
@@ -86,8 +86,16 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="0.4.0" />
   </ItemGroup>
 
-  <!-- T6: gallery toolkit closure @ 8.2.250402 - harvest their Themes/Generic.xbf into the merged pri -->
-  <ItemGroup>
+  <!--
+    F3: the provisioner writes UserPackages.g.props into its STAGED copy of this project, listing every
+    PRI-bearing package from the target project's resolved graph at the target's exact versions, and sets
+    WinUISurfaceUserPackages=true. The fixed toolkit list below is only the baseline when no target graph
+    is available (or the target's packages fail to restore here).
+  -->
+  <Import Project="UserPackages.g.props" Condition="Exists('UserPackages.g.props')" />
+
+  <!-- T6 baseline: gallery toolkit closure @ 8.2.250402 - harvest their Themes/Generic.xbf into the merged pri -->
+  <ItemGroup Condition="'$(WinUISurfaceUserPackages)' != 'true'">
     <PackageReference Include="CommunityToolkit.WinUI.Behaviors" Version="8.2.250402" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.CameraPreview" Version="8.2.250402" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Primitives" Version="8.2.250402" />

@@ -167,7 +167,7 @@ internal static class BuildStorage
             }
             AddResolvedClosure(Path.Combine(item.Item1, "obj", "project.assets.json"), lines, cancellation, witnesses);
         }
-        // Target graph/TFMs/resource closure affect identity even though arbitrary resources are not yet merged.
+        // Target graph/TFMs/resource closure affect identity; PRI-bearing target packages are merged into the template.
         witnesses?.Add(Witness.Of(project));
         if (File.Exists(project)) lines.Add("project=" + HostPayload.Hash(project, cancellation));
         var targetAssets = Path.Combine(File.Exists(project) ? Path.GetDirectoryName(project)! : project, "obj", "project.assets.json");

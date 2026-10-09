@@ -522,7 +522,7 @@ public partial class App : Application, IXamlMetadataProvider
         }
 
         Log($"Loading user assembly: {userAssemblyPath}");
-        var assembly = Assembly.LoadFrom(userAssemblyPath);
+        var assembly = PackagedAppShim.LoadUserAssembly(userAssemblyPath, Log);
         _userAssembly = assembly;
 
         // Enumerate types defensively: a real app references many packages (Win2D, toolkit, …) and
