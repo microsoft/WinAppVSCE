@@ -39,6 +39,11 @@ namespace WinUIXamlPreview.Protocol
 
         private static async Task RunAsync(IReadOnlyList<string> csprojPaths, string trigger, Action<string> log)
         {
+            if (!SurfaceIdentity.FallbackActive)
+            {
+                return; // packaged builds load without identity by default; only prewarm once the fallback is on
+            }
+
             try
             {
                 var sw = Stopwatch.StartNew();

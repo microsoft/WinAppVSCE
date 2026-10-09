@@ -82,8 +82,8 @@ namespace WinUIXamlPreview.Protocol
                 if (unpackaged == null)
                 {
                     log($"Only a packaged (MSIX) build of {assemblyName} was found ({dll}). The preview host " +
-                        "will register a sparse package identity so this build can be hosted (requires Windows " +
-                        "Developer Mode). Custom controls resolve once identity is active.");
+                        "loads it with the WinAppSDK deployment initializer disabled; if that fails it falls back " +
+                        "to a sparse package identity (requires Windows Developer Mode).");
                 }
                 else if (dlls.Count > 1)
                 {

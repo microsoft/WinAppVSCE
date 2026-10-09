@@ -146,6 +146,32 @@ namespace WinUIXamlPreview.UI
             // Hand the package ownership of this session so a VS shutdown disposes it (and its surface
             // process) even if this control's tab/margin teardown never fires (T7).
             PreviewPackageState.RegisterSession(this);
+            SurfaceIdentity.FallbackRequested += OnIdentityFallbackRequested;
+            SurfaceClient.IdentityRequired += OnSurfaceIdentityRequired;
+        }
+
+        private static void OnSurfaceIdentityRequired() => SurfaceIdentity.RequestFallback(Log.Write);
+
+        private void OnIdentityFallbackRequested()
+        {
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                if (_disposed || _activeUserDll == null || !ProjectDllLocator.IsPackagedBuild(_activeUserDll))
+                {
+                    return;
+                }
+
+                var path = _pinnedPath ?? _currentPath;
+                if (string.IsNullOrEmpty(path))
+                {
+                    return;
+                }
+
+                Log.Write("Packaged preview: the surface could not load the app without package identity; registering identity and restarting on the bundled host.");
+                _currentPath = null;
+                _carryViewOnPromote = true;
+                ShowDocument(path);
+            });
         }
 
         private void OnLoaded(object sender, RoutedEventArgs e)
@@ -302,11 +328,14 @@ namespace WinUIXamlPreview.UI
             _activeUserPri = recoverPri;
             _fullFidelityCancelled = false;
 
-            // Packaged (MSIX) user builds require the surface to run with package identity (plan §38). When the
-            // chosen assembly is a packaged build and this surface ships the sparse-identity payload, register
-            // the sparse package (external location = the surface folder) before launching. Off the UI thread
-            // (spawns PowerShell); non-fatal on failure — we still launch and render framework types.
-            if (recoverPri == null && userDll != null && ProjectDllLocator.IsPackagedBuild(userDll) && SurfaceIdentity.HasIdentityPayload(surfaceExe))
+            // Packaged (MSIX) user builds normally load without identity: the surface neutralizes the WinAppSDK
+            // deployment auto-initializer in memory (PackagedAppShim). Only when that fails does the surface
+            // report WXP:IDENTITY-REQUIRED; we then register the sparse package (external location = the surface
+            // folder) and relaunch the bundled host with identity. Off the UI thread (spawns PowerShell);
+            // non-fatal on failure — we still launch and render framework types.
+            var identityFallback = recoverPri == null && userDll != null && SurfaceIdentity.FallbackActive
+                && ProjectDllLocator.IsPackagedBuild(userDll) && SurfaceIdentity.HasIdentityPayload(surfaceExe);
+            if (identityFallback)
             {
                 SetStatus("Preparing packaged preview…", spinner: true, detail: Path.GetFileName(path));
                 var exeForReg = surfaceExe;
@@ -377,10 +406,15 @@ namespace WinUIXamlPreview.UI
 
                 // Instant bundled preview is now on its way. If this project needs a version-matched host, kick
                 // the background upgrade (run-copy a cached host, or provisioner --build) → hot-swap when ready.
-                // A P7 matched recovery is already on the matched host, so there's nothing to upgrade.
-                if (recoverPri == null)
+                // A P7 matched recovery is already on the matched host, so there's nothing to upgrade. Under the
+                // identity fallback the matched host (an unregistered run-copy) can't get identity, so stay bundled.
+                if (recoverPri == null && !identityFallback)
                 {
                     KickFidelityUpgrade(plan);
+                }
+                else if (identityFallback)
+                {
+                    Log.Write("Packaged preview: identity fallback active; staying on the bundled host (matched hosts run without identity).");
                 }
             }
             catch (Exception ex)
@@ -2150,6 +2184,8 @@ namespace WinUIXamlPreview.UI
             }
 
             _disposed = true;
+            SurfaceIdentity.FallbackRequested -= OnIdentityFallbackRequested;
+            SurfaceClient.IdentityRequired -= OnSurfaceIdentityRequired;
             PreviewPackageState.UnregisterSession(this);
             _resizeDebounce.Stop();
             DisposeClient();

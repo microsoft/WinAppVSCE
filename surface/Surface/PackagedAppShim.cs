@@ -52,7 +52,11 @@ internal static class PackagedAppShim
     /// <summary>Loads <paramref name="path"/>, neutralizing the deployment auto-initializer when needed.</summary>
     internal static Assembly LoadUserAssembly(string path, Action<string> log)
     {
-        if (!HasPackageIdentity())
+        if (Environment.GetEnvironmentVariable("WXP_DISABLE_PACKAGED_SHIM") == "1")
+        {
+            log("Packaged-app shim disabled by WXP_DISABLE_PACKAGED_SHIM (test hook).");
+        }
+        else if (!HasPackageIdentity())
         {
             try
             {
@@ -71,6 +75,27 @@ internal static class PackagedAppShim
         }
 
         return Assembly.LoadFrom(path);
+    }
+
+    /// <summary>
+    /// Marker written to stderr when the user assembly can't load for lack of package identity (the shim
+    /// didn't apply). The extension reacts by registering the sparse identity and relaunching the bundled host.
+    /// </summary>
+    internal const string IdentityRequiredMarker = "WXP:IDENTITY-REQUIRED";
+
+    /// <summary>True when <paramref name="ex"/> (or an inner exception) is the "no package identity" failure.</summary>
+    internal static bool IsMissingIdentityFailure(Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e.HResult == unchecked((int)0x80073D54) ||
+                e.Message.IndexOf("package identity", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

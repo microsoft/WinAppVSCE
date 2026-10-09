@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace WinUIXamlPreview.Protocol
@@ -21,6 +22,10 @@ namespace WinUIXamlPreview.Protocol
     /// identity, satisfying that gate. The exe carries a matching <c>&lt;msix&gt;</c> element in its manifest
     /// (embedded post-build); that element is inert until this package is registered, so the same exe still
     /// launches unpackaged for non-packaged projects (dual-mode). See plan §38.
+    ///
+    /// This is now a <b>fallback</b>: the surface normally loads packaged builds without identity by disabling
+    /// the deployment auto-initializer in memory (Surface <c>PackagedAppShim</c>). Registration only runs after a
+    /// surface reports <see cref="SurfaceClient.IdentityRequiredMarker"/> (see <see cref="RequestFallback"/>).
     ///
     /// Registration is one-time per external-location folder (cached for the process) and requires Windows
     /// Developer Mode (or a trusted signature) to register a loose external-location package. All failures are
@@ -50,6 +55,30 @@ namespace WinUIXamlPreview.Protocol
         private static string? _registeredForDir;
         private static Task<bool>? _pending;
         private static string? _pendingDir;
+        private static int _fallbackRequested;
+
+        /// <summary>
+        /// True once a surface reported <see cref="SurfaceClient.IdentityRequiredMarker"/> this VS session.
+        /// Registration is skipped until then: the surface normally loads packaged builds without identity
+        /// (PackagedAppShim).
+        /// </summary>
+        public static bool FallbackActive => Volatile.Read(ref _fallbackRequested) != 0;
+
+        /// <summary>Raised (once per VS session, on a background thread) when the identity fallback activates.</summary>
+        public static event Action? FallbackRequested;
+
+        /// <summary>Activates the identity fallback. Only the first call raises <see cref="FallbackRequested"/>.</summary>
+        public static void RequestFallback(Action<string>? log = null)
+        {
+            if (Interlocked.Exchange(ref _fallbackRequested, 1) != 0)
+            {
+                return;
+            }
+
+            log?.Invoke("Identity: surface reported it needs package identity; enabling sparse-identity fallback.");
+            try { FallbackRequested?.Invoke(); }
+            catch (Exception ex) { log?.Invoke("Identity fallback handler failed: " + ex.Message); }
+        }
 
         /// <summary>
         /// Shared, de-duplicated <see cref="EnsureRegistered"/>: a background prewarm and the preview open path

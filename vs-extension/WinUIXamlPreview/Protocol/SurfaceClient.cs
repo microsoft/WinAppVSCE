@@ -84,6 +84,12 @@ namespace WinUIXamlPreview.Protocol
         public event Action<ViewMsg>? View;
         public event Action<string>? Closed;
 
+        /// <summary>Stderr marker the surface writes when a packaged user assembly can't load without identity.</summary>
+        public const string IdentityRequiredMarker = "WXP:IDENTITY-REQUIRED";
+
+        /// <summary>Raised (on a background thread) when any surface reports <see cref="IdentityRequiredMarker"/>.</summary>
+        public static event Action? IdentityRequired;
+
         /// <summary>True once the connection has faulted (process died / socket failed); Closed is raised at most once.</summary>
         public bool IsFaulted => Volatile.Read(ref _faulted) != 0;
 
@@ -245,6 +251,10 @@ namespace WinUIXamlPreview.Protocol
             if (!string.IsNullOrWhiteSpace(e.Data))
             {
                 _log($"[surface:err] {e.Data}");
+                if (e.Data.IndexOf(IdentityRequiredMarker, StringComparison.Ordinal) >= 0)
+                {
+                    IdentityRequired?.Invoke();
+                }
             }
         }
 

@@ -386,6 +386,10 @@ public partial class App : Application, IXamlMetadataProvider
                 {
                     Log($"WARNING: failed to load user provider from '{userDll}': {DescribeExceptionChain(ex)}. " +
                         "Custom controls will not resolve; built-in XAML still renders.");
+                    if (!PackagedAppShim.HasPackageIdentity() && PackagedAppShim.IsMissingIdentityFailure(ex))
+                    {
+                        Log(PackagedAppShim.IdentityRequiredMarker);
+                    }
                 }
 
                 // LAYER 2: establish the user app's resource scope (implicit styles + {StaticResource}
