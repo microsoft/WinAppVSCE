@@ -934,11 +934,12 @@ internal sealed partial class XamlLanguageServer
         Lsp.Location Declaration,
         string TypeName);
 
-    /// <summary>A resolved resource-key reference: the key, the range of the reference in the current document (for hover), the declaration location (for F12), the resource element's type name</summary>
+    /// <summary>A resolved resource-key reference: the key, the range of the reference in the current document (for hover), the declaration location (for F12), the resource element's type name.</summary>
+    /// <remarks>Declaration is null for SDK theme resources, which hover can describe but F12 cannot navigate to.</remarks>
     private readonly record struct ResourceReferenceHit(
         string Key,
         Lsp.Range ReferenceRange,
-        Lsp.Location Declaration,
+        Lsp.Location? Declaration,
         string TypeName,
         string FileLabel);
 

@@ -1190,4 +1190,27 @@ export async function runCompletionScenarios(ctx) {
   }
   console.log(`[ok] workspace-trust boundary: an out-of-root .xaml (with a sibling project) is served project-less (F12 handler -> no location), while the in-root fixture resolved`);
 
+
+  // 563) SDK theme resource hover (review finding #6): keys offered by completion but declared in
+  // generic.xaml (not the project) previously produced no hover at all. They now report their type
+  // and an SDK provenance label, while F12 still yields no location because there is nothing to open.
+  const sdkHoverDoc = `<Page ${NS}>\n  <TextBlock Foreground="{ThemeResource SystemControlForegroundBase|HighBrush}" />\n</Page>`;
+  let sdkHover = "";
+  // The preceding boundary scenario invalidates the project context, and a cold context answers
+  // resource hovers with project-independent prose. Poll until the warm answer lands.
+  for (let attempt = 0; attempt < 30; attempt++) {
+    sdkHover = await hoverAt(563, sdkHoverDoc, "sdk-theme-resource");
+    if (/Windows SDK/i.test(sdkHover)) break;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  if (!sdkHover.includes("SystemControlForegroundBaseHighBrush")) {
+    fail(`sdk theme resource hover missing key: ${sdkHover}`);
+  }
+  if (!/Windows SDK/i.test(sdkHover)) {
+    fail(`sdk theme resource hover missing SDK provenance: ${sdkHover}`);
+  }
+  if (!/Brush/.test(sdkHover)) {
+    fail(`sdk theme resource hover missing resource type: ${sdkHover}`);
+  }
+  console.log(`[ok] SDK theme resource hover: {ThemeResource SystemControlForegroundBaseHighBrush} reports its type and Windows SDK provenance (review #6)`);
 }

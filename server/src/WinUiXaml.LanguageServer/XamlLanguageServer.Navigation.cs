@@ -485,7 +485,7 @@ internal sealed partial class XamlLanguageServer
     private async Task<object?> ResolveResourceKeyDefinitionAsync(TextDocumentPositionParams p) =>
         (await ResolveResourceReferenceAsync(p).ConfigureAwait(false))?.Declaration;
 
-    /// <summary>Hover over a resource-key reference: shows the referenced resource's element type and where it is declared (this file or App.xaml).</summary>
+    /// <summary>Hover over a resource-key reference: shows the referenced resource's element type and where it is declared (this file, a project dictionary, or the SDK).</summary>
     private async Task<Hover?> ResolveResourceKeyHoverAsync(TextDocumentPositionParams p)
     {
         var hit = await ResolveResourceReferenceAsync(p).ConfigureAwait(false);
@@ -591,6 +591,20 @@ internal sealed partial class XamlLanguageServer
                 },
                 declaration.Value.TypeName,
                 System.IO.Path.GetFileName(resourceFile.Path));
+        }
+
+        // 3) The SDK theme resource catalog, which has a type but no navigable declaration.
+        foreach (var themeResource in context.TypeSystem.GetThemeResources())
+        {
+            if (string.Equals(themeResource.Key, key, StringComparison.Ordinal))
+            {
+                return new ResourceReferenceHit(
+                    key,
+                    referenceRange,
+                    null,
+                    themeResource.LocalTypeName,
+                    "the Windows SDK");
+            }
         }
 
         return null;
