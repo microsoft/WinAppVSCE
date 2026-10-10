@@ -105,6 +105,7 @@ namespace WinUIXamlPreview.Editor
         private bool _compactLabels;
         private int _toolbarLevel = -1;
         private string? _path;
+        private ITextDocument? _textDocument;
         private bool _disposed;
 
         // Two-way selection sync (plan §41 #1/#2). The source map bridges the XAML text and the surface's
@@ -145,7 +146,7 @@ namespace WinUIXamlPreview.Editor
                 // Only attach to WinUI 3 XAML. WPF and UWP share WinUI's default namespace URI, so they can't
                 // be told apart from the markup alone — we inspect the owning project. A non-WinUI document gets
                 // no margin (and, returning null, no cached surface) so the designer never shows for WPF/UWP.
-                var path = ResolveDocumentPath(host.TextView, docFactory);
+                var path = ResolveDocument(host.TextView, docFactory)?.FilePath;
                 if (!Protocol.ProjectDllLocator.IsWinUiXaml(path, m => Log.Write("WinUI gate: " + m)))
                 {
                     return null;
@@ -213,7 +214,15 @@ namespace WinUIXamlPreview.Editor
             _root.Children.Add(_collapsedBar);
 
             // Pin the preview to THIS tab's document so it doesn't chase the active tab.
-            _path = ResolveDocumentPath(textView, docFactory);
+            _textDocument = ResolveDocument(textView, docFactory);
+            _path = _textDocument?.FilePath;
+            if (_textDocument != null)
+            {
+                // Follow a rename/move of this tab's file (Solution Explorer drag, Save As) so the preview
+                // doesn't stay pinned to a path that no longer exists.
+                _textDocument.FileActionOccurred += OnFileActionOccurred;
+            }
+
             if (!string.IsNullOrEmpty(_path))
             {
                 Log.Write($"XamlPreviewMargin[{location}]: pinning to '{_path}'.");
@@ -1453,14 +1462,14 @@ namespace WinUIXamlPreview.Editor
 
         // ---- IWpfTextViewMargin --------------------------------------------
 
-        private static string? ResolveDocumentPath(IWpfTextView textView, ITextDocumentFactoryService docFactory)
+        private static ITextDocument? ResolveDocument(IWpfTextView textView, ITextDocumentFactoryService docFactory)
         {
             try
             {
                 var buffer = textView.TextDataModel?.DocumentBuffer ?? textView.TextBuffer;
                 if (buffer != null && docFactory.TryGetTextDocument(buffer, out ITextDocument doc))
                 {
-                    return doc.FilePath;
+                    return doc;
                 }
             }
             catch
@@ -1469,6 +1478,25 @@ namespace WinUIXamlPreview.Editor
             }
 
             return null;
+        }
+
+        private void OnFileActionOccurred(object sender, TextDocumentFileActionEventArgs e)
+        {
+            if (_disposed || (e.FileActionType & FileActionTypes.DocumentRenamed) == 0)
+            {
+                return;
+            }
+
+            var oldPath = _path;
+            var newPath = e.FilePath;
+            if (string.IsNullOrEmpty(newPath) || string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _path = newPath;
+            Log.Write($"XamlPreviewMargin: document renamed '{oldPath}' -> '{newPath}'.");
+            _preview.OnDocumentRenamed(oldPath, newPath);
         }
 
         public FrameworkElement VisualElement
@@ -1518,6 +1546,11 @@ namespace WinUIXamlPreview.Editor
                 if (_buffer != null)
                 {
                     _buffer.Changed -= OnBufferChanged;
+                }
+
+                if (_textDocument != null)
+                {
+                    _textDocument.FileActionOccurred -= OnFileActionOccurred;
                 }
             }
             catch (Exception ex) { Log.Write("Margin teardown (edit debounce) failed: " + ex); }

@@ -185,6 +185,7 @@ namespace WinUIXamlPreview.UI
             {
                 _tracker.ActiveDocumentChanged += OnActiveDocumentChanged;
                 _tracker.ActiveDocumentSaved += OnActiveDocumentSaved;
+                _tracker.DocumentRenamed += OnTrackerDocumentRenamed;
             }
 
             ShowDocument(_pinnedPath ?? PreviewPackageState.GetActiveXamlPath());
@@ -210,9 +211,62 @@ namespace WinUIXamlPreview.UI
             {
                 _tracker.ActiveDocumentChanged -= OnActiveDocumentChanged;
                 _tracker.ActiveDocumentSaved -= OnActiveDocumentSaved;
+                _tracker.DocumentRenamed -= OnTrackerDocumentRenamed;
             }
 
             DisposeClient();
+        }
+
+        private void OnTrackerDocumentRenamed(object? sender, DocumentRenamedEventArgs e) => OnDocumentRenamed(e.OldPath, e.NewPath);
+
+        /// <summary>
+        /// The previewed file was renamed or moved (Solution Explorer drag, Save As). Follow it: within the same
+        /// project the running preview just adopts the new path (nothing to re-render); a move to another project
+        /// restarts so the right user assembly and host are used. Idempotent — the margin and the RDT tracker can
+        /// both report the same rename. UI thread only.
+        /// </summary>
+        internal void OnDocumentRenamed(string? oldPath, string newPath)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (_disposed || string.IsNullOrEmpty(oldPath) || string.IsNullOrEmpty(newPath))
+            {
+                return;
+            }
+
+            bool pinned = string.Equals(_pinnedPath, oldPath, StringComparison.OrdinalIgnoreCase);
+            bool current = IsCurrent(oldPath);
+            if (!pinned && !current)
+            {
+                return;
+            }
+
+            if (pinned)
+            {
+                _pinnedPath = newPath;
+            }
+
+            if (!current)
+            {
+                return;
+            }
+
+            string? newDll = null;
+            if (newPath.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase))
+            {
+                try { newDll = ProjectDllLocator.FindUserDll(newPath, Log.Write); }
+                catch (Exception ex) { Log.Write("Rename: user DLL lookup failed: " + ex.Message); }
+            }
+
+            if (_client != null && newDll != null && string.Equals(newDll, _activeUserDll, StringComparison.OrdinalIgnoreCase))
+            {
+                _currentPath = newPath;
+                Log.Write($"Rename: now previewing '{newPath}' (same project; preview kept).");
+                return;
+            }
+
+            Log.Write($"Rename: '{oldPath}' -> '{newPath}' changed project or type; restarting preview.");
+            _currentPath = null;
+            ShowDocument(newPath);
         }
 
         private void OnActiveDocumentChanged(object? sender, string? path)

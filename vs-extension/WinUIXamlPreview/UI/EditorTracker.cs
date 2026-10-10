@@ -17,7 +17,7 @@ namespace WinUIXamlPreview.UI
     /// and <see cref="ActiveDocumentSaved"/> when the active document is saved. This is standard
     /// shell boilerplate — no proprietary designer logic.
     /// </summary>
-    internal sealed class EditorTracker : IVsRunningDocTableEvents, IDisposable
+    internal sealed class EditorTracker : IVsRunningDocTableEvents2, IDisposable
     {
         private readonly IVsRunningDocumentTable _rdt;
         private readonly DTE _dte;
@@ -47,6 +47,9 @@ namespace WinUIXamlPreview.UI
         public event EventHandler<string?>? ActiveDocumentChanged;
 
         public event EventHandler<string?>? ActiveDocumentSaved;
+
+        /// <summary>A document's moniker changed (rename/move/Save As). Raised on the UI thread.</summary>
+        public event EventHandler<DocumentRenamedEventArgs>? DocumentRenamed;
 
         public string? GetActiveDocumentPath()
         {
@@ -79,6 +82,41 @@ namespace WinUIXamlPreview.UI
         public int OnBeforeLastDocumentUnlock(uint docCookie, uint dwRDTLockType, uint dwReadLocksRemaining, uint dwEditLocksRemaining) => VSConstants.S_OK;
         public int OnAfterAttributeChange(uint docCookie, uint grfAttribs) => VSConstants.S_OK;
         public int OnAfterDocumentWindowHide(uint docCookie, IVsWindowFrame pFrame) => VSConstants.S_OK;
+
+        // ---- IVsRunningDocTableEvents2 -------------------------------------
+
+        public int OnAfterAttributeChangeEx(
+            uint docCookie, uint grfAttribs,
+            IVsHierarchy pHierOld, uint itemidOld, string pszMkDocumentOld,
+            IVsHierarchy pHierNew, uint itemidNew, string pszMkDocumentNew)
+        {
+            if (_disposed ||
+                (grfAttribs & (uint)__VSRDTATTRIB.RDTA_MkDocument) == 0 ||
+                string.IsNullOrEmpty(pszMkDocumentOld) || string.IsNullOrEmpty(pszMkDocumentNew) ||
+                string.Equals(pszMkDocumentOld, pszMkDocumentNew, StringComparison.OrdinalIgnoreCase))
+            {
+                return VSConstants.S_OK;
+            }
+
+            var args = new DocumentRenamedEventArgs(pszMkDocumentOld, pszMkDocumentNew);
+            _ = _jtf.RunAsync(async () =>
+            {
+                await _jtf.SwitchToMainThreadAsync();
+                if (_disposed)
+                {
+                    return;
+                }
+
+                if (string.Equals(_lastPath, args.OldPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    _lastPath = args.NewPath;
+                }
+
+                Log.Write($"EditorTracker: document renamed '{args.OldPath}' -> '{args.NewPath}'.");
+                DocumentRenamed?.Invoke(this, args);
+            });
+            return VSConstants.S_OK;
+        }
 
         // ---- DTE events -----------------------------------------------------
 
@@ -179,5 +217,18 @@ namespace WinUIXamlPreview.UI
             try { if (_cookie != 0) _rdt.UnadviseRunningDocTableEvents(_cookie); }
             catch (Exception ex) { Log.Write("EditorTracker: RDT unadvise failed: " + ex); }
         }
+    }
+
+    internal sealed class DocumentRenamedEventArgs : EventArgs
+    {
+        public DocumentRenamedEventArgs(string oldPath, string newPath)
+        {
+            OldPath = oldPath;
+            NewPath = newPath;
+        }
+
+        public string OldPath { get; }
+
+        public string NewPath { get; }
     }
 }
