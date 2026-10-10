@@ -3,6 +3,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Markup;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
@@ -42,8 +46,8 @@ internal static class DesignInspector
     // Category display order (lower = earlier). "Misc" sinks to the bottom.
     private static readonly string[] Categories =
     {
-        "Common", "Content", "Layout", "Appearance", "Text", "Interaction", "Focus & Keyboard", "Transform",
-        "Theme & Language", "Misc",
+        "Common", "Content", "Layout", "Appearance", "Text", "Interaction", "Focus & Keyboard", "Accessibility",
+        "Transform", "Theme & Language", "Misc",
     };
 
     // Exact property -> category. Checked before the pattern rules in Categorize.
@@ -221,7 +225,164 @@ internal static class DesignInspector
             result.RemoveRange(MaxProps, result.Count - MaxProps);
         }
 
+        AddAttached(element, result);
         return result;
+    }
+
+    // Attached properties shown in the panel. "Owner" ones show whenever the element sits in that panel type
+    // (Grid row/column only when the Grid defines rows/columns); the rest only when set on the element.
+    private sealed class AttachedProp
+    {
+        public AttachedProp(string name, string category, DependencyProperty dp, Type type, Func<DependencyObject?, bool>? owner = null)
+        {
+            Name = name;
+            Category = category;
+            Property = dp;
+            Type = type;
+            Owner = owner;
+        }
+
+        public string Name { get; }
+        public string Category { get; }
+        public DependencyProperty Property { get; }
+        public Type Type { get; }
+        public Func<DependencyObject?, bool>? Owner { get; }
+    }
+
+    private static List<AttachedProp>? _attached;
+
+    private static List<AttachedProp> AttachedProps()
+    {
+        if (_attached != null)
+        {
+            return _attached;
+        }
+
+        static bool GridRows(DependencyObject? p) => p is Grid g && g.RowDefinitions.Count > 0;
+        static bool GridColumns(DependencyObject? p) => p is Grid g && g.ColumnDefinitions.Count > 0;
+        static bool InCanvas(DependencyObject? p) => p is Canvas;
+
+        var list = new List<AttachedProp>
+        {
+            new("Grid.Row", "Layout", Grid.RowProperty, typeof(int), GridRows),
+            new("Grid.RowSpan", "Layout", Grid.RowSpanProperty, typeof(int), GridRows),
+            new("Grid.Column", "Layout", Grid.ColumnProperty, typeof(int), GridColumns),
+            new("Grid.ColumnSpan", "Layout", Grid.ColumnSpanProperty, typeof(int), GridColumns),
+            new("Canvas.Left", "Layout", Canvas.LeftProperty, typeof(double), InCanvas),
+            new("Canvas.Top", "Layout", Canvas.TopProperty, typeof(double), InCanvas),
+            new("Canvas.ZIndex", "Layout", Canvas.ZIndexProperty, typeof(int)),
+            new("RelativePanel.AlignLeftWithPanel", "Layout", RelativePanel.AlignLeftWithPanelProperty, typeof(bool)),
+            new("RelativePanel.AlignTopWithPanel", "Layout", RelativePanel.AlignTopWithPanelProperty, typeof(bool)),
+            new("RelativePanel.AlignRightWithPanel", "Layout", RelativePanel.AlignRightWithPanelProperty, typeof(bool)),
+            new("RelativePanel.AlignBottomWithPanel", "Layout", RelativePanel.AlignBottomWithPanelProperty, typeof(bool)),
+            new("RelativePanel.AlignHorizontalCenterWithPanel", "Layout", RelativePanel.AlignHorizontalCenterWithPanelProperty, typeof(bool)),
+            new("RelativePanel.AlignVerticalCenterWithPanel", "Layout", RelativePanel.AlignVerticalCenterWithPanelProperty, typeof(bool)),
+            new("RelativePanel.RightOf", "Layout", RelativePanel.RightOfProperty, typeof(object)),
+            new("RelativePanel.LeftOf", "Layout", RelativePanel.LeftOfProperty, typeof(object)),
+            new("RelativePanel.Above", "Layout", RelativePanel.AboveProperty, typeof(object)),
+            new("RelativePanel.Below", "Layout", RelativePanel.BelowProperty, typeof(object)),
+            new("ScrollViewer.HorizontalScrollBarVisibility", "Layout", ScrollViewer.HorizontalScrollBarVisibilityProperty, typeof(ScrollBarVisibility)),
+            new("ScrollViewer.VerticalScrollBarVisibility", "Layout", ScrollViewer.VerticalScrollBarVisibilityProperty, typeof(ScrollBarVisibility)),
+            new("ScrollViewer.HorizontalScrollMode", "Layout", ScrollViewer.HorizontalScrollModeProperty, typeof(ScrollMode)),
+            new("ScrollViewer.VerticalScrollMode", "Layout", ScrollViewer.VerticalScrollModeProperty, typeof(ScrollMode)),
+            new("AutomationProperties.Name", "Accessibility", AutomationProperties.NameProperty, typeof(string)),
+            new("AutomationProperties.AutomationId", "Accessibility", AutomationProperties.AutomationIdProperty, typeof(string)),
+            new("AutomationProperties.HelpText", "Accessibility", AutomationProperties.HelpTextProperty, typeof(string)),
+            new("AutomationProperties.HeadingLevel", "Accessibility", AutomationProperties.HeadingLevelProperty, typeof(AutomationHeadingLevel)),
+            new("AutomationProperties.AccessibilityView", "Accessibility", AutomationProperties.AccessibilityViewProperty, typeof(AccessibilityView)),
+            new("AutomationProperties.LiveSetting", "Accessibility", AutomationProperties.LiveSettingProperty, typeof(AutomationLiveSetting)),
+            new("ToolTipService.ToolTip", "Common", ToolTipService.ToolTipProperty, typeof(object)),
+            new("ToolTipService.Placement", "Common", ToolTipService.PlacementProperty, typeof(PlacementMode)),
+        };
+        _attached = list;
+        return list;
+    }
+
+    private static void AddAttached(FrameworkElement element, List<DesignPropInfo> result)
+    {
+        List<AttachedProp> props;
+        DependencyObject? parent;
+        try
+        {
+            props = AttachedProps();
+            parent = VisualTreeHelper.GetParent(element);
+        }
+        catch
+        {
+            return;
+        }
+
+        var attached = new List<DesignPropInfo>();
+        foreach (var ap in props)
+        {
+            try
+            {
+                bool isLocal = element.ReadLocalValue(ap.Property) != DependencyProperty.UnsetValue;
+                if (!isLocal && (ap.Owner == null || !ap.Owner(parent)))
+                {
+                    continue;
+                }
+
+                object? value = element.GetValue(ap.Property);
+                string text;
+                string typeName;
+                if (ap.Type == typeof(object))
+                {
+                    // ToolTip / RelativePanel targets: a string, a named element, or another object.
+                    text = value switch
+                    {
+                        null => "",
+                        string s => s,
+                        FrameworkElement fe when !string.IsNullOrEmpty(fe.Name) => fe.Name,
+                        _ => value.GetType().Name,
+                    };
+                    typeName = value?.GetType().Name ?? "Object";
+                }
+                else if (!TryFormat(value, ap.Type, out text, out typeName))
+                {
+                    continue;
+                }
+
+                attached.Add(new DesignPropInfo
+                {
+                    Name = ap.Name,
+                    Category = ap.Category,
+                    TypeName = typeName,
+                    Value = text,
+                    ReadOnly = true,
+                });
+            }
+            catch
+            {
+                // a single attached property failing must not drop the rest of the panel
+            }
+        }
+
+        if (attached.Count == 0)
+        {
+            return;
+        }
+
+        // Keep attached rows even when the reflected list hit the cap, then re-sort into category order.
+        int room = MaxProps - attached.Count;
+        if (result.Count > room)
+        {
+            result.RemoveRange(Math.Max(0, room), result.Count - Math.Max(0, room));
+        }
+
+        result.AddRange(attached);
+        result.Sort((a, b) =>
+        {
+            int oa = CategoryRank(a.Category);
+            int ob = CategoryRank(b.Category);
+            if (oa != ob)
+            {
+                return oa.CompareTo(ob);
+            }
+
+            int c = string.CompareOrdinal(a.Category, b.Category);
+            return c != 0 ? c : string.CompareOrdinal(a.Name, b.Name);
+        });
     }
 
     /// <summary>
