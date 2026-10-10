@@ -922,6 +922,8 @@ internal sealed class RenderHost
                 RenderSettle.Quiesce(root, App.Log);
             }
 
+            FidelityNotes.Log(root, App.Log);
+
             int dipW = Math.Max(1, (int)Math.Round(canvasW));
             int dipH = Math.Max(1, (int)Math.Round(canvasH));
             IntPtr hwnd = RenderWindowHwnd;

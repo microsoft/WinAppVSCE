@@ -66,6 +66,26 @@ current-user, **not** isolated by a VS suffix. See the migration record for the
 approved dedicated-hive deployment, actual IDE evidence, retained registration,
 and the existing designer-property source-writeback/undo limitation.
 
+## Rendering fidelity
+
+The VS preview hosts the page live in a real WinUI window that is reparented into
+the tool window (native mode); it is not a still capture. Compositor effects
+therefore render as they do in the app. User code (App startup, code-behind) never
+runs, and there is no app `Window`.
+
+| Content | Preview |
+| --- | --- |
+| In-app `AcrylicBrush`, `ThemeShadow` / `Translation` | Faithful |
+| Control-template animations (`ProgressRing`, indeterminate `ProgressBar`, visual-state transitions) | Faithful, animating |
+| Window backdrop (`Window.SystemBackdrop` Mica/DesktopAcrylic) behind a page with no opaque background | Approximated: the design canvas paints `ApplicationPageBackgroundThemeBrush` (no wallpaper tint) |
+| Storyboards begun by code-behind (`Begin()` in `Loaded`, etc.) | Not started; shows the initial frame |
+| `{x:Bind}` values, resources added in `App.xaml.cs` | Placeholders (see sample data) |
+
+The approximated cases are logged once per render as `FIDELITY:` lines in
+`preview.log` (`Surface/FidelityNotes.cs`). The off-screen frame-stream path
+(`RenderTargetBitmap`) is not used by the VS preview; it cannot capture
+backdrops and only settles forever-storyboards when `SURFACE_RENDER_SETTLE=1`.
+
 ## Provisioner CLI contract (v1)
 
 Stdout is **exactly one JSON object followed by a newline**; diagnostics, including
