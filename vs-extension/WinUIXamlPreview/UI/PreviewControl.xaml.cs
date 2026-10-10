@@ -418,9 +418,25 @@ namespace WinUIXamlPreview.UI
                 Log.Write("StartPreviewAsync failed: " + ex);
                 if (ReferenceEquals(_client, client))
                 {
-                    SetStatus("Could not start the surface.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
+                    if (ex is SurfaceProtocolException)
+                    {
+                        ShowProtocolMismatch(ex.Message);
+                    }
+                    else
+                    {
+                        SetStatus("Could not start the surface.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
+                    }
                 }
             }
+        }
+
+        private void ShowProtocolMismatch(string detail)
+        {
+            _hasFrame = false;
+            _hasNative = false;
+            SetStatus("The preview surface is incompatible with this extension version.", spinner: false,
+                detail: detail + " Reinstall the extension, or clear the WINUI_SURFACE_EXE override if one is set.",
+                severity: BannerSeverity.Error, offerReload: false);
         }
 
         /// <summary>
@@ -1372,10 +1388,11 @@ namespace WinUIXamlPreview.UI
 
                 // 3. Start the matched client and await Ready — off the UI thread.
                 SurfaceClient? matched = null;
+                ReadyMsg matchedReady;
                 try
                 {
                     matched = new SurfaceClient(matchedExe, userDll, Log.Write, userAppXaml, theme, userPri: matchedPri) { SampleData = PreviewOptions.DesignTimeData };
-                    await matched.StartAsync(TimeSpan.FromSeconds(25));
+                    matchedReady = await matched.StartAsync(TimeSpan.FromSeconds(25));
                 }
                 catch (Exception ex)
                 {
@@ -1383,6 +1400,12 @@ namespace WinUIXamlPreview.UI
                     try { matched?.Dispose(); } catch { }
                     await MarshalAsync(() => { if (gen == _upgradeGeneration) EndUpgrade(gen, note: null); });
                     return;
+                }
+
+                // R3: the host reports the WASDK it was really built against; flag a cache/build mix-up.
+                if (!string.Equals(matchedReady.Wasdk, version, StringComparison.OrdinalIgnoreCase))
+                {
+                    Log.Write($"Fidelity upgrade: WARNING matched host reports WASDK '{matchedReady.Wasdk ?? "(none)"}' but the project needs '{version}'.");
                 }
 
                 // 4. Promote on the UI thread (generation-checked: never swap into a document that moved on).
@@ -1797,6 +1820,14 @@ namespace WinUIXamlPreview.UI
                 // Don't self-heal a death we caused (dispose / document switch), or after control teardown.
                 if (_disposed || _suppressAutoRestart)
                 {
+                    return;
+                }
+
+                // R2: the surface exe speaks a protocol this extension doesn't. Restarting the same exe
+                // can't fix that, so stop here with a clear message instead of burning the restart budget.
+                if (source.IsProtocolMismatch)
+                {
+                    ShowProtocolMismatch(reason);
                     return;
                 }
 

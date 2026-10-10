@@ -15,9 +15,8 @@ namespace WinUIXamlPreview.Protocol
     /// <summary>
     /// Owns the surface process + loopback socket. Launches <c>Surface.exe</c>, parses the
     /// <c>SURFACE_PORT=&lt;n&gt;</c> handshake line from stdout, connects, performs the Hello/Ready
-    /// exchange, and raises Frame/Error/Closed events. A direct C# port of
-    /// <c>client/src/visualizer/surfaceClient.ts</c> — no Visual Studio dependencies so it can be
-    /// smoke-tested from a plain console harness.
+    /// exchange, and raises Frame/Error/Closed events. No Visual Studio dependencies so it can be
+    /// smoke-tested from a plain console harness; the wire contract is <c>surface/protocol</c>.
     /// </summary>
     internal sealed class SurfaceClient : IDisposable
     {
@@ -92,6 +91,12 @@ namespace WinUIXamlPreview.Protocol
 
         /// <summary>True once the connection has faulted (process died / socket failed); Closed is raised at most once.</summary>
         public bool IsFaulted => Volatile.Read(ref _faulted) != 0;
+
+        /// <summary>
+        /// True when the surface and this client share no protocol version (R2). The fault is permanent for
+        /// this surface exe, so callers must not auto-restart it.
+        /// </summary>
+        public bool IsProtocolMismatch { get; private set; }
 
         /// <summary>Launches the surface, connects, and completes once Ready is received.</summary>
         public Task<ReadyMsg> StartAsync(TimeSpan timeout)
@@ -368,6 +373,15 @@ namespace WinUIXamlPreview.Protocol
                     var ready = JsonSerializer.Deserialize<ReadyMsg>(json, ReadOptions);
                     if (ready != null)
                     {
+                        if (!Wire.IsCompatible(ready.Protocol, ready.MinProtocol))
+                        {
+                            ProtocolMismatch(
+                                $"Surface speaks protocol {DescribeRange(ready.Protocol, ready.MinProtocol)}; this extension needs " +
+                                $"{DescribeRange(Wire.ProtocolVersion, Wire.MinProtocolVersion)}. The surface build is incompatible with this extension version.");
+                            break;
+                        }
+
+                        _log($"Surface Ready: protocol={ready.Protocol} minProtocol={ready.MinProtocol?.ToString() ?? "(none)"} wasdk={ready.Wasdk ?? "(none)"}");
                         _ready?.TrySetResult(ready);
                         Ready?.Invoke(ready);
                     }
@@ -383,6 +397,13 @@ namespace WinUIXamlPreview.Protocol
                     var err = JsonSerializer.Deserialize<ErrorMsg>(json, ReadOptions);
                     if (err != null)
                     {
+                        // The surface rejected our Hello: no shared protocol version. Fatal, not a render error.
+                        if (err.Phase == "protocol")
+                        {
+                            ProtocolMismatch("Surface rejected the handshake: " + err.Message);
+                            break;
+                        }
+
                         Error?.Invoke(err);
                     }
                     break;
@@ -536,6 +557,26 @@ namespace WinUIXamlPreview.Protocol
         public bool SetCanvasSize(double width, double height)
             => Send(new SetCanvasSizeMsg { Width = width, Height = height });
 
+        // No shared protocol version: fault permanently (the flag tells callers not to auto-restart).
+        private void ProtocolMismatch(string reason)
+        {
+            if (IsFaulted)
+            {
+                return;
+            }
+
+            _timeoutCts?.Cancel();
+            IsProtocolMismatch = true;
+            Fault(reason, new SurfaceProtocolException(reason));
+        }
+
+        private static string DescribeRange(int protocol, int? min)
+        {
+            int newest = protocol > 0 ? protocol : 1;
+            int oldest = min.HasValue && min.Value > 0 ? Math.Min(min.Value, newest) : newest;
+            return oldest == newest ? $"v{newest}" : $"v{oldest}–v{newest}";
+        }
+
         // Single funnel for every failure — startup, connect, read-loop close, timeout, process exit.
         // Idempotent (first fault wins), so _ready is completed once and exactly one Closed is raised.
         // Cancels the lifetime token to stop the read loop; suppresses Closed during intentional stop/dispose.
@@ -643,5 +684,11 @@ namespace WinUIXamlPreview.Protocol
 
             return s.Substring(0, i).ToCharArray();
         }
+    }
+
+    /// <summary>The surface and client share no protocol version; restarting the same surface exe won't help.</summary>
+    internal sealed class SurfaceProtocolException : Exception
+    {
+        public SurfaceProtocolException(string message) : base(message) { }
     }
 }

@@ -32,8 +32,9 @@ From the repository root:
 
 Both accept `-WinUISurfaceWasdkVersion`; default **2.2.0**. Renderer and template
 retain their original TFM and package pins. The adapter reads the packaged
-`Surface/Surface.wasdk.version` rather than treating the wire Ready.wasdk field
-(still hardcoded in FrameServer) as authoritative.
+`Surface/Surface.wasdk.version` to choose hosts. The wire `Ready.wasdk` field
+reports the same build-time version (stamped into Surface.dll metadata) and is
+logged as a cross-check.
 
 Fresh staging/output is under `surface/obj/PayloadBuild` and `surface/obj/HostSDK`.
 Shared building holds an exclusive `surface/obj/payload.lock`; a concurrent

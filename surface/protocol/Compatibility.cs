@@ -22,7 +22,7 @@ internal static class Compatibility
         ["Ready"] = typeof(ReadyMsg), ["Frame"] = typeof(FrameMsg), ["Error"] = typeof(ErrorMsg),
         ["Hwnd"] = typeof(HwndMsg), ["NativeExited"] = typeof(NativeExitedMsg),
         ["Selected"] = typeof(SelectedMsg), ["ElementProps"] = typeof(ElementPropsMsg),
-        ["ContentProps"] = typeof(ContentPropsMsg),
+        ["ContentProps"] = typeof(ContentPropsMsg), ["View"] = typeof(ViewMsg),
     };
     private static int _assertions;
     private static JsonArray _fixtures = null!;
@@ -32,11 +32,13 @@ internal static class Compatibility
         Console.InputEncoding = new UTF8Encoding(false);
         Console.OutputEncoding = new UTF8Encoding(false);
         Check(args.Length == 1, "Usage: Compatibility <fixtures.json|->");
-        _fixtures = JsonNode.Parse(args[0] == "-" ? Console.In.ReadToEnd() : File.ReadAllText(args[0]))!["messages"]!.AsArray();
-        Check(Wire.ProtocolVersion == 1, "production protocol version");
+        var corpus = JsonNode.Parse(args[0] == "-" ? Console.In.ReadToEnd() : File.ReadAllText(args[0]))!;
+        _fixtures = corpus["messages"]!.AsArray();
+        Check(Wire.ProtocolVersion == 1 && Wire.MinProtocolVersion == 1, "production protocol range");
         Check(_fixtures.Select(x => x!["id"]!.GetValue<string>()).Distinct().Count() == _fixtures.Count, "unique fixture ids");
         TestDtos();
         TestClient();
+        TestNegotiation(corpus["negotiation"]!.AsArray());
         TestFraming();
         TestServer();
         Console.WriteLine(JsonSerializer.Serialize(new { kind = "summary", assertions = _assertions, fixtures = _fixtures.Count }));
@@ -119,6 +121,7 @@ internal static class Compatibility
         client.Selected += Capture;
         client.ElementProps += Capture;
         client.ContentProps += Capture;
+        client.View += Capture;
         client.NativeExited += () => received.Add(new JsonObject { ["type"] = "NativeExited" });
         var dispatch = typeof(SurfaceClient).GetMethod("Dispatch", BindingFlags.Instance | BindingFlags.NonPublic)!;
         void Dispatch(string json) => dispatch.Invoke(client, new object[] { json });
@@ -126,6 +129,7 @@ internal static class Compatibility
         foreach (var fixture in _fixtures.Where(x => x!["direction"]!.GetValue<string>() == "server"))
         {
             var id = fixture!["id"]!.GetValue<string>();
+            if (id == "error-protocol") continue; // fatal handshake rejection; TestNegotiation covers it
             var before = received.Count;
             Dispatch(fixture["wire"]!.ToJsonString());
             if (id == "pong") Check(received.Count == before, "Pong has no event");
@@ -142,8 +146,7 @@ internal static class Compatibility
         Check(logs.Any(x => x.Contains("FutureReply")), "unknown server type logged");
         Dispatch("{\"type\":\"Frame\",\"WIDTH\":9,\"future\":true}");
         Check(received[^1]["width"]!.GetValue<int>() == 9, "payload properties are case-insensitive after exact type dispatch");
-        Dispatch("{\"type\":\"Ready\",\"protocol\":999,\"caps\":[]}");
-        Check(received[^1]["protocol"]!.GetValue<int>() == 999, "client does not reject Ready version mismatch");
+        Check(!client.IsFaulted, "compatible Ready fixtures never fault the client");
         var framesBefore = received.Count;
         Dispatch("{\"type\":\"Frame\",\"width\":2,\"requestId\":2}");
         Dispatch("{\"type\":\"Frame\",\"width\":1,\"requestId\":1}");
@@ -153,6 +156,73 @@ internal static class Compatibility
         try { Dispatch("{\"type\":\"Frame\",\"width\":\"wrong\"}"); }
         catch (TargetInvocationException ex) when (ex.InnerException is JsonException) { threw = true; }
         Check(threw, "typed payload errors escape Dispatch (not silently accepted)");
+    }
+
+    // R2: one shared negotiation table drives Wire.IsCompatible, FrameServer.IsCompatible, the real client's
+    // Ready/Error handling, and the real server's Hello reply (TypeScript runs the same table).
+    private static void TestNegotiation(JsonArray cases)
+    {
+        Check(cases.Count >= 8, "negotiation corpus present");
+        using var server = new ServerHarness();
+        var dispatch = typeof(SurfaceClient).GetMethod("Dispatch", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        static int? Field(JsonNode? range, string name) => range?[name]?.GetValue<int>();
+        foreach (var c in cases)
+        {
+            var id = c!["id"]!.GetValue<string>();
+            var peer = c["peer"]!;
+            var local = c["local"];
+            var compatible = c["compatible"]!.GetValue<bool>();
+            int? peerProtocol = Field(peer, "protocol"), peerMin = Field(peer, "minProtocol");
+            Check(Wire.IsCompatible(Field(local, "protocol") ?? Wire.ProtocolVersion, Field(local, "minProtocol") ?? Wire.MinProtocolVersion,
+                peerProtocol, peerMin) == compatible, $"Wire.IsCompatible: {id}");
+            if (local != null) continue; // the production peers below only speak the current range
+
+            Check(FrameServer.IsCompatible(peerProtocol, peerMin) == compatible, $"FrameServer.IsCompatible: {id}");
+
+            // Real server: Ready (with its own range) or a protocol-phase Error, never both.
+            var hello = new JsonObject { ["type"] = "Hello" };
+            foreach (var kv in peer.AsObject()) hello[kv.Key] = kv.Value!.DeepClone();
+            var replies = server.Request(hello.ToJsonString());
+            Check(replies.Length == 1, $"exactly one Hello reply: {id}");
+            if (compatible)
+            {
+                Check(replies[0]["type"]!.GetValue<string>() == "Ready" && replies[0]["minProtocol"]!.GetValue<int>() == 1
+                    && replies[0]["wasdk"]!.GetValue<string>() == "2.2.0", $"server Ready: {id}");
+            }
+            else
+            {
+                Check(replies[0]["type"]!.GetValue<string>() == "Error" && replies[0]["phase"]!.GetValue<string>() == "protocol",
+                    $"server protocol Error: {id}");
+            }
+
+            // Real client: a Ready advertising the peer range either completes startup or faults permanently.
+            var logs = new List<string>();
+            using var client = new SurfaceClient("not-launched", null, logs.Add);
+            int readies = 0, closes = 0;
+            client.Ready += _ => readies++;
+            client.Closed += _ => closes++;
+            var ready = new JsonObject { ["type"] = "Ready", ["caps"] = new JsonArray(), ["wasdk"] = "2.2.0" };
+            foreach (var kv in peer.AsObject()) ready[kv.Key] = kv.Value!.DeepClone();
+            dispatch.Invoke(client, new object[] { ready.ToJsonString() });
+            Check(readies == (compatible ? 1 : 0) && closes == (compatible ? 0 : 1), $"client Ready handling: {id}");
+            Check(client.IsFaulted == !compatible && client.IsProtocolMismatch == !compatible, $"client mismatch flags: {id}");
+        }
+
+        // A protocol-phase Error is a fatal handshake rejection, never surfaced as a render error.
+        var rejected = new SurfaceClient("not-launched", null, _ => { });
+        int errors = 0;
+        string? closedReason = null;
+        rejected.Error += _ => errors++;
+        rejected.Closed += r => closedReason = r;
+        dispatch.Invoke(rejected, new object[] { WireFixture("error-protocol").ToJsonString() });
+        Check(errors == 0 && rejected.IsProtocolMismatch && closedReason != null && closedReason.Contains("client speaks v2"),
+            "protocol Error faults the client with the server's reason");
+        rejected.Dispose();
+
+        // The production Hello DTO advertises the full local range.
+        var helloDto = JsonSerializer.SerializeToNode(new HelloMsg())!;
+        Check(helloDto["protocol"]!.GetValue<int>() == Wire.ProtocolVersion && helloDto["minProtocol"]!.GetValue<int>() == Wire.MinProtocolVersion,
+            "client Hello advertises protocol range");
     }
 
     private static void TestFraming()
@@ -185,11 +255,14 @@ internal static class Compatibility
             Check(result.Length == 1, $"exactly one reply: {json}");
             return result[0];
         }
-        var ready = One("{\"type\":\"Hello\",\"protocol\":999,\"client\":null,\"caps\":[\"future-cap\"]}");
+        var ready = One(WireFixture("hello").ToJsonString());
         var expectedReady = WireFixture("ready");
         expectedReady["caps"]!.AsArray().RemoveAt(2);
-        Equal(ready, expectedReady, "server advertises fixed version and capabilities; no negotiation");
+        Equal(ready, expectedReady, "server advertises its protocol range, capabilities and build-stamped WASDK");
         Emit("server", "ready", ready);
+        var rejected = One("{\"type\":\"Hello\",\"protocol\":2,\"client\":null,\"caps\":[\"future-cap\"]}");
+        Equal(rejected, WireFixture("error-protocol"), "server rejects a client with no shared protocol version");
+        Emit("server", "error-protocol", rejected);
         Equal(One("{\"type\":\"Ping\"}"), WireFixture("pong"), "Ping/Pong");
         Silent("   ");
 
@@ -230,6 +303,18 @@ internal static class Compatibility
         Emit("server", "hwnd", native[0]);
         Emit("server", "content", native[1]);
         Check(host.LastHost == ("<Page />", true), "first native entry prepares window");
+        Check(host.LastInitialView == null && host.LastPane == (0, 0), "no view/pane fields: zoom-to-fit, no pane hint");
+
+        var restore = Request(WireFixture("enter-restore").ToJsonString());
+        Check(restore.Length == 2, "native restore entry replies Hwnd + ContentProps");
+        Check(host.LastPane == (1200, 900), "paneWidthPx/paneHeightPx forwarded to the host");
+        Check(host.LastInitialView == new DesignSurface.ViewState(false, 1.5, 40.5, 12), "EnterNative.view restores zoom/scroll");
+        host.RaiseViewState(new DesignSurface.ViewState(false, 1.5, 40.5, 12));
+        server.Write("{\"type\":\"Ping\"}");
+        var viewReplies = server.ReadUntilPong();
+        Check(viewReplies.Length == 1, "view-state change emits one View message");
+        Equal(viewReplies[0], WireFixture("view"), "real View serializer");
+        Emit("server", "view", viewReplies[0]);
         var renders = host.Renders;
         Silent("{\"type\":\"Resize\",\"width\":900,\"height\":700,\"scale\":2}");
         Check(host.Renders == renders, "native Resize does not render");

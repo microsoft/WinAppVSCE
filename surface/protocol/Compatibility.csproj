@@ -17,4 +17,11 @@
     <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\SurfaceClient.cs" Link="Production\SurfaceClient.cs" />
     <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Production\LineDecoder.cs" />
   </ItemGroup>
+  <!-- Mirrors Surface.csproj's build-time stamp so the linked FrameServer reports a deterministic Ready.wasdk. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>WinUISurfaceWasdkVersion</_Parameter1>
+      <_Parameter2>2.2.0</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
 </Project>

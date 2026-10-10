@@ -49,27 +49,52 @@ canonical messages; it is deliberately stricter than several legacy receivers.
 Recommended first exchange:
 
 ```json
-{"type":"Hello","client":"vs","caps":["frame-stream","native-hwnd"],"protocol":1}
-{"type":"Ready","protocol":1,"caps":["frame-stream","native-hwnd"],"wasdk":"2.2.0"}
+{"type":"Hello","client":"vs","caps":["frame-stream","native-hwnd"],"protocol":1,"minProtocol":1}
+{"type":"Ready","protocol":1,"minProtocol":1,"caps":["frame-stream","native-hwnd"],"wasdk":"2.2.0"}
 ```
 
-`Hello.client` is an informational string; `caps` is a string array; `protocol` is
-an integer. They are **not inspected by FrameServer** and may be omitted.
-`HelloMsg` defaults to the example above. Surface accepts commands before Hello,
-responds to repeated Hello, and does not reject incompatible version numbers.
-`SurfaceClient` likewise dispatches/completes startup on Ready without comparing
-its version. A new consumer should check version compatibility itself.
+`Hello.client` is an informational string and `caps` a string array; FrameServer
+does not inspect them. `protocol` is the newest version a side speaks and
+`minProtocol` the oldest it still speaks (both integers, both optional on the wire).
 
-`Ready` always includes `protocol`, `caps`, and `wasdk` in the current server.
+**Negotiation rule** (`isCompatible` in `protocol.ts`, `Wire.IsCompatible` in
+`Messages.cs`, `FrameServer.IsCompatible`; one shared table in `fixtures.json`
+drives all three): two peers are compatible when each side's `protocol` is at least
+the other side's `minProtocol`. A missing or nonpositive `protocol` means legacy
+v1; a missing `minProtocol` means the peer only speaks its own `protocol` (a
+`minProtocol` above `protocol` is clamped to it). Adding `minProtocol` is
+additive, so it did not bump the version: pre-negotiation peers still interoperate
+as v1.
+
+- **Surface** checks Hello. Compatible: `Ready` with its own range. Incompatible:
+  an `Error` with phase `protocol` **instead of** Ready; the connection stays open,
+  but the client must not proceed. Surface still accepts commands before Hello and
+  answers repeated Hellos.
+- **SurfaceClient** checks Ready. Incompatible, or a `protocol`-phase Error at any
+  time, faults the client permanently (`IsProtocolMismatch`, a
+  `SurfaceProtocolException` from `StartAsync`, one `Closed`). It never raises
+  `Ready`/`Error` events for those. The VS UI shows a clear incompatibility
+  message and does **not** auto-restart, since relaunching the same exe can't help.
+
+In practice a mismatch only happens with a `WINUI_SURFACE_EXE` override pointing
+at a different build: bundled and version-matched hosts are built from the engine
+source shipped in the same VSIX.
+
+`Ready` always includes `protocol`, `minProtocol`, `caps`, and `wasdk` in the
+current server; legacy surfaces omit `minProtocol`.
 `frame-stream` means PNG frame replies; `native-hwnd` means native-window hosting.
 Capabilities are advertisements, not an intersection negotiated from Hello; there
 are no separate selection/property/theme flags or capability gates in dispatch.
 Ignore unknown capability names. Absence of `native-hwnd` should prevent a
 consumer choosing native hosting; do not infer support from a version string.
 
-`wasdk` is currently **hardcoded to `"2.2.0"` in FrameServer**. It must not be
-treated as verified discovery of the runtime/package version in a provisioned
-or version-matched host.
+`wasdk` is the Windows App SDK version the surface binary was **built against**:
+`Surface.csproj` stamps `$(WinUISurfaceWasdkVersion)` into an
+`AssemblyMetadata("WinUISurfaceWasdkVersion", …)` attribute that FrameServer reads
+(`"unknown"` if absent). The bundled host reports 2.2.0; a provisioned matched
+host reports its target version. It is build metadata, not a probe of the WASDK
+runtime actually loaded. The VS client logs it and warns if a matched host
+reports a version other than the one it was built for.
 
 ## Client → Surface messages
 
@@ -79,12 +104,12 @@ spelled out rather than inferred from C# property types.
 
 | Type | Other fields | Actual behavior / reply |
 | --- | --- | --- |
-| `Hello` | `client?: string`, `caps?: string[]`, `protocol?: integer` | Fixed `Ready`; fields ignored. |
+| `Hello` | `client?: string`, `caps?: string[]`, `protocol?: integer`, `minProtocol?: integer` | `Ready`, or `Error` phase `protocol` when no version is shared (see Handshake). `client`/`caps` ignored. |
 | `Ping` | none | `Pong`. No production C# Ping DTO/public send method. |
 | `LoadXaml` | `xaml: string`, `width?: number`, `height?: number`, `scale?: number`, `sampleData?: boolean` | Save XAML and viewport; `Frame` or `Error`. **Always uses frame rendering, even while native mode is set**, and does not clear the native flag. |
 | `UpdateXaml` | `xaml: string`, `sampleData?: boolean` | Save XAML; reuse saved viewport. Frame mode: `Frame`/`Error`. Native mode: rehost with `prepareWindow=false`, then `Hwnd` + `ContentProps`, or `Error`. Extra size fields are ignored. A prior LoadXaml is not required. |
 | `Resize` | `width?: number`, `height?: number`, `scale?: number` | Update saved viewport. Render a `Frame`/`Error` only when a document exists and native mode is off. With no document, store silently. Native mode stores values but sends no reply and does not resize the live child. |
-| `EnterNative` | `xaml: string`, `width?: number`, `height?: number`, `scale?: number`, `sampleData?: boolean` | Save document/viewport, set native flag **before** hosting, call host with `prepareWindow=true`. Success: `Hwnd` then `ContentProps`; failure: `Error` (native flag remains set). |
+| `EnterNative` | `xaml: string`, `width?: number`, `height?: number`, `scale?: number`, `sampleData?: boolean`, `paneWidthPx?: integer`, `paneHeightPx?: integer`, `view?: { fit: boolean, zoom: number, offsetX: number, offsetY: number }` | Save document/viewport, set native flag **before** hosting, call host with `prepareWindow=true`. `paneWidthPx`/`paneHeightPx` are the final pane size in device pixels so the canvas fits before reparenting (positive values only; else no hint). `view` restores zoom/scroll carried from a replaced surface (absent = zoom to fit; `fit` must be JSON `true`; nonpositive zoom/offsets fall back to 1/0). The C# client echoes a received `View` message here, so `view` may also carry `type: "View"`. Success: `Hwnd` then `ContentProps`; failure: `Error` (native flag remains set). |
 | `ExitNative` | none | Clear native flag, enqueue offscreen restoration, send `NativeExited`. No automatic frame. Ack is sent even if dispatcher rejects restoration; it is not proof the window was restored. |
 | `SetMode` | `design?: boolean` | Only JSON `true` enables design selection; everything else disables it. Enqueue runtime mode change; no ack/frame. |
 | `SelectByPath` | `path?: string \| null` | String forwarded; absent/null/non-string becomes null. A newly resolved selection can emit `Selected` then `ElementProps`. Unresolved, empty, stale, or already-selected paths need not emit anything. |
@@ -136,7 +161,7 @@ optional compatibility fields.
 
 | Type | Fields and meaning |
 | --- | --- |
-| `Ready` | `protocol: integer`, `caps: string[]`, `wasdk: string`. See handshake limitations. |
+| `Ready` | `protocol: integer`, `minProtocol?: integer` (always sent by current surfaces), `caps: string[]`, `wasdk: string` (build-time WASDK). See Handshake. |
 | `Pong` | Only `type`. C# client deliberately discards it; no Pong DTO/event. |
 | `Frame` | `format: "png"`; `width`, `height`: encoded pixel integer dimensions; `dipWidth`, `dipHeight`: logical display integer dimensions; `data: string`: base64 PNG. Display using DIP dimensions, not encoded pixels. Frames are full replacements, not deltas. Old JPEG comments are not authoritative. |
 | `Error` | `phase: string`, `message: string`; `line`, `column`: nullable integers; `notDesignable?: boolean`. See below. |
@@ -145,6 +170,7 @@ optional compatibility fields.
 | `Selected` | `id: integer`, `elementType: string`, `name: string \| null`, `path: string \| null`, `x`, `y`, `w`, `h`: numeric artboard bounds in DIPs. `name` is optional authored x:Name; `path` may be unresolved. Receivers can tolerate omission of name/path. |
 | `ElementProps` | `id: integer`, `props: PropItem[]` (may be empty). ID identifies the described runtime element. |
 | `ContentProps` | `map: { [simpleRuntimeTypeName: string]: contentPropertyName }` (may be empty), e.g. `{"ControlExample":"Example"}`. Sent after successful native (re)hosting, following Hwnd. If collection fails the server sends an empty map; if collection cannot be enqueued, it sends no ContentProps. |
+| `View` | `fit: boolean`, `zoom: number`, `offsetX: number`, `offsetY: number`. Unsolicited, native mode only: the design surface's zoom/scroll changed. The client stores the latest value and sends it back as `EnterNative.view` when it swaps processes, so zoom survives a recycle. |
 
 Each `PropItem` includes `name`, `category`, `type`, `value` (all strings),
 `readOnly: boolean`, and `options: string[] | null`. `type` here is the reflected
@@ -166,7 +192,8 @@ Do not use 32-bit bitwise coercion even for safe integers.
 
 - Known phases: `parse` (wire/XAML parsing), `activation` (user type activation),
   `render` (rendering/hosting/infrastructure failure), `nonpage` (structurally
-  non-designable root). Preserve/display unknown phase strings.
+  non-designable root), `protocol` (Hello rejected: no shared protocol version;
+  fatal for the connection, see Handshake). Preserve/display unknown phase strings.
 - Renderer/host failure replies include nullable `line`/`column` and a boolean
   `notDesignable`, including false. `nonpage` with true represents a
   ResourceDictionary/Window/template-like root that is not a designable page,
@@ -217,17 +244,24 @@ refresh emits only ElementProps. These pairs are **not an atomic envelope**:
 the write lock protects individual records, not a pair. No request correlation
 distinguishes user clicks, caret selection, or unrelated property refresh.
 
-**There is no stale-result protection in v1 or SurfaceClient dispatch.** A field
-named `requestId` is merely unknown and ignored. The current VS UI filters
-ElementProps against its latest selected ID and uses local client/generation
-checks for some asynchronous lifecycle operations; those checks are not a wire
-guarantee. A consumer should retire callbacks from old clients, reset selection,
-property and content maps on rehost/document switches, and ignore property
-updates for a different selection. ID checks alone cannot distinguish reused IDs
-across documents. Late Frame/Error/Hwnd replies cannot be unambiguously matched
-to an edit; serialize/coalesce work or replace the session when a strict boundary
-is needed. Do not claim newest-only rendering or cancellation without an explicit
-future protocol change.
+**There is no stale-result protection on the wire in v1 or in SurfaceClient dispatch.**
+A field named `requestId` is merely unknown and ignored. Two local mechanisms
+narrow the window without changing the wire:
+
+- Surface replies strictly in request order and, while a render is in flight,
+  collapses adjacent queued `UpdateXaml` messages to the newest one (any other
+  message is an ordering barrier). Every performed render still replies.
+- The VS UI binds each handler to the client that raised it and drops replies
+  from a client that is no longer active (document switch, spare promotion,
+  matched-host upgrade). It also filters ElementProps against its latest
+  selected ID.
+
+These are not wire guarantees. A consumer should retire callbacks from old
+clients, reset selection, property and content maps on rehost/document switches,
+and ignore property updates for a different selection. ID checks alone cannot
+distinguish reused IDs across documents. Late Frame/Error/Hwnd replies from the
+same client cannot be unambiguously matched to an edit; serialize work or replace
+the session when a strict boundary is needed. There is no cancellation message.
 
 ## Headless compatibility checks
 
@@ -258,16 +292,22 @@ dotnet .\surface\protocol\bin\Debug\net10.0\Compatibility.dll .\surface\protocol
 
 Coverage:
 
-- All 13 request and 9 response names; 40 shared serialized fixtures, including
+- All 13 request and 10 response names; 45 shared serialized fixtures, including
   defaults, omitted fields, nulls, unknown capabilities/phases, empty collections,
-  Unicode/emoji/newlines, PNG IHDR dimensions, property choices and native sizes.
+  Unicode/emoji/newlines, PNG IHDR dimensions, property choices, native sizes,
+  pane/view restore, and legacy (pre-`minProtocol`) Ready.
+- One shared **negotiation table** (`fixtures.json` → `negotiation`) is checked
+  against the TypeScript rule, `Wire.IsCompatible`, `FrameServer.IsCompatible`,
+  the real server's Hello reply (Ready vs `protocol` Error) and the real client's
+  Ready handling (startup vs permanent mismatch fault).
 - Strict no-emit typecheck includes positive unions and expected compile errors;
   `tsx` alone is **not** a typecheck. Runtime negative assertions reject bad
   canonical shapes rather than accepting unchecked JSON casts.
 - The C# project **links production** Messages, SurfaceClient,
   LineDecoder, and FrameServer. Tests exercise actual DTO readers/writers and
-  dispatch, unknown fields, mismatched versions, unsafe Int64s, one-byte UTF-8
-  fragmentation/coalescing, CRLF, and unterminated tails.
+  dispatch, unknown fields, protocol negotiation, unsafe Int64s, one-byte UTF-8
+  fragmentation/coalescing, CRLF, and unterminated tails. Like `Surface.csproj`,
+  `Compatibility.csproj` stamps the WASDK build metadata (fixed at 2.2.0 here).
 - FrameServer's real read loop runs over an ephemeral loopback test connection,
   checks reply content/order and silent commands using a Ping barrier, and tests
   viewport persistence, native transitions/failures, no-op theme, canvas auto,

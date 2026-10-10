@@ -26,9 +26,24 @@ namespace Surface;
 /// </summary>
 internal sealed class FrameServer
 {
+    // Wire handshake (mirrors Wire.IsCompatible in the client's Messages.cs, which Surface doesn't link):
+    // peers can talk when each side's newest version >= the other's oldest. See surface/protocol/README.md.
     private const int Protocol = 1;
-    private const string WasdkVersion = "2.2.0";
+    private const int MinProtocol = 1;
     private static readonly string[] Caps = { "frame-stream", "native-hwnd" };
+
+    /// <summary>The WASDK this binary was built against (Surface.csproj stamps $(WinUISurfaceWasdkVersion)).</summary>
+    private static readonly string WasdkVersion =
+        typeof(FrameServer).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
+            .Cast<System.Reflection.AssemblyMetadataAttribute>()
+            .FirstOrDefault(a => a.Key == "WinUISurfaceWasdkVersion")?.Value ?? "unknown";
+
+    internal static bool IsCompatible(int? peerProtocol, int? peerMin)
+    {
+        int peer = peerProtocol is > 0 ? peerProtocol.Value : 1;
+        int peerOldest = peerMin is > 0 ? Math.Min(peerMin.Value, peer) : peer;
+        return peer >= MinProtocol && Protocol >= peerOldest;
+    }
 
     private static readonly JsonSerializerOptions WriteOptions = new()
     {
@@ -205,15 +220,29 @@ internal sealed class FrameServer
         switch (type)
         {
             case "Hello":
-                App.Log("<- Hello");
+            {
+                int? peerProtocol = GetInt(root, "protocol");
+                int? peerMin = GetInt(root, "minProtocol");
+                App.Log($"<- Hello (protocol {peerProtocol?.ToString() ?? "-"}, min {peerMin?.ToString() ?? "-"})");
+                if (!IsCompatible(peerProtocol, peerMin))
+                {
+                    // No Ready: a client that can't speak our protocol must not start rendering against us.
+                    int peer = peerProtocol is > 0 ? peerProtocol.Value : 1;
+                    int peerOldest = peerMin is > 0 ? Math.Min(peerMin.Value, peer) : peer;
+                    Send(Error("protocol",
+                        $"Surface speaks protocol {DescribeRange(Protocol, MinProtocol)}; client speaks {DescribeRange(peer, peerOldest)}."));
+                    break;
+                }
                 Send(new
                 {
                     type = "Ready",
                     protocol = Protocol,
+                    minProtocol = MinProtocol,
                     caps = Caps,
                     wasdk = WasdkVersion,
                 });
                 break;
+            }
 
             case "Ping":
                 Send(new { type = "Pong" });
@@ -729,6 +758,12 @@ internal sealed class FrameServer
 
     private static string? GetString(JsonElement el, string name)
         => el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static int? GetInt(JsonElement el, string name)
+        => el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i) ? i : null;
+
+    private static string DescribeRange(int newest, int oldest)
+        => oldest == newest ? $"v{newest}" : $"v{oldest}–v{newest}";
 
     private static double GetPositiveDouble(JsonElement el, string name, double fallback)
     {

@@ -3,21 +3,22 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { knownCapabilities, protocolVersion, type ClientMessage, type ServerMessage, type WireMessage } from './protocol.js';
+import { isCompatible, knownCapabilities, minProtocolVersion, protocolVersion, type ClientMessage, type ProtocolRange, type ServerMessage, type WireMessage } from './protocol.js';
 
 const directory = __dirname;
 interface Fixture { id: string; direction: 'client' | 'server'; wire: WireMessage; normalized?: WireMessage }
-const corpus = JSON.parse(readFileSync(join(directory, 'fixtures.json'), 'utf8')) as { messages: Fixture[] };
+interface Negotiation { id: string; local?: Required<ProtocolRange>; peer: ProtocolRange; compatible: boolean }
+const corpus = JSON.parse(readFileSync(join(directory, 'fixtures.json'), 'utf8')) as { messages: Fixture[]; negotiation: Negotiation[] };
 const clientTypes = ['Hello', 'LoadXaml', 'UpdateXaml', 'Resize', 'EnterNative', 'ExitNative',
     'SetMode', 'SelectByPath', 'PickAt', 'SetProperty', 'SetTheme', 'SetCanvasSize', 'Ping'];
-const serverTypes = ['Ready', 'Frame', 'Error', 'Hwnd', 'NativeExited', 'Selected', 'ElementProps', 'ContentProps', 'Pong'];
+const serverTypes = ['Ready', 'Frame', 'Error', 'Hwnd', 'NativeExited', 'Selected', 'ElementProps', 'ContentProps', 'View', 'Pong'];
 
 // These constructions and negative examples are checked by tsc, not merely stripped by tsx.
 const typedClients = [
-    { type: 'Hello', client: 'vscode', caps: ['frame-stream', 'future-cap'], protocol: 1 },
+    { type: 'Hello', client: 'vscode', caps: ['frame-stream', 'future-cap'], protocol: 1, minProtocol: 1 },
     { type: 'LoadXaml', xaml: '<Grid />', width: 800, height: 600, scale: 1.5 },
     { type: 'UpdateXaml', xaml: '', sampleData: false }, { type: 'Resize' },
-    { type: 'EnterNative', xaml: '<Page />', width: 640.5 },
+    { type: 'EnterNative', xaml: '<Page />', width: 640.5, paneWidthPx: 800, view: { fit: true, zoom: 1, offsetX: 0, offsetY: 0 } },
     { type: 'ExitNative' }, { type: 'SetMode', design: false },
     { type: 'SelectByPath', path: null }, { type: 'PickAt', x: 0, y: 0 },
     { type: 'SetProperty', id: 7, name: 'Text', value: null },
@@ -25,7 +26,7 @@ const typedClients = [
     { type: 'Ping' },
 ] satisfies ClientMessage[];
 const typedServers = [
-    { type: 'Ready', protocol: 1, caps: ['frame-stream'], wasdk: '2.2.0' },
+    { type: 'Ready', protocol: 1, minProtocol: 1, caps: ['frame-stream'], wasdk: '2.2.0' },
     { type: 'Frame', format: 'png', width: 2, height: 2, dipWidth: 1, dipHeight: 1, data: 'iVBORw0KGgo=' },
     { type: 'Error', phase: 'future', message: 'diagnostic' },
     { type: 'Hwnd', hwnd: 4294967297, dipWidth: 640, dipHeight: 480, pixelWidth: 800, pixelHeight: 600, scale: 1.25 },
@@ -33,6 +34,7 @@ const typedServers = [
     { type: 'Selected', id: 7, elementType: 'Grid', x: 0, y: 0, w: 800, h: 600 },
     { type: 'ElementProps', id: 7, props: [{ name: 'Tag', category: 'Common', type: 'String', value: '', readOnly: false }] },
     { type: 'ContentProps', map: { ControlExample: 'Example' } },
+    { type: 'View', fit: false, zoom: 2, offsetX: -10, offsetY: 4.5 },
 ] satisfies ServerMessage[];
 // @ts-expect-error XAML is required even though C# DTO construction defaults to "".
 const missingXaml: ClientMessage = { type: 'LoadXaml' };
@@ -41,6 +43,17 @@ const stringHandle: ServerMessage = { ...typedServers[3], type: 'Hwnd', hwnd: '1
 // @ts-expect-error PNG is the current frame format (old JPEG comments are not the wire).
 const jpeg: ServerMessage = { type: 'Frame', format: 'jpeg', width: 1, height: 1, dipWidth: 1, dipHeight: 1, data: '' };
 void [missingXaml, stringHandle, jpeg];
+
+function assertView(value: unknown, nested: boolean): void {
+    assert.ok(value !== null && typeof value === 'object' && !Array.isArray(value), 'view must be an object');
+    const view = value as Record<string, unknown>;
+    if (nested && 'type' in view) assert.equal(view.type, 'View', 'nested view type');
+    assert.equal(typeof view.fit, 'boolean', 'view.fit must be a boolean');
+    for (const key of ['zoom', 'offsetX', 'offsetY']) {
+        assert.equal(typeof view[key], 'number', `view.${key} must be a number`);
+        assert.ok(Number.isFinite(view[key]), `view.${key} must be finite`);
+    }
+}
 
 /** Test oracle for valid canonical shapes, not a claim that either legacy receiver validates them. */
 function assertWire(value: unknown): asserts value is WireMessage {
@@ -68,11 +81,18 @@ function assertWire(value: unknown): asserts value is WireMessage {
     };
     string('type');
     switch (object.type) {
-        case 'Hello': string('client', true); strings('caps', true); number('protocol', true, true); break;
+        case 'Hello':
+            string('client', true); strings('caps', true);
+            number('protocol', true, true); number('minProtocol', true, true);
+            break;
         case 'LoadXaml': case 'EnterNative':
             string('xaml');
             for (const key of ['width', 'height', 'scale']) number(key, true);
             boolean('sampleData', true);
+            if (object.type === 'EnterNative') {
+                number('paneWidthPx', true, true); number('paneHeightPx', true, true);
+                if ('view' in object) assertView(object.view, true);
+            }
             break;
         case 'UpdateXaml': string('xaml'); boolean('sampleData', true); break;
         case 'Resize':
@@ -90,7 +110,10 @@ function assertWire(value: unknown): asserts value is WireMessage {
         case 'SetTheme':
             if ('theme' in object) assert.ok(['Light', 'Dark', 'Default'].includes(String(object.theme)), 'theme convention');
             break;
-        case 'Ready': number('protocol', false, true); strings('caps'); string('wasdk'); break;
+        case 'Ready':
+            number('protocol', false, true); number('minProtocol', true, true); strings('caps'); string('wasdk');
+            break;
+        case 'View': assertView(object, false); break;
         case 'Frame':
             assert.equal(object.format, 'png');
             for (const key of ['width', 'height', 'dipWidth', 'dipHeight']) {
@@ -137,6 +160,7 @@ function assertWire(value: unknown): asserts value is WireMessage {
 
 test('complete typed shapes and shared serialized corpus', () => {
     assert.equal(protocolVersion, 1);
+    assert.equal(minProtocolVersion, 1);
     assert.deepEqual(knownCapabilities, ['frame-stream', 'native-hwnd']);
     assert.deepEqual(new Set(typedClients.map(x => x.type)), new Set(clientTypes));
     assert.deepEqual(new Set(typedServers.map(x => x.type)), new Set(serverTypes));
@@ -172,7 +196,21 @@ test('shape oracle rejects invalid serialized fields rather than accepting a cas
         { type: 'ElementProps', id: 7, props: [{ name: 'Text' }] },
         { ...typedServers[3], type: 'Hwnd', hwnd: 9007199254740992 },
         { ...typedServers[1], type: 'Frame', data: 'not\nbase64' },
+        { type: 'Hello', minProtocol: '1' }, { ...typedServers[0], minProtocol: 1.5 },
+        { type: 'View', fit: 'yes', zoom: 1, offsetX: 0, offsetY: 0 },
+        { type: 'EnterNative', xaml: '', view: { fit: true, zoom: 1 } },
     ]) assert.throws(() => assertWire(wire), { name: 'AssertionError' }, JSON.stringify(wire));
+});
+
+test('shared handshake negotiation table', () => {
+    assert.ok(corpus.negotiation.length >= 8, 'negotiation corpus present');
+    for (const c of corpus.negotiation) {
+        assert.equal(isCompatible(c.peer, c.local), c.compatible, c.id);
+        // The rule is symmetric when both ranges are explicit.
+        if (c.local && c.peer.protocol !== undefined && c.peer.minProtocol !== undefined) {
+            assert.equal(isCompatible(c.local, { protocol: c.peer.protocol, minProtocol: c.peer.minProtocol }), c.compatible, `symmetric ${c.id}`);
+        }
+    }
 });
 
 test('linked production C# readers/writers consume TS JSON and return compatible NDJSON', { timeout: 180_000 }, () => {
@@ -196,7 +234,7 @@ test('linked production C# readers/writers consume TS JSON and return compatible
         assert.deepEqual(output.message, fixture.normalized ?? fixture.wire, `C# serialized content: ${output.id}`);
     }
     const server = outputs.filter(x => x.kind === 'server');
-    assert.deepEqual(server.map(x => x.id), ['ready', 'error-helper', 'frame', 'hwnd', 'content', 'selected', 'props']);
+    assert.deepEqual(server.map(x => x.id), ['ready', 'error-protocol', 'error-helper', 'frame', 'hwnd', 'content', 'view', 'selected', 'props']);
     for (const output of server) {
         const fixture = structuredClone(corpus.messages.find(x => x.id === output.id)!.wire);
         if (fixture.type === 'Ready') fixture.caps = ['frame-stream', 'native-hwnd'];

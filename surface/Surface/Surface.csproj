@@ -47,6 +47,15 @@
     <WinUISurfaceWasdkVersion Condition="'$(WinUISurfaceWasdkVersion)' == ''">2.2.0</WinUISurfaceWasdkVersion>
   </PropertyGroup>
 
+  <!-- R3: stamp the build-time WASDK version so FrameServer reports it in Ready.wasdk (a matched host built
+       at 2.5.1 says 2.5.1, not the bundled default). -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>WinUISurfaceWasdkVersion</_Parameter1>
+      <_Parameter2>$(WinUISurfaceWasdkVersion)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(WinUISurfaceWasdkVersion)" />

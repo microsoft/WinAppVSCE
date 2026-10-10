@@ -1,10 +1,11 @@
 {
   "messages": [
-    { "id": "hello", "direction": "client", "wire": { "type": "Hello", "client": "vs", "caps": ["frame-stream", "native-hwnd"], "protocol": 1 } },
+    { "id": "hello", "direction": "client", "wire": { "type": "Hello", "client": "vs", "caps": ["frame-stream", "native-hwnd"], "protocol": 1, "minProtocol": 1 } },
     { "id": "load", "direction": "client", "wire": { "type": "LoadXaml", "xaml": "<Grid>\n<TextBlock Text=\"雪 😀 &amp; café\" />\r\n</Grid>", "width": 800, "height": 600, "scale": 1.5 } },
     { "id": "update", "direction": "client", "wire": { "type": "UpdateXaml", "xaml": "<TextBlock Text=\"C:\\work\\app + /\" />" } },
     { "id": "resize", "direction": "client", "wire": { "type": "Resize", "width": 1024, "height": 768, "scale": 2 } },
     { "id": "enter", "direction": "client", "wire": { "type": "EnterNative", "xaml": "<Page />", "width": 640.5, "height": 480.25, "scale": 1.25 } },
+    { "id": "enter-restore", "direction": "client", "wire": { "type": "EnterNative", "xaml": "<Page />", "width": 0, "height": 0, "scale": 1, "paneWidthPx": 1200, "paneHeightPx": 900, "view": { "type": "View", "fit": false, "zoom": 1.5, "offsetX": 40.5, "offsetY": 12 } } },
     { "id": "exit", "direction": "client", "wire": { "type": "ExitNative" } },
     { "id": "mode", "direction": "client", "wire": { "type": "SetMode", "design": true } },
     { "id": "select", "direction": "client", "wire": { "type": "SelectByPath", "path": "0.1.0" } },
@@ -13,7 +14,8 @@
     { "id": "theme", "direction": "client", "wire": { "type": "SetTheme", "theme": "Dark" } },
     { "id": "canvas", "direction": "client", "wire": { "type": "SetCanvasSize", "width": 390.5, "height": 844 } },
     { "id": "ping", "direction": "client", "wire": { "type": "Ping" } },
-    { "id": "ready", "direction": "server", "wire": { "type": "Ready", "protocol": 1, "caps": ["frame-stream", "native-hwnd", "future-cap"], "wasdk": "2.2.0" } },
+    { "id": "ready", "direction": "server", "wire": { "type": "Ready", "protocol": 1, "minProtocol": 1, "caps": ["frame-stream", "native-hwnd", "future-cap"], "wasdk": "2.2.0" } },
+    { "id": "ready-legacy", "direction": "server", "wire": { "type": "Ready", "protocol": 1, "caps": [], "wasdk": "2.2.0" } },
     { "id": "frame", "direction": "server", "wire": { "type": "Frame", "format": "png", "width": 1, "height": 1, "dipWidth": 1, "dipHeight": 1, "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=" } },
     { "id": "error-parse", "direction": "server", "wire": { "type": "Error", "phase": "parse", "message": "Bad <Grid>\n雪", "line": 3, "column": 12, "notDesignable": false } },
     { "id": "error-activation", "direction": "server", "wire": { "type": "Error", "phase": "activation", "message": "Cannot activate user type.", "line": null, "column": null, "notDesignable": false } },
@@ -29,8 +31,10 @@
       { "name": "IsEnabled", "category": "Common", "type": "Boolean", "value": "True", "readOnly": false, "options": ["True", "False"] }
     ] } },
     { "id": "content", "direction": "server", "wire": { "type": "ContentProps", "map": { "ControlExample": "Example", "Card": "Body" } } },
+    { "id": "view", "direction": "server", "wire": { "type": "View", "fit": false, "zoom": 1.5, "offsetX": 40.5, "offsetY": 12 } },
+    { "id": "error-protocol", "direction": "server", "wire": { "type": "Error", "phase": "protocol", "message": "Surface speaks protocol v1; client speaks v2.", "line": null, "column": null } , "normalized": { "type": "Error", "phase": "protocol", "message": "Surface speaks protocol v1; client speaks v2.", "line": null, "column": null, "notDesignable": false } },
     { "id": "pong", "direction": "server", "wire": { "type": "Pong" } },
-    { "id": "hello-defaults", "direction": "client", "wire": { "type": "Hello" }, "normalized": { "type": "Hello", "client": "vs", "caps": ["frame-stream", "native-hwnd"], "protocol": 1 } },
+    { "id": "hello-defaults", "direction": "client", "wire": { "type": "Hello" }, "normalized": { "type": "Hello", "client": "vs", "caps": ["frame-stream", "native-hwnd"], "protocol": 1, "minProtocol": 1 } },
     { "id": "load-defaults", "direction": "client", "wire": { "type": "LoadXaml", "xaml": "" }, "normalized": { "type": "LoadXaml", "xaml": "", "width": 0, "height": 0, "scale": 0 } },
     { "id": "resize-defaults", "direction": "client", "wire": { "type": "Resize" }, "normalized": { "type": "Resize", "width": 0, "height": 0, "scale": 0 } },
     { "id": "enter-defaults", "direction": "client", "wire": { "type": "EnterNative", "xaml": "" }, "normalized": { "type": "EnterNative", "xaml": "", "width": 0, "height": 0, "scale": 0 } },
@@ -45,5 +49,18 @@
     { "id": "props-optional", "direction": "server", "wire": { "type": "ElementProps", "id": 8, "props": [{ "name": "Tag", "category": "Common", "type": "String", "value": "", "readOnly": false }] }, "normalized": { "type": "ElementProps", "id": 8, "props": [{ "name": "Tag", "category": "Common", "type": "String", "value": "", "readOnly": false, "options": null }] } },
     { "id": "content-empty", "direction": "server", "wire": { "type": "ContentProps", "map": {} } },
     { "id": "props-empty", "direction": "server", "wire": { "type": "ElementProps", "id": 8, "props": [] } }
+  ],
+  "negotiation": [
+    { "id": "same", "peer": { "protocol": 1, "minProtocol": 1 }, "compatible": true },
+    { "id": "legacy-peer-no-min", "peer": { "protocol": 1 }, "compatible": true },
+    { "id": "legacy-peer-no-version", "peer": {}, "compatible": true },
+    { "id": "nonpositive-is-legacy", "peer": { "protocol": 0, "minProtocol": -3 }, "compatible": true },
+    { "id": "newer-peer-still-speaks-v1", "peer": { "protocol": 3, "minProtocol": 1 }, "compatible": true },
+    { "id": "newer-peer-only", "peer": { "protocol": 2 }, "compatible": false },
+    { "id": "newer-peer-dropped-v1", "peer": { "protocol": 5, "minProtocol": 2 }, "compatible": false },
+    { "id": "peer-min-clamped-to-protocol", "peer": { "protocol": 1, "minProtocol": 4 }, "compatible": true },
+    { "id": "future-local-speaks-old-peer", "local": { "protocol": 3, "minProtocol": 1 }, "peer": { "protocol": 1 }, "compatible": true },
+    { "id": "future-local-dropped-old-peer", "local": { "protocol": 3, "minProtocol": 2 }, "peer": { "protocol": 1 }, "compatible": false },
+    { "id": "future-both-overlap", "local": { "protocol": 4, "minProtocol": 2 }, "peer": { "protocol": 6, "minProtocol": 3 }, "compatible": true }
   ]
 }

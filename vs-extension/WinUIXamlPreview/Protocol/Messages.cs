@@ -7,12 +7,31 @@ namespace WinUIXamlPreview.Protocol
 {
     /// <summary>
     /// Newline-delimited JSON wire protocol for the WinUI visualizer surface. Kept in lockstep
-    /// with <c>client/src/visualizer/protocol.ts</c> and the surface's <c>FrameServer</c>.
-    /// Image frames are base64 (no embedded newlines) so newline framing is safe.
+    /// with <c>surface/protocol/protocol.ts</c> (the shared contract, see its README) and the surface's
+    /// <c>FrameServer</c>. Image frames are base64 (no embedded newlines) so newline framing is safe.
     /// </summary>
     internal static class Wire
     {
+        /// <summary>The newest protocol this side speaks (sent as <c>protocol</c>).</summary>
         public const int ProtocolVersion = 1;
+
+        /// <summary>The oldest protocol this side still speaks (sent as <c>minProtocol</c>).</summary>
+        public const int MinProtocolVersion = 1;
+
+        /// <summary>
+        /// Handshake rule shared with <c>FrameServer</c> and <c>protocol.ts</c>: two peers can talk when each
+        /// one's newest version is at least the other's oldest. A missing/nonpositive <c>protocol</c> is the
+        /// legacy v1; a missing <c>minProtocol</c> means the peer only speaks its own <c>protocol</c>.
+        /// </summary>
+        public static bool IsCompatible(int localProtocol, int localMin, int? peerProtocol, int? peerMin)
+        {
+            int peer = peerProtocol.HasValue && peerProtocol.Value > 0 ? peerProtocol.Value : 1;
+            int peerOldest = peerMin.HasValue && peerMin.Value > 0 ? System.Math.Min(peerMin.Value, peer) : peer;
+            return peer >= localMin && localProtocol >= peerOldest;
+        }
+
+        public static bool IsCompatible(int? peerProtocol, int? peerMin)
+            => IsCompatible(ProtocolVersion, MinProtocolVersion, peerProtocol, peerMin);
     }
 
     // ---- Client -> Surface --------------------------------------------------
@@ -23,6 +42,7 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("client")] public string Client { get; set; } = "vs";
         [JsonPropertyName("caps")] public string[] Caps { get; set; } = new[] { "frame-stream", "native-hwnd" };
         [JsonPropertyName("protocol")] public int Protocol { get; set; } = Wire.ProtocolVersion;
+        [JsonPropertyName("minProtocol")] public int MinProtocol { get; set; } = Wire.MinProtocolVersion;
     }
 
     internal sealed class LoadXamlMsg
@@ -157,7 +177,10 @@ namespace WinUIXamlPreview.Protocol
     {
         [JsonPropertyName("type")] public string? Type { get; set; }
         [JsonPropertyName("protocol")] public int Protocol { get; set; }
+        /// <summary>Oldest protocol the surface still speaks; absent from pre-negotiation surfaces (= <see cref="Protocol"/>).</summary>
+        [JsonPropertyName("minProtocol"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? MinProtocol { get; set; }
         [JsonPropertyName("caps")] public List<string>? Caps { get; set; }
+        /// <summary>The Windows App SDK version the surface was actually built against (R3).</summary>
         [JsonPropertyName("wasdk")] public string? Wasdk { get; set; }
     }
 
@@ -255,7 +278,7 @@ namespace WinUIXamlPreview.Protocol
     /// (<c>&lt;controls:ControlExample.Example&gt;</c>) and derives the SAME authored-tree paths the surface
     /// does. Only non-standard content properties are sent ({Children, Content, Child, Items} are implicit).
     /// Sent after each (re)host. Kept in lockstep with the surface's <c>FrameServer</c> and
-    /// <c>client/src/visualizer/protocol.ts</c>.
+    /// <c>surface/protocol/protocol.ts</c>.
     /// </summary>
     internal sealed class ContentPropsMsg
     {

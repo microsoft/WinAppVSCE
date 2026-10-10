@@ -35,6 +35,7 @@ namespace Surface
         public (string Xaml, double Width, double Height, double Scale)? LastRender;
         public (string Xaml, bool Prepare)? LastHost;
         public DesignSurface.ViewState? LastInitialView;
+        public (int W, int H)? LastPane;
         public void RaiseViewState(DesignSurface.ViewState v) => ViewStateChanged?.Invoke(v);
         public (double, double)? Canvas;
         public bool Design;
@@ -69,6 +70,7 @@ namespace Surface
         public Task<LiveResult> HostLiveAsync(string xaml, bool prepareWindow, int panePixelW = 0, int panePixelH = 0, DesignSurface.ViewState? initialView = null)
         {
             LastInitialView = initialView;
+            LastPane = (panePixelW, panePixelH);
             LastHost = (xaml, prepareWindow);
             Hosts++;
             return Task.FromResult(Live);

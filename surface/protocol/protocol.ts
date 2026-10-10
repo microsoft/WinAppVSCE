@@ -3,10 +3,26 @@
  * See README.md for receiver defaults, asymmetries, and lifecycle limitations.
  */
 export const protocolVersion = 1;
+/** Oldest protocol this side still speaks; sent as `minProtocol` in Hello/Ready. */
+export const minProtocolVersion = 1;
 export const knownCapabilities = ['frame-stream', 'native-hwnd'] as const;
 export type KnownCapability = typeof knownCapabilities[number];
 export type Capability = string; // Unknown advertised capabilities are additive.
 export type Theme = 'Light' | 'Dark' | 'Default';
+
+export interface ProtocolRange { protocol?: number; minProtocol?: number }
+
+/**
+ * Handshake rule (README "Handshake"): peers can talk when each side's newest version is at least the
+ * other's oldest. Missing/nonpositive `protocol` is legacy v1; missing `minProtocol` equals `protocol`.
+ */
+export function isCompatible(peer: ProtocolRange,
+    local: Required<ProtocolRange> = { protocol: protocolVersion, minProtocol: minProtocolVersion }): boolean {
+    const newest = (range: ProtocolRange) => range.protocol !== undefined && range.protocol > 0 ? range.protocol : 1;
+    const oldest = (range: ProtocolRange) => range.minProtocol !== undefined && range.minProtocol > 0
+        ? Math.min(range.minProtocol, newest(range)) : newest(range);
+    return newest(peer) >= oldest(local) && newest(local) >= oldest(peer);
+}
 
 interface Size {
     width?: number;
@@ -14,16 +30,35 @@ interface Size {
     scale?: number;
 }
 
+/** Design-surface zoom/scroll. Sent by the surface as `View`; echoed back in `EnterNative.view`. */
+export interface ViewState {
+    type?: 'View';
+    fit: boolean;
+    zoom: number;
+    offsetX: number;
+    offsetY: number;
+}
+
 export interface Hello {
     type: 'Hello';
     client?: string;
     caps?: Capability[];
     protocol?: number;
+    minProtocol?: number;
 }
 export interface LoadXaml extends Size { type: 'LoadXaml'; xaml: string; sampleData?: boolean }
 export interface UpdateXaml { type: 'UpdateXaml'; xaml: string; sampleData?: boolean }
 export interface Resize extends Size { type: 'Resize' }
-export interface EnterNative extends Size { type: 'EnterNative'; xaml: string; sampleData?: boolean }
+export interface EnterNative extends Size {
+    type: 'EnterNative';
+    xaml: string;
+    sampleData?: boolean;
+    /** Final pane size in device pixels, so the canvas fits before reparenting. */
+    paneWidthPx?: number;
+    paneHeightPx?: number;
+    /** Zoom/scroll to restore; absent = zoom to fit. */
+    view?: ViewState;
+}
 export interface ExitNative { type: 'ExitNative' }
 export interface Ping { type: 'Ping' }
 export interface SetMode { type: 'SetMode'; design?: boolean }
@@ -43,7 +78,8 @@ export interface SetCanvasSize { type: 'SetCanvasSize'; width?: number; height?:
 export type ClientMessage = Hello | LoadXaml | UpdateXaml | Resize | EnterNative
     | ExitNative | Ping | SetMode | SelectByPath | PickAt | SetProperty | SetTheme | SetCanvasSize;
 
-export interface Ready { type: 'Ready'; protocol: number; caps: Capability[]; wasdk: string }
+/** `wasdk` is the Windows App SDK version the surface binary was built against. */
+export interface Ready { type: 'Ready'; protocol: number; minProtocol?: number; caps: Capability[]; wasdk: string }
 export interface Frame {
     type: 'Frame';
     format: 'png';
@@ -53,7 +89,8 @@ export interface Frame {
     dipHeight: number;
     data: string;
 }
-export type KnownErrorPhase = 'parse' | 'activation' | 'render' | 'nonpage';
+/** `protocol`: the Hello was rejected (no shared version); fatal for this process, sent instead of Ready. */
+export type KnownErrorPhase = 'parse' | 'activation' | 'render' | 'nonpage' | 'protocol';
 export interface ErrorMessage {
     type: 'Error';
     phase: string; // Display unknown phases rather than treating them as malformed.
@@ -95,6 +132,8 @@ export interface PropItem {
 }
 export interface ElementProps { type: 'ElementProps'; id: number; props: PropItem[] }
 export interface ContentProps { type: 'ContentProps'; map: Record<string, string> }
+/** Zoom/scroll changed in the native design surface; the client stores it to carry across process swaps. */
+export interface View extends ViewState { type: 'View' }
 export type ServerMessage = Ready | Frame | ErrorMessage | Hwnd | NativeExited | Pong
-    | Selected | ElementProps | ContentProps;
+    | Selected | ElementProps | ContentProps | View;
 export type WireMessage = ClientMessage | ServerMessage;
