@@ -34,6 +34,14 @@ const dataWithAdvancedAttrs = parseManifest(
     manifestXml.replace('<Application ', '<Application TrustLevel="mediumIL" RuntimeBehavior="win32App" '),
 );
 
+/** Clones the fixture's single application into `n` cards so index-keyed state can be exercised. */
+function withApplications(n: number): unknown {
+    const data = JSON.parse(JSON.stringify(dataWithAdvancedAttrs));
+    const base = data.applications[0];
+    data.applications = Array.from({ length: n }, (_, i) => ({ ...base, id: `App${i + 1}` }));
+    return data;
+}
+
 /** Loads the editor document with a stubbed VS Code webview API, optionally seeding persisted state. */
 async function loadEditor(page: Page, seedState: unknown = null): Promise<void> {
     // Injected ahead of the editor script so `acquireVsCodeApi` exists when it runs.
@@ -170,7 +178,7 @@ test('a saved tab that is hidden on the first update is restored once it becomes
 test('the parse-error overlay is modal, so the form behind it is inert', async ({ page }) => {
     await loadEditor(page);
     await postUpdate(page, manifestData);
-    // Select a tab so activateTab establishes the per-panel aria-hidden the overlay must not clobber.
+    // Select a tab so activateTab establishes the per-panel aria-hidden the overlay must not touch.
     await page.click('.tab-btn[data-tab="properties"]');
     await expect(page.locator('#tab-properties')).toHaveAttribute('aria-hidden', 'false');
 
@@ -180,9 +188,11 @@ test('the parse-error overlay is modal, so the form behind it is inert', async (
     // The overlay offers the same recovery action as the standalone parse-error page.
     await expect(page.locator('#parse-error-open-text')).toBeVisible();
 
-    // Content behind the overlay must not remain keyboard- or AT-reachable.
+    // Content behind the overlay must not remain keyboard- or AT-reachable. inert alone does
+    // that, so the overlay must leave the aria-hidden that activateTab owns exactly as it was.
     await expect(page.locator('.tab-bar')).toHaveAttribute('inert', '');
-    await expect(page.locator('#tab-identity')).toHaveAttribute('aria-hidden', 'true');
+    await expect(page.locator('.tab-bar')).not.toHaveAttribute('aria-hidden', 'true');
+    await expect(page.locator('#tab-properties')).toHaveAttribute('aria-hidden', 'false');
     expect(await focusIsInOverlay(page)).toBe(false);
 
     await page.locator('#parse-error-open-text').click();
@@ -190,7 +200,7 @@ test('the parse-error overlay is modal, so the form behind it is inert', async (
         (globalThis as unknown as { __posted: { type: string }[] }).__posted.some(m => m.type === 'openAsText'),
     )).toBe(true);
 
-    // Recovery lifts the modality again, and hands per-panel aria-hidden back to the tab system.
+    // Recovery lifts the modality again and leaves the tab system's state intact.
     await postUpdate(page, manifestData, true);
     await expect(page.locator('.tab-bar')).not.toHaveAttribute('inert', '');
     await expect(page.locator('#identity-name')).toBeEditable();
@@ -357,6 +367,25 @@ test('a background re-render keeps an open custom select open', async ({ page })
 
     await postUpdate(page, dataWithAdvancedAttrs, true);
     await expect(options).toHaveClass(/open/);
+    // Reopening bypasses the click handler that normally sets this, so a screen reader would
+    // otherwise be told the trigger is still collapsed.
+    await expect(page.locator('.app-card').first().locator('.custom-select-trigger[data-field-name="trustLevel"]'))
+        .toHaveAttribute('aria-expanded', 'true');
+});
+
+test('a re-render that changes the app count does not reopen a select on another card', async ({ page }) => {
+    await loadEditor(page);
+    await postUpdate(page, withApplications(3));
+    await page.locator('.tab-btn[data-tab="applications"]').click();
+    await page.locator('.app-card').nth(1).locator('.app-sub-tab[data-subtab="info"]').click();
+
+    // Open the select on the middle card. Removing the first application keeps index 1 valid but
+    // points it at different data, which is exactly when reopening by index picks the wrong card.
+    await page.locator('.app-card').nth(1).locator('.custom-select-trigger[data-field-name="trustLevel"]').click();
+    await expect(page.locator('.custom-select-options.open')).toHaveCount(1);
+
+    await postUpdate(page, withApplications(2), true);
+    await expect(page.locator('.custom-select-options.open')).toHaveCount(0);
 });
 
 test('only the select that was open is reopened after a re-render', async ({ page }) => {

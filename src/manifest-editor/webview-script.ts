@@ -515,6 +515,10 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         // Menus that a re-render can destroy. Both classes use .open to show.
         const DROPDOWN_SELECTOR = '.custom-dropdown-menu, .custom-select-options';
 
+        function appCardCount() {
+            return document.querySelectorAll('.app-card').length;
+        }
+
         /**
          * Keys every dropdown stably enough to survive its card being re-rendered. A card can hold
          * several same-class menus, so an ordinal disambiguates what the class alone cannot.
@@ -539,15 +543,28 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
         }
 
         function openDropdownKeys() {
-            return dropdownEntries()
-                .filter(e => e.el.classList.contains('open'))
-                .map(e => e.key);
+            // Unkeyed menus are identified by application index, so that index has to still mean
+            // the same application after the re-render. If the count changed, an app was added or
+            // removed and the snapshot would reopen a menu on the wrong card.
+            return {
+                appCount: appCardCount(),
+                keys: dropdownEntries()
+                    .filter(e => e.el.classList.contains('open'))
+                    .map(e => e.key),
+            };
         }
 
-        function reopenDropdowns(keys) {
-            if (!keys || !keys.length) { return; }
+        function reopenDropdowns(snapshot) {
+            if (!snapshot || !snapshot.keys.length || snapshot.appCount !== appCardCount()) { return; }
             dropdownEntries().forEach(e => {
-                if (keys.indexOf(e.key) !== -1) { e.el.classList.add('open'); }
+                if (snapshot.keys.indexOf(e.key) === -1) { return; }
+                e.el.classList.add('open');
+                // Reopening bypasses wireCustomSelect's click handler, so mirror the state it
+                // would have set or the trigger keeps reporting collapsed to a screen reader.
+                const trigger = e.el.closest('.custom-select')
+                    ? e.el.closest('.custom-select').querySelector('.custom-select-trigger')
+                    : null;
+                if (trigger) { trigger.setAttribute('aria-expanded', 'true'); }
             });
         }
 
@@ -692,24 +709,12 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             const live = document.getElementById('parse-error-live');
             Array.from(document.body.children).forEach(el => {
                 if (el === overlay || el === live || el.tagName === 'SCRIPT') { return; }
+                // inert already removes the subtree from the accessibility tree, so no aria-hidden
+                // is set here: managing it too would fight activateTab, which owns it on panels.
                 if (isInert) {
                     el.setAttribute('inert', '');
-                    // Snapshot any aria-hidden owned by another system (activateTab manages it
-                    // on .tab-content panels) so un-inerting restores it instead of erasing it.
-                    if (!el.hasAttribute('data-prior-aria-hidden')) {
-                        const prior = el.getAttribute('aria-hidden');
-                        el.setAttribute('data-prior-aria-hidden', prior === null ? '' : prior);
-                    }
-                    el.setAttribute('aria-hidden', 'true');
                 } else {
                     el.removeAttribute('inert');
-                    const prior = el.getAttribute('data-prior-aria-hidden');
-                    if (prior) {
-                        el.setAttribute('aria-hidden', prior);
-                    } else {
-                        el.removeAttribute('aria-hidden');
-                    }
-                    el.removeAttribute('data-prior-aria-hidden');
                 }
             });
         }

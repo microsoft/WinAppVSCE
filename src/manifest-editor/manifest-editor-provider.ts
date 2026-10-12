@@ -16,6 +16,7 @@ import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { AssetCopyTokenStore } from './asset-copy-token-store';
 import { MrtResolution, checkAspectRatio, getImageDimensions, resolveManifestImagePath } from './image-utils';
+import { applyFlushedChanges, documentParses } from './flush-changes';
 
 /** Debounce window for external document changes (e.g. typing in the XML text editor). */
 const EXTERNAL_CHANGE_DEBOUNCE_MS = 250;
@@ -72,17 +73,10 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         // Track whether we're currently applying an edit to avoid feedback loops
         let isApplyingEdit = false;
         let externalChangeTimer: NodeJS.Timeout | undefined;
+        // Text produced by a save-flush edit. VS Code applies save-participant edits outside
+        // applyEdit, so isApplyingEdit cannot cover them; match on the result instead.
+        let pendingFlushText: string | null = null;
         const assetCopyTokens = new AssetCopyTokenStore();
-
-        /** Whether the document currently parses, i.e. whether it is safe to rewrite. */
-        const documentParses = (xml: string): boolean => {
-            try {
-                parseManifest(xml);
-                return true;
-            } catch {
-                return false;
-            }
-        };
 
         /** Load the editor document. Reassigning `webview.html` destroys all webview UI state,
             so this runs once per panel: parse failures surface as an overlay instead. */
@@ -165,14 +159,25 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         // Debounced: re-rendering mid-word is wasted work and half-typed XML doesn't parse.
         const changeDocSub = vscode.workspace.onDidChangeTextDocument(e => {
             if (e.document.uri.toString() !== document.uri.toString() || isApplyingEdit) { return; }
-            // Drop input still in the webview's 300ms debounce before the re-render: it was typed
-            // against the pre-edit document, so replaying it would overwrite the incoming change.
-            webviewPanel.webview.postMessage({ type: 'externalChange' });
+            // A save with no content change still raises this event; there is nothing to re-render.
+            if (e.contentChanges.length === 0) { return; }
+            // A save-flush edit echoing back is our own write, not an external one. Treating it as
+            // external would discard input typed since the flush and overwrite the focused field,
+            // which loses keystrokes outright when autosave is on.
+            const isFlushEcho = pendingFlushText !== null && e.document.getText() === pendingFlushText;
+            if (isFlushEcho) {
+                pendingFlushText = null;
+            } else {
+                // Drop input still in the webview's 300ms debounce before the re-render: it was
+                // typed against the pre-edit document, so replaying it would overwrite the change.
+                webviewPanel.webview.postMessage({ type: 'externalChange' });
+            }
             if (externalChangeTimer) { clearTimeout(externalChangeTimer); }
             externalChangeTimer = setTimeout(() => {
                 externalChangeTimer = undefined;
-                // External change (undo, redo, text editor) — force-update all fields
-                updateWebview(true);
+                // Only a genuine external change (undo, redo, text editor) force-updates all
+                // fields; the echo refreshes validation without clobbering what is focused.
+                updateWebview(!isFlushEcho);
             }, EXTERNAL_CHANGE_DEBOUNCE_MS);
         });
 
@@ -231,17 +236,20 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                                 // resolve this save. Guarantee it completes even if a change throws.
                                 let edits: vscode.TextEdit[] = [];
                                 try {
-                                    // Never rewrite a document we could not parse.
-                                    if (documentParses(text)) {
-                                        let result = text;
-                                        for (const change of message.changes) {
-                                            result = change.kind === 'extField'
-                                                ? updateExtensionField(result, change.appIndex, change.extIndex, change.fieldPath, change.value, change.isTextContent)
-                                                : applyFieldChange(result, change.section, change.field, change.value, change.index);
-                                        }
-                                        if (result !== text) {
-                                            edits = [vscode.TextEdit.replace(new vscode.Range(0, 0, document.lineCount, 0), result)];
-                                        }
+                                    const { text: result, failed } = applyFlushedChanges(text, message.changes);
+                                    if (result !== text) {
+                                        edits = [vscode.TextEdit.replace(new vscode.Range(0, 0, document.lineCount, 0), result)];
+                                        // Suppress the echo of this edit so it is not mistaken for
+                                        // an external change (see onDidChangeTextDocument).
+                                        pendingFlushText = result;
+                                    }
+                                    if (failed.length > 0) {
+                                        // The webview already emptied its queue, so these edits are
+                                        // gone. Say which ones rather than failing silently.
+                                        vscode.window.showWarningMessage(
+                                            `Manifest edit failed for ${failed.join(', ')}. Re-apply the change and save again.`,
+                                        );
+                                        updateWebview(true);
                                     }
                                 } catch (err) {
                                     console.warn('[ManifestEditor] Flushing pending changes failed:', err);

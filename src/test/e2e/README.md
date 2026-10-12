@@ -18,10 +18,15 @@ npm install
 # and specs fail with confusing "element not found" errors.
 npm run sync-schemas
 
-# Run the full E2E suite. The `pretest:e2e` hook verifies schemas/ and installs the
-# Chromium build that webview-state.spec.ts renders the webview document in.
+# Run the full E2E suite. The `pretest:e2e` hook verifies schemas/ first.
 npm run test:e2e
 ```
+
+> **Projects** – the suite is split in two. `vscode` drives real VS Code and needs no downloaded
+> browser; `webview` (`webview-state.spec.ts` only) renders the generated webview document in
+> Chromium, so run `npx playwright install chromium` once before using it. The release pipeline
+> runs `--project=vscode` so it never fetches a browser from a public CDN. Use
+> `npm run test:e2e -- --project=vscode` to skip the browser locally.
 
 > **Prerequisites** – VS Code must be installed at the default location. Each run creates its own throwaway VS Code profile (`--user-data-dir` / `--extensions-dir`), so other VS Code windows can stay open.
 
@@ -53,9 +58,9 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (164 tests)
+## Test inventory (165 tests)
 
-### `webview-state.spec.ts` — 18 tests
+### `webview-state.spec.ts` — 19 tests
 
 Renders the generated webview document directly in Chromium (with a stubbed `acquireVsCodeApi`), so
 UI-state behaviour can be verified without launching VS Code. Regression coverage for #192.
@@ -66,7 +71,7 @@ UI-state behaviour can be verified without launching VS Code. Regression coverag
 | 2 | a parse error is shown as an overlay without discarding the editor or its state | `parseError` shows the in-place overlay, leaves the editor document intact, and `update` clears it |
 | 3 | UI state is restored after the webview document is rebuilt | State persisted via `vscode.setState()` restores the tab, sub-tab and scroll offset in a fresh script context |
 | 4 | a saved tab that is hidden on the first update is restored once it becomes available | Restoration stays pending while the saved tab is hidden, instead of being consumed and lost |
-| 5 | the parse-error overlay is modal, so the form behind it is inert | The overlay exposes "Open in Text Editor" and inerts/hides the form behind it until recovery, handing `aria-hidden` back to the tab system afterwards |
+| 5 | the parse-error overlay is modal, so the form behind it is inert | The overlay exposes "Open in Text Editor" and inerts the form behind it until recovery, leaving `aria-hidden` to the tab system |
 | 6 | the overlay never moves focus, whether or not the webview is focused | The XML usually breaks while the user types in the text editor, so neither showing nor clearing the overlay may pull the caret into the webview |
 | 7 | a parse error discards input still sitting in the debounce | In-flight webview input is dropped when the XML stops parsing, so the extension is never asked to rewrite unparseable XML |
 | 8 | an external document change discards input still sitting in the debounce | Queued input typed against the pre-edit text is dropped as soon as the document changes, so it can't replay over the newer text-editor edit |
@@ -74,12 +79,13 @@ UI-state behaviour can be verified without launching VS Code. Regression coverag
 | 10 | two extension inputs sharing a field path queue independently | Two `<Host>` inputs bound to the same `data-ext-field` get distinct debounce keys, so neither keystroke silently replaces the other |
 | 11 | a background re-render keeps an open dropdown open | A force-update landing while a dropdown menu is open reopens it, so the item the user is about to click is still there |
 | 12 | a background re-render keeps an open custom select open | App-card selects use `.custom-select-options`, a different class from the dropdown above, and must survive a re-render the same way |
-| 13 | only the select that was open is reopened after a re-render | Sibling selects in one card share a class and have no id, so each needs a distinct key or restoring reopens all of them |
-| 14 | the parse-error overlay is announced without taking focus | The overlay never moves focus, so an `aria-live` region is what tells a screen-reader user that editing paused and resumed |
-| 15 | a parse error discards extension-field input still sitting in the debounce | The same queue means extension-field edits are also dropped when the XML stops parsing |
-| 16 | Tab stays inside the parse-error dialog while it is open | Tab/Shift+Tab cycle between the dialog and its button instead of escaping the modal |
-| 17 | a saved tab that never becomes available leaves a valid fallback selected | Endless restore retries don't strand an invalid selection or override a manual tab change |
-| 18 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
+| 13 | a re-render that changes the app count does not reopen a select on another card | Select keys are application indices, so a re-render that adds or removes applications must not reopen a menu against different data |
+| 14 | only the select that was open is reopened after a re-render | Sibling selects in one card share a class and have no id, so each needs a distinct key or restoring reopens all of them |
+| 15 | the parse-error overlay is announced without taking focus | The overlay never moves focus, so an `aria-live` region is what tells a screen-reader user that editing paused and resumed |
+| 16 | a parse error discards extension-field input still sitting in the debounce | The same queue means extension-field edits are also dropped when the XML stops parsing |
+| 17 | Tab stays inside the parse-error dialog while it is open | Tab/Shift+Tab cycle between the dialog and its button instead of escaping the modal |
+| 18 | a saved tab that never becomes available leaves a valid fallback selected | Endless restore retries don't strand an invalid selection or override a manual tab change |
+| 19 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
 
 ### `external-edit-state.spec.ts` — 5 tests
 
