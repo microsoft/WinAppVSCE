@@ -994,6 +994,13 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 	}
 }
 
+/**
+ * The user dismissed a prompt. Not a failure, so it must not be reported as
+ * one: an error toast for "I pressed Escape" is noise, and VS Code's own
+ * convention is for a cancelled launch to end quietly.
+ */
+class DebugLaunchCancelled extends Error { }
+
 class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
 	private extensionPath: string;
 
@@ -1027,7 +1034,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			if (!input) {
 				const selection = await pickRunTarget(folder);
 				if (!selection) {
-					throw new Error('No run target selected, cancelling debug session.');
+					throw new DebugLaunchCancelled('No run target selected, cancelling debug session.');
 				}
 				input = selection.target.path;
 
@@ -1036,7 +1043,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				if (!config.project) {
 					const projectSelection = await pickSolutionProject(selection);
 					if (projectSelection.cancelled) {
-						throw new Error('No project selected, cancelling debug session.');
+						throw new DebugLaunchCancelled('No project selected, cancelling debug session.');
 					}
 					pickedProject = projectSelection.project;
 				}
@@ -1142,6 +1149,12 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// Return an inline no-op adapter — the real debugging happens in the child session above
 			return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
 		} catch (error) {
+			// Dismissing a prompt is a decision, not a failure. VS Code ends
+			// the session quietly; an error toast would just blame the user.
+			if (error instanceof DebugLaunchCancelled) {
+				throw error;
+			}
+
 			const message = error instanceof Error ? error.message : String(error);
 
 			// A run failure has already written the full CLI output to the
