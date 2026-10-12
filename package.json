@@ -13,7 +13,19 @@
     "vscode": "^1.109.0"
   },
   "categories": [
-    "Other"
+    "Debuggers",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "winapp",
+    "winui",
+    "windows app sdk",
+    "winappsdk",
+    "msix",
+    "appx",
+    "appxmanifest",
+    "packaging",
+    "windows"
   ],
   "activationEvents": [
     "workspaceContains:**/[Aa]ppx[Mm]anifest.xml",

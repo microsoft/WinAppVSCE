@@ -81,6 +81,27 @@ describe('package.json contributions', () => {
 		assert.deepEqual(findDuplicateKeys(raw), []);
 	});
 
+	// VS Code's "you don't have an extension for debugging X" recovery prompt
+	// opens the Extensions view with the query `@category:debuggers <language>`
+	// (debugCommands.ts). An extension that contributes a debug adapter but not
+	// this category can never appear there, nor under the Marketplace's
+	// Debuggers filter.
+	it('claims the Debuggers category', () => {
+		assert.ok(
+			manifest.categories.includes('Debuggers'),
+			'an extension contributing contributes.debuggers must claim the Debuggers category'
+		);
+		assert.ok(manifest.contributes.debuggers?.length > 0);
+	});
+
+	// The Marketplace rejects a publish with more than 10 keywords.
+	it('stays within the Marketplace keyword limit', () => {
+		assert.ok(Array.isArray(manifest.keywords));
+		assert.ok(manifest.keywords.length > 0, 'keywords drive Marketplace search ranking');
+		assert.ok(manifest.keywords.length <= 10, `too many keywords: ${manifest.keywords.length}`);
+		assert.equal(new Set(manifest.keywords).size, manifest.keywords.length, 'duplicate keyword');
+	});
+
 	it('declares every setting in a single configuration block', () => {
 		const properties = Object.keys(manifest.contributes.configuration.properties);
 		for (const expected of [
