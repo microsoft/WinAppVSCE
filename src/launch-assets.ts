@@ -18,8 +18,12 @@ import { pickRunTarget, pickSolutionProject } from './run-utils';
  * exists, after which the active editor stops mattering entirely.
  */
 
-/** Opt-out for the proactive offer, mirroring csharp.suppressBuildAssetsNotification. */
-const SUPPRESS_SETTING = 'winapp.suppressLaunchConfigNotification';
+/**
+ * Dismissal flag for the proactive offer. Deliberately `globalState` rather
+ * than a contributed setting, matching the manifest-editor notification: this
+ * is a one-off "stop asking", not something a user would ever configure.
+ */
+const DISMISSED_KEY = 'winapp.launchConfigNotificationDismissed';
 
 /** Files that mark a workspace as a WinApp project worth offering F5 for. */
 const MANIFEST_GLOB = '**/{*.appxmanifest,[Aa]ppx[Mm]anifest.xml}';
@@ -96,10 +100,10 @@ export async function buildLaunchConfiguration(
 }
 
 /**
- * `WinApp: Generate launch.json`. Adds a configuration and opens the file so
- * the result is visible and editable rather than silently applied.
+ * Add a WinApp configuration and open `launch.json`, so the result is visible
+ * and editable rather than silently applied.
  */
-export async function generateLaunchConfiguration(): Promise<void> {
+async function generateLaunchConfiguration(): Promise<void> {
 	const folder = await resolveTargetFolder();
 	if (!folder) {
 		return;
@@ -130,10 +134,10 @@ async function looksLikeWinAppWorkspace(): Promise<boolean> {
 /**
  * Offer to generate `launch.json` on activation when a WinApp workspace has
  * none. Silent unless all of: the workspace looks like a WinApp project, no
- * WinApp configuration exists yet, and the user hasn't opted out.
+ * WinApp configuration exists yet, and the user hasn't dismissed the offer.
  */
-export async function offerLaunchConfiguration(): Promise<void> {
-	if (vscode.workspace.getConfiguration().get<boolean>(SUPPRESS_SETTING)) {
+export async function offerLaunchConfiguration(context: vscode.ExtensionContext): Promise<void> {
+	if (context.globalState.get<boolean>(DISMISSED_KEY)) {
 		return;
 	}
 
@@ -163,11 +167,7 @@ export async function offerLaunchConfiguration(): Promise<void> {
 	);
 
 	if (choice === never) {
-		await vscode.workspace.getConfiguration().update(
-			SUPPRESS_SETTING,
-			true,
-			vscode.ConfigurationTarget.Global
-		);
+		await context.globalState.update(DISMISSED_KEY, true);
 		return;
 	}
 

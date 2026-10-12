@@ -97,7 +97,7 @@ import {
 	WINAPP_DEBUG_TYPE,
 	WINAPP_LAUNCH_CONFIG_NAME
 } from './launch-config';
-import { generateLaunchConfiguration, buildLaunchConfiguration, offerLaunchConfiguration } from './launch-assets';
+import { buildLaunchConfiguration, offerLaunchConfiguration } from './launch-assets';
 
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
 const FILE_PICKER_DETAIL = 'Open a file picker';
@@ -1197,14 +1197,10 @@ export function activate(context: vscode.ExtensionContext) {
 		)
 	);
 
-	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.generateLaunchConfig', () => generateLaunchConfiguration())
-	);
-
 	// A missing launch.json is what strands users on VS Code's "install an
 	// extension for <language>" prompt, so offer to create one up front.
 	// Fire-and-forget: activation must not block on a notification.
-	void offerLaunchConfiguration();
+	void offerLaunchConfiguration(context);
 
 	const factory = new WinAppDebugAdapterFactory(extensionPath);
 	context.subscriptions.push(

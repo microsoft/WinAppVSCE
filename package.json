@@ -39,7 +39,6 @@
     "onCommand:winapp.certInfo",
     "onCommand:winapp.openManifestEditor",
     "onCommand:winapp.runWithOptions",
-    "onCommand:winapp.generateLaunchConfig",
     "onDebugInitialConfigurations",
     "onDebugDynamicConfigurations:winapp"
   ],
@@ -156,11 +155,6 @@
         "title": "Open Manifest Editor",
         "category": "WinApp",
         "icon": "$(preview)"
-      },
-      {
-        "command": "winapp.generateLaunchConfig",
-        "title": "Generate launch.json",
-        "category": "WinApp"
       }
     ],
     "configuration": {
@@ -173,11 +167,6 @@
           },
           "default": [],
           "description": "Relative paths (from the workspace root) to app project directories. When set, WinApp commands target these directories instead of auto-scanning. If multiple entries are provided, you'll be prompted to choose."
-        },
-        "winapp.suppressLaunchConfigNotification": {
-          "type": "boolean",
-          "default": false,
-          "description": "Suppress the prompt offering to generate a launch.json when a WinApp project has no debug configuration. Set automatically when you choose \"Don't Ask Again\". You can still create one with the \"WinApp: Generate launch.json\" command."
         },
         "winapp.manifest.intelliSense.enable": {
           "type": "boolean",
