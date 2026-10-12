@@ -47,6 +47,9 @@ try {
     $env:WINUI_SURFACE_EXE = "$run\Surface.exe"
     & "$PSScriptRoot\SurfaceClient.Smoke\bin\x64\Debug\net472\SurfaceClient.Smoke.exe"
     if ($LASTEXITCODE -ne 0) { throw "Renderer smoke failed (exit $LASTEXITCODE)." }
+    # I2: every client source-map path must select the same element on the live surface.
+    & $ui --parity --surface "$run\Surface.exe" --out $results
+    if ($LASTEXITCODE -ne 0) { throw "Caret/designer parity failed (exit $LASTEXITCODE)." }
 } finally {
     foreach ($name in $saved.Keys) {
         [Environment]::SetEnvironmentVariable($name, $saved[$name], "Process")

@@ -13,7 +13,7 @@ using WinUIXamlPreview.Protocol;
 
 namespace WinUIXamlPreview.UITest
 {
-    internal static class Program
+    internal static partial class Program
     {
         private static string DefaultSurfaceExe => throw new ArgumentException(
             "Specify --surface or WINUI_SURFACE_EXE pointing at a disposable migrated renderer copy.");
@@ -69,6 +69,11 @@ namespace WinUIXamlPreview.UITest
             if (args.Any(a => string.Equals(a, "--d3", StringComparison.OrdinalIgnoreCase)))
             {
                 return await RunD3(args);
+            }
+
+            if (args.Any(a => string.Equals(a, "--parity", StringComparison.OrdinalIgnoreCase)))
+            {
+                return await RunParity(args);
             }
 
             string outDir = GetArg(args, "--out") ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "qa-results");

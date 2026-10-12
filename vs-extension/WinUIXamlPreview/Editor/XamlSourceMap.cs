@@ -74,16 +74,24 @@ namespace WinUIXamlPreview.Editor
         // Pre-order authored elements (path + start offset + depth), used for offset -> path lookup.
         private readonly List<(string Path, int Start, int Depth)> _preorder;
 
+        // Pre-order authored elements as (path, XML element name) — the parity harness compares these to the surface.
+        private readonly List<(string Path, XName Name)> _elements;
+
         private XamlSourceMap(
             Dictionary<string, (int, int)> pathToSpan,
-            List<(string, int, int)> preorder)
+            List<(string, int, int)> preorder,
+            List<(string, XName)> elements)
         {
             _pathToSpan = pathToSpan;
             _preorder = preorder;
+            _elements = elements;
         }
 
         /// <summary>Whether the map has at least the root element.</summary>
         public bool HasContent => _preorder.Count > 0;
+
+        /// <summary>Every mapped authored element in pre-order: its path and XML element name.</summary>
+        public IReadOnlyList<(string Path, XName Name)> Elements => _elements;
 
         /// <summary>
         /// Builds a source map from XAML <paramref name="text"/>. Returns null if the text can't be parsed
@@ -119,9 +127,10 @@ namespace WinUIXamlPreview.Editor
             var lineStarts = BuildLineStarts(text!);
             var pathToSpan = new Dictionary<string, (int, int)>(StringComparer.Ordinal);
             var preorder = new List<(string, int, int)>();
+            var elements = new List<(string, XName)>();
 
             // The XML root maps to surface path "0" (the design canvas's single child == the page root).
-            Walk(rootEl, "0", 0, lineStarts, text!.Length, pathToSpan, preorder, contentPropByType);
+            Walk(rootEl, "0", 0, lineStarts, text!.Length, pathToSpan, preorder, elements, contentPropByType);
 
             // Second pass: end offset = start of the next pre-order element that is NOT a descendant (i.e. the
             // next entry at depth <= this one), or end-of-text. This yields properly-nested containment spans.
@@ -141,7 +150,7 @@ namespace WinUIXamlPreview.Editor
                 pathToSpan[path] = (start, end);
             }
 
-            return new XamlSourceMap(pathToSpan, preorder);
+            return new XamlSourceMap(pathToSpan, preorder, elements);
         }
 
         private static void Walk(
@@ -152,16 +161,18 @@ namespace WinUIXamlPreview.Editor
             int textLength,
             Dictionary<string, (int, int)> pathToSpan,
             List<(string, int, int)> preorder,
+            List<(string, XName)> elements,
             IReadOnlyDictionary<string, string>? contentPropByType)
         {
             int start = StartOffset(element, lineStarts, textLength);
             pathToSpan[path] = (start, textLength); // provisional end; finalized in the second pass
             preorder.Add((path, start, depth));
+            elements.Add((path, element.Name));
 
             int index = 0;
             foreach (var child in AuthoredChildElements(element, contentPropByType))
             {
-                Walk(child, path + "." + index, depth + 1, lineStarts, textLength, pathToSpan, preorder, contentPropByType);
+                Walk(child, path + "." + index, depth + 1, lineStarts, textLength, pathToSpan, preorder, elements, contentPropByType);
                 index++;
             }
         }
@@ -191,15 +202,15 @@ namespace WinUIXamlPreview.Editor
                 int dot = local.LastIndexOf('.');
                 if (dot >= 0)
                 {
-                    // Property element. Recurse into a content property; skip the rest. A property element is a
-                    // content property when its name is a standard one, OR when the surface reported that the
-                    // owner type's custom content property is exactly this prop (bug D1).
+                    // Property element. Recurse into a content property; skip the rest. When the surface reported
+                    // the owner's content property (bug D1), that is the ONLY content property — e.g. CommandBar's
+                    // is PrimaryCommands, so <CommandBar.Content> is an ordinary property, not authored content.
+                    // Otherwise fall back to the standard names.
                     string owner = local.Substring(0, dot);
                     string prop = local.Substring(dot + 1);
-                    bool isContent = ContentProps.Contains(prop)
-                        || (contentPropByType != null
-                            && contentPropByType.TryGetValue(owner, out var cp)
-                            && cp == prop);
+                    bool isContent = contentPropByType != null && contentPropByType.TryGetValue(owner, out var cp)
+                        ? cp == prop
+                        : ContentProps.Contains(prop);
                     if (isContent)
                     {
                         foreach (var gc in child.Elements())

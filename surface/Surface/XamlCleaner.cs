@@ -1179,6 +1179,7 @@ internal static class XamlCleaner
             new XAttribute("Padding", "6,4"));
 
         CopyPreservedAttributes(el, placeholder);
+        placeholder.SetAttributeValue("Tag", PlaceholderTag);
 
         placeholder.Add(new XElement(
             Pres + "TextBlock",
@@ -1193,6 +1194,10 @@ internal static class XamlCleaner
 
         el.ReplaceWith(placeholder);
     }
+
+    /// <summary>Tag value on a placeholder <c>Border</c>; the design surface treats it as a leaf so the stand-in
+    /// label is never mistaken for one of the original control's children.</summary>
+    internal const string PlaceholderTag = "__wxp_placeholder";
 
     private static void CopyPreservedAttributes(XElement src, XElement dst)
     {

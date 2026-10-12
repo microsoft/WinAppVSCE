@@ -765,6 +765,11 @@ internal sealed class DesignSurface
     // This same authored tree powers source mapping (#1/#2).
     private HashSet<FrameworkElement>? _authoredSet;
 
+    // Authored child -> authored parent (or _contentHost), recorded while building the set. Paths are derived
+    // from this rather than the visual tree, so elements that aren't realized (closed ComboBox items, an
+    // unselected tab's content) still report the same path the client's XML walk computes.
+    private readonly Dictionary<FrameworkElement, DependencyObject> _authoredParent = new();
+
     private HashSet<FrameworkElement> AuthoredSet()
     {
         if (_authoredSet != null)
@@ -773,14 +778,17 @@ internal sealed class DesignSurface
         }
 
         var set = new HashSet<FrameworkElement>();
+        _authoredParent.Clear();
         var stack = new Stack<DependencyObject>();
         stack.Push(_contentHost);
         while (stack.Count > 0)
         {
-            foreach (var child in AuthoredChildren(stack.Pop()))
+            var parent = stack.Pop();
+            foreach (var child in AuthoredChildren(parent))
             {
                 if (set.Add(child))
                 {
+                    _authoredParent[child] = parent;
                     stack.Push(child);
                 }
             }
@@ -829,12 +837,25 @@ internal sealed class DesignSurface
         }
 
         string? name = null;
-        for (Type? cur = t; cur != null; cur = cur.BaseType)
+        for (Type? cur = t; cur != null && name == null; cur = cur.BaseType)
         {
-            var attrs = cur.GetCustomAttributes(typeof(ContentPropertyAttribute), inherit: false);
-            if (attrs.Length > 0)
+            // Match by name rather than by type: some controls that came from WinUI 2 (TabView) still carry the
+            // legacy Windows.UI.Xaml.Markup.ContentPropertyAttribute in the projection, not the Microsoft.UI one.
+            foreach (var data in cur.GetCustomAttributesData())
             {
-                name = (attrs[0] as ContentPropertyAttribute)?.Name;
+                if (data.AttributeType.Name != nameof(ContentPropertyAttribute))
+                {
+                    continue;
+                }
+
+                foreach (var arg in data.NamedArguments)
+                {
+                    if (arg.MemberName == nameof(ContentPropertyAttribute.Name))
+                    {
+                        name = arg.TypedValue.Value as string;
+                    }
+                }
+
                 break;
             }
         }
@@ -868,13 +889,20 @@ internal sealed class DesignSurface
             yield break;
         }
 
+        // A cleaner placeholder stands in for a control that couldn't load; its label isn't authored content.
+        if (obj is Border { Tag: string tag } && tag == XamlCleaner.PlaceholderTag)
+        {
+            yield break;
+        }
+
         object? value;
         try
         {
             value = obj.GetType().GetProperty(cp)?.GetValue(obj);
         }
-        catch
+        catch (Exception ex)
         {
+            App.Log($"AuthoredChildren: reading {obj.GetType().Name}.{cp} failed: {ex.Message}");
             yield break;
         }
 
@@ -963,17 +991,18 @@ internal sealed class DesignSurface
             return null;
         }
 
-        // Authored-ancestor chain, deepest-first, walking up the visual tree and keeping authored elements.
+        // Authored-ancestor chain, deepest-first, via the authored parent map (not the visual tree).
         var chain = new List<FrameworkElement>();
         DependencyObject? node = fe;
-        while (node != null && !ReferenceEquals(node, _contentHost))
+        while (node is FrameworkElement afe && !ReferenceEquals(node, _contentHost))
         {
-            if (node is FrameworkElement afe && authored.Contains(afe))
-            {
-                chain.Add(afe);
-            }
+            chain.Add(afe);
+            node = _authoredParent.TryGetValue(afe, out var p) ? p : null;
+        }
 
-            node = VisualTreeHelper.GetParent(node);
+        if (!ReferenceEquals(node, _contentHost))
+        {
+            return null;
         }
 
         chain.Reverse(); // root-first
@@ -1000,9 +1029,9 @@ internal sealed class DesignSurface
     {
         var parts = path.Split('.');
         DependencyObject current = _contentHost;
-        foreach (var part in parts)
+        for (int seg = 0; seg < parts.Length; seg++)
         {
-            if (!int.TryParse(part, out int idx) || idx < 0)
+            if (!int.TryParse(parts[seg], out int idx) || idx < 0)
             {
                 return null;
             }
@@ -1020,6 +1049,7 @@ internal sealed class DesignSurface
 
             if (next is null)
             {
+                App.Log($"ElementForPath '{path}': segment {seg} wants child {idx} of {current.GetType().Name}, which has {i}.");
                 return null;
             }
 
