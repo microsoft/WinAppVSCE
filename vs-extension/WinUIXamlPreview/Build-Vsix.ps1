@@ -19,11 +19,7 @@ if ($SurfaceIdentity -ne "Shipping") {
 function Assert-File([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Required build input/output missing: $Path" }
 }
-$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-Assert-File $vswhere
-$msbuild = & $vswhere -latest -prerelease -products * -version "[17.0,18.0)" -requires Microsoft.Component.MSBuild `
-    -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
-if (-not $msbuild) { throw "Desktop MSBuild (VS 2022, 17.x) not found via vswhere." }
+$msbuild = & "$repoRoot\vs-extension\Find-DesktopMSBuild.ps1"
 $mt = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter mt.exe -Recurse |
     Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending |
     Select-Object -First 1 -ExpandProperty FullName

@@ -17,7 +17,8 @@ designer UI is required or included.
 
 ### Build from a checkout without installing into VS
 
-Use Windows x64, desktop VS2026 MSBuild discoverable by `vswhere`, the .NET
+Use Windows x64, desktop VS 2022 or VS 2026 MSBuild discoverable by `vswhere`
+(see `vs-extension\Find-DesktopMSBuild.ps1`), the .NET
 Framework 4.7.2 targeting pack, .NET SDK 10, .NET 8 runtime, Windows SDK x64
 `mt.exe`/XAML/PRI tooling, and NuGet access. Runtime smoke additionally requires
 compatible .NET 10 and Windows App Runtime 2 installations. Do not install or
@@ -536,10 +537,12 @@ New files provide migration docs, source license, ignores and validation scripts
 
 Use Windows x64 with:
 
-- Desktop Visual Studio/MSBuild discovered with `vswhere -latest -prerelease`,
-  .NET Framework 4.7.2 targeting/reference assemblies, WPF and VS extension build
-  support. Validated with VS2026 Enterprise, desktop MSBuild
-  `C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe`.
+- Desktop Visual Studio/MSBuild, VS 2022 (17.x) or VS 2026 (18.x), located by
+  `vs-extension\Find-DesktopMSBuild.ps1`: the newest install that has MSBuild, the
+  .NET SDK and the .NET Framework 4.7.2 targeting pack (incomplete installs, such
+  as a bare Build Tools, are skipped). WPF and VS extension build support come
+  from NuGet (`Microsoft.VSSDK.BuildTools`). Validated with VS2026 Enterprise and
+  VS2022 Enterprise 17.14.
 - .NET SDK 10 (validated 10.0.303), plus .NET 8 runtime for the provisioner.
   A .NET 10 SDK installation does **not** imply the .NET 8 runtime is installed.
 - Windows SDK including x64 `mt.exe`, XAML/PRI tooling, and access to the pinned
