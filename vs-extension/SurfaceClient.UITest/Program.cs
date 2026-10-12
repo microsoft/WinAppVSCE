@@ -76,6 +76,11 @@ namespace WinUIXamlPreview.UITest
                 return await RunParity(args);
             }
 
+            if (args.Any(a => string.Equals(a, "--fixtures", StringComparison.OrdinalIgnoreCase)))
+            {
+                return await RunFixtures(args);
+            }
+
             string outDir = GetArg(args, "--out") ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "qa-results");
             Directory.CreateDirectory(outDir);
 
@@ -755,13 +760,51 @@ namespace WinUIXamlPreview.UITest
             private TaskCompletionSource<ElementPropsMsg>? _props;
             private TaskCompletionSource<ContentPropsMsg>? _contentProps;
 
+            /// <summary>Every surface Error since the last <see cref="Errors"/>.Clear(), as "phase: message".</summary>
+            public readonly List<string> Errors = new List<string>();
+
+            private readonly List<ElementPropsMsg> _allProps = new List<ElementPropsMsg>();
+
+            /// <summary>Waits for an ElementProps matching <paramref name="match"/>, including ones that arrived
+            /// before the call (Selected and ElementProps are sent back to back).</summary>
+            public async Task<ElementPropsMsg?> WaitProps(Func<ElementPropsMsg, bool> match, TimeSpan timeout)
+            {
+                var deadline = DateTime.UtcNow + timeout;
+                while (true)
+                {
+                    lock (_allProps)
+                    {
+                        for (int i = _allProps.Count - 1; i >= 0; i--)
+                        {
+                            if (match(_allProps[i])) return _allProps[i];
+                        }
+                    }
+
+                    if (DateTime.UtcNow > deadline) return null;
+                    await Task.Delay(50);
+                }
+            }
+
+            public void ClearProps()
+            {
+                lock (_allProps) _allProps.Clear();
+            }
+
             public FrameBox(SurfaceClient client)
             {
                 client.Hwnd += h => _hwnd?.TrySetResult(h);
                 client.Selected += s => _selected?.TrySetResult(s);
-                client.ElementProps += p => _props?.TrySetResult(p);
+                client.ElementProps += p =>
+                {
+                    lock (_allProps) _allProps.Add(p);
+                    _props?.TrySetResult(p);
+                };
                 client.ContentProps += c => _contentProps?.TrySetResult(c);
-                client.Error += e => Console.Error.WriteLine($"  [surface-error] {e.Phase}: {e.Message}");
+                client.Error += e =>
+                {
+                    lock (Errors) Errors.Add(e.Phase + ": " + e.Message);
+                    Console.Error.WriteLine($"  [surface-error] {e.Phase}: {e.Message}");
+                };
             }
 
             public async Task<HwndMsg?> NextHwnd(TimeSpan timeout)

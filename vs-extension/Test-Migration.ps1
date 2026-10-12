@@ -33,6 +33,10 @@ if (-not (Test-Path "$raw\Surface.exe")) { throw "Run Build-Vsix.ps1 -NoDeploy f
 & dotnet build "$root\surface\TestUserApp\TestUserApp.csproj" -c Debug -p:Platform=x64 `
     -p:RuntimeIdentifier=win-x64 --nologo -v minimal
 if ($LASTEXITCODE -ne 0) { throw "TestUserApp build failed (exit $LASTEXITCODE)." }
+# Q-suite fixture app: custom/other-project/Toolkit controls and resources at every scope.
+& dotnet build "$root\surface\TestFixtureApp\TestFixtureApp.csproj" -c Debug -p:Platform=x64 `
+    -p:RuntimeIdentifier=win-x64 --nologo -v minimal
+if ($LASTEXITCODE -ne 0) { throw "TestFixtureApp build failed (exit $LASTEXITCODE)." }
 $run = "$results\Renderer-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 Copy-Item "$raw\*" $run -Recurse -Force
@@ -50,6 +54,11 @@ try {
     # I2: every client source-map path must select the same element on the live surface.
     & $ui --parity --surface "$run\Surface.exe" --out $results
     if ($LASTEXITCODE -ne 0) { throw "Caret/designer parity failed (exit $LASTEXITCODE)." }
+    $fixtures = "$root\surface\TestFixtureApp"
+    & $ui --fixtures --surface "$run\Surface.exe" --out $results `
+        --user-dll "$fixtures\bin\x64\Debug\net10.0-windows10.0.26100.0\TestFixtureApp.dll" `
+        --fixtures-dir "$fixtures\Fixtures"
+    if ($LASTEXITCODE -ne 0) { throw "Fixture suite failed (exit $LASTEXITCODE)." }
 } finally {
     foreach ($name in $saved.Keys) {
         [Environment]::SetEnvironmentVariable($name, $saved[$name], "Process")
