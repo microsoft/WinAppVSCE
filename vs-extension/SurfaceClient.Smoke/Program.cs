@@ -175,6 +175,10 @@ namespace WinUIXamlPreview.Smoke
                 Check("actual --user-pri staged second run", WinUISurface.Shared.HostPayload.Hash(Path.Combine(secondRun, "Surface.pri")) ==
                     WinUISurface.Shared.HostPayload.Hash(Path.Combine(source, "Surface.designtime.pri")));
             }
+            // Dispose reaps the process and deletes run copies on a background task (T5), so poll.
+            var disposeDeadline = DateTime.UtcNow.AddSeconds(15);
+            while ((Directory.Exists(firstRun) || Directory.Exists(secondRun)) && DateTime.UtcNow < disposeDeadline)
+                await Task.Delay(100);
             Check("private run directories disposed", !Directory.Exists(firstRun) && !Directory.Exists(secondRun));
             Check("pristine input PRI unchanged after actual launches", WinUISurface.Shared.HostPayload.Hash(Path.Combine(source, "Surface.pri")) == before);
             WinUISurface.Shared.HostPayload.Validate(source);

@@ -499,19 +499,22 @@ namespace WinUIXamlPreview.UITest
             Directory.CreateDirectory(outDir);
 
             string surfaceExe = GetArg(args, "--surface") ?? Environment.GetEnvironmentVariable("WINUI_SURFACE_EXE") ?? DefaultSurfaceExe;
-            string galleryRoot = GetArg(args, "--gallery-root") ?? Environment.GetEnvironmentVariable("WINUI_GALLERY_ROOT") ?? DefaultGalleryRoot;
-            string? userDll = GetArg(args, "--user-dll") ?? Environment.GetEnvironmentVariable("WINUI_GALLERY_DLL") ?? FindGalleryDll(galleryRoot);
-            string appXaml = GetArg(args, "--app-xaml") ?? Path.Combine(galleryRoot, "App.xaml");
+            // Framework-only XAML: the Gallery is optional (explicit --gallery-root/--user-dll), so the suite
+            // runner can drive D3 against a bare surface deterministically.
+            string? galleryRoot = GetArg(args, "--gallery-root");
+            string? userDll = GetArg(args, "--user-dll") ?? (galleryRoot != null ? FindGalleryDll(galleryRoot) : null);
+            string? appXaml = GetArg(args, "--app-xaml") ?? (galleryRoot != null ? Path.Combine(galleryRoot, "App.xaml") : null);
 
             Console.WriteLine("Bug D3 regression: leaf-first pick must include transparent (no-Background) authored panels");
             Console.WriteLine("Surface.exe: " + surfaceExe);
-            Console.WriteLine("Gallery DLL: " + (userDll ?? "(not found)"));
+            Console.WriteLine("User DLL:    " + (userDll ?? "(none)"));
             Console.WriteLine();
 
-            bool haveSurface = File.Exists(surfaceExe) && userDll != null && File.Exists(userDll) && File.Exists(appXaml);
+            bool haveSurface = File.Exists(surfaceExe) && (userDll == null || File.Exists(userDll)) &&
+                (appXaml == null || File.Exists(appXaml));
             if (!haveSurface)
             {
-                Check("D3-0 surface + gallery available for e2e", false, "surface/gallery inputs missing — D3 needs a live surface");
+                Check("D3-0 surface (+ optional user inputs) available for e2e", false, "surface/user inputs missing — D3 needs a live surface");
                 WriteResults(outDir, "d3-results.json");
                 Console.WriteLine();
                 Console.WriteLine("===== D3: 0 passed, 1 failed =====");

@@ -1,8 +1,14 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param([switch]$IncludeRenderer)
+param(
+    [switch]$IncludeRenderer,
+    # Rebuilds both VSIXes (-NoDeploy) and runs the archive/payload/packaging-gate suites.
+    [switch]$IncludePackaging
+)
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path "$PSScriptRoot\..").Path
+$pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+if (-not $pwsh) { throw "PowerShell 7 (pwsh) required for surface\Test-Foundation.ps1." }
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $msbuild = & $vswhere -latest -prerelease -products * -version "[17.0,18.0)" -requires Microsoft.Component.MSBuild `
     -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
@@ -23,6 +29,26 @@ foreach ($mode in @("--d2", "--d2residual")) {
 # controllable fake surface, so it needs no Windows App SDK or real renderer and always runs.
 & "$PSScriptRoot\SurfaceClient.FaultTests\bin\x64\Debug\net472\SurfaceClient.FaultTests.exe"
 if ($LASTEXITCODE -ne 0) { throw "Fault-injection suite failed (exit $LASTEXITCODE)." }
+
+# Experimental-identity registration logic against mocks; no registration is performed.
+& "$PSScriptRoot\Test-ExperimentalIdentity.ps1"
+
+if ($IncludePackaging) {
+    foreach ($identity in @("Shipping", "Migration24e47e37")) {
+        & "$PSScriptRoot\WinUIXamlPreview\Build-Vsix.ps1" -SurfaceIdentity $identity -NoDeploy
+    }
+    # Payload contents (Test-VsixPayload) + missing-input packaging gates.
+    & "$PSScriptRoot\Test-BuildGuards.ps1"
+    # Shipping/experimental archives are never interchangeable.
+    & "$PSScriptRoot\Test-ExperimentalPackaging.ps1"
+}
+
+# Provisioner unit tests, protocol typecheck and compatibility tests. The real-provisioning and
+# actual-user-PRI lanes need the HostSDK stage and the renderer, so they ride -IncludeRenderer.
+$foundationArgs = @("-NoProfile", "-File", "$root\surface\Test-Foundation.ps1")
+if ($IncludeRenderer) { $foundationArgs += @("-IncludeBuild", "-IncludeRenderer") }
+& $pwsh.Source @foundationArgs
+if ($LASTEXITCODE -ne 0) { throw "Foundation suite failed (exit $LASTEXITCODE)." }
 
 if (-not $IncludeRenderer) { return }
 
@@ -54,6 +80,9 @@ try {
     # I2: every client source-map path must select the same element on the live surface.
     & $ui --parity --surface "$run\Surface.exe" --out $results
     if ($LASTEXITCODE -ne 0) { throw "Caret/designer parity failed (exit $LASTEXITCODE)." }
+    # D3: click-to-select (PickAt) incl. transparent-panel padding; framework XAML, no Gallery.
+    & $ui --d3 --surface "$run\Surface.exe" --out $results
+    if ($LASTEXITCODE -ne 0) { throw "Click-to-select (D3) failed (exit $LASTEXITCODE)." }
     $fixtures = "$root\surface\TestFixtureApp"
     & $ui --fixtures --surface "$run\Surface.exe" --out $results `
         --user-dll "$fixtures\bin\x64\Debug\net10.0-windows10.0.26100.0\TestFixtureApp.dll" `

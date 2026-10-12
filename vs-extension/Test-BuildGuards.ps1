@@ -5,7 +5,7 @@ $projectDir = "$PSScriptRoot\WinUIXamlPreview"
 $vsix = "$projectDir\bin\Debug\WinUIXamlPreview.vsix"
 & "$projectDir\Test-VsixPayload.ps1" -VsixPath $vsix
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$msbuild = & $vswhere -latest -prerelease -products * -requires Microsoft.Component.MSBuild `
+$msbuild = & $vswhere -latest -prerelease -products * -version "[17.0,18.0)" -requires Microsoft.Component.MSBuild `
     -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
 if (-not $msbuild) { throw "Desktop MSBuild required." }
 $check = "$projectDir\obj\GuardCheck-$([Guid]::NewGuid().ToString('N'))"
