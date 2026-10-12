@@ -23,13 +23,17 @@ internal sealed class HostSelection
 // VS selects the instant bundled host; ONLY the shared provisioner owns cache identity/discovery.
 internal static class MatchedHostResolver
 {
-    public static string BundledVersion
+    // Null when no bundled host is present (e.g. a broken install); callers degrade rather than throw.
+    public static string? BundledVersion
     {
         get
         {
             var directory = Path.GetDirectoryName(typeof(MatchedHostResolver).Assembly.Location)!;
             var surfaceDir = HostArch.BundledSurfaceDir(directory) ?? Path.Combine(directory, "Surface");
-            return File.ReadAllText(Path.Combine(surfaceDir, "Surface.wasdk.version")).Trim();
+            var file = Path.Combine(surfaceDir, "Surface.wasdk.version");
+            try { return File.Exists(file) ? File.ReadAllText(file).Trim() : null; }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
         }
     }
     public static string CacheRoot => Path.Combine(

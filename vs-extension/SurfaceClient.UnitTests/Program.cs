@@ -551,6 +551,18 @@ internal static class Program
             var p = HostBuildEnvironment.Probe();
             Check("Probe: empty HostSDK -> cannot build", !p.CanBuild && !string.IsNullOrEmpty(p.Reason), p.Reason);
 
+            // No bundled host at all: degrade (null exe/version), never throw.
+            Check("no bundled host: BundledVersion is null", MatchedHostResolver.BundledVersion is null);
+            Check("no bundled host: IsBundledCompatible false", !MatchedHostResolver.IsBundledCompatible("2.2.0"));
+            HostSelection? missing = null;
+            var threw = Throws<Exception>(() => missing = MatchedHostResolver.Resolve(Page(diff)));
+            Check("no bundled host + known version: Resolve does not throw", !threw);
+            Check("no bundled host: null exe, no upgrade, version label kept",
+                missing is not null && missing.ExePath is null && !missing.NeedsUpgrade && missing.VersionLabel == "2.2.5",
+                missing is null ? "null" : Describe(missing));
+            threw = Throws<Exception>(() => missing = MatchedHostResolver.Resolve(Page(unknown)));
+            Check("no bundled host + unknown version: no throw, null label", !threw && missing!.VersionLabel is null);
+
             // engine.stamp: 64 chars accepted (trimmed), anything else rejected.
             var stamp = new string('a', 64);
             Write(Path.Combine(BinDir, "HostSDK", "engine.stamp"), "  " + stamp + "\r\n");
