@@ -7,9 +7,11 @@
     <WinUISDKReferences>false</WinUISDKReferences>
     <ImplicitUsings>enable</ImplicitUsings>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <!-- Test-VersionMatrix.ps1 overrides this to build the test app against each WinAppSDK in the matrix. -->
+    <TestWasdkVersion Condition="'$(TestWasdkVersion)' == ''">2.2.0</TestWasdkVersion>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(TestWasdkVersion)" />
   </ItemGroup>
   <ItemGroup>
     <!-- Design-time sample-data document consumed by {d:DesignData Source=DesignData/DemoSample.xaml};

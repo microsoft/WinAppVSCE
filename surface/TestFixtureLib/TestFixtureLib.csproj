@@ -10,8 +10,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <!-- Test-VersionMatrix.ps1 overrides this to build the test app against each WinAppSDK in the matrix. -->
+    <TestWasdkVersion Condition="'$(TestWasdkVersion)' == ''">2.2.0</TestWasdkVersion>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(TestWasdkVersion)" />
   </ItemGroup>
 </Project>

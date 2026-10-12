@@ -14,9 +14,11 @@
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <!-- Mirror an app's output folder: package DLLs (the Toolkit) sit next to the user DLL. -->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <!-- Test-VersionMatrix.ps1 overrides this to build the test app against each WinAppSDK in the matrix. -->
+    <TestWasdkVersion Condition="'$(TestWasdkVersion)' == ''">2.2.0</TestWasdkVersion>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(TestWasdkVersion)" />
     <!-- Same version as the toolkit templates harvested into the bundled surface (DesignHost.csproj). -->
     <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.250402" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Segmented" Version="8.2.250402" />
