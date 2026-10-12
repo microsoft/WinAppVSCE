@@ -151,6 +151,65 @@ try
     File.Delete(Path.Combine(first, "rogue.dll"));
     File.Delete(Path.Combine(first, "Surface.designtime.pri"));
     Reject(() => HostPayload.Validate(first), "missing PRI fails");
+
+    // Manifest hardening: every structural rejection path in ReadManifest/Validate.
+    var hard = Path.Combine(root, "hard");
+    void FreshHost()
+    {
+        if (Directory.Exists(hard)) Directory.Delete(hard, true);
+        Directory.CreateDirectory(Path.Combine(hard, "runtimes", "win-arm64", "native"));
+        foreach (var file in Directory.GetFiles(source)) if (Path.GetFileName(file) != HostPayload.ManifestName)
+            File.Copy(file, Path.Combine(hard, Path.GetFileName(file)));
+        File.WriteAllText(Path.Combine(hard, "runtimes", "win-arm64", "native", "WebView2Loader.dll"), "native");
+        HostPayload.Seal(hard, key, "2.2.0", "engine");
+    }
+    void RewriteManifest(Action<PayloadManifest> edit)
+    {
+        var path = Path.Combine(hard, HostPayload.ManifestName);
+        var m = JsonSerializer.Deserialize<PayloadManifest>(File.ReadAllText(path))!;
+        edit(m);
+        File.WriteAllText(path, JsonSerializer.Serialize(m));
+    }
+    FreshHost();
+    Check(HostPayload.Validate(hard, key).Files.ContainsKey(Path.Combine("runtimes", "win-arm64", "native", "WebView2Loader.dll")),
+        "nested native member sealed and validated");
+    File.WriteAllText(Path.Combine(hard, "runtimes", "win-arm64", "native", "WebView2Loader.dll"), "swapped");
+    Reject(() => HostPayload.Validate(hard, key), "nested native member tamper fails");
+    FreshHost();
+    File.WriteAllText(Path.Combine(hard, "Microsoft.ui.xaml.dll"), "swapped");
+    Reject(() => HostPayload.Validate(hard, key), "native WinUI binary tamper fails");
+    FreshHost();
+    File.Delete(Path.Combine(hard, HostPayload.ManifestName));
+    Reject(() => HostPayload.Validate(hard), "missing manifest fails");
+    FreshHost();
+    File.WriteAllText(Path.Combine(hard, HostPayload.ManifestName), "null");
+    Reject(() => HostPayload.Validate(hard), "null manifest fails");
+    FreshHost();
+    File.WriteAllText(Path.Combine(hard, HostPayload.ManifestName), "{ not json");
+    Reject(() => HostPayload.Validate(hard), "corrupt manifest fails");
+    FreshHost();
+    RewriteManifest(m => m.Format = 1);
+    Reject(() => HostPayload.Validate(hard), "old manifest format fails");
+    FreshHost();
+    RewriteManifest(m => m.Key = "");
+    Reject(() => HostPayload.Validate(hard), "empty identity key fails");
+    FreshHost();
+    RewriteManifest(m => m.Files.Remove("Microsoft.WinUI.dll"));
+    Reject(() => HostPayload.Validate(hard), "manifest omitting a required member fails (even though the file exists)");
+    FreshHost();
+    RewriteManifest(m => m.Files["..\\outside.dll"] = new string('0', 64));
+    Reject(() => HostPayload.Validate(hard), "parent-traversal member fails");
+    FreshHost();
+    RewriteManifest(m => m.Files["C:\\Windows\\evil.dll"] = new string('0', 64));
+    Reject(() => HostPayload.Validate(hard), "rooted member fails");
+    FreshHost();
+    File.WriteAllText(Path.Combine(hard, HostPayload.RunMarker), "");
+    Check(HostPayload.Validate(hard, key).Key == key, "run marker is the only tolerated extra file");
+    FreshHost();
+    Directory.CreateDirectory(Path.Combine(hard, "sub"));
+    File.WriteAllText(Path.Combine(hard, "sub", "Surface.dll"), "shadow");
+    Reject(() => HostPayload.Validate(hard), "unlisted nested file (shadow assembly) fails");
+    Directory.Delete(hard, true);
     Reject(() => new BuildStage(Path.Combine(root, new string('x', 90))), "deep staging fails clearly");
     string owned;
     using (var stage = new BuildStage(root)) { owned = stage.Root; Check(Directory.Exists(owned), "owned short staging created"); }

@@ -14,7 +14,7 @@ namespace WinUIXamlPreview.UnitTests;
 /// %TEMP% and asserts the decision the production code makes. Prints one PASS/FAIL line per check and a
 /// "===== UNIT: N passed, M failed =====" summary; exit code 0 only when every check passes.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     private static int s_pass;
     private static int s_fail;
@@ -33,6 +33,8 @@ internal static class Program
             Run("IsWinUiXaml", IsWinUiXamlTests);
             Run("SurfaceResolver", SurfaceResolverTests);
             Run("MatchedHostResolver", MatchedHostResolverTests);
+            Run("LineDecoder", LineDecoderTests);
+            Run("XamlSourceMap", XamlSourceMapTests);
         }
         finally
         {
