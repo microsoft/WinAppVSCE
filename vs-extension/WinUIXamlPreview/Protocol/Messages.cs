@@ -148,9 +148,10 @@ namespace WinUIXamlPreview.Protocol
     }
 
     /// <summary>
-    /// Client -> surface: preview the mounted page under a different theme (Light/Dark/Default). The surface
-    /// applies it live to the mounted design canvas's <c>RequestedTheme</c> (<c>{ThemeResource}</c> brushes
-    /// re-resolve) with no re-render, and persists it so subsequent re-hosts keep the chosen theme.
+    /// Client -> surface: legacy theme request (Light/Dark/Default). Kept only so the wire contract and older
+    /// clients stay valid — the surface logs it and does nothing. Theme is per-process (<c>SURFACE_THEME</c> at
+    /// launch); the client changes theme by warm-swapping to a surface started in the new theme
+    /// (<c>PreviewControl.SetTheme</c>). This client never sends it.
     /// </summary>
     internal sealed class SetThemeMsg
     {

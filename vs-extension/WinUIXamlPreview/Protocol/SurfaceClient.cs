@@ -543,13 +543,6 @@ namespace WinUIXamlPreview.Protocol
             => Send(new SetPropertyMsg { Id = id, Name = name, Value = value });
 
         /// <summary>
-        /// Preview the mounted page under a different theme (<c>Light</c>/<c>Dark</c>/<c>Default</c>). The
-        /// surface applies it live to the mounted design canvas (no re-render) and persists it across re-hosts.
-        /// </summary>
-        public bool SetTheme(string theme)
-            => Send(new SetThemeMsg { Theme = theme });
-
-        /// <summary>
         /// Pin the design canvas to a device-size preset so the page lays out at a fixed artboard size;
         /// <paramref name="width"/>/<paramref name="height"/> &lt;= 0 restores auto (the page's own size). The
         /// surface re-hosts and replies with a fresh <c>Hwnd</c>; the design surface re-fits the new board.

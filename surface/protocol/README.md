@@ -115,7 +115,7 @@ spelled out rather than inferred from C# property types.
 | `SelectByPath` | `path?: string \| null` | String forwarded; absent/null/non-string becomes null. A newly resolved selection can emit `Selected` then `ElementProps`. Unresolved, empty, stale, or already-selected paths need not emit anything. |
 | `PickAt` | `x: number`, `y: number` | **Test-only** headless pick in artboard/host DIP coordinates. Negative/fractional coordinates are accepted. A hit can cause selection events; a miss is silent. Not sent by production VS UI. |
 | `SetProperty` | `id: integer`, `name: string`, `value?: string \| null` | Require nonnegative Int32 ID and nonempty name. Missing/null/non-string value becomes `""`. Forward a live edit; a host property refresh emits `ElementProps` only, not `Selected` or `Frame`. There is no success ack. |
-| `SetTheme` | `theme?: string` (convention: `Light`, `Dark`, `Default`) | **Compatibility no-op**, only logged. Missing/non-string becomes `"Light"` for logging. Change themes by relaunching with `SURFACE_THEME`; DTO/client comments claiming live application are stale. |
+| `SetTheme` | `theme?: string` (convention: `Light`, `Dark`, `Default`) | **Compatibility no-op**, only logged. Missing/non-string becomes `"Light"` for logging. Change themes by relaunching with `SURFACE_THEME` (the VS client warm-swaps to a surface started in the new theme and never sends this message). |
 | `SetCanvasSize` | `width?: number`, `height?: number` | Both positive numbers set the design-canvas override; otherwise clear **both** dimensions to auto. Rehost/reply only when native mode and a document are present. Frame mode stores the override silently for the next render. |
 
 ### Viewport and default distinctions
