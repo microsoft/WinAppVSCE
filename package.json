@@ -42,12 +42,6 @@
     "onLanguage:xaml"
   ],
   "main": "./dist/extension.js",
-  "capabilities": {
-    "untrustedWorkspaces": {
-      "supported": "limited",
-      "description": "In an untrusted workspace, WinUI XAML provides syntax highlighting only. The language server does not run, so IntelliSense, diagnostics, navigation, and formatting are unavailable until you trust the workspace. All other winapp extension features are unaffected."
-    }
-  },
   "contributes": {
     "languages": [
       {

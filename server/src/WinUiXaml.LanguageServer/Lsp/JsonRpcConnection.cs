@@ -198,9 +198,18 @@ internal sealed class JsonRpcConnection
             return;
         }
 
-        if (_requestCancellations.TryGetValue(RequestKey(id), out var cancellation))
+        if (!_requestCancellations.TryGetValue(RequestKey(id), out var cancellation))
+        {
+            return;
+        }
+
+        try
         {
             cancellation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The request finished and disposed its source between the lookup and this call; there is nothing left to cancel.
         }
     }
 

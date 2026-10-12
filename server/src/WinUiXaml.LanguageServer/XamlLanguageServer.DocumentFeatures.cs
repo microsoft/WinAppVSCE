@@ -165,6 +165,7 @@ internal sealed partial class XamlLanguageServer
 
         var currentPath = UriToPath(currentUri) is { } cp ? System.IO.Path.GetFullPath(cp) : null;
         var cancellationToken = _requestCancellation.Value;
+        var openDocuments = BuildOpenDocumentPathIndex();
 
         foreach (var file in context.Resolution.XamlFiles)
         {
@@ -174,43 +175,56 @@ internal sealed partial class XamlLanguageServer
                 continue;
             }
 
-            // The open document was already collected from its (possibly unsaved) buffer; skip its disk copy.
+            // The open document was already collected from its (possibly unsaved) buffer; skip it here.
             if (currentPath != null &&
                 string.Equals(canonicalFile, currentPath, System.StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            string text;
-            try
-            {
-                text = System.IO.File.ReadAllText(canonicalFile);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (System.Exception ex)
-            {
-                System.Console.Error.WriteLine($"[winui-xaml-ls] xref read '{canonicalFile}': {ex.Message}");
-                continue;
-            }
-
-            // Cheap literal pre-filter: only parse files that mention the key at all. The collector still matches the key EXACTLY, so this never widens results — it only skips irrelevant files.
-            if (text.IndexOf(key, System.StringComparison.Ordinal) < 0)
-            {
-                continue;
-            }
-
+            // Prefer the client's in-memory buffer: an unsaved edit makes the disk copy's offsets wrong, and edits built from them would corrupt the newer text.
             TextDocument fileDoc;
-            try
+            if (openDocuments.TryGetValue(canonicalFile, out var openDocument))
             {
-                fileDoc = new TextDocument(PathToUri(canonicalFile), text);
+                if (openDocument.Text.IndexOf(key, System.StringComparison.Ordinal) < 0)
+                {
+                    continue;
+                }
+
+                fileDoc = openDocument;
             }
-            catch (System.Exception ex)
+            else
             {
-                System.Console.Error.WriteLine($"[winui-xaml-ls] xref parse '{canonicalFile}': {ex.Message}");
-                continue;
+                string text;
+                try
+                {
+                    text = System.IO.File.ReadAllText(canonicalFile);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (System.Exception ex)
+                {
+                    System.Console.Error.WriteLine($"[winui-xaml-ls] xref read '{canonicalFile}': {ex.Message}");
+                    continue;
+                }
+
+                // Cheap literal pre-filter: only parse files that mention the key at all. The collector still matches the key EXACTLY, so this never widens results — it only skips irrelevant files.
+                if (text.IndexOf(key, System.StringComparison.Ordinal) < 0)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    fileDoc = new TextDocument(PathToUri(canonicalFile), text);
+                }
+                catch (System.Exception ex)
+                {
+                    System.Console.Error.WriteLine($"[winui-xaml-ls] xref parse '{canonicalFile}': {ex.Message}");
+                    continue;
+                }
             }
 
             if (fileDoc.Parsed.Root is not { } fileRoot)
@@ -222,6 +236,30 @@ internal sealed partial class XamlLanguageServer
             CollectResourceOccurrences(fileRoot, key, fileDoc, fileOccurrences);
             visit(fileDoc, DedupeAndSort(fileOccurrences));
         }
+    }
+
+    /// <summary>Indexes the open documents by canonical full path so cross-file work reads unsaved buffers rather than stale disk text.</summary>
+    private Dictionary<string, TextDocument> BuildOpenDocumentPathIndex()
+    {
+        var index = new Dictionary<string, TextDocument>(System.StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in _documents)
+        {
+            if (UriToPath(entry.Key) is not { } path)
+            {
+                continue;
+            }
+
+            try
+            {
+                index[System.IO.Path.GetFullPath(path)] = entry.Value;
+            }
+            catch (System.Exception)
+            {
+                // An unusable path spelling just falls back to the disk read.
+            }
+        }
+
+        return index;
     }
 
     /// <summary>Handles textDocument/documentHighlight — highlights every occurrence of the symbol under the caret in this document (the read-only sibling of Find All References).</summary>

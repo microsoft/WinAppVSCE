@@ -1567,6 +1567,45 @@ export async function runCoreScenarios(ctx) {
   }
   console.log(`[ok] rename(cross-file SmokeAccentBrush from a usage): 5 edits across SmokePage(3)+App.xaml(1 decl)+DiPage(1)`);
 
+  // 27h) Cross-file rename must read OPEN buffers, not their disk copies. DiPage is opened with an unsaved
+  // extra {StaticResource SmokeAccentBrush} usage; edits computed from the saved file would miss it and
+  // place the remaining range at a stale offset, silently corrupting the user's unsaved text on apply.
+  {
+    const diPath = resolve(dirname(XAML), "DiPage.xaml");
+    const diUri = pathToFileURL(diPath).href;
+    const diDisk = readFileSync(diPath, "utf8");
+    const diBuffer = diDisk.replace(
+      '            Style="{StaticResource BodyStrongTextBlockStyle}"',
+      '            Foreground="{StaticResource SmokeAccentBrush}"\n            Style="{StaticResource BodyStrongTextBlockStyle}"'
+    );
+    if (diBuffer === diDisk) fail(`DiPage fixture no longer has the BodyStrongTextBlockStyle anchor to inject an unsaved usage`);
+
+    send({ method: "textDocument/didOpen", params: { textDocument: { uri: diUri, languageId: "xaml", version: 1, text: diBuffer } } });
+    send({ id: 1803, method: "textDocument/rename", params: { textDocument: { uri: xamlUri }, position: resCaret, newName: "SmokeRenamedBrush" } });
+    const dirty = await waitFor(responseFor(1803), 30000, "xref-rename-dirty-buffer");
+    if (dirty.error) fail(`cross-file rename with a dirty buffer errored: ${JSON.stringify(dirty.error)}`);
+    const dirtyChanges = (dirty.result && dirty.result.changes) || {};
+    const diKey = Object.keys(dirtyChanges).find((f) => f.toLowerCase().endsWith("dipage.xaml"));
+    if (!diKey) fail(`cross-file rename lost DiPage once it was open: ${JSON.stringify(Object.keys(dirtyChanges))}`);
+    const diEdits = dirtyChanges[diKey];
+    if (diEdits.length !== 2) {
+      fail(`cross-file rename must see the unsaved DiPage usage: expected 2 edits, got ${diEdits.length} (disk has 1) - ${JSON.stringify(diEdits)}`);
+    }
+
+    const lineStarts = [0];
+    for (let i = 0; i < diBuffer.length; i++) if (diBuffer[i] === "\n") lineStarts.push(i + 1);
+    const toOffset = (p) => lineStarts[p.line] + p.character;
+    for (const edit of diEdits) {
+      const covered = diBuffer.slice(toOffset(edit.range.start), toOffset(edit.range.end));
+      if (covered !== "SmokeAccentBrush") {
+        fail(`cross-file rename produced a stale range against the open DiPage buffer: covers ${JSON.stringify(covered)}`);
+      }
+    }
+    console.log(`[ok] rename(cross-file, DiPage open and dirty): 2 edits, both ranges land on the buffer's SmokeAccentBrush`);
+
+    send({ method: "textDocument/didClose", params: { textDocument: { uri: diUri } } });
+  }
+
   // 28) Document Highlights (textDocument/documentHighlight): the same occurrences as references, rendered
   //     as editor highlights. Declaration is a Write highlight (kind 3); usages are Read highlights (kind 2).
   // 28a) x:Name: caret on a usage highlights declaration (Write) + both usages (Read) = 3, all "GoButton".

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  areQuickSuggestionsEnabled,
   isEnterEdit,
   shouldTriggerAutomaticXamlSuggestions,
   shouldTriggerAttributeSuggestions,
-  shouldTriggerElementSuggestions,
 } from "../xaml/attributeSuggestionTrigger";
 
 function caret(marked: string): [string, number] {
@@ -45,30 +45,53 @@ test("recognizes only an Enter edit with optional indentation", () => {
   assert.equal(isEnterEdit("\n  a"), false);
 });
 
-test("triggers when less-than starts an element on a new content line", () => {
+test("leaves less-than to the server's completion trigger character", () => {
   const [text, offset] = caret("<Page>\n  <|\n</Page>");
-  assert.equal(shouldTriggerElementSuggestions(text, offset), true);
+  assert.equal(
+    shouldTriggerAutomaticXamlSuggestions(true, true, "<", text, offset),
+    false
+  );
 });
 
-test("does not trigger element suggestions inside attributes, comments, or CDATA", () => {
-  const [attribute, attributeOffset] = caret('<Button Content="<|" />');
-  const [comment, commentOffset] = caret("<Page><!-- <| --></Page>");
-  const [cdata, cdataOffset] = caret("<Page><![CDATA[ <| ]]></Page>");
-
-  assert.equal(shouldTriggerElementSuggestions(attribute, attributeOffset), false);
-  assert.equal(shouldTriggerElementSuggestions(comment, commentOffset), false);
-  assert.equal(shouldTriggerElementSuggestions(cdata, cdataOffset), false);
+test("resolves editor.quickSuggestions the way VS Code does", () => {
+  assert.equal(areQuickSuggestionsEnabled(undefined), true);
+  assert.equal(areQuickSuggestionsEnabled(true), true);
+  assert.equal(areQuickSuggestionsEnabled(false), false);
+  assert.equal(areQuickSuggestionsEnabled({ other: "on" }), true);
+  assert.equal(areQuickSuggestionsEnabled({ other: "inline" }), true);
+  assert.equal(areQuickSuggestionsEnabled({ other: "off" }), false);
+  assert.equal(areQuickSuggestionsEnabled({ other: false }), false);
+  assert.equal(areQuickSuggestionsEnabled({ comments: "off" }), true);
 });
 
 test("does not trigger automatic suggestions while XAML IntelliSense is disabled", () => {
-  const [text, offset] = caret("<Page>\n  <|\n</Page>");
+  const [text, offset] = caret("<Button\n    | />");
 
   assert.equal(
-    shouldTriggerAutomaticXamlSuggestions(false, "<", text, offset),
+    shouldTriggerAutomaticXamlSuggestions(false, true, "\n    ", text, offset),
     false
   );
   assert.equal(
-    shouldTriggerAutomaticXamlSuggestions(true, "<", text, offset),
+    shouldTriggerAutomaticXamlSuggestions(true, true, "\n    ", text, offset),
     true
+  );
+});
+
+test("does not trigger automatic suggestions while editor.quickSuggestions is off", () => {
+  const [text, offset] = caret("<Button\n    | />");
+
+  assert.equal(
+    shouldTriggerAutomaticXamlSuggestions(
+      true,
+      { other: "off" },
+      "\n    ",
+      text,
+      offset
+    ),
+    false
+  );
+  assert.equal(
+    shouldTriggerAutomaticXamlSuggestions(true, false, "\n    ", text, offset),
+    false
   );
 });

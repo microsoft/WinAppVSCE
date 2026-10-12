@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Pipes;
 using System.Text;
 using WinUiXaml.LanguageServer.Lsp;
 
@@ -338,6 +339,43 @@ public class JsonRpcConnectionTests
         await connection.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.False(handled, "A signed Content-Length should be rejected as malformed framing.");
+    }
+
+    [Fact]
+    public async Task CancelArrivingAfterTheRequestCompletedLeavesTheConnectionRunning()
+    {
+        // VS Code routinely cancels superseded completion/hover requests, so the cancel often lands after
+        // the handler already finished and disposed its CancellationTokenSource. That must be a no-op:
+        // an escaping ObjectDisposedException reaches Program.Main's bare await and kills the server.
+        using var writeEnd = new AnonymousPipeServerStream(PipeDirection.Out);
+        await using var input = new AnonymousPipeClientStream(PipeDirection.In, writeEnd.ClientSafePipeHandle);
+        await using var output = new MemoryStream();
+
+        var handled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connection = new JsonRpcConnection(input, output)
+        {
+            OnRequest = (_, _, _) =>
+            {
+                handled.TrySetResult();
+                return Task.FromResult<object?>("done");
+            },
+        };
+
+        var run = connection.RunAsync();
+
+        await writeEnd.WriteAsync(Frame("""{"jsonrpc":"2.0","id":1,"method":"fast"}"""));
+        await writeEnd.FlushAsync();
+        await handled.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await Task.Delay(100);
+
+        await writeEnd.WriteAsync(Frame("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":1}}"""));
+        await writeEnd.FlushAsync();
+        await Task.Delay(100);
+
+        writeEnd.Dispose();
+        await run.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Contains("\"result\":\"done\"", Encoding.UTF8.GetString(output.ToArray()));
     }
 
     private static byte[] Frame(string json)

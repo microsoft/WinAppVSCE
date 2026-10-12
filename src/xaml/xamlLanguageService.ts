@@ -44,6 +44,7 @@ import { ServerLifecycle } from "./serverLifecycle";
 import {
   isEnterEdit,
   shouldTriggerAutomaticXamlSuggestions,
+  type QuickSuggestionsSetting,
 } from "./attributeSuggestionTrigger";
 import {
   PROJECT_RESTORE_ACTIONS,
@@ -351,17 +352,22 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
       }
 
       const change = event.contentChanges[0];
+      if (!isEnterEdit(change.text)) {
+        return;
+      }
+
       const enabled = vscode.workspace
         .getConfiguration(XAML_SETTINGS_SECTION)
         .get(INTELLISENSE_ENABLE_KEY, true);
-      if (!enabled || (change.text !== "<" && !isEnterEdit(change.text))) {
-        return;
-      }
+      const quickSuggestions = vscode.workspace
+        .getConfiguration("editor", event.document)
+        .get<QuickSuggestionsSetting>("quickSuggestions");
 
       const offset = change.rangeOffset + change.text.length;
       const text = event.document.getText();
       const shouldTrigger = shouldTriggerAutomaticXamlSuggestions(
         enabled,
+        quickSuggestions,
         change.text,
         text,
         offset

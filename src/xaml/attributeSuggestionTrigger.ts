@@ -45,34 +45,46 @@ export function isEnterEdit(text: string): boolean {
   return /^\r?\n[ \t]*$/.test(text);
 }
 
+/** The shape VS Code accepts for `editor.quickSuggestions`. */
+export type QuickSuggestionsSetting =
+  | boolean
+  | {
+      other?: boolean | string;
+      comments?: boolean | string;
+      strings?: boolean | string;
+    };
+
+/** Mirrors how VS Code resolves `editor.quickSuggestions` for ordinary (non-comment, non-string) positions. */
+export function areQuickSuggestionsEnabled(
+  setting: QuickSuggestionsSetting | undefined
+): boolean {
+  if (setting === undefined || setting === null) {
+    return true;
+  }
+
+  if (typeof setting === "boolean") {
+    return setting;
+  }
+
+  const other = setting.other;
+  if (other === undefined) {
+    return true;
+  }
+
+  return typeof other === "boolean" ? other : other !== "off";
+}
+
 export function shouldTriggerAutomaticXamlSuggestions(
   enabled: boolean,
+  quickSuggestions: QuickSuggestionsSetting | undefined,
   changeText: string,
   text: string,
   offset: number
 ): boolean {
   return (
     enabled &&
-    ((isEnterEdit(changeText) && shouldTriggerAttributeSuggestions(text, offset)) ||
-      (changeText === "<" && shouldTriggerElementSuggestions(text, offset)))
+    areQuickSuggestionsEnabled(quickSuggestions) &&
+    isEnterEdit(changeText) &&
+    shouldTriggerAttributeSuggestions(text, offset)
   );
-}
-
-/** Returns true when a newly typed less-than sign starts an element in XAML content. */
-export function shouldTriggerElementSuggestions(text: string, offset: number): boolean {
-  if (offset <= 0 || offset > text.length || text[offset - 1] !== "<") {
-    return false;
-  }
-
-  const beforeElement = text.slice(0, offset - 1);
-  if (
-    beforeElement.lastIndexOf("<!--") > beforeElement.lastIndexOf("-->") ||
-    beforeElement.lastIndexOf("<![CDATA[") > beforeElement.lastIndexOf("]]>")
-  ) {
-    return false;
-  }
-
-  const previousLt = beforeElement.lastIndexOf("<");
-  const previousGt = beforeElement.lastIndexOf(">");
-  return previousLt < 0 || previousGt > previousLt;
 }
