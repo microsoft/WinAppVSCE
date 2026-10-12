@@ -124,6 +124,7 @@ namespace WinUIXamlPreview.Smoke
             Console.WriteLine();
 
             await RunFrameworkClient(surfaceExe);
+            RunIncompatibleHello(surfaceExe);
             await RunDesignEditClient(surfaceExe);
             await RunSampleDataClient(surfaceExe);
             await RunNonPageClient(surfaceExe);
@@ -180,6 +181,64 @@ namespace WinUIXamlPreview.Smoke
             Check("all pristine input hashes unchanged", true);
         }
 
+        // R2 against the real Surface.exe: a client whose Hello shares no protocol version gets a protocol-phase
+        // Error and no Ready. Uses a raw socket because SurfaceClient always sends a compatible Hello.
+        private static void RunIncompatibleHello(string surfaceExe)
+        {
+            Console.WriteLine("--- incompatible Hello against the real surface (R2) ---");
+            var psi = new System.Diagnostics.ProcessStartInfo(surfaceExe)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetDirectoryName(surfaceExe)!,
+            };
+            using var proc = System.Diagnostics.Process.Start(psi)!;
+            proc.ErrorDataReceived += (_, __) => { }; // drain stderr so the surface never blocks on it
+            proc.BeginErrorReadLine();
+            try
+            {
+                int port = 0;
+                var portRead = Task.Run(() =>
+                {
+                    string? line;
+                    while ((line = proc.StandardOutput.ReadLine()) != null)
+                    {
+                        if (line.StartsWith("SURFACE_PORT=", StringComparison.Ordinal) &&
+                            int.TryParse(new string(line.Substring(13).TakeWhile(char.IsDigit).ToArray()), out port))
+                        {
+                            return;
+                        }
+                    }
+                });
+                if (!portRead.Wait(TimeSpan.FromSeconds(30)) || port == 0)
+                {
+                    Check("R2: real surface announced a port", false);
+                    return;
+                }
+
+                using var tcp = new System.Net.Sockets.TcpClient();
+                tcp.Connect(System.Net.IPAddress.Loopback, port);
+                using var stream = tcp.GetStream();
+                var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+                var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+                writer.WriteLine("{\"type\":\"Hello\",\"client\":\"smoke\",\"protocol\":99,\"minProtocol\":99}");
+
+                var replyTask = reader.ReadLineAsync();
+                var reply = replyTask.Wait(TimeSpan.FromSeconds(20)) ? replyTask.Result : null;
+                Console.WriteLine($"    reply = {reply ?? "(none)"}");
+                Check("R2: real surface answers an incompatible Hello with Error phase=protocol",
+                    reply != null && reply.Contains("\"type\":\"Error\"") && reply.Contains("\"phase\":\"protocol\"") &&
+                    reply.Contains("client speaks v99"));
+                Check("R2: real surface sends no Ready to an incompatible client", reply == null || !reply.Contains("\"Ready\""));
+            }
+            finally
+            {
+                try { if (!proc.HasExited) proc.Kill(); proc.WaitForExit(5000); } catch { }
+            }
+        }
+
         private static async Task RunFrameworkClient(string surfaceExe)
         {
             Console.WriteLine("--- framework-only surface (no --user-dll) ---");
@@ -191,7 +250,7 @@ namespace WinUIXamlPreview.Smoke
             Check("protocol == 1", ready!.Protocol == 1);
             Check("Ready advertises frame-stream", ready.Caps?.Contains("frame-stream") == true);
             Check("Ready advertises native-hwnd", ready.Caps?.Contains("native-hwnd") == true);
-            Check("wasdk reported", !string.IsNullOrEmpty(ready.Wasdk));
+            Check("wasdk reported", !string.IsNullOrEmpty(ready.Wasdk) && ready.Wasdk != "unknown");
             Console.WriteLine($"    wasdk = {ready.Wasdk}");
 
             client.LoadXaml(FrameworkXaml, 400, 300, 2.0);

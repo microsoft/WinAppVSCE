@@ -68,11 +68,44 @@ namespace WinUIXamlPreview.FaultTests
             var reader = new StreamReader(netStream, Encoding.UTF8);
             var writer = new StreamWriter(netStream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
-            // Consume the Hello the client sends on connect.
-            reader.ReadLine();
+            // Consume the Hello the client sends on connect, and report it so the suite can check what went on the wire.
+            var hello = reader.ReadLine();
+            stdout.WriteLine("FAKE_HELLO=" + hello);
+            stdout.Flush();
 
             switch (mode)
             {
+                case "ready-incompatible":
+                    // A surface from a future extension that dropped v1: no shared version (R2).
+                    writer.WriteLine("{\"type\":\"Ready\",\"protocol\":99,\"minProtocol\":99,\"caps\":[\"frame-stream\"],\"wasdk\":\"fake\"}");
+                    try { while (reader.ReadLine() != null) { } } catch { }
+                    return 0;
+
+                case "reject-hello":
+                    // The surface didn't accept our Hello range (R2): it answers with a protocol-phase Error, not Ready.
+                    writer.WriteLine("{\"type\":\"Error\",\"phase\":\"protocol\",\"message\":\"Surface speaks protocol v7; client speaks v1.\"}");
+                    try { while (reader.ReadLine() != null) { } } catch { }
+                    return 0;
+
+                case "ready-legacy":
+                    // A pre-negotiation surface: no protocol/minProtocol fields at all (treated as v1).
+                    writer.WriteLine("{\"type\":\"Ready\",\"caps\":[\"frame-stream\"]}");
+                    try { while (reader.ReadLine() != null) { } } catch { }
+                    return 0;
+
+                case "ready-newer-range":
+                    // A newer surface that still speaks v1, reporting its real WASDK (R3).
+                    writer.WriteLine("{\"type\":\"Ready\",\"protocol\":5,\"minProtocol\":1,\"caps\":[\"frame-stream\"],\"wasdk\":\"2.2.0\"}");
+                    try { while (reader.ReadLine() != null) { } } catch { }
+                    return 0;
+
+                case "ready-then-render-error":
+                    SendReady(writer);
+                    // Render errors are ordinary; only phase "protocol" is fatal.
+                    writer.WriteLine("{\"type\":\"Error\",\"phase\":\"parse\",\"message\":\"bad xaml\"}");
+                    try { while (reader.ReadLine() != null) { } } catch { }
+                    return 0;
+
                 case "never-ready":
                     // Connected, but Ready never arrives — exercises the Ready timeout.
                     Thread.Sleep(Timeout.Infinite);
@@ -125,6 +158,12 @@ namespace WinUIXamlPreview.FaultTests
             MidStreamKillRaisesClosedOnce();
             SendAfterCloseIsSwallowed();
             IntentionalDisposeSuppressesClosedAndIsIdempotent();
+            HelloAdvertisesProtocolRange();
+            IncompatibleReadyFaultsFastAndPermanently();
+            ProtocolErrorFaultsFastAndPermanently();
+            LegacyReadyIsAccepted();
+            NewerCompatibleRangeIsAcceptedWithWasdk();
+            RenderErrorIsNotAProtocolFault();
             NoLeakedFakeSurfacesRemain();
 
             Console.WriteLine();
@@ -297,6 +336,94 @@ namespace WinUIXamlPreview.FaultTests
                 $"closed={h.ClosedCount} (expect 0), reaped={reaped}, secondDisposeThrew={threwOnSecond}");
         }
 
+        // ---- R2/R3 protocol negotiation over a real process + socket ----
+
+        private static void HelloAdvertisesProtocolRange()
+        {
+            const string name = "R2: Hello on the wire carries protocol and minProtocol";
+            using var h = new Harness("ready-idle");
+            try { h.Client.StartAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult(); }
+            catch (Exception ex) { Fail(name, $"expected Ready, got {ex.GetType().Name}: {ex.Message}"); return; }
+
+            var hello = h.WaitForHello(TimeSpan.FromSeconds(3));
+            var ok = hello != null
+                && hello.Contains("\"type\":\"Hello\"")
+                && hello.Contains($"\"protocol\":{Wire.ProtocolVersion}")
+                && hello.Contains($"\"minProtocol\":{Wire.MinProtocolVersion}");
+            Assert(name, ok, hello ?? "no Hello captured");
+        }
+
+        private static void IncompatibleReadyFaultsFastAndPermanently()
+            => AssertProtocolFault("ready-incompatible",
+                "R2: incompatible Ready → StartAsync fails fast with SurfaceProtocolException, one Closed, reaped", "v99");
+
+        private static void ProtocolErrorFaultsFastAndPermanently()
+            => AssertProtocolFault("reject-hello",
+                "R2: Hello rejected (Error phase=protocol) → fails fast with SurfaceProtocolException, one Closed, reaped", "client speaks v1");
+
+        // The mismatch must short-circuit startup (not sit until the Ready timeout), flag the client so the
+        // preview doesn't auto-restart, carry a readable reason, and still kill the surface.
+        private static void AssertProtocolFault(string mode, string name, string reasonFragment)
+        {
+            using var h = new Harness(mode);
+            var timeout = TimeSpan.FromSeconds(20);
+            var sw = Stopwatch.StartNew();
+            Exception? caught = null;
+            try { h.Client.StartAsync(timeout).GetAwaiter().GetResult(); }
+            catch (Exception ex) { caught = ex; }
+            sw.Stop();
+
+            var closed = h.WaitForClosed(1, TimeSpan.FromSeconds(3));
+            var reaped = h.WaitForFakeExit(TimeSpan.FromSeconds(5)); // before Dispose: the fault itself must kill it
+            var fast = sw.Elapsed < TimeSpan.FromSeconds(10);
+            var reasonOk = caught?.Message.Contains(reasonFragment) == true && h.ClosedReason?.Contains(reasonFragment) == true;
+            Assert(name,
+                caught is SurfaceProtocolException && h.Client.IsProtocolMismatch && h.Client.IsFaulted && fast
+                    && closed && h.ClosedCount == 1 && reaped && reasonOk && h.ErrorCount == 0,
+                $"exception={caught?.GetType().Name ?? "none"}, mismatch={h.Client.IsProtocolMismatch}, " +
+                $"elapsed={sw.ElapsedMilliseconds}ms, closed={h.ClosedCount} (expect 1), reaped={reaped}, " +
+                $"errorEvents={h.ErrorCount} (expect 0), reason='{h.ClosedReason}'");
+        }
+
+        private static void LegacyReadyIsAccepted()
+        {
+            const string name = "R2: legacy Ready (no protocol fields) → starts as v1";
+            using var h = new Harness("ready-legacy");
+            ReadyMsg? ready = null;
+            try { ready = h.Client.StartAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult(); }
+            catch (Exception ex) { Fail(name, $"expected Ready, got {ex.GetType().Name}: {ex.Message}"); return; }
+
+            Thread.Sleep(200);
+            Assert(name, ready != null && !h.Client.IsFaulted && !h.Client.IsProtocolMismatch && h.ClosedCount == 0,
+                $"faulted={h.Client.IsFaulted}, mismatch={h.Client.IsProtocolMismatch}, closed={h.ClosedCount}");
+        }
+
+        private static void NewerCompatibleRangeIsAcceptedWithWasdk()
+        {
+            const string name = "R2/R3: newer surface still speaking v1 → starts, Ready.wasdk passed through";
+            using var h = new Harness("ready-newer-range");
+            ReadyMsg? ready = null;
+            try { ready = h.Client.StartAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult(); }
+            catch (Exception ex) { Fail(name, $"expected Ready, got {ex.GetType().Name}: {ex.Message}"); return; }
+
+            Assert(name,
+                ready != null && ready.Protocol == 5 && ready.MinProtocol == 1 && ready.Wasdk == "2.2.0" && !h.Client.IsFaulted,
+                $"protocol={ready?.Protocol}, minProtocol={ready?.MinProtocol}, wasdk={ready?.Wasdk ?? "null"}, faulted={h.Client.IsFaulted}");
+        }
+
+        private static void RenderErrorIsNotAProtocolFault()
+        {
+            const string name = "R2: a render Error after Ready stays a render error (no fault, no Closed)";
+            using var h = new Harness("ready-then-render-error");
+            try { h.Client.StartAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult(); }
+            catch (Exception ex) { Fail(name, $"expected Ready, got {ex.GetType().Name}: {ex.Message}"); return; }
+
+            var gotError = h.WaitForError(TimeSpan.FromSeconds(3));
+            Assert(name,
+                gotError && !h.Client.IsFaulted && !h.Client.IsProtocolMismatch && h.ClosedCount == 0,
+                $"errorEvents={h.ErrorCount}, faulted={h.Client.IsFaulted}, mismatch={h.Client.IsProtocolMismatch}, closed={h.ClosedCount}");
+        }
+
         private static void NoLeakedFakeSurfacesRemain()
         {
             const string name = "no leaked fake-surface processes remain";
@@ -320,23 +447,36 @@ namespace WinUIXamlPreview.FaultTests
             public SurfaceClient Client { get; }
             public int ClosedCount => _closed;
             public int FakePid { get; private set; }
+            public string? ClosedReason { get; private set; }
+            public int ErrorCount => Volatile.Read(ref _errors);
 
             private int _closed;
+            private int _errors;
+            private volatile string? _hello;
             private readonly ManualResetEventSlim _closedSignal = new(false);
 
             public Harness(string mode)
             {
                 Environment.SetEnvironmentVariable("FAKE_SURFACE_MODE", mode);
                 Client = new SurfaceClient(FakeExe, userDll: null, log: Log);
-                Client.Closed += _ =>
+                Client.Closed += reason =>
                 {
+                    ClosedReason = reason;
                     Interlocked.Increment(ref _closed);
                     _closedSignal.Set();
                 };
+                Client.Error += _ => Interlocked.Increment(ref _errors);
             }
 
             private void Log(string line)
             {
+                var helloAt = line.IndexOf("FAKE_HELLO=", StringComparison.Ordinal);
+                if (helloAt >= 0)
+                {
+                    _hello = line.Substring(helloAt + "FAKE_HELLO=".Length);
+                    return;
+                }
+
                 var marker = line.IndexOf("FAKE_PID=", StringComparison.Ordinal);
                 if (marker >= 0)
                 {
@@ -354,6 +494,20 @@ namespace WinUIXamlPreview.FaultTests
                 }
 
                 return Volatile.Read(ref _closed) >= expected;
+            }
+
+            public string? WaitForHello(TimeSpan timeout)
+            {
+                var deadline = DateTime.UtcNow + timeout;
+                while (_hello == null && DateTime.UtcNow < deadline) Thread.Sleep(50);
+                return _hello;
+            }
+
+            public bool WaitForError(TimeSpan timeout)
+            {
+                var deadline = DateTime.UtcNow + timeout;
+                while (ErrorCount == 0 && DateTime.UtcNow < deadline) Thread.Sleep(50);
+                return ErrorCount > 0;
             }
 
             public void KillFake()
