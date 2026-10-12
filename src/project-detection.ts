@@ -1,7 +1,7 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
 import { walkDirectoryTree } from './directory-walk';
-import { attributeValue, elementText, findElementsByLocalName, tryParseXml } from './xml-read';
+import { attributeValue, elementText, findElementsByLocalName, hasAttributeOnSelfOrAncestor, tryParseXml } from './xml-read';
 
 /**
  * Mirrors the C# DetectedProjectType enum from WinApp.Cli.
@@ -37,19 +37,58 @@ export const ALWAYS_SKIP_DIRS = [
 	'node_modules', '.git', '.vs', '.vscode', '.idea', 'packages', '.winapp'
 ] as const;
 
-/** Real-path containment rejects symlink/junction escapes; absent paths cannot. */
+/**
+ * Real-path containment rejects symlink/junction escapes.
+ *
+ * A candidate that does not exist yet still has to be judged, so containment
+ * falls back to the nearest ancestor that *does* exist: that is where a
+ * reparse point could redirect the path, and resolving it keeps the check
+ * meaningful without demanding the leaf be present. Only a container we
+ * cannot resolve at all fails the check, because there is then nothing to
+ * anchor containment to.
+ */
 export async function isContainedInReal(container: string, candidate: string): Promise<boolean> {
 	const resolved = path.resolve(container, candidate);
 	if (!isContainedIn(container, resolved)) {
 		return false;
 	}
 
+	let realContainer: string;
 	try {
-		const realContainer = await fsp.realpath(container);
-		const realResolved = await fsp.realpath(resolved);
-		return isContainedIn(realContainer, realResolved);
+		realContainer = await fsp.realpath(container);
 	} catch {
-		return true;
+		// Without a resolvable container there is no boundary to enforce.
+		return false;
+	}
+
+	const realResolved = await realpathNearestAncestor(resolved);
+	if (realResolved === undefined) {
+		return false;
+	}
+
+	return isContainedIn(realContainer, realResolved);
+}
+
+/**
+ * Resolves the deepest existing ancestor of `target` and re-appends the
+ * missing tail, so a path under a symlinked parent still resolves through it.
+ */
+async function realpathNearestAncestor(target: string): Promise<string | undefined> {
+	let current = target;
+	const missing: string[] = [];
+
+	for (;;) {
+		try {
+			return path.join(await fsp.realpath(current), ...missing.reverse());
+		} catch {
+			const parent = path.dirname(current);
+			if (parent === current) {
+				// Reached the filesystem root without resolving anything.
+				return undefined;
+			}
+			missing.push(path.basename(current));
+			current = parent;
+		}
 	}
 }
 
@@ -276,9 +315,13 @@ export function classifyProjectRunnability(content: string): ProjectRunnability 
 	}
 
 	// A conditioned OutputType is exactly the "can't tell without MSBuild"
-	// case this heuristic must not guess at, so it is left to the CLI.
+	// case this heuristic must not guess at, so it is left to the CLI. The
+	// condition may sit on the property or on an enclosing PropertyGroup —
+	// `<PropertyGroup Condition="..."><OutputType>Library</OutputType>` is as
+	// conditional as `<OutputType Condition="...">`, and trusting it would
+	// hide a real app from the run picker.
 	const outputTypes = findElementsByLocalName(doc, 'OutputType')
-		.filter(element => attributeValue(element, 'Condition') === undefined);
+		.filter(element => !hasAttributeOnSelfOrAncestor(element, 'Condition'));
 	if (outputTypes.length === 0) {
 		// No explicit OutputType. It may still build an executable (WinUI and
 		// WPF templates usually set it, but SDK defaults and shared props

@@ -72,10 +72,13 @@ export async function launchRunProcess(
 
 			child.stdout!.on('data', (data: Buffer) => {
 				const text = data.toString();
-				stdout += text;
 				outputChannel.append(text);
 				if (resolved) { return; }
 
+				// Only accumulate while still looking for the PID. The app can
+				// run for hours after that, and every byte it writes would
+				// otherwise be retained for the life of the debug session.
+				stdout += text;
 				const pid = parseProcessIdFromJson(stdout);
 				if (pid) {
 					settle(() => resolve({ processId: pid, runProcess: child }));

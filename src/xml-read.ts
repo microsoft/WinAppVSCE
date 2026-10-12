@@ -1,5 +1,5 @@
 import { DOMParser } from '@xmldom/xmldom';
-import type { Document, Element } from '@xmldom/xmldom';
+import type { Document, Element, Node } from '@xmldom/xmldom';
 
 /** Real XML parsing avoids regex mistakes with comments, quote style, and entities. */
 
@@ -82,6 +82,26 @@ export function findElementsByLocalName(doc: Document, localName: string): Eleme
 		}
 	}
 	return results;
+}
+
+/**
+ * True when `element` or any ancestor carries the named attribute.
+ *
+ * MSBuild lets a condition sit on the property itself or on any enclosing
+ * `PropertyGroup`/`Choose`, and the two mean the same thing. Callers that
+ * reason about whether a value is unconditional have to look up the tree.
+ */
+export function hasAttributeOnSelfOrAncestor(element: Element, name: string): boolean {
+	let current: Element | undefined = element;
+	while (current) {
+		if (attributeValue(current, name) !== undefined) {
+			return true;
+		}
+		const parent: Node | null | undefined = current.parentNode;
+		// 1 = ELEMENT_NODE. Stops at the document, which has no attributes.
+		current = parent && parent.nodeType === 1 ? (parent as Element) : undefined;
+	}
+	return false;
 }
 
 /** Direct child text only; nested elements must not contribute. */

@@ -110,7 +110,7 @@ async function openCommandPalette(page: Page) {
 
     for (let attempt = 1; attempt <= 3; attempt += 1) {
         await dismissFirstRunUI(page);
-        await page.keyboard.press('Escape');
+        await cancelAndExpectNoFollowUp(page);
         await page.waitForTimeout(500);
         await page.keyboard.press('Control+Shift+P');
 
@@ -185,6 +185,9 @@ const PROJECT_PICKER_PLACEHOLDER = /Which project in .+ would you like to run\?/
 /** The placeholder of the With Options command's first build-settings prompt. */
 const BUILD_CONFIG_PLACEHOLDER = /^Build configuration$/;
 
+/** The placeholder of the toggle prompt, which follows the build prompts. */
+const RUN_OPTIONS_PLACEHOLDER = /^Select run options/;
+
 /** The placeholder of the sub-prompt that picks which browse dialog to open. */
 const BROWSE_KIND_PLACEHOLDER = /^What would you like to browse for\?$/;
 
@@ -208,6 +211,25 @@ async function readPickerRows(page: Page, placeholder: RegExp): Promise<string[]
 
 async function readRunTargetPicker(page: Page): Promise<string[]> {
     return readPickerRows(page, RUN_TARGET_PLACEHOLDER);
+}
+
+/**
+ * Cancel the open prompt and prove the flow actually stopped.
+ *
+ * A bare Escape asserts nothing: a command that swallowed the cancellation and
+ * went on to invoke the CLI, or that left a prompt behind, would still pass.
+ */
+async function cancelAndExpectNoFollowUp(page: Page): Promise<void> {
+    await page.keyboard.press('Escape');
+
+    // The widget is reused rather than destroyed, so hidden is the signal.
+    await expect(page.locator('.quick-input-widget')).toBeHidden({ timeout: 15_000 });
+
+    // Nothing may replace it: no follow-up prompt, and no progress or error
+    // toast from a run that should never have started.
+    await page.waitForTimeout(1_500);
+    await expect(page.locator('.quick-input-widget')).toBeHidden();
+    await expect(page.locator('.notifications-toasts .notification-list-item')).toHaveCount(0);
 }
 
 test.describe('run target picker', () => {
@@ -252,7 +274,7 @@ test.describe('run target picker', () => {
             expect(joined).not.toContain('CoreLib.csproj');
             expect(joined).not.toContain('AppOne.Tests.csproj');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: library and test projects filtered out of the picker');
         } finally {
             if (app) {
@@ -298,7 +320,7 @@ test.describe('run target picker', () => {
             expect(joined).not.toContain('CoreLib.csproj');
             expect(joined).toContain('net8.0');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: library-only workspace falls through to build output');
         } finally {
             if (app) {
@@ -333,7 +355,7 @@ test.describe('run target picker', () => {
             // No row carries the target framework, so the bin folder is absent.
             expect(joined).not.toContain('net8.0-windows');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: project preferred over its own build output');
         } finally {
             if (app) {
@@ -376,7 +398,7 @@ test.describe('run target picker', () => {
             expect(joined).toContain('win-unpacked');
             expect(joined).not.toContain('node_modules');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: project-less app resolved to its build output');
         } finally {
             if (app) {
@@ -415,7 +437,7 @@ test.describe('run target picker', () => {
             expect(projects).toContain('Alpha.csproj');
             expect(projects).toContain('Beta.csproj');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: multi-app solution prompted for a project');
         } finally {
             if (app) {
@@ -459,7 +481,7 @@ test.describe('run target picker', () => {
             const options = await readPickerRows(page, BUILD_CONFIG_PLACEHOLDER);
             expect(options.join('\n')).toContain('Debug');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: single-app solution skipped the project prompt');
         } finally {
             if (app) {
@@ -502,7 +524,7 @@ test.describe('run target picker', () => {
             expect(joined).toContain(`Showing 10 of ${total}`);
             expect(joined).toContain('Browse');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: project list capped at 10 with a browse hint');
         } finally {
             if (app) {
@@ -535,7 +557,7 @@ test.describe('run target picker', () => {
             expect(joined).toContain('Browse');
             expect(joined).not.toContain('Search for build output folders');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: both projects listed with a single browse entry');
         } finally {
             if (app) {
@@ -575,7 +597,7 @@ test.describe('run target picker', () => {
 
             // Escaping the sub-prompt must unwind the whole flow without
             // opening a native dialog or invoking the CLI.
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             await page.waitForTimeout(1_000);
             await expect(page.locator('.quick-input-widget')).toBeHidden({ timeout: 10_000 });
 
@@ -620,7 +642,7 @@ test.describe('run target picker', () => {
             // it separately would just be a duplicate of the same app.
             expect(joined).not.toContain('AppOne.csproj');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: solution listed once, member project deduplicated');
         } finally {
             if (app) {
@@ -659,7 +681,7 @@ test.describe('run target picker', () => {
             expect(joined).toContain('Shell.csproj');
             expect(joined).toContain('Service.csproj');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: projects from both workspace folders listed');
         } finally {
             if (app) {
@@ -688,7 +710,7 @@ test.describe('run target picker', () => {
             const rows = await readPickerRows(page, BUILD_CONFIG_PLACEHOLDER);
             expect(rows.join('\n')).toContain('Release');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: With Options auto-selected the only project');
         } finally {
             if (app) {
@@ -749,8 +771,44 @@ test.describe('run target picker', () => {
             expect(rows.join('\n')).toContain('AppOne.csproj');
             expect(rows.join('\n')).toContain('AppTwo.csproj');
 
-            await page.keyboard.press('Escape');
+            await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: F5 without input prompted for a run target');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+    // Build settings are MSBuild concepts. A build output folder is already
+    // built, so offering a configuration or architecture there would collect
+    // answers the CLI must then ignore.
+    test('With Options skips the build prompts in folder mode', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-folder-options-e2e-'));
+        // No project anywhere, so the only candidate is the output folder.
+        const outputDir = path.join(tmpDir, 'bin', 'Debug');
+        fs.mkdirSync(outputDir, { recursive: true });
+        fs.writeFileSync(path.join(outputDir, 'OnlyApp.exe'), '');
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
+
+            // Landing straight on the toggle prompt proves both build prompts
+            // were skipped: it is what normally follows them.
+            const rows = await readPickerRows(page, RUN_OPTIONS_PLACEHOLDER);
+            const text = rows.join('\n');
+            expect(text).toContain('Clean application data');
+            // Project-only toggles must be gated out of folder mode too.
+            expect(text).not.toContain('Skip build');
+            expect(text).not.toContain('Skip restore');
+
+            await cancelAndExpectNoFollowUp(page);
+            console.log('✅ PASS: folder mode skipped the build prompts');
         } finally {
             if (app) {
                 await app.close().catch(() => {});

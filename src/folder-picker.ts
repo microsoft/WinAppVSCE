@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import {
-	BUILD_OUTPUT_EXCLUDE_GLOB,
 	BUILD_OUTPUT_MAX_RESULTS,
+	BUILD_OUTPUT_SKIP_DIRS,
 	deduplicateBuildOutputFolders
 } from './project-detection';
+import { walkDirectoryTree } from './directory-walk';
 import { selectFolder } from './winapp-host';
 
 /**
@@ -49,6 +50,12 @@ export { selectFolder };
  * multi-root run picker share this; a per-root wrapper would stack a separate
  * popup, and a separate Cancel button, on every folder in a multi-root
  * workspace.
+ *
+ * Walks the tree directly rather than using `vscode.workspace.findFiles`.
+ * Passing `findFiles` an exclude glob does not replace the user's
+ * `files.exclude` setting, it adds to it, so a workspace that hides `**​/bin`
+ * from the explorer would hide its own build output from this picker — the
+ * one place it must never be hidden.
  */
 export async function findBuildOutputFolders(
 	rootPaths: readonly string[]
@@ -57,29 +64,52 @@ export async function findBuildOutputFolders(
 		{ location: vscode.ProgressLocation.Notification, title: BUILD_OUTPUT_PROGRESS_TITLE, cancellable: true },
 		async (_progress, token) => {
 			const found: BuildOutputFolder[] = [];
+			const controller = new AbortController();
+			const subscription = token.onCancellationRequested(() => controller.abort());
 
-			for (const rootPath of rootPaths) {
-				// The token must reach findFiles itself: cancelling only a flag
-				// we read afterwards leaves the (expensive) scan running to
-				// completion, so the Cancel button appears to do nothing.
-				const exeMatches = await vscode.workspace.findFiles(
-					new vscode.RelativePattern(rootPath, '**/*.exe'),
-					BUILD_OUTPUT_EXCLUDE_GLOB,
-					BUILD_OUTPUT_MAX_RESULTS,
-					token
-				);
+			try {
+				for (const rootPath of rootPaths) {
+					if (token.isCancellationRequested) {
+						break;
+					}
 
-				if (token.isCancellationRequested) {
-					return undefined;
+					const executables: string[] = [];
+					const folders = new Set<string>();
+
+					await walkDirectoryTree(
+						rootPath,
+						(directory, entries) => {
+							for (const entry of entries) {
+								if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.exe') {
+									continue;
+								}
+								executables.push(path.join(directory, entry.name));
+								folders.add(directory);
+								// Cap on distinct folders, which is what the
+								// picker shows, rather than on raw hits: one
+								// output folder holds many executables.
+								if (folders.size > BUILD_OUTPUT_MAX_RESULTS) {
+									return 'stop';
+								}
+							}
+							return 'descend';
+						},
+						{ skipDirs: BUILD_OUTPUT_SKIP_DIRS, signal: controller.signal }
+					);
+
+					if (token.isCancellationRequested) {
+						return undefined;
+					}
+
+					for (const folder of deduplicateBuildOutputFolders(executables, rootPath)) {
+						found.push({ rootPath, path: folder });
+					}
 				}
-
-				const folders = deduplicateBuildOutputFolders(exeMatches.map(m => m.fsPath), rootPath);
-				for (const folder of folders) {
-					found.push({ rootPath, path: folder });
-				}
+			} finally {
+				subscription.dispose();
 			}
 
-			return found;
+			return token.isCancellationRequested ? undefined : found;
 		}
 	);
 }

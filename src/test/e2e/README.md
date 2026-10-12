@@ -8,8 +8,6 @@ Automated Playwright tests that launch VS Code as an Electron app. The suite cov
 ## Quick start
 
 ```powershell
-cd src/winapp-VSC
-
 # Install dependencies (first time only)
 npm install
 
@@ -19,7 +17,7 @@ npm run test:e2e
 
 > **Prerequisites** – VS Code must be installed at the default location and all other VS Code windows must be closed before running (Playwright needs exclusive access to the Electron process).
 
-> **`@playwright/test` version** – pinned with a caret range starting at `1.61.1` (not `1.62.1`) because the approved package feed does not mirror a stable `1.62.1` for `@playwright/test`/`playwright`/`playwright-core` (only prereleases). `^1.61.1` still resolves through that feed and picks up newer compatible stable releases (e.g. `1.62.0`) as they land, without requiring a version the feed can't serve.
+> **`@playwright/test` version** – pinned to an exact version (`1.63.0`) rather than a range, because the approved package feed does not mirror every upstream release. An exact pin keeps `npm install` reproducible and keeps it from resolving to a version the feed cannot serve; bump it deliberately once the feed carries the newer release.
 
 ## Architecture
 
@@ -47,7 +45,12 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (140 tests)
+## Test inventory (226 tests)
+
+The sections below cover the suites with per-test tables. Four smaller specs are
+not tabulated but are part of the total: `mrt-validation.spec.ts` (6),
+`semantic-diagnostics.spec.ts` (4), `new-command-quickpick.spec.ts` (3), and
+`new-command-scaffold.spec.ts` (2).
 
 ### `sign-quickpick.spec.ts` — 9 tests
 
@@ -82,9 +85,9 @@ they never wrote.
 |---|------|-----------|
 | 1 | invalid inputFolder offers to open its debug configuration | Validation cancels debugging, shows the resource-neutral action, and opens the correct folder `launch.json` with its unique configuration content |
 
-### `run-target-picker.spec.ts` — 13 tests
+### `run-target-picker.spec.ts` — 14 tests
 
-Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which depends on VS Code's own `findFiles` indexing and workspace-folder resolution and so cannot be unit tested. Every test dismisses the picker with `Escape`, so the CLI is never invoked and nothing is built or deployed.
+Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which depends on VS Code's own `findFiles` indexing and workspace-folder resolution and so cannot be unit tested. Every test dismisses the picker with `cancelAndExpectNoFollowUp`, which presses `Escape` and then asserts the quick input is gone and no notification replaced it — so the CLI is never invoked, and a flow that swallowed the cancellation would fail rather than pass silently.
 
 | # | Test | Validates |
 |---|------|-----------|
@@ -101,6 +104,7 @@ Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which de
 | 11 | discovers projects in every folder of a multi-root workspace | Projects from *both* folders of a `.code-workspace` appear — previously only `workspaceFolders[0]` was searched |
 | 12 | With Options command skips the target prompt for a single project | `winapp.runWithOptions` auto-selects the only candidate, matching `winapp.run`, and goes straight to the build prompt |
 | 13 | F5 with no input in launch.json prompts for a run target | A `winapp` launch configuration that omits `input` falls through to the picker instead of failing with a missing-argument error |
+| 14 | With Options skips the build prompts in folder mode | A build-output target goes straight to the toggle prompt, and project-only toggles stay hidden there |
 
 > When matching the picker, assert on the full placeholder. The command palette's own placeholder is "Type the name of a command **to run**", so a loose `/to run/` match silently reads the palette's rows instead of the picker's.
 
@@ -149,7 +153,7 @@ Validates that the custom editor launches correctly, all tabs render, and global
 | 10 | View XML button is visible | View XML button exists with the expected label |
 | 11 | info banner with feedback link is visible | Info banner and GitHub feedback link are present |
 
-### `identity-tab.spec.ts` — 18 tests
+### `identity-tab.spec.ts` — 19 tests
 
 Validates all Identity tab fields, validation rules, processor architecture, ResourceID, and PhoneIdentity.
 
@@ -174,7 +178,7 @@ Validates all Identity tab fields, validation rules, processor architecture, Res
 | 17 | editing Phone Identity updates the XML | Phone Product ID edits persist to XML |
 | 18 | remove Phone Identity button removes the section | Removing PhoneIdentity deletes it from XML |
 
-### `properties-tab.spec.ts` — 10 tests
+### `properties-tab.spec.ts` — 18 tests
 
 Validates Properties tab fields, validation, logo browse button, and package type selector.
 
@@ -191,7 +195,7 @@ Validates Properties tab fields, validation, logo browse button, and package typ
 | 9 | restoring values clears errors | Restoring both values clears error states |
 | 10 | package type selector is visible | Package type dropdown is rendered |
 
-### `dependencies-tab.spec.ts` — 16 tests
+### `dependencies-tab.spec.ts` — 17 tests
 
 Validates target device families, package dependencies, and all dependency sub-types (add/edit/remove).
 
@@ -214,7 +218,7 @@ Validates target device families, package dependencies, and all dependency sub-t
 | 15 | add external dependency button is visible | External dependency add control exists |
 | 16 | can add and remove a main package dependency | Main package dependency round-trip works |
 
-### `resources-tab.spec.ts` — 6 tests
+### `resources-tab.spec.ts` — 7 tests
 
 Validates resource list rendering, add/edit/move/remove operations.
 
@@ -227,7 +231,7 @@ Validates resource list rendering, add/edit/move/remove operations.
 | 5 | can edit resource language | Resource language edits persist to XML |
 | 6 | can remove a resource | Removing a resource decreases the count |
 
-### `applications-tab.spec.ts` — 18 tests
+### `applications-tab.spec.ts` — 58 tests
 
 Validates application cards, sub-tabs (Info, Extensions, Visual Assets), extension CRUD, visual asset CRUD, and add/remove applications.
 
@@ -252,7 +256,7 @@ Validates application cards, sub-tabs (Info, Extensions, Visual Assets), extensi
 | 17 | can remove the newly added application | Removing an app decreases card count |
 | 18 | browse executable button is visible | Executable browse button exists |
 
-### `capabilities-tab.spec.ts` — 16 tests
+### `capabilities-tab.spec.ts` — 20 tests
 
 Validates all four capability categories, checkbox toggling, hover descriptions, and custom capability CRUD.
 

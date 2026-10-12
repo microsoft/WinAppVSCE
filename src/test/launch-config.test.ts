@@ -3,6 +3,7 @@ import * as assert from 'node:assert';
 import {
 	createDefaultLaunchConfiguration,
 	hasWinAppConfiguration,
+	shouldOfferLaunchConfiguration,
 	WINAPP_DEBUG_TYPE,
 	WINAPP_LAUNCH_CONFIG_NAME
 } from '../launch-config';
@@ -44,5 +45,50 @@ describe('hasWinAppConfiguration', () => {
 		assert.equal(hasWinAppConfiguration(undefined), false);
 		assert.equal(hasWinAppConfiguration([]), false);
 		assert.equal(hasWinAppConfiguration([null, 'winapp', 42]), false);
+	});
+});
+
+describe('shouldOfferLaunchConfiguration', () => {
+	const winapp = { type: WINAPP_DEBUG_TYPE, request: 'launch', name: WINAPP_LAUNCH_CONFIG_NAME };
+	const base = { dismissed: false, folderConfigurations: [[]], hasManifest: true };
+
+	it('offers when a manifest workspace has no WinApp configuration', () => {
+		assert.equal(shouldOfferLaunchConfiguration(base), true);
+	});
+
+	it('stays silent once the user has dismissed it for good', () => {
+		assert.equal(shouldOfferLaunchConfiguration({ ...base, dismissed: true }), false);
+	});
+
+	it('stays silent with no folder open, where there is nowhere to write', () => {
+		assert.equal(shouldOfferLaunchConfiguration({ ...base, folderConfigurations: [] }), false);
+	});
+
+	it('stays silent when the workspace holds no manifest', () => {
+		assert.equal(shouldOfferLaunchConfiguration({ ...base, hasManifest: false }), false);
+	});
+
+	it('stays silent when a folder is already configured', () => {
+		assert.equal(shouldOfferLaunchConfiguration({ ...base, folderConfigurations: [[winapp]] }), false);
+	});
+
+	// A workspace-file configuration is visible from every folder, so one
+	// configured folder is enough to mean the workspace is already set up.
+	it('stays silent when any folder in a multi-root workspace is configured', () => {
+		assert.equal(
+			shouldOfferLaunchConfiguration({ ...base, folderConfigurations: [[], [winapp]] }),
+			false
+		);
+	});
+
+	// Other debuggers do not make F5 work for a WinApp package.
+	it('still offers when only non-WinApp configurations exist', () => {
+		assert.equal(
+			shouldOfferLaunchConfiguration({
+				...base,
+				folderConfigurations: [[{ type: 'coreclr', request: 'launch', name: 'Other' }]]
+			}),
+			true
+		);
 	});
 });

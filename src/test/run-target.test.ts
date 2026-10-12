@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import {
+	classifyRunTarget,
 	classifyRunTargetEntries,
 	classifyRunTargetFile,
 	dedupeSolutionMembers,
@@ -639,6 +640,121 @@ describe('readTargetProjects for a directory', () => {
 				root: { name: 'ws', path: dir }
 			});
 			assert.deepStrictEqual(result.projects, []);
+		});
+	});
+});
+describe('readTargetProjects for a file target', () => {
+	const app = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>WinExe</OutputType></PropertyGroup></Project>';
+
+	async function withLayout(
+		files: Record<string, string>,
+		run: (dir: string) => Promise<void>
+	): Promise<void> {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'target-file-'));
+		try {
+			for (const [name, contents] of Object.entries(files)) {
+				const full = path.join(dir, name);
+				fs.mkdirSync(path.dirname(full), { recursive: true });
+				fs.writeFileSync(full, contents);
+			}
+			await run(dir);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	it('reads members when the target is the solution file itself', async () => {
+		await withLayout(
+			{
+				'All.slnx': '<Solution>\n  <Project Path="src/AppOne/AppOne.csproj" />\n  <Project Path="src/AppTwo/AppTwo.csproj" />\n</Solution>\n',
+				'src/AppOne/AppOne.csproj': app,
+				'src/AppTwo/AppTwo.csproj': app
+			},
+			async dir => {
+				const solution = path.join(dir, 'All.slnx');
+				const result = await readTargetProjects({
+					kind: 'solution',
+					path: solution,
+					root: { name: 'ws', path: dir }
+				});
+				assert.deepStrictEqual(
+					result.projects.map(p => path.basename(p)).sort(),
+					['AppOne.csproj', 'AppTwo.csproj']
+				);
+				// The container is the solution's directory, not the file.
+				assert.strictEqual(result.containerPath, dir);
+			}
+		);
+	});
+
+	// A .csproj path already names the project, so --project would be noise.
+	it('offers no project choice when the target is a project file', async () => {
+		await withLayout({ 'src/AppOne/AppOne.csproj': app }, async dir => {
+			const project = path.join(dir, 'src', 'AppOne', 'AppOne.csproj');
+			const result = await readTargetProjects({
+				kind: 'project',
+				path: project,
+				root: { name: 'ws', path: dir }
+			});
+			assert.deepStrictEqual(result.projects, []);
+			assert.strictEqual(result.containerPath, path.dirname(project));
+		});
+	});
+});
+
+describe('classifyRunTarget', () => {
+	async function withLayout(
+		files: Record<string, string>,
+		run: (dir: string) => Promise<void>
+	): Promise<void> {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'classify-target-'));
+		try {
+			for (const [name, contents] of Object.entries(files)) {
+				const full = path.join(dir, name);
+				fs.mkdirSync(path.dirname(full), { recursive: true });
+				fs.writeFileSync(full, contents);
+			}
+			await run(dir);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	// launch.json may name a project that has not been created or checked out
+	// yet, so extension classification must not depend on the file existing.
+	it('classifies a non-existent path by extension', async () => {
+		assert.strictEqual(await classifyRunTarget(path.resolve('C:/nope/App.csproj')), 'project');
+		assert.strictEqual(await classifyRunTarget(path.resolve('C:/nope/App.sln')), 'solution');
+		assert.strictEqual(await classifyRunTarget(path.resolve('C:/nope/App.slnx')), 'solution');
+	});
+
+	it('returns unknown for a non-existent extensionless path', async () => {
+		assert.strictEqual(await classifyRunTarget(path.resolve('C:/nope/whatever')), 'unknown');
+	});
+
+	it('classifies a directory holding a project as project mode', async () => {
+		await withLayout({ 'App.csproj': '<Project />' }, async dir => {
+			assert.strictEqual(await classifyRunTarget(dir), 'project');
+		});
+	});
+
+	it('classifies a directory holding only binaries as folder mode', async () => {
+		await withLayout({ 'App.exe': '' }, async dir => {
+			assert.strictEqual(await classifyRunTarget(dir), 'folder');
+		});
+	});
+
+	// A build output folder that ships sources must keep classifying as folder
+	// mode, since running it as a project would rebuild rather than launch.
+	it('prefers folder mode when a directory holds both binaries and sources', async () => {
+		await withLayout({ 'App.exe': '', 'App.cs': 'class App {}' }, async dir => {
+			assert.strictEqual(await classifyRunTarget(dir), 'folder');
+		});
+	});
+
+	it('returns unknown for a file that is neither a project nor a solution', async () => {
+		await withLayout({ 'readme.md': '# hi' }, async dir => {
+			assert.strictEqual(await classifyRunTarget(path.join(dir, 'readme.md')), 'unknown');
 		});
 	});
 });

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import {
 	createDefaultLaunchConfiguration,
-	hasWinAppConfiguration,
+	shouldOfferLaunchConfiguration,
 	WINAPP_LAUNCH_CONFIG_NAME,
 	type WinAppLaunchConfiguration
 } from './launch-config';
@@ -32,8 +32,17 @@ function launchConfigurationSection(folder: vscode.WorkspaceFolder): vscode.Work
 	return vscode.workspace.getConfiguration('launch', folder.uri);
 }
 
-/** Read the configurations already present for a folder. */
-function readConfigurations(folder: vscode.WorkspaceFolder): unknown[] {
+/** Read the folder-scoped configurations, which is all this file may rewrite. */
+function readFolderConfigurations(folder: vscode.WorkspaceFolder): unknown[] {
+	// `.get()` returns the *effective* value, merging the workspace file's
+	// configurations into every folder. Writing that back at folder scope
+	// would copy another folder's entries into this one's launch.json, so
+	// only the folder's own value may be rewritten.
+	return launchConfigurationSection(folder).inspect<unknown[]>('configurations')?.workspaceFolderValue ?? [];
+}
+
+/** Read the configurations visible for a folder, for "is one already here?". */
+function readEffectiveConfigurations(folder: vscode.WorkspaceFolder): unknown[] {
 	return launchConfigurationSection(folder).get<unknown[]>('configurations') ?? [];
 }
 
@@ -46,7 +55,7 @@ async function appendConfiguration(
 	folder: vscode.WorkspaceFolder,
 	config: WinAppLaunchConfiguration
 ): Promise<void> {
-	const existing = readConfigurations(folder);
+	const existing = readFolderConfigurations(folder);
 	await launchConfigurationSection(folder).update(
 		'configurations',
 		[...existing, config],
@@ -84,13 +93,16 @@ async function generateLaunchConfiguration(): Promise<void> {
 
 	try {
 		await appendConfiguration(folder, createDefaultLaunchConfiguration());
+		// Inside the guard: opening the editor is part of the same operation,
+		// and an unhandled rejection here would escape to the fire-and-forget
+		// activation call site.
+		await vscode.commands.executeCommand('workbench.action.debug.configure', folder.uri);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		vscode.window.showErrorMessage(`Failed to write launch.json: ${message}`);
 		return;
 	}
 
-	await vscode.commands.executeCommand('workbench.action.debug.configure', folder.uri);
 	vscode.window.showInformationMessage(
 		`Added "${WINAPP_LAUNCH_CONFIG_NAME}" to launch.json. Press F5 to run and debug.`
 	);
@@ -108,21 +120,16 @@ async function looksLikeWinAppWorkspace(): Promise<boolean> {
  * WinApp configuration exists yet, and the user hasn't dismissed the offer.
  */
 export async function offerLaunchConfiguration(context: vscode.ExtensionContext): Promise<void> {
-	if (context.globalState.get<boolean>(DISMISSED_KEY)) {
-		return;
-	}
-
 	const folders = vscode.workspace.workspaceFolders ?? [];
-	if (folders.length === 0) {
-		return;
-	}
 
-	// Never nag a workspace that is already set up.
-	if (folders.some(folder => hasWinAppConfiguration(readConfigurations(folder)))) {
-		return;
-	}
-
-	if (!await looksLikeWinAppWorkspace()) {
+	// The manifest scan is the one expensive input, so only pay for it once
+	// the cheap conditions have already passed.
+	const preconditionsMet = shouldOfferLaunchConfiguration({
+		dismissed: context.globalState.get<boolean>(DISMISSED_KEY) === true,
+		folderConfigurations: folders.map(readEffectiveConfigurations),
+		hasManifest: true
+	});
+	if (!preconditionsMet || !await looksLikeWinAppWorkspace()) {
 		return;
 	}
 

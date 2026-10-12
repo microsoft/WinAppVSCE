@@ -1192,8 +1192,11 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// A missing launch.json is what strands users on VS Code's "install an
 	// extension for <language>" prompt, so offer to create one up front.
-	// Fire-and-forget: activation must not block on a notification.
-	void offerLaunchConfiguration(context);
+	// Fire-and-forget: activation must not block on a notification, but a
+	// rejection still has to land somewhere other than an unhandled one.
+	offerLaunchConfiguration(context).catch(error => {
+		console.error('WinApp: failed to offer a launch configuration', error);
+	});
 
 	const factory = new WinAppDebugAdapterFactory(extensionPath);
 	context.subscriptions.push(

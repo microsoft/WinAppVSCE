@@ -256,7 +256,10 @@ export async function pickRunTarget(
 		kind: vscode.QuickPickItemKind.Separator
 	});
 
-	items.push({ label: '$(folder-opened) Browse…', detail: BROWSE_DETAIL });
+	// alwaysShow keeps the escape hatch reachable: without it, typing a filter
+	// that matches no discovered target also filters away Browse…, leaving an
+	// empty picker and no way forward.
+	items.push({ label: '$(folder-opened) Browse…', detail: BROWSE_DETAIL, alwaysShow: true });
 
 	const picked = await vscode.window.showQuickPick(items, {
 		placeHolder: 'Select the project, solution, or build output folder to run',

@@ -49,3 +49,31 @@ export function hasWinAppConfiguration(configurations: unknown): boolean {
 			&& entry !== null
 			&& (entry as { type?: unknown }).type === WINAPP_DEBUG_TYPE);
 }
+
+/** Everything the proactive "add a launch configuration?" offer decides on. */
+export interface LaunchOfferContext {
+	/** The user previously chose "Don't Ask Again". */
+	dismissed: boolean;
+	/** Configurations visible in each open workspace folder. */
+	folderConfigurations: readonly unknown[];
+	/** The workspace holds a package manifest. */
+	hasManifest: boolean;
+}
+
+/**
+ * Whether to show the offer. Pure so the decision — the part that decides
+ * whether a user is interrupted — is unit-testable without a VS Code host.
+ */
+export function shouldOfferLaunchConfiguration(context: LaunchOfferContext): boolean {
+	if (context.dismissed) {
+		return false;
+	}
+	if (context.folderConfigurations.length === 0) {
+		return false;
+	}
+	// Never nag a workspace that is already set up.
+	if (context.folderConfigurations.some(hasWinAppConfiguration)) {
+		return false;
+	}
+	return context.hasManifest;
+}

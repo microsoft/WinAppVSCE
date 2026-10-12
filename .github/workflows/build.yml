@@ -89,6 +89,10 @@ jobs:
         Write-Host "WinUI template pack installed."
 
     - name: Run E2E tests
+      # The live-run spec needs a real CLI, SDK, and template pack, all of
+      # which the steps above install. Without this it silently self-skips.
+      env:
+        E2E_LIVE_RUN: '1'
       run: npm run test:e2e -- --grep-invert "adding empty custom capability|adding invalid format custom capability|adding valid custom capability|custom capability appears in the custom capabilities list|invalid inputFolder|cancelling the artifact QuickPick|selecting Browse|cancelling the certificate QuickPick"
 
     - name: Upload Playwright report
