@@ -7,6 +7,7 @@ import { execFileSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { extensionLaunchArgs } from './helpers';
 
 const VSCODE_EXE =
     process.env.VSCODE_PATH ??
@@ -21,10 +22,7 @@ const INTERFERING_EXTENSIONS = [
     'ms-dotnettools.vscode-dotnet-runtime',
 ];
 
-/** Installed-extension mode must disable only known interfering extensions. */
-const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-    ? INTERFERING_EXTENSIONS.flatMap((id) => ['--disable-extension', id])
-    : ['--disable-extensions', `--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+const EXTENSION_ARGS = extensionLaunchArgs(INTERFERING_EXTENSIONS);
 
 /** A build, deploy, and launch takes far longer than the suite's default. */
 const LIVE_RUN_TIMEOUT_MS = 12 * 60 * 1000;

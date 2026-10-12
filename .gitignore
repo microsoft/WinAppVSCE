@@ -429,6 +429,7 @@ bin/
 .vscode-test/
 playwright-report/
 test-results/
+test-results-live/
 
 # Windows Installer files from build outputs
 *.cab

@@ -17,7 +17,9 @@ import { detectProjects, BUILD_OUTPUT_EXCLUDE_GLOB } from './project-detection';
 import {
 	buildRunArgs,
 	resolveDebugInput,
+	resolveRunProject,
 	runOptionsFromDebugConfig,
+	shouldPromptForProject,
 	validateDebugRunOptions,
 	type WinAppRunOptions
 } from './run-options';
@@ -31,7 +33,8 @@ import {
 	resolveRunOptions
 } from './run-utils';
 import { getWorkspaceRoots, NO_WORKSPACE_MESSAGE } from './workspace';
-import { launchRunProcess, WinAppRunFailure } from './run-launch';
+import { launchRunProcess } from './run-launch';
+import { DebugLaunchCancelled, WinAppRunFailure } from './run-exit';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
@@ -998,9 +1001,10 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
  * The user dismissed a prompt. Not a failure, so it must not be reported as
  * one: an error toast for "I pressed Escape" is noise, and VS Code's own
  * convention is for a cancelled launch to end quietly.
+ *
+ * Shared with `run-launch.ts`, which raises the same class when the user
+ * cancels the "Launching package..." progress notification.
  */
-class DebugLaunchCancelled extends Error { }
-
 class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
 	private extensionPath: string;
 
@@ -1040,7 +1044,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 
 				// An explicit launch.json "project" wins below, so prompting for
 				// one here would only discard the answer.
-				if (!config.project) {
+				if (shouldPromptForProject(config.project)) {
 					const projectSelection = await pickSolutionProject(selection);
 					if (projectSelection.cancelled) {
 						throw new DebugLaunchCancelled('No project selected, cancelling debug session.');
@@ -1070,7 +1074,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			runOptions.args = args.trim() || undefined;
 			// An explicit launch.json "project" always wins; this only fills in
 			// what the interactive picker resolved.
-			runOptions.project = runOptions.project ?? pickedProject;
+			runOptions.project = resolveRunProject(runOptions.project, pickedProject);
 
 			const baseSpawnArgs = buildRunArgs(runOptions);
 

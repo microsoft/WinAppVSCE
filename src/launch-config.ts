@@ -56,15 +56,21 @@ export interface LaunchOfferContext {
 	dismissed: boolean;
 	/** Configurations visible in each open workspace folder. */
 	folderConfigurations: readonly unknown[];
-	/** The workspace holds a package manifest. */
-	hasManifest: boolean;
+	/**
+	 * Whether the workspace holds a package manifest.
+	 *
+	 * A thunk because answering it means scanning the workspace — the one
+	 * expensive input. The cheap conditions are checked first, so a dismissed
+	 * or already-configured workspace never pays for the scan.
+	 */
+	hasManifest: () => Promise<boolean>;
 }
 
 /**
  * Whether to show the offer. Pure so the decision — the part that decides
  * whether a user is interrupted — is unit-testable without a VS Code host.
  */
-export function shouldOfferLaunchConfiguration(context: LaunchOfferContext): boolean {
+export async function shouldOfferLaunchConfiguration(context: LaunchOfferContext): Promise<boolean> {
 	if (context.dismissed) {
 		return false;
 	}
@@ -75,5 +81,5 @@ export function shouldOfferLaunchConfiguration(context: LaunchOfferContext): boo
 	if (context.folderConfigurations.some(hasWinAppConfiguration)) {
 		return false;
 	}
-	return context.hasManifest;
+	return await context.hasManifest();
 }

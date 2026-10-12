@@ -290,6 +290,35 @@ export function runOptionsFromDebugConfig(
 	return options;
 }
 
+/** A launch.json `"project"` the user actually filled in, or undefined. */
+function explicitProject(configuredProject: unknown): string | undefined {
+	return typeof configuredProject === 'string' && configuredProject.trim()
+		? configuredProject
+		: undefined;
+}
+
+/**
+ * Whether the interactive flow should ask which project to launch.
+ *
+ * An explicit launch.json `"project"` already answers the question, and
+ * {@link resolveRunProject} would discard the answer anyway — so asking would
+ * only cost the user a prompt.
+ */
+export function shouldPromptForProject(configuredProject: unknown): boolean {
+	return explicitProject(configuredProject) === undefined;
+}
+
+/**
+ * An explicit launch.json `"project"` always wins; the picker's answer only
+ * fills in what the configuration left blank.
+ */
+export function resolveRunProject(
+	configuredProject: unknown,
+	pickedProject: string | undefined
+): string | undefined {
+	return explicitProject(configuredProject) ?? pickedProject;
+}
+
 /**
  * Reads the process ID out of `winapp run --json` output — the reciprocal of
  * the `--json` flag {@link runOptionsFromDebugConfig} always sets. Called on

@@ -132,7 +132,9 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 		directory: folderPath
 	}));
 
-	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL });
+	// alwaysShow keeps the escape hatch reachable: without it, typing a path
+	// that matches no discovered folder filters Browse… out of the list too.
+	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, alwaysShow: true });
 
 	const picked = await vscode.window.showQuickPick(items, {
 		placeHolder: SELECT_BUILD_OUTPUT_PLACEHOLDER

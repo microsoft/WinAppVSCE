@@ -131,6 +131,10 @@ extends:
 
                 $env:VSCODE_PATH = $codePath
                 $env:E2E_USE_INSTALLED_EXTENSION = "1"
+                # Without this the harness launches VS Code against the
+                # agent's default extensions directory, testing a copy of the
+                # extension that was never installed here.
+                $env:E2E_EXTENSIONS_DIR = "$(Agent.TempDirectory)/vscode-extensions"
                 npm run test:e2e -- --grep-invert "adding empty custom capability|adding invalid format custom capability|adding valid custom capability|custom capability appears in the custom capabilities list|invalid inputFolder|cancelling the artifact QuickPick|selecting Browse|cancelling the certificate QuickPick"
                 if ($LASTEXITCODE -ne 0) {
                     Write-Error "E2E tests failed"
@@ -152,6 +156,10 @@ extends:
                 $codePath = "$(Agent.TempDirectory)/vscode/Code.exe"
                 $env:VSCODE_PATH = $codePath
                 $env:E2E_USE_INSTALLED_EXTENSION = "1"
+                # Must match the directory the VSIX was installed into above,
+                # or this exercises the agent's default extensions directory
+                # rather than the package being released.
+                $env:E2E_EXTENSIONS_DIR = "$(Agent.TempDirectory)/vscode-extensions"
                 # The spec still self-skips when the SDK or template is
                 # unavailable, so this is safe on images that cannot build.
                 $env:E2E_LIVE_RUN = "1"

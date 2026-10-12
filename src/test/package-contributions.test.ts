@@ -183,6 +183,34 @@ describe('package.json contributions', () => {
 		assert.deepEqual(initial[0], createDefaultLaunchConfiguration());
 	});
 
+	// The duplicate-launch.json regression this guards against is subtle and
+	// was already shipped once: for the Initial trigger kind VS Code appends
+	// provider results onto package.json's `initialConfigurations`, so a
+	// provider that implements provideDebugConfigurations writes the WinApp
+	// entry twice. Only the standalone Dynamic-kind provider may supply one.
+	it('never offers configurations from the initial-trigger-kind provider', () => {
+		const source = fs.readFileSync(path.resolve(__dirname, '..', 'extension.ts'), 'utf8');
+
+		const providerClass = source.slice(
+			source.indexOf('class WinAppDebugConfigurationProvider'),
+			source.indexOf('class WinAppDebugAdapterFactory')
+		);
+		assert.ok(providerClass.length > 0, 'WinAppDebugConfigurationProvider must exist');
+		assert.ok(
+			!/^\s*(async\s+)?provideDebugConfigurations\s*\(/m.test(providerClass),
+			'WinAppDebugConfigurationProvider must not implement provideDebugConfigurations'
+		);
+
+		// Every other provider that does supply configurations must be
+		// registered for the Dynamic trigger kind.
+		for (const match of source.matchAll(/provideDebugConfigurations[\s\S]{0,400}?\)\s*\)/g)) {
+			assert.ok(
+				match[0].includes('DebugConfigurationProviderTriggerKind.Dynamic'),
+				'a provider supplying configurations must register for the Dynamic trigger kind'
+			);
+		}
+	});
+
 	it('names the configuration snippet the same as the generated configuration', () => {
 		const snippets = manifest.contributes.debuggers[0].configurationSnippets;
 		assert.ok(

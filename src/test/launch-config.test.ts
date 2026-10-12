@@ -50,45 +50,87 @@ describe('hasWinAppConfiguration', () => {
 
 describe('shouldOfferLaunchConfiguration', () => {
 	const winapp = { type: WINAPP_DEBUG_TYPE, request: 'launch', name: WINAPP_LAUNCH_CONFIG_NAME };
-	const base = { dismissed: false, folderConfigurations: [[]], hasManifest: true };
 
-	it('offers when a manifest workspace has no WinApp configuration', () => {
-		assert.equal(shouldOfferLaunchConfiguration(base), true);
+	/** Records whether the expensive workspace scan was actually run. */
+	function manifestProbe(result: boolean) {
+		const probe = {
+			calls: 0,
+			hasManifest: async () => {
+				probe.calls += 1;
+				return result;
+			}
+		};
+		return probe;
+	}
+
+	const base = () => ({
+		dismissed: false,
+		folderConfigurations: [[]],
+		hasManifest: async () => true
 	});
 
-	it('stays silent once the user has dismissed it for good', () => {
-		assert.equal(shouldOfferLaunchConfiguration({ ...base, dismissed: true }), false);
+	it('offers when a manifest workspace has no WinApp configuration', async () => {
+		assert.equal(await shouldOfferLaunchConfiguration(base()), true);
 	});
 
-	it('stays silent with no folder open, where there is nowhere to write', () => {
-		assert.equal(shouldOfferLaunchConfiguration({ ...base, folderConfigurations: [] }), false);
+	it('stays silent once the user has dismissed it for good', async () => {
+		assert.equal(await shouldOfferLaunchConfiguration({ ...base(), dismissed: true }), false);
 	});
 
-	it('stays silent when the workspace holds no manifest', () => {
-		assert.equal(shouldOfferLaunchConfiguration({ ...base, hasManifest: false }), false);
+	it('stays silent with no folder open, where there is nowhere to write', async () => {
+		assert.equal(await shouldOfferLaunchConfiguration({ ...base(), folderConfigurations: [] }), false);
 	});
 
-	it('stays silent when a folder is already configured', () => {
-		assert.equal(shouldOfferLaunchConfiguration({ ...base, folderConfigurations: [[winapp]] }), false);
+	it('stays silent when the workspace holds no manifest', async () => {
+		const probe = manifestProbe(false);
+		assert.equal(await shouldOfferLaunchConfiguration({ ...base(), ...probe }), false);
+		assert.equal(probe.calls, 1, 'the manifest scan decides this case, so it must run');
+	});
+
+	it('stays silent when a folder is already configured', async () => {
+		assert.equal(
+			await shouldOfferLaunchConfiguration({ ...base(), folderConfigurations: [[winapp]] }),
+			false
+		);
 	});
 
 	// A workspace-file configuration is visible from every folder, so one
 	// configured folder is enough to mean the workspace is already set up.
-	it('stays silent when any folder in a multi-root workspace is configured', () => {
+	it('stays silent when any folder in a multi-root workspace is configured', async () => {
 		assert.equal(
-			shouldOfferLaunchConfiguration({ ...base, folderConfigurations: [[], [winapp]] }),
+			await shouldOfferLaunchConfiguration({ ...base(), folderConfigurations: [[], [winapp]] }),
 			false
 		);
 	});
 
 	// Other debuggers do not make F5 work for a WinApp package.
-	it('still offers when only non-WinApp configurations exist', () => {
+	it('still offers when only non-WinApp configurations exist', async () => {
 		assert.equal(
-			shouldOfferLaunchConfiguration({
-				...base,
+			await shouldOfferLaunchConfiguration({
+				...base(),
 				folderConfigurations: [[{ type: 'coreclr', request: 'launch', name: 'Other' }]]
 			}),
 			true
 		);
+	});
+
+	// The scan walks the whole workspace, so it must not run on activation for
+	// a user who already said no or is already set up.
+	it('skips the workspace scan when a cheap condition already decided', async () => {
+		const dismissedProbe = manifestProbe(true);
+		await shouldOfferLaunchConfiguration({ ...base(), ...dismissedProbe, dismissed: true });
+		assert.equal(dismissedProbe.calls, 0, 'a dismissed offer must not scan');
+
+		const configuredProbe = manifestProbe(true);
+		await shouldOfferLaunchConfiguration({
+			...base(),
+			...configuredProbe,
+			folderConfigurations: [[winapp]]
+		});
+		assert.equal(configuredProbe.calls, 0, 'an already-configured workspace must not scan');
+
+		const emptyProbe = manifestProbe(true);
+		await shouldOfferLaunchConfiguration({ ...base(), ...emptyProbe, folderConfigurations: [] });
+		assert.equal(emptyProbe.calls, 0, 'no open folder must not scan');
 	});
 });

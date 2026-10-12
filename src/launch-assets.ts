@@ -122,14 +122,14 @@ async function looksLikeWinAppWorkspace(): Promise<boolean> {
 export async function offerLaunchConfiguration(context: vscode.ExtensionContext): Promise<void> {
 	const folders = vscode.workspace.workspaceFolders ?? [];
 
-	// The manifest scan is the one expensive input, so only pay for it once
-	// the cheap conditions have already passed.
-	const preconditionsMet = shouldOfferLaunchConfiguration({
+	const shouldOffer = await shouldOfferLaunchConfiguration({
 		dismissed: context.globalState.get<boolean>(DISMISSED_KEY) === true,
 		folderConfigurations: folders.map(readEffectiveConfigurations),
-		hasManifest: true
+		// A thunk, so the workspace scan only runs once the cheap conditions
+		// have already passed.
+		hasManifest: looksLikeWinAppWorkspace
 	});
-	if (!preconditionsMet || !await looksLikeWinAppWorkspace()) {
+	if (!shouldOffer) {
 		return;
 	}
 

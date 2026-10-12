@@ -6,10 +6,12 @@ import {
 	COMMON_CONFIGURATIONS,
 	parseProcessIdFromJson,
 	resolveDebugInput,
+	resolveRunProject,
 	resolveRunToggles,
 	RUN_OPTIONS,
 	RUN_TOGGLES,
 	runOptionsFromDebugConfig,
+	shouldPromptForProject,
 	SUPPORTED_ARCHITECTURES,
 	validateDebugRunOptions,
 	type RunOptionKey,
@@ -309,5 +311,51 @@ describe('run toggles', () => {
 		const without = buildRunArgs(options(resolveRunToggles(available, ['symbols'] as RunOptionKey[])));
 		assert.ok(!without.includes('--symbols'));
 		assert.ok(!without.includes('--debug-output'));
+	});
+});
+/**
+ * An explicit launch.json "project" is the user pinning which app F5 runs.
+ * It has to win over the picker AND suppress the prompt, or a multi-app
+ * solution asks a question whose answer is thrown away.
+ */
+describe('launch.json project precedence', () => {
+	it('suppresses the disambiguation prompt when the config pins a project', () => {
+		assert.equal(shouldPromptForProject('src/App/App.csproj'), false);
+	});
+
+	it('prompts when the config names no project', () => {
+		assert.equal(shouldPromptForProject(undefined), true);
+		assert.equal(shouldPromptForProject(''), true);
+	});
+
+	// A blank or whitespace-only value is a user who started typing and gave
+	// up, not a pin; treating it as one would launch with no --project.
+	it('prompts when the config value is blank or not a string', () => {
+		assert.equal(shouldPromptForProject('   '), true);
+		assert.equal(shouldPromptForProject(null), true);
+		assert.equal(shouldPromptForProject(42), true);
+	});
+
+	it('lets the configured project win over whatever the picker resolved', () => {
+		assert.equal(resolveRunProject('src/Pinned/Pinned.csproj', 'src/Picked/Picked.csproj'), 'src/Pinned/Pinned.csproj');
+	});
+
+	it('falls back to the picker only when the config left it blank', () => {
+		assert.equal(resolveRunProject(undefined, 'src/Picked/Picked.csproj'), 'src/Picked/Picked.csproj');
+		assert.equal(resolveRunProject('  ', 'src/Picked/Picked.csproj'), 'src/Picked/Picked.csproj');
+	});
+
+	it('leaves the project unset when neither side supplied one', () => {
+		assert.equal(resolveRunProject(undefined, undefined), undefined);
+	});
+
+	// The two must agree: whenever the prompt is suppressed, the configured
+	// value must be the one that survives.
+	it('never suppresses the prompt without also winning', () => {
+		for (const configured of [undefined, '', '   ', null, 42, 'App.csproj']) {
+			if (!shouldPromptForProject(configured)) {
+				assert.equal(resolveRunProject(configured, 'picked.csproj'), configured);
+			}
+		}
 	});
 });

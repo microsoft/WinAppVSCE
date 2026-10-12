@@ -1,10 +1,9 @@
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import { parseProcessIdFromJson } from './run-options';
+import { classifyRunExit } from './run-exit';
+import { killProcessTree } from './process-tree';
 import { WINAPP_CLI_CALLER_VALUE } from './winapp-cli-utils';
-
-/** Preserves failed run output so callers can offer the output channel. */
-export class WinAppRunFailure extends Error { }
 
 export interface LaunchedRunProcess {
 	processId: number;
@@ -51,7 +50,9 @@ export async function launchRunProcess(
 
 			const cancellation = token.onCancellationRequested(() => {
 				cancelled = true;
-				child.kill();
+				// Project mode spawns restore and MSBuild beneath the CLI, so
+				// the whole tree has to go — not just the direct child.
+				killProcessTree(child);
 			});
 
 			const settle = (fn: () => void) => {
@@ -101,20 +102,7 @@ export async function launchRunProcess(
 
 			child.on('close', (code) => {
 				if (resolved) { return; }
-
-				if (cancelled) {
-					settle(() => reject(new Error('Launch cancelled.')));
-				} else if (code !== 0) {
-					// The full output is already in the channel; a toast is the
-					// wrong place for a build log.
-					settle(() => reject(new WinAppRunFailure(
-						`winapp run failed with exit code ${code}.`
-					)));
-				} else {
-					settle(() => reject(new WinAppRunFailure(
-						'winapp run exited before reporting a process ID to attach to.'
-					)));
-				}
+				settle(() => reject(classifyRunExit({ code, cancelled })));
 			});
 		});
 	});

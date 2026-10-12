@@ -19,9 +19,35 @@ const VSCODE_EXE =
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
 
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
-const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-    ? []
-    : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+
+/**
+ * VS Code CLI arguments selecting which copy of the extension to test.
+ *
+ * `E2E_USE_INSTALLED_EXTENSION=1` tests a VSIX that CI already installed; the
+ * default loads this working tree. In installed mode `E2E_EXTENSIONS_DIR` must
+ * name the directory the VSIX was installed into — CI installs into a
+ * dedicated directory, and without this VS Code would launch against the
+ * agent's default extensions directory and silently test nothing.
+ *
+ * @param interferingExtensions Extensions to disable in installed mode. Specs
+ * that pass any also disable all extensions in development mode, since there
+ * the extension under test is loaded separately.
+ */
+export function extensionLaunchArgs(interferingExtensions: readonly string[] = []): string[] {
+    if (process.env.E2E_USE_INSTALLED_EXTENSION !== '1') {
+        return interferingExtensions.length > 0
+            ? ['--disable-extensions', `--extensionDevelopmentPath=${EXTENSION_ROOT}`]
+            : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+    }
+
+    const extensionsDir = process.env.E2E_EXTENSIONS_DIR;
+    return [
+        ...(extensionsDir ? [`--extensions-dir=${extensionsDir}`] : []),
+        ...interferingExtensions.flatMap((id) => ['--disable-extension', id])
+    ];
+}
+
+const EXTENSION_ARGS = extensionLaunchArgs();
 
 const FIXTURES_DIR = path.resolve(__dirname, '..', 'fixtures');
 
