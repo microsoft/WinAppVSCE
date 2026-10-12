@@ -96,6 +96,12 @@ try {
         --user-dll "$fixtures\bin\x64\Debug\net10.0-windows10.0.26100.0\TestFixtureApp.dll" `
         --fixtures-dir "$fixtures\Fixtures"
     if ($LASTEXITCODE -ne 0) { throw "Fixture suite failed (exit $LASTEXITCODE)." }
+    # Behaviours: frame sizing, parse errors, canvas presets, property edits, native transitions,
+    # constructor-throw safety net, design-time data failure paths and sample lists.
+    & $ui --behaviors --surface "$run\Surface.exe" --out $results `
+        --user-dll "$fixtures\bin\x64\Debug\net10.0-windows10.0.26100.0\TestFixtureApp.dll" `
+        --fixtures-dir "$fixtures\Fixtures"
+    if ($LASTEXITCODE -ne 0) { throw "Behaviour suite failed (exit $LASTEXITCODE)." }
 } finally {
     foreach ($name in $saved.Keys) {
         [Environment]::SetEnvironmentVariable($name, $saved[$name], "Process")

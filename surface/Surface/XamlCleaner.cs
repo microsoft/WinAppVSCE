@@ -121,6 +121,9 @@ internal static class XamlCleaner
         new(@"(?<lead>,\s*)?Converter\s*=\s*\{\s*(?:[\w]+:)?(?:Static|Theme)Resource\s+(?<key>[^}]+?)\s*\}(?<trail>\s*,)?",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    /// <summary>Entry in <c>forcePlaceholderTypes</c> that placeholders every custom (non-resource) element.</summary>
+    public const string ForceAllCustomTypes = "*";
+
     /// <summary>
     /// Cleans <paramref name="rawXaml"/> per the rules above. Never throws — returns the original
     /// markup on any failure so the caller's parse-error path still fires with original positions.
@@ -1047,10 +1050,13 @@ internal static class XamlCleaner
 
             // Layer 2: force a placeholder for heavy-constructor controls (never construct — hang-safe)
             // and for types the safety net flagged as throwing, EVEN IF the provider maps them.
+            // ForceAllCustomTypes is the safety net's backstop when it cannot name the offender: retire every
+            // custom element, but keep resource entries (converters, templates) so lookups still resolve.
             bool forced =
                 PreSwapConstructorSimpleNames.Contains(el.Name.LocalName) ||
                 (forcePlaceholderTypes is not null &&
-                 (forcePlaceholderTypes.Contains(fullName) || forcePlaceholderTypes.Contains(el.Name.LocalName)));
+                 (forcePlaceholderTypes.Contains(fullName) || forcePlaceholderTypes.Contains(el.Name.LocalName) ||
+                  (forcePlaceholderTypes.Contains(ForceAllCustomTypes) && !IsResourceEntry(el))));
 
             // Keep any custom type the provider CAN map (it renders for real) — unless forced above.
             if (!forced && SafeProviderMaps(providerMapsFullName, fullName))

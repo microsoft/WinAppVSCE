@@ -443,6 +443,16 @@ namespace Surface.Tests
             var throwing = CleanRoot(raw, provider: _ => throw new InvalidOperationException("boom"));
             Eq("throwing provider treated as mapped (kept)", "{using:Bad}Chart", Named(throwing, "C")?.Name.ToString());
 
+            // Safety-net backstop: the wildcard retires every custom element but keeps custom resource
+            // entries (a converter) and framework elements.
+            var all = CleanRoot(Doc(
+                "<Grid x:Name=\"Host\"><Grid.Resources><good:Conv x:Key=\"K\" /></Grid.Resources>" +
+                "<good:Card x:Name=\"Mapped\" /><TextBlock x:Name=\"Fw\" /></Grid>"),
+                provider: GoodOnly, force: new HashSet<string> { XamlCleaner.ForceAllCustomTypes });
+            Eq("wildcard force: mapped custom -> placeholder", Pres + "Border", Named(all, "Mapped")?.Name.ToString());
+            Check("wildcard force: custom resource entry kept", First(all, "Conv") is not null);
+            Eq("wildcard force: framework element kept", Pres + "TextBlock", Named(all, "Fw")?.Name.ToString());
+
             var clr = CleanRoot(Doc("<legacy:Gauge x:Name=\"G\" xmlns:legacy=\"clr-namespace:Bad.Legacy;assembly=Bad\" />"),
                 provider: n => n != "Bad.Legacy.Gauge");
             Eq("clr-namespace: custom type resolved by full name", Pres + "Border", Named(clr, "G")?.Name.ToString());

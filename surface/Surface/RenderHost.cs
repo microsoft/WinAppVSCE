@@ -266,6 +266,7 @@ internal sealed class RenderHost
 
                 object? parsed;
                 long tParse = Stopwatch.GetTimestamp();
+                var ctorWatch = new CtorThrowWatch();
                 try
                 {
                     parsed = XamlReader.Load(xaml);
@@ -274,8 +275,10 @@ internal sealed class RenderHost
                 {
                     // Runs BEFORE the parse/activation split because WinUI sometimes wraps a constructor
                     // throw (or a late type-resolution failure) in a XamlParseException. Only a
-                    // recoverable offender we have not already retired triggers a retry.
-                    var offender = ExtractRecoverableOffender(ex);
+                    // recoverable offender we have not already retired triggers a retry. WinUI usually
+                    // drops the managed exception at the native boundary (an opaque "text associated with
+                    // this error code could not be found"), so the first-chance watch is the main source.
+                    var offender = ExtractRecoverableOffender(ex) ?? ctorWatch.Offender;
                     if (attempt < maxSafetyNetRetries && offender is not null &&
                         (forced ??= new(StringComparer.Ordinal)).Add(offender))
                     {
@@ -284,6 +287,17 @@ internal sealed class RenderHost
                     }
 
                     var (l, c) = ExtractLineColumn(ex);
+
+                    // Backstop: an opaque failure (no position, no identifiable constructor) is most likely
+                    // user code in some custom control. Retire every custom element once rather than fail
+                    // the page; a positioned markup error is reported as-is.
+                    if (attempt < maxSafetyNetRetries && l is null && c is null &&
+                        (forced ??= new(StringComparer.Ordinal)).Add(XamlCleaner.ForceAllCustomTypes))
+                    {
+                        App.Log($"SAFETY-NET: unidentified Load failure ({Flatten(ex)}) — placeholdering all custom controls and retrying.");
+                        continue;
+                    }
+
                     if (IsParseException(ex))
                     {
                         App.Log($"Render parse error: {Flatten(ex)}");
@@ -293,6 +307,10 @@ internal sealed class RenderHost
                     // A non-markup exception means a type resolved but failed to activate.
                     App.Log($"Render activation error: {Flatten(ex)}");
                     return (null, "activation", Flatten(ex), l, c);
+                }
+                finally
+                {
+                    ctorWatch.Dispose();
                 }
 
                 if (timings is not null) timings.ParseMs = ElapsedMs(tParse);
@@ -1112,6 +1130,63 @@ internal sealed class RenderHost
             }
         }
         return false;
+    }
+
+    /// <summary>
+    /// Watches first-chance exceptions on the loading thread for the duration of one <c>XamlReader.Load</c>
+    /// and remembers the custom element whose constructor was on the stack. WinUI replaces a constructor
+    /// throw with an opaque native error, so this is how the safety net learns which control to retire.
+    /// The OUTERMOST user <see cref="DependencyObject"/> constructor wins: that is the element the markup
+    /// declared (a nested throw inside a UserControl's own XAML still retires the UserControl). The last
+    /// such throw wins so a control that throws and catches internally is superseded by the fatal one.
+    /// </summary>
+    private sealed class CtorThrowWatch : IDisposable
+    {
+        private readonly int _thread = Environment.CurrentManagedThreadId;
+        private bool _active = true;
+
+        public CtorThrowWatch() => AppDomain.CurrentDomain.FirstChanceException += OnFirstChance;
+
+        public string? Offender { get; private set; }
+
+        public void Dispose()
+        {
+            if (!_active) return;
+            _active = false;
+            AppDomain.CurrentDomain.FirstChanceException -= OnFirstChance;
+        }
+
+        private void OnFirstChance(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
+        {
+            if (!_active || Environment.CurrentManagedThreadId != _thread) return;
+            try
+            {
+                string? outer = null;
+                foreach (var frame in new StackTrace(false).GetFrames())
+                {
+                    if (frame.GetMethod() is System.Reflection.ConstructorInfo { IsStatic: false } ctor &&
+                        ctor.DeclaringType is { } t && IsUserElement(t))
+                    {
+                        outer = t.Name;
+                    }
+                }
+                if (outer is not null) Offender = outer;
+            }
+            catch
+            {
+                // Never let diagnostics disturb the load.
+            }
+        }
+
+        private static bool IsUserElement(Type t)
+        {
+            if (!typeof(DependencyObject).IsAssignableFrom(t)) return false;
+            var ns = t.Namespace ?? string.Empty;
+            return !(ns.StartsWith("Microsoft.UI.", StringComparison.Ordinal) ||
+                     ns.StartsWith("Windows.", StringComparison.Ordinal) ||
+                     ns.StartsWith("WinRT", StringComparison.Ordinal) ||
+                     t.Assembly == typeof(RenderHost).Assembly);
+        }
     }
 
     // A constructor stack frame ("at Namespace.Type..ctor(") pinpoints a control that threw during

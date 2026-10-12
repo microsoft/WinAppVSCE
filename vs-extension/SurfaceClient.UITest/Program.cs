@@ -81,6 +81,11 @@ namespace WinUIXamlPreview.UITest
                 return await RunFixtures(args);
             }
 
+            if (args.Any(a => string.Equals(a, "--behaviors", StringComparison.OrdinalIgnoreCase)))
+            {
+                return await RunBehaviors(args);
+            }
+
             string outDir = GetArg(args, "--out") ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "qa-results");
             Directory.CreateDirectory(outDir);
 
