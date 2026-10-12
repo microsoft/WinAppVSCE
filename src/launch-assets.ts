@@ -1,12 +1,10 @@
 import * as vscode from 'vscode';
 import {
-	createFallbackLaunchConfiguration,
-	createLaunchConfiguration,
+	createDefaultLaunchConfiguration,
 	hasWinAppConfiguration,
 	WINAPP_LAUNCH_CONFIG_NAME,
 	type WinAppLaunchConfiguration
 } from './launch-config';
-import { pickRunTarget, pickSolutionProject } from './run-utils';
 
 /**
  * Generates `launch.json` for the user, so pressing F5 works without
@@ -41,8 +39,8 @@ function readConfigurations(folder: vscode.WorkspaceFolder): unknown[] {
 
 /**
  * Append a configuration and persist it. Targets the folder rather than the
- * workspace so multi-root setups get a `launch.json` beside the project the
- * user actually chose.
+ * workspace so multi-root setups get a `launch.json` beside the folder it
+ * belongs to.
  */
 async function appendConfiguration(
 	folder: vscode.WorkspaceFolder,
@@ -75,31 +73,6 @@ async function resolveTargetFolder(): Promise<vscode.WorkspaceFolder | undefined
 }
 
 /**
- * Build a configuration for `folder`, asking the user what to run.
- *
- * Always resolves to a configuration: if discovery finds nothing, or the user
- * backs out of the picker, fall back to a target-less entry whose discovery
- * happens at F5 time instead. A `launch.json` that needs one field filled in
- * beats no `launch.json` at all, which is the state that produces VS Code's
- * "install an extension for <language>" dead end.
- */
-export async function buildLaunchConfiguration(
-	folder: vscode.WorkspaceFolder
-): Promise<WinAppLaunchConfiguration> {
-	const selection = await pickRunTarget(folder);
-	if (!selection) {
-		return createFallbackLaunchConfiguration();
-	}
-
-	const { cancelled, project } = await pickSolutionProject(selection);
-	if (cancelled) {
-		return createFallbackLaunchConfiguration();
-	}
-
-	return createLaunchConfiguration(folder.uri.fsPath, selection.target.path, project);
-}
-
-/**
  * Add a WinApp configuration and open `launch.json`, so the result is visible
  * and editable rather than silently applied.
  */
@@ -109,10 +82,8 @@ async function generateLaunchConfiguration(): Promise<void> {
 		return;
 	}
 
-	const config = await buildLaunchConfiguration(folder);
-
 	try {
-		await appendConfiguration(folder, config);
+		await appendConfiguration(folder, createDefaultLaunchConfiguration());
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		vscode.window.showErrorMessage(`Failed to write launch.json: ${message}`);

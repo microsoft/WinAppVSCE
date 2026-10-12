@@ -1,76 +1,33 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
-import * as path from 'node:path';
 import {
-	createFallbackLaunchConfiguration,
-	createLaunchConfiguration,
+	createDefaultLaunchConfiguration,
 	hasWinAppConfiguration,
-	toConfiguredPath,
-	WINAPP_LAUNCH_CONFIG_NAME,
-	WORKSPACE_FOLDER_TOKEN
+	WINAPP_DEBUG_TYPE,
+	WINAPP_LAUNCH_CONFIG_NAME
 } from '../launch-config';
 
-const root = path.resolve('C:', 'work', 'MyApp');
-
-describe('toConfiguredPath', () => {
-	it('rewrites a contained path as workspace-relative', () => {
-		const target = path.join(root, 'src', 'MyApp.csproj');
-		assert.equal(toConfiguredPath(root, target), `${WORKSPACE_FOLDER_TOKEN}/src/MyApp.csproj`);
-	});
-
-	it('uses forward slashes regardless of platform separator', () => {
-		const target = path.join(root, 'bin', 'Debug', 'net8.0-windows');
-		assert.ok(!toConfiguredPath(root, target).includes('\\'));
-	});
-
-	it('returns the bare token when the target is the root itself', () => {
-		assert.equal(toConfiguredPath(root, root), WORKSPACE_FOLDER_TOKEN);
-	});
-
-	it('leaves a path outside the workspace absolute', () => {
-		const outside = path.resolve('C:', 'elsewhere', 'Other.csproj');
-		assert.equal(toConfiguredPath(root, outside), outside);
-	});
-
-	it('does not treat a sibling with a shared prefix as contained', () => {
-		const sibling = path.resolve('C:', 'work', 'MyApplication', 'A.csproj');
-		assert.equal(toConfiguredPath(root, sibling), sibling);
-	});
-});
-
-describe('createLaunchConfiguration', () => {
-	it('produces a launch entry pointing at the target', () => {
-		const config = createLaunchConfiguration(root, path.join(root, 'MyApp.csproj'));
-		assert.deepEqual(config, {
-			type: 'winapp',
+describe('createDefaultLaunchConfiguration', () => {
+	it('produces the WinApp launch entry', () => {
+		assert.deepEqual(createDefaultLaunchConfiguration(), {
+			type: WINAPP_DEBUG_TYPE,
 			request: 'launch',
-			name: WINAPP_LAUNCH_CONFIG_NAME,
-			input: `${WORKSPACE_FOLDER_TOKEN}/MyApp.csproj`
+			name: WINAPP_LAUNCH_CONFIG_NAME
 		});
 	});
 
-	it('omits project when no solution member was chosen', () => {
-		const config = createLaunchConfiguration(root, path.join(root, 'App.sln'));
-		assert.ok(!('project' in config));
+	// The whole point of the module is that there is one configuration shape.
+	// Naming a target here would make generated content depend on which path
+	// wrote it, and would go stale as soon as the project moved.
+	it('names no run target, leaving discovery to the adapter at F5 time', () => {
+		const config = createDefaultLaunchConfiguration();
+		assert.deepEqual(Object.keys(config).sort(), ['name', 'request', 'type']);
 	});
 
-	it('includes project when one was chosen, also workspace-relative', () => {
-		const config = createLaunchConfiguration(
-			root,
-			path.join(root, 'App.sln'),
-			path.join(root, 'src', 'App', 'App.csproj')
-		);
-		assert.equal(config.input, `${WORKSPACE_FOLDER_TOKEN}/App.sln`);
-		assert.equal(config.project, `${WORKSPACE_FOLDER_TOKEN}/src/App/App.csproj`);
-	});
-});
-
-describe('createFallbackLaunchConfiguration', () => {
-	it('omits input so the adapter discovers a target at F5 time', () => {
-		const config = createFallbackLaunchConfiguration();
-		assert.equal(config.type, 'winapp');
-		assert.equal(config.request, 'launch');
-		assert.ok(!('input' in config));
+	it('returns a fresh object so callers cannot mutate the shared default', () => {
+		const first = createDefaultLaunchConfiguration();
+		first.name = 'mutated';
+		assert.equal(createDefaultLaunchConfiguration().name, WINAPP_LAUNCH_CONFIG_NAME);
 	});
 });
 

@@ -3,6 +3,7 @@ import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { RUN_OPTIONS, SUPPORTED_ARCHITECTURES } from '../run-options';
+import { createDefaultLaunchConfiguration, WINAPP_LAUNCH_CONFIG_NAME } from '../launch-config';
 
 const packageJsonPath = path.resolve(__dirname, '..', '..', 'package.json');
 const raw = fs.readFileSync(packageJsonPath, 'utf8');
@@ -145,6 +146,26 @@ describe('package.json contributions', () => {
 		// provider for configurations; without it we are never consulted.
 		assert.ok(activationEvents.includes('onDebugInitialConfigurations'));
 		assert.ok(activationEvents.includes('onDebugDynamicConfigurations:winapp'));
+	});
+
+	// Every path that writes launch.json must produce identical content: the
+	// notification, "create a launch.json file", and the Run and Debug
+	// dropdown all go through createDefaultLaunchConfiguration(), and
+	// initialConfigurations is what VS Code writes when the extension has not
+	// been activated yet. If these drift, the content a user gets silently
+	// depends on which path they happened to take.
+	it('keeps the static default identical to the generated one', () => {
+		const initial = manifest.contributes.debuggers[0].initialConfigurations;
+		assert.equal(initial.length, 1, 'exactly one default configuration');
+		assert.deepEqual(initial[0], createDefaultLaunchConfiguration());
+	});
+
+	it('names the configuration snippet the same as the generated configuration', () => {
+		const snippets = manifest.contributes.debuggers[0].configurationSnippets;
+		assert.ok(
+			snippets.some((snippet: { label: string }) => snippet.label === WINAPP_LAUNCH_CONFIG_NAME),
+			'a snippet must carry the shared configuration name'
+		);
 	});
 
 	// launch.json is the only place a user types these by hand, so the schema
