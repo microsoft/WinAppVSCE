@@ -149,11 +149,13 @@ describe('package.json contributions', () => {
 	});
 
 	// Every path that writes launch.json must produce identical content: the
-	// notification, "create a launch.json file", and the Run and Debug
-	// dropdown all go through createDefaultLaunchConfiguration(), and
-	// initialConfigurations is what VS Code writes when the extension has not
-	// been activated yet. If these drift, the content a user gets silently
-	// depends on which path they happened to take.
+	// notification writes this shape directly, and VS Code's "create a
+	// launch.json file" flow writes initialConfigurations verbatim.
+	//
+	// This is also why WinAppDebugConfigurationProvider must NOT implement
+	// provideDebugConfigurations: for the initial trigger kind VS Code
+	// concatenates provider results onto initialConfigurations, so doing both
+	// writes the entry twice.
 	it('keeps the static default identical to the generated one', () => {
 		const initial = manifest.contributes.debuggers[0].initialConfigurations;
 		assert.equal(initial.length, 1, 'exactly one default configuration');

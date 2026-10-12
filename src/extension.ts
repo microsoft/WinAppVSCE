@@ -894,18 +894,16 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 	}
 
 	/**
-	 * Supplies the configuration for "create a launch.json file" and the Run
-	 * and Debug dropdown. Returns the one shared default so every generation
-	 * path writes identical content, and so VS Code never has to query
-	 * anything interactive just to populate a list.
+	 * Deliberately no `provideDebugConfigurations` here.
+	 *
+	 * For the initial trigger kind VS Code CONCATENATES package.json's
+	 * `initialConfigurations` with whatever providers return
+	 * (Debugger.getInitialConfigurationContent), so implementing it would
+	 * write the WinApp entry to launch.json twice. package.json already
+	 * declares the one configuration we want; the dynamic provider
+	 * registered in activate() covers the Run and Debug dropdown, which VS
+	 * Code queries through a separate path that does no concatenation.
 	 */
-	provideDebugConfigurations(
-		_folder?: vscode.WorkspaceFolder,
-		_token?: vscode.CancellationToken
-	): vscode.DebugConfiguration[] {
-		return [createDefaultLaunchConfiguration()];
-	}
-
 	async resolveDebugConfiguration(
 		_folder: vscode.WorkspaceFolder | undefined,
 		config: vscode.DebugConfiguration,
@@ -1176,13 +1174,18 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.debug.registerDebugConfigurationProvider(WINAPP_DEBUG_TYPE, provider)
 	);
 
-	// Also offer WinApp in the Run and Debug view's automatic configuration
-	// list. Unlike the F5 path, that list is queried independently of the
-	// active editor, so it works whatever file the user happens to have open.
+	// Offer WinApp in the Run and Debug view's automatic configuration list.
+	// Unlike the F5 path, that list is queried independently of the active
+	// editor, so it works whatever file the user happens to have open.
+	//
+	// A standalone provider rather than `provider` above: only the dynamic
+	// trigger kind may supply configurations here, because VS Code appends
+	// initial-kind results to package.json's `initialConfigurations` and
+	// would duplicate the entry.
 	context.subscriptions.push(
 		vscode.debug.registerDebugConfigurationProvider(
 			WINAPP_DEBUG_TYPE,
-			provider,
+			{ provideDebugConfigurations: () => [createDefaultLaunchConfiguration()] },
 			vscode.DebugConfigurationProviderTriggerKind.Dynamic
 		)
 	);
