@@ -92,8 +92,13 @@ import {
 	resolveWinappToolInvocation,
 	type WinappToolTaskSpec
 } from './tool-command-utils';
+import {
+	createFallbackLaunchConfiguration,
+	WINAPP_DEBUG_TYPE,
+	WINAPP_LAUNCH_CONFIG_NAME
+} from './launch-config';
+import { generateLaunchConfiguration, buildLaunchConfiguration, offerLaunchConfiguration } from './launch-assets';
 
-const WINAPP_DEBUG_TYPE = 'winapp';
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
 const FILE_PICKER_DETAIL = 'Open a file picker';
 
@@ -888,6 +893,24 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		this.extensionPath = extensionPath;
 	}
 
+	/**
+	 * Populate "create a launch.json file" and the dynamic configuration list
+	 * with a real target instead of package.json's static stub, so the first
+	 * F5 after generation runs the user's app rather than prompting again.
+	 */
+	async provideDebugConfigurations(
+		folder: vscode.WorkspaceFolder | undefined,
+		_token?: vscode.CancellationToken
+	): Promise<vscode.DebugConfiguration[]> {
+		// Without a folder there is nothing to discover against; the adapter
+		// resolves a target at F5 time instead.
+		if (!folder) {
+			return [createFallbackLaunchConfiguration()];
+		}
+
+		return [await buildLaunchConfiguration(folder)];
+	}
+
 	async resolveDebugConfiguration(
 		_folder: vscode.WorkspaceFolder | undefined,
 		config: vscode.DebugConfiguration,
@@ -896,7 +919,7 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		// If no configuration, create a default one
 		if (!config.type && !config.request && !config.name) {
 			config.type = WINAPP_DEBUG_TYPE;
-			config.name = 'WinApp: Launch and Attach';
+			config.name = WINAPP_LAUNCH_CONFIG_NAME;
 			config.request = 'launch';
 		}
 
@@ -1157,6 +1180,31 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.debug.registerDebugConfigurationProvider(WINAPP_DEBUG_TYPE, provider)
 	);
+
+	// Also offer WinApp in the Run and Debug view's automatic configuration
+	// list. Unlike the F5 path, that list is queried independently of the
+	// active editor, so it works whatever file the user happens to have open.
+	//
+	// Deliberately NOT the provider above: VS Code queries dynamic providers
+	// just to populate the dropdown, so this one must never prompt. The
+	// target-less configuration it returns makes the adapter discover at F5
+	// time, once the user has actually chosen to run.
+	context.subscriptions.push(
+		vscode.debug.registerDebugConfigurationProvider(
+			WINAPP_DEBUG_TYPE,
+			{ provideDebugConfigurations: () => [createFallbackLaunchConfiguration()] },
+			vscode.DebugConfigurationProviderTriggerKind.Dynamic
+		)
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('winapp.generateLaunchConfig', () => generateLaunchConfiguration())
+	);
+
+	// A missing launch.json is what strands users on VS Code's "install an
+	// extension for <language>" prompt, so offer to create one up front.
+	// Fire-and-forget: activation must not block on a notification.
+	void offerLaunchConfiguration();
 
 	const factory = new WinAppDebugAdapterFactory(extensionPath);
 	context.subscriptions.push(

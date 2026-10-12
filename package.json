@@ -38,7 +38,10 @@
     "onCommand:winapp.unregister",
     "onCommand:winapp.certInfo",
     "onCommand:winapp.openManifestEditor",
-    "onCommand:winapp.runWithOptions"
+    "onCommand:winapp.runWithOptions",
+    "onCommand:winapp.generateLaunchConfig",
+    "onDebugInitialConfigurations",
+    "onDebugDynamicConfigurations:winapp"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -153,6 +156,11 @@
         "title": "Open Manifest Editor",
         "category": "WinApp",
         "icon": "$(preview)"
+      },
+      {
+        "command": "winapp.generateLaunchConfig",
+        "title": "Generate launch.json",
+        "category": "WinApp"
       }
     ],
     "configuration": {
@@ -165,6 +173,11 @@
           },
           "default": [],
           "description": "Relative paths (from the workspace root) to app project directories. When set, WinApp commands target these directories instead of auto-scanning. If multiple entries are provided, you'll be prompted to choose."
+        },
+        "winapp.suppressLaunchConfigNotification": {
+          "type": "boolean",
+          "default": false,
+          "description": "Suppress the prompt offering to generate a launch.json when a WinApp project has no debug configuration. Set automatically when you choose \"Don't Ask Again\". You can still create one with the \"WinApp: Generate launch.json\" command."
         },
         "winapp.manifest.intelliSense.enable": {
           "type": "boolean",
@@ -217,10 +230,26 @@
         }
       ]
     },
+    "breakpoints": [
+      {
+        "language": "csharp"
+      },
+      {
+        "language": "cpp"
+      },
+      {
+        "language": "xaml"
+      }
+    ],
     "debuggers": [
       {
         "type": "winapp",
         "label": "WinApp",
+        "languages": [
+          "csharp",
+          "cpp",
+          "xaml"
+        ],
         "configurationAttributes": {
           "launch": {
             "properties": {
@@ -369,7 +398,7 @@
     "download-cli:latest": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1 -Tag latest\"",
     "sync-schemas": "pwsh -NoProfile -Command \"& ./scripts/sync-schemas.ps1\"",
     "verify-schemas": "node -e \"const fs=require('fs'),p=require('path'),d=p.join(__dirname,'schemas');if(!fs.existsSync(d)||fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length===0){console.error('ERROR: schemas/ contains no XSD files. Run npm run sync-schemas first.');process.exit(1);}console.log('schemas/ verified:',fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length,'XSD files');\"",
-    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && npx tsx --test src/test/artifact-types.test.ts src/test/arch-detection.test.ts src/test/asset-copy-token-store.test.ts src/test/cert-utils.test.ts src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-path.test.ts src/test/manifest-validator.test.ts src/test/image-utils.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/cli-json-output.test.ts src/test/noop-debug-adapter.test.ts src/test/pack-result.test.ts src/test/new-command-utils.test.ts src/test/sign-utils.test.ts src/test/sign-flow.test.ts src/test/tool-command-utils.test.ts src/test/xsd-parser.test.ts src/test/xml-context.test.ts src/test/intellisense-integration.test.ts src/test/intellisense-validation.test.ts src/test/schema-shared.test.ts src/test/semantic-validation.test.ts src/test/working-directory.test.ts src/test/run-target.test.ts src/test/project-runnability.test.ts src/test/run-options.test.ts src/test/package-contributions.test.ts src/test/run-cli-contract.test.ts"
+    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && npx tsx --test src/test/artifact-types.test.ts src/test/arch-detection.test.ts src/test/asset-copy-token-store.test.ts src/test/cert-utils.test.ts src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-path.test.ts src/test/manifest-validator.test.ts src/test/image-utils.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/cli-json-output.test.ts src/test/noop-debug-adapter.test.ts src/test/pack-result.test.ts src/test/new-command-utils.test.ts src/test/sign-utils.test.ts src/test/sign-flow.test.ts src/test/tool-command-utils.test.ts src/test/xsd-parser.test.ts src/test/xml-context.test.ts src/test/intellisense-integration.test.ts src/test/intellisense-validation.test.ts src/test/schema-shared.test.ts src/test/semantic-validation.test.ts src/test/working-directory.test.ts src/test/run-target.test.ts src/test/project-runnability.test.ts src/test/run-options.test.ts src/test/launch-config.test.ts src/test/package-contributions.test.ts src/test/run-cli-contract.test.ts"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",

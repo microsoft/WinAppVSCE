@@ -116,6 +116,37 @@ describe('package.json contributions', () => {
 		assert.ok(commands.includes('winapp.runWithOptions'));
 	});
 
+	// Without a `languages` claim VS Code never considers the WinApp debugger
+	// for a bare F5, and sends the user to the Marketplace instead (#287).
+	it('claims the languages a WinApp project is written in', () => {
+		const languages: string[] = manifest.contributes.debuggers[0].languages;
+		assert.ok(Array.isArray(languages) && languages.length > 0, 'debugger must declare languages');
+		for (const expected of ['csharp', 'cpp']) {
+			assert.ok(languages.includes(expected), `missing debugger language ${expected}`);
+		}
+	});
+
+	// canSetBreakpointsIn() reads this contribution, and it is one of the
+	// conditions that lets VS Code fall back to our configuration provider.
+	it('contributes breakpoints for exactly the languages the debugger claims', () => {
+		const languages: string[] = manifest.contributes.debuggers[0].languages;
+		const breakpoints: { language: string }[] = manifest.contributes.breakpoints;
+		assert.ok(Array.isArray(breakpoints), 'breakpoints must be contributed');
+		assert.deepEqual(
+			breakpoints.map(entry => entry.language).sort(),
+			[...languages].sort(),
+			'breakpoint languages must stay in sync with debugger languages'
+		);
+	});
+
+	it('activates for the debug flows that have no launch.json yet', () => {
+		const activationEvents: string[] = manifest.activationEvents;
+		// guessDebugger() fires onDebugInitialConfigurations before asking any
+		// provider for configurations; without it we are never consulted.
+		assert.ok(activationEvents.includes('onDebugInitialConfigurations'));
+		assert.ok(activationEvents.includes('onDebugDynamicConfigurations:winapp'));
+	});
+
 	// launch.json is the only place a user types these by hand, so the schema
 	// is the first line of defence: a wrong type or a missing enum turns into
 	// a CLI error at F5 time instead of a red squiggle while editing.
