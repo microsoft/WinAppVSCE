@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Pure-logic unit tests for the VS extension's host/project discovery: WASDK version discovery,
+       matched-host selection, user-assembly location, WinUI project detection, PE architecture and surface
+       resolution. Compiles the production sources in place and drives them against temp-dir fixtures —
+       no VS, no Surface.exe, no Windows App SDK. net472 to match the runtime that hosts the extension. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>SurfaceClient.UnitTests</AssemblyName>
+    <RootNamespace>WinUIXamlPreview.UnitTests</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\surface\Shared\HostPayload.cs" Link="Shared\HostPayload.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\IsExternalInit.cs" Link="Protocol\IsExternalInit.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\HostArch.cs" Link="Protocol\HostArch.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\WasdkVersionDiscovery.cs" Link="Protocol\WasdkVersionDiscovery.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceResolver.cs" Link="Protocol\SurfaceResolver.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\ProjectDllLocator.cs" Link="Protocol\ProjectDllLocator.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\MatchedHostResolver.cs" Link="Protocol\MatchedHostResolver.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\HostProvisionerRunner.cs" Link="Protocol\HostProvisionerRunner.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="10.0.9" />
+  </ItemGroup>
+
+</Project>

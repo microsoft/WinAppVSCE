@@ -10,7 +10,7 @@ $root = (Resolve-Path "$PSScriptRoot\..").Path
 $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
 if (-not $pwsh) { throw "PowerShell 7 (pwsh) required for surface\Test-Foundation.ps1." }
 $msbuild = & "$PSScriptRoot\Find-DesktopMSBuild.ps1"
-foreach ($name in @("SurfaceClient.Smoke", "SurfaceClient.UITest", "SurfaceClient.FaultTests")) {
+foreach ($name in @("SurfaceClient.Smoke", "SurfaceClient.UITest", "SurfaceClient.FaultTests", "SurfaceClient.UnitTests")) {
     & $msbuild "$PSScriptRoot\$name\$name.csproj" /restore /nologo `
         /p:Configuration=Debug /p:Platform=x64 /v:minimal
     if ($LASTEXITCODE -ne 0) { throw "$name build failed (exit $LASTEXITCODE)." }
@@ -26,6 +26,17 @@ foreach ($mode in @("--d2", "--d2residual")) {
 # controllable fake surface, so it needs no Windows App SDK or real renderer and always runs.
 & "$PSScriptRoot\SurfaceClient.FaultTests\bin\x64\Debug\net472\SurfaceClient.FaultTests.exe"
 if ($LASTEXITCODE -ne 0) { throw "Fault-injection suite failed (exit $LASTEXITCODE)." }
+
+# Host/project discovery logic (WASDK version, matched host, user DLL, WinUI detection, PE arch,
+# surface resolution) against temp-dir fixtures.
+& "$PSScriptRoot\SurfaceClient.UnitTests\bin\x64\Debug\net472\SurfaceClient.UnitTests.exe"
+if ($LASTEXITCODE -ne 0) { throw "Extension unit tests failed (exit $LASTEXITCODE)." }
+
+# XamlCleaner rule-by-rule tests. Reflection over WinUI types only — no window, no runtime bootstrap.
+& dotnet build "$root\surface\Surface.Tests\Surface.Tests.csproj" -c Debug -nologo -v quiet
+if ($LASTEXITCODE -ne 0) { throw "Surface.Tests build failed (exit $LASTEXITCODE)." }
+& dotnet run --project "$root\surface\Surface.Tests\Surface.Tests.csproj" -c Debug --no-build
+if ($LASTEXITCODE -ne 0) { throw "XamlCleaner tests failed (exit $LASTEXITCODE)." }
 
 # Experimental-identity registration logic against mocks; no registration is performed.
 & "$PSScriptRoot\Test-ExperimentalIdentity.ps1"
