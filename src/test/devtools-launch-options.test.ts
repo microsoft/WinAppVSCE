@@ -32,30 +32,47 @@ test('only an explicit false turns DevTools off', () => {
 
 // ───────────────────────────── spawn arguments ─────────────────────────────
 
-test('an unconfigured launch passes --devtools to the CLI', () => {
-    assert.deepStrictEqual(devToolsSpawnArgs({}), ['--devtools']);
+test('an unconfigured launch asks the CLI for DevTools on', () => {
+    assert.deepStrictEqual(devToolsSpawnArgs({}), ['--devtools', 'on']);
 });
 
-test('opting out passes nothing, leaving the CLI command untouched', () => {
-    assert.deepStrictEqual(devToolsSpawnArgs({ useDevTools: false }), []);
+test('opting out turns DevTools off explicitly', () => {
+    // The CLI enables DevTools by default for WinUI projects, so passing
+    // nothing here would quietly override useDevTools: false.
+    assert.deepStrictEqual(devToolsSpawnArgs({ useDevTools: false }), ['--devtools', 'off']);
 });
 
 test('hiding the overlay still starts the engine', () => {
-    // The panel is a second client of the same engine, so --no-overlay without
-    // --devtools would leave the panel with nothing to talk to.
+    // The panel is a second client of the same engine, so a mode that stopped
+    // the engine would leave the panel with nothing to talk to.
     assert.deepStrictEqual(
         devToolsSpawnArgs({ noOverlay: true }),
-        ['--devtools', '--no-overlay'],
+        ['--devtools', 'headless'],
     );
 });
 
-test('--no-overlay is never passed on its own when DevTools is off', () => {
-    // The CLI rejects it without --devtools, which would break the launch.
-    assert.deepStrictEqual(devToolsSpawnArgs({ useDevTools: false, noOverlay: true }), []);
+test('off wins over noOverlay', () => {
+    // noOverlay only chooses how DevTools is shown; it must never resurrect it.
+    assert.deepStrictEqual(
+        devToolsSpawnArgs({ useDevTools: false, noOverlay: true }),
+        ['--devtools', 'off'],
+    );
 });
 
 test('an explicitly false noOverlay keeps the overlay', () => {
-    assert.deepStrictEqual(devToolsSpawnArgs({ noOverlay: false }), ['--devtools']);
+    assert.deepStrictEqual(devToolsSpawnArgs({ noOverlay: false }), ['--devtools', 'on']);
+});
+
+test('the mode is always one the CLI accepts', () => {
+    // --devtools is a valued option; a bare flag or an unknown mode fails the launch.
+    for (const config of [{}, { useDevTools: true }, { useDevTools: false }, { noOverlay: true }]) {
+        const args = devToolsSpawnArgs(config);
+        assert.strictEqual(args[0], '--devtools', `missing flag for ${JSON.stringify(config)}`);
+        assert.ok(
+            ['on', 'off', 'headless'].includes(args[1]),
+            `unexpected mode ${args[1]} for ${JSON.stringify(config)}`,
+        );
+    }
 });
 
 // ───────────────────────────── agreement ─────────────────────────────
@@ -74,7 +91,7 @@ test('the spawn arguments and the panel never disagree about being on', () => {
 
     for (const config of configs) {
         assert.strictEqual(
-            devToolsSpawnArgs(config).length > 0,
+            devToolsSpawnArgs(config)[1] !== 'off',
             shouldUseDevTools(config),
             `disagreement for ${JSON.stringify(config)}`,
         );
@@ -115,7 +132,7 @@ test('noDebug leaves DevTools fully enabled', () => {
     // would lose the panel it exists to provide.
     const config = { noDebug: true };
     assert.strictEqual(shouldUseDevTools(config), true);
-    assert.deepStrictEqual(devToolsSpawnArgs(config), ['--devtools']);
+    assert.deepStrictEqual(devToolsSpawnArgs(config), ['--devtools', 'on']);
 });
 
 test('noDebug and useDevTools are independent across every combination', () => {
