@@ -291,6 +291,59 @@ async function findExecutableCsproj(directory: string): Promise<string | undefin
 /** `unknown` stays visible because only the CLI can fully evaluate MSBuild. */
 export type ProjectRunnability = 'app' | 'test' | 'library' | 'unknown';
 
+/**
+ * Package id prefixes that mark a test project, mirroring the CLI's
+ * `TestPackagePrefixes` in `ProjectDetectionService`. Matching the CLI matters
+ * because it is the component that ultimately refuses to run these.
+ */
+const TEST_PACKAGE_PREFIXES = [
+	'microsoft.net.test.sdk',
+	'microsoft.testplatform.testhost',
+	'mstest',
+	'xunit',
+	'nunit'
+];
+
+/** The MSBuild project SDK used by `dotnet new mstest` since MSTest 3.3. */
+const TEST_PROJECT_SDK_PREFIX = 'mstest.sdk';
+
+function isKnownTestPackage(packageId: string | undefined): boolean {
+	const id = packageId?.trim().toLowerCase();
+	return id !== undefined && TEST_PACKAGE_PREFIXES.some(prefix => id.startsWith(prefix));
+}
+
+/**
+ * True when the project carries an *unconditional* test marker: the VS
+ * `TestContainer` capability or a test-framework package reference. Conditional
+ * markers are ignored because only MSBuild can tell whether they are active,
+ * and assuming they are would hide a real app from the run picker.
+ */
+function hasInlineTestMarkers(doc: ReturnType<typeof tryParseXml>): boolean {
+	if (!doc) {
+		return false;
+	}
+
+	const unconditional = (elements: ReturnType<typeof findElementsByLocalName>) =>
+		elements.filter(element => !hasAttributeOnSelfOrAncestor(element, 'Condition'));
+
+	for (const element of unconditional(findElementsByLocalName(doc, 'ProjectCapability'))) {
+		if (attributeValue(element, 'Include')?.trim().toLowerCase() === 'testcontainer') {
+			return true;
+		}
+	}
+
+	for (const element of unconditional(findElementsByLocalName(doc, 'PackageReference'))) {
+		// `Update` carries the id just as `Include` does when the reference
+		// comes from central package management.
+		const id = attributeValue(element, 'Include') ?? attributeValue(element, 'Update');
+		if (isKnownTestPackage(id)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 /** Only explicit `test`/`library` markers demote; pending microsoft/winappCli#957. */
 export function classifyProjectRunnability(content: string): ProjectRunnability {
 	const doc = tryParseXml(content);
@@ -306,12 +359,17 @@ export function classifyProjectRunnability(content: string): ProjectRunnability 
 		}
 	}
 
-	// The test SDK is what actually makes a project a test project; projects
-	// relying on it rarely set IsTestProject themselves.
-	for (const element of findElementsByLocalName(doc, 'PackageReference')) {
-		if (attributeValue(element, 'Include')?.toLowerCase() === 'microsoft.net.test.sdk') {
+	// `dotnet new mstest` now emits `<Project Sdk="MSTest.Sdk/3.x">` with no
+	// package references at all, so the SDK attribute is the only inline
+	// signal that the project is a test project.
+	for (const element of findElementsByLocalName(doc, 'Project')) {
+		if (attributeValue(element, 'Sdk')?.trim().toLowerCase().startsWith(TEST_PROJECT_SDK_PREFIX)) {
 			return 'test';
 		}
+	}
+
+	if (hasInlineTestMarkers(doc)) {
+		return 'test';
 	}
 
 	// A conditioned OutputType is exactly the "can't tell without MSBuild"
@@ -320,16 +378,23 @@ export function classifyProjectRunnability(content: string): ProjectRunnability 
 	// `<PropertyGroup Condition="..."><OutputType>Library</OutputType>` is as
 	// conditional as `<OutputType Condition="...">`, and trusting it would
 	// hide a real app from the run picker.
-	const outputTypes = findElementsByLocalName(doc, 'OutputType')
-		.filter(element => !hasAttributeOnSelfOrAncestor(element, 'Condition'));
+	const declaredOutputTypes = findElementsByLocalName(doc, 'OutputType');
+	const outputTypes = declaredOutputTypes.filter(element => !hasAttributeOnSelfOrAncestor(element, 'Condition'));
 	if (outputTypes.length === 0) {
-		// No explicit OutputType. It may still build an executable (WinUI and
-		// WPF templates usually set it, but SDK defaults and shared props
-		// files can supply it too), so defer to the CLI.
-		return 'unknown';
+		// Every declared OutputType is conditional: genuinely undecidable here.
+		if (declaredOutputTypes.length > 0) {
+			return 'unknown';
+		}
+		// Nothing declared at all. The CLI's own static classification treats
+		// this as not runnable (`ClassifyRunnableStatic` requires Exe/WinExe),
+		// so offering it would surface `dotnet new classlib` projects in the
+		// picker — and auto-run them when they are the only candidate. Browse
+		// still reaches a project whose OutputType arrives from an import.
+		return 'library';
 	}
 
-	const outputType = elementText(outputTypes[0]).toLowerCase();
+	// Last declaration wins, matching MSBuild property semantics and the CLI.
+	const outputType = elementText(outputTypes[outputTypes.length - 1]).toLowerCase();
 	if (outputType === 'exe' || outputType === 'winexe') {
 		return 'app';
 	}

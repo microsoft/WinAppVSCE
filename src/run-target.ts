@@ -1,6 +1,6 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
-import { isContainedIn, isContainedInReal, isOfferableProject, readProjectRunnability } from './project-detection';
+import { isContainedIn, isContainedInReal, isOfferableProject, readProjectRunnability, type ProjectRunnability } from './project-detection';
 import { attributeValue, findElementsByLocalName, tryParseXml } from './xml-read';
 import type { WorkspaceRoot } from './workspace';
 
@@ -72,7 +72,6 @@ export function classifyRunTargetFile(filePath: string): RunTargetKind | undefin
 export function classifyRunTargetEntries(entryNames: readonly string[]): RunTargetKind {
 	let hasProject = false;
 	let hasExecutable = false;
-	let hasFileBasedApp = false;
 
 	for (const name of entryNames) {
 		const extension = path.extname(name).toLowerCase();
@@ -83,16 +82,16 @@ export function classifyRunTargetEntries(entryNames: readonly string[]): RunTarg
 			hasProject = true;
 		} else if (extension === '.exe') {
 			hasExecutable = true;
-		} else if ((FILE_BASED_APP_EXTENSIONS as readonly string[]).includes(extension)) {
-			hasFileBasedApp = true;
 		}
 	}
 
 	if (hasProject) { return 'project'; }
 	if (hasExecutable) { return 'folder'; }
-	// Ranked below .exe so a build-output folder that happens to ship sources
-	// keeps classifying as folder mode, exactly as it did before.
-	if (hasFileBasedApp) { return 'project'; }
+	// Loose `.cs` files deliberately do NOT make a directory project mode: the
+	// CLI reaches single-file mode only from an explicitly typed `.cs` path,
+	// never from directory inference, so `winapp run <dir>` would run folder
+	// mode and fail with "Manifest file not found". Leaving it `unknown` keeps
+	// the extension's classification honest about what the CLI will do.
 	return 'unknown';
 }
 
@@ -276,9 +275,48 @@ export async function readTargetProjects(
 
 /** Drops only explicit test/library projects; `unknown` stays visible. */
 export async function filterOfferableProjects(projectPaths: readonly string[]): Promise<string[]> {
+	return (await classifyOfferableProjects(projectPaths)).map(entry => entry.path);
+}
+
+/**
+ * Like {@link filterOfferableProjects}, but keeps each project's runnability so
+ * callers can tell a confident `app` from an undecidable `unknown`. Prompting
+ * on `unknown` would second-guess the CLI, which evaluates MSBuild properly.
+ */
+export async function classifyOfferableProjects(
+	projectPaths: readonly string[]
+): Promise<{ path: string; runnability: ProjectRunnability }[]> {
 	const runnability = await Promise.all(projectPaths.map(readProjectRunnability));
 
-	return projectPaths.filter((_, index) => isOfferableProject(runnability[index]));
+	return projectPaths
+		.map((projectPath, index) => ({ path: projectPath, runnability: runnability[index] }))
+		.filter(entry => isOfferableProject(entry.runnability));
+}
+
+/**
+ * Collapses same-folder, same-basename `.sln`/`.slnx` pairs into one entry,
+ * preferring the newer `.slnx`. Visual Studio leaves both side by side during
+ * `.slnx` migration, so without this a single-solution workspace stops
+ * auto-selecting and prompts between two names for the same solution. The CLI
+ * does exactly this (`CollapseSolutionMigrationPairs`); solutions with
+ * distinct base names still require an explicit choice.
+ */
+export function collapseSolutionMigrationPairs(
+	candidates: readonly RunTargetCandidate[]
+): RunTargetCandidate[] {
+	const superseded = new Set<string>();
+
+	for (const candidate of candidates) {
+		if (path.extname(candidate.path).toLowerCase() !== '.slnx') { continue; }
+		const stem = candidate.path.slice(0, -'.slnx'.length);
+		superseded.add(normalizeForComparison(`${stem}.sln`));
+	}
+
+	if (superseded.size === 0) {
+		return [...candidates];
+	}
+
+	return candidates.filter(candidate => !superseded.has(normalizeForComparison(candidate.path)));
 }
 
 /** Folds solution members into the solution target to preserve MSBuild context. */

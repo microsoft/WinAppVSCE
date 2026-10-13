@@ -46,11 +46,14 @@ describe('classifyProjectRunnability', () => {
 		assert.strictEqual(classifyProjectRunnability(content), 'test');
 	});
 
-	// The CLI resolves OutputType through full MSBuild evaluation, so it can
-	// come from an SDK default or Directory.Build.props. Guessing 'library'
-	// here would hide real apps from the picker.
-	it('reports unknown when OutputType is absent rather than assuming a library', () => {
-		assert.strictEqual(classifyProjectRunnability(csproj('<TargetFramework>net8.0</TargetFramework>')), 'unknown');
+	// `ClassifyRunnableStatic` in the CLI requires Exe/WinExe, so a project
+	// whose OutputType is absent is not something the CLI will run from a
+	// directory scan either. Calling it `unknown` here put `dotnet new
+	// classlib` in the picker — and auto-ran it when it was the only
+	// candidate. Browse still reaches a project that gets its OutputType from
+	// an import.
+	it('reports library when no OutputType is declared at all', () => {
+		assert.strictEqual(classifyProjectRunnability(csproj('<TargetFramework>net8.0</TargetFramework>')), 'library');
 	});
 
 	it('reports unknown for an unrecognised OutputType', () => {
@@ -58,28 +61,71 @@ describe('classifyProjectRunnability', () => {
 	});
 
 	// Each of these passed the old regex scan, which could not tell markup
-	// from text. The first two hid a runnable project; the third invented a
-	// classification the project file never actually declared.
+	// from text. Every fixture declares a real Exe output, so reading the
+	// commented-out or prose markup would flip the result away from 'app'.
 	it('ignores a commented-out Library output', () => {
-		const content = csproj('<!-- <OutputType>Library</OutputType> --><TargetFramework>net8.0</TargetFramework>');
-		assert.strictEqual(classifyProjectRunnability(content), 'unknown');
+		const content = csproj('<OutputType>Exe</OutputType><!-- <OutputType>Library</OutputType> -->');
+		assert.strictEqual(classifyProjectRunnability(content), 'app');
 	});
 
 	it('ignores a commented-out IsTestProject marker', () => {
-		const content = csproj('<!-- <IsTestProject>true</IsTestProject> -->');
-		assert.strictEqual(classifyProjectRunnability(content), 'unknown');
+		const content = csproj('<OutputType>Exe</OutputType><!-- <IsTestProject>true</IsTestProject> -->');
+		assert.strictEqual(classifyProjectRunnability(content), 'app');
 	});
 
 	it('ignores an OutputType mentioned only in documentation text', () => {
-		const content = csproj('<PropertyGroup><Description>Set &lt;OutputType&gt;Library&lt;/OutputType&gt; to build a DLL.</Description></PropertyGroup>');
-		assert.strictEqual(classifyProjectRunnability(content), 'unknown');
+		const content = csproj('<OutputType>Exe</OutputType><Description>Set &lt;OutputType&gt;Library&lt;/OutputType&gt; to build a DLL.</Description>');
+		assert.strictEqual(classifyProjectRunnability(content), 'app');
 	});
 
 	// A conditioned OutputType is the "cannot tell without MSBuild" case, so
-	// it must stay visible rather than being read as unconditional.
+	// it must stay visible rather than being read as unconditional. It is also
+	// why an absent OutputType and an inactive one are not the same thing.
 	it('does not read a conditioned OutputType as the effective value', () => {
 		const content = csproj('<OutputType Condition="\'$(Configuration)\'==\'Debug\'">Library</OutputType>');
 		assert.strictEqual(classifyProjectRunnability(content), 'unknown');
+	});
+
+	it('takes the last unconditional OutputType, as MSBuild does', () => {
+		const content = '<Project Sdk="Microsoft.NET.Sdk">'
+			+ '<PropertyGroup><OutputType>Library</OutputType></PropertyGroup>'
+			+ '<PropertyGroup><OutputType>WinExe</OutputType></PropertyGroup>'
+			+ '</Project>';
+		assert.strictEqual(classifyProjectRunnability(content), 'app');
+	});
+
+	it('classifies the MSTest project SDK as a test project', () => {
+		// `dotnet new mstest` emits this and no package references at all.
+		assert.strictEqual(classifyProjectRunnability('<Project Sdk="MSTest.Sdk/3.6.4"></Project>'), 'test');
+	});
+
+	it('classifies the TestContainer project capability as a test project', () => {
+		const content = '<Project Sdk="Microsoft.NET.Sdk">'
+			+ '<PropertyGroup><OutputType>WinExe</OutputType></PropertyGroup>'
+			+ '<ItemGroup><ProjectCapability Include="TestContainer" /></ItemGroup>'
+			+ '</Project>';
+		assert.strictEqual(classifyProjectRunnability(content), 'test');
+	});
+
+	it('classifies xunit, nunit and mstest package references as test projects', () => {
+		for (const id of ['xunit.v3', 'NUnit', 'MSTest.TestFramework', 'Microsoft.TestPlatform.TestHost']) {
+			const content = '<Project Sdk="Microsoft.NET.Sdk">'
+				+ '<PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>'
+				+ `<ItemGroup><PackageReference Include="${id}" Version="1.0.0" /></ItemGroup>`
+				+ '</Project>';
+			assert.strictEqual(classifyProjectRunnability(content), 'test', id);
+		}
+	});
+
+	it('ignores a conditioned test package reference', () => {
+		// Only MSBuild knows whether the condition is active, and assuming it
+		// is would drop a real app from the picker.
+		const content = '<Project Sdk="Microsoft.NET.Sdk">'
+			+ '<PropertyGroup><OutputType>WinExe</OutputType></PropertyGroup>'
+			+ '<ItemGroup Condition="\'$(Configuration)\'==\'Debug\'">'
+			+ '<PackageReference Include="xunit" Version="2.9.0" /></ItemGroup>'
+			+ '</Project>';
+		assert.strictEqual(classifyProjectRunnability(content), 'app');
 	});
 
 	it('accepts a single-quoted Include on the test SDK reference', () => {

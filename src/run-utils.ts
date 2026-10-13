@@ -10,10 +10,11 @@ import { PROJECT_SCAN_SKIP_DIRS } from './project-detection';
 import {
 	classifyRunTarget,
 	classifyRunTargetFile,
+	collapseSolutionMigrationPairs,
 	dedupeSolutionMembers,
 	DISCOVERABLE_TARGET_EXTENSIONS,
 	filterOfferableCandidates,
-	filterOfferableProjects,
+	classifyOfferableProjects,
 	findOwningRoot,
 	isDirectory,
 	isDiscoverableTargetExtension,
@@ -208,6 +209,9 @@ async function discoverRunTargets(
 	let solutionMembers = new Map<string, string[]>();
 
 	if (candidates.length > 0) {
+		// A workspace mid-.slnx-migration ships both files for one solution;
+		// keeping both would turn an unambiguous workspace into a prompt.
+		candidates = collapseSolutionMigrationPairs(candidates);
 		solutionMembers = await mapSolutionMembers(candidates);
 		candidates = dedupeSolutionMembers(candidates, solutionMembers);
 		// Drop projects the project file itself identifies as a library or a
@@ -421,14 +425,24 @@ export async function pickSolutionProject(
 		return { cancelled: false };
 	}
 
-	const offerable = await filterOfferableProjects(projects);
+	const offerable = await classifyOfferableProjects(projects);
 	if (offerable.length <= 1) {
 		// The CLI makes the final app classification and reports failures more
 		// precisely than a doomed QuickPick would.
 		return { cancelled: false };
 	}
 
-	const items = offerable.map(projectPath => ({
+	// Only genuine ambiguity deserves a prompt. When at most one member is a
+	// confident app, `winapp run <solution>` picks it without `--project` —
+	// asking would make the user arbitrate a question the CLI already answers
+	// with full MSBuild evaluation. The list still offers every `unknown`
+	// member once we do ask, so nothing undecidable is hidden from a choice.
+	const apps = offerable.filter(entry => entry.runnability === 'app');
+	if (apps.length <= 1) {
+		return { cancelled: false };
+	}
+
+	const items = offerable.map(({ path: projectPath }) => ({
 		label: `$(file-code) ${path.basename(projectPath)}`,
 		// Show the path relative to the container, not just the file name, so
 		// two same-named projects are distinguishable.

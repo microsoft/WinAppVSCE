@@ -103,6 +103,37 @@ const maximalOptions: Required<WinAppRunOptions> = {
 	json: true,
 };
 
+/**
+ * Every `winapp run` option the extension intentionally surfaces. This is the
+ * extension's side of the contract: the CLI may grow options we have not
+ * adopted yet without failing the build, but dropping one from here is a
+ * deliberate act that shows up in review.
+ */
+const SUPPORTED_RUN_OPTIONS = [
+	'--aot',
+	'--arch',
+	'--args',
+	'--clean',
+	'--configuration',
+	'--debug-output',
+	'--detach',
+	'--executable',
+	'--framework',
+	'--json',
+	'--manifest',
+	'--no-build',
+	'--no-launch',
+	'--no-restore',
+	'--output-appx-directory',
+	'--project',
+	'--property',
+	'--runtime',
+	'--symbols',
+	'--unregister-on-exit',
+	'--with-alias',
+	'--without-alias'
+];
+
 /** Schema-guided argv walk; --args may contain values that start with --. */
 function walkArgs(args: string[]): Set<string> {
 	const schema = requireSchema();
@@ -155,20 +186,27 @@ describe('buildRunArgs matches the real winapp run schema', { skip: skipReason }
 		}
 	});
 
-	it('covers every non-diagnostic option the CLI exposes', () => {
+	it('covers every run option the extension claims to support', () => {
 		const schema = requireSchema();
 		const emitted = walkArgs(buildRunArgs(maximalOptions));
 
-		// --verbose/--quiet are output controls the extension deliberately owns
-		// elsewhere; they are not part of the run-options surface.
-		const diagnosticOnly = new Set(['--verbose', '--quiet']);
-		const missing = Object.keys(schema.options)
-			.filter((flag) => !diagnosticOnly.has(flag) && !emitted.has(flag));
+		// Deliberately checked against a pinned list rather than "everything
+		// the CLI exposes". CI downloads the *latest* CLI, so an exhaustive
+		// check turns any new winapp flag into a red build on every open PR —
+		// a CLI release is not an extension regression. What is a regression is
+		// quietly losing an option we already surface, which is what this pins.
+		// Extend SUPPORTED_RUN_OPTIONS when the extension adopts a new flag.
+		const expected = SUPPORTED_RUN_OPTIONS
+			// An option the CLI has since removed is the CLI's business; the
+			// "emits only flags the CLI defines" test already covers that.
+			.filter((flag) => flag in schema.options);
+
+		const missing = expected.filter((flag) => !emitted.has(flag));
 
 		assert.deepEqual(
 			missing,
 			[],
-			`winapp ${schema.cliVersion} exposes run options the extension cannot emit: ${missing.join(', ')}`
+			`the extension no longer emits run options it supports: ${missing.join(', ')}`
 		);
 	});
 

@@ -206,11 +206,25 @@ describe('validateRunInput (project mode)', () => {
 		}
 	});
 
-	it('accepts a directory holding only a file-based app', async () => {
+	// The CLI reaches single-file mode only from an explicitly typed `.cs`
+	// path, never from directory inference — `winapp run <dir>` would run
+	// folder mode and fail with "Manifest file not found". Rejecting here says
+	// what is actually wrong.
+	it('rejects a directory holding only loose sources', async () => {
 		const fileBasedDir = path.join(tmpDir, 'script-app');
 		await fs.promises.mkdir(fileBasedDir);
 		await fs.promises.writeFile(path.join(fileBasedDir, 'app.cs'), '');
 		const result = await validateRunInput(fileBasedDir, tmpDir);
+		assert.equal(result.valid, false);
+		if (!result.valid) {
+			assert.equal(result.reason, 'nothing-runnable');
+		}
+	});
+
+	it('accepts an explicitly named file-based app', async () => {
+		const scriptPath = path.join(tmpDir, 'app.cs');
+		await fs.promises.writeFile(scriptPath, '');
+		const result = await validateRunInput(scriptPath, tmpDir);
 		assert.equal(result.valid, true);
 	});
 });

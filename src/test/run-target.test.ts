@@ -6,8 +6,10 @@ import * as os from 'os';
 import {
 	classifyRunTarget,
 	classifyRunTargetEntries,
+	classifyOfferableProjects,
 	classifyRunTargetFile,
 	dedupeSolutionMembers,
+	collapseSolutionMigrationPairs,
 	filterOfferableCandidates,
 	filterOfferableProjects,
 	findOwningRoot,
@@ -67,12 +69,14 @@ describe('classifyRunTargetEntries', () => {
 		assert.strictEqual(classifyRunTargetEntries(['MyApp.csproj', 'MyApp.exe']), 'project');
 	});
 
-	it('treats a directory holding only a file-based app as project mode', () => {
-		assert.strictEqual(classifyRunTargetEntries(['App.cs']), 'project');
+	// The CLI reaches single-file mode only from an explicitly typed `.cs`
+	// path, never from directory inference, so `winapp run <dir>` here would
+	// run folder mode and fail with "Manifest file not found".
+	it('does not treat a directory holding only loose sources as project mode', () => {
+		assert.strictEqual(classifyRunTargetEntries(['App.cs']), 'unknown');
 	});
 
-	// Ranking .cs below .exe keeps build-output folders that happen to ship
-	// sources in folder mode, which is how they classified before .cs support.
+	// Build-output folders that happen to ship sources stay in folder mode.
 	it('still prefers an executable over loose sources', () => {
 		assert.strictEqual(classifyRunTargetEntries(['App.cs', 'MyApp.exe']), 'folder');
 	});
@@ -176,6 +180,49 @@ describe('parseSolutionProjectPaths (.slnx)', () => {
 	it('returns nothing for malformed XML instead of guessing', () => {
 		const content = '<Solution><Project Path="src/MyApp/MyApp.csproj"';
 		assert.deepStrictEqual(parseSolutionProjectPaths(content, 'C:/ws/MyApp.slnx'), []);
+	});
+});
+
+describe('collapseSolutionMigrationPairs', () => {
+	// Visual Studio leaves both files side by side mid-migration, which turned
+	// a single-solution workspace into a pointless "which solution?" prompt.
+	it('drops the .sln when a same-named .slnx sits beside it', () => {
+		const sln = candidate('solution', 'C:/ws/AppA/MyApp.sln');
+		const slnx = candidate('solution', 'C:/ws/AppA/MyApp.slnx');
+
+		const result = collapseSolutionMigrationPairs([sln, slnx]);
+
+		assert.deepStrictEqual(result.map(c => c.path), [slnx.path]);
+	});
+
+	it('is case insensitive about the base name', () => {
+		const sln = candidate('solution', 'C:/ws/AppA/MYAPP.sln');
+		const slnx = candidate('solution', 'C:/ws/AppA/myapp.slnx');
+
+		assert.deepStrictEqual(
+			collapseSolutionMigrationPairs([sln, slnx]).map(c => c.path),
+			[slnx.path]
+		);
+	});
+
+	it('keeps solutions with distinct base names', () => {
+		const one = candidate('solution', 'C:/ws/AppA/One.sln');
+		const two = candidate('solution', 'C:/ws/AppA/Two.slnx');
+
+		assert.deepStrictEqual(collapseSolutionMigrationPairs([one, two]).length, 2);
+	});
+
+	it('keeps same-named solutions in different folders', () => {
+		const sln = candidate('solution', 'C:/ws/AppA/MyApp.sln');
+		const slnx = candidate('solution', 'C:/ws/AppB/MyApp.slnx');
+
+		assert.deepStrictEqual(collapseSolutionMigrationPairs([sln, slnx]).length, 2);
+	});
+
+	it('leaves a lone .sln alone', () => {
+		const sln = candidate('solution', 'C:/ws/AppA/MyApp.sln');
+
+		assert.deepStrictEqual(collapseSolutionMigrationPairs([sln]).map(c => c.path), [sln.path]);
 	});
 });
 
@@ -437,11 +484,14 @@ describe('filterOfferableProjects', () => {
 		});
 	});
 
-	// The counterweight to the rule above: an inherited or conditional
-	// OutputType must never make a real app disappear.
-	it('keeps a project whose OutputType is not stated in the file', async () => {
-		const inherited = '<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>';
-		await withProjects({ 'Core.csproj': library, 'Mystery.csproj': inherited }, async (_dir, paths) => {
+	// The counterweight to the rule above: a *conditional* OutputType is
+	// genuinely undecidable without MSBuild, so it must never make a real app
+	// disappear. An entirely absent OutputType is a different case — the CLI's
+	// own static classification treats that as not runnable.
+	it('keeps a project whose OutputType is conditional', async () => {
+		const conditional = '<Project><PropertyGroup Condition="\'$(Configuration)\'==\'Debug\'">'
+			+ '<OutputType>Library</OutputType></PropertyGroup></Project>';
+		await withProjects({ 'Core.csproj': library, 'Mystery.csproj': conditional }, async (_dir, paths) => {
 			const kept = (await filterOfferableProjects(paths)).map(p => path.basename(p));
 			assert.deepStrictEqual(kept, ['Mystery.csproj']);
 		});
@@ -521,6 +571,28 @@ describe('filterOfferableCandidates', () => {
 				candidate('project', path.join(dir, 'Core.csproj'))
 			]);
 			assert.deepStrictEqual(result, []);
+		});
+	});
+
+	// `pickSolutionProject` prompts (and passes --project) only when two or
+	// more members are confident apps, so it needs the classification, not
+	// just the surviving paths.
+	it('reports each surviving project runnability', async () => {
+		const app = '<Project><PropertyGroup><OutputType>WinExe</OutputType></PropertyGroup></Project>';
+		const conditional = '<Project><PropertyGroup Condition="\'$(Configuration)\'==\'Debug\'">'
+			+ '<OutputType>Library</OutputType></PropertyGroup></Project>';
+
+		await withCandidateDir({ 'App.csproj': app, 'Core.csproj': library, 'Mystery.csproj': conditional }, async dir => {
+			const result = await classifyOfferableProjects([
+				path.join(dir, 'App.csproj'),
+				path.join(dir, 'Core.csproj'),
+				path.join(dir, 'Mystery.csproj')
+			]);
+
+			assert.deepStrictEqual(
+				result.map(entry => [path.basename(entry.path), entry.runnability]),
+				[['App.csproj', 'app'], ['Mystery.csproj', 'unknown']]
+			);
 		});
 	});
 });
