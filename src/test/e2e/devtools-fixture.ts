@@ -20,6 +20,31 @@ export const FIXTURE_APP_DIR = path.resolve(__dirname, '..', 'fixtures', 'devtoo
 
 const FIXTURE_EXE = 'DevToolsFixtureApp.exe';
 
+/** Repository root, three levels up from src/test/e2e. */
+const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
+
+/**
+ * Whether the winapp CLI in bin/ supports `winapp run --devtools`.
+ *
+ * DevTools is not in a stable CLI release yet, so CI downloads a build without
+ * it and every DevTools launch fails with "Unrecognized argument: '--devtools'".
+ * Probing lets those specs skip cleanly instead of reporting a product failure,
+ * and they start running automatically once a CLI that supports it ships.
+ */
+export function cliSupportsDevTools(): boolean {
+    const arch = process.arch === 'arm64' ? 'win-arm64' : 'win-x64';
+    const cli = path.join(REPO_ROOT, 'bin', arch, 'winapp.exe');
+    if (!fs.existsSync(cli)) {
+        return false;
+    }
+
+    const help = spawnSync(cli, ['run', '--help'], {
+        encoding: 'utf-8',
+        timeout: 60_000,
+    });
+    return (help.stdout ?? '').includes('--devtools');
+}
+
 /**
  * Locates the fixture's build output directory.
  *

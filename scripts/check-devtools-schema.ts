@@ -46,8 +46,14 @@ const schemaPaths = findSchemas();
 
 if (schemaPaths.length === 0) {
     // bin/ is gitignored and populated by `npm run download-cli`, so a clean
-    // checkout legitimately has no schema to check against.
-    console.log('[devtools-schema] No bundled schema found under bin/. Skipping drift check.');
+    // checkout legitimately has no schema to check against. A released CLI
+    // without DevTools also ships no schema, which is why this currently
+    // no-ops in CI — worth saying out loud, because the step still reports
+    // success and could otherwise be mistaken for real coverage.
+    console.log(
+        '[devtools-schema] WARNING: no bundled schema found under bin/, so NO drift check ran. ' +
+        'This is expected on a clean checkout, or when bin/ holds a CLI build without DevTools support.',
+    );
     process.exit(0);
 }
 
