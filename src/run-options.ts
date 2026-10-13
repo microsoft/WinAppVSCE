@@ -71,7 +71,7 @@ export interface RunToggle {
 	detail: string;
 	/** Only offered when the target is a project or solution. */
 	projectOnly?: boolean;
-	/** Dropped unless this toggle is also on; the CLI ignores it otherwise. */
+	/** Turned on alongside this toggle; the CLI ignores it otherwise. */
 	requires?: RunOptionKey;
 }
 
@@ -82,18 +82,21 @@ export interface RunToggle {
  * `debugOutput` and `symbols` live here rather than in `launch.json` because
  * `--debug-output` attaches the CLI's own debugger, and only one debugger can
  * attach to a process at a time.
+ *
+ * `detail` carries no flag name: {@link runToggleDetail} appends it from
+ * {@link RUN_OPTIONS}, so there is one spelling of every flag.
  */
 export const RUN_TOGGLES: readonly RunToggle[] = [
-	{ key: 'clean', label: 'Clean application data', detail: 'Remove the existing package\'s LocalState and settings before deploying (--clean)' },
-	{ key: 'noBuild', label: 'Skip build', detail: 'Run the existing build output without rebuilding (--no-build)', projectOnly: true },
-	{ key: 'noRestore', label: 'Skip restore', detail: 'Do not restore the project before building (--no-restore)', projectOnly: true },
-	{ key: 'aot', label: 'Native AOT publish', detail: 'Run the project\'s configured Native AOT publish; requires PublishAot=true (--aot)', projectOnly: true },
-	{ key: 'detach', label: 'Launch and return immediately', detail: 'Do not wait for the app to exit (--detach)' },
-	{ key: 'noLaunch', label: 'Register only, do not launch', detail: 'Create the debug identity and register the package without starting the app (--no-launch)' },
-	{ key: 'withAlias', label: 'Launch via execution alias', detail: 'Run in the terminal with stdin/stdout inherited; requires an execution alias in the manifest (--with-alias)' },
-	{ key: 'unregisterOnExit', label: 'Unregister on exit', detail: 'Remove the development package after the app exits (--unregister-on-exit)' },
-	{ key: 'debugOutput', label: 'Capture debug output', detail: 'Capture OutputDebugString and first-chance exceptions; no other debugger can attach while this is on (--debug-output)' },
-	{ key: 'symbols', label: 'Download symbols for crash analysis', detail: 'Use the Microsoft Symbol Server for richer native stacks; only applies with Capture debug output (--symbols)', requires: 'debugOutput' }
+	{ key: 'clean', label: 'Clean application data', detail: 'Remove the existing package\'s LocalState and settings before deploying' },
+	{ key: 'noBuild', label: 'Skip build', detail: 'Run the existing build output without rebuilding', projectOnly: true },
+	{ key: 'noRestore', label: 'Skip restore', detail: 'Do not restore the project before building', projectOnly: true },
+	{ key: 'aot', label: 'Native AOT publish', detail: 'Run the project\'s configured Native AOT publish; requires PublishAot=true', projectOnly: true },
+	{ key: 'detach', label: 'Launch and return immediately', detail: 'Do not wait for the app to exit' },
+	{ key: 'noLaunch', label: 'Register only, do not launch', detail: 'Create the debug identity and register the package without starting the app' },
+	{ key: 'withAlias', label: 'Launch via execution alias', detail: 'Run in the terminal with stdin/stdout inherited; requires an execution alias in the manifest' },
+	{ key: 'unregisterOnExit', label: 'Unregister on exit', detail: 'Remove the development package after the app exits' },
+	{ key: 'debugOutput', label: 'Capture debug output', detail: 'Capture OutputDebugString and first-chance exceptions; no other debugger can attach while this is on' },
+	{ key: 'symbols', label: 'Download symbols for crash analysis', detail: 'Use the Microsoft Symbol Server for richer native stacks; turns on Capture debug output', requires: 'debugOutput' }
 ];
 
 /** Toggles applicable to a target; project-only ones need project mode. */
@@ -102,16 +105,45 @@ export function availableRunToggles(projectMode: boolean): RunToggle[] {
 }
 
 /**
+ * Checked keys plus every prerequisite they imply.
+ *
+ * Checking a dependent toggle states an intent the prerequisite is part of, so
+ * turning the prerequisite on is what the user asked for. The reverse does not
+ * hold: a prerequisite is useful on its own, so clearing one leaves the
+ * dependent alone — {@link resolveRunToggles} drops it at that point.
+ */
+export function expandRequiredToggles(
+	available: readonly RunToggle[],
+	checkedKeys: readonly RunOptionKey[]
+): RunOptionKey[] {
+	const byKey = new Map(available.map(toggle => [toggle.key, toggle]));
+	const expanded = new Set(checkedKeys.filter(key => byKey.has(key)));
+
+	for (const key of [...expanded]) {
+		// Walk the chain so a future three-deep dependency still resolves.
+		let requirement = byKey.get(key)?.requires;
+		while (requirement && byKey.has(requirement) && !expanded.has(requirement)) {
+			expanded.add(requirement);
+			requirement = byKey.get(requirement)?.requires;
+		}
+	}
+
+	// Emit in offer order so callers can compare against the offered list.
+	return available.filter(toggle => expanded.has(toggle.key)).map(toggle => toggle.key);
+}
+
+/**
  * Resolves checked toggle keys into run options.
  *
- * A dependent toggle checked on its own is cleared rather than passed through,
- * so the CLI never receives a flag it would ignore.
+ * A dependent toggle brings its prerequisite with it, and is itself cleared
+ * when that prerequisite is unavailable, so the CLI never receives a flag it
+ * would ignore.
  */
 export function resolveRunToggles(
 	available: readonly RunToggle[],
 	checkedKeys: readonly RunOptionKey[]
 ): Partial<WinAppRunOptions> {
-	const checked = new Set(checkedKeys);
+	const checked = new Set(expandRequiredToggles(available, checkedKeys));
 	const selected: Record<string, boolean> = {};
 	for (const toggle of available) {
 		selected[toggle.key] = checked.has(toggle.key);
@@ -206,8 +238,26 @@ export const RUN_OPTIONS: readonly RunOptionDescriptor[] = [
 	{ key: 'json', flag: '--json', kind: 'switch', inLaunchSchema: false, fromDebugConfig: false }
 ];
 
-/** Builds argv for shell-free spawn; project-only options stay for validation. */
-export function buildRunArgs(options: WinAppRunOptions): string[] {
+/** How an option is spelled on the command line, for UI text. */
+export function runOptionFlag(key: RunOptionKey): string {
+	const option = RUN_OPTIONS.find(entry => entry.key === key);
+	if (!option) {
+		throw new Error(`No winapp run option is registered for "${key}".`);
+	}
+	return option.flag;
+}
+
+/**
+ * Detail line for a toggle, with its flag appended from {@link RUN_OPTIONS}.
+ *
+ * Spelling the flag in the toggle literal too would let the picker drift out
+ * of sync with the argv the same key actually produces.
+ */
+export function runToggleDetail(toggle: RunToggle): string {
+	return `${toggle.detail} (${runOptionFlag(toggle.key)})`;
+}
+
+/** Builds argv for shell-free spawn; project-only options stay for validation. */export function buildRunArgs(options: WinAppRunOptions): string[] {
 	const args = ['run', options.input];
 
 	for (const option of RUN_OPTIONS) {

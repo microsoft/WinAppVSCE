@@ -4,6 +4,7 @@ import {
 	availableRunToggles,
 	buildRunArgs,
 	COMMON_CONFIGURATIONS,
+	expandRequiredToggles,
 	parseProcessIdFromJson,
 	resolveDebugInput,
 	resolveRunProject,
@@ -11,6 +12,7 @@ import {
 	RUN_OPTIONS,
 	RUN_TOGGLES,
 	runOptionsFromDebugConfig,
+	runToggleDetail,
 	shouldPromptForProject,
 	SUPPORTED_ARCHITECTURES,
 	validateDebugRunOptions,
@@ -286,11 +288,11 @@ describe('run toggles', () => {
 		}
 	});
 
-	it('drops a dependent toggle when its prerequisite is unchecked', () => {
+	it('turns on the prerequisite of a dependent toggle', () => {
 		const available = availableRunToggles(true);
 		const resolved = resolveRunToggles(available, ['symbols', 'clean'] as RunOptionKey[]);
-		assert.strictEqual(resolved.symbols, false);
-		assert.strictEqual(resolved.debugOutput, false);
+		assert.strictEqual(resolved.symbols, true);
+		assert.strictEqual(resolved.debugOutput, true);
 		assert.strictEqual(resolved.clean, true);
 	});
 
@@ -301,6 +303,21 @@ describe('run toggles', () => {
 		assert.strictEqual(resolved.debugOutput, true);
 	});
 
+	it('leaves a prerequisite checked on its own alone', () => {
+		const available = availableRunToggles(true);
+		const resolved = resolveRunToggles(available, ['debugOutput'] as RunOptionKey[]);
+		assert.strictEqual(resolved.debugOutput, true);
+		assert.strictEqual(resolved.symbols, false);
+	});
+
+	it('drops a dependent toggle whose prerequisite is not offered', () => {
+		// A dependent toggle offered without its prerequisite cannot be
+		// honoured, so the flag must not reach the CLI.
+		const available = [RUN_TOGGLES.find(toggle => toggle.key === 'symbols')!];
+		const resolved = resolveRunToggles(available, ['symbols'] as RunOptionKey[]);
+		assert.strictEqual(resolved.symbols, false);
+	});
+
 	it('round-trips the gated toggles into argv', () => {
 		const available = availableRunToggles(true);
 		const resolved = resolveRunToggles(available, ['symbols', 'debugOutput'] as RunOptionKey[]);
@@ -308,9 +325,67 @@ describe('run toggles', () => {
 		assert.ok(args.includes('--debug-output'));
 		assert.ok(args.includes('--symbols'));
 
-		const without = buildRunArgs(options(resolveRunToggles(available, ['symbols'] as RunOptionKey[])));
-		assert.ok(!without.includes('--symbols'));
-		assert.ok(!without.includes('--debug-output'));
+		// Checking only the dependent is the same request, so it produces the
+		// same command line.
+		const implied = buildRunArgs(options(resolveRunToggles(available, ['symbols'] as RunOptionKey[])));
+		assert.deepStrictEqual(implied, args);
+	});
+});
+
+describe('toggle prerequisites', () => {
+	it('adds the prerequisite of a checked dependent', () => {
+		const available = availableRunToggles(false);
+		assert.deepStrictEqual(
+			expandRequiredToggles(available, ['symbols'] as RunOptionKey[]),
+			['debugOutput', 'symbols']
+		);
+	});
+
+	it('does not imply a dependent from its prerequisite', () => {
+		const available = availableRunToggles(false);
+		assert.deepStrictEqual(
+			expandRequiredToggles(available, ['debugOutput'] as RunOptionKey[]),
+			['debugOutput']
+		);
+	});
+
+	it('is idempotent, so the picker settles after one pass', () => {
+		const available = availableRunToggles(true);
+		const once = expandRequiredToggles(available, ['symbols', 'clean'] as RunOptionKey[]);
+		assert.deepStrictEqual(expandRequiredToggles(available, once), once);
+	});
+
+	it('ignores keys that are not on offer', () => {
+		const available = availableRunToggles(false);
+		assert.deepStrictEqual(
+			expandRequiredToggles(available, ['noBuild'] as RunOptionKey[]),
+			[]
+		);
+	});
+
+	it('emits in offer order regardless of check order', () => {
+		const available = availableRunToggles(false);
+		const order = available.map(toggle => toggle.key);
+		const expanded = expandRequiredToggles(available, ['symbols', 'clean'] as RunOptionKey[]);
+		assert.deepStrictEqual(expanded, order.filter(key => expanded.includes(key)));
+	});
+});
+
+describe('toggle detail text', () => {
+	it('appends the flag from the run option table', () => {
+		const clean = RUN_TOGGLES.find(toggle => toggle.key === 'clean')!;
+		assert.ok(runToggleDetail(clean).endsWith(' (--clean)'));
+	});
+
+	it('never hard-codes a flag in the toggle literal, so the two cannot drift', () => {
+		for (const toggle of RUN_TOGGLES) {
+			assert.ok(
+				!toggle.detail.includes('--'),
+				`${toggle.key} spells a flag in its detail text; runToggleDetail appends it`
+			);
+			const flag = RUN_OPTIONS.find(option => option.key === toggle.key)!.flag;
+			assert.strictEqual(runToggleDetail(toggle), `${toggle.detail} (${flag})`);
+		}
 	});
 });
 /**

@@ -2,7 +2,7 @@
  * E2E picker coverage for VS Code findFiles/workspace behavior; Escape prevents CLI invocation.
  */
 
-import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -167,6 +167,16 @@ function writeProject(root: string, relativePath: string, contents: string = MIN
 /** The rows currently shown in the quick input list. */
 function quickPickRows(page: Page) {
     return page.locator('.quick-input-widget .quick-input-list .monaco-list-row');
+}
+
+/**
+ * A multi-select row carries its own checked state.
+ *
+ * VS Code gives the row `role="checkbox"`, so `aria-checked` on the row is the
+ * rendered tick — it is what the user sees, not just what we asked for.
+ */
+function expectChecked(row: Locator, checked: boolean, timeout = 10_000) {
+    return expect(row).toHaveAttribute('aria-checked', String(checked), { timeout });
 }
 
 /** The exact placeholder of the run-target picker. */
@@ -805,6 +815,51 @@ test.describe('run target picker', () => {
 
             await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: folder mode skipped the build prompts');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    // --symbols does nothing without --debug-output. Ticking the prerequisite
+    // in place beats silently dropping the flag or warning about a choice the
+    // user already made.
+    test('checking Download symbols also checks Capture debug output', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-implies-e2e-'));
+        const outputDir = path.join(tmpDir, 'bin', 'Debug');
+        fs.mkdirSync(outputDir, { recursive: true });
+        fs.writeFileSync(path.join(outputDir, 'OnlyApp.exe'), '');
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
+            await readPickerRows(page, RUN_OPTIONS_PLACEHOLDER);
+
+            // Anchored: the symbols detail line mentions the other label.
+            const symbols = quickPickRows(page).filter({ hasText: /^Download symbols/ });
+            const debugOutput = quickPickRows(page).filter({ hasText: /^Capture debug output/ });
+
+            // Nothing is checked until the user checks something.
+            await expectChecked(debugOutput, false);
+
+            await symbols.click();
+
+            await expectChecked(symbols, true);
+            await expectChecked(debugOutput, true);
+
+            // The implication is one-way: the prerequisite stands on its own.
+            await symbols.click();
+            await expectChecked(symbols, false);
+            await expectChecked(debugOutput, true);
+
+            await cancelAndExpectNoFollowUp(page);
+            console.log('✅ PASS: Download symbols implied Capture debug output');
         } finally {
             if (app) {
                 await app.close().catch(() => {});

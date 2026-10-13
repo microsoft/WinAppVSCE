@@ -2,10 +2,10 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-	findBuildOutputFolders,
+	scanBuildOutputFolders,
 	selectFolder
 } from './folder-picker';
-import { walkDirectoryTree } from './directory-walk';
+import { walkDirectoryTree, scanRoots, type ScanCancellationToken } from './directory-walk';
 import { PROJECT_SCAN_SKIP_DIRS } from './project-detection';
 import {
 	classifyRunTarget,
@@ -30,8 +30,12 @@ import { getWorkspaceRoots, NO_WORKSPACE_MESSAGE, type WorkspaceRoot } from './w
 import {
 	availableRunToggles,
 	COMMON_CONFIGURATIONS,
+	expandRequiredToggles,
 	resolveRunToggles,
+	runToggleDetail,
 	SUPPORTED_ARCHITECTURES,
+	type RunToggle,
+	type RunOptionKey,
 	type WinAppRunOptions
 } from './run-options';
 
@@ -46,6 +50,9 @@ const PROJECT_PICKER_DETAIL = 'Open a file picker for .csproj, .sln, or .slnx';
 /** Marks the browse sub-prompt entry that opens a folder dialog. */
 const FOLDER_BROWSE_DETAIL = 'Open a folder picker for a project directory or a build output folder';
 
+/** Progress message shown when discovery falls back to a build-output scan. */
+const BUILD_OUTPUT_FALLBACK_MESSAGE = 'Searching for build output folders...';
+
 /**
  * Prefer project discovery; reserve executable scans for fallback or explicit use.
  *
@@ -56,51 +63,48 @@ const FOLDER_BROWSE_DETAIL = 'Open a folder picker for a project directory or a 
  */
 async function findProjectTargets(
 	roots: readonly WorkspaceRoot[],
-	token: vscode.CancellationToken
+	token: ScanCancellationToken
 ): Promise<RunTargetCandidate[]> {
 	const candidates: RunTargetCandidate[] = [];
-	const controller = new AbortController();
-	const subscription = token.onCancellationRequested(() => controller.abort());
 
-	try {
-		for (const root of roots) {
-			if (token.isCancellationRequested || candidates.length >= PROJECT_FILE_MAX_RESULTS) {
-				break;
-			}
-
-			await walkDirectoryTree(
-				root.path,
-				(directory, entries) => {
-					for (const entry of entries) {
-						if (!entry.isFile()) { continue; }
-
-						const kind = isDiscoverableTargetExtension(entry.name)
-							? classifyRunTargetFile(entry.name)
-							: undefined;
-						if (!kind) { continue; }
-
-						candidates.push({ kind, path: path.join(directory, entry.name), root });
-						if (candidates.length >= PROJECT_FILE_MAX_RESULTS) { return 'stop'; }
-					}
-					return 'descend';
-				},
-				{ skipDirs: PROJECT_SCAN_SKIP_DIRS, signal: controller.signal }
-			);
+	const completed = await scanRoots(roots, token, async (root, signal) => {
+		if (candidates.length >= PROJECT_FILE_MAX_RESULTS) {
+			return 'stop';
 		}
-	} finally {
-		subscription.dispose();
-	}
 
-	return token.isCancellationRequested ? [] : candidates;
+		await walkDirectoryTree(
+			root.path,
+			(directory, entries) => {
+				for (const entry of entries) {
+					if (!entry.isFile()) { continue; }
+
+					const kind = isDiscoverableTargetExtension(entry.name)
+						? classifyRunTargetFile(entry.name)
+						: undefined;
+					if (!kind) { continue; }
+
+					candidates.push({ kind, path: path.join(directory, entry.name), root });
+					if (candidates.length >= PROJECT_FILE_MAX_RESULTS) { return 'stop'; }
+				}
+				return 'descend';
+			},
+			{ skipDirs: PROJECT_SCAN_SKIP_DIRS, signal }
+		);
+	});
+
+	return completed ? candidates : [];
 }
 
 /** Find `.exe` output folders across every workspace root. */
-async function findBuildOutputTargets(roots: readonly WorkspaceRoot[]): Promise<RunTargetCandidate[] | undefined> {
+async function findBuildOutputTargets(
+	roots: readonly WorkspaceRoot[],
+	token: ScanCancellationToken
+): Promise<RunTargetCandidate[] | undefined> {
 	// Attribute each folder back to the root it came from; the run picker
 	// labels candidates by root in a multi-root workspace.
 	const rootsByPath = new Map(roots.map(root => [root.path, root]));
 
-	const found = await findBuildOutputFolders(roots.map(root => root.path));
+	const found = await scanBuildOutputFolders(roots.map(root => root.path), token);
 	if (!found) {
 		return undefined;
 	}
@@ -176,32 +180,30 @@ function buildRunTargetItems(
 	return items;
 }
 
-/** Pick what to run; the selection derives the CLI mode. */
-export async function pickRunTarget(
-	scope?: vscode.WorkspaceFolder
-): Promise<RunTargetSelection | undefined> {
-	const roots = scope
-		? [{ name: scope.name, path: scope.uri.fsPath }]
-		: getWorkspaceRoots();
-	if (roots.length === 0) {
-		vscode.window.showErrorMessage(NO_WORKSPACE_MESSAGE);
+/** Everything discovery learned about a workspace, under one progress popup. */
+interface RunTargetDiscovery {
+	candidates: RunTargetCandidate[];
+	solutionMembers: Map<string, string[]>;
+	/** Projects were found, but every one was a library or a test project. */
+	onlyUnrunnableProjects: boolean;
+}
+
+/**
+ * Project discovery, with a build-output scan as the fallback.
+ *
+ * Both scans share the caller's token and progress reporter so the whole
+ * search is one cancellable notification rather than two in sequence.
+ */
+async function discoverRunTargets(
+	roots: readonly WorkspaceRoot[],
+	progress: vscode.Progress<{ message?: string }>,
+	token: ScanCancellationToken
+): Promise<RunTargetDiscovery | undefined> {
+	const projects = await findProjectTargets(roots, token);
+	if (token.isCancellationRequested) {
 		return undefined;
 	}
 
-	const projects = await vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title: 'Searching for projects...', cancellable: true },
-		async (_progress, token) => {
-			const found = await findProjectTargets(roots, token);
-			return token.isCancellationRequested ? undefined : found;
-		}
-	);
-
-	if (!projects) {
-		return undefined;
-	}
-
-	// No project or solution anywhere — fall back to the (more expensive)
-	// build-output scan, which is the only way to run in folder mode.
 	let candidates = projects;
 	let solutionMembers = new Map<string, string[]>();
 
@@ -219,12 +221,39 @@ export async function pickRunTarget(
 	// run, so look for one before giving up on the workspace.
 	const onlyUnrunnableProjects = projects.length > 0 && candidates.length === 0;
 	if (candidates.length === 0) {
-		const folders = await findBuildOutputTargets(roots);
+		progress.report({ message: BUILD_OUTPUT_FALLBACK_MESSAGE });
+		const folders = await findBuildOutputTargets(roots, token);
 		if (!folders) {
 			return undefined;
 		}
 		candidates = folders;
 	}
+
+	return { candidates, solutionMembers, onlyUnrunnableProjects };
+}
+
+/** Pick what to run; the selection derives the CLI mode. */
+export async function pickRunTarget(
+	scope?: vscode.WorkspaceFolder
+): Promise<RunTargetSelection | undefined> {
+	const roots = scope
+		? [{ name: scope.name, path: scope.uri.fsPath }]
+		: getWorkspaceRoots();
+	if (roots.length === 0) {
+		vscode.window.showErrorMessage(NO_WORKSPACE_MESSAGE);
+		return undefined;
+	}
+
+	const discovery = await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: 'Searching for projects...', cancellable: true },
+		async (progress, token) => discoverRunTargets(roots, progress, token)
+	);
+
+	if (!discovery) {
+		return undefined;
+	}
+
+	const { candidates, solutionMembers, onlyUnrunnableProjects } = discovery;
 
 	if (candidates.length === 0) {
 		// Nothing runnable at all. Say so before a file dialog appears
@@ -329,13 +358,45 @@ async function browseForRunTarget(
 		return undefined;
 	}
 
+	const targetKind = await classifyRunTarget(selected);
+
 	return {
 		target: {
-			kind: await classifyRunTarget(selected),
+			kind: targetKind,
 			path: selected,
-			root: findOwningRoot(roots, selected) ?? roots[0]
+			root: resolveBrowsedRoot(roots, selected, targetKind)
 		}
 	};
+}
+
+/**
+ * The containment root for a browsed target.
+ *
+ * Solution members are resolved and filtered against this root, so attributing
+ * a target outside the workspace to `roots[0]` would silently discard every
+ * project in a solution the user deliberately picked. A target with no
+ * workspace root of its own becomes its own root instead.
+ */
+function resolveBrowsedRoot(
+	roots: readonly WorkspaceRoot[],
+	selected: string,
+	kind: RunTargetKind
+): WorkspaceRoot {
+	// Honours a scoped root list, and prefers the deepest match when roots nest.
+	const owning = findOwningRoot(roots, selected);
+	if (owning) {
+		return owning;
+	}
+
+	// `roots` may have been scoped to a single folder by the caller, while the
+	// browsed path belongs to another folder of the same workspace.
+	const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(selected));
+	if (folder) {
+		return { name: folder.name, path: folder.uri.fsPath };
+	}
+
+	const base = kind === 'folder' ? selected : path.dirname(selected);
+	return { name: path.basename(base) || base, path: base };
 }
 
 /** Prompt only for multiple plausible apps; otherwise the CLI is authoritative. */
@@ -387,27 +448,58 @@ export async function pickSolutionProject(
 	return { cancelled: false, project: picked.projectPath };
 }
 
-/** Omit target-inapplicable toggles; everything starts unchecked. */
+/** A toggle row, carrying the toggle it stands for. */
+interface RunToggleQuickPickItem extends vscode.QuickPickItem {
+	toggle: RunToggle;
+}
+
+/**
+ * Omit target-inapplicable toggles; everything starts unchecked.
+ *
+ * Built by hand rather than with `showQuickPick` so checking a dependent
+ * toggle can tick its prerequisite in place. Silently adding the flag later
+ * would leave the list showing something other than what runs, and warning
+ * about it would be noise for a choice the user already made.
+ */
 export async function pickRunToggles(
 	kind: RunTargetKind
 ): Promise<Partial<WinAppRunOptions> | undefined> {
 	const available = availableRunToggles(isProjectMode(kind));
-	const items = available.map(toggle => ({
+	const picker = vscode.window.createQuickPick<RunToggleQuickPickItem>();
+	picker.canSelectMany = true;
+	picker.placeholder = 'Select run options (press Enter to continue)';
+	picker.items = available.map(toggle => ({
 		label: toggle.label,
-		detail: toggle.detail,
+		detail: runToggleDetail(toggle),
 		toggle
 	}));
 
-	const picked = await vscode.window.showQuickPick(items, {
-		canPickMany: true,
-		placeHolder: 'Select run options (press Enter to continue)'
-	});
+	try {
+		const checkedKeys = await new Promise<RunOptionKey[] | undefined>(resolve => {
+			// Assigning selectedItems re-enters this handler, so the implied
+			// update must not try to imply anything further.
+			let syncing = false;
 
-	if (!picked) {
-		return undefined;
+			picker.onDidChangeSelection(selection => {
+				if (syncing) { return; }
+
+				const expanded = expandRequiredToggles(available, selection.map(item => item.toggle.key));
+				if (expanded.length === selection.length) { return; }
+
+				syncing = true;
+				picker.selectedItems = picker.items.filter(item => expanded.includes(item.toggle.key));
+				syncing = false;
+			});
+
+			picker.onDidAccept(() => resolve(picker.selectedItems.map(item => item.toggle.key)));
+			picker.onDidHide(() => resolve(undefined));
+			picker.show();
+		});
+
+		return checkedKeys && resolveRunToggles(available, checkedKeys);
+	} finally {
+		picker.dispose();
 	}
-
-	return resolveRunToggles(available, picked.map(item => item.toggle.key));
 }
 
 /** Build prompts for the With Options flow; the CLI owns the defaults. */

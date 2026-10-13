@@ -5,7 +5,7 @@ import {
 	BUILD_OUTPUT_SKIP_DIRS,
 	deduplicateBuildOutputFolders
 } from './project-detection';
-import { walkDirectoryTree } from './directory-walk';
+import { walkDirectoryTree, scanRoots, type ScanCancellationToken } from './directory-walk';
 import { selectFolder } from './winapp-host';
 
 /**
@@ -43,13 +43,12 @@ export interface BuildOutputFolder {
 export { selectFolder };
 
 /**
- * Scan every root for folders containing `.exe` files, under one cancellable
- * progress notification. Returns undefined if the user cancelled.
+ * Scan every root for folders containing `.exe` files. Returns undefined if
+ * the scan was cancelled.
  *
- * A single root is just the one-element case, so both the pack picker and the
- * multi-root run picker share this; a per-root wrapper would stack a separate
- * popup, and a separate Cancel button, on every folder in a multi-root
- * workspace.
+ * Takes a token rather than owning a progress notification, so a caller that
+ * has already opened one — the run picker, which falls back to this scan —
+ * does not stack a second popup, with a second Cancel button, on the first.
  *
  * Walks the tree directly rather than using `vscode.workspace.findFiles`.
  * Passing `findFiles` an exclude glob does not replace the user's
@@ -57,60 +56,58 @@ export { selectFolder };
  * from the explorer would hide its own build output from this picker — the
  * one place it must never be hidden.
  */
+export async function scanBuildOutputFolders(
+	rootPaths: readonly string[],
+	token: ScanCancellationToken
+): Promise<BuildOutputFolder[] | undefined> {
+	const found: BuildOutputFolder[] = [];
+
+	const completed = await scanRoots(rootPaths, token, async (rootPath, signal) => {
+		const executables: string[] = [];
+		const folders = new Set<string>();
+
+		await walkDirectoryTree(
+			rootPath,
+			(directory, entries) => {
+				for (const entry of entries) {
+					if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.exe') {
+						continue;
+					}
+					executables.push(path.join(directory, entry.name));
+					folders.add(directory);
+					// Cap on distinct folders, which is what the picker shows,
+					// rather than on raw hits: one output folder holds many
+					// executables.
+					if (folders.size > BUILD_OUTPUT_MAX_RESULTS) {
+						return 'stop';
+					}
+				}
+				return 'descend';
+			},
+			{ skipDirs: BUILD_OUTPUT_SKIP_DIRS, signal }
+		);
+
+		for (const folder of deduplicateBuildOutputFolders(executables, rootPath)) {
+			found.push({ rootPath, path: folder });
+		}
+	});
+
+	return completed ? found : undefined;
+}
+
+/**
+ * {@link scanBuildOutputFolders} under its own cancellable progress
+ * notification, for callers that have not already opened one.
+ *
+ * A single root is just the one-element case, so both the pack picker and the
+ * multi-root run picker share this.
+ */
 export async function findBuildOutputFolders(
 	rootPaths: readonly string[]
 ): Promise<BuildOutputFolder[] | undefined> {
 	return vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: BUILD_OUTPUT_PROGRESS_TITLE, cancellable: true },
-		async (_progress, token) => {
-			const found: BuildOutputFolder[] = [];
-			const controller = new AbortController();
-			const subscription = token.onCancellationRequested(() => controller.abort());
-
-			try {
-				for (const rootPath of rootPaths) {
-					if (token.isCancellationRequested) {
-						break;
-					}
-
-					const executables: string[] = [];
-					const folders = new Set<string>();
-
-					await walkDirectoryTree(
-						rootPath,
-						(directory, entries) => {
-							for (const entry of entries) {
-								if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.exe') {
-									continue;
-								}
-								executables.push(path.join(directory, entry.name));
-								folders.add(directory);
-								// Cap on distinct folders, which is what the
-								// picker shows, rather than on raw hits: one
-								// output folder holds many executables.
-								if (folders.size > BUILD_OUTPUT_MAX_RESULTS) {
-									return 'stop';
-								}
-							}
-							return 'descend';
-						},
-						{ skipDirs: BUILD_OUTPUT_SKIP_DIRS, signal: controller.signal }
-					);
-
-					if (token.isCancellationRequested) {
-						return undefined;
-					}
-
-					for (const folder of deduplicateBuildOutputFolders(executables, rootPath)) {
-						found.push({ rootPath, path: folder });
-					}
-				}
-			} finally {
-				subscription.dispose();
-			}
-
-			return token.isCancellationRequested ? undefined : found;
-		}
+		async (_progress, token) => scanBuildOutputFolders(rootPaths, token)
 	);
 }
 

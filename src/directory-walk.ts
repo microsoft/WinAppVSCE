@@ -84,3 +84,47 @@ export async function walkDirectoryTree(
 		}
 	}
 }
+
+/**
+ * The slice of `vscode.CancellationToken` a scan needs.
+ *
+ * Declared structurally so this module stays free of a `vscode` import and
+ * remains unit-testable outside the extension host.
+ */
+export interface ScanCancellationToken {
+	readonly isCancellationRequested: boolean;
+	onCancellationRequested(listener: () => void): { dispose(): void };
+}
+
+/**
+ * Visits each root in turn under one `AbortController` wired to `token`,
+ * returning false when the scan was cancelled.
+ *
+ * Every multi-root scan needs the same scaffolding — bridge the token to an
+ * abort signal, re-check cancellation between roots, dispose the subscription,
+ * and discard partial results — so it lives here once rather than once per
+ * scan.
+ */
+export async function scanRoots<TRoot>(
+	roots: readonly TRoot[],
+	token: ScanCancellationToken,
+	visit: (root: TRoot, signal: AbortSignal) => Promise<WalkDecision | void>
+): Promise<boolean> {
+	const controller = new AbortController();
+	const subscription = token.onCancellationRequested(() => controller.abort());
+
+	try {
+		for (const root of roots) {
+			if (token.isCancellationRequested) {
+				break;
+			}
+			if (await visit(root, controller.signal) === 'stop') {
+				break;
+			}
+		}
+	} finally {
+		subscription.dispose();
+	}
+
+	return !token.isCancellationRequested;
+}
