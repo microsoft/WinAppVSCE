@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
 namespace TestFixtureApp.Controls;
@@ -50,4 +51,19 @@ public sealed class NoDefaultCtorViewModel
     public NoDefaultCtorViewModel(string title) => Title = title;
 
     public string Title { get; }
+}
+
+/// <summary>A control that keeps the UI thread busy forever (an auto-advancing carousel, a clock), for the
+/// opt-in render-settle sweep (SURFACE_RENDER_SETTLE=1) to stop.</summary>
+public sealed class TickerControl : Control
+{
+    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(16) };
+
+    public TickerControl()
+    {
+        _timer.Tick += (_, _) => Ticks++;
+        _timer.Start();
+    }
+
+    public int Ticks { get; private set; }
 }

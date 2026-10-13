@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Not rendered by the fixtures lane. Compiling it puts ThrowingControl into the app's XAML type info, so the
+<!-- Not rendered by the fixtures lane. Compiling it puts ThrowingControl and TickerControl into the app's XAML type info, so the
      behaviors lane reaches the surface's constructor-throw safety net instead of the cleaner's
      unresolved-type placeholder. -->
 <Page
@@ -8,5 +8,6 @@
     xmlns:controls="using:TestFixtureApp.Controls">
     <StackPanel>
         <controls:ThrowingControl />
+        <controls:TickerControl />
     </StackPanel>
 </Page>

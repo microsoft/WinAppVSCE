@@ -128,10 +128,10 @@ namespace WinUIXamlPreview.UITest
             }
         }
 
-        private static async Task<Session> Open(string surfaceExe, string? userDll, string? appXaml)
+        private static async Task<Session> Open(string surfaceExe, string? userDll, string? appXaml, bool renderSettle = false)
         {
             var s = new Session();
-            s.Client = new SurfaceClient(surfaceExe, userDll, line => { s.Logs.Enqueue(line); Console.Error.WriteLine("  " + line); }, appXaml, "Light")
+            s.Client = new SurfaceClient(surfaceExe, userDll, line => { s.Logs.Enqueue(line); Console.Error.WriteLine("  " + line); }, appXaml, "Light", renderSettle)
             {
                 SampleData = true,
             };
@@ -156,6 +156,8 @@ namespace WinUIXamlPreview.UITest
             Console.WriteLine("User DLL:    " + (userDll ?? "(none)"));
             Console.WriteLine();
 
+            s_behSurface = surfaceExe;
+            s_behUserDll = userDll;
             bool ok = CheckInput("BEH-0 Surface.exe exists", surfaceExe) & CheckInput("BEH-0 user DLL exists", userDll) &
                 CheckInput("BEH-0 App.xaml exists", appXaml);
             if (ok)
@@ -170,6 +172,10 @@ namespace WinUIXamlPreview.UITest
                     ("safety net", SafetyNet),
                     ("design-time data", DesignTimeDataNegatives),
                     ("sample lists", SampleLists),
+                    ("root types", RootTypes),
+                    ("resources", Resources),
+                    ("app.xaml failures", AppXamlFailures),
+                    ("render settle", RenderSettle),
                 })
                 {
                     Console.WriteLine("== " + name);

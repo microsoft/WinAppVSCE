@@ -35,6 +35,7 @@ internal static partial class Program
             Run("MatchedHostResolver", MatchedHostResolverTests);
             Run("LineDecoder", LineDecoderTests);
             Run("XamlSourceMap", XamlSourceMapTests);
+            Run("DesignerSelection", DesignerSelectionTests);
         }
         finally
         {
