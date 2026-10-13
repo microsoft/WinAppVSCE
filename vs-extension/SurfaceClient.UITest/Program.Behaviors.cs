@@ -158,6 +158,8 @@ namespace WinUIXamlPreview.UITest
 
             s_behSurface = surfaceExe;
             s_behUserDll = userDll;
+            s_behMatchedHost = FullPathOrNull(GetArg(args, "--matched-host"));
+            string? only = GetArg(args, "--group");
             bool ok = CheckInput("BEH-0 Surface.exe exists", surfaceExe) & CheckInput("BEH-0 user DLL exists", userDll) &
                 CheckInput("BEH-0 App.xaml exists", appXaml);
             if (ok)
@@ -180,8 +182,10 @@ namespace WinUIXamlPreview.UITest
                     ("app.xaml merged sources", AppXamlMergedSources),
                     ("never-settling page", NeverSettlingPage),
                     ("malformed payloads", MalformedPayloads),
+                    ("matched-host PRI", MatchedHostPri),
                 })
                 {
+                    if (only != null && name.IndexOf(only, StringComparison.OrdinalIgnoreCase) < 0) continue;
                     Console.WriteLine("== " + name);
                     try
                     {

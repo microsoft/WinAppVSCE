@@ -106,6 +106,13 @@ try {
             $env:WINUI_SURFACE_USER_PRI = "$run\Surface.designtime.pri"
             & $smoke
             if ($LASTEXITCODE -ne 0) { throw "Matched actual-user-PRI smoke failed." }
+            # Sealed garbage/empty/truncated PRIs, tampered and foreign PRIs against this real matched host.
+            $ui = "$root\vs-extension\SurfaceClient.UITest\bin\x64\Debug\net472\SurfaceClient.UITest.exe"
+            $fixtures = "$root\surface\TestFixtureApp"
+            & $ui --behaviors --group "matched-host PRI" --matched-host $hostDir --surface "$run\Surface.exe" `
+                --out "$cache\behaviors" --user-dll "$fixtures\bin\x64\Debug\net10.0-windows10.0.26100.0\TestFixtureApp.dll" `
+                --fixtures-dir "$fixtures\Fixtures"
+            if ($LASTEXITCODE -ne 0) { throw "Matched-host PRI behaviours failed." }
         } finally {
             foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], "Process") }
         }

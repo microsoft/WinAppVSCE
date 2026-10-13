@@ -444,4 +444,110 @@ internal static partial class Program
             try { Directory.Delete(dir, true); } catch { }
         }
     }
+
+    // ---------------------------------------------------------------- matched-host PRI
+
+    private static string? s_behMatchedHost;
+
+    // A version-matched host stages Surface.designtime.pri over Surface.pri before WinUI starts. The PRI is
+    // hash-checked against the payload manifest, so a bad one can only arrive sealed (a bad build) or be
+    // caught as tampering. Sealed garbage must either render or fail start within the timeout, never hang;
+    // tampering and foreign paths must fail before any process launches. Needs a sealed matched host
+    // (--matched-host); skipped otherwise. The Session argument is unused beyond the lane's liveness probe.
+    private static async Task MatchedHostPri(Session s)
+    {
+        if (s_behMatchedHost == null)
+        {
+            Console.WriteLine("  SKIP: pass --matched-host <sealed matched host dir> to run");
+            return;
+        }
+
+        var source = s_behMatchedHost;
+        var pristine = WinUISurface.Shared.HostPayload.Validate(source);
+        var realPri = File.ReadAllBytes(Path.Combine(source, "Surface.designtime.pri"));
+        var root = Path.Combine(Path.GetTempPath(), "wxp-beh-pri-" + Guid.NewGuid().ToString("N"));
+        const string probe = "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Width=\"200\" Height=\"100\"><Button Content=\"pri\"/></Page>";
+
+        string MakeHost(string name, byte[] pri)
+        {
+            var host = Path.Combine(root, name);
+            foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+            {
+                var dest = Path.Combine(host, file.Substring(source.TrimEnd('\\').Length + 1));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.Copy(file, dest);
+            }
+
+            File.WriteAllBytes(Path.Combine(host, "Surface.designtime.pri"), pri);
+            WinUISurface.Shared.HostPayload.Seal(host, pristine.Key, pristine.Version, pristine.EngineStamp);
+            return host;
+        }
+
+        async Task<(bool ready, bool rendered, string? error, long startMs, long disposeMs)> Launch(string host, string pri)
+        {
+            bool ready = false, rendered = false;
+            string? error = null;
+            var frame = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var client = new SurfaceClient(Path.Combine(host, "Surface.exe"), null, l => Console.Error.WriteLine("  " + l), null, "Light", userPri: pri);
+            client.Frame += _ => frame.TrySetResult(true);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            long startMs;
+            try
+            {
+                await client.StartAsync(TimeSpan.FromSeconds(30));
+                startMs = sw.ElapsedMilliseconds;
+                ready = true;
+                client.LoadXaml(probe, 200, 100, 1);
+                rendered = await Task.WhenAny(frame.Task, Task.Delay(TimeSpan.FromSeconds(20))) == frame.Task;
+            }
+            catch (Exception ex)
+            {
+                startMs = sw.ElapsedMilliseconds;
+                error = ex.GetType().Name + ": " + ex.Message;
+            }
+
+            sw.Restart();
+            client.Dispose();
+            return (ready, rendered, error, startMs, sw.ElapsedMilliseconds);
+        }
+
+        try
+        {
+            var good = MakeHost("good", realPri);
+            var r = await Launch(good, Path.Combine(good, "Surface.designtime.pri"));
+            Check("BEH-P1 resealed real PRI starts and renders", r.ready && r.rendered, r.error);
+
+            foreach (var (code, name, pri) in new (string, string, byte[])[]
+            {
+                ("BEH-P2", "garbage", Enumerable.Range(0, 4096).Select(i => (byte)(i * 31 + 7)).ToArray()),
+                ("BEH-P3", "empty", new byte[0]),
+                ("BEH-P4", "truncated", realPri.Take(realPri.Length / 2).ToArray()),
+            })
+            {
+                var host = MakeHost(name, pri);
+                r = await Launch(host, Path.Combine(host, "Surface.designtime.pri"));
+                var outcome = r.ready ? (r.rendered ? "started and rendered" : "started, no frame") : "start failed: " + r.error;
+                Console.WriteLine($"  {name} PRI: {outcome} (start {r.startMs} ms, dispose {r.disposeMs} ms)");
+                Check(code + " sealed " + name + " PRI renders or fails start in bounded time",
+                    (r.ready && r.rendered) || (!r.ready && r.startMs < 40000), outcome);
+                Check(code + " sealed " + name + " PRI client disposes promptly", r.disposeMs < 10000, r.disposeMs + " ms");
+            }
+
+            var tampered = MakeHost("tampered", realPri);
+            File.WriteAllBytes(Path.Combine(tampered, "Surface.designtime.pri"), new byte[] { 1, 2, 3 });
+            r = await Launch(tampered, Path.Combine(tampered, "Surface.designtime.pri"));
+            Check("BEH-P5 PRI changed after sealing fails start before launch (hash check)", !r.ready && r.startMs < 10000 &&
+                r.error != null && r.error.Contains("hash mismatch"), r.error);
+
+            var foreign = Path.Combine(root, "foreign.pri");
+            File.WriteAllBytes(foreign, realPri);
+            r = await Launch(good, foreign);
+            Check("BEH-P6 PRI outside the payload fails start before launch", !r.ready && r.startMs < 10000 &&
+                r.error != null && r.error.Contains("must belong"), r.error);
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch { }
+        }
+    }
 }

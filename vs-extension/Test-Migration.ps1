@@ -54,7 +54,14 @@ if ($IncludePackaging) {
 # Provisioner unit tests, protocol typecheck and compatibility tests. The real-provisioning and
 # actual-user-PRI lanes need the HostSDK stage and the renderer, so they ride -IncludeRenderer.
 $foundationArgs = @("-NoProfile", "-File", "$root\surface\Test-Foundation.ps1")
-if ($IncludeRenderer) { $foundationArgs += @("-IncludeBuild", "-IncludeRenderer") }
+if ($IncludeRenderer) {
+    $foundationArgs += @("-IncludeBuild", "-IncludeRenderer")
+    # Q-suite fixture app: custom/other-project/Toolkit controls and resources at every scope. Built before
+    # Foundation, whose matched-host PRI behaviours run the UITest lane against it.
+    & dotnet build "$root\surface\TestFixtureApp\TestFixtureApp.csproj" -c Debug -p:Platform=x64 `
+        -p:RuntimeIdentifier=win-x64 --nologo -v minimal
+    if ($LASTEXITCODE -ne 0) { throw "TestFixtureApp build failed (exit $LASTEXITCODE)." }
+}
 & $pwsh.Source @foundationArgs
 if ($LASTEXITCODE -ne 0) { throw "Foundation suite failed (exit $LASTEXITCODE)." }
 
@@ -67,11 +74,7 @@ if (-not (Test-Path "$raw\Surface.exe")) { throw "Run Build-Vsix.ps1 -NoDeploy f
 & dotnet build "$root\surface\TestUserApp\TestUserApp.csproj" -c Debug -p:Platform=x64 `
     -p:RuntimeIdentifier=win-x64 --nologo -v minimal
 if ($LASTEXITCODE -ne 0) { throw "TestUserApp build failed (exit $LASTEXITCODE)." }
-# Q-suite fixture app: custom/other-project/Toolkit controls and resources at every scope.
-& dotnet build "$root\surface\TestFixtureApp\TestFixtureApp.csproj" -c Debug -p:Platform=x64 `
-    -p:RuntimeIdentifier=win-x64 --nologo -v minimal
-if ($LASTEXITCODE -ne 0) { throw "TestFixtureApp build failed (exit $LASTEXITCODE)." }
-$run = "$results\Renderer-$([Guid]::NewGuid().ToString('N'))"
+$run =  "$results\Renderer-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 Copy-Item "$raw\*" $run -Recurse -Force
 $saved = @{}
