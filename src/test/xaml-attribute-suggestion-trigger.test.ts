@@ -58,7 +58,8 @@ test("resolves editor.quickSuggestions the way VS Code does", () => {
   assert.equal(areQuickSuggestionsEnabled(true), true);
   assert.equal(areQuickSuggestionsEnabled(false), false);
   assert.equal(areQuickSuggestionsEnabled({ other: "on" }), true);
-  assert.equal(areQuickSuggestionsEnabled({ other: "inline" }), true);
+  // "inline" shows ghost text instead of the suggest widget, so forcing the widget open fights the user's setting.
+  assert.equal(areQuickSuggestionsEnabled({ other: "inline" }), false);
   assert.equal(areQuickSuggestionsEnabled({ other: "off" }), false);
   assert.equal(areQuickSuggestionsEnabled({ other: false }), false);
   assert.equal(areQuickSuggestionsEnabled({ comments: "off" }), true);

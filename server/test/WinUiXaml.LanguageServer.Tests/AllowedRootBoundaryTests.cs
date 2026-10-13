@@ -199,4 +199,116 @@ public class AllowedRootBoundaryTests
             catch { /* best-effort cleanup */ }
         }
     }
+
+    [Fact]
+    public void ContainedFileExists_RejectsTargetsOutsideTheTrustedRoots()
+    {
+        var roots = XamlLanguageServer.NormalizeRoots(new[] { @"C:\repo\app" });
+        // Every path is reported to exist, so only containment can reject anything here.
+        var probe = XamlLanguageServer.ContainedFileExists(roots, _ => true);
+
+        Assert.True(probe(@"C:\repo\app\Themes\Generic.xaml"));
+        Assert.False(probe(@"C:\repo\app\..\..\Windows\win.ini"));
+        Assert.False(probe(@"C:\Windows\System32\drivers\etc\hosts"));
+        Assert.False(probe(@"C:\repo\appEvil\Generic.xaml"));
+    }
+
+    [Fact]
+    public void ContainedFileExists_WithNoTrustedRoots_AdmitsNothing()
+    {
+        var probe = XamlLanguageServer.ContainedFileExists(System.Array.Empty<string>(), _ => true);
+        Assert.False(probe(@"C:\repo\app\Themes\Generic.xaml"));
+    }
+
+    [Fact]
+    public void DocumentLink_TraversalSource_ProducesNoLink()
+    {
+        // End-to-end for the containment seam: a crafted Source that escapes the workspace must not
+        // become a clickable link, and must not even be probed for existence on disk.
+        const string xaml = """
+            <Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+              <Page.Resources>
+                <ResourceDictionary Source="..\..\..\Windows\win.ini" />
+              </Page.Resources>
+            </Page>
+            """;
+
+        var roots = XamlLanguageServer.NormalizeRoots(new[] { @"C:\repo\app" });
+        var probed = new List<string>();
+        var links = XamlDocumentLinks.Collect(
+            new TextDocument("file:///C:/repo/app/Page.xaml", xaml),
+            @"C:\repo\app",
+            @"C:\repo\app",
+            XamlLanguageServer.ContainedFileExists(roots, candidate =>
+            {
+                probed.Add(candidate);
+                return true;
+            }));
+
+        Assert.Empty(links);
+        Assert.Empty(probed);
+    }
+
+    [Fact]
+    public void Junction_MakesLexicalAndCanonicalSpellingsDisagree()
+    {
+        // Why open-document lookups must key on CanonicalizePath: through a junction, Path.GetFullPath
+        // keeps the link spelling while every allow-list check reports the target spelling. Keying the
+        // index on the lexical path makes those two disagree, and the dirty-buffer lookup silently
+        // misses - so the rename reads stale disk text and corrupts the user's unsaved edits.
+        var baseDir = Path.Combine(Path.GetTempPath(), "winui-xaml-canon-" + Guid.NewGuid().ToString("N"));
+        var realDir = Path.Combine(baseDir, "real");
+        var linkPath = Path.Combine(baseDir, "link");
+        var junctionCreated = false;
+        try
+        {
+            Directory.CreateDirectory(realDir);
+            File.WriteAllText(Path.Combine(realDir, "Page.xaml"), "<Page/>");
+
+            var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{linkPath}\" \"{realDir}\"")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            using (var proc = Process.Start(psi))
+            {
+                proc?.WaitForExit(10000);
+                junctionCreated = proc is { ExitCode: 0 } && Directory.Exists(linkPath);
+            }
+        }
+        catch (Exception)
+        {
+            junctionCreated = false;
+        }
+
+        try
+        {
+            if (!junctionCreated)
+            {
+                return; // skip: junction creation unavailable (nothing proven, nothing masked)
+            }
+
+            var viaLink = Path.Combine(linkPath, "Page.xaml");
+            var canonical = XamlLanguageServer.CanonicalizePath(viaLink);
+
+            Assert.False(string.Equals(Path.GetFullPath(viaLink), canonical, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(Path.Combine(realDir, "Page.xaml"), canonical, ignoreCase: true);
+
+            // The spelling the allow-list hands every cross-file caller must be the canonical one.
+            var roots = XamlLanguageServer.NormalizeRoots(new[] { baseDir });
+            Assert.True(XamlLanguageServer.TryGetAllowedRoot(viaLink, roots, out var allowed, out _));
+            Assert.Equal(canonical, allowed, ignoreCase: true);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(linkPath)) { Directory.Delete(linkPath); }
+                if (Directory.Exists(baseDir)) { Directory.Delete(baseDir, recursive: true); }
+            }
+            catch { /* best-effort cleanup */ }
+        }
+    }
 }

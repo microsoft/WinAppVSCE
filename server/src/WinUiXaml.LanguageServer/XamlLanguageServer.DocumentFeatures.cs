@@ -125,7 +125,13 @@ internal sealed partial class XamlLanguageServer
         // A resource key is a PROJECT-WIDE symbol: its x:Key is typically declared in App.xaml and used across pages.
         if (DetectSymbolAt(doc, offset, typeSystem) is { Kind: XamlRenameKind.Key, Name: { Length: > 0 } key })
         {
-            AddCrossFileResourceReferences(context, p.TextDocument.Uri, key, includeDeclaration, locations);
+            AddCrossFileResourceReferences(
+                context,
+                p.TextDocument.Uri,
+                key,
+                includeDeclaration,
+                GetCrossFileResourcePolicy(context, p.TextDocument.Uri, doc, offset),
+                locations);
         }
 
         return locations;
@@ -137,7 +143,14 @@ internal sealed partial class XamlLanguageServer
         string currentUri,
         string key,
         bool includeDeclaration,
-        List<Lsp.Location> locations) =>
+        CrossFileResourcePolicy policy,
+        List<Lsp.Location> locations)
+    {
+        if (policy == CrossFileResourcePolicy.None)
+        {
+            return;
+        }
+
         ForEachCrossFileResourceOccurrence(context, currentUri, key, (fileDoc, occurrences) =>
         {
             foreach (var occurrence in occurrences)
@@ -149,23 +162,111 @@ internal sealed partial class XamlLanguageServer
 
                 locations.Add(new Lsp.Location { Uri = fileDoc.Uri, Range = occurrence.Range });
             }
-        });
+        },
+        includeDeclarations: includeDeclaration &&
+            policy == CrossFileResourcePolicy.ReferencesAndDeclarations);
+    }
+
+    /// <summary>What the cross-file walker may rewrite for the resource key under the caret.</summary>
+    private enum CrossFileResourcePolicy
+    {
+        /// <summary>The symbol is private to this document; other files cannot bind to it.</summary>
+        None,
+
+        /// <summary>The declaration is here, so other files contribute usages only — their own same-key declarations are different resources.</summary>
+        ReferencesOnly,
+
+        /// <summary>The caret is on a usage whose declaration lives in another file, so that declaration must be rewritten too.</summary>
+        ReferencesAndDeclarations,
+    }
+
+    /// <summary>Decides how far a resource-key rename or reference search may reach beyond the current document.</summary>
+    private CrossFileResourcePolicy GetCrossFileResourcePolicy(
+        XamlProjectContext? context,
+        string currentUri,
+        TextDocument doc,
+        int offset)
+    {
+        if (FindResourceDeclarationAt(doc, offset) is null)
+        {
+            return CrossFileResourcePolicy.ReferencesAndDeclarations;
+        }
+
+        return ResourcesAreVisibleProjectWide(context, currentUri)
+            ? CrossFileResourcePolicy.ReferencesOnly
+            : CrossFileResourcePolicy.None;
+    }
+
+    /// <summary>True when other documents can resolve this document's resource declarations — it is App.xaml or a dictionary merged into it.</summary>
+    private bool ResourcesAreVisibleProjectWide(XamlProjectContext? context, string currentUri)
+    {
+        if (context == null)
+        {
+            return false;
+        }
+
+        if (TryGetProjectWideResourceFiles(context) is not { } projectWideFiles)
+        {
+            return true;
+        }
+
+        return UriToPath(currentUri) is { } path && projectWideFiles.Contains(CanonicalizePath(path));
+    }
+
+    /// <summary>Canonical paths of the XAML reachable from App.xaml — the only files whose resource declarations other documents can bind to. Null means the graph is unavailable, so nothing should be restricted on its say-so.</summary>
+    private HashSet<string>? TryGetProjectWideResourceFiles(XamlProjectContext? context)
+    {
+        if (context == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var resolution = context.Resolution;
+            var projectRoot = System.IO.Path.GetDirectoryName(resolution.ProjectPath);
+            if (FindAppXamlPath(resolution) is not { } appXaml || string.IsNullOrEmpty(projectRoot))
+            {
+                return null;
+            }
+
+            var files = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+            foreach (var file in ReadResourceGraph(appXaml, projectRoot!, context.TypeSystem))
+            {
+                files.Add(CanonicalizePath(file.Path));
+            }
+
+            return files;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (System.Exception ex)
+        {
+            System.Console.Error.WriteLine($"[winui-xaml-ls] resource visibility: {ex.Message}");
+            return null;
+        }
+    }
 
     /// <summary>Invokes visit with every OTHER project XAML document that mentions key, plus that document's deduped occurrences of it. Shared by Find All References and rename.</summary>
     private void ForEachCrossFileResourceOccurrence(
         XamlProjectContext? context,
         string currentUri,
         string key,
-        Action<TextDocument, List<(Lsp.Range Range, bool IsDeclaration)>> visit)
+        Action<TextDocument, List<(Lsp.Range Range, bool IsDeclaration)>> visit,
+        bool includeDeclarations)
     {
         if (context == null)
         {
             return;
         }
 
-        var currentPath = UriToPath(currentUri) is { } cp ? System.IO.Path.GetFullPath(cp) : null;
+        var currentPath = UriToPath(currentUri) is { } cp ? CanonicalizePath(cp) : null;
         var cancellationToken = _requestCancellation.Value;
         var openDocuments = BuildOpenDocumentPathIndex();
+        // A page-local declaration in another file is a different resource object that merely shares a key, so only declarations other documents can actually bind to may be rewritten.
+        var projectWideFiles = includeDeclarations ? TryGetProjectWideResourceFiles(context) : null;
 
         foreach (var file in context.Resolution.XamlFiles)
         {
@@ -233,7 +334,16 @@ internal sealed partial class XamlLanguageServer
             }
 
             var fileOccurrences = new List<(Lsp.Range Range, bool IsDeclaration)>();
-            CollectResourceOccurrences(fileRoot, key, fileDoc, fileOccurrences);
+            // A reference that resolves inside its own file belongs to that file's resource, not ours, so only unresolved ones can bind to the symbol being renamed.
+            CollectResourceOccurrences(
+                fileRoot,
+                key,
+                fileDoc,
+                fileOccurrences,
+                onlyUnresolvedReferences: true,
+                resourceIndex: XamlSemanticFacts.CreateResourceIndex(fileRoot, context.TypeSystem),
+                includeDeclarations: includeDeclarations &&
+                    (projectWideFiles == null || projectWideFiles.Contains(canonicalFile)));
             visit(fileDoc, DedupeAndSort(fileOccurrences));
         }
     }
@@ -249,14 +359,8 @@ internal sealed partial class XamlLanguageServer
                 continue;
             }
 
-            try
-            {
-                index[System.IO.Path.GetFullPath(path)] = entry.Value;
-            }
-            catch (System.Exception)
-            {
-                // An unusable path spelling just falls back to the disk read.
-            }
+            // Must match TryGetAllowedRoot's canonical spelling, which also resolves reparse points — a plain GetFullPath misses on junction, symlink, subst and mapped-drive checkouts.
+            index[CanonicalizePath(path)] = entry.Value;
         }
 
         return index;
@@ -329,7 +433,11 @@ internal sealed partial class XamlLanguageServer
         }
 
         var (crossFileEdits, declaredElsewhere) = CollectCrossFileResourceRenameEdits(
-            context, p.TextDocument.Uri, key, (p.NewName ?? string.Empty).Trim());
+            context,
+            p.TextDocument.Uri,
+            key,
+            (p.NewName ?? string.Empty).Trim(),
+            GetCrossFileResourcePolicy(context, p.TextDocument.Uri, doc, offset));
         if (XamlRename.Rename(doc, offset, p.NewName ?? string.Empty, typeSystem, declaredElsewhere)
             is not { Changes: { } changes } edit)
         {
@@ -358,8 +466,18 @@ internal sealed partial class XamlLanguageServer
         }
 
         bool found = false;
+        if (GetCrossFileResourcePolicy(context, currentUri, doc, offset)
+            != CrossFileResourcePolicy.ReferencesAndDeclarations)
+        {
+            return false;
+        }
+
         ForEachCrossFileResourceOccurrence(
-            context, currentUri, key, (_, occurrences) => found |= occurrences.Any(o => o.IsDeclaration));
+            context,
+            currentUri,
+            key,
+            (_, occurrences) => found |= occurrences.Any(o => o.IsDeclaration),
+            includeDeclarations: true);
         return found;
     }
 
@@ -368,10 +486,16 @@ internal sealed partial class XamlLanguageServer
         XamlProjectContext? context,
         string currentUri,
         string key,
-        string newName)
+        string newName,
+        CrossFileResourcePolicy policy)
     {
         var edits = new Dictionary<string, List<TextEdit>>(System.StringComparer.Ordinal);
         bool hasDeclaration = false;
+        if (policy == CrossFileResourcePolicy.None)
+        {
+            return (edits, hasDeclaration);
+        }
+
         ForEachCrossFileResourceOccurrence(context, currentUri, key, (fileDoc, occurrences) =>
         {
             if (occurrences.Count == 0)
@@ -383,7 +507,8 @@ internal sealed partial class XamlLanguageServer
             edits[fileDoc.Uri] = occurrences
                 .Select(o => new TextEdit { Range = o.Range, NewText = newName })
                 .ToList();
-        });
+        },
+        includeDeclarations: policy == CrossFileResourcePolicy.ReferencesAndDeclarations);
         return (edits, hasDeclaration);
     }
 
@@ -863,7 +988,12 @@ internal sealed partial class XamlLanguageServer
             : null;
         var projectDirectory = projectPath == null ? null : System.IO.Path.GetDirectoryName(projectPath);
 
-        return Task.FromResult<object?>(XamlDocumentLinks.Collect(doc, documentDirectory, projectDirectory));
+        return Task.FromResult<object?>(XamlDocumentLinks.Collect(
+            doc,
+            documentDirectory,
+            projectDirectory,
+            // Link targets must obey the same containment every other disk-touching feature enforces.
+            ContainedFileExists(_allowedRoots)));
     }
 
     /// <summary>Resolves the symbol under the caret — an x:Name (declaration or an ElementName=/ Storyboard.TargetName usage) or a resource key (an x:Key declaration or a</summary>

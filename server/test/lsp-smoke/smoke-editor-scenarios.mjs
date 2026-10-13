@@ -1,3 +1,7 @@
+import { writeFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 export async function runEditorScenarios(ctx) {
   const {
     fail, xamlText, xamlUri, XAML, NS, pageRes, pageCls, sb, validateDoc,
@@ -149,7 +153,22 @@ export async function runEditorScenarios(ctx) {
     fail(`documentLink: ms-appx:///App.xaml must resolve under the project root, got ${JSON.stringify(dlAppx)}`);
   const dlMissing = await documentLinkWith(351, `<ResourceDictionary Source="DoesNotExist.xaml" />`, "missing Source");
   if (dlMissing.length !== 0) fail(`documentLink: a missing target must not link, got ${JSON.stringify(dlMissing)}`);
-  console.log(`[ok] documentLink: existing/ms-appx ResourceDictionary Source -> file link; missing -> none`);
+  // A Source that points outside the workspace must not become a clickable link even though the file
+  // really exists on disk — document links obey the same trust boundary as every other disk feature.
+  const escapeTarget = join(tmpdir(), `winui-smoke-outofroot-${process.pid}.xaml`);
+  writeFileSync(escapeTarget, "<ResourceDictionary />");
+  let dlEscape;
+  try {
+    dlEscape = await documentLinkWith(
+      354,
+      `<ResourceDictionary Source="${escapeTarget}" />`,
+      "out-of-root Source");
+  } finally {
+    try { unlinkSync(escapeTarget); } catch { /* best-effort cleanup */ }
+  }
+  if (dlEscape.length !== 0)
+    fail(`documentLink: a target outside the allowed roots must not link, got ${JSON.stringify(dlEscape)}`);
+  console.log(`[ok] documentLink: existing/ms-appx ResourceDictionary Source -> file link; missing/out-of-root -> none`);
 
   // 18b) asset document links — Image/BitmapImage sources resolve app-root-relative (ms-appx:/// semantics)
   // to real files under the fixture's Assets folder, over exactly the path token.

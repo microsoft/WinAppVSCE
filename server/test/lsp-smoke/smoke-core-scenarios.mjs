@@ -1606,6 +1606,37 @@ export async function runCoreScenarios(ctx) {
     send({ method: "textDocument/didClose", params: { textDocument: { uri: diUri } } });
   }
 
+  // 27i) Resource keys are SCOPED, not global strings. A page-local x:Key that happens to reuse
+  // SmokeAccentBrush is a different resource object, and DiPage's own usage then binds to it rather than
+  // to App.xaml. Renaming the App.xaml resource must leave both of them alone; rewriting them produces a
+  // silently wrong edit that repoints an unrelated page at a key that no longer exists.
+  {
+    const diPath = resolve(dirname(XAML), "DiPage.xaml");
+    const diUri = pathToFileURL(diPath).href;
+    const diDisk = readFileSync(diPath, "utf8");
+    const shadowed = diDisk.replace(
+      '    mc:Ignorable="d">',
+      '    mc:Ignorable="d">\n\n    <Page.Resources>\n        <SolidColorBrush x:Key="SmokeAccentBrush" Color="Red" />\n    </Page.Resources>'
+    );
+    if (shadowed === diDisk) fail(`DiPage fixture no longer has the mc:Ignorable anchor to inject a page-local resource`);
+
+    send({ method: "textDocument/didOpen", params: { textDocument: { uri: diUri, languageId: "xaml", version: 1, text: shadowed } } });
+    send({ id: 1804, method: "textDocument/rename", params: { textDocument: { uri: xamlUri }, position: resCaret, newName: "SmokeRenamedBrush" } });
+    const scoped = await waitFor(responseFor(1804), 30000, "xref-rename-scoped");
+    if (scoped.error) fail(`cross-file rename with a shadowing page-local key errored: ${JSON.stringify(scoped.error)}`);
+    const scopedChanges = (scoped.result && scoped.result.changes) || {};
+    const diKey = Object.keys(scopedChanges).find((f) => f.toLowerCase().endsWith("dipage.xaml"));
+    if (diKey) {
+      fail(`rename must not touch DiPage once it declares its own SmokeAccentBrush, got ${JSON.stringify(scopedChanges[diKey])}`);
+    }
+    if (!Object.keys(scopedChanges).some((f) => f.toLowerCase().endsWith("app.xaml"))) {
+      fail(`rename must still rewrite the App.xaml declaration it started from: ${JSON.stringify(Object.keys(scopedChanges))}`);
+    }
+    console.log(`[ok] rename(cross-file, DiPage shadows the key locally): DiPage untouched, App.xaml still renamed`);
+
+    send({ method: "textDocument/didClose", params: { textDocument: { uri: diUri } } });
+  }
+
   // 28) Document Highlights (textDocument/documentHighlight): the same occurrences as references, rendered
   //     as editor highlights. Declaration is a Write highlight (kind 3); usages are Read highlights (kind 2).
   // 28a) x:Name: caret on a usage highlights declaration (Write) + both usages (Read) = 3, all "GoButton".

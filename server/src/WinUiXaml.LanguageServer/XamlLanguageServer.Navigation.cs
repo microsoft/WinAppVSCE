@@ -355,11 +355,15 @@ internal sealed partial class XamlLanguageServer
         List<(Lsp.Range Range, bool IsDeclaration)> results,
         XamlElement? targetDeclaration = null,
         bool onlyUnresolvedReferences = false,
-        XamlSemanticFacts.ResourceScopeIndex? resourceIndex = null)
+        XamlSemanticFacts.ResourceScopeIndex? resourceIndex = null,
+        bool? includeDeclarations = null)
     {
+        // Cross-file work needs unresolved references WITHOUT their file's own declarations, so the two switches are independent there; every other caller keeps the original coupling.
+        bool collectDeclarations = includeDeclarations ?? !onlyUnresolvedReferences;
+
         if (XamlSemanticFacts.GetKeyAttribute(element) is { Value: { IsMarkupExtension: false } keyValue } &&
             string.Equals(keyValue.Text.Trim(), key, StringComparison.Ordinal) &&
-            !onlyUnresolvedReferences &&
+            collectDeclarations &&
             (targetDeclaration is null || ReferenceEquals(element, targetDeclaration)))
         {
             results.Add((doc.RangeOf(TrimmedValueSpan(keyValue)), true));
@@ -413,7 +417,8 @@ internal sealed partial class XamlLanguageServer
                     results,
                     targetDeclaration,
                     onlyUnresolvedReferences,
-                    resourceIndex);
+                    resourceIndex,
+                    includeDeclarations);
             }
         }
     }

@@ -265,11 +265,14 @@ internal sealed partial class XamlLanguageServer
     }
 
     /// <summary>True when path lies under one of the trusted _allowedRoots.</summary>
-    private bool TryGetAllowedRoot(string path, out string canonicalPath, out string allowedRoot)
+    private bool TryGetAllowedRoot(string path, out string canonicalPath, out string allowedRoot) =>
+        TryGetAllowedRoot(path, _allowedRoots, out canonicalPath, out allowedRoot);
+
+    /// <summary>True when path lies under one of roots. The canonical spelling is the one every caller must key on, since a reparse point makes the lexical path a different file.</summary>
+    internal static bool TryGetAllowedRoot(string path, string[] roots, out string canonicalPath, out string allowedRoot)
     {
         canonicalPath = string.Empty;
         allowedRoot = string.Empty;
-        var roots = _allowedRoots;
         if (roots.Length == 0)
         {
             return false;
@@ -294,6 +297,14 @@ internal sealed partial class XamlLanguageServer
         }
 
         return false;
+    }
+
+    /// <summary>A file-existence probe for document links that admits only files inside roots. Without it a crafted "..\..\" or absolute Source links to — and probes the existence of — any local file.</summary>
+    internal static Func<string, bool> ContainedFileExists(string[] roots, Func<string, bool>? fileExists = null)
+    {
+        var exists = fileExists ?? System.IO.File.Exists;
+        return candidate => TryGetAllowedRoot(candidate, roots, out var canonicalTarget, out _)
+            && exists(canonicalTarget);
     }
 
     internal static bool PathIsWithin(string path, string root)

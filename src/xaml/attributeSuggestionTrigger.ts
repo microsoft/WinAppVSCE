@@ -71,7 +71,8 @@ export function areQuickSuggestionsEnabled(
     return true;
   }
 
-  return typeof other === "boolean" ? other : other !== "off";
+  // "inline" means ghost text INSTEAD OF the suggest widget, so only "on" may force the widget open.
+  return typeof other === "boolean" ? other : other === "on";
 }
 
 export function shouldTriggerAutomaticXamlSuggestions(

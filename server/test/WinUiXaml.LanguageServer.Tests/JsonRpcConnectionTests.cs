@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO.Pipes;
 using System.Text;
+using System.Text.RegularExpressions;
 using WinUiXaml.LanguageServer.Lsp;
 
 namespace WinUiXaml.LanguageServer.Tests;
@@ -342,40 +343,53 @@ public class JsonRpcConnectionTests
     }
 
     [Fact]
-    public async Task CancelArrivingAfterTheRequestCompletedLeavesTheConnectionRunning()
+    public async Task CancelStormInterleavedWithCompletionsLeavesTheConnectionRunning()
     {
-        // VS Code routinely cancels superseded completion/hover requests, so the cancel often lands after
-        // the handler already finished and disposed its CancellationTokenSource. That must be a no-op:
-        // an escaping ObjectDisposedException reaches Program.Main's bare await and kills the server.
+        // VS Code cancels superseded completion/hover requests constantly, so cancel frames arrive
+        // interleaved with - and often after - the responses they were meant to interrupt. None of that
+        // may lose a response or fault the read loop, because DispatchAsync and RunAsync have no handler
+        // and an escaping exception reaches Program.Main's bare await and kills the language server.
+        //
+        // Scope note: this does NOT pin the catch (ObjectDisposedException) in CancelRequest. That window
+        // is the handful of instructions between its TryGetValue and Cancel(), and the entry is removed
+        // before the source is disposed, so it cannot be driven deterministically from the public surface.
+        // The catch stays as cheap defence; what is testable, and tested here, is that a cancel storm
+        // neither destabilizes the connection nor drops work.
+        const int requests = 400;
+
         using var writeEnd = new AnonymousPipeServerStream(PipeDirection.Out);
         await using var input = new AnonymousPipeClientStream(PipeDirection.In, writeEnd.ClientSafePipeHandle);
         await using var output = new MemoryStream();
 
-        var handled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connection = new JsonRpcConnection(input, output)
         {
-            OnRequest = (_, _, _) =>
+            // Yielding pushes the rest of the handler - including the TryRemove and the using's Dispose -
+            // onto the thread pool so it genuinely overlaps the read loop handling the matching cancel.
+            OnRequest = async (_, _, _) =>
             {
-                handled.TrySetResult();
-                return Task.FromResult<object?>("done");
+                await Task.Yield();
+                return "done";
             },
         };
 
         var run = connection.RunAsync();
 
-        await writeEnd.WriteAsync(Frame("""{"jsonrpc":"2.0","id":1,"method":"fast"}"""));
-        await writeEnd.FlushAsync();
-        await handled.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        await Task.Delay(100);
+        for (int id = 1; id <= requests; id++)
+        {
+            await writeEnd.WriteAsync(Frame(
+                "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":\"fast\"}"));
+            await writeEnd.WriteAsync(Frame(
+                "{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{\"id\":" + id + "}}"));
+        }
 
-        await writeEnd.WriteAsync(Frame("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":1}}"""));
         await writeEnd.FlushAsync();
-        await Task.Delay(100);
-
         writeEnd.Dispose();
+
+        // RunAsync throwing here IS the regression: the server would have exited mid-session.
         await run.WaitAsync(TimeSpan.FromSeconds(30));
 
-        Assert.Contains("\"result\":\"done\"", Encoding.UTF8.GetString(output.ToArray()));
+        var written = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Equal(requests, Regex.Matches(written, "\"result\":\"done\"").Count);
     }
 
     private static byte[] Frame(string json)
