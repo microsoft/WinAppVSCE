@@ -73,8 +73,10 @@ export interface VisualTreeEnumerateParams {
 }
 
 /**
- * `VisualTree.enumerate` is declared as a `oneOf`: some engines return a bare
- * array, others return an envelope with classification metadata.
+ * `VisualTree.enumerate` is declared as a `oneOf`: the engine answers with a
+ * bare array, or with an envelope carrying classification metadata, depending
+ * on the call. Both shapes come from the same engine — this is the current
+ * contract, not a concession to an older one.
  * {@link normalizeEnumerateResult} collapses both into a node array.
  */
 export type VisualTreeEnumerateResult =
