@@ -181,12 +181,17 @@ function parseSlnxProjectPaths(content: string): string[] {
  * against the owning workspace root when the caller knows it, and against the
  * solution's own directory otherwise.
  *
- * `unrestricted` drops the check entirely. It is for a solution the user named
+ * `unrestricted` drops the directory check. It is for a solution the user named
  * in a file dialog outside every workspace folder: its repository root is
  * unknown, so any boundary we could invent would be the solution's own
  * directory, which discards the ordinary `solutions/` + `src/` layout. The
  * explicit pick is the trust decision, and `winapp run` resolves the same
  * members without a containment rule of its own.
+ *
+ * Rooted members are rejected either way. A real solution always names its
+ * members relatively, so an absolute or UNC entry is never something to honour
+ * — and honouring one would let a crafted solution aim the classifier's
+ * `readFile` at `\\attacker\share`, which on Windows authenticates to that host.
  */
 export async function readSolutionProjectPaths(
 	solutionPath: string,
@@ -202,6 +207,7 @@ export async function readSolutionProjectPaths(
 
 	const solutionDir = path.dirname(solutionPath);
 	const resolved = parseSolutionProjectPaths(content, solutionPath)
+		.filter(relative => !isRootedSolutionMember(relative))
 		.map(relative => path.resolve(solutionDir, relative.replace(/\\/g, path.sep)));
 	if (options.unrestricted) {
 		return resolved;
@@ -212,6 +218,20 @@ export async function readSolutionProjectPaths(
 		resolved.map(candidate => isContainedInReal(container, candidate))
 	);
 	return resolved.filter((_, index) => contained[index]);
+}
+
+/**
+ * True for a member path that names a location rather than a sibling.
+ *
+ * Checked on the raw entry, before `path.resolve` folds it into something that
+ * looks ordinary: `path.isAbsolute` alone misses a UNC path written with
+ * forward slashes, and a drive-relative `C:App.csproj` escapes the solution
+ * directory without ever being absolute.
+ */
+function isRootedSolutionMember(relative: string): boolean {
+	return path.isAbsolute(relative)
+		|| /^[\\/]{2}/.test(relative)
+		|| /^[a-zA-Z]:/.test(relative);
 }
 
 /** Reads only top-level projects, matching the CLI's directory-input rule. */

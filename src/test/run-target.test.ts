@@ -428,6 +428,33 @@ describe('readSolutionProjectPaths containment', () => {
 		}
 	});
 
+	// A crafted solution must not aim the classifier's readFile at a UNC path:
+	// on Windows the SMB client offers the user's credentials to that host, and
+	// browsing to a solution is a single click with no further confirmation.
+	// Real solutions always name members relatively, so nothing legitimate is
+	// lost by refusing rooted entries even when containment is unrestricted.
+	it('drops rooted members even when containment is unrestricted', async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-rooted-'));
+		try {
+			fs.mkdirSync(path.join(dir, 'App'));
+			fs.writeFileSync(path.join(dir, 'App', 'App.csproj'), '<Project />');
+			const solutionPath = writeSolution(dir, [
+				'App\\App.csproj',
+				'\\\\127.0.0.1\\share\\App.csproj',
+				'//127.0.0.1/share/Fwd.csproj',
+				'C:\\Windows\\System32\\Evil.csproj',
+				'C:Drive.csproj'
+			]);
+
+			assert.deepStrictEqual(
+				await readSolutionProjectPaths(solutionPath, undefined, { unrestricted: true }),
+				[path.join(dir, 'App', 'App.csproj')]
+			);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it('still drops a member that escapes the containment root', async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-escape-'));
 		try {
