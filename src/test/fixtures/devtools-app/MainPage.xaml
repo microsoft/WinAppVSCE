@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="DevToolsFixtureApp.MainPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:DevToolsFixtureApp"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!--
+        Deliberately shaped for the DevTools E2E spec, not as a sample app.
+
+        Every element below is named so the test can assert on exact visual-tree
+        nodes instead of brittle positional lookups, and the properties set here
+        (Text, Margin, Background) are the ones the property-grid assertions read
+        back. Changing a name or a value here will fail devtools-panel.spec.ts.
+    -->
+    <Grid x:Name="FixtureRoot">
+        <StackPanel x:Name="FixturePanel" Margin="24" Spacing="12">
+            <TextBlock x:Name="FixtureHeading" Text="DevTools Fixture" FontSize="24" />
+            <Button x:Name="FixtureButton" Content="Fixture Button" />
+        </StackPanel>
+    </Grid>
+</Page>

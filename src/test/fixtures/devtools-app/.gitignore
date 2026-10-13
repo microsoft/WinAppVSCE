@@ -1,0 +1,13 @@
+# Build output only.
+#
+# This is an E2E fixture, not a standalone project: the source is committed and
+# the binaries are built on demand by devtools-panel.spec.ts. The scaffolded
+# template .gitignore was replaced because it also excluded *.pubxml, which
+# would have dropped the publish profiles the csproj references.
+[Bb]in/
+[Oo]bj/
+
+# The repo-root .gitignore excludes *.pubxml globally. The csproj references these
+# publish profiles by name, so re-include them here to keep the fixture complete
+# on a fresh clone.
+!Properties/PublishProfiles/*.pubxml
