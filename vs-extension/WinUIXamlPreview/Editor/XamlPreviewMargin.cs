@@ -115,14 +115,13 @@ namespace WinUIXamlPreview.Editor
         // Echo guard: moving the caret in #1 fires PositionChanged (#2) synchronously; this suppresses that
         // re-entrant hop so the two directions can't loop. The async echo (#2 -> surface -> Selected -> #1) is
         // additionally broken by the "caret already inside the element's span" check in #1.
-        private bool _syncing;
-        private string? _lastCaretPath;
+        private readonly CaretSyncGuard _caretSync = new CaretSyncGuard();
 
         // Live-edit refresh: coalesce a burst of keystrokes into a single re-render (#7). The editor raises
         // ITextBuffer.Changed on the UI thread, so a UI DispatcherTimer is the natural debounce.
         private readonly ITextBuffer? _buffer;
         private readonly System.Windows.Threading.DispatcherTimer _editDebounce;
-        private bool _dirtyWhileCollapsed;
+        private readonly LiveEditGate _liveEdit = new LiveEditGate();
 
         // Resize-grip drag state (measured against the text view element, which is stable while the
         // margin resizes — using the margin's own coordinate space would feed back on itself).
@@ -1101,9 +1100,8 @@ namespace WinUIXamlPreview.Editor
             }
 
             // Re-render on expand if edits arrived while hidden (we skip live-edit renders while collapsed).
-            if (!collapsed && _dirtyWhileCollapsed)
+            if (!collapsed && _liveEdit.OnExpanded())
             {
-                _dirtyWhileCollapsed = false;
                 try { _preview.Reload(); } catch (Exception ex) { Log.Write("Reload-on-expand failed: " + ex); }
             }
         }
@@ -1168,10 +1166,9 @@ namespace WinUIXamlPreview.Editor
             // The text changed, so the cached path<->span map is stale; rebuild it lazily on next use.
             _sourceMapDirty = true;
 
-            // Don't spend renders on a hidden preview; mark it dirty and refresh when it's reopened.
-            if (PreviewOptions.Collapsed)
+            // Don't spend renders on a hidden preview; it refreshes once when it's reopened.
+            if (!_liveEdit.OnTextChanged(PreviewOptions.Collapsed))
             {
-                _dirtyWhileCollapsed = true;
                 return;
             }
 
@@ -1182,7 +1179,7 @@ namespace WinUIXamlPreview.Editor
         private void OnEditDebounceTick(object sender, EventArgs e)
         {
             _editDebounce.Stop();
-            if (_disposed || PreviewOptions.Collapsed)
+            if (!_liveEdit.OnDebounceElapsed(PreviewOptions.Collapsed, _disposed))
             {
                 return;
             }
@@ -1231,7 +1228,7 @@ namespace WinUIXamlPreview.Editor
         /// <summary>#1 — the designer selected an element; move the editor caret to its source span.</summary>
         private void OnDesignerElementSelected(SelectedMsg sel)
         {
-            if (_disposed || _syncing || string.IsNullOrEmpty(sel?.Path))
+            if (_disposed || !_caretSync.AcceptsDesignerSelection(sel?.Path))
             {
                 return;
             }
@@ -1245,22 +1242,17 @@ namespace WinUIXamlPreview.Editor
             try
             {
                 var snapshot = _textView.TextSnapshot;
-                int len = snapshot.Length;
-                if (start > len) start = len;
-                if (end > len) end = len;
-                if (end < start) end = start;
+                (start, end) = CaretSyncGuard.Clamp(start, end, snapshot.Length);
 
                 // If the caret is already inside this element, the selection originated from the caret (#2's
                 // echo) — leave it be so the two directions don't fight over the caret.
                 int caret = _textView.Caret.Position.BufferPosition.Position;
-                if (caret >= start && caret <= end)
+                if (_caretSync.IsEchoOfCaret(sel.Path!, caret, start, end))
                 {
-                    _lastCaretPath = sel.Path;
                     return;
                 }
 
-                _syncing = true;
-                try
+                using (_caretSync.BeginCaretMove())
                 {
                     // Highlight the element's opening tag (name + attributes), caret at its start.
                     int tagEnd = FindStartTagEnd(snapshot, start);
@@ -1268,11 +1260,7 @@ namespace WinUIXamlPreview.Editor
                     _textView.Selection.Select(selSpan, isReversed: false);
                     _textView.Caret.MoveTo(new SnapshotPoint(snapshot, start));
                     _textView.ViewScroller.EnsureSpanVisible(selSpan);
-                    _lastCaretPath = sel.Path;
-                }
-                finally
-                {
-                    _syncing = false;
+                    _caretSync.CaretMovedTo(sel.Path!);
                 }
             }
             catch (Exception ex)
@@ -1284,7 +1272,7 @@ namespace WinUIXamlPreview.Editor
         /// <summary>#2 — the editor caret moved; select the innermost enclosing element in the designer.</summary>
         private void OnCaretPositionChanged(object sender, CaretPositionChangedEventArgs e)
         {
-            if (_disposed || _syncing || !PreviewOptions.DesignMode)
+            if (_disposed || !_caretSync.TracksCaret(PreviewOptions.DesignMode))
             {
                 return;
             }
@@ -1298,13 +1286,12 @@ namespace WinUIXamlPreview.Editor
                 }
 
                 int caret = e.NewPosition.BufferPosition.Position;
-                string? path = map.PathForOffset(caret);
-                if (path == null || path == _lastCaretPath)
+                string? path = _caretSync.OnCaretMoved(map.PathForOffset(caret), PreviewOptions.DesignMode);
+                if (path == null)
                 {
                     return; // outside any element, or the caret is still in the same element
                 }
 
-                _lastCaretPath = path;
                 _preview.SelectByPath(path);
             }
             catch (Exception ex)

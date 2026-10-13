@@ -40,6 +40,8 @@ internal static partial class Program
             Run("SurfaceIdentity", SurfaceIdentityTests);
             Run("PreviewSettings", PreviewSettingsTests);
             Run("CommandLine", CommandLineTests);
+            Run("Session", SessionTests);
+            Run("EditorSync", EditorSyncTests);
         }
         finally
         {

@@ -49,23 +49,14 @@ namespace WinUIXamlPreview.UI
         private bool _nativeSupported;
         private bool _hasNative;
 
-        // Self-healing: a render can fail-fast the surface process on certain content (re-realizing a
-        // complex compiled control tree — see plan §36). When the surface dies unexpectedly we auto-
-        // restart and re-render the current document; the first render in a fresh process succeeds, so
-        // the crash becomes a brief reload instead of a dead preview. Bounded so a document that dies on
-        // its very first render (or a broken surface exe) can't loop forever; the counter resets on any
-        // successful render, so ordinary edit-triggered crashes recover indefinitely.
-        private int _restartAttempts;
-        private const int MaxAutoRestarts = 3;
+        // Session bookkeeping (spare generations, held edits, theme swap, upgrade generations, the bounded
+        // auto-restart budget, risky docs). Pure and unit-tested; this control owns the processes and UI.
+        // Self-healing: a render can fail-fast the surface on certain content (plan §36); an unexpected death
+        // auto-restarts and re-renders, bounded by the restart budget, which resets on any successful render.
+        // Process recycling: a pre-warmed idle spare renders a "risky" document (one that has crashed the
+        // surface before) in a fresh, unarmed process without a visible cold-restart blip.
+        private readonly PreviewSessionState _session = new PreviewSessionState();
 
-        // Set while we intentionally tear down a client (dispose / document switch) so a racing Closed
-        // event from that client cannot trigger an auto-restart.
-        private bool _suppressAutoRestart;
-
-        // Process recycling (plan §36): a pre-warmed idle spare surface lets us render a "risky" document
-        // (one that fail-fasts on its 2nd render in a warm process) in a fresh, unarmed process without a
-        // visible cold-restart blip. A document is learned to be risky the first time it crashes the
-        // surface, then recycled proactively on every subsequent edit.
         // WS3-P0 latency markers: one pending "action → paint" span, closed by the next Hwnd/Frame/Error.
         // Emits greppable "PERF <label>.paint ms=<n> outcome=<x>" lines (see scripts\designer-perf-summary.ps1).
         private System.Diagnostics.Stopwatch? _perfSw;
@@ -75,16 +66,8 @@ namespace WinUIXamlPreview.UI
         private SurfaceClient? _spareClient;
         private Action<string>? _spareClosedSub; // the spare's Closed subscription (carries which client died)
         private bool _spareReady;
-        private bool _spareWarming;
-        private int _spareGeneration;
-        private bool _editAwaitingSpare;
-        private int _editAwaitGen;
-        private int _editAwaitSeq;
-        private bool _promotedRenderPending; // a promoted spare's first render is in flight; the next spare follows it
         private System.Diagnostics.Stopwatch? _editAwaitSw;
         private SurfaceClient? _retiringClient;
-        private readonly System.Collections.Generic.HashSet<string> _riskyDocs =
-            new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string? _activeSurfaceExe;
         private string? _activeUserDll;
         private string? _activeUserAppXaml;
@@ -99,9 +82,7 @@ namespace WinUIXamlPreview.UI
         // the same document; a failed matched relaunch falls back to the normal bundled + upgrade path.
         private (string Path, string Exe, string Pri)? _recoverMatchedHost;
         // P6: a theme change warms a spare in the new theme (same exe/pri) while the old frame stays on screen,
-        // then promotes it. Valid only while _themeSwapGen == _spareGeneration (a doc switch / dispose bumps it).
-        private bool _themeSwapPending;
-        private int _themeSwapGen;
+        // then promotes it (see PreviewSessionState.ThemeSwapPendingFor).
         private System.Diagnostics.Stopwatch? _themeSwapSw;
         // Latest zoom/scroll reported by the active native surface (socket thread writes, UI thread reads), and
         // whether the next spare promotion is the same document (theme swap) and should restore it.
@@ -113,11 +94,8 @@ namespace WinUIXamlPreview.UI
         // WASDK version, a version-matched self-contained host is produced in the BACKGROUND (a run-copy of a
         // verified cached host, or a provisioner --build) and hot-swapped in, so version-new controls (e.g.
         // GridSplitter) upgrade from placeholder to real. Kept deliberately separate from the crash-recycle
-        // spare so neither path regresses the other. Every doc-switch/dispose bumps _upgradeGeneration to
-        // cancel any in-flight upgrade before it can promote into a document that has moved on.
-        private int _upgradeGeneration;
-        private bool _upgradeInProgress;
-        private bool _fullFidelityCancelled;   // user cancelled the upgrade for the current document
+        // spare so neither path regresses the other. Every doc-switch/dispose bumps the session's upgrade
+        // generation to cancel any in-flight upgrade before it can promote into a document that has moved on.
         private MatchedHostBuild? _upgradeBuild; // shared per-version build we hold interest in (release on cancel/dispose/promote)
         // U2 top banners: the message bar carries the XAML-error-over-last-good-render note;
         // the fidelity bar carries the background full-fidelity upgrade. Both live in BannerHost (row 0).
@@ -127,11 +105,6 @@ namespace WinUIXamlPreview.UI
         // Versions whose background build already FAILED this VS session — don't auto-retry (no retry loop).
         private static readonly System.Collections.Generic.HashSet<string> FailedVersions =
             new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // Whether the CURRENT active surface process has produced at least one frame/native host. A process
-        // that hasn't rendered yet is still fresh, so an isolated edit can render in it directly. Reset whenever
-        // a new active surface is wired; set on the first successful render.
-        private bool _activeProcessRendered;
 
         public PreviewControl()
         {
@@ -384,7 +357,7 @@ namespace WinUIXamlPreview.UI
             // matched host (with its merged pri) is swapped in later by the background upgrade, which updates
             // _activeUserPri at promote time. A P7 matched recovery launches the matched host + pri directly.
             _activeUserPri = recoverPri;
-            _fullFidelityCancelled = false;
+            _session.OnNewDocument();
 
             // Packaged (MSIX) user builds normally load without identity: the surface neutralizes the WinAppSDK
             // deployment auto-initializer in memory (PackagedAppShim). Only when that fails does the surface
@@ -415,9 +388,8 @@ namespace WinUIXamlPreview.UI
             var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, PreviewOptions.Theme, userPri: recoverPri) { SampleData = PreviewOptions.DesignTimeData };
             AttachClient(client);
             _client = client;
-            _activeProcessRendered = false; // a fresh process; it hasn't rendered yet
-            // A fresh client is wired up; allow its (unexpected) death to trigger an auto-restart.
-            _suppressAutoRestart = false;
+            // A fresh process (it hasn't rendered yet); allow its unexpected death to trigger an auto-restart.
+            _session.OnNewActiveClient();
 
             try
             {
@@ -615,14 +587,13 @@ namespace WinUIXamlPreview.UI
         /// </summary>
         private bool TryBeginThemeSwap(string theme)
         {
-            if (_client == null || _currentPath == null || string.IsNullOrEmpty(_activeSurfaceExe) || _upgradeInProgress)
+            if (!_session.CanThemeSwap(_client != null, _currentPath != null, !string.IsNullOrEmpty(_activeSurfaceExe)))
             {
                 return false;
             }
 
             _activeTheme = theme;
-            _spareGeneration++; // the old-theme spare (ready or warming) is now stale
-            _spareWarming = false;
+            _session.BeginThemeSwap(); // the old-theme spare (ready or warming) is now stale
             if (_spareClient != null)
             {
                 _spareClient.Closed -= _spareClosedSub;
@@ -631,13 +602,11 @@ namespace WinUIXamlPreview.UI
                 _spareReady = false;
             }
 
-            _themeSwapPending = true;
-            _themeSwapGen = _spareGeneration;
             _themeSwapSw = System.Diagnostics.Stopwatch.StartNew();
             WarmSpare();
-            if (!_spareWarming)
+            if (!_session.SpareWarming)
             {
-                _themeSwapPending = false;
+                _session.ClearThemeSwap();
                 _themeSwapSw = null;
                 return false;
             }
@@ -646,12 +615,10 @@ namespace WinUIXamlPreview.UI
             return true;
         }
 
-        private bool ThemeSwapPendingFor(int gen) => _themeSwapPending && _themeSwapGen == gen && gen == _spareGeneration;
-
         /// <summary>The ready spare is in the new theme: render the latest text on it and swap it in.</summary>
         private void CompleteThemeSwap()
         {
-            _themeSwapPending = false;
+            _session.ClearThemeSwap();
             var sw = _themeSwapSw;
             _themeSwapSw = null;
             string xaml;
@@ -679,7 +646,7 @@ namespace WinUIXamlPreview.UI
         /// <summary>The cold path: tear down and relaunch the surface with the new <c>SURFACE_THEME</c>.</summary>
         private void RestartForTheme(string theme)
         {
-            _themeSwapPending = false;
+            _session.ClearThemeSwap();
             _themeSwapSw = null;
             Log.Write($"Preview theme set to {theme} — restarting preview (per-process app theme).");
 
@@ -961,7 +928,7 @@ namespace WinUIXamlPreview.UI
                 // fail-fast this one. Promote the pre-warmed spare instead of re-hosting in place (which
                 // would risk a crash). The spare is already up, so the swap costs about one render, not a
                 // cold process start — no visible restart blip.
-                bool isolate = _riskyDocs.Contains(_currentPath);
+                bool isolate = _session.IsRisky(_currentPath);
                 if (isolate && TryPromoteSpare(xaml))
                 {
                     PerfBegin("edit.riskyspare");
@@ -999,13 +966,13 @@ namespace WinUIXamlPreview.UI
         /// <summary>Start (in the background) an idle spare surface matching the active launch config.</summary>
         private void WarmSpare()
         {
-            if (_disposed || _spareClient != null || _spareWarming || string.IsNullOrEmpty(_activeSurfaceExe))
+            var warm = _session.TryBeginSpareWarm(_spareClient != null, !string.IsNullOrEmpty(_activeSurfaceExe), _disposed);
+            if (warm == null)
             {
                 return;
             }
 
-            _spareWarming = true;
-            var gen = _spareGeneration;
+            var gen = warm.Value;
             var exe = _activeSurfaceExe!;
             var dll = _activeUserDll;
             var appx = _activeUserAppXaml;
@@ -1026,19 +993,13 @@ namespace WinUIXamlPreview.UI
                     var dead = spare;
                     _ = Dispatcher.InvokeAsync(() =>
                     {
-                        if (gen == _spareGeneration)
-                        {
-                            _spareWarming = false; // a stale warm must not clear the flag for a newer one
-                        }
-
+                        var action = _session.OnSpareStartFailed(gen);
                         try { dead?.Dispose(); } catch { }
-                        if (ThemeSwapPendingFor(gen))
+                        if (action == SpareFailedAction.RestartForTheme)
                         {
                             RestartForTheme(PreviewOptions.Theme);
-                            return;
                         }
-
-                        if (gen == _spareGeneration && EditAwaitingSpare)
+                        else if (action == SpareFailedAction.RenderHeldEditInPlace)
                         {
                             RenderAwaitedEditInPlace("the spare failed to start");
                         }
@@ -1050,24 +1011,24 @@ namespace WinUIXamlPreview.UI
                 _ = Dispatcher.InvokeAsync(() =>
                 {
                     // A doc switch (or dispose) happened while warming — this spare is for a stale config.
-                    if (_disposed || gen != _spareGeneration)
+                    var action = _session.OnSpareReady(gen, _disposed);
+                    if (action == SpareReadyAction.Discard)
                     {
                         try { ready!.Dispose(); } catch { }
                         return;
                     }
 
-                    _spareWarming = false;
                     _spareClient = ready;
                     _spareReady = true;
                     var spareSub = new Action<string>(r => OnSpareClosed(ready!, r));
                     _spareClosedSub = spareSub;
                     ready!.Closed += spareSub;
                     Log.Write("Warm spare ready.");
-                    if (ThemeSwapPendingFor(gen))
+                    if (action == SpareReadyAction.CompleteThemeSwap)
                     {
                         CompleteThemeSwap(); // also satisfies any held edit (renders the latest text)
                     }
-                    else if (EditAwaitingSpare)
+                    else if (action == SpareReadyAction.DrainHeldEdit)
                     {
                         DrainAwaitedEdit();
                     }
@@ -1083,43 +1044,30 @@ namespace WinUIXamlPreview.UI
 
         private static readonly TimeSpan SpareWaitLimit = TimeSpan.FromSeconds(15);
 
-        private bool EditAwaitingSpare => _editAwaitingSpare && _editAwaitGen == _spareGeneration;
-
         private bool AwaitSpareForEdit()
         {
             // A spare is on its way if one is warming, or a promoted render is in flight (the next spare is
             // warmed when it paints). A process that has not rendered yet is still fresh, so the edit can
             // render in it directly, as before.
-            if (!_promotedRenderPending)
+            var decision = _session.TryHoldEdit(() => { WarmSpare(); return _session.SpareWarming; }, out var seq);
+            if (decision == HoldDecision.RenderNow)
             {
-                if (!_activeProcessRendered)
-                {
-                    return false;
-                }
-
-                WarmSpare();
-                if (!_spareWarming)
-                {
-                    return false; // nothing is coming (no launch config) — render in place as before
-                }
+                return false;
             }
 
-            if (EditAwaitingSpare)
+            if (decision == HoldDecision.AlreadyHeld)
             {
                 Log.Write("Isolated edit: still waiting for the spare; it will render the latest text.");
                 return true;
             }
 
-            _editAwaitingSpare = true;
-            _editAwaitGen = _spareGeneration;
             _editAwaitSw = System.Diagnostics.Stopwatch.StartNew();
-            var seq = ++_editAwaitSeq;
             Log.Write("Isolated edit: no spare ready yet; holding the edit until the next spare is up.");
 
             _ = System.Threading.Tasks.Task.Delay(SpareWaitLimit).ContinueWith(_ =>
                 Dispatcher.InvokeAsync(() =>
                 {
-                    if (!_disposed && seq == _editAwaitSeq && EditAwaitingSpare)
+                    if (_session.HoldTimedOut(seq, _disposed))
                     {
                         RenderAwaitedEditInPlace($"the spare took longer than {SpareWaitLimit.TotalSeconds:0} s");
                     }
@@ -1129,7 +1077,7 @@ namespace WinUIXamlPreview.UI
 
         private void EndHold(string result)
         {
-            _editAwaitingSpare = false;
+            _session.EndHold();
             if (_editAwaitSw != null)
             {
                 Log.Write($"PERF edit.hold ms={_editAwaitSw.ElapsedMilliseconds} result={result}");
@@ -1142,13 +1090,13 @@ namespace WinUIXamlPreview.UI
         {
             if (_disposed || _currentPath == null)
             {
-                _editAwaitingSpare = false;
+                _session.EndHold();
                 return;
             }
 
             string xaml;
             try { xaml = ReadDocumentText(_currentPath); }
-            catch (Exception ex) { _editAwaitingSpare = false; Log.Write("Re-read for held edit failed: " + ex.Message); return; }
+            catch (Exception ex) { _session.EndHold(); Log.Write("Re-read for held edit failed: " + ex.Message); return; }
 
             EndHold("spare");
             if (TryPromoteSpare(xaml))
@@ -1161,7 +1109,7 @@ namespace WinUIXamlPreview.UI
         {
             if (_disposed || _client == null || _currentPath == null)
             {
-                _editAwaitingSpare = false;
+                _session.EndHold();
                 return;
             }
 
@@ -1249,8 +1197,7 @@ namespace WinUIXamlPreview.UI
             // Wire the spare as the new active.
             AttachClient(spare);
             _client = spare;
-            _activeProcessRendered = false; // the promoted spare hasn't rendered yet
-            _suppressAutoRestart = false;
+            _session.OnNewActiveClient(); // the promoted spare hasn't rendered yet
 
             try
             {
@@ -1280,19 +1227,16 @@ namespace WinUIXamlPreview.UI
             }
 
             // Any held edit is satisfied: this render used the document text read just before promotion.
-            _editAwaitingSpare = false;
             // The replacement spare is warmed by OnRenderSucceeded, after this render paints. Starting it now
             // was measured to be slower: startup and the render compete (spare ready 9.7-11.2 s vs 5.5 s).
-            _promotedRenderPending = true;
+            _session.OnSparePromoted();
             return true;
         }
 
         /// <summary>After a successful render: retire any client we swapped away from and ensure a spare.</summary>
         private void OnRenderSucceeded()
         {
-            _restartAttempts = 0;
-            _activeProcessRendered = true; // this process produced a frame — a later crash is a 2nd-render case
-            _promotedRenderPending = false;
+            _session.OnRenderSucceeded(); // refunds the restart budget; a later crash is a 2nd-render case
 
             var retiring = _retiringClient;
             if (retiring != null)
@@ -1338,7 +1282,7 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
-            if (_fullFidelityCancelled || _upgradeInProgress)
+            if (!_session.CanStartUpgrade)
             {
                 return;
             }
@@ -1363,8 +1307,7 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
-            _upgradeInProgress = true;
-            var gen = _upgradeGeneration;
+            var gen = _session.BeginUpgrade();
             var userDll = _activeUserDll;
             var userAppXaml = _activeUserAppXaml;
             var theme = _activeTheme;
@@ -1377,7 +1320,7 @@ namespace WinUIXamlPreview.UI
                 build = HostProvisionerRunner.Acquire(version!, project!, Log.Write);
                 if (build == null)
                 {
-                    _upgradeInProgress = false;
+                    _session.AbortUpgradeStart();
                     ShowFidelityNote($"Install the .NET SDK for a full-fidelity WinAppSDK {version} preview.");
                     return;
                 }
@@ -1404,7 +1347,7 @@ namespace WinUIXamlPreview.UI
                     {
                         await MarshalAsync(() =>
                         {
-                            if (gen != _upgradeGeneration)
+                            if (!_session.IsUpgradeCurrent(gen))
                             {
                                 return;
                             }
@@ -1423,7 +1366,7 @@ namespace WinUIXamlPreview.UI
                 //    validated per-process run-copy that gets the mutable merged PRI (the cache is never mutated).
                 if (completedHost == null)
                 {
-                    await MarshalAsync(() => { if (gen == _upgradeGeneration) EndUpgrade(gen, note: null); });
+                    await MarshalAsync(() => EndUpgrade(gen, note: null));
                     return;
                 }
 
@@ -1434,7 +1377,7 @@ namespace WinUIXamlPreview.UI
                 // checkpoint): if the user cancelled or switched documents during the build, don't spend
                 // a Surface.exe on it. The promote guard below is the second, authoritative checkpoint.
                 bool superseded = false;
-                await MarshalAsync(() => superseded = _disposed || gen != _upgradeGeneration || _fullFidelityCancelled);
+                await MarshalAsync(() => superseded = _session.UpgradeSuperseded(gen, _disposed));
                 if (superseded)
                 {
                     return;
@@ -1452,7 +1395,7 @@ namespace WinUIXamlPreview.UI
                 {
                     Log.Write("Fidelity upgrade: matched host failed to start: " + ex.Message);
                     try { matched?.Dispose(); } catch { }
-                    await MarshalAsync(() => { if (gen == _upgradeGeneration) EndUpgrade(gen, note: null); });
+                    await MarshalAsync(() => EndUpgrade(gen, note: null));
                     return;
                 }
 
@@ -1467,13 +1410,13 @@ namespace WinUIXamlPreview.UI
                 Log.Write($"PERF upgrade.ready ms={upSw.ElapsedMilliseconds}");
                 await MarshalAsync(() =>
                 {
-                    if (_disposed || gen != _upgradeGeneration)
+                    if (_disposed || !_session.IsUpgradeCurrent(gen))
                     {
                         try { readyMatched!.Dispose(); } catch { }
                         return;
                     }
 
-                    PromoteMatched(readyMatched!, matchedExe, matchedPri, version!);
+                    PromoteMatched(readyMatched!, matchedExe, matchedPri, version!, gen);
                 });
             });
         }
@@ -1483,7 +1426,7 @@ namespace WinUIXamlPreview.UI
         /// but for the matched host + its merged pri). The old bundled client is silenced and retired once the
         /// matched render lands; future crash-recycle spares now match the matched host. UI thread only.
         /// </summary>
-        private void PromoteMatched(SurfaceClient matched, string matchedExe, string matchedPri, string version)
+        private void PromoteMatched(SurfaceClient matched, string matchedExe, string matchedPri, string version, int gen)
         {
             string xaml;
             try
@@ -1495,7 +1438,7 @@ namespace WinUIXamlPreview.UI
             {
                 Log.Write("PromoteMatched: could not read current document (" + ex.Message + "); staying on bundled.");
                 try { matched.Dispose(); } catch { }
-                EndUpgrade(_upgradeGeneration, note: null);
+                EndUpgrade(gen, note: null);
                 return;
             }
 
@@ -1511,8 +1454,7 @@ namespace WinUIXamlPreview.UI
 
             // Any in-flight/ready BUNDLED crash-spare is now stale — invalidate + drop it; a matched spare is
             // warmed after the matched render succeeds (OnRenderSucceeded).
-            _spareGeneration++;
-            _spareWarming = false;
+            _session.InvalidateSpare();
             if (_spareClient != null)
             {
                 _spareClient.Closed -= _spareClosedSub;
@@ -1525,8 +1467,7 @@ namespace WinUIXamlPreview.UI
             // reproduces the matched host (exe + merged pri).
             AttachClient(matched);
             _client = matched;
-            _activeProcessRendered = false;
-            _suppressAutoRestart = false;
+            _session.OnNewActiveClient();
             _activeSurfaceExe = matchedExe;
             _activeUserPri = matchedPri;
 
@@ -1552,19 +1493,18 @@ namespace WinUIXamlPreview.UI
             }
 
             Log.Write($"Fidelity upgrade: hot-swapped to the version-matched WinAppSDK {version} host.");
-            EndUpgrade(_upgradeGeneration, note: null);
+            EndUpgrade(gen, note: null);
             ShowFidelityReady(version);
         }
 
         /// <summary>Finish an upgrade attempt for generation <paramref name="gen"/>: release build interest, clear the in-progress flag, and show the note (or hide the banner). UI thread.</summary>
         private void EndUpgrade(int gen, string? note)
         {
-            if (gen != _upgradeGeneration)
+            if (!_session.EndUpgrade(gen))
             {
                 return;
             }
 
-            _upgradeInProgress = false;
             if (_upgradeBuild != null)
             {
                 try { _upgradeBuild.Release(cancelIfLast: false); } catch { }
@@ -1621,9 +1561,7 @@ namespace WinUIXamlPreview.UI
         {
             // Supersede any in-flight upgrade (the background task's generation check will make it abandon the
             // promote) and release our build interest — cancelling the shared build if no other preview wants it.
-            _fullFidelityCancelled = true;
-            _upgradeGeneration++;
-            _upgradeInProgress = false;
+            _session.CancelUpgrade(byUser: true);
             if (_upgradeBuild != null)
             {
                 try { _upgradeBuild.Release(cancelIfLast: true); } catch { }
@@ -1811,13 +1749,9 @@ namespace WinUIXamlPreview.UI
 
                 // A promoted spare that answered with an error never rendered, so it is still fresh: a held
                 // edit (often the fix for a half-typed tag) can safely render in it now instead of waiting.
-                if (_promotedRenderPending)
+                if (_session.OnRenderError())
                 {
-                    _promotedRenderPending = false;
-                    if (EditAwaitingSpare && !_activeProcessRendered)
-                    {
-                        RenderAwaitedEditInPlace("the previous render failed, so this process is still fresh");
-                    }
+                    RenderAwaitedEditInPlace("the previous render failed, so this process is still fresh");
                 }
 
                 // P1 (VE1): a structurally non-designable root — a ResourceDictionary (styles/themes/
@@ -1826,11 +1760,10 @@ namespace WinUIXamlPreview.UI
                 // + a human reason) instead of a parse failure. Present it as a calm, informational state
                 // rather than a scary red error or a blank surface, so the user understands the preview is
                 // intentionally empty for this file.
-                if (err.NotDesignable)
+                var kind = PreviewErrorText.Classify(err.NotDesignable, _hasFrame || _hasNative);
+                if (kind == ErrorDisplay.NotDesignable)
                 {
-                    var reason = string.IsNullOrWhiteSpace(err.Message)
-                        ? "This file has no designable page root."
-                        : err.Message!;
+                    var reason = PreviewErrorText.NotDesignableReason(err.Message);
                     Log.Write("Surface reported a non-designable root — " + reason);
                     SetNotDesignable(reason);
                     return;
@@ -1839,9 +1772,9 @@ namespace WinUIXamlPreview.UI
                 var where = err.Line.HasValue ? $" (line {err.Line}, col {err.Column})" : "";
                 var text = $"{err.Phase}: {err.Message}{where}";
                 Log.Write("Surface error — " + text);
-                var display = FormatXamlError(err);
+                var display = PreviewErrorText.FormatXamlError(err.Message, err.Line, err.Column);
 
-                if (_hasFrame || _hasNative)
+                if (kind == ErrorDisplay.BannerOverLastRender)
                 {
                     // Keep the last good frame / native view; surface a compact banner.
                     SetDetailBanner(display);
@@ -1872,33 +1805,25 @@ namespace WinUIXamlPreview.UI
                 }
 
                 // Don't self-heal a death we caused (dispose / document switch), or after control teardown.
-                if (_disposed || _suppressAutoRestart)
+                // R2: a protocol mismatch can't be fixed by restarting the same exe — say so instead of burning
+                // the restart budget. Otherwise the death is nearly always the §36 2nd-render fail-fast: the
+                // document is learned as risky (future edits recycle proactively) and we self-heal, bounded.
+                var path = _currentPath;
+                var action = _session.OnActiveDied(path, _disposed, source.IsProtocolMismatch);
+                if (action == ActiveDeathAction.Ignore)
                 {
                     return;
                 }
 
-                // R2: the surface exe speaks a protocol this extension doesn't. Restarting the same exe
-                // can't fix that, so stop here with a clear message instead of burning the restart budget.
-                if (source.IsProtocolMismatch)
+                if (action == ActiveDeathAction.ProtocolMismatch)
                 {
                     ShowProtocolMismatch(reason);
                     return;
                 }
 
-                // The active surface died unexpectedly — nearly always the §36 2nd-render fail-fast. Learn
-                // that this document is risky so future edits recycle it proactively (no repeat crash).
-                var path = _currentPath;
-                if (!string.IsNullOrEmpty(path))
+                var restarts = _session.Restarts;
+                if (action == ActiveDeathAction.Recover)
                 {
-                    _riskyDocs.Add(path!);
-                }
-
-                // Self-heal, bounded (the counter resets on any successful render, so ordinary edit-crashes
-                // recover indefinitely; only a doc that dies on its very FIRST render, or a broken surface
-                // exe, can exhaust the budget).
-                if (!string.IsNullOrEmpty(path) && _restartAttempts < MaxAutoRestarts)
-                {
-                    _restartAttempts++;
                     _hasFrame = false;
                     _hasNative = false;
 
@@ -1911,13 +1836,13 @@ namespace WinUIXamlPreview.UI
                     if (xaml != null && TryPromoteSpare(xaml))
                     {
                         PerfBegin("recover.spare");
-                        Log.Write($"Surface died; recovered via warm spare (attempt {_restartAttempts}/{MaxAutoRestarts}).");
+                        Log.Write($"Surface died; recovered via warm spare (attempt {restarts.Attempts}/{restarts.MaxAttempts}).");
                         SetStatus("Recycling surface…", spinner: true, detail: Path.GetFileName(path!));
                         return;
                     }
 
                     // No spare available — fall back to a full cold restart.
-                    Log.Write($"Surface died; cold-restarting preview (attempt {_restartAttempts}/{MaxAutoRestarts}).");
+                    Log.Write($"Surface died; cold-restarting preview (attempt {restarts.Attempts}/{restarts.MaxAttempts}).");
                     SetStatus("Surface restarted; reloading…", spinner: true, detail: Path.GetFileName(path!));
                     _currentPath = null; // force ShowDocument to fully re-init rather than short-circuit
                     _perfNextOpenLabel = "recover.cold";
@@ -1926,19 +1851,7 @@ namespace WinUIXamlPreview.UI
                     return;
                 }
 
-                if (_hasFrame || _hasNative)
-                {
-                    ShowReconnectBanner(
-                        _restartAttempts >= MaxAutoRestarts
-                            ? $"Auto-restart gave up after {MaxAutoRestarts} attempts. {reason}"
-                            : reason);
-                    return;
-                }
-
-                ShowReconnectBanner(
-                    _restartAttempts >= MaxAutoRestarts
-                        ? $"Auto-restart gave up after {MaxAutoRestarts} attempts. {reason}"
-                        : reason);
+                ShowReconnectBanner(PreviewErrorText.DisconnectedDetail(reason, restarts.Exhausted, restarts.MaxAttempts));
             });
         }
 
@@ -2053,25 +1966,6 @@ namespace WinUIXamlPreview.UI
             }
 
             ShowStatusCard(text, detail, spinner ? (BannerSeverity?)null : severity, action);
-        }
-
-        /// <summary>
-        /// User-facing XAML error text: "Line 3, col 5 — message", whitespace collapsed to one line, without the
-        /// internal phase tag, WinUI's placeholder "text associated with this error code could not be found"
-        /// line, or the parser's duplicate "[Line: n Position: m]" suffix. The log keeps the raw form.
-        /// </summary>
-        private static string FormatXamlError(ErrorMsg err)
-        {
-            var msg = err.Message ?? "";
-            msg = msg.Replace("The text associated with this error code could not be found.", "");
-            msg = System.Text.RegularExpressions.Regex.Replace(msg, @"\s*\[Line:\s*\d+\s+Position:\s*\d+\]", "");
-            msg = System.Text.RegularExpressions.Regex.Replace(msg, @"\s+", " ").Trim();
-            if (msg.Length == 0)
-            {
-                msg = "The XAML could not be loaded.";
-            }
-
-            return err.Line.HasValue ? $"Line {err.Line}, col {err.Column} — {msg}" : msg;
         }
 
         private void ShowStatusCard(string title, string? detail, BannerSeverity? icon, Button? action)
@@ -2193,8 +2087,7 @@ namespace WinUIXamlPreview.UI
             // User-initiated recovery: clear the terminal banner, hand back a fresh auto-restart budget, and
             // force a full cold re-init of the current document (the dead surface can't be reused).
             HideReconnectBanner();
-            _restartAttempts = 0;
-            _suppressAutoRestart = false;
+            _session.OnUserReload();
 
             var path = _pinnedPath ?? _currentPath;
             if (string.IsNullOrEmpty(path))
@@ -2254,14 +2147,11 @@ namespace WinUIXamlPreview.UI
         private void DisposeClient()
         {
             // We're intentionally tearing this client down; a Closed event it raises during teardown
-            // must not trigger an auto-restart.
-            _suppressAutoRestart = true;
-
-            // Cancel any in-flight version-matched upgrade so it can't promote into a document that has moved
-            // on (generation bump), release our interest in the shared build (cancels it if we were the last
-            // interested preview), and hide the banner.
-            _upgradeGeneration++;
-            _upgradeInProgress = false;
+            // must not trigger an auto-restart. Cancel any in-flight version-matched upgrade so it can't
+            // promote into a document that has moved on (generation bump), release our interest in the shared
+            // build (cancels it if we were the last interested preview), and hide the banner. Invalidate any
+            // in-flight spare warm (its launch config is about to be stale).
+            _session.OnTeardown();
             if (_upgradeBuild != null)
             {
                 try { _upgradeBuild.Release(cancelIfLast: true); } catch { }
@@ -2269,11 +2159,7 @@ namespace WinUIXamlPreview.UI
             }
             HideFidelityBanner();
 
-            // Invalidate any in-flight spare warm (its launch config is about to be stale) and tear down
-            // the spare + any surface we were mid-swap retiring.
-            _spareGeneration++;
-            _spareWarming = false;
-            _promotedRenderPending = false;
+            // Tear down the spare + any surface we were mid-swap retiring.
             if (_spareClient != null)
             {
                 _spareClient.Closed -= _spareClosedSub;
