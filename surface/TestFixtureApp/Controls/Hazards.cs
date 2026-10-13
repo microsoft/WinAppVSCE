@@ -17,6 +17,33 @@ public sealed class ThrowingControl : Control
     }
 }
 
+// Five more distinct throwing types: the safety net retires one type per retry and is bounded at 5 retries, so a
+// page using all six exhausts it. Each throws from its OWN constructor so the offender is the declared type.
+public sealed class ThrowingControlB : Control
+{
+    public ThrowingControlB() => throw new InvalidOperationException("ThrowingControlB");
+}
+
+public sealed class ThrowingControlC : Control
+{
+    public ThrowingControlC() => throw new InvalidOperationException("ThrowingControlC");
+}
+
+public sealed class ThrowingControlD : Control
+{
+    public ThrowingControlD() => throw new InvalidOperationException("ThrowingControlD");
+}
+
+public sealed class ThrowingControlE : Control
+{
+    public ThrowingControlE() => throw new InvalidOperationException("ThrowingControlE");
+}
+
+public sealed class ThrowingControlF : Control
+{
+    public ThrowingControlF() => throw new InvalidOperationException("ThrowingControlF");
+}
+
 /// <summary>A view model whose constructor throws.</summary>
 public sealed class ThrowingViewModel
 {

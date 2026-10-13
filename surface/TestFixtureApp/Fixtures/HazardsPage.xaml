@@ -8,6 +8,11 @@
     xmlns:controls="using:TestFixtureApp.Controls">
     <StackPanel>
         <controls:ThrowingControl />
+        <controls:ThrowingControlB />
+        <controls:ThrowingControlC />
+        <controls:ThrowingControlD />
+        <controls:ThrowingControlE />
+        <controls:ThrowingControlF />
         <controls:TickerControl />
     </StackPanel>
 </Page>

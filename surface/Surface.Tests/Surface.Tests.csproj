@@ -27,6 +27,7 @@
   <ItemGroup>
     <Compile Include="..\Surface\XamlCleaner.cs" Link="Production\XamlCleaner.cs" />
     <Compile Include="..\Surface\SampleListFiller.cs" Link="Production\SampleListFiller.cs" />
+    <Compile Include="..\Surface\DesignTimeData.cs" Link="Production\DesignTimeData.cs" />
   </ItemGroup>
 
   <ItemGroup>

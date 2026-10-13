@@ -78,6 +78,8 @@ namespace Surface.Tests
             Run("R6 resources", Rule6);
             Run("R7 unmapped custom types", Rule7);
             Run("R7a/b/c attached, extensions, converters", Rule7abc);
+            Run("DTD grammar", DtdGrammar);
+            Run("DTD source paths + file prep", DtdPaths);
 
             foreach (var f in s_failures)
             {
@@ -502,6 +504,109 @@ namespace Surface.Tests
             Eq("R7b: mapped custom extension kept", "{good:Icon Glyph=x}", Attr(Named(r, "GoodExt"), "Content"));
             Eq("R7b: ...Extension-suffixed mapping kept", "{good2:Icon Glyph=x}", Attr(Named(r, "GoodExtSuffix"), "Content"));
             Eq("R7b: framework extension kept", "{Binding X}", Attr(Named(r, "Framework"), "Content"));
+        }
+
+        // ------------------------------------------------------------ design-time data grammar
+
+        private const string DtdNs =
+            "xmlns=\"" + PresNs + "\" xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\" " +
+            "xmlns:f=\"using:My.Vms\" xmlns:c=\"clr-namespace:Legacy.Vms;assembly=Legacy\" xmlns:g=\"using:\"";
+
+        private static DesignTimeData.Spec? DtdSpec(string dataContext) =>
+            DesignTimeData.ExtractRootSpec($"<Page {DtdNs} d:DataContext=\"{dataContext}\"/>");
+
+        private static void DtdGrammar()
+        {
+            // Never throws, and anything it can't understand is null.
+            Check("null / blank markup -> null", DesignTimeData.ExtractRootSpec(null) is null && DesignTimeData.ExtractRootSpec("  ") is null);
+            Check("malformed XML -> null", DesignTimeData.ExtractRootSpec("<Page d:DataContext=\"{d:DesignInstance f:Vm}\"") is null);
+            Check("no d:DataContext -> null", DesignTimeData.ExtractRootSpec($"<Page {DtdNs}/>") is null);
+            Check("plain (non-design) DataContext ignored",
+                DesignTimeData.ExtractRootSpec($"<Page {DtdNs} DataContext=\"{{d:DesignInstance f:Vm}}\"/>") is null);
+            Check("only the root's d:DataContext counts",
+                DesignTimeData.ExtractRootSpec($"<Page {DtdNs}><Grid d:DataContext=\"{{d:DesignInstance f:Vm}}\"/></Page>") is null);
+            foreach (var bad in new[] { "Hello", "{d:DesignInstance f:Vm", "d:DesignInstance f:Vm}", "{}", "{d:DesignInstance}",
+                                        "{d:DesignInstance Type=}", "{d:DesignInstance Type=nope:Vm}", "{d:DesignInstance Vm}",
+                                        "{d:Unknown Type=f:Vm}", "{d:DesignData}", "{d:DesignData Source=}", "{d:DesignData Source=''}" })
+            {
+                Check($"'{bad}' -> null", DtdSpec(bad) is null);
+            }
+
+            // DesignInstance type tokens.
+            var s = DtdSpec("{d:DesignInstance Type=f:Vm}");
+            Check("Type= with using: prefix", s is { Kind: DesignTimeData.SpecKind.DesignInstance, TypeFullName: "My.Vms.Vm", IsDesignTimeCreatable: false, CreateList: false },
+                s?.TypeFullName);
+            Eq("Raw keeps the original text", "{d:DesignInstance Type=f:Vm}", s?.Raw);
+            Eq("positional type", "My.Vms.Vm", DtdSpec("{d:DesignInstance f:Vm}")?.TypeFullName);
+            Eq("named Type wins over positional", "My.Vms.Vm", DtdSpec("{d:DesignInstance f:Other, Type=f:Vm}")?.TypeFullName);
+            Eq("clr-namespace with assembly", "Legacy.Vms.Vm", DtdSpec("{d:DesignInstance Type=c:Vm}")?.TypeFullName);
+            Eq("empty using: namespace -> bare name", "Vm", DtdSpec("{d:DesignInstance Type=g:Vm}")?.TypeFullName);
+            Eq("quoted value", "My.Vms.Vm", DtdSpec("{d:DesignInstance Type='f:Vm'}")?.TypeFullName);
+            Eq("keys are case-insensitive", "My.Vms.Vm", DtdSpec("{d:DesignInstance type=f:Vm}")?.TypeFullName);
+            Eq("whitespace around '=' and ','", "My.Vms.Vm", DtdSpec("{d:DesignInstance   Type = f:Vm ,  CreateList = True }")?.TypeFullName);
+            Eq("tab after the extension name", "My.Vms.Vm", DtdSpec("{d:DesignInstance\tType=f:Vm}")?.TypeFullName);
+            Eq("extension without a prefix", "My.Vms.Vm", DtdSpec("{DesignInstance Type=f:Vm}")?.TypeFullName);
+
+            // Named booleans.
+            foreach (var (text, want) in new[] { ("True", true), ("true", true), ("TRUE", true), ("1", true), (" True ", true),
+                                                 ("False", false), ("false", false), ("0", false), ("yes", false), ("", false) })
+            {
+                var b = DtdSpec($"{{d:DesignInstance Type=f:Vm, IsDesignTimeCreatable={text}, CreateList={text}}}");
+                Check($"bool '{text}' -> {want}", b != null && b.IsDesignTimeCreatable == want && b.CreateList == want,
+                    b == null ? "null spec" : $"{b.IsDesignTimeCreatable}/{b.CreateList}");
+            }
+            var both = DtdSpec("{d:DesignInstance f:Vm, CreateList=True}");
+            Check("positional type + named CreateList", both is { TypeFullName: "My.Vms.Vm", CreateList: true, IsDesignTimeCreatable: false });
+            Check("unknown named args ignored", DtdSpec("{d:DesignInstance Type=f:Vm, Foo=Bar}")?.TypeFullName == "My.Vms.Vm");
+
+            // DesignData sources.
+            var dd = DtdSpec("{d:DesignData Source=Sample.xaml}");
+            Check("DesignData Source=", dd is { Kind: DesignTimeData.SpecKind.DesignData, Source: "Sample.xaml" }, dd?.Source);
+            Eq("DesignData positional source", "Data/Sample.xaml", DtdSpec("{d:DesignData Data/Sample.xaml}")?.Source);
+            Eq("DesignData quoted source with spaces", "My Data/Sample.xaml", DtdSpec("{d:DesignData Source='My Data/Sample.xaml'}")?.Source);
+            Eq("DesignData leading slash kept for the resolver", "/Data/Sample.xaml", DtdSpec("{d:DesignData Source=/Data/Sample.xaml}")?.Source);
+            Eq("DesignData absolute path", @"C:\data\Sample.xaml", DtdSpec(@"{d:DesignData Source=C:\data\Sample.xaml}")?.Source);
+        }
+
+        private static void DtdPaths()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "wxp-dtd-" + Guid.NewGuid().ToString("N"));
+            var sub = Path.Combine(root, "Data");
+            Directory.CreateDirectory(sub);
+            try
+            {
+                var top = Path.Combine(root, "Top.xaml");
+                var nested = Path.Combine(sub, "Nested.xaml");
+                File.WriteAllText(top, "x");
+                File.WriteAllText(nested, "x");
+
+                Eq("relative to baseDir", top, DesignTimeData.ResolveSourcePath("Top.xaml", root));
+                Eq("leading '/' is baseDir-relative", top, DesignTimeData.ResolveSourcePath("/Top.xaml", root));
+                Eq("leading '\\' is baseDir-relative", top, DesignTimeData.ResolveSourcePath("\\Top.xaml", root));
+                Eq("forward-slash subfolder", Path.GetFullPath(nested), Path.GetFullPath(DesignTimeData.ResolveSourcePath("Data/Nested.xaml", root) ?? "?"));
+                Eq("backslash subfolder", nested, DesignTimeData.ResolveSourcePath("Data\\Nested.xaml", root));
+                Eq("surrounding whitespace trimmed", top, DesignTimeData.ResolveSourcePath("  Top.xaml  ", root));
+                Eq("absolute path without a baseDir", nested, DesignTimeData.ResolveSourcePath(nested, null));
+                Eq("absolute path wins over baseDir", nested, DesignTimeData.ResolveSourcePath(nested, Path.GetTempPath()));
+                Check("missing file -> null", DesignTimeData.ResolveSourcePath("Gone.xaml", root) is null);
+                Check("missing absolute file -> null", DesignTimeData.ResolveSourcePath(Path.Combine(root, "Gone.xaml"), null) is null);
+                Check("relative with no baseDir and not beside the exe -> null", DesignTimeData.ResolveSourcePath("Top.xaml", null) is null);
+                Check("blank source -> null", DesignTimeData.ResolveSourcePath("   ", root) is null);
+                Check("a directory is not a file", DesignTimeData.ResolveSourcePath("Data", root) is null);
+            }
+            finally
+            {
+                try { Directory.Delete(root, true); } catch { }
+            }
+
+            const string tb = "<TextBlock/>";
+            Eq("plain markup unchanged", tb, DesignTimeData.PrepareForXamlReader(tb));
+            Eq("empty unchanged", "", DesignTimeData.PrepareForXamlReader(""));
+            Eq("BOM stripped", tb, DesignTimeData.PrepareForXamlReader("\uFEFF" + tb));
+            Eq("XML declaration stripped", tb, DesignTimeData.PrepareForXamlReader("<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" + tb));
+            Eq("BOM + whitespace + declaration stripped", tb, DesignTimeData.PrepareForXamlReader("\uFEFF \r\n<?XML version=\"1.0\"?>" + tb));
+            Eq("comment kept", "<!-- c -->" + tb, DesignTimeData.PrepareForXamlReader("<?xml version=\"1.0\"?><!-- c -->" + tb));
+            Eq("unterminated declaration left alone", "<?xml version", DesignTimeData.PrepareForXamlReader("<?xml version"));
         }
     }
 }

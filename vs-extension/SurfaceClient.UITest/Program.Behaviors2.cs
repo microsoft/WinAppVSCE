@@ -319,4 +319,129 @@ internal static partial class Program
         Check("BEH-M14 a valid edit still applies afterwards", FindProp(echo, "Width")?.Value == "130", FindProp(echo, "Width")?.Value ?? "(no echo)");
         Check("BEH-M15 client never faulted", !s.Client.IsFaulted);
     }
+
+    // ---------------------------------------------------------------- safety net: several throwing controls
+
+    private static string[] LogsSince(Session s, int mark) => s.Logs.Skip(mark).ToArray();
+
+    private static async Task SafetyNetMany(Session s)
+    {
+        // Two distinct throwing types (one used twice) beside a well-behaved custom control: each throwing type
+        // is retired once by name and the innocent custom control stays real.
+        var mixed = PageXaml(
+            "<StackPanel>\n" +
+            "  <TextBlock Text=\"before\"/>\n" +   // 0.0.0
+            "  <fx:ThrowingControl/>\n" +          // 0.0.1
+            "  <fx:ThrowingControlB/>\n" +         // 0.0.2
+            "  <fx:ThrowingControl/>\n" +          // 0.0.3
+            "  <fx:TickerControl/>\n" +            // 0.0.4
+            "  <TextBlock Text=\"after\"/>\n" +    // 0.0.5
+            "</StackPanel>");
+        int mark = s.Logs.Count;
+        var f = await s.NextFrame(() => s.Client.LoadXaml(mixed, 400, 300, 1.0), TimeSpan.FromSeconds(30));
+        Check("BEH-S8 two throwing types (one repeated) still render a frame", f != null, string.Join("; ", s.TakeErrors()));
+        await Task.Delay(300);
+        var net = LogsSince(s, mark).Where(l => l.Contains("SAFETY-NET")).ToArray();
+        Check("BEH-S9 each throwing type retired exactly once, by name",
+            net.Length == 2 && net.Count(l => l.Contains("'ThrowingControl'")) == 1 && net.Count(l => l.Contains("'ThrowingControlB'")) == 1,
+            string.Join(" | ", net));
+        Check("BEH-S10 no blanket 'all custom controls' fallback", !net.Any(l => l.Contains("all custom controls")));
+
+        await s.Host(mixed);
+        var sel = new SelectedMsg?[6];
+        for (int i = 0; i < sel.Length; i++) sel[i] = await s.Select("0.0." + i);
+        Check("BEH-S11 siblings stay real", sel[0]?.ElementType == "TextBlock" && sel[5]?.ElementType == "TextBlock",
+            Bounds(sel[0]) + " / " + Bounds(sel[5]));
+        Check("BEH-S12 all three throwing instances are placeholders",
+            new[] { sel[1], sel[2], sel[3] }.All(x => x != null && x.ElementType?.StartsWith("ThrowingControl") != true),
+            string.Join(" / ", new[] { sel[1], sel[2], sel[3] }.Select(Bounds)));
+        Check("BEH-S13 the well-behaved custom control is not retired", sel[4]?.ElementType == "TickerControl", Bounds(sel[4]));
+
+        // Six distinct throwing types: one more than the per-type retry budget (5). The page must still render,
+        // falling back to placeholdering every custom control once the budget is spent.
+        var six = PageXaml(
+            "<StackPanel>\n" +
+            "  <TextBlock Text=\"before\"/>\n" +
+            "  <fx:ThrowingControl/><fx:ThrowingControlB/><fx:ThrowingControlC/>\n" +
+            "  <fx:ThrowingControlD/><fx:ThrowingControlE/><fx:ThrowingControlF/>\n" +
+            "  <TextBlock Text=\"after\"/>\n" +
+            "</StackPanel>");
+        s.Client.ExitNative();
+        await Task.Delay(300);
+        s.TakeErrors();
+        mark = s.Logs.Count;
+        f = await s.NextFrame(() => s.Client.LoadXaml(six, 400, 300, 1.0), TimeSpan.FromSeconds(30));
+        var errs = s.TakeErrors();
+        Check("BEH-S14 six throwing types (retry budget exhausted) still render a frame", f != null && errs.Length == 0, string.Join("; ", errs));
+        await Task.Delay(300);
+        net = LogsSince(s, mark).Where(l => l.Contains("SAFETY-NET")).ToArray();
+        Check("BEH-S15 falls back to placeholdering all custom controls", net.Any(l => l.Contains("all custom controls")), string.Join(" | ", net));
+        Check("BEH-S16 retries stay bounded", net.Length <= 6, net.Length + " SAFETY-NET line(s)");
+
+        var h = await s.Host(six);
+        Check("BEH-S17 exhausted page hosts natively", h != null && h.Hwnd != 0);
+        var last = await s.Select("0.0.7");
+        Check("BEH-S18 sibling after six throwers is real", last?.ElementType == "TextBlock", Bounds(last));
+    }
+
+    // ---------------------------------------------------------------- design-time data grammar
+
+    private static async Task DesignTimeDataGrammar(Session s)
+    {
+        string Page(string dc) => DtdPage(dc, "<TextBlock Text=\"{Binding Title}\"/>");
+        await s.Host(Page("{d:DesignInstance fx:SampleViewModel}"));
+        Check("BEH-G1 positional type (no Type=)", await s.Read("0.0.0", "Text") == "Sample title");
+
+        foreach (var (code, dc) in new[]
+        {
+            ("BEH-G2 IsDesignTimeCreatable=False still constructs", "{d:DesignInstance Type=fx:SampleViewModel, IsDesignTimeCreatable=False}"),
+            ("BEH-G3 quoted value, lower-case key", "{d:DesignInstance type='fx:SampleViewModel'}"),
+            ("BEH-G4 extra whitespace", "{d:DesignInstance   Type = fx:SampleViewModel ,  IsDesignTimeCreatable = True }"),
+        })
+        {
+            await s.Rehost(Page(dc));
+            var text = await s.Read("0.0.0", "Text");
+            Check(code, text == "Sample title", text ?? "(null)");
+        }
+
+        // DesignData relative to the user assembly's folder (the surface's baseDir).
+        if (s_behUserDll is null)
+        {
+            Check("BEH-G5 relative DesignData (needs --user-dll)", false);
+            return;
+        }
+
+        var sub = "wxp-dtd-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var dir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(s_behUserDll))!, sub);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            const string pres = "xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"";
+            File.WriteAllText(Path.Combine(dir, "Plain.xaml"), "<TextBlock " + pres + " Text=\"From file\"/>");
+            // A Blend-style file: UTF-8 BOM + XML declaration (XamlReader rejects both unless stripped).
+            File.WriteAllText(Path.Combine(dir, "Blend.xaml"),
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<TextBlock " + pres + " Text=\"From Blend\"/>",
+                new System.Text.UTF8Encoding(true));
+
+            string DataPage(string dc) => DtdPage(dc, "<TextBlock Text=\"{Binding Text}\"/>");
+            foreach (var (code, dc, want) in new[]
+            {
+                ("BEH-G5 DesignData relative path", "{d:DesignData Source=" + sub + "/Plain.xaml}", "From file"),
+                ("BEH-G6 DesignData leading-slash path", "{d:DesignData Source=/" + sub + "/Plain.xaml}", "From file"),
+                ("BEH-G7 DesignData backslash relative path", "{d:DesignData Source=" + sub + "\\Plain.xaml}", "From file"),
+                ("BEH-G8 DesignData positional source", "{d:DesignData " + sub + "/Plain.xaml}", "From file"),
+                ("BEH-G9 DesignData with BOM + XML declaration", "{d:DesignData Source=" + sub + "/Blend.xaml}", "From Blend"),
+            })
+            {
+                s.TakeErrors();
+                await s.Rehost(DataPage(dc));
+                var text = await s.Read("0.0.0", "Text");
+                Check(code, text == want && s.TakeErrors().Length == 0, text ?? "(null)");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
 }

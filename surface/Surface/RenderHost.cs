@@ -289,12 +289,15 @@ internal sealed class RenderHost
                     var (l, c) = ExtractLineColumn(ex);
 
                     // Backstop: an opaque failure (no position, no identifiable constructor) is most likely
-                    // user code in some custom control. Retire every custom element once rather than fail
-                    // the page; a positioned markup error is reported as-is.
-                    if (attempt < maxSafetyNetRetries && l is null && c is null &&
+                    // user code in some custom control, and a named offender past the per-type budget is too.
+                    // Retire every custom element once rather than fail the page; a positioned markup error
+                    // with no offender is reported as-is. ForceAll is added at most once, so this terminates.
+                    if (attempt <= maxSafetyNetRetries && (offender is not null || (l is null && c is null)) &&
                         (forced ??= new(StringComparer.Ordinal)).Add(XamlCleaner.ForceAllCustomTypes))
                     {
-                        App.Log($"SAFETY-NET: unidentified Load failure ({Flatten(ex)}) — placeholdering all custom controls and retrying.");
+                        App.Log(offender is not null
+                            ? $"SAFETY-NET: '{offender}' still failing after {attempt} retries — placeholdering all custom controls and retrying."
+                            : $"SAFETY-NET: unidentified Load failure ({Flatten(ex)}) — placeholdering all custom controls and retrying.");
                         continue;
                     }
 

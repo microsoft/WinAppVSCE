@@ -289,8 +289,9 @@ internal static class DesignTimeData
         return -1;
     }
 
+    // XAML booleans are case-insensitive ("TRUE" is true); "1" is kept as a Blend-era shorthand.
     private static bool ParseBool(string? v) =>
-        v != null && (v.Trim() is "True" or "true" or "1");
+        v != null && (bool.TryParse(v.Trim(), out var b) ? b : v.Trim() == "1");
 
     /// <summary>Resolve a <c>prefix:TypeName</c> token to a CLR full name using the root's xmlns table.</summary>
     private static string? ResolveTypeToken(XElement root, string typeToken)
@@ -404,7 +405,7 @@ internal static class DesignTimeData
     /// BOM, both of which real Blend/Expression sample-data files commonly carry. Strip them so those files
     /// load. Standard XML comments are tolerated by XamlReader and left in place.
     /// </summary>
-    private static string PrepareForXamlReader(string text)
+    internal static string PrepareForXamlReader(string text)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -429,7 +430,7 @@ internal static class DesignTimeData
         return text;
     }
 
-    private static string? ResolveSourcePath(string source, string? baseDir)
+    internal static string? ResolveSourcePath(string source, string? baseDir)
     {
         var s = source.Trim();
         if (s.Length == 0)
