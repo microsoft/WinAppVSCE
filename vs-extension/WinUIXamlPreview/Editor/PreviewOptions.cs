@@ -1,20 +1,12 @@
 #nullable enable
 
 using System;
-using System.Globalization;
 using Microsoft.VisualStudio.Settings;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Settings;
 
 namespace WinUIXamlPreview.Editor
 {
-    /// <summary>Where the in-editor preview margin docks relative to the XAML text.</summary>
-    internal enum PreviewLocation
-    {
-        Right,
-        Bottom,
-    }
-
     /// <summary>
     /// Tiny persisted settings for the in-editor preview margin — the dock location plus the last
     /// user-dragged size for each orientation — stored in the VS user settings store. Every access is
@@ -35,12 +27,12 @@ namespace WinUIXamlPreview.Editor
         private const string CanvasHeightKey = "CanvasHeight";
         private const string FullFidelityAutoBuildKey = "FullFidelityAutoBuild";
 
-        public const double MinWidth = 240;
-        public const double MaxWidth = 1400;
-        public const double MinHeight = 160;
-        public const double MaxHeight = 1000;
-        public const double DefaultWidth = 480;
-        public const double DefaultHeight = 340;
+        public const double MinWidth = PreviewSettingsParser.MinWidth;
+        public const double MaxWidth = PreviewSettingsParser.MaxWidth;
+        public const double MinHeight = PreviewSettingsParser.MinHeight;
+        public const double MaxHeight = PreviewSettingsParser.MaxHeight;
+        public const double DefaultWidth = PreviewSettingsParser.DefaultWidth;
+        public const double DefaultHeight = PreviewSettingsParser.DefaultHeight;
 
         private static readonly object Gate = new object();
 
@@ -183,7 +175,7 @@ namespace WinUIXamlPreview.Editor
             set
             {
                 EnsureLoaded();
-                var v = value == "Dark" || value == "Default" ? value : "Light";
+                var v = PreviewSettingsParser.NormalizeTheme(value);
                 if (_theme == v)
                 {
                     return;
@@ -201,7 +193,7 @@ namespace WinUIXamlPreview.Editor
             set
             {
                 EnsureLoaded();
-                var v = value > 0 ? value : 0;
+                var v = PreviewSettingsParser.NormalizeCanvas(value);
                 if (_canvasWidth == v)
                 {
                     return;
@@ -219,7 +211,7 @@ namespace WinUIXamlPreview.Editor
             set
             {
                 EnsureLoaded();
-                var v = value > 0 ? value : 0;
+                var v = PreviewSettingsParser.NormalizeCanvas(value);
                 if (_canvasHeight == v)
                 {
                     return;
@@ -253,7 +245,7 @@ namespace WinUIXamlPreview.Editor
             }
         }
 
-        internal static double Clamp(double v, double lo, double hi) => v < lo ? lo : (v > hi ? hi : v);
+        internal static double Clamp(double v, double lo, double hi) => PreviewSettingsParser.Clamp(v, lo, hi);
 
         private static WritableSettingsStore? Store()
         {
@@ -289,56 +281,53 @@ namespace WinUIXamlPreview.Editor
 
                     if (store.PropertyExists(Collection, LocationKey))
                     {
-                        _location = string.Equals(store.GetString(Collection, LocationKey), "Bottom", StringComparison.OrdinalIgnoreCase)
-                            ? PreviewLocation.Bottom
-                            : PreviewLocation.Right;
+                        _location = PreviewSettingsParser.ParseLocation(store.GetString(Collection, LocationKey));
                     }
 
                     if (store.PropertyExists(Collection, RightWidthKey))
                     {
-                        _rightWidth = Clamp(ParseD(store.GetString(Collection, RightWidthKey), DefaultWidth), MinWidth, MaxWidth);
+                        _rightWidth = PreviewSettingsParser.ParseSize(store.GetString(Collection, RightWidthKey), DefaultWidth, MinWidth, MaxWidth);
                     }
 
                     if (store.PropertyExists(Collection, BottomHeightKey))
                     {
-                        _bottomHeight = Clamp(ParseD(store.GetString(Collection, BottomHeightKey), DefaultHeight), MinHeight, MaxHeight);
+                        _bottomHeight = PreviewSettingsParser.ParseSize(store.GetString(Collection, BottomHeightKey), DefaultHeight, MinHeight, MaxHeight);
                     }
 
                     if (store.PropertyExists(Collection, DesignTimeDataKey))
                     {
-                        _designTimeData = string.Equals(store.GetString(Collection, DesignTimeDataKey), "1", StringComparison.Ordinal);
+                        _designTimeData = PreviewSettingsParser.ParseFlag(store.GetString(Collection, DesignTimeDataKey));
                     }
 
                     if (store.PropertyExists(Collection, DesignModeKey))
                     {
-                        _designMode = string.Equals(store.GetString(Collection, DesignModeKey), "1", StringComparison.Ordinal);
+                        _designMode = PreviewSettingsParser.ParseFlag(store.GetString(Collection, DesignModeKey));
                     }
 
                     if (store.PropertyExists(Collection, CollapsedKey))
                     {
-                        _collapsed = string.Equals(store.GetString(Collection, CollapsedKey), "1", StringComparison.Ordinal);
+                        _collapsed = PreviewSettingsParser.ParseFlag(store.GetString(Collection, CollapsedKey));
                     }
 
                     if (store.PropertyExists(Collection, ThemeKey))
                     {
-                        var t = store.GetString(Collection, ThemeKey);
-                        _theme = (t == "Dark" || t == "Default") ? t : "Light";
+                        _theme = PreviewSettingsParser.NormalizeTheme(store.GetString(Collection, ThemeKey));
                     }
 
                     if (store.PropertyExists(Collection, CanvasWidthKey))
                     {
-                        _canvasWidth = Clamp(ParseD(store.GetString(Collection, CanvasWidthKey), 0), 0, 8192);
+                        _canvasWidth = PreviewSettingsParser.ParseCanvas(store.GetString(Collection, CanvasWidthKey));
                     }
 
                     if (store.PropertyExists(Collection, CanvasHeightKey))
                     {
-                        _canvasHeight = Clamp(ParseD(store.GetString(Collection, CanvasHeightKey), 0), 0, 8192);
+                        _canvasHeight = PreviewSettingsParser.ParseCanvas(store.GetString(Collection, CanvasHeightKey));
                     }
 
                     if (store.PropertyExists(Collection, FullFidelityAutoBuildKey))
                     {
                         // default ON: anything but an explicit "0" is treated as enabled.
-                        _fullFidelityAutoBuild = !string.Equals(store.GetString(Collection, FullFidelityAutoBuildKey), "0", StringComparison.Ordinal);
+                        _fullFidelityAutoBuild = PreviewSettingsParser.ParseFlagDefaultOn(store.GetString(Collection, FullFidelityAutoBuildKey));
                     }
                 }
                 catch
@@ -347,9 +336,6 @@ namespace WinUIXamlPreview.Editor
                 }
             }
         }
-
-        private static double ParseD(string s, double dflt) =>
-            double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v) ? v : dflt;
 
         private static void Save()
         {
@@ -366,16 +352,16 @@ namespace WinUIXamlPreview.Editor
                     store.CreateCollection(Collection);
                 }
 
-                store.SetString(Collection, LocationKey, _location == PreviewLocation.Bottom ? "Bottom" : "Right");
-                store.SetString(Collection, RightWidthKey, _rightWidth.ToString(CultureInfo.InvariantCulture));
-                store.SetString(Collection, BottomHeightKey, _bottomHeight.ToString(CultureInfo.InvariantCulture));
-                store.SetString(Collection, DesignTimeDataKey, _designTimeData ? "1" : "0");
-                store.SetString(Collection, DesignModeKey, _designMode ? "1" : "0");
-                store.SetString(Collection, CollapsedKey, _collapsed ? "1" : "0");
+                store.SetString(Collection, LocationKey, PreviewSettingsParser.FormatLocation(_location));
+                store.SetString(Collection, RightWidthKey, PreviewSettingsParser.FormatDouble(_rightWidth));
+                store.SetString(Collection, BottomHeightKey, PreviewSettingsParser.FormatDouble(_bottomHeight));
+                store.SetString(Collection, DesignTimeDataKey, PreviewSettingsParser.FormatFlag(_designTimeData));
+                store.SetString(Collection, DesignModeKey, PreviewSettingsParser.FormatFlag(_designMode));
+                store.SetString(Collection, CollapsedKey, PreviewSettingsParser.FormatFlag(_collapsed));
                 store.SetString(Collection, ThemeKey, _theme);
-                store.SetString(Collection, CanvasWidthKey, _canvasWidth.ToString(CultureInfo.InvariantCulture));
-                store.SetString(Collection, CanvasHeightKey, _canvasHeight.ToString(CultureInfo.InvariantCulture));
-                store.SetString(Collection, FullFidelityAutoBuildKey, _fullFidelityAutoBuild ? "1" : "0");
+                store.SetString(Collection, CanvasWidthKey, PreviewSettingsParser.FormatDouble(_canvasWidth));
+                store.SetString(Collection, CanvasHeightKey, PreviewSettingsParser.FormatDouble(_canvasHeight));
+                store.SetString(Collection, FullFidelityAutoBuildKey, PreviewSettingsParser.FormatFlag(_fullFidelityAutoBuild));
             }
             catch
             {

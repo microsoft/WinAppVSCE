@@ -29,6 +29,7 @@
     <Compile Include="..\WinUIXamlPreview\UI\DesignerSelection.cs" Link="UI\DesignerSelection.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceIdentity.cs" Link="Protocol\SurfaceIdentity.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\IdentityPrewarm.cs" Link="Protocol\IdentityPrewarm.cs" />
+    <Compile Include="..\WinUIXamlPreview\Editor\PreviewSettingsParser.cs" Link="Editor\PreviewSettingsParser.cs" />
   </ItemGroup>
 
   <ItemGroup>

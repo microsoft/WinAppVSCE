@@ -38,6 +38,7 @@ internal static partial class Program
             Run("DesignerSelection", DesignerSelectionTests);
             Run("MatchedHostBuild", MatchedHostBuildTests);
             Run("SurfaceIdentity", SurfaceIdentityTests);
+            Run("PreviewSettings", PreviewSettingsTests);
         }
         finally
         {
