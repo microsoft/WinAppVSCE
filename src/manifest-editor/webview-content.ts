@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import { KNOWN_CAPABILITIES, ARCHITECTURE_OPTIONS, DEVICE_FAMILY_OPTIONS } from './manifest-types';
 import { getEditorStyles, getErrorPageStyles } from './webview-styles';
 import { getEditorScript } from './webview-script';
+import { getSharedColorPickerScript } from '../shared/webview-controls';
 
 function buildCapabilityCheckboxList(
     capabilities: Array<{ name: string; label: string; namespace?: string }>,
@@ -448,6 +449,7 @@ ${getEditorStyles(nonce)}
 
 
 ${getEditorScript(nonce, manifestDirUri)}
+    <script nonce="${nonce}">${getSharedColorPickerScript()}</script>
 </body>
 </html>`;
 }

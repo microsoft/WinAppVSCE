@@ -1,10 +1,26 @@
 /**
  * CSS styles for the AppxManifest editor webview.
  * Extracted from webview-content.ts for maintainability.
+ *
+ * Form controls come from `src/shared/webview-controls.ts` so this editor and
+ * the DevTools panel stay visually identical; only geometry is overridden here.
  */
+
+import { getSharedControlStyles } from '../shared/webview-controls';
 
 export function getEditorStyles(nonce: string): string {
     return `    <style nonce="${nonce}">
+${getSharedControlStyles({
+    fieldSelectors: [
+        '.form-group input[type="text"]',
+        '.form-group select',
+        '.form-group textarea',
+        '.custom-cap-row input',
+    ],
+    primaryButtonSelectors: ['.btn'],
+    colorSwatchSelectors: ['.color-row input[type="color"]'],
+    includeDropdownMenu: true,
+})}
         /* ─── Reset & base ─────────────────────────────────── */
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         html, body {
@@ -173,26 +189,13 @@ export function getEditorStyles(nonce: string): string {
             color: var(--vscode-foreground);
             font-size: 13px;
         }
+        /* Width only — colour, border, padding and focus are shared.
+           Colour inputs are excluded: they are fixed-size swatches. */
         .form-group input[type="text"],
-        .form-group input[type="color"],
         .form-group select,
         .form-group textarea,
         .custom-cap-row input {
             width: 100%;
-            padding: 4px 8px;
-            font-family: inherit;
-            font-size: var(--vscode-font-size, 13px);
-            color: var(--vscode-input-foreground);
-            background: var(--vscode-input-background);
-            border: 1px solid var(--vscode-input-border, transparent);
-            border-radius: 2px;
-            outline: none;
-        }
-        .form-group input:focus,
-        .form-group select:focus,
-        .form-group textarea:focus,
-        .custom-cap-row input:focus {
-            border-color: var(--vscode-focusBorder, #007acc);
         }
         .form-group textarea {
             min-height: 60px;
@@ -208,7 +211,7 @@ export function getEditorStyles(nonce: string): string {
             width:100%; padding:4px 28px 4px 8px; font-family:inherit;
             font-size:var(--vscode-font-size, 13px); color:var(--vscode-input-foreground);
             background:var(--vscode-input-background); border:1px solid var(--vscode-input-border, transparent);
-            border-radius:2px; outline:none; cursor:pointer; text-align:left;
+            border-radius:4px; outline:none; cursor:pointer; text-align:left;
         }
         .custom-select-trigger::after {
             content:'▾'; position:absolute; right:8px; top:50%; transform:translateY(-50%);
@@ -270,17 +273,11 @@ export function getEditorStyles(nonce: string): string {
         }
 
         /* ─── Color picker row ─────────────────────────────── */
+        /* The swatch itself is styled by the shared controls module. */
         .color-row {
             display: flex;
             gap: 8px;
             align-items: center;
-        }
-        .color-row input[type="color"] {
-            width: 32px;
-            height: 28px;
-            padding: 2px;
-            cursor: pointer;
-            flex-shrink: 0;
         }
         .color-row input[type="text"] {
             flex: 1;
@@ -377,24 +374,20 @@ export function getEditorStyles(nonce: string): string {
         }
 
         /* ─── Buttons ──────────────────────────────────────── */
-        .btn, .btn-sm, .btn-remove-field, .btn-remove-section, .btn-add-field, .custom-dropdown-btn {
+        /* The .btn rule itself is defined by the shared controls module. */
+        .btn-sm, .btn-remove-field, .btn-remove-section, .btn-add-field, .custom-dropdown-btn {
             cursor: pointer;
             border: none;
-            border-radius: 2px;
+            border-radius: 4px;
             font-family: inherit;
         }
-        .btn, .btn-add-field, .custom-dropdown-btn {
+        .btn-add-field, .custom-dropdown-btn {
             font-size: 12px;
             color: var(--vscode-button-foreground);
             background: var(--vscode-button-background);
         }
-        .btn { padding: 4px 12px; }
-        .btn:hover, .btn-add-field:hover, .custom-dropdown-btn:hover {
+        .btn-add-field:hover, .custom-dropdown-btn:hover {
             background: var(--vscode-button-hoverBackground);
-        }
-        .btn:focus-visible {
-            outline: 1px solid var(--vscode-focusBorder);
-            outline-offset: 1px;
         }
         .btn-danger {
             color: var(--vscode-errorForeground, #f44747);
@@ -540,12 +533,9 @@ export function getEditorStyles(nonce: string): string {
         .cap-description-panel { padding:12px; border-radius:4px; background:var(--vscode-textBlockQuote-background,transparent); border-left:3px solid var(--vscode-focusBorder,#007acc); font-size:13px; color:var(--vscode-descriptionForeground); min-height:40px; position:sticky; top:60px; }
         .cap-description-name { font-weight:600; margin-bottom:4px; color:var(--vscode-foreground); }
 
-        .custom-dropdown { position:relative; display:inline-block; }
+        /* The dropdown menu and items come from the shared controls module;
+           only this trigger's padding is local. */
         .custom-dropdown-btn { padding:4px 12px; }
-        .custom-dropdown-menu { display:none; position:absolute; top:100%; left:0; margin-top:4px; min-width:180px; background:var(--vscode-menu-background, var(--vscode-editor-background)); border:1px solid var(--vscode-panel-border); border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,0.2); z-index:20; padding:4px; }
-        .custom-dropdown-menu.open { display:block; }
-        .custom-dropdown-item { padding:6px 12px; cursor:pointer; font-size:12px; color:var(--vscode-foreground); border-radius:4px; }
-        .custom-dropdown-item:hover { background:var(--vscode-list-hoverBackground, rgba(255,255,255,0.05)); }
     </style>`;
 }
 
@@ -582,7 +572,7 @@ export function getErrorPageStyles(nonce: string): string {
         }
         .btn {
             padding: 6px 16px; font-size: 13px; font-family: inherit;
-            cursor: pointer; border: none; border-radius: 2px;
+            cursor: pointer; border: none; border-radius: 4px;
             color: var(--vscode-button-foreground);
             background: var(--vscode-button-background);
         }
