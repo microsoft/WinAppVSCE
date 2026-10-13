@@ -404,6 +404,30 @@ describe('readSolutionProjectPaths containment', () => {
 		}
 	});
 
+	// The Browse flow outside every workspace folder: the user named this file
+	// in a dialog, and the CLI resolves its members with no containment rule of
+	// its own, so neither may the picker.
+	it('keeps every member when containment is unrestricted', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-unrestricted-'));
+		try {
+			const solutionDir = path.join(root, 'solutions');
+			const projectDir = path.join(root, 'src', 'App');
+			fs.mkdirSync(solutionDir);
+			fs.mkdirSync(projectDir, { recursive: true });
+			fs.writeFileSync(path.join(projectDir, 'App.csproj'), '<Project />');
+
+			const solutionPath = writeSolution(solutionDir, ['..\\src\\App\\App.csproj']);
+
+			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), []);
+			assert.deepStrictEqual(
+				await readSolutionProjectPaths(solutionPath, undefined, { unrestricted: true }),
+				[path.join(projectDir, 'App.csproj')]
+			);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it('still drops a member that escapes the containment root', async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-escape-'));
 		try {
@@ -771,6 +795,78 @@ describe('readTargetProjects for a file target', () => {
 			assert.deepStrictEqual(result.projects, []);
 			assert.strictEqual(result.containerPath, path.dirname(project));
 		});
+	});
+
+	// Browsing outside every workspace folder synthesizes a root from the
+	// target itself, which for a `solutions/` + `src/` layout is the solution's
+	// own directory. Containing members to it discarded all of them, so the
+	// --project prompt never appeared and the CLI was handed an ambiguous
+	// solution the user had no way to narrow.
+	it('keeps .. members of a browsed solution outside the workspace', async () => {
+		await withLayout(
+			{
+				'solutions/All.slnx': '<Solution>\n  <Project Path="../src/AppOne/AppOne.csproj" />\n  <Project Path="../src/AppTwo/AppTwo.csproj" />\n</Solution>\n',
+				'src/AppOne/AppOne.csproj': app,
+				'src/AppTwo/AppTwo.csproj': app
+			},
+			async dir => {
+				const solution = path.join(dir, 'solutions', 'All.slnx');
+				const result = await readTargetProjects({
+					kind: 'solution',
+					path: solution,
+					root: { name: 'solutions', path: path.dirname(solution) },
+					rootIsSynthesized: true
+				});
+				assert.deepStrictEqual(
+					result.projects.map(p => path.basename(p)).sort(),
+					['AppOne.csproj', 'AppTwo.csproj']
+				);
+			}
+		);
+	});
+
+	// The same browsed layout reached through its directory rather than the
+	// solution file: the single top-level solution is read the same way.
+	it('keeps .. members of a solution in a browsed directory outside the workspace', async () => {
+		await withLayout(
+			{
+				'solutions/All.slnx': '<Solution>\n  <Project Path="../src/AppOne/AppOne.csproj" />\n  <Project Path="../src/AppTwo/AppTwo.csproj" />\n</Solution>\n',
+				'src/AppOne/AppOne.csproj': app,
+				'src/AppTwo/AppTwo.csproj': app
+			},
+			async dir => {
+				const solutionDir = path.join(dir, 'solutions');
+				const result = await readTargetProjects({
+					kind: 'solution',
+					path: solutionDir,
+					root: { name: 'solutions', path: solutionDir },
+					rootIsSynthesized: true
+				});
+				assert.deepStrictEqual(
+					result.projects.map(p => path.basename(p)).sort(),
+					['AppOne.csproj', 'AppTwo.csproj']
+				);
+			}
+		);
+	});
+
+	// A workspace-owned target keeps its boundary: the root is the repository,
+	// so a member escaping it is still dropped.
+	it('still contains a workspace-owned solution to its workspace root', async () => {
+		await withLayout(
+			{
+				'ws/solutions/All.slnx': '<Solution>\n  <Project Path="../../outside/Outside.csproj" />\n</Solution>\n',
+				'outside/Outside.csproj': app
+			},
+			async dir => {
+				const result = await readTargetProjects({
+					kind: 'solution',
+					path: path.join(dir, 'ws', 'solutions', 'All.slnx'),
+					root: { name: 'ws', path: path.join(dir, 'ws') }
+				});
+				assert.deepStrictEqual(result.projects, []);
+			}
+		);
 	});
 });
 

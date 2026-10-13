@@ -363,44 +363,47 @@ async function browseForRunTarget(
 	}
 
 	const targetKind = await classifyRunTarget(selected);
+	const { root, synthesized } = resolveBrowsedRoot(roots, selected, targetKind);
 
 	return {
 		target: {
 			kind: targetKind,
 			path: selected,
-			root: resolveBrowsedRoot(roots, selected, targetKind)
+			root,
+			rootIsSynthesized: synthesized
 		}
 	};
 }
 
 /**
- * The containment root for a browsed target.
+ * The working directory and display anchor for a browsed target.
  *
- * Solution members are resolved and filtered against this root, so attributing
- * a target outside the workspace to `roots[0]` would silently discard every
- * project in a solution the user deliberately picked. A target with no
- * workspace root of its own becomes its own root instead.
+ * Attributing a target outside the workspace to `roots[0]` would mislabel it
+ * and run the CLI from an unrelated directory, so a target no workspace folder
+ * owns becomes its own root. `synthesized` marks that case: such a root says
+ * nothing about where the target's repository begins, so callers must not use
+ * it to bound a solution's members.
  */
 function resolveBrowsedRoot(
 	roots: readonly WorkspaceRoot[],
 	selected: string,
 	kind: RunTargetKind
-): WorkspaceRoot {
+): { root: WorkspaceRoot; synthesized: boolean } {
 	// Honours a scoped root list, and prefers the deepest match when roots nest.
 	const owning = findOwningRoot(roots, selected);
 	if (owning) {
-		return owning;
+		return { root: owning, synthesized: false };
 	}
 
 	// `roots` may have been scoped to a single folder by the caller, while the
 	// browsed path belongs to another folder of the same workspace.
 	const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(selected));
 	if (folder) {
-		return { name: folder.name, path: folder.uri.fsPath };
+		return { root: { name: folder.name, path: folder.uri.fsPath }, synthesized: false };
 	}
 
 	const base = kind === 'folder' ? selected : path.dirname(selected);
-	return { name: path.basename(base) || base, path: base };
+	return { root: { name: path.basename(base) || base, path: base }, synthesized: true };
 }
 
 /** Prompt only for multiple plausible apps; otherwise the CLI is authoritative. */
