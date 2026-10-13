@@ -72,6 +72,24 @@ test('shows the parse-error overlay for malformed XML', async () => {
     await expect(innerFrame.locator('#parse-error-open-text')).toContainText('Open in Text Editor');
 });
 
+test('"Open in Text Editor" keeps the visual editor open beside it', async () => {
+    // The overlay promises the editor "resumes automatically with your current view intact", so
+    // the button must not replace this tab with the text editor.
+    const overlay = innerFrame.locator('#parse-error-overlay');
+    await expect(overlay).toBeVisible({ timeout: 15_000 });
+
+    await innerFrame.locator('#parse-error-open-text').click();
+
+    // A second editor group means the text editor opened beside rather than over the webview.
+    await expect(ctx.page.locator('.editor-group-container')).toHaveCount(2, { timeout: 15_000 });
+    // The custom editor survived the click, so the overlay is still there to recover into.
+    await expect(overlay).toBeVisible();
+
+    // Close the text editor so the following test sees a single group again.
+    await ctx.page.keyboard.press('Control+W');
+    await expect(ctx.page.locator('.editor-group-container')).toHaveCount(1, { timeout: 15_000 });
+});
+
 test('recovers into the editor once the XML is fixed', async () => {
     // Repair the file on disk, as the user would in the text editor. The overlay must clear
     // and the form must populate.

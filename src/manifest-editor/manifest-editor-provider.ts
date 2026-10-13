@@ -151,6 +151,25 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             webviewPanel.webview.postMessage({ type: 'update', data, errors, forceAll });
         };
 
+        /** Refresh only the error list, leaving the form untouched. After our own save-flush edit
+            the form already matches the document, and re-rendering would rebuild the inputs from
+            the document value, discarding anything typed since the flush. */
+        const refreshValidationOnly = () => {
+            let data;
+            try {
+                data = parseManifest(document.getText());
+            } catch {
+                // A flush only edits text that parses, so this is unexpected: fall back to the
+                // full path, which raises the overlay.
+                updateWebview(true);
+                return;
+            }
+            webviewPanel.webview.postMessage({
+                type: 'validationErrors',
+                errors: validateManifest(data, this.getSchema()),
+            });
+        };
+
         // The editor document loads even when the XML is currently unparseable: it posts 'ready',
         // and the resulting updateWebview raises the overlay over the empty form.
         showEditorView();
@@ -175,9 +194,10 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             if (externalChangeTimer) { clearTimeout(externalChangeTimer); }
             externalChangeTimer = setTimeout(() => {
                 externalChangeTimer = undefined;
-                // Only a genuine external change (undo, redo, text editor) force-updates all
-                // fields; the echo refreshes validation without clobbering what is focused.
-                updateWebview(!isFlushEcho);
+                // A genuine external change (undo, redo, text editor) force-updates all fields.
+                // Our own echo only refreshes validation: re-rendering would rebuild the
+                // Applications inputs and drop characters typed since the save.
+                if (isFlushEcho) { refreshValidationOnly(); } else { updateWebview(true); }
             }, EXTERNAL_CHANGE_DEBOUNCE_MS);
         });
 
@@ -262,7 +282,14 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                         }
 
                         case 'openAsText':
-                            await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+                            // The parse-error overlay opens beside itself so the visual editor
+                            // stays open, as its message says. Other entry points replace the tab.
+                            await vscode.commands.executeCommand(
+                                'vscode.openWith',
+                                document.uri,
+                                'default',
+                                message.beside ? vscode.ViewColumn.Beside : undefined,
+                            );
                             return;
 
                         case 'checkImagePath': {

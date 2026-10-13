@@ -118,7 +118,9 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
             vscode.postMessage({ type: 'openAsText' });
         });
         document.getElementById('parse-error-open-text').addEventListener('click', () => {
-            vscode.postMessage({ type: 'openAsText' });
+            // Open beside the overlay: replacing this tab would close the editor the message
+            // promises to keep intact.
+            vscode.postMessage({ type: 'openAsText', beside: true });
         });
 
         // ─── Validation helper ──────────────────────────────

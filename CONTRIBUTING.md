@@ -43,6 +43,16 @@ npm run test:unit
 npm run test:e2e
 ```
 
+`npm run test:e2e` has two Playwright projects. The `vscode` project drives real VS Code, while
+the `webview` project renders the webview in Chromium and needs that browser downloaded once:
+
+```powershell
+npx playwright install chromium
+```
+
+Without it the `webview` project fails. Use `npm run test:e2e -- --project=vscode` to skip it.
+See [`src/test/e2e/README.md`](src/test/e2e/README.md) for details.
+
 ## Package
 
 To produce a VSIX package locally:

@@ -208,7 +208,7 @@ export type WebviewToExtensionMessage =
     | { type: 'removeExternalDependency'; index: number }
     | { type: 'moveExternalDependency'; index: number; direction: 'up' | 'down' }
     | { type: 'updateAssets' }
-    | { type: 'openAsText' }
+    | { type: 'openAsText'; beside?: boolean }
     | { type: 'addPhoneIdentity' }
     | { type: 'removePhoneIdentity' }
     | { type: 'packageTypeChanged'; value: string }

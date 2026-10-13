@@ -58,7 +58,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (165 tests)
+## Test inventory (167 tests)
 
 ### `webview-state.spec.ts` — 19 tests
 
@@ -87,7 +87,7 @@ UI-state behaviour can be verified without launching VS Code. Regression coverag
 | 18 | a saved tab that never becomes available leaves a valid fallback selected | Endless restore retries don't strand an invalid selection or override a manual tab change |
 | 19 | hiding a tab for a non-application package clears its button selection | Hiding a tab clears its `.tab-btn.active`, so only one tab button ever looks selected |
 
-### `external-edit-state.spec.ts` — 5 tests
+### `external-edit-state.spec.ts` — 6 tests
 
 Full VS Code coverage for #192: edits made to the manifest outside the webview must not reset the
 visual editor. Launches its own VS Code instance.
@@ -98,7 +98,8 @@ visual editor. Launches its own VS Code instance.
 | 2 | exactly one top-level tab button is marked active after an external edit | Tab button/panel selection stays in sync |
 | 3 | shows an in-place overlay — not a rebuilt document — while the XML is invalid | Invalid XML shows the overlay, and recovering restores the previous view |
 | 4 | a save flushes webview input that is still inside the debounce window | Ctrl+S before the 300 ms debounce elapses reaches the provider's flush handler and the value lands in the saved file |
-| 5 | saving while the XML is unparseable stores the raw text instead of rewriting the document | The save-flush guard resolves with no edits when the document can't be parsed, so Ctrl+S persists the user's raw text and never hangs |
+| 5 | the save-flush echo refreshes validation instead of rebuilding the form | The document change the flush itself produces posts `validationErrors`, not a second `update`, so it never rebuilds the Applications inputs over text typed since the save |
+| 6 | saving while the XML is unparseable stores the raw text instead of rewriting the document | The save-flush guard resolves with no edits when the document can't be parsed, so Ctrl+S persists the user's raw text and never hangs |
 
 ### `sign-quickpick.spec.ts` — 9 tests
 
@@ -282,14 +283,15 @@ Validates MRT-aware resolution of visual asset paths (issue #191). Uses the `mrt
 | 6 | a non-variant sibling does not satisfy the reference | `OnlyBackup.backup.png` is not treated as a variant of `OnlyBackup.png` |
 | 7 | a genuinely missing asset still warns | A reference with neither literal file nor variants still warns |
 
-### `parse-error.spec.ts` — 2 tests
+### `parse-error.spec.ts` — 3 tests
 
 Validates error handling for malformed manifests. This spec launches its own VS Code instance with broken XML.
 
 | # | Test | Validates |
 |---|------|-----------|
 | 1 | shows the parse-error overlay for malformed XML | Malformed manifest XML raises the shared parse-error overlay with its message and "Open in Text Editor" action |
-| 2 | recovers into the editor once the XML is fixed | Repairing the file on disk clears the overlay and populates the form |
+| 2 | "Open in Text Editor" keeps the visual editor open beside it | The overlay's recovery action opens the raw XML in a second editor group instead of replacing the custom editor, so the promised automatic resume is possible |
+| 3 | recovers into the editor once the XML is fixed | Repairing the file on disk clears the overlay and populates the form |
 
 ### `open-manifest-editor-command.spec.ts` — 2 tests
 
@@ -348,4 +350,4 @@ These tests occasionally fail on the first attempt but pass on retry (Playwright
 | Test | Reason |
 |------|--------|
 | `background-task-fixture.spec.ts` › identity fields are populated correctly | Timing — editor may not have fully reloaded after fixture swap |
-| `parse-error.spec.ts` › both tests | Shared `beforeAll` launches its own VS Code instance — sensitive to startup timing, so a slow launch fails both tests |
+| `parse-error.spec.ts` › all tests | Shared `beforeAll` launches its own VS Code instance — sensitive to startup timing, so a slow launch fails every test in the file |

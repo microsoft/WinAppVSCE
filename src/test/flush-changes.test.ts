@@ -64,3 +64,23 @@ test('mixed field and extension-field changes are all applied', () => {
     assert.ok(text.includes('Mixed.Name'));
     assert.ok(text.includes('Mixed Display'));
 });
+
+test('KNOWN LIMITATION: sibling elements sharing a field path both rewrite the first element', () => {
+    // The fixture's AppUriHandler has two <uap3:Host> children. updateExtensionField resolves a
+    // field path with the first regex match, so both changes land on Host[0] and Host[1] is never
+    // written. This predates the debounce-key work and is tracked by #289; the assertions
+    // below pin the current behaviour so the fix is forced to update this test.
+    const changes: FlushedChange[] = [
+        { kind: 'extField', appIndex: 0, extIndex: 0, fieldPath: 'Host.Name', value: 'first.example.com' },
+        { kind: 'extField', appIndex: 0, extIndex: 0, fieldPath: 'Host.Name', value: 'second.example.com' },
+    ];
+    const { text, failed } = applyFlushedChanges(manifestXml, changes);
+    assert.deepStrictEqual(failed, []);
+
+    const hosts = [...text.matchAll(/<uap3:Host Name="([^"]*)"/g)].map(m => m[1]);
+    assert.deepStrictEqual(
+        hosts,
+        ['second.example.com', 'xamlcontrolsgallery.com'],
+        'today the last write wins on Host[0] and Host[1] keeps its original value',
+    );
+});

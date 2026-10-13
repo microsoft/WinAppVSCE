@@ -321,6 +321,9 @@ test('two extension inputs sharing a field path queue independently', async ({ p
 
     // Two <Host> elements render two inputs with the same data-ext-field, so a queue key built
     // only from the field path would let one keystroke silently drop the other.
+    // Scope: this covers queueing only. Both changes currently rewrite the *first* <Host>, because
+    // updateExtensionField matches the first element for a field path. That is a pre-existing bug
+    // tracked in #289, so asserting the resulting XML here would lock in the wrong behaviour.
     const count = await page.locator('input[data-ext-field="Host.Name"]').count();
     expect(count).toBeGreaterThan(1);
 

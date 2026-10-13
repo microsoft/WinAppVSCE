@@ -137,6 +137,76 @@ test('a save flushes webview input that is still inside the debounce window', as
     expect(saved).toContain('</Package>');
 });
 
+test('the save-flush echo refreshes validation instead of rebuilding the form', async () => {
+    // The flush edit echoes back as a document change. Treating that echo as an external edit
+    // makes populateForm run renderApplications, which rebuilds the Applications inputs from the
+    // document and drops any text typed since the save, out from under the user's cursor.
+    //
+    // The webview's own 300 ms input debounce flushes that text a moment later and the field
+    // converges, so asserting the settled value proves nothing. What distinguishes the two
+    // behaviours is the message the echo produces: 'validationErrors' (form untouched) rather
+    // than a second 'update' (form rebuilt). Verified by reverting the fix: the trace becomes
+    // flushChanges -> update -> update instead of flushChanges -> validationErrors -> update.
+    await switchAppSubTab(frame, 0, 'extensions');
+    await ctx.page.waitForTimeout(500);
+
+    const hostInput = frame.locator('input[data-ext-field="Host.Name"]').first();
+    await expect(hostInput).toBeVisible({ timeout: 10_000 });
+
+    // Record what the extension posts to the webview. 'body' survives renderApplications, which
+    // only rebuilds the applications container, so the recorder is not torn down mid-test.
+    await frame.locator('body').evaluate(el => {
+        const w = el.ownerDocument.defaultView as unknown as {
+            __msgs: string[];
+            addEventListener: (type: string, cb: (e: { data?: { type?: string } }) => void) => void;
+        };
+        w.__msgs = [];
+        w.addEventListener('message', e => { w.__msgs.push(((e.data || {}).type) as string); });
+    });
+
+    await hostInput.click();
+    await hostInput.fill('echo-base.example.com');
+    await ctx.page.keyboard.press('Control+S');
+
+    // Keep typing straight away, so this text is still local when the echo arrives.
+    await hostInput.pressSequentially('/more');
+
+    // The save landing on disk is what triggers the echo, so poll for it first.
+    await expect.poll(
+        () => fs.readFileSync(manifestPath, 'utf-8'),
+        { timeout: 15_000, message: 'the flushed value never reached the saved manifest' },
+    ).toContain('echo-base.example.com');
+
+    const readMessages = () => frame.locator('body').evaluate(
+        el => (el.ownerDocument.defaultView as unknown as { __msgs: string[] }).__msgs);
+
+    // Wait for the echo to be handled rather than sleeping a fixed amount.
+    await expect.poll(readMessages, {
+        timeout: 15_000,
+        message: 'the save never produced a flushChanges/validationErrors exchange',
+    }).toContain('validationErrors');
+
+    const msgs = await readMessages();
+    const flushIndex = msgs.indexOf('flushChanges');
+    expect(flushIndex, 'the save never reached the webview').toBeGreaterThanOrEqual(0);
+
+    // The echo must refresh validation before anything rebuilds the form.
+    const afterFlush = msgs.slice(flushIndex + 1).filter(m => m === 'update' || m === 'validationErrors');
+    expect(afterFlush[0], `unexpected message order after the save: ${msgs.join(', ')}`)
+        .toBe('validationErrors');
+
+    // And the text typed after the save is still in the field.
+    await expect(hostInput).toHaveValue('echo-base.example.com/more');
+
+    // Leave the document clean: the next test edits the file on disk, which VS Code ignores
+    // while the in-memory document still has unsaved changes.
+    await ctx.page.keyboard.press('Control+S');
+    await expect.poll(
+        () => fs.readFileSync(manifestPath, 'utf-8'),
+        { timeout: 15_000, message: 'the trailing edit was never saved' },
+    ).toContain('echo-base.example.com/more');
+});
+
 test('saving while the XML is unparseable stores the raw text instead of rewriting the document', async () => {
     writeManifest(original.replace('</Package>', '<Unclosed>'));
     await expect(frame.locator('#parse-error-overlay')).toBeVisible({ timeout: 20_000 });
@@ -146,11 +216,12 @@ test('saving while the XML is unparseable stores the raw text instead of rewriti
     // This test runs last: it leaves the text editor, not the custom editor, focused.
     await frame.locator('#parse-error-open-text').click();
 
-    // Wait for and click into the text editor rather than sleeping — typing before it is ready
-    // silently sends the keystrokes to the webview instead.
-    const textEditor = ctx.page.locator('.editor-group-container.active .view-lines');
+    // The overlay opens the text editor beside the visual one and focuses it. Wait for that
+    // focus rather than sleeping or clicking — typing before the editor is ready silently sends
+    // the keystrokes to the webview, and the webview overlay intercepts clicks while the new
+    // group is still laying out.
+    const textEditor = ctx.page.locator('.editor-group-container.active .monaco-editor.focused');
     await expect(textEditor).toBeVisible({ timeout: 20_000 });
-    await textEditor.click();
     // The assertion below depends on the insert position, so anchor the caret explicitly
     // instead of assuming it landed at offset 0.
     await ctx.page.keyboard.press('Control+Home');
