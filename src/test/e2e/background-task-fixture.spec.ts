@@ -139,6 +139,6 @@ test('editing display name persists to XML', async () => {
     await switchTab(frame, 'properties');
     await setInputValue(frame, 'props-displayname', 'BackgroundTaskEdited');
     await waitForDebounce(ctx.page);
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, '<DisplayName>BackgroundTaskEdited</DisplayName>');
     expect(xml).toContain('<DisplayName>BackgroundTaskEdited</DisplayName>');
 });
