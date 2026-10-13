@@ -26,6 +26,7 @@ import {
     createDevToolsWorkspace,
     snapshotOwnedPids,
     killProcessesStartedSinceWithRetry,
+    cliSupportsDevTools,
     FIXTURE_APP_DIR,
 } from './devtools-fixture';
 
@@ -51,6 +52,13 @@ test.beforeAll(async () => {
 
     if (!hasDotnet()) {
         launchFailure = 'the .NET SDK is not available';
+        return;
+    }
+
+    // Probed before the fixture is built: without DevTools CLI support the app
+    // cannot launch at all, so building it would waste several minutes.
+    if (!cliSupportsDevTools()) {
+        launchFailure = 'the winapp CLI in bin/ does not support "run --devtools"';
         return;
     }
 
