@@ -105,6 +105,19 @@ namespace WinUIXamlPreview.Smoke
 
         private static async Task<int> Main(string[] args)
         {
+            // Reclaim copies orphaned by earlier runs (VS does the same at package load), and never exit while
+            // a disposed client is still reaping its process or deleting its matched-host run copy.
+            SurfaceClient.SweepStaleRunCopies(TimeSpan.FromMinutes(10));
+            try { return await MainCore(args); }
+            finally
+            {
+                if (!SurfaceClient.WaitForPendingCleanup(TimeSpan.FromSeconds(45)))
+                    Console.Error.WriteLine("WARNING: Surface cleanup still pending at exit.");
+            }
+        }
+
+        private static async Task<int> MainCore(string[] args)
+        {
             var repoRoot = FindRepoRoot();
             var surfaceExe = SurfaceResolver.Resolve(
                 preferred: Environment.GetEnvironmentVariable("WINUI_SURFACE_EXE"),

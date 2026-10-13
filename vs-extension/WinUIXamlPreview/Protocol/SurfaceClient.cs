@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
@@ -59,6 +60,26 @@ namespace WinUIXamlPreview.Protocol
         private CancellationTokenSource? _timeoutCts;
         private int _faulted;
         private volatile bool _intentionalStop;
+
+        /// <summary>Parent of the per-process matched-host run copies.</summary>
+        internal static string RunRoot => Path.Combine(Path.GetTempPath(), "wsr-v2");
+
+        // Background reap/cleanup tasks started by Dispose. VS outlives them; short-lived hosts (test
+        // runners) must wait on them before exiting or the run copies (~140 MB each) are orphaned.
+        private static readonly List<Task> s_cleanups = new List<Task>();
+
+        /// <summary>Waits for every disposed client's process reap and run-copy cleanup. Returns false on timeout.</summary>
+        internal static bool WaitForPendingCleanup(TimeSpan timeout)
+        {
+            Task[] pending;
+            lock (s_cleanups) pending = s_cleanups.ToArray();
+            try { return Task.WaitAll(pending, timeout); }
+            catch (AggregateException) { return true; }
+        }
+
+        /// <summary>Reclaims run copies older than <paramref name="minAge"/> that no running Surface holds.</summary>
+        internal static int SweepStaleRunCopies(TimeSpan minAge, Action<string>? log = null) =>
+            HostPayload.SweepRunRoot(RunRoot, minAge, log);
 
         public SurfaceClient(string surfaceExe, string? userDll, Action<string> log, string? userAppXaml = null, string? theme = null, string? userPri = null)
         {
@@ -139,7 +160,7 @@ namespace WinUIXamlPreview.Protocol
                     var source = Path.GetDirectoryName(Path.GetFullPath(_surfaceExe))!;
                     if (!string.Equals(Path.GetFullPath(_userPri!), Path.Combine(source, "Surface.designtime.pri"), StringComparison.OrdinalIgnoreCase))
                         throw new InvalidDataException("Matched PRI must belong to the supplied payload.");
-                    _privateRun = Path.Combine(Path.GetTempPath(), "wsr-v2", Guid.NewGuid().ToString("N"));
+                    _privateRun = Path.Combine(RunRoot, Guid.NewGuid().ToString("N"));
                     var rcSw = Stopwatch.StartNew();
                     HostPayload.CreateRunCopy(source, _privateRun);
                     _log($"PERF client.runcopy ms={rcSw.ElapsedMilliseconds}");
@@ -640,24 +661,31 @@ namespace WinUIXamlPreview.Protocol
 
             if (proc != null || runDir != null)
             {
-                Task.Run(() =>
+                var cleanup = Task.Run(() =>
                 {
                     try { proc?.WaitForExit(5000); } catch { }
                     try { proc?.Dispose(); } catch { }
                     if (runDir != null)
                     {
-                        // The image and its DLLs can stay locked briefly after exit (notably under x64
-                        // emulation). Retry for a few seconds; whatever remains is reclaimed by the next
-                        // session's SweepRunRoot.
-                        for (var attempt = 0; attempt < 10 && Directory.Exists(runDir); attempt++)
+                        // The image and its DLLs can stay locked for several seconds after exit (notably under
+                        // x64 emulation / AV scans of the fresh copy). Retry for up to 30 s on this background
+                        // thread; whatever remains is reclaimed by the next session's SweepRunRoot.
+                        var cleanupSw = Stopwatch.StartNew();
+                        for (var attempt = 0; Directory.Exists(runDir) && (attempt == 0 || cleanupSw.Elapsed < TimeSpan.FromSeconds(30)); attempt++)
                         {
                             if (attempt > 0) Thread.Sleep(500);
                             try { if (HostPayload.TryRetire(runDir, _log, deleteAttempts: 10)) break; }
                             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
                         }
                         if (Directory.Exists(runDir)) _log($"Private Surface run cleanup deferred for '{runDir}'.");
+                        else _log($"PERF client.runcopy.cleanup ms={cleanupSw.ElapsedMilliseconds}");
                     }
                 });
+                lock (s_cleanups)
+                {
+                    s_cleanups.RemoveAll(t => t.IsCompleted);
+                    s_cleanups.Add(cleanup);
+                }
             }
 
             try { _lifetimeCts.Dispose(); } catch { }

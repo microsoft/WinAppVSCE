@@ -214,7 +214,11 @@ Cleanup failures remain visible rather than being masked by a later cancellation
 The shared run-copy helper validates a pristine source. **Each SurfaceClient
 process**, including warmed spares, copies again to a distinct
 `%TEMP%\wsr-v2\<guid>` before passing `--user-pri`; only this private path is
-launched and it is disposed after the owned process exits. A mutated run cannot
+launched and it is disposed after the owned process exits. Disposal retries for
+up to 30 s on a background thread (the image commonly stays locked 1.5–6 s after
+exit); anything left is reclaimed by the run-root sweep at VS package load or at
+test-runner start, and test runners wait for pending cleanup before exiting.
+A mutated run cannot
 validate as pristine input. Multiple clients cannot overwrite each other's PRI.
 These are ownership/integrity boundaries, not a sandbox or protection against
 a malicious process running as the same user.

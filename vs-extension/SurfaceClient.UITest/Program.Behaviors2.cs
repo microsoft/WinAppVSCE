@@ -534,6 +534,8 @@ internal static partial class Program
         }
 
         var source = s_behMatchedHost;
+        var runsBefore = new System.Collections.Generic.HashSet<string>(Directory.Exists(SurfaceClient.RunRoot)
+            ? Directory.GetDirectories(SurfaceClient.RunRoot) : new string[0], StringComparer.OrdinalIgnoreCase);
         var pristine = WinUISurface.Shared.HostPayload.Validate(source);
         var realPri = File.ReadAllBytes(Path.Combine(source, "Surface.designtime.pri"));
         var root = Path.Combine(Path.GetTempPath(), "wxp-beh-pri-" + Guid.NewGuid().ToString("N"));
@@ -615,6 +617,14 @@ internal static partial class Program
             r = await Launch(good, foreign);
             Check("BEH-P6 PRI outside the payload fails start before launch", !r.ready && r.startMs < 10000 &&
                 r.error != null && r.error.Contains("must belong"), r.error);
+
+            // Every run copy this group made is reclaimed once cleanup settles (a still-locked delete may
+            // leave a .trash- directory for the next sweep, but never a launchable copy).
+            Check("BEH-P7 disposed clients settle cleanup within 45 s", SurfaceClient.WaitForPendingCleanup(TimeSpan.FromSeconds(45)));
+            var leaked = (Directory.Exists(SurfaceClient.RunRoot) ? Directory.GetDirectories(SurfaceClient.RunRoot) : new string[0])
+                .Where(d => !runsBefore.Contains(d) && !Path.GetFileName(d).StartsWith(WinUISurface.Shared.HostPayload.TrashPrefix, StringComparison.Ordinal))
+                .ToArray();
+            Check("BEH-P8 no matched-host run copies left behind", leaked.Length == 0, string.Join(", ", leaked));
         }
         finally
         {
