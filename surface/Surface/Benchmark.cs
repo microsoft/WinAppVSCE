@@ -17,6 +17,8 @@ namespace Surface;
 /// per-stage p50/p95/p99/min/max/mean table (milliseconds) plus frame KB to stdout, and writes the
 /// same data as machine-readable JSON to <c>surface\out\s5-results.json</c>.
 ///
+/// Compiled only when opted in: <c>dotnet build surface\Surface\Surface.csproj -p:Platform=x64 -p:SurfaceBenchmarks=true</c>.
+///
 /// Stages measured (see <see cref="RenderTimings"/>): clean, parse, layout, capture (RTB), encode,
 /// total. The pipeline itself is unchanged from the live server path — this only observes it.
 /// </summary>

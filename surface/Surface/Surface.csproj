@@ -47,6 +47,16 @@
     <WinUISurfaceWasdkVersion Condition="'$(WinUISurfaceWasdkVersion)' == ''">2.2.0</WinUISurfaceWasdkVersion>
   </PropertyGroup>
 
+  <!-- Developer-only S5 measurement modes (the "benchmark" render-latency tables and the "wgc" capture probe).
+       Left out of every build unless asked for, since all documented builds (including the VSIX payload) are
+       Debug. Opt in with the MSBuild property SurfaceBenchmarks=true. -->
+  <PropertyGroup Condition="'$(SurfaceBenchmarks)' == 'true'">
+    <DefineConstants>$(DefineConstants);SURFACE_BENCHMARKS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(SurfaceBenchmarks)' != 'true'">
+    <Compile Remove="Benchmark.cs;WgcBenchmark.cs;WgcCapture.cs" />
+  </ItemGroup>
+
   <!-- R3: stamp the build-time WASDK version so FrameServer reports it in Ready.wasdk (a matched host built
        at 2.5.1 says 2.5.1, not the bundled default). -->
   <ItemGroup>

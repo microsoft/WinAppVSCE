@@ -657,9 +657,9 @@ internal sealed class RenderHost
         (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
 
     // ---- S5 Part 2: Windows.Graphics.Capture (WGC) probe support ---------------------------
-    // These hooks let the --wgc benchmark attempt a DXGI/DWM screen-capture path against the SAME
-    // warm render window the RTB path uses, and toggle the window state (cloak / on-screen) that
-    // WGC composition may require. RTB stays the default live-path capture regardless.
+    // These hooks let the --wgc benchmark (SurfaceBenchmarks builds only) attempt a DXGI/DWM screen-capture
+    // path against the SAME warm render window the RTB path uses, and toggle the window state (cloak /
+    // on-screen) that WGC composition may require. RTB stays the default live-path capture regardless.
 
     /// <summary>
     /// The warm render window's top-level HWND — what WGC's <c>CreateForWindow</c> needs, and what the
@@ -671,6 +671,7 @@ internal sealed class RenderHost
             ? _renderHwnd
             : (_renderWindow is null ? IntPtr.Zero : Win32Interop.GetWindowFromWindowId(_renderWindow.AppWindow.Id));
 
+#if SURFACE_BENCHMARKS
     /// <summary>Toggle the render window's DWM cloak (Part 2 tests whether WGC can capture it cloaked).</summary>
     internal void SetRenderWindowCloaked(bool cloaked)
     {
@@ -740,6 +741,7 @@ internal sealed class RenderHost
         _design = null;
         if (_renderWindow is not null) _renderWindow.Content = null;
     }
+#endif
 
     /// <summary>
     /// Toggle design (select) vs interact mode for the mounted design surface (plan §41). Design mode
@@ -1027,6 +1029,7 @@ internal sealed class RenderHost
         return outBytes;
     }
 
+#if SURFACE_BENCHMARKS
     private static async Task<byte[]> EncodeJpegAsync(byte[] bgraPixels, int srcW, int srcH, int outW, int outH)
     {
         var stream = new InMemoryRandomAccessStream();
@@ -1056,6 +1059,7 @@ internal sealed class RenderHost
         reader.ReadBytes(outBytes);
         return outBytes;
     }
+#endif
 
     private static async Task WaitForLoadedAsync(FrameworkElement element, int timeoutMs)
     {
@@ -1311,7 +1315,8 @@ internal sealed class RenderHost
 /// <summary>
 /// Per-stage wall-clock timings (milliseconds) for one render, plus the encoded frame size in
 /// bytes. Populated by <see cref="RenderHost.RenderAsync"/> only when a caller supplies an
-/// instance (the <c>--benchmark</c> path); the live server path passes null and pays no
+/// instance (the <c>--benchmark</c> path, compiled only with <c>-p:SurfaceBenchmarks=true</c>); the live
+/// server path passes null and pays no
 /// measurement overhead beyond a handful of <see cref="Stopwatch.GetTimestamp"/> reads.
 /// </summary>
 internal sealed class RenderTimings
@@ -1332,11 +1337,11 @@ internal sealed class RenderTimings
     public double CaptureRender2Ms { get; set; }
     /// <summary>Capture sub-stage: GPU→CPU pixel readback (<see cref="RenderTargetBitmap.GetPixelsAsync"/>).</summary>
     public double CaptureReadbackMs { get; set; }
-    /// <summary>JPEG <see cref="BitmapEncoder"/> set-pixels + flush.</summary>
+    /// <summary>PNG <see cref="BitmapEncoder"/> set-pixels + flush.</summary>
     public double EncodeMs { get; set; }
     /// <summary>End-to-end: clean → encoded bytes ready.</summary>
     public double TotalMs { get; set; }
-    /// <summary>Size of the encoded JPEG frame in bytes.</summary>
+    /// <summary>Size of the encoded PNG frame in bytes.</summary>
     public int FrameBytes { get; set; }
 }
 

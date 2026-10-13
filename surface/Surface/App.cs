@@ -56,11 +56,13 @@ public static class Program
     /// </summary>
     internal static string? UserAppXamlPath { get; private set; }
 
+#if SURFACE_BENCHMARKS
     /// <summary>True when launched with <c>--benchmark</c>: run the offline latency benchmark (S5 Part 1) instead of the TCP server.</summary>
     internal static bool BenchmarkMode { get; private set; }
 
     /// <summary>True when launched with <c>--wgc</c>: run the WGC-vs-RTB capture probe (S5 Part 2) instead of the TCP server.</summary>
     internal static bool WgcMode { get; private set; }
+#endif
 
     [STAThread]
     private static void Main(string[] args)
@@ -74,10 +76,12 @@ public static class Program
         UserAppXamlPath = ParseFlag(args, "--user-appxaml");
         Boot("Main: user-appxaml = " + (UserAppXamlPath ?? "<none>"));
         StageUserPri();
+#if SURFACE_BENCHMARKS
         BenchmarkMode = args.Any(a => string.Equals(a, "--benchmark", StringComparison.OrdinalIgnoreCase));
         Boot("Main: benchmark = " + BenchmarkMode);
         WgcMode = args.Any(a => string.Equals(a, "--wgc", StringComparison.OrdinalIgnoreCase));
         Boot("Main: wgc = " + WgcMode);
+#endif
         try
         {
             WinRT.ComWrappersSupport.InitializeComWrappers();
@@ -364,15 +368,17 @@ public partial class App : Application, IXamlMetadataProvider
             //    user resource dictionaries (framework defaults only). This stops a user previewing
             //    their own plain page from inheriting a bundled test app's implicit styles/types (e.g.
             //    the teal Button style). Only an EXPLICIT --user-dll loads that assembly's provider AND
-            //    resources. The offline self-test paths (--benchmark / --wgc) exercise TestUserApp's
-            //    custom control + resources, so they opt in EXPLICITLY here instead of relying on a
-            //    silent default.
+            //    resources. The offline self-test paths (--benchmark / --wgc, SurfaceBenchmarks builds
+            //    only) exercise TestUserApp's custom control + resources, so they opt in EXPLICITLY here
+            //    instead of relying on a silent default.
             var userDll = Program.UserDllPath;
+#if SURFACE_BENCHMARKS
             if (string.IsNullOrWhiteSpace(userDll) && (Program.BenchmarkMode || Program.WgcMode))
             {
                 userDll = Paths.TestUserAppDll;
                 Log($"No --user-dll supplied; benchmark/self-test path explicitly loads TestUserApp: {userDll}");
             }
+#endif
 
             if (!string.IsNullOrWhiteSpace(userDll))
             {
@@ -416,6 +422,7 @@ public partial class App : Application, IXamlMetadataProvider
                 EstablishFrameworkOnlyResourceScope();
             }
 
+#if SURFACE_BENCHMARKS
             // 3) Either run an offline benchmark (S5 Part 1 latency, or Part 2 WGC probe), or serve frames.
             if (Program.WgcMode)
             {
@@ -432,6 +439,7 @@ public partial class App : Application, IXamlMetadataProvider
                 Program.Boot("StartServer: benchmark started");
                 return;
             }
+#endif
 
             _server = new FrameServer(_renderHost);
             _server.Start();
@@ -445,6 +453,7 @@ public partial class App : Application, IXamlMetadataProvider
         }
     }
 
+#if SURFACE_BENCHMARKS
     /// <summary>
     /// Runs the offline S5 latency benchmark on the UI thread, then exits. Fire-and-forget from
     /// <see cref="StartServer"/>: <see cref="OnLaunched"/> returns, the WinUI message loop keeps
@@ -487,6 +496,7 @@ public partial class App : Application, IXamlMetadataProvider
             Environment.Exit(0);
         }
     }
+#endif
 
     /// <summary>
     /// Flattens an exception and its <see cref="Exception.InnerException"/> chain into
