@@ -445,6 +445,77 @@ internal static partial class Program
         }
     }
 
+    // ---------------------------------------------------------------- huge canvas
+
+    // Nothing caps the canvas (a SetCanvasSize preset or the page's own Width/Height); only the output scale is
+    // clamped. A canvas far beyond GPU texture limits must still answer with a Frame or a clean Error, and the
+    // surface must keep rendering afterwards. Observed: RenderTargetBitmap scales any capture down to at most
+    // 4096 px per side (aspect kept), so huge canvases come back small and fast; native mode just re-hosts.
+    private static async Task HugeCanvas(Session s)
+    {
+        var small = PageXaml("<Border Background=\"Teal\"/>", "Width=\"320\" Height=\"200\"");
+        var f = await s.NextFrame(() => s.Client.LoadXaml(small, 400, 300, 1.0), TimeSpan.FromSeconds(30));
+        Check("BEH-K0 baseline renders", f != null, Dims(f));
+
+        async Task<string> Outcome(Action send)
+        {
+            s.TakeErrors();
+            int before;
+            lock (s.Frames) before = s.Frames.Count;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            send();
+            while (sw.Elapsed < TimeSpan.FromSeconds(90))
+            {
+                lock (s.Frames)
+                {
+                    if (s.Frames.Count > before) return $"frame {Dims(s.Frames[before])} in {sw.ElapsedMilliseconds} ms";
+                }
+
+                var e = s.TakeErrors();
+                if (e.Length > 0) return $"error '{e[0]}' in {sw.ElapsedMilliseconds} ms";
+                if (s.Client.IsFaulted) return "client faulted";
+                await Task.Delay(100);
+            }
+
+            return "no answer in 90 s";
+        }
+
+        bool Answered(string o) => o.StartsWith("frame") || o.StartsWith("error");
+
+        foreach (var (code, what, send, reset) in new (string, string, Action, Action?)[]
+        {
+            ("BEH-K1", "100000x100000 preset", () => { s.Client.SetCanvasSize(100000, 100000); s.Client.UpdateXaml(small); }, () => s.Client.SetCanvasSize(0, 0)),
+            ("BEH-K2", "100000x100000 page", () => s.Client.UpdateXaml(PageXaml("<Border Background=\"Teal\"/>", "Width=\"100000\" Height=\"100000\"")), null),
+            ("BEH-K3", "20000x20 page at 2x", () => s.Client.UpdateXaml(PageXaml("<Border Background=\"Teal\"/>", "Width=\"20000\" Height=\"20\"")), null),
+        })
+        {
+            // Resize re-renders the current page, so take that frame before measuring the 2x case.
+            if (code == "BEH-K3") await s.NextFrame(() => s.Client.Resize(400, 300, 2.0), TimeSpan.FromSeconds(30));
+            var o = await Outcome(send);
+            Console.WriteLine($"  {what}: {o}");
+            Check(code + " " + what + " answers with a Frame or an Error", Answered(o), o);
+            reset?.Invoke();
+            if (code == "BEH-K3") await s.NextFrame(() => s.Client.Resize(400, 300, 1.0), TimeSpan.FromSeconds(30));
+            f = await s.NextFrame(() => s.Client.UpdateXaml(small), TimeSpan.FromSeconds(30));
+            Check(code + " surface still renders a normal page afterwards", f != null && f.DipWidth == 320 && f.DipHeight == 200, Dims(f));
+        }
+
+        // Native mode hosts a XAML island instead of capturing; a huge preset must still re-host or report.
+        var hwnd = await s.Host(PageXaml("<Grid Background=\"Teal\"/>", ""));
+        Check("BEH-K4 native baseline hosts", hwnd != null);
+        s.TakeErrors();
+        var t = s.Box.NextHwnd(TimeSpan.FromSeconds(60));
+        s.Client.SetCanvasSize(100000, 100000);
+        var re = await t;
+        var errs = s.TakeErrors();
+        Console.WriteLine($"  native 100000x100000 preset: {(re != null ? "re-hosted" : "no Hwnd")}; errors: {string.Join("; ", errs)}");
+        Check("BEH-K5 native huge preset re-hosts or reports an Error", re != null || errs.Length > 0, string.Join("; ", errs));
+        t = s.Box.NextHwnd(TimeSpan.FromSeconds(30));
+        s.Client.SetCanvasSize(0, 0);
+        Check("BEH-K6 native auto restores after a huge preset", await t != null);
+        Check("BEH-K7 client never faulted", !s.Client.IsFaulted);
+    }
+
     // ---------------------------------------------------------------- matched-host PRI
 
     private static string? s_behMatchedHost;

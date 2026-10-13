@@ -182,6 +182,7 @@ namespace WinUIXamlPreview.UITest
                     ("app.xaml merged sources", AppXamlMergedSources),
                     ("never-settling page", NeverSettlingPage),
                     ("malformed payloads", MalformedPayloads),
+                    ("huge canvas", HugeCanvas),
                     ("matched-host PRI", MatchedHostPri),
                 })
                 {
