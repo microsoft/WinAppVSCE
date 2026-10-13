@@ -171,6 +171,10 @@ export async function getWebviewFrame(page: Page): Promise<FrameLocator> {
  * The frame-tree walk is identical for every webview this extension renders;
  * only the "is it ready" signal differs, so the manifest editor and the
  * DevTools panel share this and pass their own root selector.
+ *
+ * `timeout` applies to each phase separately rather than to the pair. Sharing
+ * one budget means a slow frame appearance eats the rendering budget, which is
+ * a silent regression on a loaded CI runner.
  */
 export async function getWebviewFrameWaitingFor(
     page: Page,
@@ -198,7 +202,7 @@ export async function getWebviewFrameWaitingFor(
 
     await innerFrame.locator(readySelector).waitFor({
         state: 'visible',
-        timeout: Math.max(5_000, deadline - Date.now()),
+        timeout,
     });
 
     return innerFrame;
