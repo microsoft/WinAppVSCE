@@ -156,8 +156,10 @@ namespace WinUIXamlPreview.Smoke
             var source = Path.GetDirectoryName(surfaceExe)!;
             var before = WinUISurface.Shared.HostPayload.Hash(Path.Combine(source, "Surface.pri"));
             string? firstRun = null, secondRun = null;
-            using (var first = CreateClient(surfaceExe, null, Console.Error.WriteLine))
-            using (var second = CreateClient(surfaceExe, null, Console.Error.WriteLine))
+            var logs = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            Action<string> log = line => { logs.Enqueue(line); Console.Error.WriteLine(line); };
+            using (var first = CreateClient(surfaceExe, null, log))
+            using (var second = CreateClient(surfaceExe, null, log))
             {
                 var firstFrames = new FrameBox(first);
                 var secondFrames = new FrameBox(second);
@@ -175,11 +177,16 @@ namespace WinUIXamlPreview.Smoke
                 Check("actual --user-pri staged second run", WinUISurface.Shared.HostPayload.Hash(Path.Combine(secondRun, "Surface.pri")) ==
                     WinUISurface.Shared.HostPayload.Hash(Path.Combine(source, "Surface.designtime.pri")));
             }
-            // Dispose reaps the process and deletes run copies on a background task (T5), so poll.
-            var disposeDeadline = DateTime.UtcNow.AddSeconds(15);
-            while ((Directory.Exists(firstRun) || Directory.Exists(secondRun)) && DateTime.UtcNow < disposeDeadline)
+            // Dispose reaps the process and deletes run copies on a background task (T5), so poll. Either outcome
+            // is correct: deleted, or still file-locked (AV scan, slow image unload) and handed to the next
+            // session's SweepRunRoot with a "cleanup deferred" log. What must never happen is silence.
+            bool Settled(string dir) => !Directory.Exists(dir) || logs.Any(l => l.Contains("cleanup deferred") && l.Contains(dir));
+            var disposeDeadline = DateTime.UtcNow.AddSeconds(30);
+            while (!(Settled(firstRun!) && Settled(secondRun!)) && DateTime.UtcNow < disposeDeadline)
                 await Task.Delay(100);
-            Check("private run directories disposed", !Directory.Exists(firstRun) && !Directory.Exists(secondRun));
+            var deferred = new[] { firstRun!, secondRun! }.Count(Directory.Exists);
+            Check("private run directories disposed or deferred to the sweep", Settled(firstRun!) && Settled(secondRun!));
+            Console.WriteLine(deferred == 0 ? "        both deleted" : $"        {deferred} deferred (locked); reclaimed by the next sweep");
             Check("pristine input PRI unchanged after actual launches", WinUISurface.Shared.HostPayload.Hash(Path.Combine(source, "Surface.pri")) == before);
             WinUISurface.Shared.HostPayload.Validate(source);
             Check("all pristine input hashes unchanged", true);

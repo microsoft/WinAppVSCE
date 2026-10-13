@@ -97,8 +97,7 @@ try {
         $smoke = "$root\vs-extension\SurfaceClient.Smoke\bin\x64\Debug\net472\SurfaceClient.Smoke.exe"
         if (-not (Test-Path $smoke)) { throw "Run vs-extension\Test-Migration.ps1 first." }
         $saved = @{}
-        foreach ($name in @("WINUI_SURFACE_EXE", "WINUI_SURFACE_USER_PRI", "WINUI_GALLERY_PAGE", "SURFACE_GUARDS",
-            "SURFACE_RENDER_SETTLE")) {
+        foreach ($name in @("WINUI_SURFACE_EXE", "WINUI_SURFACE_USER_PRI", "WINUI_GALLERY_PAGE", "SURFACE_GUARDS")) {
             $saved[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
             [Environment]::SetEnvironmentVariable($name, $null, "Process")
         }

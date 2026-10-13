@@ -53,8 +53,8 @@ public sealed class NoDefaultCtorViewModel
     public string Title { get; }
 }
 
-/// <summary>A control that keeps the UI thread busy forever (an auto-advancing carousel, a clock), for the
-/// opt-in render-settle sweep (SURFACE_RENDER_SETTLE=1) to stop.</summary>
+/// <summary>A control that keeps the UI thread busy forever (an auto-advancing carousel, a clock); the preview must
+/// still render pages that contain it.</summary>
 public sealed class TickerControl : Control
 {
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(16) };

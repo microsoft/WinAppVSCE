@@ -34,7 +34,6 @@ namespace WinUIXamlPreview.Protocol
         private readonly string? _userDll;
         private readonly string? _userAppXaml;
         private readonly string? _userPri;
-        private readonly bool _renderSettle;
         private readonly string? _theme;
         private readonly Action<string> _log;
 
@@ -61,13 +60,12 @@ namespace WinUIXamlPreview.Protocol
         private int _faulted;
         private volatile bool _intentionalStop;
 
-        public SurfaceClient(string surfaceExe, string? userDll, Action<string> log, string? userAppXaml = null, string? theme = null, bool renderSettle = false, string? userPri = null)
+        public SurfaceClient(string surfaceExe, string? userDll, Action<string> log, string? userAppXaml = null, string? theme = null, string? userPri = null)
         {
             _surfaceExe = surfaceExe;
             _userDll = userDll;
             _userAppXaml = userAppXaml;
             _userPri = userPri;
-            _renderSettle = renderSettle;
             _theme = theme;
             _log = log ?? (_ => { });
         }
@@ -170,12 +168,6 @@ namespace WinUIXamlPreview.Protocol
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
-
-            // Coverage-hardening P3: the design-time render-settle sweep is likewise a launch-time opt-in — the
-            // surface reads SURFACE_RENDER_SETTLE once at startup. It is off unless explicitly requested so the
-            // certified default render path (which never runs the sweep) stays byte-for-byte unchanged. Set
-            // explicitly so an inherited value from the VS process can never leak in.
-            psi.EnvironmentVariables["SURFACE_RENDER_SETTLE"] = _renderSettle ? "1" : "0";
 
             // Theme preview is likewise a launch-time decision: the surface reads SURFACE_THEME once at
             // startup and sets the app-global Application.RequestedTheme (the only mechanism that re-resolves

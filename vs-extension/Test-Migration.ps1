@@ -76,8 +76,7 @@ New-Item -ItemType Directory -Path $run -Force | Out-Null
 Copy-Item "$raw\*" $run -Recurse -Force
 $saved = @{}
 # Keep baseline unguarded and prevent inherited external Gallery opt-in.
-foreach ($name in @("WINUI_SURFACE_EXE", "WINUI_SURFACE_USER_PRI", "WINUI_GALLERY_PAGE", "SURFACE_GUARDS",
-    "SURFACE_RENDER_SETTLE")) {
+foreach ($name in @("WINUI_SURFACE_EXE", "WINUI_SURFACE_USER_PRI", "WINUI_GALLERY_PAGE", "SURFACE_GUARDS")) {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
     [Environment]::SetEnvironmentVariable($name, $null, "Process")
 }

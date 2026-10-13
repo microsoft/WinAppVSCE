@@ -84,7 +84,7 @@ runs, and there is no app `Window`.
 The approximated cases are logged once per render as `FIDELITY:` lines in
 `preview.log` (`Surface/FidelityNotes.cs`). The off-screen frame-stream path
 (`RenderTargetBitmap`) is not used by the VS preview; it cannot capture
-backdrops and only settles forever-storyboards when `SURFACE_RENDER_SETTLE=1`.
+backdrops.
 
 ## Provisioner CLI contract (v1)
 

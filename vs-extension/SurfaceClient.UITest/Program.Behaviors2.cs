@@ -8,7 +8,7 @@ using WinUIXamlPreview.Protocol;
 
 namespace WinUIXamlPreview.UITest;
 
-/// <summary>Behaviours lane, part 2: root element types, resource lookup order, App.xaml failure and render settle.</summary>
+/// <summary>Behaviours lane, part 2: root element types, resource lookup order, App.xaml failure and never-settling pages.</summary>
 internal static partial class Program
 {
     private static string s_behSurface = "";
@@ -195,9 +195,9 @@ internal static partial class Program
         }
     }
 
-    private static Task<Session> OpenWith(string? appXaml, bool renderSettle = false) => Open(s_behSurface, s_behUserDll, appXaml, renderSettle);
+    private static Task<Session> OpenWith(string? appXaml) => Open(s_behSurface, s_behUserDll, appXaml);
 
-    // ---------------------------------------------------------------- render settle
+    // ---------------------------------------------------------------- never-settling pages
 
     private const string ChurnPage =
         "<StackPanel>\n" +
@@ -207,26 +207,17 @@ internal static partial class Program
         "      <DoubleAnimation Storyboard.TargetName=\"Spin\" Storyboard.TargetProperty=\"(UIElement.RenderTransform).(RotateTransform.Angle)\" From=\"0\" To=\"360\" Duration=\"0:0:1\"/>\n" +
         "    </Storyboard></BeginStoryboard></EventTrigger></Rectangle.Triggers>\n" +
         "  </Rectangle>\n" +
-        "  <fx:TickerControl/>\n" + // user code with a running DispatcherTimer: what the settle sweep stops
+        "  <fx:TickerControl/>\n" + // user code with a DispatcherTimer that never stops
         "  <ProgressRing IsActive=\"True\" Width=\"40\" Height=\"40\"/>\n" +
         "  <ProgressBar IsIndeterminate=\"True\" Width=\"100\"/>\n" +
         "</StackPanel>";
 
-    private static async Task RenderSettle(Session s)
+    private static async Task NeverSettlingPage(Session s)
     {
         var f = await s.NextFrame(() => s.Client.LoadXaml(PageXaml(ChurnPage), 400, 300, 1.0), TimeSpan.FromSeconds(30));
-        Check("BEH-RT1 forever animation page renders (settle off)", f != null, string.Join("; ", s.TakeErrors()));
+        Check("BEH-RT1 forever animation + running timer page renders", f != null, string.Join("; ", s.TakeErrors()));
         f = await s.NextFrame(() => s.Client.UpdateXaml(PageXaml(ChurnPage.Replace("Teal", "Navy"))), TimeSpan.FromSeconds(30));
         Check("BEH-RT2 re-render of a churning page still completes", f != null);
-        Check("BEH-RT3 settle sweep is off by default", !s.Logs.Any(l => l.Contains("SETTLE:")));
-
-        // SurfaceClient owns SURFACE_RENDER_SETTLE (it always writes 1/0 into the child env), so opt in via the ctor.
-        using var on = await OpenWith(null, renderSettle: true);
-        f = await on.NextFrame(() => on.Client.LoadXaml(PageXaml(ChurnPage), 400, 300, 1.0), TimeSpan.FromSeconds(30));
-        Check("BEH-RT4 forever animation page renders (settle on)", f != null, string.Join("; ", on.TakeErrors()));
-        Check("BEH-RT5 settle sweep stopped the user DispatcherTimer",
-            await on.WaitLog(l => l.Contains("SETTLE:") && !l.Contains("stopped 0 timer"), TimeSpan.FromSeconds(5)),
-            on.Logs.FirstOrDefault(l => l.Contains("SETTLE:")) ?? "no SETTLE log");
-        Check("BEH-RT6 settle on: surface alive", await Alive(on));
+        Check("BEH-RT3 churning page: surface alive", await Alive(s));
     }
 }

@@ -489,17 +489,6 @@ internal sealed class RenderHost
         host.UpdateLayout();
         await PumpFramesAsync(4);
 
-        // P3 (coverage hardening): stop self-perpetuating UI-thread churn (auto-advance DispatcherTimers,
-        // forever-storyboards) so animation/nav pages settle to a representative frame instead of timing out.
-        // OPT-IN ONLY (SURFACE_RENDER_SETTLE=1): the sweep walks the live tree, and that extra UI-thread work
-        // can shift frame-capture timing on pages that already render fine, so it never runs on the certified
-        // default (leg A) path. When enabled, one more short pump lets the now-quiet tree reach a stable frame.
-        if (App.RenderSettleEnabled)
-        {
-            RenderSettle.Quiesce(root, App.Log);
-            await PumpFramesAsync(2);
-        }
-
         if (timings is not null) timings.LayoutMs = ElapsedMs(tLayout);
 
         // ---------------- capture phase ----------------
@@ -928,16 +917,6 @@ internal sealed class RenderHost
                 {
                     if (!ReferenceEquals(stage.Children[i], newRoot)) { stage.Children.RemoveAt(i); }
                 }
-            }
-
-            // P3 (coverage hardening): quiesce self-perpetuating churn on the live-hosted page too, so an
-            // auto-advancing/animating page settles in the native design surface instead of hanging the host.
-            // OPT-IN ONLY (SURFACE_RENDER_SETTLE=1) — the tree-walk is extra UI-thread work that can perturb
-            // an already-OK live page's capture timing, so the certified live path for the OK pages must not
-            // run it by default. The mechanism stays proven via the smoke test, which sets the flag.
-            if (App.RenderSettleEnabled)
-            {
-                RenderSettle.Quiesce(root, App.Log);
             }
 
             FidelityNotes.Log(root, App.Log);

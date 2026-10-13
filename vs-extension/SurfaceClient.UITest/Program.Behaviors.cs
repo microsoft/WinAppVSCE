@@ -128,10 +128,10 @@ namespace WinUIXamlPreview.UITest
             }
         }
 
-        private static async Task<Session> Open(string surfaceExe, string? userDll, string? appXaml, bool renderSettle = false)
+        private static async Task<Session> Open(string surfaceExe, string? userDll, string? appXaml)
         {
             var s = new Session();
-            s.Client = new SurfaceClient(surfaceExe, userDll, line => { s.Logs.Enqueue(line); Console.Error.WriteLine("  " + line); }, appXaml, "Light", renderSettle)
+            s.Client = new SurfaceClient(surfaceExe, userDll, line => { s.Logs.Enqueue(line); Console.Error.WriteLine("  " + line); }, appXaml, "Light")
             {
                 SampleData = true,
             };
@@ -176,7 +176,7 @@ namespace WinUIXamlPreview.UITest
                     ("resources", Resources),
                     ("app.xaml failures", AppXamlFailures),
                     ("app.xaml merged sources", AppXamlMergedSources),
-                    ("render settle", RenderSettle),
+                    ("never-settling page", NeverSettlingPage),
                 })
                 {
                     Console.WriteLine("== " + name);

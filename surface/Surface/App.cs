@@ -716,19 +716,6 @@ public partial class App : Application, IXamlMetadataProvider
     }
 
     /// <summary>
-    /// Coverage-hardening P3: opt-in for the design-time RENDER-SETTLE sweep (env <c>SURFACE_RENDER_SETTLE=1</c>).
-    /// When set, <see cref="RenderSettle.Quiesce"/> runs after a page mounts to stop self-perpetuating UI-thread
-    /// churn (auto-advance <c>DispatcherTimer</c>s, forever-storyboards) so an animation/nav page can settle to a
-    /// representative frame. It is OFF by default because the sweep walks the live visual tree, and that extra
-    /// UI-thread work can perturb the frame-capture timing of pages that already render fine (it shifted the
-    /// async-load race on a model page during coverage measurement). Keeping it opt-in guarantees the certified
-    /// default (leg A) render path is byte-for-byte unchanged; the mechanism stays proven via the smoke test,
-    /// which sets this flag. Never reached on the certified default path.
-    /// </summary>
-    internal static bool RenderSettleEnabled { get; } =
-        string.Equals(Environment.GetEnvironmentVariable("SURFACE_RENDER_SETTLE"), "1", StringComparison.Ordinal);
-
-    /// <summary>
     /// Copies the user assembly's loose compiled-XAML tree next to this host's executable so that
     /// <c>ms-appx:///…/*.xaml</c> resolves (via the unpackaged file-system fallback) when a custom control
     /// calls <c>InitializeComponent()</c> AND when Layer 2 merges the user's resource dictionaries.
