@@ -151,6 +151,50 @@ internal static partial class Program
         }
     }
 
+    // App.xaml MergedDictionaries with Source=: the compiler's app-relative shorthand must be normalized to
+    // ms-appx:/// before the design-time load, and when the full load fails the per-Source fallback must still
+    // merge the dictionaries. Points at the fixture's compiled Themes\Styles.xaml (staged as ms-appx:///TestFixtureApp/…).
+    private static async Task AppXamlMergedSources(Session ignored)
+    {
+        const string ns = "xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"";
+        static string App(string merged, string inline = "") =>
+            $"<Application {ns}><Application.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries>{merged}</ResourceDictionary.MergedDictionaries>{inline}</ResourceDictionary></Application.Resources></Application>";
+
+        var dir = Path.Combine(Path.GetTempPath(), "wxp-apps-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var probe = PageXaml("<TextBlock Text=\"x\" Style=\"{StaticResource FixtureHeaderStyle}\"/>");
+            foreach (var (code, content, needles) in new (string, string, string[])[]
+            {
+                ("BEH-A5 leading-slash Source", App("<ResourceDictionary Source=\"/TestFixtureApp/Themes/Styles.xaml\"/>"),
+                    new[] { "Normalized 1 app-relative dictionary Source", "Merged app resource scope from App.xaml: 1 merged dict(s)" }),
+                ("BEH-A6 bare relative Source", App("<ResourceDictionary Source=\"TestFixtureApp/Themes/Styles.xaml\"/>"),
+                    new[] { "Normalized 1 app-relative dictionary Source", "Merged app resource scope from App.xaml: 1 merged dict(s)" }),
+                ("BEH-A7 absolute ms-appx Source", App("<ResourceDictionary Source=\"ms-appx:///TestFixtureApp/Themes/Styles.xaml\"/>"),
+                    new[] { "Merged app resource scope from App.xaml: 1 merged dict(s)" }),
+                ("BEH-A8 full load fails → per-Source fallback", App("<ResourceDictionary Source=\"/TestFixtureApp/Themes/Styles.xaml\"/>", "<NoSuchType x:Key=\"k\"/>"),
+                    new[] { "Falling back to per-Source merge", "Merged app dictionary (fallback): ms-appx:///TestFixtureApp/Themes/Styles.xaml" }),
+            })
+            {
+                var path = Path.Combine(dir, code.Substring(4, 2) + ".xaml");
+                File.WriteAllText(path, content);
+                Console.WriteLine("-- " + code);
+                using var s = await OpenWith(path);
+                var f = await s.NextFrame(() => s.Client.LoadXaml(probe, 400, 300, 1.0), TimeSpan.FromSeconds(30));
+                Check(code + ": page using a key from the Source dictionary renders", f != null, string.Join("; ", s.TakeErrors()));
+                foreach (var needle in needles)
+                {
+                    Check(code + ": logged '" + needle + "'", await s.WaitLog(l => l.Contains(needle), TimeSpan.FromSeconds(5)), needle);
+                }
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
     private static Task<Session> OpenWith(string? appXaml, bool renderSettle = false) => Open(s_behSurface, s_behUserDll, appXaml, renderSettle);
 
     // ---------------------------------------------------------------- render settle

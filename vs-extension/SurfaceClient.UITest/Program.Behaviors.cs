@@ -175,6 +175,7 @@ namespace WinUIXamlPreview.UITest
                     ("root types", RootTypes),
                     ("resources", Resources),
                     ("app.xaml failures", AppXamlFailures),
+                    ("app.xaml merged sources", AppXamlMergedSources),
                     ("render settle", RenderSettle),
                 })
                 {

@@ -106,6 +106,28 @@ namespace WinUIXamlPreview.FaultTests
                     try { while (reader.ReadLine() != null) { } } catch { }
                     return 0;
 
+                case "ready-malformed":
+                    // Ready with a wrong-typed field: the handshake can't be trusted, so the client must fail fast.
+                    writer.WriteLine("{\"type\":\"Ready\",\"protocol\":\"one\",\"caps\":\"frame-stream\"}");
+                    try { while (reader.ReadLine() != null) { } } catch { }
+                    return 0;
+
+                case "ready-then-garbage":
+                    SendReady(writer);
+                    // Junk a buggy/older surface (or stray diagnostics) could put on the wire after Ready:
+                    // non-JSON, non-object JSON, no type, unknown type, and known types with wrong field shapes.
+                    writer.WriteLine("this is not json");
+                    writer.WriteLine("[1,2,3]");
+                    writer.WriteLine("{\"no\":\"type\"}");
+                    writer.WriteLine("{\"type\":\"Bogus\",\"x\":1}");
+                    writer.WriteLine("{\"type\":\"Error\",\"phase\":5,\"message\":[]}");
+                    writer.WriteLine("{\"type\":\"Selected\",\"id\":\"not-a-number\"}");
+                    writer.WriteLine("{\"type\":\"Frame\",\"width\":\"wide\",\"png\":42}");
+                    // A well-formed message afterwards proves the read loop survived.
+                    writer.WriteLine("{\"type\":\"Error\",\"phase\":\"parse\",\"message\":\"after garbage\"}");
+                    try { while (reader.ReadLine() != null) { } } catch { }
+                    return 0;
+
                 case "never-ready":
                     // Connected, but Ready never arrives — exercises the Ready timeout.
                     Thread.Sleep(Timeout.Infinite);
@@ -164,6 +186,8 @@ namespace WinUIXamlPreview.FaultTests
             LegacyReadyIsAccepted();
             NewerCompatibleRangeIsAcceptedWithWasdk();
             RenderErrorIsNotAProtocolFault();
+            GarbageAfterReadyIsIgnored();
+            MalformedReadyFaultsFast();
             NoLeakedFakeSurfacesRemain();
 
             Console.WriteLine();
@@ -422,6 +446,34 @@ namespace WinUIXamlPreview.FaultTests
             Assert(name,
                 gotError && !h.Client.IsFaulted && !h.Client.IsProtocolMismatch && h.ClosedCount == 0,
                 $"errorEvents={h.ErrorCount}, faulted={h.Client.IsFaulted}, mismatch={h.Client.IsProtocolMismatch}, closed={h.ClosedCount}");
+        }
+
+        private static void GarbageAfterReadyIsIgnored()
+        {
+            const string name = "malformed/unknown/mis-shaped messages after Ready are ignored; the next valid message still arrives";
+            using var h = new Harness("ready-then-garbage");
+            try { h.Client.StartAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult(); }
+            catch (Exception ex) { Fail(name, $"expected Ready, got {ex.GetType().Name}: {ex.Message}"); return; }
+
+            var gotError = h.WaitForError(TimeSpan.FromSeconds(3));
+            Thread.Sleep(200);
+            Assert(name,
+                gotError && !h.Client.IsFaulted && h.ClosedCount == 0,
+                $"errorEvents={h.ErrorCount}, faulted={h.Client.IsFaulted}, closed={h.ClosedCount}, reason='{h.ClosedReason}'");
+        }
+
+        private static void MalformedReadyFaultsFast()
+        {
+            const string name = "malformed Ready → StartAsync fails fast (no timeout wait), one Closed";
+            using var h = new Harness("ready-malformed");
+            var sw = Stopwatch.StartNew();
+            var threw = false;
+            try { h.Client.StartAsync(TimeSpan.FromSeconds(20)).GetAwaiter().GetResult(); }
+            catch (Exception) { threw = true; }
+            var elapsed = sw.ElapsedMilliseconds;
+            var closed = h.WaitForClosed(1, TimeSpan.FromSeconds(3));
+            Assert(name, threw && elapsed < 10000 && closed && h.ClosedCount == 1,
+                $"threw={threw}, elapsed={elapsed}ms, closed={h.ClosedCount}");
         }
 
         private static void NoLeakedFakeSurfacesRemain()

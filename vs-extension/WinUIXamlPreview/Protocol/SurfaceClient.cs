@@ -342,7 +342,16 @@ namespace WinUIXamlPreview.Protocol
 
                 foreach (var line in _decoder.Push(buffer, n))
                 {
-                    Dispatch(line);
+                    try
+                    {
+                        Dispatch(line);
+                    }
+                    catch (JsonException ex) when (_ready?.Task.Status == TaskStatus.RanToCompletion)
+                    {
+                        // After a successful handshake, one mis-shaped message (wrong field types) must not tear
+                        // down a healthy connection. Before Ready it still faults fast instead of waiting out the timeout.
+                        _log($"Ignoring malformed message from surface ({ex.Message}): {(line.Length > 200 ? line.Substring(0, 200) + "…" : line)}");
+                    }
                 }
             }
 
