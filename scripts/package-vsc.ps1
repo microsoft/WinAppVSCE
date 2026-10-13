@@ -267,6 +267,15 @@ try
     $CreatedVsix = Get-ChildItem -Path $OutputPath -Filter "winapp-*.vsix" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
     if ($CreatedVsix) {
+        # Fail loudly if packaging dropped part of the CLI payload (the DevTools
+        # engine needs sidecar files that only fail at runtime when missing).
+        $VerifyScript = Join-Path $PSScriptRoot "verify-vsix-payload.ps1"
+        & $VerifyScript -VsixPath $CreatedVsix.FullName -BinPath $VscBinPath
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "VSIX payload verification failed; the package is incomplete."
+            exit 1
+        }
+
         $VsixSize = [math]::Round($CreatedVsix.Length / 1MB, 2)
         Write-Host ""
         Write-Host "[SUCCESS] VS Code extension packaged successfully!" -ForegroundColor Green
