@@ -187,56 +187,51 @@ internal sealed partial class XamlLanguageServer
         TextDocument doc,
         int offset)
     {
-        if (FindResourceDeclarationAt(doc, offset) is null)
+        // What matters is the declaration the caret BINDS to, not whether it happens to sit on an x:Key: a usage that resolves in this document is exactly as private as the declaration it resolves to.
+        var declaration = FindResourceDeclarationAt(doc, offset);
+        if (declaration is null &&
+            doc.Parsed.Root is { } root &&
+            FindResourceKeyReferenceAt(doc, offset) is { } reference)
         {
+            declaration = FindResourceDeclarationForReference(
+                doc,
+                reference.Span.Start,
+                reference.Key,
+                XamlSemanticFacts.CreateResourceIndex(root, context?.TypeSystem));
+        }
+
+        if (declaration is null)
+        {
+            // Nothing here binds the key, so the declaration being renamed lives in another file.
             return CrossFileResourcePolicy.ReferencesAndDeclarations;
         }
 
-        return ResourcesAreVisibleProjectWide(context, currentUri)
+        return DocumentExposesResourcesToOtherFiles(context, UriToPath(currentUri), doc)
             ? CrossFileResourcePolicy.ReferencesOnly
             : CrossFileResourcePolicy.None;
     }
 
-    /// <summary>True when other documents can resolve this document's resource declarations — it is App.xaml or a dictionary merged into it.</summary>
-    private bool ResourcesAreVisibleProjectWide(XamlProjectContext? context, string currentUri)
+    /// <summary>True when other documents can bind to the resources this one declares: App.xaml, or a standalone ResourceDictionary that some file merges. A Page, Window or UserControl keeps its resources to itself.</summary>
+    private bool DocumentExposesResourcesToOtherFiles(
+        XamlProjectContext? context,
+        string? path,
+        TextDocument doc)
     {
-        if (context == null)
-        {
-            return false;
-        }
-
-        if (TryGetProjectWideResourceFiles(context) is not { } projectWideFiles)
+        if (doc.Parsed.Root is { } root &&
+            XamlSemanticFacts.IsResourceDictionaryRoot(root, context?.TypeSystem))
         {
             return true;
         }
 
-        return UriToPath(currentUri) is { } path && projectWideFiles.Contains(CanonicalizePath(path));
-    }
-
-    /// <summary>Canonical paths of the XAML reachable from App.xaml — the only files whose resource declarations other documents can bind to. Null means the graph is unavailable, so nothing should be restricted on its say-so.</summary>
-    private HashSet<string>? TryGetProjectWideResourceFiles(XamlProjectContext? context)
-    {
-        if (context == null)
+        if (context == null || path == null)
         {
-            return null;
+            return false;
         }
 
         try
         {
-            var resolution = context.Resolution;
-            var projectRoot = System.IO.Path.GetDirectoryName(resolution.ProjectPath);
-            if (FindAppXamlPath(resolution) is not { } appXaml || string.IsNullOrEmpty(projectRoot))
-            {
-                return null;
-            }
-
-            var files = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
-            foreach (var file in ReadResourceGraph(appXaml, projectRoot!, context.TypeSystem))
-            {
-                files.Add(CanonicalizePath(file.Path));
-            }
-
-            return files;
+            return FindAppXamlPath(context.Resolution) is { } appXaml &&
+                string.Equals(appXaml, CanonicalizePath(path), System.StringComparison.OrdinalIgnoreCase);
         }
         catch (OperationCanceledException)
         {
@@ -245,7 +240,7 @@ internal sealed partial class XamlLanguageServer
         catch (System.Exception ex)
         {
             System.Console.Error.WriteLine($"[winui-xaml-ls] resource visibility: {ex.Message}");
-            return null;
+            return false;
         }
     }
 
@@ -265,8 +260,6 @@ internal sealed partial class XamlLanguageServer
         var currentPath = UriToPath(currentUri) is { } cp ? CanonicalizePath(cp) : null;
         var cancellationToken = _requestCancellation.Value;
         var openDocuments = BuildOpenDocumentPathIndex();
-        // A page-local declaration in another file is a different resource object that merely shares a key, so only declarations other documents can actually bind to may be rewritten.
-        var projectWideFiles = includeDeclarations ? TryGetProjectWideResourceFiles(context) : null;
 
         foreach (var file in context.Resolution.XamlFiles)
         {
@@ -334,16 +327,20 @@ internal sealed partial class XamlLanguageServer
             }
 
             var fileOccurrences = new List<(Lsp.Range Range, bool IsDeclaration)>();
-            // A reference that resolves inside its own file belongs to that file's resource, not ours, so only unresolved ones can bind to the symbol being renamed.
+            var fileIndex = XamlSemanticFacts.CreateResourceIndex(fileRoot, context.TypeSystem);
+            // A page-local declaration elsewhere is a different resource that merely shares a key, so only a file that actually exposes its resources can own the one being renamed.
+            var fileOwnsResource = includeDeclarations &&
+                DocumentExposesResourcesToOtherFiles(context, canonicalFile, fileDoc);
             CollectResourceOccurrences(
                 fileRoot,
                 key,
                 fileDoc,
                 fileOccurrences,
-                onlyUnresolvedReferences: true,
-                resourceIndex: XamlSemanticFacts.CreateResourceIndex(fileRoot, context.TypeSystem),
-                includeDeclarations: includeDeclarations &&
-                    (projectWideFiles == null || projectWideFiles.Contains(canonicalFile)));
+                // When this file owns the resource its own usages bind to it and have to move with the declaration; otherwise only a reference that resolves nowhere locally can be bound to ours.
+                onlyUnresolvedReferences: !fileOwnsResource,
+                resourceIndex: fileIndex,
+                includeDeclarations: fileOwnsResource);
+
             visit(fileDoc, DedupeAndSort(fileOccurrences));
         }
     }

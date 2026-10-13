@@ -2,4 +2,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <SolidColorBrush x:Key="MergedAccentBrush" Color="#FF8B5CF6" />
+    <Style x:Key="MergedAccentTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource MergedAccentBrush}" />
+    </Style>
 </ResourceDictionary>

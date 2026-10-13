@@ -170,6 +170,14 @@ function assertPositiveCrossFileShape(refs, currentCount, why) {
   assertNoBuildOutput(refs, why);
 }
 
+// A key declared in <Page.Resources> is a distinct resource that merely shares a spelling with the App-level one, so nothing outside this buffer may appear.
+function assertDocumentPrivateShape(refs, currentCount, why) {
+  assert.strictEqual(countBase(refs, "App.xaml"), 0, `${why}: page-local key must not reach App.xaml`);
+  assert.strictEqual(countBase(refs, "DiPage.xaml"), 0, `${why}: page-local key must not reach DiPage.xaml`);
+  assert.strictEqual(currentRefs(refs).length, currentCount, `${why}: wrong current-buffer count`);
+  assertNoBuildOutput(refs, why);
+}
+
 function sortedSignature(refs) {
   return refs
     .map((r) => `${norm(r.fsPath)}:${r.line}:${r.character}:${r.endLine}:${r.endCharacter}`)
@@ -224,17 +232,21 @@ describe("WinUI XAML — red-team 79 (cross-file resource references)", function
     for (const [label, buffer, currentCount, total] of [
       ["StaticResource usage", page(`<Border Background="{StaticResource SmokeAccent|Brush}" />`), 1, 3],
       ["ThemeResource usage", page(`<Border Background="{ThemeResource SmokeAccent|Brush}" />`), 1, 3],
-      ["declaration", page([
-        "<Page.Resources>",
-        `  <SolidColorBrush x:Key="SmokeAccent|Brush" Color="Red" />`,
-        "</Page.Resources>",
-        `<Border Background="{StaticResource ${KEY}}" />`,
-      ].join("\n  ")), 2, 4],
     ]) {
       const refs = await referencesAt(buffer);
       assert.strictEqual(refs.length, total, `${label}: wrong total; got ${JSON.stringify(refs)}`);
       assertPositiveCrossFileShape(refs, currentCount, label);
     }
+
+    // A page-local declaration shadows the App-level key, so this caret is document-private and must stay off disk copies too.
+    const shadowed = await referencesAt(page([
+      "<Page.Resources>",
+      `  <SolidColorBrush x:Key="SmokeAccent|Brush" Color="Red" />`,
+      "</Page.Resources>",
+      `<Border Background="{StaticResource ${KEY}}" />`,
+    ].join("\n  ")));
+    assert.strictEqual(shadowed.length, 2, `shadowing declaration: wrong total; got ${JSON.stringify(shadowed)}`);
+    assertDocumentPrivateShape(shadowed, 2, "shadowing declaration");
   });
 
   it("uses the unsaved current buffer, not the stale on-disk SmokePage.xaml copy", async () => {
@@ -277,15 +289,43 @@ describe("WinUI XAML — red-team 79 (cross-file resource references)", function
     assertPositiveCrossFileShape(refs, 1, "cold direct LSP request");
   });
 
-  it("drives cross-file references from an x:Key declaration caret in the open buffer", async () => {
+  it("keeps a page-local x:Key declaration caret inside its own document", async () => {
     const refs = await referencesAt(page([
       "<Page.Resources>",
       `  <SolidColorBrush x:Key="SmokeAccent|Brush" Color="Red" />`,
       "</Page.Resources>",
       `<Border Background="{StaticResource ${KEY}}" />`,
     ].join("\n  ")));
-    assert.strictEqual(refs.length, 4, `declaration caret should find local declaration+usage plus App declaration+DiPage usage; got ${JSON.stringify(refs)}`);
-    assertPositiveCrossFileShape(refs, 2, "declaration-side search");
+    assert.strictEqual(refs.length, 2, `a page-local declaration owns only its own buffer's declaration+usage; got ${JSON.stringify(refs)}`);
+    assertDocumentPrivateShape(refs, 2, "page-local declaration caret");
+  });
+
+  // The mirror of the declaration-side rule: a usage that binds to a page-local declaration is just as private as that declaration.
+  it("keeps a usage that resolves to a page-local declaration inside its own document", async () => {
+    const refs = await referencesAt(page([
+      "<Page.Resources>",
+      `  <SolidColorBrush x:Key="${KEY}" Color="Red" />`,
+      "</Page.Resources>",
+      `<Border Background="{StaticResource SmokeAccent|Brush}" />`,
+    ].join("\n  ")));
+    assert.strictEqual(refs.length, 2, `a locally-bound usage must not reach App.xaml or DiPage; got ${JSON.stringify(refs)}`);
+    assertDocumentPrivateShape(refs, 2, "locally-bound usage caret");
+  });
+
+  // A usage that binds nowhere locally does resolve to the App-level declaration, so that file's own usages of it travel with it.
+  it("reaches the App-level declaration only when nothing local binds the key", async () => {
+    const refs = await referencesAt(page(`<Border Background="{StaticResource SmokeAccent|Brush}" />`));
+    assert.strictEqual(refs.length, 3, `unbound usage should reach buffer + App + DiPage; got ${JSON.stringify(refs)}`);
+    assertPositiveCrossFileShape(refs, 1, "unbound usage caret");
+  });
+
+  // A dictionary that owns the key also owns its own usages of it, so they have to travel with the declaration rather than be skipped for resolving locally.
+  it("carries an owning dictionary's internal usages along with its declaration", async () => {
+    const refs = await referencesAt(page(`<Border Background="{StaticResource MergedAccent|Brush}" />`));
+    assert.strictEqual(countBase(refs, "MergedResources.xaml"), 2, `expected the dictionary's declaration AND its own Setter usage; got ${JSON.stringify(refs)}`);
+    assert.strictEqual(currentRefs(refs).length, 1, "expected the current-buffer usage");
+    assert.strictEqual(refs.length, 3, `got ${JSON.stringify(refs)}`);
+    assertNoBuildOutput(refs, "owning dictionary internal usage");
   });
 
   it("keeps x:Name document-scoped even when another project file has the same name", async () => {

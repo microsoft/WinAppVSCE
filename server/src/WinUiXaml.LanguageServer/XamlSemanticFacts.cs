@@ -606,6 +606,12 @@ internal static class XamlSemanticFacts
         }
     }
 
+    /// <summary>True when the document root is a standalone ResourceDictionary, whose top-level declarations are visible to every file that merges it.</summary>
+    internal static bool IsResourceDictionaryRoot(
+        XamlElement root,
+        XamlTypeSystem? typeSystem) =>
+        IsResourceDictionaryScope(root, typeSystem);
+
     private static bool IsResourceDictionaryScope(
         XamlElement element,
         XamlTypeSystem? typeSystem)
