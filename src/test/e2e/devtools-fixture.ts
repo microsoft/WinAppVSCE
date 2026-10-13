@@ -24,12 +24,16 @@ const FIXTURE_EXE = 'DevToolsFixtureApp.exe';
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 
 /**
- * Whether the winapp CLI in bin/ supports `winapp run --devtools`.
+ * Whether the winapp CLI in bin/ supports `winapp run --devtools <mode>`.
  *
  * DevTools is not in a stable CLI release yet, so CI downloads a build without
  * it and every DevTools launch fails with "Unrecognized argument: '--devtools'".
  * Probing lets those specs skip cleanly instead of reporting a product failure,
  * and they start running automatically once a CLI that supports it ships.
+ *
+ * The mode is part of the test: `--devtools` was a bare flag in earlier builds
+ * of the feature branch, and we no longer support that form. Matching the bare
+ * flag would let such a build start the suite and then fail at launch.
  */
 export function cliSupportsDevTools(): boolean {
     const arch = process.arch === 'arm64' ? 'win-arm64' : 'win-x64';
@@ -42,7 +46,7 @@ export function cliSupportsDevTools(): boolean {
         encoding: 'utf-8',
         timeout: 60_000,
     });
-    return (help.stdout ?? '').includes('--devtools');
+    return /--devtools\s*<[^>]*\bon\b[^>]*>/.test(help.stdout ?? '');
 }
 
 /**
