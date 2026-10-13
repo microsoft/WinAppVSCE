@@ -300,18 +300,24 @@ namespace WinUIXamlPreview.UITest
             Check("BEH-E1 malformed XML -> Error (not a crash)", e != null, Pos(e));
             Check("BEH-E2 malformed XML reports a line", e?.Line != null, Pos(e));
             Check("BEH-E3 malformed XML line points at the mismatch (line 5)", e?.Line == 5, Pos(e));
+            Check("BEH-E3b malformed XML has readable text (no WinUI placeholder)",
+                e?.Message != null && e.Message.StartsWith("XML error:") && e.Message.Contains("Border") && !e.Message.Contains("could not be found"), Pos(e));
 
             // Bad attribute value on line 3, column 15 (the Width attribute).
             var badValue = "<Page " + BehNs + ">\n  <StackPanel>\n    <Button Width=\"wide\" Content=\"x\"/>\n  </StackPanel>\n</Page>";
             e = await NextError(s, () => s.Client.UpdateXaml(badValue));
             Check("BEH-E4 bad attribute value -> Error", e != null, Pos(e));
             Check("BEH-E5 bad attribute value reports line 3", e?.Line == 3, Pos(e));
+            Check("BEH-E5b bad attribute value names the attribute and element",
+                e?.Message != null && e.Message.Contains("Width=\"wide\"") && e.Message.Contains("<Button>"), Pos(e));
 
             // An unknown property on a framework element (line 3).
             var badProp = "<Page " + BehNs + ">\n  <StackPanel>\n    <Button NotAProperty=\"1\"/>\n  </StackPanel>\n</Page>";
             e = await NextError(s, () => s.Client.UpdateXaml(badProp));
             Check("BEH-E6 unknown property -> Error", e != null, Pos(e));
             Check("BEH-E7 unknown property reports line 3", e?.Line == 3, Pos(e));
+            Check("BEH-E7b unknown property keeps WinUI's real text, minus the placeholder",
+                e?.Message != null && e.Message.Contains("NotAProperty") && !e.Message.Contains("could not be found") && !e.Message.Contains("Exception:"), Pos(e));
 
             f = await s.NextFrame(() => s.Client.UpdateXaml(good), TimeSpan.FromSeconds(30));
             Check("BEH-E8 recovers after parse errors", f != null);

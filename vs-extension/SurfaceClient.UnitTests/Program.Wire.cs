@@ -144,9 +144,12 @@ internal static partial class Program
         SpanStartsAt("second Button span", m, text, "0.0.3", "<Button", 1);
 
         m!.TryGetSpan("0.0.0", out var bStart, out var bEnd);
-        Eq("sibling span ends where the next authored sibling starts", text.IndexOf("<TextBlock", StringComparison.Ordinal), bEnd);
+        int btnTag = text.IndexOf("<Button Content=\"A\"/>", StringComparison.Ordinal);
+        Eq("self-closing span ends just past '/>'", btnTag + "<Button Content=\"A\"/>".Length, bEnd);
+        m.TryGetSpan("0.0.2", out _, out var gridEnd);
+        Eq("element span ends just past its closing tag", text.IndexOf("</Grid>", StringComparison.Ordinal) + "</Grid>".Length, gridEnd);
         m.TryGetSpan("0", out _, out var rootEnd);
-        Eq("root span ends at end of text", text.Length, rootEnd);
+        Eq("root span ends at end of </Page>", text.Length, rootEnd);
 
         Check("unknown path -> false", !m.TryGetSpan("0.9.9", out _, out _));
         Check("null path -> false", !m.TryGetSpan(null, out _, out _));
@@ -158,10 +161,36 @@ internal static partial class Program
         Eq("caret inside a skipped Run -> its TextBlock", "0.0.1", m.PathForOffset(text.IndexOf("<Run", StringComparison.Ordinal)));
         Eq("caret inside a skipped RowDefinitions -> the Grid", "0.0.2", m.PathForOffset(text.IndexOf("<RowDefinition/>", StringComparison.Ordinal)));
         Check("caret in the XML prolog -> null", m.PathForOffset(5) == null);
-        // KNOWN LIMITATION (revisit.md): spans end at the next element's start, so a closing tag belongs to the
-        // last descendant. Pinned so a fix shows up as an intentional test change.
-        Eq("KNOWN: caret at closing </Page> -> last descendant", "0.0.4.0", m.PathForOffset(text.LastIndexOf("</Page>", StringComparison.Ordinal)));
+        // Closing tags belong to their own element (formerly a known limitation: the last descendant won).
+        Eq("caret at closing </Page> -> the Page", "0", m.PathForOffset(text.LastIndexOf("</Page>", StringComparison.Ordinal)));
+        Eq("caret inside </Grid> -> the Grid", "0.0.2", m.PathForOffset(text.IndexOf("</Grid>", StringComparison.Ordinal) + 3));
+        Eq("caret inside </StackPanel> -> the StackPanel", "0.0", m.PathForOffset(text.IndexOf("</StackPanel>", StringComparison.Ordinal) + 3));
+        Eq("caret just after '/>' -> that element", "0.0.0", m.PathForOffset(btnTag + "<Button Content=\"A\"/>".Length));
+        Eq("caret in whitespace between children -> the parent", "0.0.2", m.PathForOffset(text.IndexOf("</Grid>", StringComparison.Ordinal) - 2));
         Check("caret past end -> null", m.PathForOffset(text.Length + 10) == null);
+        Check("caret in trailing whitespace after the root -> null", XamlSourceMap.Build(text + "\n\n")!.PathForOffset(text.Length + 1) == null);
+
+        // Tokenizer edge cases: '>' and '/>' inside quoted values, comments and CDATA must not end a tag.
+        var tricky = "<Page " + Pns + "><StackPanel Tag=\"a>b/>\"><!-- <Button/> --><TextBlock><![CDATA[ </StackPanel> ]]></TextBlock>" +
+                     "<Button Tag='x>'/></StackPanel></Page>";
+        var mt = XamlSourceMap.Build(tricky);
+        mt!.TryGetSpan("0.0", out var spS, out var spE);
+        Eq("quoted '>' / comment / CDATA: StackPanel span is exact", tricky.IndexOf("</Page>", StringComparison.Ordinal), spE);
+        Eq("quoted '>' / comment / CDATA: Button mapped", "0=Page, 0.0=StackPanel, 0.0.0=TextBlock, 0.0.1=Button", Names(mt));
+        Eq("caret on </StackPanel> after tricky content -> StackPanel", "0.0", mt.PathForOffset(tricky.IndexOf("</StackPanel></Page>", StringComparison.Ordinal) + 2));
+
+        // DOCTYPE with an internal subset is skipped; an entity that expands to markup makes the scan disagree
+        // with the parser, so the map falls back to next-sibling ends (still usable, never wrong-element).
+        var dtd = "<!DOCTYPE Page [ <!ENTITY e \"<Button/>\"> ]>\n<Page " + Pns + "><StackPanel>&e;<TextBlock/></StackPanel></Page>";
+        var md = XamlSourceMap.Build(dtd);
+        if (md != null)
+        {
+            Check("DTD entity markup: falls back, root still maps", md.HasContent && md.TryGetSpan("0", out _, out _));
+        }
+        else
+        {
+            Check("DTD entity markup: parser refused (no map)", true);
+        }
 
         // CRLF line endings, tabs and non-BMP characters must not skew offsets.
         var crlf = text.Replace("\n", "\r\n").Replace("    <Button Content=\"A\"/>", "\t\t<Button Content=\"😀😀\"/>  <CheckBox/>");

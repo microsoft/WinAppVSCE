@@ -28,6 +28,7 @@
     <Compile Include="..\Surface\XamlCleaner.cs" Link="Production\XamlCleaner.cs" />
     <Compile Include="..\Surface\SampleListFiller.cs" Link="Production\SampleListFiller.cs" />
     <Compile Include="..\Surface\DesignTimeData.cs" Link="Production\DesignTimeData.cs" />
+    <Compile Include="..\Surface\XamlErrorText.cs" Link="Production\XamlErrorText.cs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -304,7 +304,17 @@ internal sealed class RenderHost
                     if (IsParseException(ex))
                     {
                         App.Log($"Render parse error: {Flatten(ex)}");
-                        return (null, "parse", Flatten(ex), l, c);
+                        var message = Flatten(ex);
+                        if (XamlErrorText.Informative(message) is string useful)
+                        {
+                            message = useful;
+                        }
+                        else
+                        {
+                            (message, l, c) = XamlErrorText.Describe(rawXaml, l, c);
+                        }
+
+                        return (null, "parse", message, l, c);
                     }
 
                     // A non-markup exception means a type resolved but failed to activate.

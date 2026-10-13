@@ -1253,7 +1253,7 @@ namespace WinUIXamlPreview.Editor
                 // If the caret is already inside this element, the selection originated from the caret (#2's
                 // echo) — leave it be so the two directions don't fight over the caret.
                 int caret = _textView.Caret.Position.BufferPosition.Position;
-                if (caret >= start && caret < end)
+                if (caret >= start && caret <= end)
                 {
                     _lastCaretPath = sel.Path;
                     return;

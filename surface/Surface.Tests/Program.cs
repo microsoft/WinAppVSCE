@@ -80,6 +80,7 @@ namespace Surface.Tests
             Run("R7a/b/c attached, extensions, converters", Rule7abc);
             Run("DTD grammar", DtdGrammar);
             Run("DTD source paths + file prep", DtdPaths);
+            Run("XAML error text", ErrorText);
 
             foreach (var f in s_failures)
             {
@@ -87,6 +88,59 @@ namespace Surface.Tests
             }
             Console.WriteLine($"===== CLEANER: {s_pass} passed, {s_fail} failed =====");
             return s_fail == 0 ? 0 : 1;
+        }
+
+        // ------------------------------------------------------------ harness
+
+        private static void ErrorText()
+        {
+            const string Opaque = "XamlParseException: " + XamlErrorText.OpaqueWinUiText;
+            Check("opaque: placeholder + type name", XamlErrorText.IsOpaque(Opaque));
+            Check("opaque: with position suffix and chain", XamlErrorText.IsOpaque(Opaque + " [Line: 3 Position: 13] -> COMException: " + XamlErrorText.OpaqueWinUiText));
+            Check("opaque: empty", XamlErrorText.IsOpaque(""));
+            Check("not opaque: real WinUI text kept", !XamlErrorText.IsOpaque("XamlParseException: Cannot find a Resource with the Name/Key Foo [Line: 2 Position: 4]"));
+            Check("opaque: bare wfc code (as WinUI really reports)", XamlErrorText.IsOpaque(Opaque + "\r\n\r\nwfc: element type match [Line: 5 Position: 5]"));
+            Eq("informative: real text extracted from the WinUI shape", "The property 'NotAProperty' was not found in type 'Button'.",
+                XamlErrorText.Informative(Opaque + "\r\n\r\nThe property 'NotAProperty' was not found in type 'Button'. [Line: 3 Position: 13]"));
+
+            var unclosed = "<Page>\n  <StackPanel>\n    <TextBlock Text=\"a\"/>\n    <Border>\n  </StackPanel>\n</Page>";
+            var (m, l, c) = XamlErrorText.Describe(unclosed, 5, 5);
+            Check("malformed XML: uses the XML parser's message", m.StartsWith("XML error: ", StringComparison.Ordinal) && m.Contains("Border") && m.Contains("StackPanel"), m);
+            Check("malformed XML: no duplicate position suffix", !m.Contains("Line 5, position"), m);
+            Check("malformed XML: position kept", l == 5 && c == 5, $"{l},{c}");
+
+            var badValue = "<Page>\n  <StackPanel>\n    <Button Width=\"wide\" Content=\"x\"/>\n  </StackPanel>\n</Page>";
+            (m, l, c) = XamlErrorText.Describe(badValue, 3, 13);
+            Eq("bad value: names attribute, value and element", "WinUI couldn't set Width=\"wide\" on <Button>. Check the property name and value.", m);
+            Check("bad value: position unchanged", l == 3 && c == 13, $"{l},{c}");
+
+            var attached = "<Page>\n  <Grid>\n    <Button Grid.Row='x'/>\n  </Grid>\n</Page>";
+            Eq("attached property, single quotes", "WinUI couldn't set Grid.Row=\"x\" on <Button>. Check the property name and value.",
+                XamlErrorText.Describe(attached, 3, 13).Message);
+
+            var crlf = badValue.Replace("\n", "\r\n");
+            Eq("CRLF line endings", "WinUI couldn't set Width=\"wide\" on <Button>. Check the property name and value.",
+                XamlErrorText.Describe(crlf, 3, 13).Message);
+
+            var unknownEl = "<Page>\n  <StackPanel>\n    <Buton/>\n  </StackPanel>\n</Page>";
+            Eq("unknown element at the name", "WinUI couldn't create <Buton>. Check the element name and that its namespace is mapped.",
+                XamlErrorText.Describe(unknownEl, 3, 6).Message);
+            Eq("unknown element at the '<'", "WinUI couldn't create <Buton>. Check the element name and that its namespace is mapped.",
+                XamlErrorText.Describe(unknownEl, 3, 5).Message);
+            Eq("prefixed element", "WinUI couldn't create <local:Thing>. Check the element name and that its namespace is mapped.",
+                XamlErrorText.Describe("<Page xmlns:local=\"using:App\">\n<local:Thing/>\n</Page>", 2, 2).Message);
+            Check("undeclared prefix is an XML error", XamlErrorText.Describe("<Page>\n<local:Thing/>\n</Page>", 2, 2).Message.Contains("'local' is an undeclared prefix"));
+
+            var longValue = "<Page>\n<Button Tag=\"" + new string('v', 200) + "\"/>\n</Page>";
+            var lm = XamlErrorText.Describe(longValue, 2, 9).Message;
+            Check("long value is truncated", lm.Length < 160 && lm.Contains("…"), lm);
+
+            const string Fallback = "WinUI couldn't load this XAML and didn't report why.";
+            Eq("no position -> generic", Fallback, XamlErrorText.Describe(badValue, null, null).Message);
+            Eq("position in whitespace -> generic", Fallback, XamlErrorText.Describe(badValue, 3, 2).Message);
+            Eq("position past the line end -> generic", Fallback, XamlErrorText.Describe(badValue, 3, 200).Message);
+            Eq("line past the end -> generic", Fallback, XamlErrorText.Describe(badValue, 99, 1).Message);
+            Eq("null xaml -> generic", Fallback, XamlErrorText.Describe(null, 1, 1).Message);
         }
 
         // ------------------------------------------------------------ harness

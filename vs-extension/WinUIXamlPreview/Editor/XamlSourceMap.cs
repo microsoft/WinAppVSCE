@@ -129,11 +129,42 @@ namespace WinUIXamlPreview.Editor
             var preorder = new List<(string, int, int)>();
             var elements = new List<(string, XName)>();
 
-            // The XML root maps to surface path "0" (the design canvas's single child == the page root).
-            Walk(rootEl, "0", 0, lineStarts, text!.Length, pathToSpan, preorder, elements, contentPropByType);
+            // Real element extents (start '<' .. just past the closing tag's '>'), in document order. Null when the
+            // light scan disagrees with the parser (e.g. DTD entities that expand to markup); then we fall back to
+            // next-sibling-start ends below.
+            var extents = ScanElementExtents(text!);
+            Dictionary<XElement, int>? ends = null;
+            if (extents != null)
+            {
+                ends = new Dictionary<XElement, int>();
+                int k = 0;
+                foreach (var el in rootEl.DescendantsAndSelf())
+                {
+                    if (k >= extents.Count || extents[k].Start != StartOffset(el, lineStarts, text!.Length))
+                    {
+                        ends = null;
+                        break;
+                    }
 
-            // Second pass: end offset = start of the next pre-order element that is NOT a descendant (i.e. the
-            // next entry at depth <= this one), or end-of-text. This yields properly-nested containment spans.
+                    ends[el] = extents[k].End;
+                    k++;
+                }
+
+                if (ends != null && k != extents.Count)
+                {
+                    ends = null;
+                }
+            }
+
+            // The XML root maps to surface path "0" (the design canvas's single child == the page root).
+            Walk(rootEl, "0", 0, lineStarts, text!.Length, pathToSpan, preorder, elements, contentPropByType, ends);
+            if (ends != null)
+            {
+                return new XamlSourceMap(pathToSpan, preorder, elements);
+            }
+
+            // Fallback: end offset = start of the next pre-order element that is NOT a descendant (i.e. the next
+            // entry at depth <= this one), or end-of-text. Closing tags then belong to the last descendant.
             for (int i = 0; i < preorder.Count; i++)
             {
                 var (path, start, depth) = preorder[i];
@@ -162,19 +193,129 @@ namespace WinUIXamlPreview.Editor
             Dictionary<string, (int, int)> pathToSpan,
             List<(string, int, int)> preorder,
             List<(string, XName)> elements,
-            IReadOnlyDictionary<string, string>? contentPropByType)
+            IReadOnlyDictionary<string, string>? contentPropByType,
+            Dictionary<XElement, int>? ends)
         {
             int start = StartOffset(element, lineStarts, textLength);
-            pathToSpan[path] = (start, textLength); // provisional end; finalized in the second pass
+            // Real end when known; otherwise provisional, finalized by Build's fallback pass.
+            int end = ends != null && ends.TryGetValue(element, out var e) ? e : textLength;
+            pathToSpan[path] = (start, end);
             preorder.Add((path, start, depth));
             elements.Add((path, element.Name));
 
             int index = 0;
             foreach (var child in AuthoredChildElements(element, contentPropByType))
             {
-                Walk(child, path + "." + index, depth + 1, lineStarts, textLength, pathToSpan, preorder, elements, contentPropByType);
+                Walk(child, path + "." + index, depth + 1, lineStarts, textLength, pathToSpan, preorder, elements, contentPropByType, ends);
                 index++;
             }
+        }
+
+        /// <summary>
+        /// Every element's [start, end) in document order, where start is its '&lt;' and end is just past the
+        /// '&gt;' of its closing tag (or of a self-closing start tag). A lightweight tokenizer for well-formed
+        /// text: skips comments, CDATA, processing instructions and DOCTYPE, and honours quoted attribute
+        /// values. Returns null on anything unexpected; the caller cross-checks starts against the parser.
+        /// </summary>
+        private static List<(int Start, int End)>? ScanElementExtents(string text)
+        {
+            var result = new List<(int Start, int End)>();
+            var open = new Stack<int>();
+            int i = 0;
+            int n = text.Length;
+            while (true)
+            {
+                int lt = text.IndexOf('<', i);
+                if (lt < 0)
+                {
+                    break;
+                }
+
+                if (string.CompareOrdinal(text, lt, "<!--", 0, 4) == 0)
+                {
+                    int c = text.IndexOf("-->", lt + 4, StringComparison.Ordinal);
+                    if (c < 0) return null;
+                    i = c + 3;
+                }
+                else if (string.CompareOrdinal(text, lt, "<![CDATA[", 0, 9) == 0)
+                {
+                    int c = text.IndexOf("]]>", lt + 9, StringComparison.Ordinal);
+                    if (c < 0) return null;
+                    i = c + 3;
+                }
+                else if (string.CompareOrdinal(text, lt, "<?", 0, 2) == 0)
+                {
+                    int c = text.IndexOf("?>", lt + 2, StringComparison.Ordinal);
+                    if (c < 0) return null;
+                    i = c + 2;
+                }
+                else if (string.CompareOrdinal(text, lt, "<!", 0, 2) == 0)
+                {
+                    // DOCTYPE (possibly with an internal subset in [...]).
+                    int gt = FindTagEnd(text, lt + 2, allowBrackets: true);
+                    if (gt < 0) return null;
+                    i = gt + 1;
+                }
+                else if (lt + 1 < n && text[lt + 1] == '/')
+                {
+                    int gt = text.IndexOf('>', lt + 2);
+                    if (gt < 0 || open.Count == 0) return null;
+                    int idx = open.Pop();
+                    result[idx] = (result[idx].Start, gt + 1);
+                    i = gt + 1;
+                }
+                else
+                {
+                    int gt = FindTagEnd(text, lt + 1, allowBrackets: false);
+                    if (gt < 0) return null;
+                    if (text[gt - 1] == '/')
+                    {
+                        result.Add((lt, gt + 1));
+                    }
+                    else
+                    {
+                        open.Push(result.Count);
+                        result.Add((lt, -1));
+                    }
+
+                    i = gt + 1;
+                }
+            }
+
+            return open.Count == 0 ? result : null;
+        }
+
+        /// <summary>Index of the '&gt;' that ends a tag starting at <paramref name="from"/>, skipping quoted values.</summary>
+        private static int FindTagEnd(string text, int from, bool allowBrackets)
+        {
+            char quote = '\0';
+            int brackets = 0;
+            for (int i = from; i < text.Length; i++)
+            {
+                char ch = text[i];
+                if (quote != '\0')
+                {
+                    if (ch == quote) quote = '\0';
+                }
+                else if (ch == '"' || ch == '\'')
+                {
+                    quote = ch;
+                }
+                else if (allowBrackets && ch == '[')
+                {
+                    brackets++;
+                }
+                else if (allowBrackets && ch == ']')
+                {
+                    brackets--;
+                }
+                else if (ch == '>' && brackets <= 0)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
         }
 
         /// <summary>
@@ -313,7 +454,8 @@ namespace WinUIXamlPreview.Editor
 
         /// <summary>
         /// The authored path of the innermost element whose span contains <paramref name="offset"/>, or null.
-        /// "Innermost" = the largest start offset with start &lt;= offset &lt; end (deeper elements start later).
+        /// The end is inclusive so a caret just after an element's closing '&gt;' still selects it.
+        /// "Innermost" = the largest start offset with start &lt;= offset &lt;= end (deeper elements start later).
         /// </summary>
         public string? PathForOffset(int offset)
         {
@@ -327,7 +469,7 @@ namespace WinUIXamlPreview.Editor
                 }
 
                 if (_pathToSpan.TryGetValue(path, out var span) &&
-                    offset >= span.Start && offset < span.End &&
+                    offset >= span.Start && offset <= span.End &&
                     span.Start > bestStart)
                 {
                     best = path;
