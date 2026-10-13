@@ -24,6 +24,7 @@
     <Compile Include="..\WinUIXamlPreview\Protocol\ProjectDllLocator.cs" Link="Protocol\ProjectDllLocator.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\MatchedHostResolver.cs" Link="Protocol\MatchedHostResolver.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\HostProvisionerRunner.cs" Link="Protocol\HostProvisionerRunner.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\CommandLine.cs" Link="Protocol\CommandLine.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Protocol\LineDecoder.cs" />
     <Compile Include="..\WinUIXamlPreview\Editor\XamlSourceMap.cs" Link="Editor\XamlSourceMap.cs" />
     <Compile Include="..\WinUIXamlPreview\UI\DesignerSelection.cs" Link="UI\DesignerSelection.cs" />

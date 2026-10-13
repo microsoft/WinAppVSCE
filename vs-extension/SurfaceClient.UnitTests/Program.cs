@@ -39,6 +39,7 @@ internal static partial class Program
             Run("MatchedHostBuild", MatchedHostBuildTests);
             Run("SurfaceIdentity", SurfaceIdentityTests);
             Run("PreviewSettings", PreviewSettingsTests);
+            Run("CommandLine", CommandLineTests);
         }
         finally
         {

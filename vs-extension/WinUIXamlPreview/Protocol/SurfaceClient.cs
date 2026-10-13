@@ -634,7 +634,7 @@ namespace WinUIXamlPreview.Protocol
             catch { }
         }
 
-        private static string Quote(string s) => s.IndexOf(' ') >= 0 ? $"\"{s}\"" : s;
+        private static string Quote(string s) => CommandLine.Quote(s);
 
         public void Dispose()
         {

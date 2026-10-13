@@ -459,6 +459,6 @@ namespace WinUIXamlPreview.Protocol
             try { log("  [provisioner] " + line); } catch { }
         }
 
-        private static string Quote(string s) => "\"" + s.Replace("\"", "\\\"") + "\"";
+        private static string Quote(string s) => CommandLine.Quote(s);
     }
 }
