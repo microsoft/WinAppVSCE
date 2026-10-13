@@ -189,7 +189,7 @@ const RUN_TARGET_PLACEHOLDER = /Select the project, solution, or build output fo
 const PROJECT_PICKER_PLACEHOLDER = /Which project in .+ would you like to run\?/;
 
 /** The placeholder of the With Options command's first build-settings prompt. */
-const BUILD_CONFIG_PLACEHOLDER = /^Build configuration$/;
+const BUILD_CONFIG_PLACEHOLDER = /^Build configuration/;
 
 /** The placeholder of the toggle prompt, which follows the build prompts. */
 const RUN_OPTIONS_PLACEHOLDER = /^Select run options/;

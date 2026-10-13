@@ -363,14 +363,12 @@ async function browseForRunTarget(
 	}
 
 	const targetKind = await classifyRunTarget(selected);
-	const { root, synthesized } = resolveBrowsedRoot(roots, selected, targetKind);
 
 	return {
 		target: {
 			kind: targetKind,
 			path: selected,
-			root,
-			rootIsSynthesized: synthesized
+			root: resolveBrowsedRoot(roots, selected, targetKind)
 		}
 	};
 }
@@ -380,30 +378,28 @@ async function browseForRunTarget(
  *
  * Attributing a target outside the workspace to `roots[0]` would mislabel it
  * and run the CLI from an unrelated directory, so a target no workspace folder
- * owns becomes its own root. `synthesized` marks that case: such a root says
- * nothing about where the target's repository begins, so callers must not use
- * it to bound a solution's members.
+ * owns becomes its own root.
  */
 function resolveBrowsedRoot(
 	roots: readonly WorkspaceRoot[],
 	selected: string,
 	kind: RunTargetKind
-): { root: WorkspaceRoot; synthesized: boolean } {
+): WorkspaceRoot {
 	// Honours a scoped root list, and prefers the deepest match when roots nest.
 	const owning = findOwningRoot(roots, selected);
 	if (owning) {
-		return { root: owning, synthesized: false };
+		return owning;
 	}
 
 	// `roots` may have been scoped to a single folder by the caller, while the
 	// browsed path belongs to another folder of the same workspace.
 	const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(selected));
 	if (folder) {
-		return { root: { name: folder.name, path: folder.uri.fsPath }, synthesized: false };
+		return { name: folder.name, path: folder.uri.fsPath };
 	}
 
 	const base = kind === 'folder' ? selected : path.dirname(selected);
-	return { root: { name: path.basename(base) || base, path: base }, synthesized: true };
+	return { name: path.basename(base) || base, path: base };
 }
 
 /** Prompt only for multiple plausible apps; otherwise the CLI is authoritative. */
@@ -521,12 +517,8 @@ export async function pickRunToggles(
 
 /** Build prompts for the With Options flow; the CLI owns the defaults. */
 export async function pickBuildSettings(): Promise<Partial<WinAppRunOptions> | undefined> {
-	const configurationItems = [...COMMON_CONFIGURATIONS].map(name => ({ label: name }));
-
-	const configuration = await vscode.window.showQuickPick(configurationItems, {
-		placeHolder: 'Build configuration'
-	});
-	if (!configuration) {
+	const configuration = await pickConfiguration();
+	if (configuration === undefined) {
 		return undefined;
 	}
 
@@ -546,7 +538,48 @@ export async function pickBuildSettings(): Promise<Partial<WinAppRunOptions> | u
 		return undefined;
 	}
 
-	return { configuration: configuration.label, arch: arch.arch };
+	return { configuration: configuration.value, arch: arch.arch };
+}
+
+/**
+ * The configuration prompt, which accepts a name that is not Debug or Release.
+ *
+ * `--configuration` is an open string — a project is free to define `Staging`
+ * or `Debug-Internal`, and `launch.json` already declares the field as a plain
+ * string — so the two common names are offered as rows while anything typed is
+ * taken as-is. Returns `undefined` when dismissed, or a wrapper whose `value`
+ * is `undefined` for "let the CLI choose", which the two cases cannot otherwise
+ * be told apart.
+ */
+async function pickConfiguration(): Promise<{ value: string | undefined } | undefined> {
+	const picker = vscode.window.createQuickPick<vscode.QuickPickItem>();
+	picker.placeholder = 'Build configuration, or type another name';
+	picker.items = [
+		{ label: 'Default', description: 'the project\'s default configuration' },
+		...[...COMMON_CONFIGURATIONS].map(name => ({ label: name }))
+	];
+
+	try {
+		const picked = await new Promise<vscode.QuickPickItem | string | undefined>(resolve => {
+			picker.onDidAccept(() => resolve(picker.selectedItems[0] ?? picker.value.trim()));
+			picker.onDidHide(() => resolve(undefined));
+			picker.show();
+		});
+
+		if (picked === undefined) {
+			return undefined;
+		}
+
+		// A typed name only reaches here when it matched no row, and an empty
+		// one means the user accepted without choosing anything.
+		const label = typeof picked === 'string' ? picked : picked.label;
+		if (!label || label === 'Default') {
+			return { value: undefined };
+		}
+		return { value: label };
+	} finally {
+		picker.dispose();
+	}
 }
 
 /** Resolve run options shared by palette commands and debug fallback. */

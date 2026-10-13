@@ -370,20 +370,24 @@ describe('readSolutionProjectPaths containment', () => {
 		}
 	});
 
-	it('drops a member reached through .. traversal', async () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-traverse-'));
+	it('drops a member more than one level above the solution', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-traverse-'));
 		try {
-			const solutionPath = writeSolution(dir, ['..\\Outside\\Outside.csproj']);
+			const solutionDir = path.join(root, 'sln');
+			fs.mkdirSync(solutionDir);
+			const solutionPath = writeSolution(solutionDir, ['..\\..\\Outside\\Outside.csproj']);
 			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), []);
 		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
 
-	// A `solutions/App.sln` referencing `..\src\App` is a normal layout. Without
-	// the workspace root as the container the member is dropped, the --project
-	// prompt never appears, and the CLI is handed an ambiguous solution.
-	it('keeps a .. member that stays inside the given containment root', async () => {
+	// A `solutions/App.sln` referencing `..\src\App` is a normal layout, and it
+	// has to work without a containment root too: the Browse flow reaches
+	// solutions outside every workspace folder, where no root is known. Dropping
+	// the member there would silently skip the --project prompt and hand the CLI
+	// an ambiguous solution.
+	it('keeps a .. member one level up with or without a containment root', async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-root-'));
 		try {
 			const solutionDir = path.join(root, 'solutions');
@@ -393,6 +397,27 @@ describe('readSolutionProjectPaths containment', () => {
 			fs.writeFileSync(path.join(projectDir, 'App.csproj'), '<Project />');
 
 			const solutionPath = writeSolution(solutionDir, ['..\\src\\App\\App.csproj']);
+			const expected = [path.join(projectDir, 'App.csproj')];
+
+			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), expected);
+			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath, root), expected);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	// A workspace root widens containment past the solution's parent: a solution
+	// nested deep in a repo may reach further up and still be inside it.
+	it('keeps a member the containment root allows but the solution parent does not', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-widen-'));
+		try {
+			const solutionDir = path.join(root, 'build', 'sln');
+			const projectDir = path.join(root, 'src', 'App');
+			fs.mkdirSync(solutionDir, { recursive: true });
+			fs.mkdirSync(projectDir, { recursive: true });
+			fs.writeFileSync(path.join(projectDir, 'App.csproj'), '<Project />');
+
+			const solutionPath = writeSolution(solutionDir, ['..\\..\\src\\App\\App.csproj']);
 
 			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), []);
 			assert.deepStrictEqual(
@@ -404,36 +429,12 @@ describe('readSolutionProjectPaths containment', () => {
 		}
 	});
 
-	// The Browse flow outside every workspace folder: the user named this file
-	// in a dialog, and the CLI resolves its members with no containment rule of
-	// its own, so neither may the picker.
-	it('keeps every member when containment is unrestricted', async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-unrestricted-'));
-		try {
-			const solutionDir = path.join(root, 'solutions');
-			const projectDir = path.join(root, 'src', 'App');
-			fs.mkdirSync(solutionDir);
-			fs.mkdirSync(projectDir, { recursive: true });
-			fs.writeFileSync(path.join(projectDir, 'App.csproj'), '<Project />');
-
-			const solutionPath = writeSolution(solutionDir, ['..\\src\\App\\App.csproj']);
-
-			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), []);
-			assert.deepStrictEqual(
-				await readSolutionProjectPaths(solutionPath, undefined, { unrestricted: true }),
-				[path.join(projectDir, 'App.csproj')]
-			);
-		} finally {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
-	});
-
 	// A crafted solution must not aim the classifier's readFile at a UNC path:
 	// on Windows the SMB client offers the user's credentials to that host, and
 	// browsing to a solution is a single click with no further confirmation.
-	// Real solutions always name members relatively, so nothing legitimate is
-	// lost by refusing rooted entries even when containment is unrestricted.
-	it('drops rooted members even when containment is unrestricted', async () => {
+	// Real solutions always name their members relatively, so nothing legitimate
+	// is lost by refusing rooted entries.
+	it('drops rooted, UNC and drive-relative members', async () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-rooted-'));
 		try {
 			fs.mkdirSync(path.join(dir, 'App'));
@@ -447,7 +448,7 @@ describe('readSolutionProjectPaths containment', () => {
 			]);
 
 			assert.deepStrictEqual(
-				await readSolutionProjectPaths(solutionPath, undefined, { unrestricted: true }),
+				await readSolutionProjectPaths(solutionPath),
 				[path.join(dir, 'App', 'App.csproj')]
 			);
 		} finally {
@@ -469,12 +470,13 @@ describe('readSolutionProjectPaths containment', () => {
 
 	// The lexical check alone passes this: "link\Outside.csproj" contains no
 	// `..`, so nothing in the string reveals that `link` redirects out of the
-	// solution directory. Only resolving the reparse point catches it.
-	it('drops a member whose path crosses a junction out of the solution directory', async () => {
+	// solution's reach. Only resolving the reparse point catches it. The target
+	// sits two levels up so a junction cannot buy what a plain `..` could not.
+	it('drops a member whose path crosses a junction out of the solution reach', async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-junction-'));
-		const solutionDir = path.join(root, 'sln');
+		const solutionDir = path.join(root, 'repo', 'sln');
 		const outside = path.join(root, 'outside');
-		fs.mkdirSync(solutionDir);
+		fs.mkdirSync(solutionDir, { recursive: true });
 		fs.mkdirSync(outside);
 		fs.writeFileSync(path.join(outside, 'Outside.csproj'), '<Project />');
 
@@ -841,8 +843,7 @@ describe('readTargetProjects for a file target', () => {
 				const result = await readTargetProjects({
 					kind: 'solution',
 					path: solution,
-					root: { name: 'solutions', path: path.dirname(solution) },
-					rootIsSynthesized: true
+					root: { name: 'solutions', path: path.dirname(solution) }
 				});
 				assert.deepStrictEqual(
 					result.projects.map(p => path.basename(p)).sort(),
@@ -866,8 +867,7 @@ describe('readTargetProjects for a file target', () => {
 				const result = await readTargetProjects({
 					kind: 'solution',
 					path: solutionDir,
-					root: { name: 'solutions', path: solutionDir },
-					rootIsSynthesized: true
+					root: { name: 'solutions', path: solutionDir }
 				});
 				assert.deepStrictEqual(
 					result.projects.map(p => path.basename(p)).sort(),

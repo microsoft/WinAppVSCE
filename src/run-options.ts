@@ -39,7 +39,7 @@ export interface WinAppRunOptions {
 	noLaunch?: boolean;
 	/** Unregister the development package after the app exits. */
 	unregisterOnExit?: boolean;
-	/** Launch via the manifest's execution alias instead of AUMID activation. */
+	/** Launch via the app's execution alias instead of AUMID activation. */
 	withAlias?: boolean;
 	/** Forces AUMID activation; mutually exclusive with {@link withAlias}. */
 	withoutAlias?: boolean;
@@ -93,7 +93,7 @@ export const RUN_TOGGLES: readonly RunToggle[] = [
 	{ key: 'aot', label: 'Native AOT publish', detail: 'Run the project\'s configured Native AOT publish; requires PublishAot=true', projectOnly: true },
 	{ key: 'detach', label: 'Launch and return immediately', detail: 'Do not wait for the app to exit' },
 	{ key: 'noLaunch', label: 'Register only, do not launch', detail: 'Create the debug identity and register the package without starting the app' },
-	{ key: 'withAlias', label: 'Launch via execution alias', detail: 'Run in the terminal with stdin/stdout inherited; requires an execution alias in the manifest' },
+	{ key: 'withAlias', label: 'Launch via execution alias', detail: 'Run in the terminal with stdin/stdout inherited; forces this for a windowed app, as console apps already do it' },
 	{ key: 'unregisterOnExit', label: 'Unregister on exit', detail: 'Remove the development package after the app exits' },
 	{ key: 'debugOutput', label: 'Capture debug output', detail: 'Capture OutputDebugString and first-chance exceptions; no other debugger can attach while this is on' },
 	{ key: 'symbols', label: 'Download symbols for crash analysis', detail: 'Use the Microsoft Symbol Server for richer native stacks; turns on Capture debug output', requires: 'debugOutput' }
