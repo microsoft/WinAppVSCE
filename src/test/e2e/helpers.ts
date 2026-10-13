@@ -80,15 +80,22 @@ export function createTempWorkspace(fixtureName: string): string {
 /**
  * Launches VS Code with the extension under test, opens the given workspace,
  * and returns the Electron app + main window page.
+ *
+ * `openManifest` controls whether an AppxManifest.xml in the workspace root is
+ * passed on the command line. The DevTools spec uses a workspace that has no
+ * manifest at all, so it opts out.
  */
-export async function launchVSCode(workspacePath: string): Promise<VSCodeTestContext> {
-    const manifestPath = path.join(workspacePath, 'AppxManifest.xml');
+export async function launchVSCode(
+    workspacePath: string,
+    options: { openManifest?: boolean } = {},
+): Promise<VSCodeTestContext> {
+    const { openManifest = true } = options;
     prepareUserDataDir();
     const app = await electron.launch({
         executablePath: VSCODE_EXE,
         args: [
             workspacePath,
-            manifestPath,
+            ...(openManifest ? [path.join(workspacePath, 'AppxManifest.xml')] : []),
             '--new-window',
             `--user-data-dir=${USER_DATA_DIR}`,
             ...EXTENSION_ARGS,
@@ -155,20 +162,50 @@ export async function openManifestEditor(page: Page): Promise<FrameLocator> {
  * Useful for re-acquiring the frame after the webview reloads (e.g., fixture swap).
  */
 export async function getWebviewFrame(page: Page): Promise<FrameLocator> {
+    return getWebviewFrameWaitingFor(page, '.tab-bar');
+}
+
+/**
+ * Locates a VS Code webview frame and waits for a caller-supplied selector.
+ *
+ * The frame-tree walk is identical for every webview this extension renders;
+ * only the "is it ready" signal differs, so the manifest editor and the
+ * DevTools panel share this and pass their own root selector.
+ */
+export async function getWebviewFrameWaitingFor(
+    page: Page,
+    readySelector: string,
+    timeout = 15_000,
+): Promise<FrameLocator> {
     // The custom editor renders inside VS Code webview frames.
     // VS Code uses a named iframe for the webview container, and a nested
     // iframe with name="pending-frame" (or "active-frame") for the actual content.
     // We navigate the frame tree to find the inner content frame.
-    const webviewOuterFrame = page.frames().find(f => f.url().includes('vscode-webview://') && !f.url().includes('fake.html'));
+    //
+    // page.frames() is a snapshot, so poll: a webview opened in response to an
+    // async action (such as a debug launch) does not exist yet when this is
+    // first called.
+    const deadline = Date.now() + timeout;
+    let webviewOuterFrame = findWebviewOuterFrame(page);
+    while (!webviewOuterFrame && Date.now() < deadline) {
+        await page.waitForTimeout(500);
+        webviewOuterFrame = findWebviewOuterFrame(page);
+    }
     if (!webviewOuterFrame) {
         throw new Error('Could not find webview outer frame');
     }
     const innerFrame = webviewOuterFrame.frameLocator('#active-frame');
 
-    // Wait for the editor to render (the tab bar should appear)
-    await innerFrame.locator('.tab-bar').waitFor({ state: 'visible', timeout: 15_000 });
+    await innerFrame.locator(readySelector).waitFor({
+        state: 'visible',
+        timeout: Math.max(5_000, deadline - Date.now()),
+    });
 
     return innerFrame;
+}
+
+function findWebviewOuterFrame(page: Page) {
+    return page.frames().find(f => f.url().includes('vscode-webview://') && !f.url().includes('fake.html'));
 }
 
 /**

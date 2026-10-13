@@ -16,6 +16,8 @@ import {
 import { detectProjects, deduplicateBuildOutputFolders, BUILD_OUTPUT_EXCLUDE_GLOB, BUILD_OUTPUT_MAX_RESULTS } from './project-detection';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
+import { DevToolsPanel } from './devtools/devtools-panel';
+import { devToolsSpawnArgs, shouldAttachDebugger, shouldUseDevTools } from './devtools/launch-options';
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
 import { SchemaModel } from './manifest-schema/schema-model';
 import { loadSchemaModel } from './manifest-schema/xsd-parser';
@@ -945,12 +947,19 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		// the session starts, so a first-run user isn't dropped into a half-started
 		// session (issue #32). When no debuggerType is configured, let the user
 		// choose the extension matching their project instead of assuming coreclr.
-		const debuggerType = await resolveDebuggerType(config.debuggerType);
-		if (!debuggerType) {
-			return undefined;
+		//
+		// Skipped entirely for a no-debug run: nothing will attach, so demanding a
+		// debugger extension would block a launch that does not need one. This is
+		// what lets "Run Without Debugging" start the app with DevTools on a
+		// machine with no C#/C++ debugger installed.
+		if (shouldAttachDebugger(config)) {
+			const debuggerType = await resolveDebuggerType(config.debuggerType);
+			if (!debuggerType) {
+				return undefined;
+			}
+			// Persist the resolved type so the attach step uses the matching debugger.
+			config.debuggerType = debuggerType;
 		}
-		// Persist the resolved type so the attach step uses the matching debugger.
-		config.debuggerType = debuggerType;
 
 		return config;
 	}
@@ -1073,13 +1082,25 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				baseSpawnArgs.push('--output-appx-directory', config.outputAppxDirectory);
 			}
 
+			// WinUI DevTools: launches the app with the live XAML inspection
+			// overlay so `winapp devtools ...` can drive the running app alongside
+			// the attached debugger. Enabled unless explicitly opted out.
+			baseSpawnArgs.push(...devToolsSpawnArgs(config));
+
 			// Determine the debugger type based on config or default to coreclr
 			const debuggerType = config.debuggerType || 'coreclr';
+
+			// "Run Without Debugging" (Ctrl+F5) or an explicit "noDebug": true.
+			// The app still launches with DevTools; we just skip the debugger
+			// extension entirely, which is the only piece that requires C# Dev
+			// Kit. Checked once here so the extension gate and the child session
+			// below can never disagree.
+			const attachDebugger = shouldAttachDebugger(config);
 
 			// Safety net: resolveDebugConfiguration already verifies the required
 			// extension before the session starts, but re-check here so we never
 			// launch the process only to fail on attach if resolution was bypassed.
-			if (!await ensureDebuggerExtensionInstalled(debuggerType)) {
+			if (attachDebugger && !await ensureDebuggerExtensionInstalled(debuggerType)) {
 				return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
 			}
 
@@ -1173,13 +1194,17 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				}
 				teardownRequested = true;
 				disposable.dispose();
+				DevToolsPanel.closeFor(processId);
 				runProcess.kill();
 				vscode.debug.stopDebugging(parentSession);
 			};
 
-			// When the child debug session ends, tear down the run process and parent session
+			// When the child debug session ends, tear down the run process and parent session.
+			// With no child session (noDebug), the parent session ending — the user pressing
+			// Stop — is the signal instead. The teardownRequested guard makes the re-entry
+			// from our own stopDebugging call harmless.
 			const disposable = vscode.debug.onDidTerminateDebugSession((ended) => {
-				if (ended.parentSession === parentSession) {
+				if (ended.parentSession === parentSession || ended.id === parentSession.id) {
 					teardown();
 				}
 			});
@@ -1195,21 +1220,34 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// the project type (e.g. a C# extension was reused for a C/C++ app).
 			// If it throws, tear down so the winapp run process is not left orphaned.
 			try {
-				const started = await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
-				if (!started) {
-					teardown();
-					const debuggerName = getDebuggerExtensionRequirement(debuggerType)?.name ?? `"${debuggerType}"`;
-					await promptAndInstallDebuggerChoice(
-						`The ${debuggerName} debugger couldn't attach to your app. ` +
-						`This usually means the installed debugger extension doesn't match your project type. ` +
-						`Install the debugger that matches your project, then start debugging again:`,
-						'you selected it after the previous debugger failed to attach'
-					);
-					return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
+				if (attachDebugger) {
+					const started = await vscode.debug.startDebugging(folder, debugConfiguration, { parentSession: session });
+					if (!started) {
+						teardown();
+						const debuggerName = getDebuggerExtensionRequirement(debuggerType)?.name ?? `"${debuggerType}"`;
+						await promptAndInstallDebuggerChoice(
+							`The ${debuggerName} debugger couldn't attach to your app. ` +
+							`This usually means the installed debugger extension doesn't match your project type. ` +
+							`Install the debugger that matches your project, then start debugging again:`,
+							'you selected it after the previous debugger failed to attach'
+						);
+						return new vscode.DebugAdapterInlineImplementation(new NoOpDebugAdapter());
+					}
 				}
 			} catch (startError) {
 				teardown();
 				throw startError;
+			}
+
+			// With the app running — debugger attached or not — surface the
+			// DevTools panel for the same process. Failures here are reported
+			// inside the panel so a DevTools problem never takes down a working
+			// debug session.
+			if (shouldUseDevTools(config)) {
+				void DevToolsPanel.show(
+					processId,
+					vscode.Uri.file(this.extensionPath),
+				);
 			}
 
 			// Return an inline no-op adapter — the real debugging happens in the child session above

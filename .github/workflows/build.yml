@@ -25,6 +25,14 @@ jobs:
       with:
         node-version: '24'
 
+    # The DevTools E2E fixture is a WinUI app targeting net10.0-windows, built
+    # on demand by devtools-panel.spec.ts. Hosted runners do not ship the .NET
+    # 10 SDK, so install it explicitly.
+    - name: Setup .NET
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      with:
+        dotnet-version: '10.0.x'
+
     - name: Install dependencies
       run: npm ci
 
@@ -38,6 +46,13 @@ jobs:
 
     - name: Sync manifest schemas
       run: npm run sync-schemas
+
+    # Guards the DevTools protocol against drift in both directions: the
+    # methods we call must exist in the CLI's bundled schema, and every entry
+    # in USED_METHODS must still have a call site. Needs the CLI binaries, so
+    # it has to run after the download step above.
+    - name: Check DevTools protocol schema
+      run: npm run check-devtools-schema
 
     - name: Lint
       run: npm run lint
@@ -89,6 +104,9 @@ jobs:
         Write-Host "WinUI template pack installed."
 
     - name: Run E2E tests
+      # @winui-app specs launch a real WinUI app and drive its DevTools panel.
+      # They need the .NET SDK (installed above) and build the fixture app on
+      # first run, so this step is slower than a webview-only E2E pass.
       run: npm run test:e2e -- --grep-invert "adding empty custom capability|adding invalid format custom capability|adding valid custom capability|custom capability appears in the custom capabilities list|invalid inputFolder|cancelling the artifact QuickPick|selecting Browse|cancelling the certificate QuickPick"
 
     - name: Upload Playwright report

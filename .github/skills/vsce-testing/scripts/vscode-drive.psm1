@@ -493,8 +493,12 @@ function Invoke-VSCodeDriverCommand {
 
 # Launch the app via the WinApp DEBUGGER (vscode.debug.startDebugging).
 function Invoke-VSCodeDriverDebug {
-    param([Parameter(Mandatory)]$Ctx, [Parameter(Mandatory)][string]$InputFolder, [string]$Name = 'WinApp: Launch and Attach', [int]$TimeoutSec = 120)
-    return Invoke-VSCodeDriverStep -Ctx $Ctx -Step @{ type = 'debug'; inputFolder = $InputFolder; name = $Name } -TimeoutSec $TimeoutSec
+    param([Parameter(Mandatory)]$Ctx, [Parameter(Mandatory)][string]$InputFolder, [string]$Name = 'WinApp: Launch and Attach', [hashtable]$ExtraConfig, [switch]$NoAnswerDialogs, [int]$AfterMs = 0, [int]$TimeoutSec = 120)
+    $step = @{ type = 'debug'; inputFolder = $InputFolder; name = $Name }
+    if ($ExtraConfig) { $step.extraConfig = $ExtraConfig }
+    if ($NoAnswerDialogs) { $step.answerDialogs = $false }
+    if ($AfterMs -gt 0) { $step.afterMs = $AfterMs }
+    return Invoke-VSCodeDriverStep -Ctx $Ctx -Step $step -TimeoutSec $TimeoutSec
 }
 
 # Open a file / the manifest webview in the live instance.

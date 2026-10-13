@@ -164,6 +164,11 @@ async function runDebugStep(step, result) {
     debuggerType: 'coreclr',
     inputFolder: step.inputFolder
   };
+  // Allow a test to set extra launch.json attributes (e.g. useDevTools) on the
+  // config that is handed to startDebugging.
+  if (step.extraConfig && typeof step.extraConfig === 'object') {
+    Object.assign(config, step.extraConfig);
+  }
   if (folder && step.writeLaunch !== false) writeLaunchJson(folder.uri.fsPath, step.inputFolder, config.name);
   let started = false, err = null;
   // The winapp debugger packages the app before launch, which raises a native
