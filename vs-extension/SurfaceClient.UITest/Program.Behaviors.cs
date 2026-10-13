@@ -177,6 +177,7 @@ namespace WinUIXamlPreview.UITest
                     ("app.xaml failures", AppXamlFailures),
                     ("app.xaml merged sources", AppXamlMergedSources),
                     ("never-settling page", NeverSettlingPage),
+                    ("malformed payloads", MalformedPayloads),
                 })
                 {
                     Console.WriteLine("== " + name);

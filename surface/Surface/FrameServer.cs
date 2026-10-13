@@ -390,8 +390,8 @@ internal sealed class FrameServer
                 // artboard/host DIP coordinates. Runs the real PickForClick path on the UI thread and replies
                 // with the usual Selected (+ ElementProps). The production VS client never sends this; it exists
                 // so the D3 regression can assert point -> element selection without synthesizing pointer input.
-                double px = root.TryGetProperty("x", out var pxe) && pxe.TryGetDouble(out var pxv) ? pxv : double.NaN;
-                double py = root.TryGetProperty("y", out var pye) && pye.TryGetDouble(out var pyv) ? pyv : double.NaN;
+                double px = root.TryGetProperty("x", out var pxe) && pxe.ValueKind == JsonValueKind.Number && pxe.TryGetDouble(out var pxv) ? pxv : double.NaN;
+                double py = root.TryGetProperty("y", out var pye) && pye.ValueKind == JsonValueKind.Number && pye.TryGetDouble(out var pyv) ? pyv : double.NaN;
                 if (double.IsNaN(px) || double.IsNaN(py))
                 {
                     Send(Error("parse", "PickAt requires numeric 'x' and 'y' fields."));
@@ -413,7 +413,7 @@ internal sealed class FrameServer
                 // Live property edit from the panel (plan §41 Phase C). Apply it to the selected element on the
                 // UI thread; the surface replies with a fresh ElementProps (applied value, or reverted if the
                 // string didn't convert). The live HWND repaints itself — no frame reply needed.
-                int id = root.TryGetProperty("id", out var ide) && ide.TryGetInt32(out var idv) ? idv : -1;
+                int id = root.TryGetProperty("id", out var ide) && ide.ValueKind == JsonValueKind.Number && ide.TryGetInt32(out var idv) ? idv : -1;
                 string? name = GetString(root, "name");
                 string value = GetString(root, "value") ?? "";
                 if (id < 0 || string.IsNullOrEmpty(name))

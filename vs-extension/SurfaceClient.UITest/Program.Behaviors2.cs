@@ -220,4 +220,103 @@ internal static partial class Program
         Check("BEH-RT2 re-render of a churning page still completes", f != null);
         Check("BEH-RT3 churning page: surface alive", await Alive(s));
     }
+
+    // ---------------------------------------------------------------- malformed client payloads
+
+    // The production client always sends well-typed messages, so wrongly typed fields go straight onto the
+    // socket through its private Send (a JsonElement serializes as its raw JSON).
+    private static readonly System.Reflection.MethodInfo s_send = typeof(SurfaceClient).GetMethod("Send",
+        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+    private static void SendRaw(Session s, string json)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        s_send.Invoke(s.Client, new object[] { doc.RootElement.Clone() });
+    }
+
+    private static async Task<string?> NextError(Session s, Action send, TimeSpan timeout)
+    {
+        s.TakeErrors();
+        send();
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var e = s.TakeErrors();
+            if (e.Length > 0) return e[0];
+            await Task.Delay(50);
+        }
+        return null;
+    }
+
+    private static async Task MalformedPayloads(Session s)
+    {
+        await s.Host(PageXaml(EditPage));
+        var btn = await s.Select("0.0.0");
+        Check("BEH-M0 Button selectable", btn?.ElementType == "Button", Bounds(btn));
+        if (btn == null) return;
+        int id = btn.Id;
+        var t5 = TimeSpan.FromSeconds(5);
+
+        // SetProperty: every wrong shape is a clean parse error, never a "render" server error.
+        foreach (var (code, json) in new[]
+        {
+            ("BEH-M1 SetProperty without id", "{\"type\":\"SetProperty\",\"name\":\"Width\",\"value\":\"50\"}"),
+            ("BEH-M2 SetProperty string id", $"{{\"type\":\"SetProperty\",\"id\":\"{id}\",\"name\":\"Width\",\"value\":\"50\"}}"),
+            ("BEH-M3 SetProperty fractional id", "{\"type\":\"SetProperty\",\"id\":1.5,\"name\":\"Width\",\"value\":\"50\"}"),
+            ("BEH-M4 SetProperty negative id", "{\"type\":\"SetProperty\",\"id\":-3,\"name\":\"Width\",\"value\":\"50\"}"),
+            ("BEH-M5 SetProperty numeric name", $"{{\"type\":\"SetProperty\",\"id\":{id},\"name\":5,\"value\":\"50\"}}"),
+        })
+        {
+            var err = await NextError(s, () => SendRaw(s, json), t5);
+            Check(code + ": parse error", err != null && err.StartsWith("parse:") && err.Contains("SetProperty requires"), err ?? "no error");
+        }
+
+        var unknown = await NextError(s, () => SendRaw(s, "{\"type\":\"SetProperty\",\"id\":987654,\"name\":\"Width\",\"value\":\"50\"}"), TimeSpan.FromSeconds(2));
+        Check("BEH-M6 SetProperty on an unknown element: no error, logged", unknown == null &&
+            await s.WaitLog(l => l.Contains("SetProperty #987654 Width did not apply"), t5), unknown ?? "");
+
+        // PickAt: non-numeric coordinates are a parse error.
+        var pick = await NextError(s, () => SendRaw(s, "{\"type\":\"PickAt\",\"x\":\"10\",\"y\":10}"), t5);
+        Check("BEH-M7 PickAt string x: parse error", pick != null && pick.StartsWith("parse:") && pick.Contains("PickAt requires"), pick ?? "no error");
+
+        // SelectByPath with a non-string path resolves nothing and reports nothing.
+        var sel = await NextError(s, () => SendRaw(s, "{\"type\":\"SelectByPath\",\"path\":5}"), TimeSpan.FromSeconds(2));
+        Check("BEH-M8 SelectByPath numeric path: no error, logged", sel == null &&
+            await s.WaitLog(l => l.Contains("SelectByPath: path '' did not resolve"), t5), sel ?? "");
+
+        // SetCanvasSize: wrong types, a missing side and non-positive sizes all mean "auto" and still re-host
+        // at the page's auto board (same shape as before), never at the 375x667 the bad payload hinted at.
+        var autoRoot = await s.Select("0");
+        foreach (var (code, json) in new[]
+        {
+            ("BEH-M9 SetCanvasSize string width", "{\"type\":\"SetCanvasSize\",\"width\":\"375\",\"height\":667}"),
+            ("BEH-M10 SetCanvasSize missing height", "{\"type\":\"SetCanvasSize\",\"width\":375}"),
+            ("BEH-M11 SetCanvasSize negative", "{\"type\":\"SetCanvasSize\",\"width\":-375,\"height\":-667}"),
+        })
+        {
+            var t = s.Box.NextHwnd(TimeSpan.FromSeconds(30));
+            SendRaw(s, json);
+            var re = await t;
+            await Task.Delay(300);
+            var root = await s.Select("0");
+            Check(code + ": treated as auto (re-hosts at the auto board)", re != null && autoRoot != null &&
+                Aspect(root, autoRoot.W, autoRoot.H) && !Aspect(root, 375, 667), Bounds(root) + " vs " + Bounds(autoRoot));
+        }
+
+        // sampleData with a non-boolean value is ignored; the document still re-hosts.
+        foreach (var (code, raw) in new[] { ("BEH-M12 sampleData string", "\"yes\""), ("BEH-M13 sampleData null", "null") })
+        {
+            var t = s.Box.NextHwnd(TimeSpan.FromSeconds(30));
+            var xaml = System.Text.Json.JsonSerializer.Serialize(PageXaml(EditPage));
+            SendRaw(s, $"{{\"type\":\"UpdateXaml\",\"xaml\":{xaml},\"sampleData\":{raw}}}");
+            Check(code + ": ignored, page re-hosts", await t != null, string.Join("; ", s.TakeErrors()));
+        }
+
+        // After all of that the connection is healthy: a real edit still applies.
+        await Task.Delay(300);
+        btn = await s.Select("0.0.0");
+        var echo = btn == null ? null : await s.Set(btn.Id, "Width", "130");
+        Check("BEH-M14 a valid edit still applies afterwards", FindProp(echo, "Width")?.Value == "130", FindProp(echo, "Width")?.Value ?? "(no echo)");
+        Check("BEH-M15 client never faulted", !s.Client.IsFaulted);
+    }
 }
