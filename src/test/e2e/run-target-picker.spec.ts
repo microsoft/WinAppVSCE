@@ -497,7 +497,8 @@ test.describe('run target picker', () => {
         }
     });
 
-    test('caps the list and points at browse when many projects are found', async () => {        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-cap-e2e-'));
+    test('keeps every project reachable by typing when many are found', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-cap-e2e-'));
         const total = 14;
         for (let index = 0; index < total; index += 1) {
             const name = `App${String(index).padStart(2, '0')}`;
@@ -511,27 +512,19 @@ test.describe('run target picker', () => {
             const page = launched.page;
 
             await runCommandPalette(page, 'WinApp: Run Application');
+            await readRunTargetPicker(page);
 
-            const topRows = await readRunTargetPicker(page);
-            // The list virtualizes, so the tail — including the cap separator
-            // and the browse entries — is not in the DOM until it scrolls into
-            // view. ArrowUp from the first item wraps to the last.
-            await page.keyboard.press('ArrowUp');
+            // The 13th project sorts well past any short display cap, so it is
+            // only reachable if every candidate was handed to the QuickPick:
+            // VS Code filters over the items it was given, never re-queries.
+            await page.keyboard.type('App12');
             await page.waitForTimeout(750);
-            const bottomRows = await readRunTargetPicker(page);
 
-            const rows = [...topRows, ...bottomRows];
-            const joined = rows.join('\n');
-            const projectNames = new Set(
-                rows.map(row => /App\d\d\.csproj/.exec(row)?.[0]).filter((name): name is string => !!name)
-            );
-
-            expect(projectNames.size).toBeLessThanOrEqual(10);
-            expect(joined).toContain(`Showing 10 of ${total}`);
-            expect(joined).toContain('Browse');
+            const filtered = await readRunTargetPicker(page);
+            expect(filtered.join('\n')).toContain('App12.csproj');
 
             await cancelAndExpectNoFollowUp(page);
-            console.log('✅ PASS: project list capped at 10 with a browse hint');
+            console.log('✅ PASS: typing reached a project past the old display cap');
         } finally {
             if (app) {
                 await app.close().catch(() => {});

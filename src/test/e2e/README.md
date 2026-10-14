@@ -97,7 +97,7 @@ Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which de
 | 4 | finds output for a project-less app without surfacing node_modules | Electron/Rust-shaped workspaces reach the `.exe` scan, and excluded directories stay excluded |
 | 5 | asks which project to run inside a multi-app solution | A multi-app `.sln` is auto-selected, then raises the second prompt that supplies `--project` |
 | 6 | skips the project prompt when a solution holds one runnable app | A single-app solution goes straight on, landing on the build-configuration prompt |
-| 7 | caps the list and points at browse when many projects are found | Beyond the cap the picker truncates and surfaces the browse entry instead of hundreds of rows |
+| 7 | keeps every project reachable by typing when many are found | Typing a project name past the top of the list still finds it, because every candidate is handed to the QuickPick |
 | 8 | lists every discovered project in the workspace | Both `.csproj` files appear alongside a single browse entry, with no separate build-output search row |
 | 9 | Browse opens a sub-prompt that chooses between a file and a folder dialog | Selecting the single browse entry raises the "What would you like to browse for?" sub-prompt offering both a project/solution *file* dialog and a project-directory-or-build-output *folder* dialog, and Escape unwinds without opening a native dialog |
 | 10 | shows a solution once rather than also listing its member projects | A `.sln` and its member `.csproj` collapse to a single entry |

@@ -345,7 +345,7 @@ describe('readDirectoryProjectPaths', () => {
 	});
 });
 
-describe('readSolutionProjectPaths containment', () => {
+describe('readSolutionProjectPaths members', () => {
 	function writeSolution(dir: string, members: string[]): string {
 		const body = members
 			.map((member, index) =>
@@ -357,7 +357,7 @@ describe('readSolutionProjectPaths containment', () => {
 		return solutionPath;
 	}
 
-	it('keeps a member that really lives inside the solution directory', async () => {
+	it('keeps a member that lives inside the solution directory', async () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-contain-'));
 		try {
 			fs.mkdirSync(path.join(dir, 'App'));
@@ -370,24 +370,8 @@ describe('readSolutionProjectPaths containment', () => {
 		}
 	});
 
-	it('drops a member more than one level above the solution', async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-traverse-'));
-		try {
-			const solutionDir = path.join(root, 'sln');
-			fs.mkdirSync(solutionDir);
-			const solutionPath = writeSolution(solutionDir, ['..\\..\\Outside\\Outside.csproj']);
-			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), []);
-		} finally {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
-	});
-
-	// A `solutions/App.sln` referencing `..\src\App` is a normal layout, and it
-	// has to work without a containment root too: the Browse flow reaches
-	// solutions outside every workspace folder, where no root is known. Dropping
-	// the member there would silently skip the --project prompt and hand the CLI
-	// an ambiguous solution.
-	it('keeps a .. member one level up with or without a containment root', async () => {
+	// A `solutions/App.sln` referencing `..\src\App` is a normal layout.
+	it('keeps a .. member one level up', async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-root-'));
 		try {
 			const solutionDir = path.join(root, 'solutions');
@@ -397,19 +381,20 @@ describe('readSolutionProjectPaths containment', () => {
 			fs.writeFileSync(path.join(projectDir, 'App.csproj'), '<Project />');
 
 			const solutionPath = writeSolution(solutionDir, ['..\\src\\App\\App.csproj']);
-			const expected = [path.join(projectDir, 'App.csproj')];
-
-			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), expected);
-			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath, root), expected);
+			assert.deepStrictEqual(
+				await readSolutionProjectPaths(solutionPath),
+				[path.join(projectDir, 'App.csproj')]
+			);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
 
-	// A workspace root widens containment past the solution's parent: a solution
-	// nested deep in a repo may reach further up and still be inside it.
-	it('keeps a member the containment root allows but the solution parent does not', async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-widen-'));
+	// Members reach as far up as the solution names them. An earlier directory
+	// boundary dropped every member of this layout, which silently skipped the
+	// --project prompt and handed the CLI an ambiguous solution.
+	it('keeps members several levels above the solution', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-deep-'));
 		try {
 			const solutionDir = path.join(root, 'build', 'sln');
 			const projectDir = path.join(root, 'src', 'App');
@@ -418,10 +403,8 @@ describe('readSolutionProjectPaths containment', () => {
 			fs.writeFileSync(path.join(projectDir, 'App.csproj'), '<Project />');
 
 			const solutionPath = writeSolution(solutionDir, ['..\\..\\src\\App\\App.csproj']);
-
-			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), []);
 			assert.deepStrictEqual(
-				await readSolutionProjectPaths(solutionPath, root),
+				await readSolutionProjectPaths(solutionPath),
 				[path.join(projectDir, 'App.csproj')]
 			);
 		} finally {
@@ -453,48 +436,6 @@ describe('readSolutionProjectPaths containment', () => {
 			);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
-	it('still drops a member that escapes the containment root', async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-escape-'));
-		try {
-			const solutionDir = path.join(root, 'solutions');
-			fs.mkdirSync(solutionDir);
-			const solutionPath = writeSolution(solutionDir, ['..\\..\\Outside\\Outside.csproj']);
-			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath, root), []);
-		} finally {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
-	});
-
-	// The lexical check alone passes this: "link\Outside.csproj" contains no
-	// `..`, so nothing in the string reveals that `link` redirects out of the
-	// solution's reach. Only resolving the reparse point catches it. The target
-	// sits two levels up so a junction cannot buy what a plain `..` could not.
-	it('drops a member whose path crosses a junction out of the solution reach', async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sln-junction-'));
-		const solutionDir = path.join(root, 'repo', 'sln');
-		const outside = path.join(root, 'outside');
-		fs.mkdirSync(solutionDir, { recursive: true });
-		fs.mkdirSync(outside);
-		fs.writeFileSync(path.join(outside, 'Outside.csproj'), '<Project />');
-
-		const link = path.join(solutionDir, 'link');
-		try {
-			fs.symlinkSync(outside, link, 'junction');
-		} catch {
-			// Junction creation can be unavailable; the lexical cases above
-			// still cover the rule, so skip rather than fail the suite.
-			fs.rmSync(root, { recursive: true, force: true });
-			return;
-		}
-
-		try {
-			const solutionPath = writeSolution(solutionDir, ['link\\Outside.csproj']);
-			assert.deepStrictEqual(await readSolutionProjectPaths(solutionPath), []);
-		} finally {
-			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
 });
@@ -828,9 +769,7 @@ describe('readTargetProjects for a file target', () => {
 
 	// Browsing outside every workspace folder synthesizes a root from the
 	// target itself, which for a `solutions/` + `src/` layout is the solution's
-	// own directory. Containing members to it discarded all of them, so the
-	// --project prompt never appeared and the CLI was handed an ambiguous
-	// solution the user had no way to narrow.
+	// own directory. Members still resolve relative to the solution file.
 	it('keeps .. members of a browsed solution outside the workspace', async () => {
 		await withLayout(
 			{
@@ -877,9 +816,10 @@ describe('readTargetProjects for a file target', () => {
 		);
 	});
 
-	// A workspace-owned target keeps its boundary: the root is the repository,
-	// so a member escaping it is still dropped.
-	it('still contains a workspace-owned solution to its workspace root', async () => {
+	// A member naming a sibling of the workspace root is still a member: the
+	// CLI builds whatever the solution resolves, so hiding it from the picker
+	// would only cost the user the --project prompt.
+	it('keeps a member that resolves outside the workspace root', async () => {
 		await withLayout(
 			{
 				'ws/solutions/All.slnx': '<Solution>\n  <Project Path="../../outside/Outside.csproj" />\n</Solution>\n',
@@ -891,7 +831,10 @@ describe('readTargetProjects for a file target', () => {
 					path: path.join(dir, 'ws', 'solutions', 'All.slnx'),
 					root: { name: 'ws', path: path.join(dir, 'ws') }
 				});
-				assert.deepStrictEqual(result.projects, []);
+				assert.deepStrictEqual(
+					result.projects.map(p => path.basename(p)),
+					['Outside.csproj']
+				);
 			}
 		);
 	});

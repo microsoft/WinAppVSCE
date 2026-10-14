@@ -22,7 +22,6 @@ import {
 	PROJECT_FILE_MAX_RESULTS,
 	readSolutionProjectPaths,
 	readTargetProjects,
-	RUN_TARGET_DISPLAY_LIMIT,
 	sortRunTargets,
 	type RunTargetCandidate,
 	type RunTargetKind
@@ -131,7 +130,7 @@ async function mapSolutionMembers(
 		candidates
 			.filter(candidate => candidate.kind === 'solution')
 			.map(async candidate => {
-				members.set(candidate.path, await readSolutionProjectPaths(candidate.path, candidate.root.path));
+				members.set(candidate.path, await readSolutionProjectPaths(candidate.path));
 			})
 	);
 
@@ -278,16 +277,12 @@ export async function pickRunTarget(
 		return { target: sorted[0], members: solutionMembers.get(sorted[0].path) };
 	}
 
-	const shown = sorted.slice(0, RUN_TARGET_DISPLAY_LIMIT);
-	const items = buildRunTargetItems(shown, roots.length > 1);
+	// Every discovered target is listed: a QuickPick filters only over the items
+	// it was given, so truncating here would make the rest unreachable by
+	// typing. The scan is already bounded by PROJECT_FILE_MAX_RESULTS.
+	const items = buildRunTargetItems(sorted, roots.length > 1);
 
-	// A separator immediately followed by another is collapsed by VS Code, so
-	// the cap notice doubles as the divider before the browse entry.
-	const capped = sorted.length > shown.length;
-	items.push({
-		label: capped ? `Showing ${shown.length} of ${sorted.length} — browse to reach the rest` : '',
-		kind: vscode.QuickPickItemKind.Separator
-	});
+	items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
 
 	// alwaysShow keeps the escape hatch reachable: without it, typing a filter
 	// that matches no discovered target also filters away Browse…, leaving an
@@ -555,7 +550,7 @@ async function pickConfiguration(): Promise<{ value: string | undefined } | unde
 	const picker = vscode.window.createQuickPick<vscode.QuickPickItem>();
 	picker.placeholder = 'Build configuration, or type another name';
 	picker.items = [
-		{ label: 'Default', description: 'the project\'s default configuration' },
+		{ label: 'Default', description: 'Debug' },
 		...[...COMMON_CONFIGURATIONS].map(name => ({ label: name }))
 	];
 

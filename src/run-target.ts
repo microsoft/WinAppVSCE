@@ -1,6 +1,6 @@
 import * as fsp from 'fs/promises';
 import * as path from 'path';
-import { isContainedIn, isContainedInReal, isOfferableProject, readProjectRunnability, type ProjectRunnability } from './project-detection';
+import { isContainedIn, isOfferableProject, readProjectRunnability, type ProjectRunnability } from './project-detection';
 import { attributeValue, findElementsByLocalName, tryParseXml } from './xml-read';
 import type { WorkspaceRoot } from './workspace';
 
@@ -40,9 +40,6 @@ export function isDiscoverableTargetExtension(filePath: string): boolean {
 
 /** Bounds the project-file scan; display is capped separately. */
 export const PROJECT_FILE_MAX_RESULTS = 200;
-
-/** Caps picker entries while Browse keeps all targets reachable. */
-export const RUN_TARGET_DISPLAY_LIMIT = 10;
 
 /** A candidate target for `winapp run`. */
 export interface RunTargetCandidate {
@@ -169,27 +166,20 @@ function parseSlnxProjectPaths(content: string): string[] {
 /**
  * Drops solution entries that name somewhere other than a sibling project.
  *
- * Two rules, both aimed at keeping the classifier's `readFile` on files the
- * solution plausibly owns:
- *
- * Rooted members are rejected outright. A real solution always names members
+ * Rooted members are rejected: a real solution always names its members
  * relatively, so an absolute, UNC or drive-relative entry is never something to
- * honour — and honouring one would let a crafted solution aim that `readFile`
- * at `\\attacker\share`, which on Windows authenticates to that host.
+ * honour — and honouring one would let a crafted solution aim the classifier's
+ * `readFile` at `\\attacker\share`, which on Windows authenticates to that host.
  *
- * Relative members are then contained, which is what catches an escape through
- * a reparse point since `isContainedInReal` compares resolved real paths. The
- * boundary is the solution's own parent directory, because a `solutions/`
- * directory alongside `src/` is a common layout and those members legitimately
- * sit one level up. `containmentRoot` widens it when the caller knows the
- * owning workspace root — a solution nested deep in a repo may reach further up
- * and still be inside it. Neither boundary narrows the other: a member only has
- * to satisfy one.
+ * Relative members are returned as-is. Containing them to a directory was tried
+ * and removed: the boundary could only ever be guessed from how deep the
+ * solution happened to sit, so it was vacuous for a solution near a drive root
+ * and wrong for a `solutions/` + `src/` layout, where it silently discarded
+ * every member and left the user with an ambiguous solution and no prompt.
+ * `winapp run App.sln` builds whatever MSBuild resolves regardless of what this
+ * returns, so filtering members prevented no execution — it only hid choices.
  */
-export async function readSolutionProjectPaths(
-	solutionPath: string,
-	containmentRoot?: string
-): Promise<string[]> {
+export async function readSolutionProjectPaths(solutionPath: string): Promise<string[]> {
 	let content: string;
 	try {
 		content = await fsp.readFile(solutionPath, 'utf-8');
@@ -198,25 +188,9 @@ export async function readSolutionProjectPaths(
 	}
 
 	const solutionDir = path.dirname(solutionPath);
-	const resolved = parseSolutionProjectPaths(content, solutionPath)
+	return parseSolutionProjectPaths(content, solutionPath)
 		.filter(relative => !isRootedSolutionMember(relative))
 		.map(relative => path.resolve(solutionDir, relative.replace(/\\/g, path.sep)));
-
-	const containers = [path.dirname(solutionDir)];
-	if (containmentRoot) {
-		containers.push(containmentRoot);
-	}
-	const contained = await Promise.all(
-		resolved.map(async candidate => {
-			for (const container of containers) {
-				if (await isContainedInReal(container, candidate)) {
-					return true;
-				}
-			}
-			return false;
-		})
-	);
-	return resolved.filter((_, index) => contained[index]);
 }
 
 /**
@@ -277,17 +251,13 @@ export async function readTargetProjects(
 		return { projects: [], containerPath: target.path };
 	}
 
-	// The workspace root only ever widens containment past the solution's own
-	// parent directory, so a synthesized root needs no special handling.
-	const containmentRoot = target.root.path;
-
 	if (await isDirectory(target.path)) {
 		// A top-level solution takes precedence over projects; reading its
 		// members lets browsed directories reach the --project prompt.
 		const solutions = await readDirectorySolutionPaths(target.path);
 		if (solutions.length === 1) {
 			return {
-				projects: await readSolutionProjectPaths(solutions[0], containmentRoot),
+				projects: await readSolutionProjectPaths(solutions[0]),
 				containerPath: path.dirname(solutions[0])
 			};
 		}
@@ -306,7 +276,7 @@ export async function readTargetProjects(
 
 	if (target.kind === 'solution') {
 		return {
-			projects: await readSolutionProjectPaths(target.path, containmentRoot),
+			projects: await readSolutionProjectPaths(target.path),
 			containerPath: path.dirname(target.path)
 		};
 	}
