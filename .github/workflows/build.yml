@@ -47,10 +47,12 @@ jobs:
     - name: Sync manifest schemas
       run: npm run sync-schemas
 
-    # Guards the DevTools protocol against drift in both directions: the
-    # methods we call must exist in the CLI's bundled schema, and every entry
-    # in USED_METHODS must still have a call site. Needs the CLI binaries, so
-    # it has to run after the download step above.
+    # Guards the DevTools protocol against drift in three directions: the
+    # methods we call must exist in the schema this branch is pinned to, a CLI
+    # staged in bin/ must match that pinned schema exactly (shapes included),
+    # and every entry in USED_METHODS must still have a call site. The pinned
+    # copy is committed, so this runs for real even though the released CLI
+    # downloaded above ships no DevTools schema of its own.
     - name: Check DevTools protocol schema
       run: npm run check-devtools-schema
 

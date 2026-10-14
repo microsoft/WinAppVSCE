@@ -1,0 +1,10 @@
+{
+    "version": "0.7.2-nmetulev-devtools.278",
+    "repository": "microsoft/winappCli",
+    "branch": "nmetulev-devtools",
+    "pullRequest": 943,
+    "commit": "ab83d4cd",
+    "runId": 38601085305,
+    "syncedOn": "2026-10-14",
+    "comment": "The winapp CLI build whose DevTools schema is pinned alongside this file. bin/ is gitignored, so this is the only record in git of which engine build src/devtools is validated against. Update both files together whenever you re-sync: see .github/skills/devtools-cli-sync/AGENTS.md."
+}
