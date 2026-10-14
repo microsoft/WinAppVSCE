@@ -39,6 +39,7 @@ namespace WinUIXamlPreview.IntegrationTests
             ("Margin", Group_Margin),
             ("Render", Group_Render),
             ("Edit", Group_Edit),
+            ("Caret", Group_Caret),
         };
 
         private static int Main(string[] args)
