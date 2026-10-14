@@ -61,6 +61,19 @@ internal sealed class FrameServer
     private NetworkStream? _stream;
     private int _shuttingDown;
 
+    /// <summary>Launch-time secret (env <c>SURFACE_AUTH_TOKEN</c>). When set, the first message on a connection
+    /// must be a Hello carrying it; other local processes that race to the port are dropped.</summary>
+    internal const string AuthTokenVariable = "SURFACE_AUTH_TOKEN";
+    /// <summary>Test override (ms) for <see cref="DefaultConnectTimeout"/>.</summary>
+    internal const string ConnectTimeoutVariable = "SURFACE_CONNECT_TIMEOUT_MS";
+    private static readonly TimeSpan DefaultConnectTimeout = TimeSpan.FromSeconds(60);
+    private const int AuthReadTimeoutMs = 10_000;
+    private const int MaxFirstLineBytes = 64 * 1024;
+    private byte[]? _authToken;
+    private int _claimed;
+    // The authenticated Hello, replayed by ReadLoop as the first message.
+    private string? _pendingFirstLine;
+
     // Persisted render state so UpdateXaml/Resize can reuse the last size/scale/document.
     private string? _lastXaml;
     private double _lastWidth = 800;
@@ -86,6 +99,15 @@ internal sealed class FrameServer
     /// </summary>
     public int Start()
     {
+        var token = Environment.GetEnvironmentVariable(AuthTokenVariable);
+        // Keep the secret out of anything this process launches.
+        Environment.SetEnvironmentVariable(AuthTokenVariable, null);
+        _authToken = string.IsNullOrEmpty(token) ? null : Encoding.UTF8.GetBytes(token);
+        if (_authToken is null)
+        {
+            App.Log($"No {AuthTokenVariable}; accepting the first connection without authentication.");
+        }
+
         _listener = new TcpListener(IPAddress.Loopback, 0);
         _listener.Start();
         int port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -98,14 +120,121 @@ internal sealed class FrameServer
 
         new Thread(AcceptLoop) { IsBackground = true, Name = "surface-accept" }.Start();
         new Thread(StdinWatch) { IsBackground = true, Name = "surface-stdin" }.Start();
+        StartConnectWatchdog();
         return port;
+    }
+
+    /// <summary>Exit if no client connects in time, so a launcher that died before connecting (e.g. VS killed
+    /// mid-startup) can't leave this process waiting forever.</summary>
+    private void StartConnectWatchdog()
+    {
+        var timeout = DefaultConnectTimeout;
+        if (int.TryParse(Environment.GetEnvironmentVariable(ConnectTimeoutVariable), out var ms) && ms > 0)
+        {
+            timeout = TimeSpan.FromMilliseconds(ms);
+        }
+
+        new Thread(() =>
+        {
+            Thread.Sleep(timeout);
+            if (Volatile.Read(ref _claimed) == 0)
+            {
+                App.Log($"No client connected within {timeout.TotalSeconds:0.#}s; shutting down.");
+                Shutdown();
+            }
+        }) { IsBackground = true, Name = "surface-connect-watchdog" }.Start();
     }
 
     private void AcceptLoop()
     {
         try
         {
-            _client = _listener!.AcceptTcpClient();
+            while (Volatile.Read(ref _claimed) == 0)
+            {
+                var candidate = _listener!.AcceptTcpClient();
+                if (_authToken is null)
+                {
+                    Interlocked.Exchange(ref _claimed, 1);
+                    Serve(candidate);
+                    return;
+                }
+
+                // Authenticate off the accept thread so a connection that never speaks can't block the real client.
+                new Thread(() => Authenticate(candidate)) { IsBackground = true, Name = "surface-auth" }.Start();
+            }
+        }
+        catch (Exception ex)
+        {
+            // Stop() after a client is claimed ends the pending Accept; that's expected.
+            if (Volatile.Read(ref _claimed) == 0 && _shuttingDown == 0)
+            {
+                App.Log("Accept loop error: " + ex.Message);
+                Shutdown();
+            }
+        }
+    }
+
+    private void Authenticate(TcpClient candidate)
+    {
+        string? first = null;
+        try
+        {
+            candidate.ReceiveTimeout = AuthReadTimeoutMs;
+            first = ReadFirstLine(candidate.GetStream());
+        }
+        catch
+        {
+        }
+
+        if (first != null && HasValidToken(first) && Interlocked.CompareExchange(ref _claimed, 1, 0) == 0)
+        {
+            candidate.ReceiveTimeout = 0;
+            try { _listener!.Stop(); } catch { }
+            _pendingFirstLine = first;
+            Serve(candidate);
+            return;
+        }
+
+        App.Log("Rejected a connection without a valid auth token.");
+        try { candidate.Close(); } catch { }
+    }
+
+    /// <summary>Reads one LF-terminated line byte by byte, so nothing after it is buffered away from ReadLoop.</summary>
+    private static string? ReadFirstLine(NetworkStream stream)
+    {
+        var bytes = new List<byte>();
+        while (bytes.Count < MaxFirstLineBytes)
+        {
+            int b = stream.ReadByte();
+            if (b < 0) return null;
+            if (b == '\n') return Encoding.UTF8.GetString(bytes.ToArray()).Trim();
+            bytes.Add((byte)b);
+        }
+        return null;
+    }
+
+    private bool HasValidToken(string line)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || GetString(root, "type") != "Hello") return false;
+            var presented = GetString(root, "token");
+            return presented != null &&
+                System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(presented), _authToken);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private void Serve(TcpClient client)
+    {
+        try
+        {
+            _client = client;
             _client.NoDelay = true;
             _stream = _client.GetStream();
             App.Log("Client connected.");
@@ -136,6 +265,10 @@ internal sealed class FrameServer
     private void ReadLoop(NetworkStream stream)
     {
         var inbox = new Queue<string>();
+        if (Interlocked.Exchange(ref _pendingFirstLine, null) is { Length: > 0 } first)
+        {
+            inbox.Enqueue(first);
+        }
         var gate = new object();
         var closed = false;
         Exception? fault = null;

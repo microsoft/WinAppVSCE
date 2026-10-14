@@ -43,6 +43,8 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("caps")] public string[] Caps { get; set; } = new[] { "frame-stream", "native-hwnd" };
         [JsonPropertyName("protocol")] public int Protocol { get; set; } = Wire.ProtocolVersion;
         [JsonPropertyName("minProtocol")] public int MinProtocol { get; set; } = Wire.MinProtocolVersion;
+        /// <summary>The per-launch secret passed to the surface in <c>SURFACE_AUTH_TOKEN</c>.</summary>
+        [JsonPropertyName("token"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Token { get; set; }
     }
 
     internal sealed class LoadXamlMsg

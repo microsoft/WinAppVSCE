@@ -318,6 +318,8 @@ namespace WinUIXamlPreview.Protocol
                     return new HostBuildOutcome { Success = false, Error = "failed to start provisioner" };
                 }
 
+                ChildProcessJob.TryAdd(proc, log);
+
                 var stdout = proc.StandardOutput.ReadToEndAsync();
                 var stderr = proc.StandardError.ReadToEndAsync();
 

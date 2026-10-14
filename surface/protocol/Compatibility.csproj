@@ -15,6 +15,8 @@
     <Compile Include="..\Surface\FrameServer.cs" Link="Production\FrameServer.cs" />
     <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\Messages.cs" Link="Production\Messages.cs" />
     <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\SurfaceClient.cs" Link="Production\SurfaceClient.cs" />
+    <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\ChildProcessJob.cs" Link="Production\ChildProcessJob.cs" />
+    <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\CommandLine.cs" Link="Production\CommandLine.cs" />
     <Compile Include="..\..\vs-extension\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Production\LineDecoder.cs" />
   </ItemGroup>
   <!-- Mirrors Surface.csproj's build-time stamp so the linked FrameServer reports a deterministic Ready.wasdk. -->

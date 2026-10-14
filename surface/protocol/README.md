@@ -32,13 +32,25 @@ canonical messages; it is deliberately stricter than several legacy receivers.
 - Surface trims lines and skips blank lines. Its `StreamReader.ReadLine` can
   process a final nonterminated line at EOF. The C# client's `LineDecoder` emits
   only LF-terminated lines: a partial tail at disconnect is not dispatched.
-- There is no message-length limit, authentication handshake, compression,
-  batch envelope, request ID, document ID, sequence number, cancellation message,
-  retry protocol, or reconnect/resume protocol in v1.
+- **Launch token.** The launcher may set `SURFACE_AUTH_TOKEN` in the surface's
+  environment (`SurfaceClient` always sends 32 random bytes as hex). The surface reads
+  and clears it at startup. When set, the first record on a connection must be a
+  `Hello` whose `token` matches exactly, within 10 seconds and 64 KB; any other
+  connection is closed without a reply and the surface keeps listening. The first
+  matching connection claims the surface and the listener closes. Without the
+  variable, the surface serves the first connection as before.
+- **Connect watchdog.** If no client claims the surface within 60 seconds
+  (`SURFACE_CONNECT_TIMEOUT_MS` overrides), it exits. This covers a host that dies
+  between launch and connect.
+- There is no message-length limit, compression, batch envelope, request ID,
+  document ID, sequence number, cancellation message, retry protocol, or
+  reconnect/resume protocol in v1.
 - Socket disconnect ends the real Surface process. Stdin EOF causes shutdown only
   if stdin previously delivered bytes; an immediately closed/ignored stdin does
-  not. Process launch, loading user assemblies, provisioner/cache behavior, and
-  binary/version selection are outside the JSON contract.
+  not. `SurfaceClient` and the provisioner runner also place their child processes
+  in a kill-on-close job object, so they die with the VS process even if it is
+  killed abruptly. Process launch, loading user assemblies, provisioner/cache
+  behavior, and binary/version selection are outside the JSON contract.
 - The C# client has a caller-supplied startup timeout and reports transport/process
   closure locally through `Closed`; these are not wire messages. It sends no
   automatic heartbeat. Surface serializes individual writes with a lock. The C#
@@ -68,8 +80,8 @@ as v1.
 
 - **Surface** checks Hello. Compatible: `Ready` with its own range. Incompatible:
   an `Error` with phase `protocol` **instead of** Ready; the connection stays open,
-  but the client must not proceed. Surface still accepts commands before Hello and
-  answers repeated Hellos.
+  but the client must not proceed. Without a launch token, Surface still accepts
+  commands before Hello; in either mode it answers repeated Hellos.
 - **SurfaceClient** checks Ready. Incompatible, or a `protocol`-phase Error at any
   time, faults the client permanently (`IsProtocolMismatch`, a
   `SurfaceProtocolException` from `StartAsync`, one `Closed`). It never raises

@@ -138,6 +138,8 @@ namespace WinUIXamlPreview.Smoke
 
             await RunFrameworkClient(surfaceExe);
             RunIncompatibleHello(surfaceExe);
+            RunSurfaceAuth(surfaceExe);
+            RunConnectWatchdog(surfaceExe);
             await RunDesignEditClient(surfaceExe);
             await RunSampleDataClient(surfaceExe);
             await RunNonPageClient(surfaceExe);
@@ -256,6 +258,109 @@ namespace WinUIXamlPreview.Smoke
                     reply != null && reply.Contains("\"type\":\"Error\"") && reply.Contains("\"phase\":\"protocol\"") &&
                     reply.Contains("client speaks v99"));
                 Check("R2: real surface sends no Ready to an incompatible client", reply == null || !reply.Contains("\"Ready\""));
+            }
+            finally
+            {
+                try { if (!proc.HasExited) proc.Kill(); proc.WaitForExit(5000); } catch { }
+            }
+        }
+
+        private static System.Diagnostics.Process StartRawSurface(string surfaceExe, params (string Key, string Value)[] env)
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(surfaceExe)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetDirectoryName(surfaceExe)!,
+            };
+            foreach (var (key, value) in env) psi.EnvironmentVariables[key] = value;
+            var proc = System.Diagnostics.Process.Start(psi)!;
+            proc.ErrorDataReceived += (_, __) => { };
+            proc.BeginErrorReadLine();
+            return proc;
+        }
+
+        private static int ReadSurfacePort(System.Diagnostics.Process proc)
+        {
+            int port = 0;
+            var portRead = Task.Run(() =>
+            {
+                string? line;
+                while ((line = proc.StandardOutput.ReadLine()) != null)
+                {
+                    if (line.StartsWith("SURFACE_PORT=", StringComparison.Ordinal) &&
+                        int.TryParse(new string(line.Substring(13).TakeWhile(char.IsDigit).ToArray()), out port))
+                    {
+                        return;
+                    }
+                }
+            });
+            return portRead.Wait(TimeSpan.FromSeconds(30)) ? port : 0;
+        }
+
+        /// <summary>Sends one line on a fresh connection and returns the first reply, or null when the
+        /// surface closes the connection without answering.</summary>
+        private static string? SendFirstLine(int port, string line)
+        {
+            using var tcp = new System.Net.Sockets.TcpClient();
+            tcp.Connect(System.Net.IPAddress.Loopback, port);
+            using var stream = tcp.GetStream();
+            var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+            var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+            writer.WriteLine(line);
+            try
+            {
+                var replyTask = reader.ReadLineAsync();
+                return replyTask.Wait(TimeSpan.FromSeconds(20)) ? replyTask.Result : "(timeout)";
+            }
+            catch (AggregateException) { return null; }
+            catch (IOException) { return null; }
+        }
+
+        // Per-launch token: connections without the right token in their first Hello are dropped and the
+        // surface keeps listening for the real client.
+        private static void RunSurfaceAuth(string surfaceExe)
+        {
+            Console.WriteLine("--- surface auth token ---");
+            const string token = "0123456789abcdef0123456789abcdef";
+            using var proc = StartRawSurface(surfaceExe, ("SURFACE_AUTH_TOKEN", token));
+            try
+            {
+                var port = ReadSurfacePort(proc);
+                if (port == 0) { Check("auth: real surface announced a port", false); return; }
+
+                var hello = "{\"type\":\"Hello\",\"client\":\"smoke\",\"protocol\":" + Wire.ProtocolVersion +
+                    ",\"minProtocol\":" + Wire.MinProtocolVersion;
+                var wrong = SendFirstLine(port, hello + ",\"token\":\"ffffffffffffffffffffffffffffffff\"}");
+                Check("auth: Hello with a wrong token is dropped unanswered", wrong == null);
+                var missing = SendFirstLine(port, hello + "}");
+                Check("auth: Hello without a token is dropped unanswered", missing == null);
+                var notHello = SendFirstLine(port, "{\"type\":\"Resize\",\"width\":10,\"height\":10}");
+                Check("auth: a non-Hello first message is dropped unanswered", notHello == null);
+                var right = SendFirstLine(port, hello + ",\"token\":\"" + token + "\"}");
+                Console.WriteLine($"    reply = {right ?? "(none)"}");
+                Check("auth: the right token still gets Ready after rejected attempts",
+                    right != null && right.Contains("\"type\":\"Ready\""));
+            }
+            finally
+            {
+                try { if (!proc.HasExited) proc.Kill(); proc.WaitForExit(5000); } catch { }
+            }
+        }
+
+        // A surface whose host never connects (host died between launch and connect) exits on its own.
+        private static void RunConnectWatchdog(string surfaceExe)
+        {
+            Console.WriteLine("--- connect watchdog ---");
+            using var proc = StartRawSurface(surfaceExe,
+                ("SURFACE_AUTH_TOKEN", "watchdog"), ("SURFACE_CONNECT_TIMEOUT_MS", "3000"));
+            try
+            {
+                var port = ReadSurfacePort(proc);
+                var exited = proc.WaitForExit(20000);
+                Check("watchdog: an unclaimed surface exits on its own", port != 0 && exited);
             }
             finally
             {

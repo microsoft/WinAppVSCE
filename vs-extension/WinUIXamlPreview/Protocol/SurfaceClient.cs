@@ -50,6 +50,18 @@ namespace WinUIXamlPreview.Protocol
         private bool _disposed;
         private bool _connecting;
         private string? _privateRun;
+        private readonly string _authToken = NewAuthToken();
+
+        private static string NewAuthToken()
+        {
+            var bytes = new byte[32];
+            using (var rng = System.Security.Cryptography.RandomNumberGenerator.Create())
+            {
+                rng.GetBytes(bytes);
+            }
+
+            return BitConverter.ToString(bytes).Replace("-", string.Empty);
+        }
 
         // Failure funnel: every failure (startup, connect, read-loop close, timeout, process exit) routes
         // through Fault(). _lifetimeCts cancels the connect + read loop on fault/dispose; _timeoutCts (linked
@@ -208,6 +220,9 @@ namespace WinUIXamlPreview.Protocol
             psi.EnvironmentVariables["SURFACE_THEME"] =
                 string.Equals(_theme, "Dark", StringComparison.OrdinalIgnoreCase) ? "Dark" :
                 string.Equals(_theme, "Light", StringComparison.OrdinalIgnoreCase) ? "Light" : "Default";
+            // Only the process holding this secret can drive the surface; it's in the environment, not the
+            // command line, so other users can't read it from the process list.
+            psi.EnvironmentVariables["SURFACE_AUTH_TOKEN"] = _authToken;
 
             try
             {
@@ -216,6 +231,7 @@ namespace WinUIXamlPreview.Protocol
                 _proc.ErrorDataReceived += OnStderr;
                 _proc.Exited += OnExited;
                 _proc.Start();
+                ChildProcessJob.TryAdd(_proc, _log);
                 _spawnMs = _startSw.ElapsedMilliseconds;
                 _proc.BeginOutputReadLine();
                 _proc.BeginErrorReadLine();
@@ -318,7 +334,7 @@ namespace WinUIXamlPreview.Protocol
                     _tcp = tcp;
                     _stream = tcp.GetStream();
                     _log("Connected to surface. Sending Hello.");
-                    Send(new HelloMsg());
+                    Send(new HelloMsg { Token = _authToken });
                     await ReadLoop(_stream, token).ConfigureAwait(false);
                 }
                 catch (Exception ex)

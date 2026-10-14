@@ -45,6 +45,8 @@ export interface Hello {
     caps?: Capability[];
     protocol?: number;
     minProtocol?: number;
+    /** Per-launch secret from `SURFACE_AUTH_TOKEN`; required when the surface was launched with one. */
+    token?: string;
 }
 export interface LoadXaml extends Size { type: 'LoadXaml'; xaml: string; sampleData?: boolean }
 export interface UpdateXaml { type: 'UpdateXaml'; xaml: string; sampleData?: boolean }

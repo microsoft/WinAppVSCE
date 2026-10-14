@@ -28,12 +28,39 @@ namespace WinUIXamlPreview.FaultTests
             // SurfaceClient launches us with only its own (--user-dll) args, so we can't rely on a CLI
             // flag to pick the fake-surface role. Instead the suite sets FAKE_SURFACE_MODE before each
             // launch; the child inherits it and becomes the fake. The suite starts without it set.
+            if (Environment.GetEnvironmentVariable("FAKE_HOST_MODE") != null)
+            {
+                return FakeHost.Run();
+            }
+
             if (Environment.GetEnvironmentVariable("FAKE_SURFACE_MODE") != null)
             {
                 return FakeSurface.Run();
             }
 
             return TestSuite.Run();
+        }
+    }
+
+    // ---- The fake host (stands in for devenv) ----------------------------------------------------
+
+    internal static class FakeHost
+    {
+        /// <summary>Launches a never-connecting fake surface through the production client, reports its PID,
+        /// then waits to be killed, so the suite can check the surface dies with its host.</summary>
+        public static int Run()
+        {
+            Environment.SetEnvironmentVariable("FAKE_HOST_MODE", null);
+            Environment.SetEnvironmentVariable("FAKE_SURFACE_MODE", "no-port");
+            var self = Process.GetCurrentProcess().MainModule!.FileName;
+            var client = new SurfaceClient(self, userDll: null, log: _ => { });
+            _ = client.StartAsync(TimeSpan.FromMinutes(10));
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (client.ProcessId == null && DateTime.UtcNow < deadline) Thread.Sleep(20);
+            Console.Out.WriteLine($"HOST_SURFACE_PID={client.ProcessId}");
+            Console.Out.Flush();
+            Thread.Sleep(Timeout.Infinite);
+            return 0;
         }
     }
 
@@ -71,6 +98,10 @@ namespace WinUIXamlPreview.FaultTests
             // Consume the Hello the client sends on connect, and report it so the suite can check what went on the wire.
             var hello = reader.ReadLine();
             stdout.WriteLine("FAKE_HELLO=" + hello);
+            var expectedToken = Environment.GetEnvironmentVariable("SURFACE_AUTH_TOKEN");
+            var tokenMatches = !string.IsNullOrEmpty(expectedToken) && hello != null
+                && hello.Contains("\"token\":\"" + expectedToken + "\"");
+            stdout.WriteLine("FAKE_TOKEN_MATCH=" + (tokenMatches ? "true" : "false"));
             stdout.Flush();
 
             switch (mode)
@@ -181,6 +212,8 @@ namespace WinUIXamlPreview.FaultTests
             SendAfterCloseIsSwallowed();
             IntentionalDisposeSuppressesClosedAndIsIdempotent();
             HelloAdvertisesProtocolRange();
+            HelloCarriesTheLaunchToken();
+            SurfaceDiesWithItsHost();
             IncompatibleReadyFaultsFastAndPermanently();
             ProtocolErrorFaultsFastAndPermanently();
             LegacyReadyIsAccepted();
@@ -377,6 +410,73 @@ namespace WinUIXamlPreview.FaultTests
             Assert(name, ok, hello ?? "no Hello captured");
         }
 
+        private static void HelloCarriesTheLaunchToken()
+        {
+            const string name = "Hello carries the per-launch token passed in SURFACE_AUTH_TOKEN";
+            string? first = null;
+            using (var h = new Harness("ready-idle"))
+            {
+                try { h.Client.StartAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult(); }
+                catch (Exception ex) { Fail(name, $"expected Ready, got {ex.GetType().Name}: {ex.Message}"); return; }
+                first = h.WaitForHello(TimeSpan.FromSeconds(3));
+                var matched = h.WaitForTokenMatch(TimeSpan.FromSeconds(3));
+                if (matched != true) { Fail(name, $"token match={matched?.ToString() ?? "none"}; hello={first}"); return; }
+            }
+
+            using var h2 = new Harness("ready-idle");
+            try { h2.Client.StartAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult(); }
+            catch (Exception ex) { Fail(name, $"second launch: {ex.GetType().Name}: {ex.Message}"); return; }
+            var second = h2.WaitForHello(TimeSpan.FromSeconds(3));
+            Assert(name, first != null && second != null && first != second, "each launch must get a fresh token");
+        }
+
+        private static void SurfaceDiesWithItsHost()
+        {
+            const string name = "a surface dies when its host process is killed (job object)";
+            var psi = new ProcessStartInfo(FakeExe)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+            };
+            psi.EnvironmentVariables.Remove("FAKE_SURFACE_MODE");
+            psi.EnvironmentVariables["FAKE_HOST_MODE"] = "1";
+            using var host = Process.Start(psi)!;
+            int surfacePid = 0;
+            try
+            {
+                var read = Task.Run(() =>
+                {
+                    string? line;
+                    while ((line = host.StandardOutput.ReadLine()) != null)
+                    {
+                        if (line.StartsWith("HOST_SURFACE_PID=", StringComparison.Ordinal))
+                        {
+                            int.TryParse(line.Substring("HOST_SURFACE_PID=".Length), out surfacePid);
+                            return;
+                        }
+                    }
+                });
+                if (!read.Wait(TimeSpan.FromSeconds(15)) || surfacePid == 0)
+                {
+                    Fail(name, "host never reported its surface PID");
+                    return;
+                }
+
+                using var surface = Process.GetProcessById(surfacePid);
+                var aliveBefore = !surface.HasExited;
+                host.Kill();
+                host.WaitForExit(5000);
+                var died = surface.WaitForExit(5000);
+                Assert(name, aliveBefore && died, $"aliveBefore={aliveBefore}, diedWithHost={died}, pid={surfacePid}");
+                if (!died) { try { surface.Kill(); } catch { } }
+            }
+            finally
+            {
+                try { if (!host.HasExited) host.Kill(); } catch { }
+            }
+        }
+
         private static void IncompatibleReadyFaultsFastAndPermanently()
             => AssertProtocolFault("ready-incompatible",
                 "R2: incompatible Ready → StartAsync fails fast with SurfaceProtocolException, one Closed, reaped", "v99");
@@ -505,6 +605,7 @@ namespace WinUIXamlPreview.FaultTests
             private int _closed;
             private int _errors;
             private volatile string? _hello;
+            private volatile string? _tokenMatch;
             private readonly ManualResetEventSlim _closedSignal = new(false);
 
             public Harness(string mode)
@@ -522,6 +623,13 @@ namespace WinUIXamlPreview.FaultTests
 
             private void Log(string line)
             {
+                var matchAt = line.IndexOf("FAKE_TOKEN_MATCH=", StringComparison.Ordinal);
+                if (matchAt >= 0)
+                {
+                    _tokenMatch = line.Substring(matchAt + "FAKE_TOKEN_MATCH=".Length).Trim();
+                    return;
+                }
+
                 var helloAt = line.IndexOf("FAKE_HELLO=", StringComparison.Ordinal);
                 if (helloAt >= 0)
                 {
@@ -553,6 +661,13 @@ namespace WinUIXamlPreview.FaultTests
                 var deadline = DateTime.UtcNow + timeout;
                 while (_hello == null && DateTime.UtcNow < deadline) Thread.Sleep(50);
                 return _hello;
+            }
+
+            public bool? WaitForTokenMatch(TimeSpan timeout)
+            {
+                var deadline = DateTime.UtcNow + timeout;
+                while (_tokenMatch == null && DateTime.UtcNow < deadline) Thread.Sleep(50);
+                return _tokenMatch == null ? null : _tokenMatch == "true";
             }
 
             public bool WaitForError(TimeSpan timeout)
