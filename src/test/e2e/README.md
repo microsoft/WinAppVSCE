@@ -45,7 +45,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (226 tests)
+## Test inventory (227 tests)
 
 The sections below cover the suites with per-test tables. Four smaller specs are
 not tabulated but are part of the total: `mrt-validation.spec.ts` (6),
@@ -85,7 +85,7 @@ they never wrote.
 |---|------|-----------|
 | 1 | invalid inputFolder offers to open its debug configuration | Validation cancels debugging, shows the resource-neutral action, and opens the correct folder `launch.json` with its unique configuration content |
 
-### `run-target-picker.spec.ts` — 14 tests
+### `run-target-picker.spec.ts` — 15 tests
 
 Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which depends on VS Code's own `findFiles` indexing and workspace-folder resolution and so cannot be unit tested. Every test dismisses the picker with `cancelAndExpectNoFollowUp`, which presses `Escape` and then asserts the quick input is gone and no notification replaced it — so the CLI is never invoked, and a flow that swallowed the cancellation would fail rather than pass silently.
 
@@ -105,6 +105,7 @@ Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which de
 | 12 | With Options command skips the target prompt for a single project | `winapp.runWithOptions` auto-selects the only candidate, matching `winapp.run`, and goes straight to the build prompt |
 | 13 | F5 with no input in launch.json prompts for a run target | A `winapp` launch configuration that omits `input` falls through to the picker instead of failing with a missing-argument error |
 | 14 | With Options skips the build prompts in folder mode | A build-output target goes straight to the toggle prompt, and project-only toggles stay hidden there |
+| 15 | checking Download symbols also checks Capture debug output | Selecting the symbols toggle turns on the debug-output toggle it requires, so the pair cannot be submitted half-set |
 
 > When matching the picker, assert on the full placeholder. The command palette's own placeholder is "Type the name of a command **to run**", so a loose `/to run/` match silently reads the palette's rows instead of the picker's.
 
