@@ -97,7 +97,7 @@ internal sealed class RenderHost
         // server lifetime, independent of anything we do to the render window.
         _anchor = new Window();
         var anchorHwnd = Win32Interop.GetWindowFromWindowId(_anchor.AppWindow.Id);
-        _anchor.AppWindow.IsShownInSwitchers = false;
+        HideFromSwitchers(_anchor);
         SetToolWindowStyle(anchorHwnd);
         SetCloaked(anchorHwnd, true);
         _anchor.AppWindow.Move(new PointInt32(-32000, -32000));
@@ -107,7 +107,7 @@ internal sealed class RenderHost
         _renderWindow = new Window();
         var renderHwnd = Win32Interop.GetWindowFromWindowId(_renderWindow.AppWindow.Id);
         _renderHwnd = renderHwnd;
-        _renderWindow.AppWindow.IsShownInSwitchers = false;
+        HideFromSwitchers(_renderWindow);
         SetToolWindowStyle(renderHwnd);
         SetCloaked(renderHwnd, true);
         _dpiScale = GetDpiForWindow(renderHwnd) / 96.0;
@@ -1294,6 +1294,17 @@ internal sealed class RenderHost
     private const long WS_CHILD = 0x40000000L;
     private const long WS_EX_TOOLWINDOW = 0x00000080L;
     private const long WS_EX_APPWINDOW = 0x00040000L;
+
+    /// <summary>
+    /// <c>IsShownInSwitchers</c> throws on a desktop with no shell/switcher (e.g. a non-interactive desktop used
+    /// for headless test runs). <see cref="SetToolWindowStyle"/> already keeps the window out of Alt-Tab, so the
+    /// failure is safe to ignore.
+    /// </summary>
+    private static void HideFromSwitchers(Window window)
+    {
+        try { window.AppWindow.IsShownInSwitchers = false; }
+        catch (Exception ex) { App.Log($"IsShownInSwitchers unavailable: {ex.Message}"); }
+    }
 
     /// <summary>
     /// Force a window off the taskbar and Alt-Tab for good: add <c>WS_EX_TOOLWINDOW</c> and strip
