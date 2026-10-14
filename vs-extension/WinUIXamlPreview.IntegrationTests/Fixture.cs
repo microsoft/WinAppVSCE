@@ -13,6 +13,8 @@ namespace WinUIXamlPreview.IntegrationTests
         public string SecondPage => Path.Combine(WinUiDir, "SecondPage.xaml");
         public string BrokenPage => Path.Combine(WinUiDir, "BrokenPage.xaml");
         public string Dictionary => Path.Combine(WinUiDir, "Styles.xaml");
+        /// <summary>Only the Save As test uses this: VS keeps a renamed buffer's identity, so a renamed page can't be reused.</summary>
+        public string SaveAsPage => Path.Combine(WinUiDir, "SaveAsPage.xaml");
         public string WpfWindow => Path.Combine(Root, "WpfApp", "MainWindow.xaml");
 
         public Fixture(string root)
@@ -76,6 +78,7 @@ $"Project(\"{{{sdkProject}}}\") = \"WpfApp\", \"WpfApp\\WpfApp.csproj\", \"{{3C1
             File.WriteAllText(SecondPage, SecondPageXaml);
             File.WriteAllText(BrokenPage, BrokenPageXaml);
             File.WriteAllText(Dictionary, DictionaryXaml);
+            File.WriteAllText(SaveAsPage, SecondPageXaml);
         }
 
         public const string MainPageXaml =

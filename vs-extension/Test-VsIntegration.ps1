@@ -39,7 +39,7 @@ $runnerExe = Join-Path $here "WinUIXamlPreview.IntegrationTests\bin\Debug\net472
 
 if (-not $SkipBuild) {
     Write-Host "Building product VSIX..."
-    & (Join-Path $here "Build-Vsix.ps1") -NoDeploy | Out-Host
+    & (Join-Path $here "WinUIXamlPreview\Build-Vsix.ps1") -NoDeploy | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Build-Vsix.ps1 failed" }
 
     $msb = & (Join-Path $here "Find-DesktopMSBuild.ps1")

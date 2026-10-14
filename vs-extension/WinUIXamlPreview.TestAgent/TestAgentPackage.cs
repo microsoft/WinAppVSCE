@@ -159,6 +159,11 @@ namespace WinUIXamlPreview.TestAgent
                 case "dteCommand": Dte().ExecuteCommand(Str(req, "name"), (string?)req["args"] ?? ""); return true;
                 case "toolWindowVisible": return ToolWindowVisible(Str(req, "guid"));
                 case "hideToolWindow": return HideToolWindow(Str(req, "guid"));
+                case "closeSolution":
+                    Dte().Documents.CloseAll(vsSaveChanges.vsSaveChangesNo);
+                    RevertDirtyDocData();
+                    Dte().Solution.Close(false);
+                    return true;
                 case "quit":
                     Dte().Documents.CloseAll(vsSaveChanges.vsSaveChangesNo);
                     try { Dte().Solution.Close(false); } catch { }

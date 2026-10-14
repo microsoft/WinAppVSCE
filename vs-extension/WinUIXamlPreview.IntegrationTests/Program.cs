@@ -31,7 +31,7 @@ namespace WinUIXamlPreview.IntegrationTests
         private static Fixture _fx = null!;
         private static int _passed, _failed;
         private static readonly List<string> Failures = new List<string>();
-        private static readonly HashSet<int> SurfacePids = new HashSet<int>();
+        private static readonly Dictionary<int, DateTime?> SurfacePids = new Dictionary<int, DateTime?>();
 
         private static readonly (string Name, Action Body)[] Groups =
         {
@@ -43,6 +43,7 @@ namespace WinUIXamlPreview.IntegrationTests
             ("Toolbar", Group_Toolbar),
             ("Errors", Group_Errors),
             ("Crash", Group_Crash),
+            ("Teardown", Group_Teardown),
         };
 
         private static int Main(string[] args)
@@ -120,7 +121,17 @@ namespace WinUIXamlPreview.IntegrationTests
             {
                 if (!keepOpen)
                 {
+                    var clean = _vs != null && _agent != null;
                     ShutdownVs();
+                    if (clean)
+                    {
+                        Run("Teardown: no surface process outlives VS", () =>
+                        {
+                            var left = SurvivingSurfaces(SeenSurfacePids.ToList());
+                            foreach (var pid in left) Kill(pid);
+                            Assert(left.Count == 0, $"{left.Count} of {SeenSurfacePids.Count} surfaces still running after VS exited: {string.Join(", ", left)}");
+                        });
+                    }
                 }
             }
 
@@ -317,8 +328,34 @@ namespace WinUIXamlPreview.IntegrationTests
         {
             if (n != null && n.GetValueKind() == System.Text.Json.JsonValueKind.Number)
             {
-                SurfacePids.Add(n.GetValue<int>());
+                var pid = n.GetValue<int>();
+                if (!SurfacePids.ContainsKey(pid))
+                {
+                    SurfacePids[pid] = StartTime(pid);
+                }
             }
+        }
+
+        private static DateTime? StartTime(int pid)
+        {
+            try { using var p = Process.GetProcessById(pid); return p.StartTime; }
+            catch (Exception) { return null; }
+        }
+
+        /// <summary>The surface we saw is still running (not a later process that reused its PID).</summary>
+        internal static bool SurfaceAlive(int pid) =>
+            SurfacePids.TryGetValue(pid, out var started) && started != null && StartTime(pid) == started;
+
+        /// <summary>Waits up to <paramref name="timeoutMs"/> for every given surface to exit; returns the survivors.</summary>
+        internal static List<int> SurvivingSurfaces(IEnumerable<int> pids, int timeoutMs = 15_000)
+        {
+            var end = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            List<int> alive;
+            while ((alive = pids.Where(SurfaceAlive).ToList()).Count > 0 && DateTime.UtcNow < end)
+            {
+                Thread.Sleep(250);
+            }
+            return alive;
         }
 
         private static void CollectPids()
@@ -422,7 +459,7 @@ namespace WinUIXamlPreview.IntegrationTests
             }
         }
 
-        internal static IReadOnlyCollection<int> SeenSurfacePids => SurfacePids;
+        internal static IReadOnlyCollection<int> SeenSurfacePids => SurfacePids.Keys;
     }
 
     internal sealed class TestFailure : Exception

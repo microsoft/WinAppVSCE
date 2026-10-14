@@ -102,18 +102,18 @@ namespace WinUIXamlPreview.IntegrationTests
             Run("Render: Save As follows the renamed document", () =>
             {
                 Fresh();
-                OpenRendered(_fx.SecondPage);
+                OpenRendered(_fx.SaveAsPage);
                 var renamed = Path.Combine(_fx.WinUiDir, "RenamedPage.xaml");
                 if (File.Exists(renamed)) File.Delete(renamed);
                 var mark = LogMark();
-                Call("save", new { path = _fx.SecondPage, newPath = renamed });
+                Call("save", new { path = _fx.SaveAsPage, newPath = renamed });
                 WaitForLog(mark, "renamed");
                 var s = WaitFor("margin re-pinned to the new path", x => Margin(x, renamed) != null
                                                                         && SamePath((string?)Preview(x, renamed)!["pinnedPath"], renamed), 30_000);
-                Assert(Margin(s, _fx.SecondPage) == null, "old-path margin still live");
+                Assert(Margin(s, _fx.SaveAsPage) == null, "old-path margin still live");
                 WaitFor("renamed page rendered", x => Rendered(Preview(x, renamed)) && SamePath((string?)Preview(x, renamed)!["currentPath"], renamed), 60_000);
                 Call("closeAll");
-                File.Delete(renamed);
+                WaitFor("renamed margin disposed", x => Margin(x, renamed) == null, 15_000);
             });
 
             Run("Render: closing a tab disposes its margin and ends its surface", () =>

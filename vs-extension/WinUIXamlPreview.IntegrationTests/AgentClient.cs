@@ -35,6 +35,8 @@ namespace WinUIXamlPreview.IntegrationTests
             }
         }
 
+        private static readonly TimeSpan CallTimeout = TimeSpan.FromMinutes(2);
+
         public JsonNode? Call(string cmd, object? args = null)
         {
             var req = new JsonObject { ["cmd"] = cmd };
@@ -47,7 +49,14 @@ namespace WinUIXamlPreview.IntegrationTests
             }
 
             _writer.WriteLine(req.ToJsonString());
-            var line = _reader.ReadLine() ?? throw new IOException("agent pipe closed during " + cmd);
+            // A hidden modal dialog blocks the UI thread forever; fail the run instead of hanging it.
+            var read = _reader.ReadLineAsync();
+            if (!read.Wait(CallTimeout))
+            {
+                Dispose();
+                throw new IOException($"agent did not answer '{cmd}' within {CallTimeout.TotalSeconds:0}s (VS is probably showing a modal dialog)");
+            }
+            var line = read.Result ?? throw new IOException("agent pipe closed during " + cmd);
             var resp = JsonNode.Parse(line)!.AsObject();
             if (resp["ok"]?.GetValue<bool>() != true)
             {
