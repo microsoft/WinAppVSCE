@@ -115,7 +115,7 @@ namespace WinUIXamlPreview.TestAgent
                 case "open": return Open(Str(req, "path"));
                 case "isOpen": return VsShellUtilities.IsDocumentOpen(this, Str(req, "path"), Guid.Empty, out _, out _, out _);
                 case "close": return Close(Str(req, "path"), (bool?)req["save"] ?? false);
-                case "closeAll": Dte().Documents.CloseAll(vsSaveChanges.vsSaveChangesNo); return true;
+                case "closeAll": Dte().Documents.CloseAll(vsSaveChanges.vsSaveChangesNo); return RevertDirtyDocData();
                 case "activate": return Activate(Str(req, "path"));
                 case "text": return View(Str(req, "path")).TextBuffer.CurrentSnapshot.GetText();
                 case "setText": return Replace(Str(req, "path"), 0, -1, Str(req, "text"));
@@ -175,6 +175,48 @@ namespace WinUIXamlPreview.TestAgent
         private static string Str(JObject req, string name) => (string?)req[name] ?? throw new ArgumentException("missing " + name);
 
         private DTE2 Dte() => (DTE2)GetGlobalService(typeof(SDTE));
+
+        // Closing a tab without saving doesn't always discard the buffer: a loaded project can keep the doc
+        // data alive (dirty) in the RDT, and reopening shows the stale edits. Reload any such doc from disk.
+        private int RevertDirtyDocData()
+        {
+            var rdt = (IVsRunningDocumentTable)GetGlobalService(typeof(SVsRunningDocumentTable));
+            if (rdt.GetRunningDocumentsEnum(out var docs) != 0 || docs == null)
+            {
+                return 0;
+            }
+
+            var reverted = 0;
+            var cookie = new uint[1];
+            while (docs.Next(1, cookie, out var fetched) == 0 && fetched == 1)
+            {
+                rdt.GetDocumentInfo(cookie[0], out _, out _, out _, out var moniker, out _, out _, out var punk);
+                if (punk == IntPtr.Zero)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (Marshal.GetObjectForIUnknown(punk) is IVsPersistDocData data
+                        && data.IsDocDataDirty(out var dirty) == 0 && dirty != 0)
+                    {
+                        data.ReloadDocData(0);
+                        reverted++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Revert {moniker} failed: {ex.Message}");
+                }
+                finally
+                {
+                    Marshal.Release(punk);
+                }
+            }
+
+            return reverted;
+        }
 
         private Type Hooks()
         {

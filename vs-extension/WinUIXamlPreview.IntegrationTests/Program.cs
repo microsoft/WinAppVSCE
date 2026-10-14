@@ -38,6 +38,7 @@ namespace WinUIXamlPreview.IntegrationTests
             ("Load", Group_Load),
             ("Margin", Group_Margin),
             ("Render", Group_Render),
+            ("Edit", Group_Edit),
         };
 
         private static int Main(string[] args)
