@@ -152,8 +152,22 @@ test('the tree reports the XAML file each element came from @winui-app', async (
     await expect(row.locator('.node-file')).toContainText('MainPage.xaml');
 });
 
-test('selecting an element populates the property grid @winui-app', async () => {
+test('the tree captions each row with the element\u2019s own text @winui-app', async () => {
     test.setTimeout(120_000);
+
+    const frame = await devToolsFrame();
+
+    await frame.locator('#filter').fill('FixtureHeading');
+    const row = frame.locator('.tree-row', { hasText: 'FixtureHeading' }).first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+
+    // Captions come from a second call (VisualTree.getPreviews) made only for
+    // the rows on screen, so this also proves the lazy fetch reaches the row
+    // the user is looking at. MainPage.xaml sets Text="DevTools Fixture".
+    await expect(row.locator('.node-preview')).toContainText('DevTools Fixture', { timeout: 30_000 });
+});
+
+test('selecting an element populates the property grid @winui-app', async () => {    test.setTimeout(120_000);
 
     const frame = await devToolsFrame();
 

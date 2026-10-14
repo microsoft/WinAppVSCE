@@ -290,7 +290,10 @@ body { display: flex; flex-direction: column; }
 .tree-viewport {
     flex: 1 1 auto;
     overflow-y: auto;
-    overflow-x: auto;
+    /* Rows ellipsize instead of scrolling sideways: a horizontal scrollbar
+       moves the whole tree off-screen to read one long label, and the label
+       is already reachable through the row tooltip. */
+    overflow-x: hidden;
     position: relative;
     outline: none;
     padding: 8px;
@@ -316,7 +319,7 @@ body { display: flex; flex-direction: column; }
 
 .tree-row:hover { background: var(--vscode-list-hoverBackground); }
 .tree-row.selected { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
-.tree-row.selected .node-name, .tree-row.selected .node-file { color: inherit; }
+.tree-row.selected .node-name, .tree-row.selected .node-file, .tree-row.selected .node-preview { color: inherit; }
 
 .twisty {
     flex: 0 0 16px;
@@ -327,9 +330,13 @@ body { display: flex; flex-direction: column; }
 }
 .twisty.leaf { visibility: hidden; }
 
-.node-type { color: var(--vscode-symbolIcon-classForeground, var(--vscode-foreground)); }
-.node-name { margin-left: 6px; color: var(--vscode-descriptionForeground); }
-.node-file { margin-left: 8px; font-size: 0.85em; opacity: 0.6; }
+/* Rows never scroll sideways, so every caption part has to be able to shrink;
+   without min-width:0 a flex item refuses to go below its text width. */
+.node-type { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--vscode-symbolIcon-classForeground, var(--vscode-foreground)); }
+.node-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 6px; color: var(--vscode-descriptionForeground); }
+/* The element's own text, which is usually how a human recognizes the row. */
+.node-preview { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 8px; color: var(--vscode-debugTokenExpression-string, var(--vscode-descriptionForeground)); }
+.node-file { flex: 0 0 auto; margin-left: 8px; font-size: 0.85em; opacity: 0.6; }
 
 .tree-empty, .props-empty {
     padding: 12px 10px;
@@ -660,6 +667,18 @@ select.pfield { font-family: var(--vscode-font-family); }
 .comment-el { font-family: Consolas, 'Cascadia Mono', monospace; font-size: 11px; color: var(--vscode-descriptionForeground); }
 .comment-text { margin: 4px 0; white-space: pre-wrap; font-size: 12px; }
 .comment-meta { font-size: 10px; color: var(--vscode-descriptionForeground); }
+.comment-source {
+    margin-top: 4px;
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 10px;
+    color: var(--vscode-textLink-foreground);
+    cursor: pointer;
+    text-align: left;
+}
+.comment-source:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
 .comment-actions { display: flex; gap: 6px; margin-top: 6px; }
 
 .comment-compose {

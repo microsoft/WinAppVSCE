@@ -59,9 +59,27 @@ interface CommentListResult {
         element?: string;
         handle?: string;
         file?: string;
+        uri?: string;
+        line?: number;
         placed?: boolean;
     }[];
 }
+
+interface VisualTreePreviewResult {
+    previews?: {
+        handle: string;
+        preview: string;
+        automationId?: string;
+        file?: string;
+        line?: number;
+    }[];
+}
+
+/**
+ * The engine's cap on one `VisualTree.getPreviews` call. Asking for more is a
+ * protocol error rather than a truncated answer, so the panel chunks instead.
+ */
+const PREVIEW_BATCH = 256;
 
 interface SurfaceListResult {
     surfaces?: { name: string; window?: string; active?: boolean }[];
@@ -354,7 +372,10 @@ export class DevToolsPanel {
             status: row.status,
             element: row.element,
             handle: row.handle,
-            window: row.file,
+            // Carried so the panel can offer the declaration as a link. In the
+            // native window this is read-only text; in an editor it can open.
+            file: row.file || row.uri,
+            line: row.line,
             // The engine reports placed:false when it could not re-find the
             // element, which is exactly when a human should confirm.
             requiresConfirmation: row.placed === false,
@@ -365,6 +386,34 @@ export class DevToolsPanel {
         this.lastCommentsJson = json;
 
         this.post({ type: 'comments', comments });
+    }
+
+    /**
+     * Fetches one-line captions for the rows the webview currently shows.
+     *
+     * `VisualTree.enumerate` carries no caption, so without this the tree reads
+     * as a column of bare type names and you cannot tell two Buttons apart. The
+     * webview asks only for what is on screen, because a caption costs a live
+     * read of the element.
+     */
+    private async sendPreviews(handles: string[]): Promise<void> {
+        const client = this.client;
+        if (!client || this.disposed || handles.length === 0) { return; }
+        if (!client.supports('VisualTree.getPreviews')) { return; }
+
+        const previews: NonNullable<VisualTreePreviewResult['previews']> = [];
+        for (let i = 0; i < handles.length; i += PREVIEW_BATCH) {
+            const batch = handles.slice(i, i + PREVIEW_BATCH);
+            const result = await client.trySend(
+                'VisualTree.getPreviews',
+                { handles: batch },
+            ) as VisualTreePreviewResult | undefined;
+            if (!result) { return; }
+            previews.push(...(result.previews ?? []));
+        }
+
+        if (this.disposed) { return; }
+        this.post({ type: 'previews', previews });
     }
 
     private async refreshSurfaces(): Promise<void> {
@@ -518,6 +567,10 @@ export class DevToolsPanel {
                 });
                 await this.refreshSurfaces();
                 await this.refreshTree();
+                return;
+
+            case 'requestPreviews':
+                await this.sendPreviews(message.handles ?? []);
                 return;
 
             case 'loadComments':

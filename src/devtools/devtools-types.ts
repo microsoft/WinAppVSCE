@@ -48,10 +48,21 @@ export interface CommentPayload {
     status?: string;
     element?: string;
     automationId?: string;
-    window?: string;
     handle?: string;
+    /** Declaration site of the commented element, when the engine still knows it. */
+    file?: string;
+    line?: number;
     /** True when the engine matched the element weakly and wants a human check. */
     requiresConfirmation?: boolean;
+}
+
+/** A one-line caption for a tree row, read live from the element. */
+export interface PreviewPayload {
+    handle: string;
+    preview: string;
+    automationId?: string;
+    file?: string;
+    line?: number;
 }
 
 /** One diagnosed binding, as reported by the managed binding agent. */
@@ -109,6 +120,7 @@ export type ExtensionToWebviewMessage =
     | { type: 'pickStateChanged'; armed: boolean }
     | { type: 'treeInvalidated'; reason?: string }
     | { type: 'comments'; comments: CommentPayload[] }
+    | { type: 'previews'; previews: PreviewPayload[] }
     | { type: 'commentError'; message: string }
     | { type: 'binding'; name: string; binding: BindingPayload }
     | { type: 'bindingRestoreConfirm'; name: string; scope?: string }
@@ -125,6 +137,7 @@ export type WebviewToExtensionMessage =
     | { type: 'selectNode'; handle: string }
     | { type: 'hoverNode'; handle: string | undefined }
     | { type: 'expandNode'; handle: string }
+    | { type: 'requestPreviews'; handles: string[] }
     | { type: 'togglePick'; armed: boolean }
     | { type: 'toggleFocusTracking'; armed: boolean }
     | { type: 'toggleLayout'; armed: boolean; handle?: string }
