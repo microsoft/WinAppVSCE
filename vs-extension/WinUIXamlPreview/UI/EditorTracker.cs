@@ -79,9 +79,26 @@ namespace WinUIXamlPreview.UI
         }
 
         public int OnAfterFirstDocumentLock(uint docCookie, uint dwRDTLockType, uint dwReadLocksRemaining, uint dwEditLocksRemaining) => VSConstants.S_OK;
-        public int OnBeforeLastDocumentUnlock(uint docCookie, uint dwRDTLockType, uint dwReadLocksRemaining, uint dwEditLocksRemaining) => VSConstants.S_OK;
+        public int OnBeforeLastDocumentUnlock(uint docCookie, uint dwRDTLockType, uint dwReadLocksRemaining, uint dwEditLocksRemaining)
+        {
+            // Closing the last tab activates nothing, so no other signal fires; re-check now so the
+            // preview lets go of a document that is no longer open (and its surface processes).
+            if (dwReadLocksRemaining == 0 && dwEditLocksRemaining == 0)
+            {
+                RaiseChanged(closingPath: DocumentPath(docCookie));
+            }
+
+            return VSConstants.S_OK;
+        }
+
         public int OnAfterAttributeChange(uint docCookie, uint grfAttribs) => VSConstants.S_OK;
-        public int OnAfterDocumentWindowHide(uint docCookie, IVsWindowFrame pFrame) => VSConstants.S_OK;
+        public int OnAfterDocumentWindowHide(uint docCookie, IVsWindowFrame pFrame)
+        {
+            // A closed tab often keeps its RDT entry (project/language-service locks), so the unlock above
+            // never fires; the window hiding is the reliable signal.
+            RaiseChanged(closingPath: DocumentPath(docCookie));
+            return VSConstants.S_OK;
+        }
 
         // ---- IVsRunningDocTableEvents2 -------------------------------------
 
@@ -126,7 +143,7 @@ namespace WinUIXamlPreview.UI
 
         // ---- dispatch -------------------------------------------------------
 
-        private void RaiseChanged()
+        private void RaiseChanged(string? closingPath = null)
         {
             if (_disposed)
             {
@@ -136,12 +153,25 @@ namespace WinUIXamlPreview.UI
             _ = _jtf.RunAsync(async () =>
             {
                 await _jtf.SwitchToMainThreadAsync();
+                if (closingPath != null)
+                {
+                    // Let VS activate the next tab first; a transient null would throw away a live surface.
+                    await System.Threading.Tasks.Task.Delay(300);
+                    await _jtf.SwitchToMainThreadAsync();
+                }
+
                 if (_disposed)
                 {
                     return;
                 }
 
                 var path = GetActiveDocumentPath();
+                if (closingPath != null && string.Equals(path, closingPath, StringComparison.OrdinalIgnoreCase)
+                    && !VsShellUtilities.IsDocumentOpen(ServiceProvider.GlobalProvider, closingPath, Guid.Empty, out _, out _, out _))
+                {
+                    path = null; // DTE can still report a document whose window is gone (unless it was reopened since)
+                }
+
                 if (string.Equals(_lastPath, path, StringComparison.OrdinalIgnoreCase))
                 {
                     return;
@@ -150,6 +180,24 @@ namespace WinUIXamlPreview.UI
                 _lastPath = path;
                 ActiveDocumentChanged?.Invoke(this, path);
             });
+        }
+
+        private string? DocumentPath(uint docCookie)
+        {
+            try
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                ErrorHandler.ThrowOnFailure(_rdt.GetDocumentInfo(docCookie, out _, out _, out _, out var moniker, out _, out _, out var docData));
+                if (docData != IntPtr.Zero)
+                {
+                    System.Runtime.InteropServices.Marshal.Release(docData);
+                }
+                return moniker;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private void RaiseSaved()
