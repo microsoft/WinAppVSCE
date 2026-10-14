@@ -108,6 +108,13 @@ If the hash changed, diff the old and new JSON and read every `$defs` entry for
 a method we call. `src/devtools/protocol.ts` and `src/devtools/devtools-client.ts`
 encode those shapes.
 
+**The emitted JSON carries only the public surface.** Methods declared
+`DevToolsVisibility::Internal` in `DevToolsProtocolSchema.inc` are not exported
+(50 public methods, 0 `Internal.*`). So an upstream commit can touch
+`DevToolsProtocolSchema.inc` with no change to the schema hash at all — that is
+expected, not a sign the gate missed something. We call no `Internal.*` method
+and must not start: it is the overlay's and the CLI's private channel.
+
 `USED_METHODS` in `protocol.ts` is checked **in both directions**: the script
 fails if the schema no longer advertises something we list, and separately
 scans `src/devtools/` to fail if the list and the actual call sites disagree.
