@@ -272,14 +272,14 @@ internal static class Compatibility
         Emit("server", "error-helper", One("{\"type\":\"Future\"}"));
         Check(One("{\"TYPE\":\"Hello\"}")["phase"]!.GetValue<string>() == "parse", "case-sensitive server fields");
         Check(One("{\"type\":4}")["phase"]!.GetValue<string>() == "parse", "non-string discriminator");
-        foreach (var json in new[] { "{", "null", "[]", "{\"type\":\"PickAt\",\"x\":\"bad\",\"y\":1}", "{\"type\":\"SetProperty\",\"id\":\"7\",\"name\":\"Text\"}" })
+        foreach (var json in new[] { "{", "null", "[]" })
         {
             var error = One(json);
             Check(error["phase"]!.GetValue<string>() == "render" && error["message"]!.GetValue<string>().StartsWith("Server error:"),
                 $"outer catch reports render error: {json}");
             Check(error["notDesignable"] == null, "helper error omits notDesignable");
         }
-        foreach (var json in new[] { "{\"type\":\"PickAt\",\"x\":1}", "{\"type\":\"SetProperty\",\"id\":-1,\"name\":\"Text\"}", "{\"type\":\"SetProperty\",\"id\":1.5,\"name\":\"Text\"}", "{\"type\":\"SetProperty\",\"id\":7,\"name\":\"\"}" })
+        foreach (var json in new[] { "{\"type\":\"PickAt\",\"x\":\"bad\",\"y\":1}", "{\"type\":\"SetProperty\",\"id\":\"7\",\"name\":\"Text\"}", "{\"type\":\"PickAt\",\"x\":1}", "{\"type\":\"SetProperty\",\"id\":-1,\"name\":\"Text\"}", "{\"type\":\"SetProperty\",\"id\":1.5,\"name\":\"Text\"}", "{\"type\":\"SetProperty\",\"id\":7,\"name\":\"\"}" })
             Check(One(json)["phase"]!.GetValue<string>() == "parse", $"semantic validation: {json}");
 
         Silent("{\"type\":\"Resize\"}");
