@@ -7,6 +7,7 @@ bin/**/*.pdb
 out/**
 node_modules/**
 scripts/**
+schemas/devtools/**
 artifacts/**
 .winapp/**
 .gitignore
