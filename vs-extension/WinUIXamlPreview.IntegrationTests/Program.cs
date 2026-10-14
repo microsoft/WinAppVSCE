@@ -41,6 +41,7 @@ namespace WinUIXamlPreview.IntegrationTests
             ("Edit", Group_Edit),
             ("Caret", Group_Caret),
             ("Toolbar", Group_Toolbar),
+            ("Errors", Group_Errors),
         };
 
         private static int Main(string[] args)
