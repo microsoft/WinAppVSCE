@@ -42,6 +42,7 @@ namespace WinUIXamlPreview.IntegrationTests
             ("Caret", Group_Caret),
             ("Toolbar", Group_Toolbar),
             ("Errors", Group_Errors),
+            ("Crash", Group_Crash),
         };
 
         private static int Main(string[] args)
