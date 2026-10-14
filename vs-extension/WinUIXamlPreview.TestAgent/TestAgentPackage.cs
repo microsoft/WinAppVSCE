@@ -158,6 +158,7 @@ namespace WinUIXamlPreview.TestAgent
                 case "raise": return Raise(Str(req, "guid"), (int)req["id"]!);
                 case "dteCommand": Dte().ExecuteCommand(Str(req, "name"), (string?)req["args"] ?? ""); return true;
                 case "toolWindowVisible": return ToolWindowVisible(Str(req, "guid"));
+                case "hideToolWindow": return HideToolWindow(Str(req, "guid"));
                 case "quit":
                     Dte().Documents.CloseAll(vsSaveChanges.vsSaveChangesNo);
                     try { Dte().Solution.Close(false); } catch { }
@@ -469,6 +470,17 @@ namespace WinUIXamlPreview.TestAgent
                 return false;
             }
             return frame.IsVisible() == 0;
+        }
+
+        private bool HideToolWindow(string guid)
+        {
+            var shell = (IVsUIShell)GetGlobalService(typeof(SVsUIShell));
+            var g = new Guid(guid);
+            if (shell.FindToolWindow((uint)__VSFINDTOOLWIN.FTW_fFindFirst, ref g, out var frame) != 0 || frame == null)
+            {
+                return false;
+            }
+            return frame.Hide() == 0;
         }
     }
 }

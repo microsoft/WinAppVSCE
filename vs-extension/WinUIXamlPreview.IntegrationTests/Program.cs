@@ -40,6 +40,7 @@ namespace WinUIXamlPreview.IntegrationTests
             ("Render", Group_Render),
             ("Edit", Group_Edit),
             ("Caret", Group_Caret),
+            ("Toolbar", Group_Toolbar),
         };
 
         private static int Main(string[] args)
@@ -80,10 +81,13 @@ namespace WinUIXamlPreview.IntegrationTests
                 PrimeHiveIfNeeded();
                 if (install)
                 {
-                    InstallVsix(productVsix ?? throw new ArgumentException("--vsix required"), ProductVsixId);
-                    InstallVsix(agentVsix ?? throw new ArgumentException("--agent-vsix required"), AgentVsixId);
-                    // VSIXInstaller doesn't always mark the hive's config as stale, so new pkgdefs can be ignored.
-                    Log("  updateconfiguration exit " + RunProcess(_devenv, $"/rootsuffix {_rootSuffix} /updateconfiguration", 300));
+                    var changed = InstallVsix(productVsix ?? throw new ArgumentException("--vsix required"), ProductVsixId)
+                                | InstallVsix(agentVsix ?? throw new ArgumentException("--agent-vsix required"), AgentVsixId);
+                    if (changed)
+                    {
+                        // VSIXInstaller doesn't always mark the hive's config as stale, so new pkgdefs can be ignored.
+                        Log("  updateconfiguration exit " + RunProcess(_devenv, $"/rootsuffix {_rootSuffix} /updateconfiguration", 300));
+                    }
                 }
                 LaunchVs();
 
@@ -164,8 +168,33 @@ namespace WinUIXamlPreview.IntegrationTests
             File.WriteAllText(Path.Combine(hive, "wxp-primed.txt"), DateTime.Now.ToString("o"));
         }
 
-        private static void InstallVsix(string vsix, string id)
+        private static string? HiveDir()
         {
+            var vsData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "VisualStudio");
+            return Directory.Exists(vsData) ? Directory.GetDirectories(vsData, HiveGlob()).FirstOrDefault() : null;
+        }
+
+        /// <summary>(Re)installs <paramref name="vsix"/> unless this exact file is already installed in the hive
+        /// (VSIXInstaller costs ~1-2 min per package). Returns true if it installed.</summary>
+        private static bool InstallVsix(string vsix, string id)
+        {
+            string hash;
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            using (var fs = File.OpenRead(vsix))
+            {
+                hash = BitConverter.ToString(sha.ComputeHash(fs)).Replace("-", "");
+            }
+            var marker = Path.Combine(HiveDir() ?? Path.GetTempPath(), "wxp-installed-" + id + ".sha256");
+            if (File.Exists(marker) && File.ReadAllText(marker).Trim() == hash)
+            {
+                Log($"{Path.GetFileName(vsix)} unchanged; already installed");
+                return false;
+            }
+            if (File.Exists(marker))
+            {
+                File.Delete(marker);
+            }
+
             var installer = Path.Combine(Path.GetDirectoryName(_devenv)!, "VSIXInstaller.exe");
             var scope = $"/quiet /rootSuffix:{_rootSuffix} /instanceIds:{_instance}";
             // The product version is fixed, so a plain install of a rebuilt VSIX is skipped as "already installed".
@@ -176,6 +205,8 @@ namespace WinUIXamlPreview.IntegrationTests
             {
                 throw new InvalidOperationException($"VSIXInstaller failed ({code}) for {vsix}; see %TEMP%\\dd_VSIXInstaller_*.log");
             }
+                            File.WriteAllText(marker, hash);
+                            return true;
         }
 
         private static int RunProcess(string exe, string args, int timeoutSeconds)

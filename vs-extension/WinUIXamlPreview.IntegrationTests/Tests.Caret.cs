@@ -43,8 +43,9 @@ namespace WinUIXamlPreview.IntegrationTests
             {
                 Fresh();
                 OpenRendered(_fx.MainPage);
+                var btn = OffsetOf(_fx.MainPage, "<Button");
                 Call("designerSelect", new { path = _fx.MainPage, elementPath = "0.0.1" });
-                var s = WaitFor("caret on Button", x => Num(Margin(x, _fx.MainPage)!["caret"]) == OffsetOf(_fx.MainPage, "<Button"), 5_000);
+                var s = WaitFor("caret on Button", x => Num(Margin(x, _fx.MainPage)!["caret"]) == btn, 5_000);
                 Eq("<Button x:Name=\"Go\" Content=\"Go\" />", (string?)Margin(s, _fx.MainPage)!["selection"], "selected text");
             });
 
@@ -64,10 +65,11 @@ namespace WinUIXamlPreview.IntegrationTests
                 Fresh();
                 OpenRendered(_fx.MainPage);
                 Edit(_fx.MainPage, "<Button", "<CheckBox x:Name=\"Inserted\" />\r\n        <Button");
+                int cb = OffsetOf(_fx.MainPage, "<CheckBox"), btn = OffsetOf(_fx.MainPage, "<Button");
                 Call("designerSelect", new { path = _fx.MainPage, elementPath = "0.0.1" });
-                var s = WaitFor("caret on the inserted CheckBox", x => Num(Margin(x, _fx.MainPage)!["caret"]) == OffsetOf(_fx.MainPage, "<CheckBox"), 5_000);
+                WaitFor("caret on the inserted CheckBox", x => Num(Margin(x, _fx.MainPage)!["caret"]) == cb, 5_000);
                 Call("designerSelect", new { path = _fx.MainPage, elementPath = "0.0.2" });
-                WaitFor("caret on Button (shifted)", x => Num(Margin(x, _fx.MainPage)!["caret"]) == OffsetOf(_fx.MainPage, "<Button"), 5_000);
+                WaitFor("caret on Button (shifted)", x => Num(Margin(x, _fx.MainPage)!["caret"]) == btn, 5_000);
             });
 
             Run("Caret: unknown designer path is ignored", () =>
