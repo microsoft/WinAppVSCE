@@ -611,7 +611,21 @@ dependency; no signing, publishing or credentials have been introduced.
 # Also builds TestUserApp and runs real frame + native/property smoke.
 # Requires existing compatible runtimes. Never launches Visual Studio.
 .\vs-extension\Test-Migration.ps1 -IncludeRenderer
+
+# In-VS integration suite (also reachable as Test-Migration.ps1 -IncludeVs). Runs a
+# real Visual Studio 17.8+ on a hidden desktop with the dedicated "WinUIPreviewTest"
+# root suffix (never your normal or Exp hive); nothing appears on screen.
+.\vs-extension\Test-VsIntegration.ps1                     # all groups
+.\vs-extension\Test-VsIntegration.ps1 -Group Render,Crash # selected groups
 ```
+
+The in-VS suite is three parts: product-side test hooks, a test-only agent VSIX
+(`WinUIXamlPreview.TestAgent`) serving a named pipe inside VS, and a console runner
+(`WinUIXamlPreview.IntegrationTests`) that drives VS through that pipe and asserts on
+snapshots of margins, sessions and surface processes. Groups: Load, Margin, Render,
+Edit, Caret, Toolbar, Errors, Crash, Teardown. Results go to
+`%TEMP%\wxp-vs-integration\results.log`. After VS exits, the runner checks that no
+surface process it saw is still alive.
 
 Renderer tests copy the pristine unpackaged output to a unique ignored
 `vs-extension/SurfaceClient.UITest/TestResults/Migration/Renderer-*` directory.

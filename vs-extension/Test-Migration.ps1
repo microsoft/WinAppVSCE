@@ -3,7 +3,9 @@
 param(
     [switch]$IncludeRenderer,
     # Rebuilds both VSIXes (-NoDeploy) and runs the archive/payload/packaging-gate suites.
-    [switch]$IncludePackaging
+    [switch]$IncludePackaging,
+    # Drives a real Visual Studio (dedicated test hive, hidden desktop) through Test-VsIntegration.ps1.
+    [switch]$IncludeVs
 )
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path "$PSScriptRoot\..").Path
@@ -64,6 +66,12 @@ if ($IncludeRenderer) {
 }
 & $pwsh.Source @foundationArgs
 if ($LASTEXITCODE -ne 0) { throw "Foundation suite failed (exit $LASTEXITCODE)." }
+
+# Real Visual Studio on a hidden desktop with a dedicated test hive; builds its own VSIXes.
+if ($IncludeVs) {
+    & "$PSScriptRoot\Test-VsIntegration.ps1"
+    if ($LASTEXITCODE -ne 0) { throw "VS integration suite failed (exit $LASTEXITCODE)." }
+}
 
 if (-not $IncludeRenderer) { return }
 
