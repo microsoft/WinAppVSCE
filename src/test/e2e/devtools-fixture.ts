@@ -35,9 +35,14 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
  * of the feature branch, and we no longer support that form. Matching the bare
  * flag would let such a build start the suite and then fail at launch.
  */
-export function cliSupportsDevTools(): boolean {
+/** Path to the winapp CLI staged in bin/ for this machine's architecture. */
+function cliPath(): string {
     const arch = process.arch === 'arm64' ? 'win-arm64' : 'win-x64';
-    const cli = path.join(REPO_ROOT, 'bin', arch, 'winapp.exe');
+    return path.join(REPO_ROOT, 'bin', arch, 'winapp.exe');
+}
+
+export function cliSupportsDevTools(): boolean {
+    const cli = cliPath();
     if (!fs.existsSync(cli)) {
         return false;
     }
@@ -47,6 +52,46 @@ export function cliSupportsDevTools(): boolean {
         timeout: 60_000,
     });
     return /--devtools\s*<[^>]*\bon\b[^>]*>/.test(help.stdout ?? '');
+}
+
+/** The overlay state the engine reports, as returned by `Overlay.getState`. */
+export interface OverlayState {
+    toolbarVisible: boolean;
+    highlightHandle: string;
+    layoutAdornersOn: boolean;
+    revision: number;
+}
+
+/**
+ * Asks the running fixture app's DevTools engine what the overlay is doing.
+ *
+ * Deliberately routed through the CLI rather than the panel: the panel is the
+ * thing under test, so asking it to report its own effect would prove nothing.
+ * This is a second, independent client of the same engine.
+ *
+ * Returns undefined when the app is not running or the call fails, so callers
+ * can poll rather than crash on a race with app startup.
+ */
+export function readOverlayState(): OverlayState | undefined {
+    const result = spawnSync(
+        cliPath(),
+        ['devtools', 'call', 'Overlay.getState', '-a', path.parse(FIXTURE_EXE).name, '--json'],
+        { encoding: 'utf-8', timeout: 60_000 },
+    );
+
+    if (result.status !== 0 || !result.stdout) {
+        return undefined;
+    }
+
+    try {
+        // The CLI wraps protocol results in its own envelope on some commands,
+        // so accept either the bare result or a { result: ... } wrapper.
+        const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+        const state = (parsed.result ?? parsed) as Partial<OverlayState>;
+        return typeof state.toolbarVisible === 'boolean' ? (state as OverlayState) : undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 /**

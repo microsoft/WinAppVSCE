@@ -27,8 +27,11 @@ import {
     snapshotOwnedPids,
     killProcessesStartedSinceWithRetry,
     cliSupportsDevTools,
+    readOverlayState,
     FIXTURE_APP_DIR,
+    type OverlayState,
 } from './devtools-fixture';
+import { NO_HIGHLIGHT } from '../../devtools/overlay';
 
 // One VS Code instance and one launched app shared by the whole file: starting a
 // WinUI app per test would multiply the slowest part of the run.
@@ -112,6 +115,28 @@ async function devToolsFrame(timeout = 180_000) {
     return getWebviewFrameWaitingFor(ctx.page, TREE_VIEWPORT, timeout);
 }
 
+/**
+ * Polls the engine until the overlay reaches an expected state.
+ *
+ * The panel's overlay calls are fire-and-forget, so there is no moment at which
+ * the engine is guaranteed to have caught up with a pointer move.
+ */
+async function waitForOverlayState(
+    predicate: (state: OverlayState) => boolean,
+    timeout = 30_000,
+): Promise<OverlayState> {
+    const deadline = Date.now() + timeout;
+    let last: OverlayState | undefined;
+    while (Date.now() < deadline) {
+        last = readOverlayState();
+        if (last && predicate(last)) {
+            return last;
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    throw new Error(`Overlay never reached the expected state; last seen: ${JSON.stringify(last)}`);
+}
+
 test('launching with DevTools opens the panel and renders the visual tree @winui-app', async () => {
     test.setTimeout(260_000);
 
@@ -122,6 +147,39 @@ test('launching with DevTools opens the panel and renders the visual tree @winui
     const rows = frame.locator('.tree-row');
     await expect(rows.first()).toBeVisible({ timeout: 60_000 });
     expect(await rows.count()).toBeGreaterThan(0);
+});
+
+// Deliberately placed before any test that selects an element: highlightTarget
+// falls back to the selection when the pointer leaves the tree, so a lingering
+// selection from an earlier test would mask the NO_HIGHLIGHT path.
+test('clearing the tree highlight leaves the app toolbar up @winui-app', async () => {
+    test.setTimeout(120_000);
+
+    const frame = await devToolsFrame();
+
+    // Read the overlay state from the engine itself rather than from the panel.
+    // The panel is the thing under test, so asking it to confirm its own effect
+    // would prove nothing; the CLI is a second, independent protocol client.
+    const initial = await waitForOverlayState(s => s.toolbarVisible);
+    expect(initial.highlightHandle).toBe(NO_HIGHLIGHT);
+
+    await frame.locator('#filter').fill('FixtureHeading');
+    const row = frame.locator('.tree-row', { hasText: 'FixtureHeading' }).first();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+
+    await row.hover();
+    const highlighted = await waitForOverlayState(s => s.highlightHandle !== NO_HIGHLIGHT);
+    expect(highlighted.toolbarVisible).toBe(true);
+
+    // Leaving the tree sends Overlay.highlight with the panel's NO_HIGHLIGHT
+    // sentinel. That the engine reads it as "nothing highlighted" — rather than
+    // as a real handle, or as a request to tear the overlay down — is the
+    // assumption src/devtools/overlay.ts encodes and this test pins.
+    await frame.locator('#filter').hover();
+    const cleared = await waitForOverlayState(s => s.highlightHandle === NO_HIGHLIGHT);
+    expect(cleared.toolbarVisible).toBe(true);
+
+    await frame.locator('#filter').fill('');
 });
 
 test('the tree contains the fixture app element names @winui-app', async () => {
