@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
-import { parseProcessIdFromJson } from './run-options';
+import { createProgressLineReader, parseProcessIdFromJson } from './run-options';
 import { classifyRunExit } from './run-exit';
 import { killProcessTree } from './process-tree';
 import { WINAPP_CLI_CALLER_VALUE } from './winapp-cli-utils';
@@ -61,15 +61,11 @@ export async function launchRunProcess(
 				fn();
 			};
 
-			// The CLI's human-readable progress goes to stderr; surfacing it as
-			// the notification message turns a multi-minute blank wait into a
-			// live view of restore/build/deploy.
-			const reportProgress = (text: string) => {
-				const lastLine = text.split(/\r?\n/).filter(line => line.trim()).pop();
-				if (lastLine) {
-					progress.report({ message: lastLine.trim().slice(0, 120) });
-				}
-			};
+			// Under `--json` the CLI reserves stdout for the payload and sends
+			// its human-readable output to stderr, so this is where restore and
+			// build progress shows up. Surfacing it turns a multi-minute blank
+			// wait into a live view.
+			const nextProgressMessage = createProgressLineReader();
 
 			child.stdout!.on('data', (data: Buffer) => {
 				const text = data.toString();
@@ -89,8 +85,11 @@ export async function launchRunProcess(
 			child.stderr!.on('data', (data: Buffer) => {
 				const text = data.toString();
 				outputChannel.append(text);
-				if (!resolved) {
-					reportProgress(text);
+				if (resolved) { return; }
+
+				const message = nextProgressMessage(text);
+				if (message) {
+					progress.report({ message });
 				}
 			});
 

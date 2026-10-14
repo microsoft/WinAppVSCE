@@ -383,3 +383,51 @@ export function parseProcessIdFromJson(output: string): number | undefined {
 	return typeof pid === 'number' && pid > 0 ? pid : undefined;
 }
 
+/** Keeps a notification message to one line's worth of text. */
+export const PROGRESS_MESSAGE_MAX_LENGTH = 120;
+
+/**
+ * MSBuild closes every build with a summary block. It reports on the build
+ * that just finished rather than on what the run is doing next, so as a
+ * progress message it is actively misleading.
+ */
+const BUILD_SUMMARY_NOISE: readonly RegExp[] = [
+	/^Time Elapsed\b/,
+	/^\d+\s+(?:Warning|Error)\(s\)$/
+];
+
+/**
+ * Picks the line to show in the "Launching package..." notification.
+ *
+ * Under `--json` the CLI keeps stdout clean for the JSON payload and sends
+ * everything human-readable to stderr — which, in project mode, is `dotnet
+ * build` passthrough. The last line MSBuild prints is `Time Elapsed ...`, so
+ * naively tailing stderr parks the notification on a stopwatch reading for the
+ * whole register-and-launch phase. Skipping the summary block leaves the last
+ * line that actually names a phase, such as `Build succeeded.`.
+ *
+ * Returns a reader because stderr arrives in arbitrary chunks: a line can be
+ * split across two of them, and a half-line is both unreadable and able to
+ * slip past the filters above. Partial text is held until its newline lands.
+ */
+export function createProgressLineReader(): (chunk: string) => string | undefined {
+	let pending = '';
+
+	return (chunk: string): string | undefined => {
+		pending += chunk;
+		const lines = pending.split(/\r?\n/);
+		// Whatever follows the final newline is incomplete by definition.
+		pending = lines.pop() ?? '';
+
+		let message: string | undefined;
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (!trimmed || BUILD_SUMMARY_NOISE.some(pattern => pattern.test(trimmed))) {
+				continue;
+			}
+			message = trimmed.slice(0, PROGRESS_MESSAGE_MAX_LENGTH);
+		}
+		return message;
+	};
+}
+

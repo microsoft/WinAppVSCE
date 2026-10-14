@@ -4,8 +4,10 @@ import {
 	availableRunToggles,
 	buildRunArgs,
 	COMMON_CONFIGURATIONS,
+	createProgressLineReader,
 	expandRequiredToggles,
 	parseProcessIdFromJson,
+	PROGRESS_MESSAGE_MAX_LENGTH,
 	resolveDebugInput,
 	resolveRunProject,
 	resolveRunToggles,
@@ -432,5 +434,67 @@ describe('launch.json project precedence', () => {
 				assert.equal(resolveRunProject(configured, 'picked.csproj'), configured);
 			}
 		}
+	});
+});
+
+describe('createProgressLineReader', () => {
+	// Captured from `winapp run <project> --no-launch --json` against a WinUI
+	// app: with --json the CLI keeps stdout for the payload, so stderr is pure
+	// `dotnet build` passthrough and ends on MSBuild's summary block.
+	const REAL_BUILD_STDERR = [
+		'dotnet build C:\\src\\TabApp\\TabApp.csproj -c Debug -r win-arm64 -v minimal -tl:off -p:Platform=ARM64',
+		'  Determining projects to restore...',
+		'  Restored C:\\src\\TabApp\\TabApp.csproj (in 226 ms).',
+		'  TabApp -> C:\\src\\TabApp\\bin\\ARM64\\Debug\\net10.0-windows10.0.26100.0\\win-arm64\\TabApp.dll',
+		'',
+		'Build succeeded.',
+		'    0 Warning(s)',
+		'    0 Error(s)',
+		'',
+		'Time Elapsed 00:00:15.11',
+		''
+	].join('\r\n');
+
+	it('rests on the phase line instead of MSBuild stopwatch output', () => {
+		const read = createProgressLineReader();
+		assert.equal(read(REAL_BUILD_STDERR), 'Build succeeded.');
+	});
+
+	it('keeps a failed build visible rather than its summary counts', () => {
+		const read = createProgressLineReader();
+		const failed = 'Build FAILED.\r\n    1 Warning(s)\r\n    3 Error(s)\r\n\r\nTime Elapsed 00:00:02.40\r\n';
+		assert.equal(read(failed), 'Build FAILED.');
+	});
+
+	it('reports the newest phase while the build is still talking', () => {
+		const read = createProgressLineReader();
+		assert.equal(read('  Determining projects to restore...\r\n'), 'Determining projects to restore...');
+		assert.equal(read('  Restored TabApp.csproj (in 226 ms).\r\n'), 'Restored TabApp.csproj (in 226 ms).');
+	});
+
+	// stderr chunk boundaries fall wherever the pipe flushes. A half-line is
+	// both unreadable and able to slip past the summary filter, so the reader
+	// holds it until the newline arrives.
+	it('reassembles a line split across chunks', () => {
+		const read = createProgressLineReader();
+		assert.equal(read('Build succeeded.\r\nTime Ela'), 'Build succeeded.');
+		assert.equal(read('psed 00:00:15.11\r\n'), undefined);
+	});
+
+	it('holds a trailing partial line until it is complete', () => {
+		const read = createProgressLineReader();
+		assert.equal(read('Restoring'), undefined);
+		assert.equal(read(' packages...\r\n'), 'Restoring packages...');
+	});
+
+	it('reports nothing when a chunk carries only summary noise', () => {
+		const read = createProgressLineReader();
+		assert.equal(read('    0 Warning(s)\r\n    0 Error(s)\r\n\r\nTime Elapsed 00:00:15.11\r\n'), undefined);
+	});
+
+	it('truncates a long line to one notification row', () => {
+		const read = createProgressLineReader();
+		const message = read(`${'a'.repeat(400)}\r\n`);
+		assert.equal(message?.length, PROGRESS_MESSAGE_MAX_LENGTH);
 	});
 });
