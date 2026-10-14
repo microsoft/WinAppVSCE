@@ -606,6 +606,136 @@ test('disconnect status is surfaced to the user', async () => {
     assert.ok((status?.textContent ?? '').includes('disconnected'));
 });
 
+// ───────────────────────── failure-path UX ─────────────────────────
+//
+// Every one of these is a state a user reaches on a bad setup — an engine that
+// never came up, an app that exited mid-session, an edit the engine refused.
+// The panel's only way to explain itself is the status banner and the compose
+// error, so what those say, and how loudly, is the whole user experience of a
+// failure.
+
+test('a connect failure is reported as an error, not a passing remark', async () => {
+    const h = loadPanel();
+
+    h.send({
+        type: 'status',
+        status: { state: 'error', message: 'Could not connect to the DevTools engine.' },
+    } as ExtensionToWebviewMessage);
+
+    const status = h.doc.getElementById('status');
+    assert.ok(!status?.classList.contains('hidden'), 'status banner should be visible');
+    assert.ok((status?.textContent ?? '').includes('Could not connect'));
+    assert.ok(
+        status?.classList.contains('error'),
+        `a failed connect should read as an error, got class "${status?.className}"`,
+    );
+});
+
+test('a disconnect reads as a warning rather than a fault', async () => {
+    // An app that exited is usually the user closing their own window. Styling
+    // that the same as a genuine engine failure trains people to ignore both.
+    const h = loadPanel();
+
+    h.send({
+        type: 'status',
+        status: { state: 'disconnected', message: 'The app disconnected.' },
+    } as ExtensionToWebviewMessage);
+
+    const status = h.doc.getElementById('status');
+    assert.ok(
+        status?.classList.contains('warn'),
+        `a disconnect should read as a warning, got class "${status?.className}"`,
+    );
+    assert.ok(!status?.classList.contains('error'), 'a disconnect is not an engine fault');
+});
+
+test('a failure with no reason attached still explains itself', async () => {
+    // DevToolsError carries a message, but a socket error or a rejected
+    // promise from somewhere else may not. An empty banner is worse than a
+    // generic one: it looks like the panel simply stopped.
+    const h = loadPanel();
+
+    h.send({ type: 'status', status: { state: 'error' } } as ExtensionToWebviewMessage);
+    const afterError = h.doc.getElementById('status')?.textContent ?? '';
+    assert.ok(afterError.trim().length > 0, 'an error with no message should still say something');
+
+    h.send({ type: 'status', status: { state: 'disconnected' } } as ExtensionToWebviewMessage);
+    const afterDisconnect = h.doc.getElementById('status')?.textContent ?? '';
+    assert.ok(afterDisconnect.trim().length > 0, 'a disconnect with no message should still say something');
+});
+
+test('the panel says it is connecting rather than looking empty', async () => {
+    // The engine creates its pipe a moment after the PID is known, and the
+    // client retries for 20s. Without this the panel is a blank tree for what
+    // looks like a hang.
+    const h = loadPanel();
+
+    h.send({ type: 'status', status: { state: 'connecting', processId: 4242 } } as ExtensionToWebviewMessage);
+
+    const status = h.doc.getElementById('status');
+    assert.ok(!status?.classList.contains('hidden'), 'status banner should be visible while connecting');
+    assert.match(status?.textContent ?? '', /connect/i);
+});
+
+test('failure text from the engine is never interpreted as markup', async () => {
+    // Engine error strings can carry a pipe path, an exception message, or
+    // anything else the app put in a property name. They reach the banner
+    // unmodified, so the banner has to be the thing that refuses to render it.
+    const h = loadPanel();
+    const hostile = '<img src=x onerror="globalThis.__pwned = true">';
+
+    h.send({ type: 'status', status: { state: 'error', message: hostile } } as ExtensionToWebviewMessage);
+
+    const status = h.doc.getElementById('status');
+    assert.strictEqual(
+        (h.dom.window as unknown as Record<string, unknown>).__pwned,
+        undefined,
+        'engine failure text must not execute',
+    );
+    assert.strictEqual(status?.querySelector('img'), null, 'engine failure text must not become elements');
+    assert.ok((status?.textContent ?? '').includes('<img'), 'the raw text should still be shown');
+});
+
+test('a failure is announced to assistive technology', async () => {
+    // The banner is the only indication the panel has stopped working, and a
+    // screen-reader user never sees it change colour.
+    const h = loadPanel();
+
+    h.send({ type: 'status', status: { state: 'error', message: 'Engine gone.' } } as ExtensionToWebviewMessage);
+
+    const status = h.doc.getElementById('status');
+    assert.strictEqual(status?.getAttribute('role'), 'status');
+    assert.strictEqual(status?.getAttribute('aria-live'), 'polite');
+});
+
+test('a refused comment with no reason still reports the failure', async () => {
+    const h = loadPanel();
+
+    h.send({ type: 'commentError' } as unknown as ExtensionToWebviewMessage);
+
+    const composeError = h.doc.getElementById('compose-error');
+    assert.ok(!composeError?.classList.contains('hidden'), 'the compose error should be visible');
+    assert.ok((composeError?.textContent ?? '').trim().length > 0);
+});
+
+test('a later success clears a previous failure', async () => {
+    // A banner that outlives the condition it describes is worse than none:
+    // the user reconnects, the panel works, and it still says it is broken.
+    const h = loadPanel();
+
+    h.send({ type: 'status', status: { state: 'error', message: 'Engine gone.' } } as ExtensionToWebviewMessage);
+    assert.ok(!h.doc.getElementById('status')?.classList.contains('hidden'));
+
+    h.send({
+        type: 'status',
+        status: { state: 'connected', processId: 4242, protocolVersion: '1.0' },
+    } as ExtensionToWebviewMessage);
+
+    const status = h.doc.getElementById('status');
+    assert.ok(!status?.classList.contains('error'), 'the error styling should be gone');
+    assert.ok((status?.textContent ?? '').includes('4242'), 'the banner should describe the new connection');
+});
+
 test('filtering narrows the rendered rows', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
@@ -727,6 +857,7 @@ test('a failed comment add is shown rather than silently dropped', async () => {
     h.send({ type: 'commentError', message: 'comments add failed' } as ExtensionToWebviewMessage);
     assert.ok(!error.className.includes('hidden'), 'a failure must become visible');
     assert.ok((error.textContent ?? '').includes('comments add failed'));
+    assert.strictEqual(error.getAttribute('role'), 'alert', 'the failure must reach a screen reader too');
 });
 
 test('the properties header names the element and how you reached it', async () => {
