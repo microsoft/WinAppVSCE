@@ -42,6 +42,7 @@ namespace WinUIXamlPreview.Editor
     [Order(After = PredefinedMarginNames.VerticalScrollBar)]
     [MarginContainer(PredefinedMarginNames.Right)]
     [ContentType("XAML")]
+    [ContentType("XML")] // a .xaml outside any project opens in the XML editor
     [TextViewRole(PredefinedTextViewRoles.Document)]
     internal sealed class XamlPreviewRightMarginProvider : IWpfTextViewMarginProvider
     {
@@ -62,6 +63,7 @@ namespace WinUIXamlPreview.Editor
     [Order(After = PredefinedMarginNames.HorizontalScrollBar)]
     [MarginContainer(PredefinedMarginNames.Bottom)]
     [ContentType("XAML")]
+    [ContentType("XML")]
     [TextViewRole(PredefinedTextViewRoles.Document)]
     internal sealed class XamlPreviewBottomMarginProvider : IWpfTextViewMarginProvider
     {
@@ -146,6 +148,12 @@ namespace WinUIXamlPreview.Editor
                 // be told apart from the markup alone — we inspect the owning project. A non-WinUI document gets
                 // no margin (and, returning null, no cached surface) so the designer never shows for WPF/UWP.
                 var path = ResolveDocument(host.TextView, docFactory)?.FilePath;
+                if (!host.TextView.TextBuffer.ContentType.IsOfType("XAML")
+                    && (path == null || !path.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return null; // registered for XML only to catch loose .xaml files
+                }
+
                 if (!Protocol.ProjectDllLocator.IsWinUiXaml(path, m => Log.Write("WinUI gate: " + m)))
                 {
                     return null;

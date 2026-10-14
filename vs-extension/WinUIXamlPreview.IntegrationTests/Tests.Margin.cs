@@ -35,6 +35,19 @@ namespace WinUIXamlPreview.IntegrationTests
                 Holds("no margin on WPF window", x => Margin(x, _fx.WpfWindow) == null, 4_000);
             });
 
+            Run("Margin: a loose .xaml outside any project gets a margin and renders", () =>
+            {
+                Fresh();
+                Assert(Rendered(Preview(OpenRendered(_fx.LoosePage), _fx.LoosePage)), "loose page rendered");
+            });
+
+            Run("Margin: a plain .xml file gets no margin", () =>
+            {
+                Fresh();
+                Call("open", new { path = _fx.LooseXml });
+                Holds("no margin on .xml", x => Margin(x, _fx.LooseXml) == null, 4_000);
+            });
+
             Run("Margin: each WinUI tab gets its own margin and surface", () =>
             {
                 Fresh();

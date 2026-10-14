@@ -82,8 +82,8 @@ namespace WinUIXamlPreview.IntegrationTests
                 Fresh();
                 OpenRendered(_fx.MainPage);
                 var (pv, killed) = ExhaustRestarts();
-                Assert((string?)pv["statusText"] is "Preview disconnected" or "Could not start the surface.",
-                    $"terminal status: {pv["statusText"]}");
+                Eq("Preview disconnected", (string?)pv["statusText"], "terminal status");
+                Eq(true, pv["reconnectShown"]!.GetValue<bool>(), "reconnect card shown");
                 Eq(false, pv["statusSpinner"]!.GetValue<bool>(), "spinner stopped");
                 Assert(killed >= 4, $"only {killed} surfaces were killed");
             });
@@ -92,9 +92,8 @@ namespace WinUIXamlPreview.IntegrationTests
             {
                 Fresh();
                 OpenRendered(_fx.MainPage);
-                var (dead, _) = ExhaustRestarts();
-                var button = dead["reconnectShown"]!.GetValue<bool>() ? "PreviewReconnectReload" : "PreviewStatusReload";
-                Call("click", new { path = _fx.MainPage, automationId = button });
+                ExhaustRestarts();
+                Call("click", new { path = _fx.MainPage, automationId = "PreviewReconnectReload" });
                 var s = WaitFor("recovered", x => Preview(x, _fx.MainPage) is JsonObject p && Rendered(p)
                                                  && !p["reconnectShown"]!.GetValue<bool>(), 60_000);
                 var pv = Preview(s, _fx.MainPage)!;

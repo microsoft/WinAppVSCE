@@ -16,6 +16,9 @@ namespace WinUIXamlPreview.IntegrationTests
         /// <summary>Only the Save As test uses this: VS keeps a renamed buffer's identity, so a renamed page can't be reused.</summary>
         public string SaveAsPage => Path.Combine(WinUiDir, "SaveAsPage.xaml");
         public string WpfWindow => Path.Combine(Root, "WpfApp", "MainWindow.xaml");
+        /// <summary>Outside every project, so VS opens these in the XML editor.</summary>
+        public string LoosePage => Path.Combine(Root, "Loose", "LoosePage.xaml");
+        public string LooseXml => Path.Combine(Root, "Loose", "settings.xml");
 
         public Fixture(string root)
         {
@@ -62,7 +65,11 @@ namespace WinUIXamlPreview.IntegrationTests
 </Window>
 ");
             // Loose .xaml files open in the XML editor (content type "XML"); only files in a loaded project get
-            // the XAML content type the margin is registered for, so open the projects as a solution.
+            // the XAML content type, so open the projects as a solution. The margin also accepts XML views of
+            // .xaml files, which the Loose files exercise.
+            Directory.CreateDirectory(Path.GetDirectoryName(LoosePage)!);
+            File.WriteAllText(LoosePage, SecondPageXaml);
+            File.WriteAllText(LooseXml, "<settings><item key=\"a\" /></settings>\r\n");
             const string sdkProject = "9A19103F-16F7-4668-BE54-9A1E7A4F7556";
             File.WriteAllText(Solution,
 "\r\nMicrosoft Visual Studio Solution File, Format Version 12.00\r\n# Visual Studio Version 17\r\n" +

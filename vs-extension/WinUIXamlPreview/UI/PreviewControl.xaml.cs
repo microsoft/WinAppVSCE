@@ -444,6 +444,13 @@ namespace WinUIXamlPreview.UI
                 Log.Write("StartPreviewAsync failed: " + ex);
                 if (ReferenceEquals(_client, client))
                 {
+                    if (client.IsFaulted)
+                    {
+                        // The client's Closed handler owns this outcome (recover, "Preview disconnected", or
+                        // protocol mismatch); setting a status here would race it.
+                        return;
+                    }
+
                     if (ex is SurfaceProtocolException)
                     {
                         ShowProtocolMismatch(ex.Message);
