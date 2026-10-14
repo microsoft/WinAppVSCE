@@ -58,6 +58,15 @@ namespace WinUIXamlPreview
             }
         }
 
+        /// <summary>Point-in-time copy of the live sessions (integration-test snapshots).</summary>
+        internal static IDisposable[] SessionsSnapshot()
+        {
+            lock (_sessionGate)
+            {
+                return _sessions.ToArray();
+            }
+        }
+
         /// <summary>Stop tracking a session that disposed itself normally (e.g. its tab/margin closed).</summary>
         public static void UnregisterSession(IDisposable session)
         {

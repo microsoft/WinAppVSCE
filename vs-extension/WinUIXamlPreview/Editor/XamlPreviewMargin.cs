@@ -81,7 +81,7 @@ namespace WinUIXamlPreview.Editor
     /// The docked panel that hosts a <see cref="PreviewControl"/> pinned to this tab's .xaml file, with a
     /// draggable resize grip, a themed in-tab toolbar, and a Right/Bottom layout toggle.
     /// </summary>
-    internal sealed class XamlPreviewMargin : IWpfTextViewMargin
+    internal sealed partial class XamlPreviewMargin : IWpfTextViewMargin
     {
         public const string MarginName = "WinUIXamlPreviewMargin";
 
@@ -249,6 +249,7 @@ namespace WinUIXamlPreview.Editor
             catch (Exception ex) { Log.Write("Caret sync subscribe failed: " + ex.Message); }
 
             ApplyCollapsedState();
+            Testing.TestHooks.RegisterMargin(this);
         }
 
         // ---- toolbar --------------------------------------------------------
@@ -1526,6 +1527,7 @@ namespace WinUIXamlPreview.Editor
             }
 
             _disposed = true;
+            Testing.TestHooks.UnregisterMargin(this);
             try
             {
                 _editDebounce.Stop();

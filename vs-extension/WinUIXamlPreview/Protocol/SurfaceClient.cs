@@ -117,6 +117,16 @@ namespace WinUIXamlPreview.Protocol
         /// </summary>
         public bool IsProtocolMismatch { get; private set; }
 
+        /// <summary>OS process id of the launched surface, or null before launch / if unavailable.</summary>
+        internal int? ProcessId
+        {
+            get
+            {
+                try { return _proc?.Id; }
+                catch { return null; }
+            }
+        }
+
         /// <summary>Launches the surface, connects, and completes once Ready is received.</summary>
         public Task<ReadyMsg> StartAsync(TimeSpan timeout)
         {
