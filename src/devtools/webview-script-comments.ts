@@ -44,10 +44,25 @@ export const COMMENTS_FRAGMENT = `
         const meta = document.createElement('div');
         meta.className = 'comment-meta';
         const bits = [comment.status || 'open'];
-        if (comment.window) { bits.push(comment.window); }
         if (comment.requiresConfirmation) { bits.push('needs confirmation'); }
         meta.textContent = bits.join(' \\u00B7 ');
         box.appendChild(meta);
+
+        if (comment.file) {
+            // The native window prints this as plain text. In an editor it can
+            // be the thing you actually wanted: the declaration, open.
+            const source = document.createElement('button');
+            source.type = 'button';
+            source.className = 'comment-source';
+            source.textContent = comment.line
+                ? fileLabel(comment.file) + ':' + comment.line
+                : fileLabel(comment.file);
+            source.title = 'Open ' + comment.file;
+            source.addEventListener('click', function () {
+                vscode.postMessage({ type: 'goToSource', file: comment.file, line: comment.line });
+            });
+            box.appendChild(source);
+        }
 
         const actions = document.createElement('div');
         actions.className = 'comment-actions';

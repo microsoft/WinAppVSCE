@@ -272,6 +272,7 @@ export const USED_METHODS = [
     'DevTools.negotiate',
     'DevTools.releaseOwnedState',
     'VisualTree.enumerate',
+    'VisualTree.getPreviews',
     'VisualTree.enable',
     'Property.get',
     'Property.enable',

@@ -48,12 +48,24 @@ export const MESSAGES_FRAGMENT = `
 
             case 'tree': {
                 state.roots = message.tree.nodes || [];
+                resetPreviews();
                 // First load has nothing expanded; open the first root so the
                 // panel is not an empty box.
                 if (state.expanded.size === 0 && state.roots.length > 0) {
                     state.expanded.add(state.roots[0].handle);
                 }
                 rebuildRows();
+                scheduleRender();
+                break;
+            }
+
+            case 'previews': {
+                for (const row of message.previews || []) {
+                    state.previews[row.handle] = {
+                        text: row.preview || row.automationId || '',
+                        line: row.line,
+                    };
+                }
                 scheduleRender();
                 break;
             }

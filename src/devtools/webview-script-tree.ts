@@ -98,7 +98,6 @@ export const TREE_FRAGMENT = `    // ──────────────�
         const total = state.rows.length;
         el.treeSizer.style.height = (total * ROW_HEIGHT) + 'px';
         el.treeHeader.textContent = 'VISUAL TREE \\u00B7 ' + countNodes(state.roots) + ' NODES';
-
         if (total === 0) {
             el.treeSizer.textContent = '';
             const empty = document.createElement('div');
@@ -123,6 +122,7 @@ export const TREE_FRAGMENT = `    // ──────────────�
 
         el.treeSizer.textContent = '';
         el.treeSizer.appendChild(fragment);
+        requestPreviews(first, last);
 
         if (state.focused) {
             el.treeViewport.setAttribute('aria-activedescendant', rowId(state.focused));
@@ -133,6 +133,57 @@ export const TREE_FRAGMENT = `    // ──────────────�
         return 'row-' + handle;
     }
 
+    // ───────────────────────── row captions ─────────────────────────
+
+    let previewTimer = null;
+    let previewQueue = [];
+
+    /**
+     * Queues caption reads for the rows now on screen.
+     *
+     * Scrolling fires this on every frame, so the queue is debounced: a fast
+     * flick through a large tree should cost one request for where the user
+     * landed, not one per frame along the way.
+     */
+    function requestPreviews(first, last) {
+        for (let i = first; i <= last; i++) {
+            const row = state.rows[i];
+            if (!row) { continue; }
+            const handle = row.node.handle;
+            if (state.previewsAsked.has(handle)) { continue; }
+            state.previewsAsked.add(handle);
+            previewQueue.push(handle);
+        }
+        if (previewQueue.length === 0 || previewTimer) { return; }
+
+        previewTimer = setTimeout(function () {
+            previewTimer = null;
+            const handles = previewQueue;
+            previewQueue = [];
+            vscode.postMessage({ type: 'requestPreviews', handles: handles });
+        }, PREVIEW_DEBOUNCE_MS);
+    }
+
+    /** Drops captions when the tree changes: handles do not survive a reload. */
+    function resetPreviews() {
+        state.previews = Object.create(null);
+        state.previewsAsked = new Set();
+        previewQueue = [];
+        if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+    }
+
+    /**
+     * The row's full caption, in the same order the native DevTools window
+     * uses: type, then #name, then the element's own text in quotes.
+     */
+    function rowLabel(node) {
+        const preview = state.previews[node.handle];
+        let label = shortTypeName(node.type);
+        if (node.name) { label += '  #' + node.name; }
+        if (preview && preview.text) { label += '  \\u201C' + preview.text + '\\u201D'; }
+        return label;
+    }
+
     function buildRow(row, index, total) {
         const node = row.node;
         const div = document.createElement('div');
@@ -140,6 +191,9 @@ export const TREE_FRAGMENT = `    // ──────────────�
         div.style.top = (index * ROW_HEIGHT) + 'px';
         div.id = rowId(node.handle);
         div.dataset.handle = node.handle;
+        // Rows ellipsize rather than scroll sideways, so the full label has to
+        // stay reachable somehow.
+        div.title = rowLabel(node);
 
         div.setAttribute('role', 'treeitem');
         div.setAttribute('aria-level', String(row.depth + 1));
@@ -173,10 +227,22 @@ export const TREE_FRAGMENT = `    // ──────────────�
             div.appendChild(name);
         }
 
+        const preview = state.previews[node.handle];
+        if (preview && preview.text) {
+            const caption = document.createElement('span');
+            caption.className = 'node-preview';
+            caption.textContent = '\\u201C' + preview.text + '\\u201D';
+            div.appendChild(caption);
+        }
+
         if (node.file) {
             const file = document.createElement('span');
             file.className = 'node-file';
-            file.textContent = fileLabel(node.file);
+            // The engine only reports a line with the caption, so a row shows
+            // one as soon as its caption has arrived.
+            file.textContent = preview && preview.line
+                ? fileLabel(node.file) + ':' + preview.line
+                : fileLabel(node.file);
             div.appendChild(file);
         }
 

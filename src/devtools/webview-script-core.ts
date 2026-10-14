@@ -18,6 +18,9 @@ export const CORE_FRAGMENT = `
     const OVERSCAN = 8;
     const INDENT_PX = 14;
 
+    /** Coalescing window for caption reads while the tree is being scrolled. */
+    const PREVIEW_DEBOUNCE_MS = 90;
+
     /** Editors are suppressed for these kinds regardless of mutation posture. */
     const READONLY_EDIT_KINDS = new Set(['', 'none', 'readonly', 'readOnly']);
 
@@ -68,6 +71,14 @@ export const CORE_FRAGMENT = `
         expanded: new Set(),
         /** Flattened visible rows: { node, depth, hasChildren }. */
         rows: [],
+        /**
+         * Row captions keyed by handle, filled in lazily for visible rows.
+         * A caption is a live read of the element, so the tree asks only for
+         * what is on screen rather than for every node it knows about.
+         */
+        previews: Object.create(null),
+        /** Handles already asked for, so scrolling does not re-ask. */
+        previewsAsked: new Set(),
         selected: null,
         focused: null,
         filter: '',
