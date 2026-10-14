@@ -37,6 +37,7 @@ namespace WinUIXamlPreview.IntegrationTests
         {
             ("Load", Group_Load),
             ("Margin", Group_Margin),
+            ("Render", Group_Render),
         };
 
         private static int Main(string[] args)
