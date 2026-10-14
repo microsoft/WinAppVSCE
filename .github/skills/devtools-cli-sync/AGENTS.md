@@ -31,6 +31,22 @@ Upstream coordinates:
 
 ## Pass 1 — Get the new CLI build into `bin/`
 
+Start here, before anything else:
+
+```powershell
+npm run check-cli-freshness
+```
+
+It reads `schemas/devtools/pinned-cli.json` — the only record in git of which
+CLI build we are validated against — and reports whether the branch has moved
+and whether a newer successful build exists, with the exact `gh run download`
+line to use. If it says we are up to date, there is nothing to sync and you can
+stop. It never fails the build; falling behind is information, not a defect.
+
+It needs `gh` authenticated against `microsoft/winappCli`. This is local-only on
+purpose: CI's `GITHUB_TOKEN` cannot read that repository, so automating it would
+mean storing a cross-repo PAT.
+
 **Do not use `scripts/download-cli.ps1`.** It only fetches published GitHub
 *releases*, and there is no DevTools prerelease. Builds come from branch CI.
 
@@ -89,40 +105,44 @@ WinApp.DevTools.Managed.dll  WinApp.DevTools.Native.dll  winapp.exe
 npm run check-devtools-schema
 ```
 
-It compares `bin/*/winapp-devtools-schema.json` against the methods and events
-our code actually uses, for both RIDs. Record the counts (at last sync:
-**29 methods, 7 events**, no drift).
+The gate compares three things:
 
-### The gate is weaker than it looks — do the manual part
+1. The methods and events our code uses against the **pinned** schema in
+   `schemas/devtools/winapp-devtools-schema.json`. This half needs nothing in
+   `bin/`, so it is the half that actually runs in CI.
+2. Each `bin/*/winapp-devtools-schema.json` against that pinned copy, by full
+   normalized content — not just names. A renamed or retyped field in a `$defs`
+   entry is reported, with added/removed methods, events and types itemized.
+3. `USED_METHODS` in `protocol.ts` against the real call sites in
+   `src/devtools/`, **in both directions**: adding a call means adding its
+   entry, and removing the last call site means removing its entry.
 
-`check-devtools-schema.ts` compares **names only**. A change to a params or
-result *shape* passes clean. This has already happened once (an upstream commit
-added a field to `InternalSetCommentsParams` and the gate stayed green). So:
+Record the counts (at last sync: **29 methods, 7 events** used, 50 advertised).
+
+### Re-pinning is part of the sync
+
+Once you have accepted a new CLI build, update **both** files together:
 
 ```powershell
-# Byte-compare the schema against the one you were on before
-Get-FileHash .\bin\win-arm64\winapp-devtools-schema.json
+Copy-Item .\bin\win-arm64\winapp-devtools-schema.json .\schemas\devtools\ -Force
+# then edit schemas/devtools/pinned-cli.json: version, commit, runId, syncedOn
+npm run check-devtools-schema
 ```
 
-If the hash changed, diff the old and new JSON and read every `$defs` entry for
-a method we call. `src/devtools/protocol.ts` and `src/devtools/devtools-client.ts`
-encode those shapes.
+Read the diff before you copy — that diff *is* pass 2's deliverable. Pinning
+without reading it defeats the gate, because every subsequent run compares
+against whatever you silently accepted. `bin/` is gitignored, so the pinned pair
+is the only thing in git that records which engine build we were built against.
 
 **The emitted JSON carries only the public surface.** Methods declared
 `DevToolsVisibility::Internal` in `DevToolsProtocolSchema.inc` are not exported
 (50 public methods, 0 `Internal.*`). So an upstream commit can touch
-`DevToolsProtocolSchema.inc` with no change to the schema hash at all — that is
+`DevToolsProtocolSchema.inc` with no change to the schema at all — that is
 expected, not a sign the gate missed something. We call no `Internal.*` method
 and must not start: it is the overlay's and the CLI's private channel.
 
-`USED_METHODS` in `protocol.ts` is checked **in both directions**: the script
-fails if the schema no longer advertises something we list, and separately
-scans `src/devtools/` to fail if the list and the actual call sites disagree.
-So adding a call means adding its entry, and removing the last call site means
-removing its entry.
-
-**Deliverable:** schema hash same/changed; method and event counts; a list of
-shape changes affecting methods we call.
+**Deliverable:** the schema diff against the pin; method and event counts; a
+list of shape changes affecting methods we call.
 
 ---
 
@@ -243,9 +263,9 @@ Run all of these and paste the real numbers:
 ```powershell
 npm run compile-tsc              # typecheck
 npm run lint                     # 0 errors (11 pre-existing warnings as of last sync)
-npm run check-devtools-schema    # method/event counts, both RIDs, no drift
+npm run check-devtools-schema    # method/event counts, both RIDs, no drift from the pin
 npm run test:unit                # 1352/1352 at last sync
-npm run test:e2e -- --grep "@winui-app"   # DevTools panel E2E, 8 specs
+npm run test:e2e -- --grep "@winui-app"   # DevTools panel E2E, 9 specs
 .\scripts\package-vsc.ps1 -CliBinariesPath (Resolve-Path bin).Path
 ```
 
@@ -256,6 +276,9 @@ Notes:
 - The DevTools E2E suite builds and launches a real WinUI fixture app, then
   drives the panel. `beforeAll` order matters: dotnet probe → **CLI DevTools
   probe before building** → build → workspace → launch → F5.
+- One of those specs reads overlay state back from the engine through
+  `winapp devtools call Overlay.getState`, so it also exercises the CLI build
+  you just staged. A failure there can mean the engine changed, not the panel.
 - No unit test may import `vscode`, so `devtools-panel.ts` is unit-untestable;
   E2E is its only coverage. Budget for that when changing it.
 - New unit test files must be added by hand to the `test:unit` script list in
@@ -309,7 +332,7 @@ unsupported build rather than adapting to it.)
 
 | Item | Why it needs a look |
 | --- | --- |
-| `overlay.ts`'s `NO_HIGHLIGHT = '0'` claim | The "highlighting handle `0` clears the adorner without hiding the toolbar" behaviour was verified against an **older** engine, upstream has since reworked overlay internals, and no test covers it. Confirm manually: select an element, clear the highlight, check the toolbar is still up. |
-| Schema gate compares names only | Consider tightening `check-devtools-schema.ts` to compare `$defs` shapes for used methods. Until then, pass 2's manual hash/diff step is mandatory. |
+| `overlay.ts`'s `NO_HIGHLIGHT = '0'` claim | Now covered: the DevTools E2E hovers a row, un-hovers, and reads `Overlay.getState` back from the engine to assert the adorner cleared and `toolbarVisible` stayed true. Re-run it after any upstream overlay rework rather than re-checking by hand. |
+| Pinned schema drifting from upstream | `npm run check-cli-freshness` tells you the branch has moved; `npm run check-devtools-schema` tells you how the schema differs. Neither one re-pins for you — that is a deliberate read-the-diff step in pass 2. |
 | CI cannot run the DevTools E2E yet | Blocked on a dotnet change shipping in the CLI. Re-test CI once the new build contains it. |
 | Engine gaps issue `microsoft/winappCli#1051` | Append anything new you find; keep "blocking" and "nice to have" separated. |

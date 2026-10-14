@@ -32,6 +32,9 @@ by an upstream change.
 
 ## Workflow
 
+0. **Check whether there is anything to do:** `npm run check-cli-freshness`.
+   It compares the pinned CLI build in `schemas/devtools/pinned-cli.json`
+   against the live branch. If it reports we are up to date, say so and stop.
 1. **Read `.github/skills/devtools-cli-sync/AGENTS.md` first.** It is the
    authoritative runbook: exact commands, the CLI-file-to-our-file map, the
    validation gates, and the traps that have bitten previous syncs.
@@ -58,3 +61,7 @@ by an upstream change.
 - **Gaps are feedback, not workarounds.** When the engine cannot give us what
   the native window has, add it to the upstream gaps issue
   (`microsoft/winappCli#1051`) instead of reimplementing engine logic.
+- **Re-pin when you accept a build.** `schemas/devtools/winapp-devtools-schema.json`
+  and `pinned-cli.json` are the only record in git of what we are built
+  against, and the CI schema gate checks against them. Update both, together,
+  after reading the schema diff — never before.
