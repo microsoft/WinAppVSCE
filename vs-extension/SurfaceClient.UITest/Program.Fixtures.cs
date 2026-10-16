@@ -17,10 +17,14 @@ namespace WinUIXamlPreview.UITest
     {
         private sealed class Expect
         {
-            public Expect(string path, string type, string? prop = null, string? light = null, string? dark = null, bool sized = false, bool themeFlips = false)
+            public Expect(string path, string type, string? prop = null, string? light = null, string? dark = null, bool sized = false, bool themeFlips = false, double minHeight = 0)
             {
-                Path = path; Type = type; Prop = prop; Light = light; Dark = dark; Sized = sized; ThemeFlips = themeFlips;
+                Path = path; Type = type; Prop = prop; Light = light; Dark = dark; Sized = sized; ThemeFlips = themeFlips; MinHeight = minHeight;
             }
+
+            /// <summary>Lower bound on laid-out height that only the control's real template reaches (an untemplated
+            /// Toolkit control still sizes to its bare content, so <see cref="Sized"/> alone can't catch a missing PRI).</summary>
+            public double MinHeight { get; }
 
             public string Path { get; }
             public string Type { get; }
@@ -52,10 +56,10 @@ namespace WinUIXamlPreview.UITest
             }),
             ("ToolkitPage.xaml", new[]
             {
-                new Expect("0.0.0", "SettingsCard", "Header", "Notifications", sized: true),
+                new Expect("0.0.0", "SettingsCard", "Header", "Notifications", sized: true, minHeight: 60),
                 new Expect("0.0.0.0", "ToggleSwitch", sized: true),
                 new Expect("0.0.1", "Segmented", "SelectedIndex", "0", sized: true),
-                new Expect("0.0.1.1", "SegmentedItem", "Content", "Week", sized: true),
+                new Expect("0.0.1.1", "SegmentedItem", "Content", "Week", sized: true, minHeight: 25),
             }),
             ("StylingPage.xaml", new[]
             {
@@ -175,6 +179,11 @@ namespace WinUIXamlPreview.UITest
             if (e.Sized)
             {
                 Check(label + " has a laid-out size", sel.W > 0 && sel.H > 0, $"{sel.W}x{sel.H}");
+            }
+
+            if (e.MinHeight > 0)
+            {
+                Check(label + $" has its template (height >= {e.MinHeight})", sel.H >= e.MinHeight, $"{sel.W}x{sel.H}");
             }
 
             if (e.Prop == null)

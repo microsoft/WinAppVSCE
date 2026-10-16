@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 using System.Xml.Linq;
 
 using WinUISurface.Shared;
@@ -31,33 +30,17 @@ internal static class TemplatePackages
             return null;
         }
 
-        try
+        var found = ProjectFiles.ReadPriPackages(assets);
+        if (found == null)
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(assets));
-            var found = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var lib in doc.RootElement.GetProperty("libraries").EnumerateObject())
-            {
-                if (!lib.Value.TryGetProperty("type", out var type) || type.GetString() != "package") continue;
-                var slash = lib.Name.IndexOf('/');
-                if (slash <= 0) continue;
-                var id = lib.Name[..slash];
-                var version = lib.Name[(slash + 1)..];
-                if (id.StartsWith("Microsoft.WindowsAppSDK", StringComparison.OrdinalIgnoreCase)) continue;
-                if (!lib.Value.TryGetProperty("files", out var files)) continue;
-                if (!files.EnumerateArray().Any(f => f.GetString()?.EndsWith(".pri", StringComparison.OrdinalIgnoreCase) == true)) continue;
-                found[id] = version;
-            }
-
-            log(found.Count == 0
-                ? "Template packages: target has no PRI-bearing packages."
-                : "Template packages: " + string.Join(", ", found.Select(p => p.Key + " " + p.Value)));
-            return found.Select(p => (p.Key, p.Value)).ToList();
-        }
-        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
-        {
-            log("Template packages: could not read target project.assets.json (" + ex.Message + "); using the template baseline.");
+            log("Template packages: could not read target project.assets.json; using the template baseline.");
             return null;
         }
+
+        log(found.Count == 0
+            ? "Template packages: target has no PRI-bearing packages."
+            : "Template packages: " + string.Join(", ", found.Select(p => p.Key + " " + p.Value)));
+        return found.Select(p => (p.Key, p.Value)).ToList();
     }
 
     /// <summary>

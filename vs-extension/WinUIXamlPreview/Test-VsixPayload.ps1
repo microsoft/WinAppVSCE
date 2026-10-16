@@ -23,7 +23,7 @@ try {
         "Surface-arm64/Surface.runtimeconfig.json", "Surface-arm64/Microsoft.WinUI.dll",
         "Surface-arm64/AppxManifest.xml", "Surface-arm64/Assets/StoreLogo.png",
         "Surface-arm64/Assets/MedTile.png", "Surface-arm64/Assets/AppList.png",
-        "HostSDK/engine.stamp", "HostSDK/LICENSE.winui-vsc.txt",
+        "HostSDK/engine.stamp", "HostSDK/LICENSE.winui-vsc.txt", "HostSDK/template-baseline.txt",
         "HostSDK/surface/Surface/Surface.csproj", "HostSDK/surface/Surface/App.cs",
         "HostSDK/DesignHost/DesignHost.csproj", "HostSDK/DesignHost/Package.appxmanifest",
         "HostSDK/SurfaceProvisioner/SurfaceProvisioner.exe",

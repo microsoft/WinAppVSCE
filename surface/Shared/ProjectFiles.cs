@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
@@ -49,6 +50,32 @@ internal static class ProjectFiles
         }
 
         return candidates.FirstOrDefault(File.Exists);
+    }
+
+    /// <summary>
+    /// Packages in a restore graph that carry a <c>.pri</c> (where third-party control templates live), keyed
+    /// by id with their resolved version, excluding Windows App SDK packages. Null when the file is unreadable.
+    /// </summary>
+    public static SortedDictionary<string, string>? ReadPriPackages(string assetsPath)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(assetsPath));
+            var found = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var lib in doc.RootElement.GetProperty("libraries").EnumerateObject())
+            {
+                if (!lib.Value.TryGetProperty("type", out var type) || type.GetString() != "package") continue;
+                var slash = lib.Name.IndexOf('/');
+                if (slash <= 0) continue;
+                var id = lib.Name.Substring(0, slash);
+                if (id.StartsWith("Microsoft.WindowsAppSDK", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!lib.Value.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array) continue;
+                if (!files.EnumerateArray().Any(f => f.GetString()?.EndsWith(".pri", StringComparison.OrdinalIgnoreCase) == true)) continue;
+                found[id] = lib.Name.Substring(slash + 1);
+            }
+            return found;
+            }
+            catch { return null; }
     }
 
     /// <summary>

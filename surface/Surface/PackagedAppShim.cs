@@ -63,7 +63,7 @@ internal static class PackagedAppShim
                 var patched = TryNeutralizeDeploymentAutoInit(File.ReadAllBytes(path), out var sites);
                 if (patched != null)
                 {
-                    var assembly = AssemblyLoadContext.Default.LoadFromStream(new MemoryStream(patched));
+                    var assembly = UserAssemblyLoader.Load(path, patched);
                     log($"No package identity: loaded '{Path.GetFileName(path)}' with the DeploymentManager auto-initializer disabled ({sites} call site(s)).");
                     return assembly;
                 }
@@ -74,7 +74,7 @@ internal static class PackagedAppShim
             }
         }
 
-        return Assembly.LoadFrom(path);
+        return UserAssemblyLoader.Load(path);
     }
 
     /// <summary>

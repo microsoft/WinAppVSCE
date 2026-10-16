@@ -111,6 +111,11 @@ internal static partial class Program
     private static string PkgRef(string version) =>
         $"<ItemGroup><PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"{version}\" /></ItemGroup>";
 
+    // obj\project.assets.json with package libraries; hasPri adds a .pri to the package's files.
+    private static string Assets(string dir, params (string Lib, bool HasPri)[] libs) =>
+        Write(Path.Combine(dir, "obj", "project.assets.json"), "{\"version\":3,\"libraries\":{" + string.Join(",", libs.Select(l =>
+            $"\"{l.Lib}\":{{\"type\":\"package\",\"files\":[\"lib/net8.0/x.dll\"{(l.HasPri ? ",\"lib/net8.0/x.pri\"" : "")}]}}")) + "}}");
+
     private static string Page(string dir, string name = "MainPage.xaml", string markup =
         "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" />") =>
         Write(Path.Combine(dir, name), markup);
@@ -588,6 +593,25 @@ internal static partial class Program
 
                 // Same version never builds even when it could.
                 Check("same version + buildable: no upgrade", !MatchedHostResolver.Resolve(Page(same)).NeedsUpgrade);
+
+                // Same version, PRI-bearing packages: build only for packages beyond the baked template baseline.
+                Write(Path.Combine(BinDir, "HostSDK", "template-baseline.txt"), "CommunityToolkit.WinUI.Controls.Segmented/8.2.250402\nCommunityToolkit.WinUI.Triggers/8.2.250402");
+                var tpl = NewDir("mh-templates");
+                Csproj(tpl, "App", PkgRef("2.2.0"));
+                Assets(tpl, ("Microsoft.WindowsAppSDK/2.2.0", true), ("CommunityToolkit.WinUI.Controls.Segmented/8.2.250402", true),
+                    ("CommunityToolkit.WinUI.Triggers/8.2.250402", true), ("CommunityToolkit.Mvvm/8.4.0", false));
+                Check("same version + baseline-only PRI packages: no upgrade", !MatchedHostResolver.Resolve(Page(tpl)).NeedsUpgrade);
+                Assets(tpl, ("Microsoft.WindowsAppSDK/2.2.0", true), ("CommunityToolkit.WinUI.Controls.Segmented/8.2.251219", true));
+                s = MatchedHostResolver.Resolve(Page(tpl));
+                Check("same version + newer toolkit: NeedsUpgrade=Build at the bundled version, no note",
+                    s.NeedsUpgrade && s.Upgrade == HostUpgradeKind.Build && s.TargetVersion == "2.2.0" && s.Note is null, Describe(s));
+                Assets(tpl, ("Microsoft.WindowsAppSDK/2.2.0", true), ("Contoso.Controls/1.0.0", true));
+                Check("same version + third-party PRI package: upgrade", MatchedHostResolver.Resolve(Page(tpl)).NeedsUpgrade);
+                File.Delete(Path.Combine(BinDir, "HostSDK", "template-baseline.txt"));
+                Assets(tpl, ("Microsoft.WindowsAppSDK/2.2.0", true), ("CommunityToolkit.WinUI.Controls.Segmented/8.2.250402", true));
+                Check("missing baseline file: any PRI package upgrades", MatchedHostResolver.Resolve(Page(tpl)).NeedsUpgrade);
+                Assets(tpl, ("Microsoft.WindowsAppSDK/2.2.0", true), ("CommunityToolkit.Mvvm/8.4.0", false));
+                Check("no PRI packages: no upgrade", !MatchedHostResolver.Resolve(Page(tpl)).NeedsUpgrade);
             }
 
             // No project: a version can't be discovered, so nothing to match.

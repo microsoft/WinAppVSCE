@@ -158,7 +158,7 @@ public static class Program
                     {
                         try
                         {
-                            var fromApp = context.LoadFromAssemblyPath(candidate);
+                            var fromApp = UserAssemblyLoader.Load(candidate);
                             Boot($"AssemblyResolver: app-closure load '{requested}' -> '{candidate}' ({fromApp.GetName()})");
                             return fromApp;
                         }
@@ -653,7 +653,7 @@ public partial class App : Application, IXamlMetadataProvider
 
             try
             {
-                var asm = Assembly.LoadFrom(dll);
+                var asm = UserAssemblyLoader.Load(dll);
                 Type[] types;
                 try
                 {
