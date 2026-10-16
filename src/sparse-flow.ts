@@ -208,6 +208,25 @@ function isStrictlyInside(candidate: string, root: string): boolean {
 }
 
 /**
+ * Find the workspace root that owns `target`.
+ *
+ * The longest containing path wins so nested workspace folders behave like
+ * VS Code's `getWorkspaceFolder`: a file belongs to the most specific root.
+ */
+export function findOwningWorkspacePath(
+	target: string,
+	workspacePaths: readonly string[]
+): string | undefined {
+	const resolvedTarget = path.resolve(target);
+	return workspacePaths
+		.filter(workspacePath => {
+			const relative = path.relative(path.resolve(workspacePath), resolvedTarget);
+			return relative.length === 0 || (!relative.startsWith('..') && !path.isAbsolute(relative));
+		})
+		.sort((left, right) => path.resolve(right).length - path.resolve(left).length)[0];
+}
+
+/**
  * Walk up from `filePath` to the nearest enclosing project root, stopping at
  * (and never escaping) `workspacePath`.
  *

@@ -12,6 +12,7 @@ import {
 	getSparseManifestPath,
 	isProjectMarker,
 	findProjectRootIn,
+	findOwningWorkspacePath,
 	chooseSparseManifest,
 	SPARSE_OUTPUT_FOLDER,
 	PackInput
@@ -389,6 +390,48 @@ describe('findProjectRootIn', () => {
 		);
 
 		assert.equal(root, undefined);
+	});
+});
+
+describe('findOwningWorkspacePath', () => {
+	it('uses the workspace root that contains the selected target', () => {
+		assert.equal(
+			findOwningWorkspacePath(
+				'C:\\repo\\AppB\\bin\\AppB.exe',
+				['C:\\repo\\AppA', 'C:\\repo\\AppB']
+			),
+			'C:\\repo\\AppB'
+		);
+	});
+
+	it('uses the most specific root when workspace folders are nested', () => {
+		assert.equal(
+			findOwningWorkspacePath(
+				'C:\\repo\\apps\\AppB\\bin\\AppB.exe',
+				['C:\\repo', 'C:\\repo\\apps\\AppB']
+			),
+			'C:\\repo\\apps\\AppB'
+		);
+	});
+
+	it('does not match a sibling directory that shares a prefix', () => {
+		assert.equal(
+			findOwningWorkspacePath(
+				'C:\\repo-other\\App.exe',
+				['C:\\repo']
+			),
+			undefined
+		);
+	});
+
+	it('returns undefined for a target outside every workspace root', () => {
+		assert.equal(
+			findOwningWorkspacePath(
+				'D:\\outside\\App.exe',
+				['C:\\repo\\AppA', 'C:\\repo\\AppB']
+			),
+			undefined
+		);
 	});
 });
 

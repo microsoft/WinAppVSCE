@@ -58,6 +58,7 @@ import {
 	defaultSparseOutputDir,
 	getSparseManifestPath,
 	findProjectRootIn,
+	findOwningWorkspacePath,
 	chooseSparseManifest,
 	type PackInput
 } from './sparse-flow';
@@ -150,9 +151,6 @@ function withTruncationHint(placeholder: string, resultCount: number): string {
 		? `${placeholder} (showing ${MAX_QUICKPICK_RESULTS} most recent — use Browse… for others)`
 		: placeholder;
 }
-
-/** Detail marker identifying the "Browse…" row in file QuickPicks. */
-const FILE_PICKER_DETAIL = 'Open a file picker';
 
 /**
  * Output channel for debugger-related activity (e.g. auto-installed extensions),
@@ -433,7 +431,7 @@ async function pickExecutableTarget(
 	const candidatePaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for executables...', cancellable: true },
 		(_progress, token) =>
-			findWorkspaceArtifactsWithCancellation(workspacePath, ['**/*.exe', ...extraGlobs], token)
+			findWorkspaceArtifactsWithCancellation(workspacePath, [['**/*.exe', ...extraGlobs]], token)
 	);
 
 	if (!candidatePaths) {
@@ -444,30 +442,30 @@ async function pickExecutableTarget(
 		return selectFile(title, dialogFilters);
 	}
 
-	const items: vscode.QuickPickItem[] = candidatePaths
-		.slice(0, MAX_SIGNABLE_FILES)
-		.map((p) => {
-			const relDir = path.dirname(path.relative(workspacePath, p));
-			return {
-				label: path.basename(p),
-				description: relDir === '.' ? '' : relDir,
-				detail: p
-			};
-		});
+	const items: SignableFileItem[] = candidatePaths.map((p) => {
+		const relDir = path.dirname(path.relative(workspacePath, p));
+		return {
+			label: path.basename(p),
+			description: relDir === '.' ? '' : relDir,
+			filePath: p
+		};
+	});
 
-	items.push({ label: '$(folder-opened) Browse…', detail: FILE_PICKER_DETAIL });
+	items.push(createBrowseItem());
 
-	const picked = await vscode.window.showQuickPick(items, { placeHolder: title });
+	const picked = await vscode.window.showQuickPick(items, {
+		placeHolder: withTruncationHint(title, candidatePaths.length)
+	});
 
 	if (!picked) {
 		return undefined;
 	}
 
-	if (picked.detail === FILE_PICKER_DETAIL) {
+	if (!picked.filePath) {
 		return selectFile(title, dialogFilters);
 	}
 
-	return picked.detail;
+	return picked.filePath;
 }
 
 /**
@@ -1219,6 +1217,20 @@ function getWorkspacePath(): string | undefined {
 }
 
 /**
+ * Resolve the workspace root that owns a selected target.
+ *
+ * Sparse commands start discovery from the first workspace root, but Browse…
+ * can select a file from another root or outside the workspace. All subsequent
+ * path decisions must follow the selected file rather than root ordering.
+ */
+function getTargetWorkspacePath(target: string): string | undefined {
+	return findOwningWorkspacePath(
+		target,
+		vscode.workspace.workspaceFolders?.map(folder => folder.uri.fsPath) ?? []
+	);
+}
+
+/**
  * Prompt user to select a file
  */
 async function selectFile(title: string, filters?: { [name: string]: string[] }): Promise<string | undefined> {
@@ -1738,13 +1750,31 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const outputDir = defaultSparseOutputDir(workspacePath, findProjectRootForFile(workspacePath, exePath));
+			const targetWorkspacePath = getTargetWorkspacePath(exePath);
+			let outputDir: string;
+			if (targetWorkspacePath) {
+				outputDir = defaultSparseOutputDir(
+					targetWorkspacePath,
+					findProjectRootForFile(targetWorkspacePath, exePath)
+				);
+			} else {
+				const selectedOutputDir = await selectFolder(
+					'Select sparse manifest output folder',
+					vscode.Uri.file(path.dirname(exePath))
+				);
+				if (!selectedOutputDir) {
+					return;
+				}
+				outputDir = selectedOutputDir;
+			}
 
 			// The CLI refuses to replace an existing manifest, so ask first
 			// rather than letting the run fail.
 			let force = false;
 			if (fs.existsSync(getSparseManifestPath(outputDir))) {
-				const relative = path.relative(workspacePath, outputDir) || outputDir;
+				const relative = targetWorkspacePath
+					? path.relative(targetWorkspacePath, outputDir) || outputDir
+					: outputDir;
 				const proceed = await vscode.window.showWarningMessage(
 					`A sparse manifest already exists in ${relative}. Overwrite it and its generated assets?`,
 					{ modal: true },
@@ -1760,7 +1790,7 @@ export function activate(context: vscode.ExtensionContext) {
 			await runWinappCommand(
 				extensionPath,
 				formatPowerShellArgs(args),
-				workspacePath
+				targetWorkspacePath ?? path.dirname(exePath)
 			);
 		})
 	);
@@ -1785,6 +1815,7 @@ export function activate(context: vscode.ExtensionContext) {
 			if (!target) {
 				return;
 			}
+			const targetWorkspacePath = getTargetWorkspacePath(target);
 
 			// EXE mode rewrites the binary in place with mt.exe, which
 			// invalidates any existing Authenticode signature. Confirm before
@@ -1803,7 +1834,9 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			}
 
-			const manifestPath = await resolveSparseManifestForTarget(workspacePath, target);
+			const manifestPath = targetWorkspacePath
+				? await resolveSparseManifestForTarget(targetWorkspacePath, target)
+				: await pickSparseManifestForEmbed(path.dirname(target), target, []);
 			if (!manifestPath) {
 				return;
 			}
@@ -1811,7 +1844,7 @@ export function activate(context: vscode.ExtensionContext) {
 			await runWinappCommand(
 				extensionPath,
 				formatPowerShellArgs(args),
-				workspacePath
+				targetWorkspacePath ?? path.dirname(target)
 			);
 		})
 	);
