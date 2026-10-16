@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { parseManifestXml } from './manifest-schema/xml-parser';
 
 /**
  * Pure helpers for the sparse packaging workflow:
@@ -20,19 +21,6 @@ export const SPARSE_OUTPUT_FOLDER = 'sparse';
 export const SPARSE_MANIFEST_FILENAME = 'appxmanifest.xml';
 
 /**
- * Matches `<uap10:AllowExternalContent>true</uap10:AllowExternalContent>`.
- *
- * The element is the defining marker of a sparse (identity-only) manifest:
- * `winapp pack` only accepts a manifest *file* when it declares this, and the
- * namespace prefix is not fixed, so any prefix (or none) is tolerated.
- *
- * The pattern is deliberately linear — a single bounded character class for
- * the optional prefix and simple `\s*` runs — so it cannot backtrack
- * catastrophically on hostile input (see `redos-prevention.test.ts`).
- */
-const ALLOW_EXTERNAL_CONTENT_RE = /<(?:[\w.-]+:)?AllowExternalContent\s*>\s*true\s*</i;
-
-/**
  * Determine whether manifest XML declares `AllowExternalContent`, i.e. whether
  * it is a sparse identity-only manifest.
  *
@@ -41,7 +29,23 @@ const ALLOW_EXTERNAL_CONTENT_RE = /<(?:[\w.-]+:)?AllowExternalContent\s*>\s*true
  * manifest may legitimately live anywhere.
  */
 export function isSparseManifestXml(xml: string): boolean {
-	return ALLOW_EXTERNAL_CONTENT_RE.test(xml);
+	const { doc, errors } = parseManifestXml(xml);
+	if (errors.length > 0) {
+		return false;
+	}
+
+	const elements = doc.getElementsByTagName('*');
+	for (let index = 0; index < elements.length; index++) {
+		const element = elements.item(index);
+		if (
+			element?.localName === 'AllowExternalContent' &&
+			element.textContent?.trim().toLowerCase() === 'true'
+		) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 /**
@@ -113,6 +117,24 @@ export function buildSparseInitArgs(options: {
 	return args;
 }
 
+export interface SparseCommandPlan {
+	args: string[];
+	cwd: string;
+}
+
+/** Build the complete sparse-init dispatch plan used by the command handler. */
+export function planSparseInitCommand(options: {
+	exePath: string;
+	outputDir: string;
+	workspacePath?: string;
+	force?: boolean;
+}): SparseCommandPlan {
+	return {
+		args: buildSparseInitArgs(options),
+		cwd: options.workspacePath ?? path.dirname(options.exePath)
+	};
+}
+
 /**
  * Build the argument list for `winapp embed-identity`.
  *
@@ -137,6 +159,26 @@ export function buildEmbedIdentityArgs(options: {
 	}
 
 	return args;
+}
+
+/**
+ * Build the complete embed-identity dispatch plan.
+ *
+ * The manifest is required at this boundary so the extension cannot
+ * accidentally fall back to the CLI's location guessing.
+ */
+export function planEmbedIdentityCommand(options: {
+	target: string;
+	manifestPath: string;
+	workspacePath?: string;
+}): SparseCommandPlan {
+	return {
+		args: buildEmbedIdentityArgs({
+			target: options.target,
+			manifestPath: options.manifestPath
+		}),
+		cwd: options.workspacePath ?? path.dirname(options.target)
+	};
 }
 
 /**

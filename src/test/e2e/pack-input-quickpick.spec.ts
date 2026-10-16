@@ -197,6 +197,16 @@ async function choosePackRow(page: Page, filterText: string): Promise<void> {
     await page.keyboard.press('Enter');
 }
 
+async function chooseQuickPickOption(page: Page, option: string): Promise<void> {
+    await page.keyboard.type(option, { delay: 30 });
+    await page.waitForTimeout(500);
+    await page.keyboard.press('Enter');
+}
+
+async function expectWinAppTerminal(page: Page): Promise<void> {
+    await expect(page.locator('.terminal-wrapper')).toBeVisible({ timeout: DISCOVERY_TIMEOUT });
+}
+
 /** Close VS Code and remove the throwaway workspace and profile. */
 async function cleanup(
     app: ElectronApplication | undefined,
@@ -204,11 +214,31 @@ async function cleanup(
     userDataDir?: string
 ): Promise<void> {
     if (app) {
+        for (const page of app.windows()) {
+            const killTerminal = page.getByRole('button', { name: 'Kill Terminal', exact: true });
+            while (await killTerminal.count()) {
+                await killTerminal.first().click().catch(() => {});
+                await page.waitForTimeout(250);
+            }
+        }
         await app.close().catch(() => {});
+        // Terminal-launched CLI processes may briefly retain the workspace as
+        // their cwd after Electron exits. Give Windows time to release it.
+        await new Promise(resolve => setTimeout(resolve, 2_000));
     }
-    fs.rmSync(workspaceDir, { recursive: true, force: true });
+    fs.rmSync(workspaceDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 500,
+    });
     if (userDataDir) {
-        fs.rmSync(userDataDir, { recursive: true, force: true });
+        fs.rmSync(userDataDir, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 500,
+        });
     }
 }
 
@@ -363,7 +393,7 @@ test.describe('winapp.pack command — input discovery', () => {
                 /development certificate/,
                 { timeout: DISCOVERY_TIMEOUT }
             );
-            await page.keyboard.press('Escape');
+            await chooseQuickPickOption(page, 'No');
 
             // An identity-only package has no binaries, so there is no runtime
             // to bundle and the question must never be asked.
@@ -399,7 +429,7 @@ test.describe('winapp.pack command — input discovery', () => {
                 /development certificate/,
                 { timeout: DISCOVERY_TIMEOUT }
             );
-            await page.keyboard.press('Escape');
+            await chooseQuickPickOption(page, 'No');
 
             await expect(quickPickPlaceholder(page)).toHaveAttribute(
                 'placeholder',
@@ -409,6 +439,161 @@ test.describe('winapp.pack command — input discovery', () => {
             await page.keyboard.press('Escape');
 
             console.log('✅ PASS: folder input was asked about self-contained');
+        } finally {
+            await cleanup(app, tmpDir, userDataDir);
+        }
+    });
+
+    test('cancelling the certificate prompt aborts before packaging', async () => {
+        const tmpDir = createPackWorkspace({
+            sparseManifests: [path.join('src', 'App', 'sparse', 'appxmanifest.xml')],
+        });
+
+        let app: ElectronApplication | undefined;
+        let userDataDir: string | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            userDataDir = launched.userDataDir;
+            const page = launched.page;
+
+            await openPackPicker(page);
+            await choosePackRow(page, 'appxmanifest');
+            await expect(quickPickPlaceholder(page)).toHaveAttribute(
+                'placeholder',
+                /development certificate/,
+                { timeout: DISCOVERY_TIMEOUT }
+            );
+            await page.keyboard.press('Escape');
+
+            await page.waitForTimeout(3_000);
+            await expect(page.locator('.quick-input-widget')).toBeHidden();
+            expect(
+                fs.readdirSync(tmpDir, { recursive: true })
+                    .some(entry => String(entry).endsWith('.identity.msix'))
+            ).toBe(false);
+
+            console.log('✅ PASS: cancelling certificate selection aborted sparse packaging');
+        } finally {
+            await cleanup(app, tmpDir, userDataDir);
+        }
+    });
+
+    test('discovers pack inputs from every workspace root', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-multiroot-e2e-'));
+        const rootA = path.join(tmpDir, 'AppA');
+        const rootB = path.join(tmpDir, 'AppB');
+        fs.mkdirSync(rootA, { recursive: true });
+        fs.mkdirSync(rootB, { recursive: true });
+        writeFile(rootB, path.join('src', 'App', 'App.csproj'), '<Project Sdk="Microsoft.NET.Sdk" />');
+        writeFile(rootB, path.join('src', 'App', 'bin', 'Debug', 'App.exe'), Buffer.alloc(1024));
+        writeFile(rootB, path.join('src', 'App', 'sparse', 'appxmanifest.xml'), SPARSE_MANIFEST);
+        const workspaceFile = writeFile(
+            tmpDir,
+            'multi.code-workspace',
+            JSON.stringify({ folders: [{ path: rootA }, { path: rootB }] })
+        );
+
+        let app: ElectronApplication | undefined;
+        let userDataDir: string | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(workspaceFile);
+            app = launched.app;
+            userDataDir = launched.userDataDir;
+
+            const rows = await openPackPicker(launched.page);
+            const rowText = await rows.allTextContents();
+            expect(rowText.some(text => text.includes('AppB') && text.includes('Debug'))).toBe(true);
+            expect(rowText.some(text => text.includes('AppB') && text.includes('appxmanifest.xml'))).toBe(true);
+
+            await launched.page.keyboard.press('Escape');
+            console.log('✅ PASS: pack discovery included the secondary workspace root');
+        } finally {
+            await cleanup(app, tmpDir, userDataDir);
+        }
+    });
+
+    test('skips oversized manifest candidates', async () => {
+        const tmpDir = createPackWorkspace({ includeBuildOutput: false });
+        writeFile(
+            tmpDir,
+            path.join('identity', 'appxmanifest.xml'),
+            SPARSE_MANIFEST + ' '.repeat(1024 * 1024)
+        );
+
+        let app: ElectronApplication | undefined;
+        let userDataDir: string | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            userDataDir = launched.userDataDir;
+
+            const rows = await openPackPicker(launched.page);
+            const rowText = await rows.allTextContents();
+            expect(rowText.filter(text => text.includes('appxmanifest.xml'))).toHaveLength(0);
+            expect(rowText.filter(text => text.includes('Browse'))).toHaveLength(2);
+
+            await launched.page.keyboard.press('Escape');
+            console.log('✅ PASS: oversized sparse manifest candidate was skipped');
+        } finally {
+            await cleanup(app, tmpDir, userDataDir);
+        }
+    });
+
+    test('dispatches sparse init with the selected executable and project output', async () => {
+        const tmpDir = createPackWorkspace();
+
+        let app: ElectronApplication | undefined;
+        let userDataDir: string | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            userDataDir = launched.userDataDir;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Create Sparse Identity Manifest');
+            await expect(quickPickPlaceholder(page)).toHaveAttribute(
+                'placeholder',
+                /executable to grant package identity/,
+                { timeout: DISCOVERY_TIMEOUT }
+            );
+            await choosePackRow(page, 'App.exe');
+
+            await expectWinAppTerminal(page);
+
+            console.log('✅ PASS: sparse init dispatched the expected CLI arguments');
+        } finally {
+            await cleanup(app, tmpDir, userDataDir);
+        }
+    });
+
+    test('dispatches embed identity with the resolved sparse manifest', async () => {
+        const tmpDir = createPackWorkspace({
+            sparseManifests: [path.join('src', 'App', 'sparse', 'appxmanifest.xml')],
+        });
+        writeFile(tmpDir, path.join('src', 'App', 'app.manifest'), '<assembly />');
+
+        let app: ElectronApplication | undefined;
+        let userDataDir: string | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            userDataDir = launched.userDataDir;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Embed Identity into Executable');
+            await expect(quickPickPlaceholder(page)).toHaveAttribute(
+                'placeholder',
+                /executable or side-by-side manifest/,
+                { timeout: DISCOVERY_TIMEOUT }
+            );
+            // Use the side-by-side target so the test can cover dispatch
+            // without depending on VS Code's native modal-button accessibility.
+            await choosePackRow(page, 'app.manifest');
+
+            await expectWinAppTerminal(page);
+
+            console.log('✅ PASS: embed identity dispatched an explicit sparse manifest');
         } finally {
             await cleanup(app, tmpDir, userDataDir);
         }

@@ -7,6 +7,8 @@ import {
 	getPackInputRoot,
 	buildSparseInitArgs,
 	buildEmbedIdentityArgs,
+	planSparseInitCommand,
+	planEmbedIdentityCommand,
 	embedRewritesBinary,
 	defaultSparseOutputDir,
 	getSparseManifestPath,
@@ -21,7 +23,7 @@ import {
 describe('isSparseManifestXml', () => {
 	it('detects the element with the conventional uap10 prefix', () => {
 		const xml =
-			'<Package><Properties>' +
+			'<Package xmlns:uap10="urn:test"><Properties>' +
 			'<uap10:AllowExternalContent>true</uap10:AllowExternalContent>' +
 			'</Properties></Package>';
 
@@ -37,28 +39,62 @@ describe('isSparseManifestXml', () => {
 
 	it('detects the element with an arbitrary namespace prefix', () => {
 		assert.equal(
-			isSparseManifestXml('<uap13:AllowExternalContent>true</uap13:AllowExternalContent>'),
+			isSparseManifestXml(
+				'<Package xmlns:uap13="urn:test">' +
+				'<uap13:AllowExternalContent>true</uap13:AllowExternalContent>' +
+				'</Package>'
+			),
 			true
 		);
 	});
 
 	it('tolerates whitespace around the value', () => {
 		assert.equal(
-			isSparseManifestXml('<uap10:AllowExternalContent>  true  </uap10:AllowExternalContent>'),
+			isSparseManifestXml(
+				'<Package xmlns:uap10="urn:test">' +
+				'<uap10:AllowExternalContent>  true  </uap10:AllowExternalContent>' +
+				'</Package>'
+			),
 			true
 		);
 	});
 
 	it('is case-insensitive on the value', () => {
 		assert.equal(
-			isSparseManifestXml('<uap10:AllowExternalContent>TRUE</uap10:AllowExternalContent>'),
+			isSparseManifestXml(
+				'<Package xmlns:uap10="urn:test">' +
+				'<uap10:AllowExternalContent>TRUE</uap10:AllowExternalContent>' +
+				'</Package>'
+			),
 			true
 		);
 	});
 
 	it('rejects an explicit false value', () => {
 		assert.equal(
-			isSparseManifestXml('<uap10:AllowExternalContent>false</uap10:AllowExternalContent>'),
+			isSparseManifestXml(
+				'<Package xmlns:uap10="urn:test">' +
+				'<uap10:AllowExternalContent>false</uap10:AllowExternalContent>' +
+				'</Package>'
+			),
+			false
+		);
+	});
+
+	it('ignores the marker when it appears only inside a comment', () => {
+		assert.equal(
+			isSparseManifestXml(
+				'<Package><!-- <uap10:AllowExternalContent>true</uap10:AllowExternalContent> --></Package>'
+			),
+			false
+		);
+	});
+
+	it('rejects malformed XML even when it contains the marker text', () => {
+		assert.equal(
+			isSparseManifestXml(
+				'<Package><AllowExternalContent>true</AllowExternalContent></NotPackage>'
+			),
 			false
 		);
 	});
@@ -164,6 +200,61 @@ describe('buildEmbedIdentityArgs', () => {
 			buildEmbedIdentityArgs({ target: 'C:\\app\\MyApp.exe' }),
 			['embed-identity', 'C:\\app\\MyApp.exe']
 		);
+	});
+
+	describe('sparse command dispatch plans', () => {
+		it('dispatches sparse init from the owning workspace with explicit output', () => {
+			assert.deepEqual(
+				planSparseInitCommand({
+					exePath: 'C:\\repo\\App\\bin\\App.exe',
+					outputDir: 'C:\\repo\\App\\sparse',
+					workspacePath: 'C:\\repo',
+					force: true
+				}),
+				{
+					args: [
+						'init',
+						'--exe',
+						'C:\\repo\\App\\bin\\App.exe',
+						'--sparse',
+						'--use-defaults',
+						'--output-dir',
+						'C:\\repo\\App\\sparse',
+						'--force'
+					],
+					cwd: 'C:\\repo'
+				}
+			);
+		});
+
+		it('requires and dispatches the resolved manifest for embed identity', () => {
+			assert.deepEqual(
+				planEmbedIdentityCommand({
+					target: 'C:\\repo\\App\\bin\\App.exe',
+					manifestPath: 'C:\\repo\\App\\sparse\\appxmanifest.xml',
+					workspacePath: 'C:\\repo'
+				}),
+				{
+					args: [
+						'embed-identity',
+						'C:\\repo\\App\\bin\\App.exe',
+						'--manifest',
+						'C:\\repo\\App\\sparse\\appxmanifest.xml'
+					],
+					cwd: 'C:\\repo'
+				}
+			);
+		});
+
+		it('uses the target directory as cwd outside the workspace', () => {
+			assert.equal(
+				planEmbedIdentityCommand({
+					target: 'D:\\outside\\App.exe',
+					manifestPath: 'D:\\identity\\appxmanifest.xml'
+				}).cwd,
+				'D:\\outside'
+			);
+		});
 	});
 
 	it('passes --manifest when one is supplied', () => {

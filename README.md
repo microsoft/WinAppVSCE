@@ -324,6 +324,27 @@ Run these three commands in order:
 
 > **Important:** Embedding identity into an `.exe` rewrites the binary in place, which invalidates any existing Authenticode signature. WinApp asks for confirmation before doing this. Sign the executable *after* embedding, not before. Choosing a side-by-side `.manifest` target instead leaves the binary untouched.
 
+For local testing, finish the workflow by deploying the generated assets beside
+the executable and registering the identity package against that external
+location:
+
+```powershell
+Copy-Item .\sparse\Assets -Destination .\bin\Release\Assets -Recurse -Force
+Add-AppxPackage -Path .\MyApp.identity.msix `
+  -ExternalLocation (Resolve-Path .\bin\Release)
+```
+
+The external location must be the directory that contains the executable and
+the `Assets\` layout referenced by the sparse manifest. This is why sparse
+packages offer **Reveal** and **Sign**, but not the normal **Install** action:
+registration requires the application-specific external location. Production
+installers should copy the app, assets, and identity MSIX, then perform the same
+external-location registration. Unregister during cleanup with:
+
+```powershell
+Get-AppxPackage -Name <manifest Identity Name> | Remove-AppxPackage
+```
+
 ### Access Windows SDK tools
 
 **WinApp: Run SDK Tool** gives you direct access to `makeappx`, `signtool`, `mt`, and `makepri` — no need to find SDK installation paths or open a separate Developer Command Prompt. Arguments are passed directly to the selected tool without shell interpretation; double-quote values that contain spaces.

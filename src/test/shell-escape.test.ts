@@ -66,6 +66,21 @@ describe('escapePowerShellArg', () => {
 		assert.equal(escapePowerShellArg("O'Brien.pfx"), "'O''Brien.pfx'");
 	});
 
+	it('escapes PowerShell typographic single-quote delimiters', () => {
+		assert.equal(
+			escapePowerShellArg('a\u2018b\u2019c\u201Ad\u201Be.exe'),
+			"'a\u2018\u2018b\u2019\u2019c\u201A\u201Ad\u201B\u201Be.exe'"
+		);
+	});
+
+	it('keeps a curly-quote command injection attempt inside the literal', () => {
+		const attack = '\u2019; Write-Output INJECTED; \u2018.exe';
+		assert.equal(
+			escapePowerShellArg(attack),
+			"'\u2019\u2019; Write-Output INJECTED; \u2018\u2018.exe'"
+		);
+	});
+
 	it('escapes a single quote used to break out of the literal', () => {
 		// Attempt to close the quote and append a statement.
 		const attack = "'; Remove-Item C:\\ #";

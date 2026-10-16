@@ -31,9 +31,9 @@ export function getWinappCliPath(extensionPath: string): string {
  * parsed by PowerShell. Inside a double-quoted string PowerShell still expands
  * `$(...)`, `$var` and backtick escapes, which lets a crafted file path inject
  * arbitrary commands (e.g. a path containing `$(Remove-Item ...)`). A
- * single-quoted PowerShell literal performs no such expansion; the only
- * metacharacters are the quote characters themselves, which are escaped by
- * doubling them.
+ * single-quoted PowerShell literal performs no such expansion. Windows
+ * PowerShell treats both ASCII and typographic single quotes as delimiters, so
+ * every variant must be escaped by doubling it.
  *
  * PowerShell accepts the Unicode quotation marks U+2018-U+201B as single
  * quotes too, so a path containing one would otherwise close the literal and

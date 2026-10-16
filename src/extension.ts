@@ -52,8 +52,8 @@ import {
 	isSparseManifestXml,
 	isIdentityOnlyInput,
 	getPackInputRoot,
-	buildSparseInitArgs,
-	buildEmbedIdentityArgs,
+	planSparseInitCommand,
+	planEmbedIdentityCommand,
 	embedRewritesBinary,
 	defaultSparseOutputDir,
 	getSparseManifestPath,
@@ -417,21 +417,22 @@ async function pickSignableFile(workspacePath: string): Promise<string | undefin
  * an existing built executable rather than on a project directory.
  *
  * @param title Title for both the QuickPick and the fallback dialog.
- * @param extraGlobs Additional patterns to include (e.g. side-by-side manifests).
- * @param extraFilters Additional file-dialog filters matching `extraGlobs`.
+ * @param extraExtensions Additional file extensions to include (e.g. side-by-side manifests).
+ * @param extraFilters Additional file-dialog filters matching `extraExtensions`.
  */
 async function pickExecutableTarget(
-	workspacePath: string,
+	workspacePaths: readonly string[],
 	title: string,
-	extraGlobs: string[] = [],
+	extraExtensions: string[] = [],
 	extraFilters: { [name: string]: string[] } = {}
 ): Promise<string | undefined> {
+	const defaultWorkspacePath = workspacePaths[0];
 	const dialogFilters = { 'Executables': ['exe'], ...extraFilters, 'All files': ['*'] };
 
 	const candidatePaths = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Searching for executables...', cancellable: true },
 		(_progress, token) =>
-			findWorkspaceArtifactsWithCancellation(workspacePath, [['**/*.exe', ...extraGlobs]], token)
+			findWorkspaceArtifactsWithCancellation(workspacePaths, [['exe', ...extraExtensions]], token)
 	);
 
 	if (!candidatePaths) {
@@ -443,10 +444,12 @@ async function pickExecutableTarget(
 	}
 
 	const items: SignableFileItem[] = candidatePaths.map((p) => {
-		const relDir = path.dirname(path.relative(workspacePath, p));
+		const owner = findOwningWorkspacePath(p, workspacePaths) ?? defaultWorkspacePath;
+		const relDir = path.dirname(path.relative(owner, p));
+		const rootPrefix = workspacePaths.length > 1 ? `${path.basename(owner)}\\` : '';
 		return {
 			label: path.basename(p),
-			description: relDir === '.' ? '' : relDir,
+			description: relDir === '.' ? rootPrefix.slice(0, -1) : `${rootPrefix}${relDir}`,
 			filePath: p
 		};
 	});
@@ -521,10 +524,11 @@ async function pickCertificateFile(workspacePath: string): Promise<string | unde
 }
 
 async function findWorkspaceArtifactsWithCancellation(
-	workspacePath: string,
+	workspacePath: string | readonly string[],
 	tiers: readonly (readonly string[])[],
 	token: vscode.CancellationToken
 ): Promise<string[] | undefined> {
+	const workspacePaths = typeof workspacePath === 'string' ? [workspacePath] : workspacePath;
 	const abortController = new AbortController();
 	const cancellation = token.onCancellationRequested(() => abortController.abort());
 	if (token.isCancellationRequested) {
@@ -532,11 +536,27 @@ async function findWorkspaceArtifactsWithCancellation(
 	}
 
 	try {
-		const paths = await findWorkspaceArtifacts(workspacePath, {
-			tiers,
-			signal: abortController.signal
+		const pathGroups = await Promise.all(
+			workspacePaths.map(root =>
+				findWorkspaceArtifacts(root, {
+					tiers,
+					signal: abortController.signal
+				})
+			)
+		);
+		if (token.isCancellationRequested) {
+			return undefined;
+		}
+
+		const seen = new Set<string>();
+		return pathGroups.flat().filter(candidate => {
+			const key = candidate.toLowerCase();
+			if (seen.has(key)) {
+				return false;
+			}
+			seen.add(key);
+			return true;
 		});
-		return token.isCancellationRequested ? undefined : paths;
 	} finally {
 		cancellation.dispose();
 	}
@@ -710,6 +730,9 @@ const SPARSE_MANIFEST_PICKER_DETAIL = 'Open a manifest picker';
 /** Upper bound on manifests read while looking for sparse ones. */
 const MAX_SCANNED_MANIFESTS = 20;
 
+/** App manifests are small text files; skip hostile or accidental huge inputs. */
+const MAX_SPARSE_MANIFEST_BYTES = 1024 * 1024;
+
 /**
  * Search the workspace for sparse (identity-only) manifests.
  *
@@ -753,6 +776,10 @@ async function findSparseManifests(
 		seen.add(key);
 
 		try {
+			const stat = await vscode.workspace.fs.stat(uri);
+			if (stat.size > MAX_SPARSE_MANIFEST_BYTES) {
+				continue;
+			}
 			const bytes = await vscode.workspace.fs.readFile(uri);
 			if (isSparseManifestXml(Buffer.from(bytes).toString('utf8'))) {
 				sparsePaths.push(uri.fsPath);
@@ -868,7 +895,8 @@ async function pickSparseManifestForEmbed(
  *
  * @returns The selected input, or `undefined` if cancelled.
  */
-async function pickPackInput(workspacePath: string): Promise<PackInput | undefined> {
+async function pickPackInput(workspacePaths: readonly string[]): Promise<PackInput | undefined> {
+	const defaultWorkspacePath = workspacePaths[0];
 	let cancelled = false;
 	const discovered = await vscode.window.withProgress(
 		{
@@ -879,27 +907,38 @@ async function pickPackInput(workspacePath: string): Promise<PackInput | undefin
 		async (_progress, token) => {
 			token.onCancellationRequested(() => { cancelled = true; });
 
-			const exeMatches = await vscode.workspace.findFiles(
-				new vscode.RelativePattern(workspacePath, '**/*.exe'),
-				BUILD_OUTPUT_EXCLUDE_GLOB,
-				BUILD_OUTPUT_MAX_RESULTS,
-				token
+			const rootResults = await Promise.all(
+				workspacePaths.map(async workspacePath => {
+					const exeMatches = await vscode.workspace.findFiles(
+						new vscode.RelativePattern(workspacePath, '**/*.exe'),
+						BUILD_OUTPUT_EXCLUDE_GLOB,
+						BUILD_OUTPUT_MAX_RESULTS,
+						token
+					);
+					if (token.isCancellationRequested) {
+						return undefined;
+					}
+
+					const folders = deduplicateBuildOutputFolders(
+						exeMatches.map(m => m.fsPath),
+						workspacePath
+					);
+					const sparseManifests = await findSparseManifests(workspacePath, token);
+					return sparseManifests ? { folders, sparseManifests } : undefined;
+				})
 			);
 			if (token.isCancellationRequested) {
 				return undefined;
 			}
 
-			const folders = deduplicateBuildOutputFolders(
-				exeMatches.map(m => m.fsPath),
-				workspacePath
-			);
-
-			const sparseManifests = await findSparseManifests(workspacePath, token);
-			if (!sparseManifests) {
+			if (rootResults.some(result => !result)) {
 				return undefined;
 			}
 
-			return { folders, sparseManifests };
+			return {
+				folders: [...new Set(rootResults.flatMap(result => result?.folders ?? []))],
+				sparseManifests: [...new Set(rootResults.flatMap(result => result?.sparseManifests ?? []))]
+			};
 		}
 	);
 
@@ -911,16 +950,23 @@ async function pickPackInput(workspacePath: string): Promise<PackInput | undefin
 
 	type PackInputItem = vscode.QuickPickItem & { input?: PackInput };
 
-	const items: PackInputItem[] = folders.map(folderPath => ({
-		label: path.relative(workspacePath, folderPath) || '.',
-		detail: folderPath,
-		input: { kind: 'folder', path: folderPath }
-	}));
+	const items: PackInputItem[] = folders.map(folderPath => {
+		const owner = findOwningWorkspacePath(folderPath, workspacePaths) ?? defaultWorkspacePath;
+		const relative = path.relative(owner, folderPath) || '.';
+		return {
+			label: workspacePaths.length > 1 ? `${path.basename(owner)}\\${relative}` : relative,
+			detail: folderPath,
+			input: { kind: 'folder', path: folderPath }
+		};
+	});
 
 	for (const manifestPath of sparseManifests) {
+		const owner = findOwningWorkspacePath(manifestPath, workspacePaths) ?? defaultWorkspacePath;
 		items.push({
 			label: `$(file-code) ${path.basename(manifestPath)}`,
-			description: 'sparse identity-only',
+			description: workspacePaths.length > 1
+				? `${path.basename(owner)} — sparse identity-only`
+				: 'sparse identity-only',
 			detail: manifestPath,
 			input: { kind: 'sparseManifest', path: manifestPath }
 		});
@@ -938,7 +984,7 @@ async function pickPackInput(workspacePath: string): Promise<PackInput | undefin
 	}
 
 	if (picked.detail === FOLDER_PICKER_DETAIL) {
-		const folder = await selectFolder('Select build output folder', vscode.Uri.file(workspacePath));
+		const folder = await selectFolder('Select build output folder', vscode.Uri.file(defaultWorkspacePath));
 		return folder ? { kind: 'folder', path: folder } : undefined;
 	}
 
@@ -966,7 +1012,12 @@ async function pickPackInput(workspacePath: string): Promise<PackInput | undefin
 /** Read a manifest from disk and report whether it is a sparse identity manifest. */
 async function isSparseManifestFile(manifestPath: string): Promise<boolean> {
 	try {
-		const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(manifestPath));
+		const uri = vscode.Uri.file(manifestPath);
+		const stat = await vscode.workspace.fs.stat(uri);
+		if (stat.size > MAX_SPARSE_MANIFEST_BYTES) {
+			return false;
+		}
+		const bytes = await vscode.workspace.fs.readFile(uri);
 		return isSparseManifestXml(Buffer.from(bytes).toString('utf8'));
 	} catch {
 		return false;
@@ -1208,12 +1259,17 @@ async function resolveProjectDirectory(workspacePath: string): Promise<string | 
  * Get the current workspace folder path
  */
 function getWorkspacePath(): string | undefined {
-	const workspaceFolders = vscode.workspace.workspaceFolders;
-	if (!workspaceFolders || workspaceFolders.length === 0) {
+	return getWorkspacePaths()?.[0];
+}
+
+/** Get all open workspace folder paths, preserving VS Code's root order. */
+function getWorkspacePaths(): string[] | undefined {
+	const paths = vscode.workspace.workspaceFolders?.map(folder => folder.uri.fsPath);
+	if (!paths || paths.length === 0) {
 		vscode.window.showErrorMessage(NO_WORKSPACE_MESSAGE);
 		return undefined;
 	}
-	return workspaceFolders[0].uri.fsPath;
+	return paths;
 }
 
 /**
@@ -1735,15 +1791,15 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register winapp.initSparse command
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.initSparse', async () => {
-			const workspacePath = getWorkspacePath();
-			if (!workspacePath) {
+			const workspacePaths = getWorkspacePaths();
+			if (!workspacePaths) {
 				return;
 			}
 
 			// Sparse init acts on an existing built executable and writes to an
 			// explicit --output-dir, so it deliberately skips project detection.
 			const exePath = await pickExecutableTarget(
-				workspacePath,
+				workspacePaths,
 				'Select the executable to grant package identity'
 			);
 			if (!exePath) {
@@ -1786,11 +1842,16 @@ export function activate(context: vscode.ExtensionContext) {
 				force = true;
 			}
 
-			const args = buildSparseInitArgs({ exePath, outputDir, force });
+			const plan = planSparseInitCommand({
+				exePath,
+				outputDir,
+				workspacePath: targetWorkspacePath,
+				force
+			});
 			await runWinappCommand(
 				extensionPath,
-				formatPowerShellArgs(args),
-				targetWorkspacePath ?? path.dirname(exePath)
+				formatPowerShellArgs(plan.args),
+				plan.cwd
 			);
 		})
 	);
@@ -1798,8 +1859,8 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register winapp.embedIdentity command
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.embedIdentity', async () => {
-			const workspacePath = getWorkspacePath();
-			if (!workspacePath) {
+			const workspacePaths = getWorkspacePaths();
+			if (!workspacePaths) {
 				return;
 			}
 
@@ -1807,9 +1868,9 @@ export function activate(context: vscode.ExtensionContext) {
 			// deliberately avoided — far too noisy in a real repo. An .xml target
 			// stays reachable through Browse….
 			const target = await pickExecutableTarget(
-				workspacePath,
+				workspacePaths,
 				'Select the executable or side-by-side manifest',
-				['**/*.manifest'],
+				['manifest'],
 				{ 'Side-by-side manifests': ['manifest', 'xml'] }
 			);
 			if (!target) {
@@ -1840,11 +1901,15 @@ export function activate(context: vscode.ExtensionContext) {
 			if (!manifestPath) {
 				return;
 			}
-			const args = buildEmbedIdentityArgs({ target, manifestPath });
+			const plan = planEmbedIdentityCommand({
+				target,
+				manifestPath,
+				workspacePath: targetWorkspacePath
+			});
 			await runWinappCommand(
 				extensionPath,
-				formatPowerShellArgs(args),
-				targetWorkspacePath ?? path.dirname(target)
+				formatPowerShellArgs(plan.args),
+				plan.cwd
 			);
 		})
 	);
@@ -1894,15 +1959,18 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register winapp.pack command
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.pack', async () => {
-			const workspacePath = getWorkspacePath();
-			if (!workspacePath) {
+			const workspacePaths = getWorkspacePaths();
+			if (!workspacePaths) {
 				return;
 			}
 
-			const input = await pickPackInput(workspacePath);
+			const input = await pickPackInput(workspacePaths);
 			if (!input) {
 				return;
 			}
+			const workspacePath =
+				findOwningWorkspacePath(input.path, workspacePaths) ??
+				getPackInputRoot(input);
 
 			const identityOnly = isIdentityOnlyInput(input);
 
@@ -1910,6 +1978,9 @@ export function activate(context: vscode.ExtensionContext) {
 				['Yes', 'No'],
 				{ placeHolder: 'Generate and install a development certificate?' }
 			);
+			if (generateCert === undefined) {
+				return;
+			}
 
 			// An identity-only package contains no binaries: it has no
 			// architecture and no Windows App SDK runtime to bundle, so both the
@@ -1920,6 +1991,9 @@ export function activate(context: vscode.ExtensionContext) {
 					['Yes', 'No'],
 					{ placeHolder: 'Bundle Windows App SDK runtime (self-contained)?' }
 				);
+				if (selfContained === undefined) {
+					return;
+				}
 
 				// --- Architecture mismatch warning for self-contained packages ---
 				if (selfContained === 'Yes') {
