@@ -427,6 +427,7 @@ out/
 bin/
 *.map
 .vscode-test/
+.drive-extensions/
 playwright-report/
 test-results/
 

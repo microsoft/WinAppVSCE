@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "SmokeFixture (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "SmokeFixture (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

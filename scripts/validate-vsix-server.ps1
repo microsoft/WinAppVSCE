@@ -1,0 +1,69 @@
+#!/usr/bin/env pwsh
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$VsixPath
+)
+
+$ErrorActionPreference = "Stop"
+$ResolvedVsix = Resolve-Path $VsixPath -ErrorAction Stop
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::OpenRead($ResolvedVsix.Path)
+try {
+    # The server ships as one Native AOT executable per architecture, plus the shared,
+    # framework-dependent generator host that runs source generators out of process.
+    $requiredRelativeFiles = @(
+        'win-x64/WinUiXaml.LanguageServer.exe',
+        'win-arm64/WinUiXaml.LanguageServer.exe',
+        'generator-host/WinUiXaml.GeneratorHost.dll',
+        'generator-host/WinUiXaml.GeneratorHost.deps.json',
+        'generator-host/WinUiXaml.GeneratorHost.runtimeconfig.json'
+    )
+    foreach ($relativeFile in $requiredRelativeFiles) {
+        $entry = "extension/dist/server/$relativeFile"
+        if (-not ($zip.Entries | Where-Object { $_.FullName -ieq $entry })) {
+            throw "VSIX is missing required server file: $entry"
+        }
+    }
+    # A Native AOT publish is self-contained, so any CoreCLR runtime file means the server was
+    # published the old way. The managed server assembly is likewise not allowed to ship.
+    $forbiddenNames = @(
+        'WinUiXaml.LanguageServer.dll',
+        'WinUiXaml.LanguageServer.deps.json',
+        'WinUiXaml.LanguageServer.runtimeconfig.json',
+        'hostfxr.dll',
+        'hostpolicy.dll',
+        'coreclr.dll',
+        'clrjit.dll',
+        'System.Private.CoreLib.dll',
+        'dotnet.exe',
+        'dotnet.dll',
+        'dotnet.deps.json',
+        'dotnet.runtimeconfig.json'
+    )
+    foreach ($entry in $zip.Entries | Where-Object {
+        $_.FullName.StartsWith('extension/dist/server/', [System.StringComparison]::OrdinalIgnoreCase)
+    }) {
+        $name = ($entry.FullName -split '/')[-1]
+        # The server executable belongs at its two published RID paths and nowhere else; a copy
+        # anywhere else is a stale launcher that would ship alongside the real ones.
+        $isUnexpectedAppHost = $name -imatch '^WinUiXaml\..*\.exe$' -and
+            $entry.FullName -notin @(
+                'extension/dist/server/win-x64/WinUiXaml.LanguageServer.exe',
+                'extension/dist/server/win-arm64/WinUiXaml.LanguageServer.exe'
+            )
+        if (($forbiddenNames -icontains $name) -or $isUnexpectedAppHost) {
+            throw "VSIX must not bundle a .NET apphost or runtime file: $($entry.FullName)"
+        }
+        # Native-linker intermediates carry no runtime value and are pure download weight.
+        # .vscodeignore excludes them; this fails the build if that exclusion is ever dropped.
+        if ($name -imatch '\.(lib|exp|ilk|obj)$') {
+            throw "VSIX must not bundle native linker intermediates: $($entry.FullName)"
+        }
+    }
+}
+finally {
+    $zip.Dispose()
+}
+
+Write-Host "[VALIDATE] VSIX contains the Native AOT server for each architecture and no bundled .NET runtime." -ForegroundColor Green
