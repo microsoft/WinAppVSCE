@@ -185,11 +185,13 @@ The extension includes a **visual editor** for `AppxManifest.xml` and `.appxmani
 
 **Key features:**
 
-- **Real-time validation**: inline errors for required fields, format rules (publisher DN, version, GUIDs, BCP-47, hex colors), and extension field requirements
-- **Asset generation**: "Regenerate Assets" button invokes the CLI to auto-generate all icon sizes from a single source image
-- **Extension management**: add/remove typed extensions (Protocol Activation, COM Server, Background Tasks, File Type Association, App Execution Alias, Startup Task, Share Target, App Service, Toast Notification Activation, MCP Server) with pre-filled templates
-- **Reorderable lists**: drag dependencies and resources up/down to control XML element order
-- **Format-preserving edits**: changes are applied surgically to the XML text, preserving your whitespace, comments, and attribute ordering
+- **Real-time validation** — inline errors for required fields, format rules (publisher DN, version, GUIDs, BCP-47, hex colors), and extension field requirements
+- **Asset generation** — "Regenerate Assets" button invokes the CLI to auto-generate all icon sizes from a single source image
+- **Extension management** — add/remove typed extensions (Protocol Activation, COM Server, Background Tasks, File Type Association, App Execution Alias, Startup Task, Share Target, App Service, Toast Notification Activation, MCP Server) with pre-filled templates
+- **Reorderable lists** — drag dependencies and resources up/down to control XML element order
+- **Format-preserving edits** — changes are applied surgically to the XML text, preserving your whitespace, comments, and attribute ordering
+- **State-preserving refresh** — editing the XML in a text editor updates the form in place, keeping your selected tab, expanded fields, and scroll position
+- **Recoverable parse errors** — while the XML can't be parsed the form is covered by an explanatory overlay instead of closing, and editing resumes as soon as the XML is valid again
 
 **How to open:**
 

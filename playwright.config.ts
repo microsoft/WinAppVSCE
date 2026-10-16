@@ -18,4 +18,18 @@ export default defineConfig({
         trace: 'retain-on-failure',
         screenshot: 'only-on-failure',
     },
+    projects: [
+        {
+            // Launches VS Code itself, so it needs no downloaded Playwright browser.
+            name: 'vscode',
+            testIgnore: '**/webview-state.spec.ts',
+        },
+        {
+            // Renders the generated webview document directly, which does need Chromium.
+            // Split out so pipelines without that download can run `--project=vscode`.
+            name: 'webview',
+            testMatch: '**/webview-state.spec.ts',
+            use: { browserName: 'chromium' },
+        },
+    ],
 });

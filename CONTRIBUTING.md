@@ -59,6 +59,16 @@ npm test                 # VS Code integration tests (drives the real extension 
 
 `npm test` runs a `pretest` step that compiles, lints, builds the language server, and restores the test fixture — so it needs the .NET SDK. `test:xaml-bundled` runs the already-published Native AOT server executable end-to-end; the .NET 10 runtime is still required so the server can spawn the out-of-process source-generator host. On a machine without the SDK, run `npm run test:unit` instead; build-dependent suites fail fast with a clear "dotnet not found" error rather than silently skipping.
 
+`npm run test:e2e` has two Playwright projects. The `vscode` project drives real VS Code, while
+the `webview` project renders the webview in Chromium and needs that browser downloaded once:
+
+```powershell
+npx playwright install chromium
+```
+
+Without it the `webview` project fails. Use `npm run test:e2e -- --project=vscode` to skip it.
+See [`src/test/e2e/README.md`](src/test/e2e/README.md) for details.
+
 ## Package
 
 To produce a VSIX package locally:
