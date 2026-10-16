@@ -212,18 +212,12 @@ internal sealed partial class XamlLanguageServer
             : CrossFileResourcePolicy.None;
     }
 
-    /// <summary>True when other documents can bind to the resources this one declares: App.xaml, or a standalone ResourceDictionary that some file merges. A Page, Window or UserControl keeps its resources to itself.</summary>
+    /// <summary>True when other documents can bind to the resources this one declares: App.xaml, or a ResourceDictionary reachable from its merged-dictionary Source graph. A Page, Window, UserControl or unmerged dictionary keeps its resources to itself.</summary>
     private bool DocumentExposesResourcesToOtherFiles(
         XamlProjectContext? context,
         string? path,
         TextDocument doc)
     {
-        if (doc.Parsed.Root is { } root &&
-            XamlSemanticFacts.IsResourceDictionaryRoot(root, context?.TypeSystem))
-        {
-            return true;
-        }
-
         if (context == null || path == null)
         {
             return false;
@@ -231,8 +225,29 @@ internal sealed partial class XamlLanguageServer
 
         try
         {
-            return FindAppXamlPath(context.Resolution) is { } appXaml &&
-                string.Equals(appXaml, CanonicalizePath(path), System.StringComparison.OrdinalIgnoreCase);
+            if (FindAppXamlPath(context.Resolution) is not { } appXaml)
+            {
+                return false;
+            }
+
+            var canonicalPath = CanonicalizePath(path);
+            if (string.Equals(appXaml, canonicalPath, System.StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (doc.Parsed.Root is not { } root ||
+                !XamlSemanticFacts.IsResourceDictionaryRoot(root, context.TypeSystem))
+            {
+                return false;
+            }
+
+            var projectRoot = System.IO.Path.GetDirectoryName(context.Resolution.ProjectPath)!;
+            return ReadResourceGraph(appXaml, projectRoot, context.TypeSystem)
+                .Any(file => string.Equals(
+                    CanonicalizePath(file.Path),
+                    canonicalPath,
+                    System.StringComparison.OrdinalIgnoreCase));
         }
         catch (OperationCanceledException)
         {

@@ -328,6 +328,17 @@ describe("WinUI XAML — red-team 79 (cross-file resource references)", function
     assertNoBuildOutput(refs, "owning dictionary internal usage");
   });
 
+  it("renames a merged resource without editing an unmerged same-key dictionary", async () => {
+    const res = await h.renameAt(
+      page(`<Border Background="{StaticResource MergedAccent|Brush}" />`),
+      "RenamedMergedAccentBrush");
+    assert.ok(!res.error, `rename should succeed; got ${JSON.stringify(res)}`);
+    assert.strictEqual(currentRefs(res.edits).length, 1, "expected the current-buffer usage edit");
+    assert.strictEqual(countBase(res.edits, "MergedResources.xaml"), 2, "expected the merged declaration and its internal usage");
+    assert.strictEqual(countBase(res.edits, "UnmergedResources.xaml"), 0, `unmerged dictionary must not be edited; got ${JSON.stringify(res.edits)}`);
+    assert.strictEqual(res.edits.length, 3, `expected only page usage plus merged declaration and usage; got ${JSON.stringify(res.edits)}`);
+  });
+
   it("keeps x:Name document-scoped even when another project file has the same name", async () => {
     const refs = await referencesAt(page([
       `<StackPanel x:Name="DiPage|Title">`,
