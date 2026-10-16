@@ -1,56 +1,68 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { glob } from 'glob';
+import { classifyRunTargetEntries } from './run-target';
 
 export interface DebuggerExtensionRequirement {
 	id: string;
 	name: string;
 }
 
-export type InputFolderValidation = {
+export type RunInputValidation = {
 	valid: true;
 } | {
 	valid: false;
-	reason: 'not-found' | 'not-directory' | 'no-exe';
+	reason: 'not-found' | 'nothing-runnable';
 	message: string;
 };
 
+/** One phrase for every "point launch.json somewhere valid" hint. */
+const RUNNABLE_TARGET = 'a project, a solution, or the folder containing your built application';
+
+const BUILD_FIRST = 'Build your project first, or ';
+
+function pointAt(propertyName: string, target: string): string {
+	return `update "${propertyName}" in launch.json to point to ${target}.`;
+}
+
 /**
- * Validates that an inputFolder path is suitable for a debug launch:
- * - The path must exist
- * - It must be a directory
- * - It must contain at least one .exe file
- *
- * Relative paths are resolved against the provided cwd.
+ * The CLI decides project vs folder mode, so this only catches the one
+ * launch.json mistake it cannot report well: a path that exists but holds
+ * nothing runnable, which is almost always a stale or unbuilt directory.
  */
-export async function validateInputFolder(inputFolder: string, cwd: string): Promise<InputFolderValidation> {
-	const resolvedFolder = path.isAbsolute(inputFolder) ? inputFolder : path.resolve(cwd, inputFolder);
-	const folderStat = await fs.promises.stat(resolvedFolder).catch(() => undefined);
-	if (!folderStat) {
+export async function validateRunInput(
+	input: string,
+	cwd: string,
+	propertyName: string = 'input'
+): Promise<RunInputValidation> {
+	const resolved = path.isAbsolute(input) ? input : path.resolve(cwd, input);
+	const stat = await fs.promises.stat(resolved).catch(() => undefined);
+
+	if (!stat) {
 		return {
 			valid: false,
 			reason: 'not-found',
-			message: `The configured "inputFolder" path does not exist: ${inputFolder}. `
-				+ 'Build your project first, or update "inputFolder" in launch.json to point to your build output directory.'
+			message: `The configured "${propertyName}" path does not exist: ${input}. `
+				+ BUILD_FIRST + pointAt(propertyName, RUNNABLE_TARGET)
 		};
 	}
 
-	if (!folderStat.isDirectory()) {
-		return {
-			valid: false,
-			reason: 'not-directory',
-			message: `The configured "inputFolder" is not a directory: ${inputFolder}. `
-				+ 'Update "inputFolder" in launch.json to point to the folder containing your built application.'
-		};
+	// A file input names a project or an executable; the CLI reports anything
+	// else it cannot build far better than a guess here would.
+	if (!stat.isDirectory()) {
+		return { valid: true };
 	}
 
-	const exesInFolder = await glob('*.exe', { cwd: resolvedFolder, absolute: true, nocase: true });
-	if (exesInFolder.length === 0) {
+	const entries = await fs.promises.readdir(resolved).catch(() => undefined);
+	if (!entries) {
+		return { valid: true };
+	}
+
+	if (classifyRunTargetEntries(entries) === 'unknown') {
 		return {
 			valid: false,
-			reason: 'no-exe',
-			message: `The configured "inputFolder" does not contain any .exe files: ${inputFolder}. `
-				+ 'Build your project first, or update "inputFolder" in launch.json to point to the folder containing your built application.'
+			reason: 'nothing-runnable',
+			message: `The configured "${propertyName}" contains no project or .exe files: ${input}. `
+				+ BUILD_FIRST + pointAt(propertyName, RUNNABLE_TARGET)
 		};
 	}
 
@@ -76,6 +88,38 @@ export const DEBUGGER_CHOICE_LABELS = {
 	installCpp: 'Install C/C++',
 	useNode: 'Use Node.js / Electron (built-in)'
 } as const;
+
+export interface DebuggerTypeResolution {
+	debuggerType: string | undefined;
+	error?: string;
+}
+
+/**
+ * Native AOT has no managed CLR for `coreclr` to attach to. When the user did
+ * not choose a debugger, select the native debugger; when they did, reject a
+ * contradictory configuration before building and launching the app.
+ */
+export function resolveDebuggerTypeForRun(
+	explicitType: unknown,
+	aot: unknown
+): DebuggerTypeResolution {
+	const debuggerType = typeof explicitType === 'string' && explicitType.trim()
+		? explicitType
+		: undefined;
+
+	if (aot !== true) {
+		return { debuggerType };
+	}
+
+	if (debuggerType && debuggerType !== 'cppvsdbg') {
+		return {
+			debuggerType,
+			error: 'Native AOT debugging requires "debuggerType": "cppvsdbg" because the published process has no managed CLR for coreclr to attach to.'
+		};
+	}
+
+	return { debuggerType: 'cppvsdbg' };
+}
 
 export function getDebuggerExtensionRequirement(debuggerType: string): DebuggerExtensionRequirement | undefined {
 	return DEBUGGER_EXTENSION_REQUIREMENTS[debuggerType];
