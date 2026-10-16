@@ -88,6 +88,11 @@ jobs:
         }
         Write-Host "WinUI template pack installed."
 
+    - name: Install Playwright Chromium
+      # Only the 'webview' project needs it; the release pipeline skips that project so it
+      # never downloads a browser.
+      run: npx playwright install chromium
+
     - name: Run E2E tests
       run: npm run test:e2e -- --grep-invert "adding empty custom capability|adding invalid format custom capability|adding valid custom capability|custom capability appears in the custom capabilities list|invalid inputFolder|cancelling the artifact QuickPick|selecting Browse|cancelling the certificate QuickPick"
 
