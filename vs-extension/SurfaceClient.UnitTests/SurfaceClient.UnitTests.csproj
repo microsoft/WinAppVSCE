@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <Compile Include="..\..\surface\Shared\HostPayload.cs" Link="Shared\HostPayload.cs" />
+    <Compile Include="..\..\surface\Shared\ProjectFiles.cs" Link="Shared\ProjectFiles.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\IsExternalInit.cs" Link="Protocol\IsExternalInit.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\HostArch.cs" Link="Protocol\HostArch.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\WasdkVersionDiscovery.cs" Link="Protocol\WasdkVersionDiscovery.cs" />

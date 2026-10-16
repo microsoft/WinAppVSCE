@@ -45,17 +45,23 @@ internal static class MatchedHostResolver
     {
         log ??= _ => { };
         var bundled = SurfaceResolver.Resolve(preferred: null, nearPath: xamlPath, log: log);
-        var version = WasdkVersionDiscovery.Discover(xamlPath, log).Version;
+        var discovery = WasdkVersionDiscovery.Discover(xamlPath, log);
+        var version = discovery.Version;
         var project = WasdkVersionDiscovery.FindOwningCsproj(xamlPath);
         var needsMatch = !string.IsNullOrEmpty(version) && !IsBundledCompatible(version!);
         var canBuild = needsMatch && project != null && HostBuildEnvironment.Probe(log).CanBuild;
+        string? note = null;
+        if (needsMatch && !canBuild)
+            note = $"Matched WinAppSDK {version} preview requires a project and .NET SDK.";
+        else if (discovery.Source == WasdkVersionSource.Unresolved)
+            note = $"Couldn't determine this project's WinAppSDK version, so the preview uses the bundled {BundledVersion}. Build the project, then reopen the file.";
         return new HostSelection
         {
             ExePath = bundled, Fidelity = HostFidelity.Baseline, VersionLabel = version ?? BundledVersion,
             NeedsUpgrade = bundled != null && canBuild,
             Upgrade = canBuild ? HostUpgradeKind.Build : HostUpgradeKind.None,
             TargetVersion = version, TargetProject = project,
-            Note = needsMatch && !canBuild ? $"Matched WinAppSDK {version} preview requires a project and .NET SDK." : null
+            Note = note
         };
     }
 

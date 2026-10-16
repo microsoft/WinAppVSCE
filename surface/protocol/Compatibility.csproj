@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\Shared\HostPayload.cs" Link="Production\HostPayload.cs" />
+    <Compile Include="..\Shared\ProjectFiles.cs" Link="Production\ProjectFiles.cs" />
     <Compile Include="Compatibility.cs" />
     <Compile Include="ServerDoubles.cs" />
     <Compile Include="..\Surface\FrameServer.cs" Link="Production\FrameServer.cs" />

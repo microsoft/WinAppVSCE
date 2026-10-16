@@ -66,6 +66,7 @@
 
   <ItemGroup>
     <Compile Include="..\..\surface\Shared\HostPayload.cs" Link="Shared\HostPayload.cs" />
+    <Compile Include="..\..\surface\Shared\ProjectFiles.cs" Link="Shared\ProjectFiles.cs" />
     <Content Include="..\LICENSE.winui-vsc.txt">
       <Link>LICENSE.winui-vsc.txt</Link>
       <IncludeInVSIX>true</IncludeInVSIX>

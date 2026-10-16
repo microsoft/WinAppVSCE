@@ -31,6 +31,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\Shared\HostPayload.cs" Link="Shared\HostPayload.cs" />
+    <Compile Include="..\Shared\ProjectFiles.cs" Link="Shared\ProjectFiles.cs" />
   </ItemGroup>
 
 </Project>

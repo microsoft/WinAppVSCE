@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <Compile Include="..\..\surface\Shared\HostPayload.cs" Link="Shared\HostPayload.cs" />
+    <Compile Include="..\..\surface\Shared\ProjectFiles.cs" Link="Shared\ProjectFiles.cs" />
     <!-- Compile the production protocol/client sources in place — no duplication. -->
     <Compile Include="..\WinUIXamlPreview\Protocol\Messages.cs" Link="Protocol\Messages.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Protocol\LineDecoder.cs" />

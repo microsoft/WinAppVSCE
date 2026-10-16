@@ -283,6 +283,46 @@ internal static partial class Program
         var wpf = NewDir("wpf");
         Csproj(wpf, "Wpf", "<PropertyGroup><UseWPF>true</UseWPF></PropertyGroup>");
         Check("project without WASDK -> NotFound", !WasdkVersionDiscovery.Discover(Page(wpf)).Found);
+
+        // WinUI Gallery layout: BaseIntermediateOutputPath=obj\$(MSBuildProjectName)\ puts the assets one level down.
+        var perProject = NewDir("assets-per-project");
+        Csproj(perProject, "Gallery", PkgRef("$(WindowsAppSdkPackageVersion)"));
+        Write(Path.Combine(perProject, "obj", "Gallery", "project.assets.json"),
+            "{ \"libraries\": { \"Microsoft.WindowsAppSDK/2.5.4-experimental\": { \"type\": \"package\" } } }");
+        r = WasdkVersionDiscovery.Discover(Page(perProject));
+        Check("assets under obj\\<ProjectName>\\ found", r.Version == "2.5.4-experimental" && r.Source == WasdkVersionSource.ProjectAssetsJson, $"{r.Source} {r.Version}");
+
+        // Unrestored: the declared $(Property) is expanded through Directory.Build.props -> parent props -> imported props.
+        var gallery = NewDir("gallery");
+        Write(Path.Combine(gallery, "Directory.Build.props"),
+            "<Project><Import Project=\"standalone.props\" Condition=\"'$(IsInWinUIRepo)' != 'true'\" /></Project>");
+        Write(Path.Combine(gallery, "standalone.props"),
+            "<Project><PropertyGroup><WasdkVer>2.5.4-experimental</WasdkVer>" +
+            "<WindowsAppSdkPackageVersion>$(WasdkVer)</WindowsAppSdkPackageVersion></PropertyGroup></Project>");
+        var galleryProj = Path.Combine(gallery, "WinUIGallery");
+        Write(Path.Combine(galleryProj, "Directory.Build.props"),
+            "<Project><Import Project=\"$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))\" />" +
+            "<PropertyGroup Condition=\"'$(WindowsAppSdkPackageVersion)' == ''\"><WindowsAppSdkPackageVersion>1.0.0</WindowsAppSdkPackageVersion></PropertyGroup></Project>");
+        Csproj(galleryProj, "WinUIGallery", PkgRef("$(WindowsAppSdkPackageVersion)"));
+        r = WasdkVersionDiscovery.Discover(Page(galleryProj));
+        Check("$(Property) expanded via props chain (conditional default doesn't override)",
+            r.Version == "2.5.4-experimental" && r.Source == WasdkVersionSource.CsprojPackageReference, $"{r.Source} {r.Version}");
+
+        // CPM version as a property defined in the csproj.
+        var cpmProp = NewDir("cpm-prop");
+        Write(Path.Combine(cpmProp, "Directory.Packages.props"),
+            "<Project><ItemGroup><PackageVersion Include=\"Microsoft.WindowsAppSDK\" Version=\"$(WasdkVersion)\" /></ItemGroup></Project>");
+        Csproj(cpmProp, "App", "<PropertyGroup><WasdkVersion>2.4.0</WasdkVersion></PropertyGroup>");
+        Eq("Directory.Packages.props $(Property) expanded", "2.4.0", WasdkVersionDiscovery.Discover(Page(cpmProp)).Version);
+
+        // An expression we can't evaluate is Unresolved — never returned as the version.
+        var unresolved = NewDir("unresolved");
+        Csproj(unresolved, "App", PkgRef("$(SetByTheCommandLine)"));
+        r = WasdkVersionDiscovery.Discover(Page(unresolved));
+        Check("unexpandable $(Property) -> Unresolved, no version", !r.Found && r.Source == WasdkVersionSource.Unresolved, $"{r.Source} {r.Version}");
+        var range = NewDir("range");
+        Csproj(range, "App", PkgRef("[1.6.0,)"));
+        Check("version range -> Unresolved", WasdkVersionDiscovery.Discover(Page(range)).Source == WasdkVersionSource.Unresolved);
     }
 
     // ---------------------------------------------------------------- ProjectDllLocator

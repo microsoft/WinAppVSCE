@@ -2,6 +2,8 @@ using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
 
+using WinUISurface.Shared;
+
 namespace SurfaceProvisioner;
 
 /// <summary>
@@ -22,8 +24,8 @@ internal static class TemplatePackages
     public static IReadOnlyList<(string Id, string Version)>? Discover(string project, Action<string> log)
     {
         var dir = File.Exists(project) ? Path.GetDirectoryName(Path.GetFullPath(project))! : project;
-        var assets = Path.Combine(dir, "obj", "project.assets.json");
-        if (!File.Exists(assets))
+        var assets = ProjectFiles.FindAssetsFile(dir, ProjectFiles.ResolveCsproj(project));
+        if (assets == null)
         {
             log("Template packages: target project.assets.json not found; using the template baseline.");
             return null;

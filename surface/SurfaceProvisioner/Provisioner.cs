@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Xml.Linq;
 
+using WinUISurface.Shared;
+
 namespace SurfaceProvisioner;
 
 /// <summary>How the native payload for the resolved WASDK version was located.</summary>
@@ -230,8 +232,8 @@ public static class Provisioner
         string projectDir, string? csproj, Action<string> log)
     {
         // 1. project.assets.json (authoritative resolved graph).
-        var assets = Path.Combine(projectDir, "obj", "project.assets.json");
-        if (File.Exists(assets))
+        var assets = ProjectFiles.FindAssetsFile(projectDir, csproj);
+        if (assets != null)
         {
             var v = ReadVersionFromAssets(assets);
             if (v != null) return (v, VersionSourceKind.ProjectAssetsJson, assets);
@@ -243,16 +245,26 @@ public static class Provisioner
         if (dpp != null)
         {
             var v = ReadVersionFromXmlItem(dpp, "PackageVersion", Metapackage);
-            if (v != null) return (v, VersionSourceKind.DirectoryPackagesProps, dpp);
+            if (v != null) return Declared(v, VersionSourceKind.DirectoryPackagesProps, dpp, csproj, log);
         }
 
         // 3. csproj PackageReference.
         if (csproj != null && File.Exists(csproj))
         {
             var v = ReadVersionFromXmlItem(csproj, "PackageReference", Metapackage);
-            if (v != null) return (v, VersionSourceKind.CsprojPackageReference, csproj);
+            if (v != null) return Declared(v, VersionSourceKind.CsprojPackageReference, csproj, csproj, log);
         }
 
+        return (null, VersionSourceKind.NotFound, null);
+    }
+
+    // A declared (unrestored) version may be an MSBuild property; never hand an unexpanded expression on.
+    private static (string? version, VersionSourceKind src, string? path) Declared(
+        string raw, VersionSourceKind source, string path, string? csproj, Action<string> log)
+    {
+        var v = ProjectFiles.ExpandProperties(raw, csproj);
+        if (ProjectFiles.IsConcreteVersion(v)) return (v, source, path);
+        log($"'{raw}' in {path} is not a concrete WindowsAppSDK version; restore the project to resolve it.");
         return (null, VersionSourceKind.NotFound, null);
     }
 

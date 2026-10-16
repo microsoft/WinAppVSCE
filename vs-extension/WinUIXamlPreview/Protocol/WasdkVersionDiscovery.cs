@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Xml.Linq;
+using WinUISurface.Shared;
 
 namespace WinUIXamlPreview.Protocol
 {
@@ -15,6 +16,9 @@ namespace WinUIXamlPreview.Protocol
         ProjectAssetsJson,
         DirectoryPackagesProps,
         CsprojPackageReference,
+
+        /// <summary>A reference exists but its version is an MSBuild expression we can't evaluate statically.</summary>
+        Unresolved,
     }
 
     internal readonly struct WasdkVersionResult
@@ -40,7 +44,10 @@ namespace WinUIXamlPreview.Protocol
     /// VSIX and the build tool agree on the version. Deliberately BCL-only (System.Text.Json +
     /// System.Xml.Linq, both already referenced by this project) and free of any build toolchain, so it
     /// works even on a machine with no .NET SDK — the resolver still knows "this is a 2.2.5 project" and
-    /// can show the right fallback note. Every failure path returns NotFound; never throws into the editor.
+    /// can show the right fallback note. Assets are found under obj\ or obj\&lt;ProjectName&gt;\ and declared
+    /// <c>$(Property)</c> versions are expanded via <see cref="ProjectFiles"/> (shared with the provisioner);
+    /// an expression that can't be expanded is <see cref="WasdkVersionSource.Unresolved"/>, never passed on.
+    /// Every failure path returns NotFound; never throws into the editor.
     /// </summary>
     internal static class WasdkVersionDiscovery
     {
@@ -66,9 +73,9 @@ namespace WinUIXamlPreview.Protocol
 
                 var projectDir = Path.GetDirectoryName(csproj)!;
 
-                // 1. obj\project.assets.json — the authoritative resolved dependency graph.
-                var assets = Path.Combine(projectDir, "obj", "project.assets.json");
-                if (File.Exists(assets))
+                // 1. project.assets.json — the authoritative resolved dependency graph.
+                var assets = ProjectFiles.FindAssetsFile(projectDir, csproj);
+                if (assets != null)
                 {
                     var v = ReadVersionFromAssets(assets);
                     if (v != null)
@@ -79,14 +86,13 @@ namespace WinUIXamlPreview.Protocol
                 }
 
                 // 2. Directory.Packages.props (central package management), walking up.
-                var dpp = FindUpwards(projectDir, "Directory.Packages.props");
+                var dpp = ProjectFiles.FindUpwards(projectDir, "Directory.Packages.props");
                 if (dpp != null)
                 {
                     var v = ReadVersionFromXmlItem(dpp, "PackageVersion", Metapackage);
                     if (v != null)
                     {
-                        log($"WASDK discovery: {v} (Directory.Packages.props).");
-                        return new WasdkVersionResult(v, WasdkVersionSource.DirectoryPackagesProps, dpp);
+                        return Declared(v, WasdkVersionSource.DirectoryPackagesProps, dpp, csproj, "Directory.Packages.props", log);
                     }
                 }
 
@@ -94,8 +100,7 @@ namespace WinUIXamlPreview.Protocol
                 var vc = ReadVersionFromXmlItem(csproj, "PackageReference", Metapackage);
                 if (vc != null)
                 {
-                    log($"WASDK discovery: {vc} (csproj PackageReference).");
-                    return new WasdkVersionResult(vc, WasdkVersionSource.CsprojPackageReference, csproj);
+                    return Declared(vc, WasdkVersionSource.CsprojPackageReference, csproj, csproj, "csproj PackageReference", log);
                 }
 
                 log("WASDK discovery: no Microsoft.WindowsAppSDK version found.");
@@ -106,6 +111,21 @@ namespace WinUIXamlPreview.Protocol
                 log("WASDK discovery failed: " + ex.Message);
                 return new WasdkVersionResult(null, WasdkVersionSource.NotFound, null);
             }
+        }
+
+        // A declared (unrestored) version may be an MSBuild property; never hand an unexpanded expression on.
+        private static WasdkVersionResult Declared(string raw, WasdkVersionSource source, string path, string csproj,
+            string label, Action<string> log)
+        {
+            var v = ProjectFiles.ExpandProperties(raw, csproj);
+            if (!ProjectFiles.IsConcreteVersion(v))
+            {
+                log($"WASDK discovery: '{raw}' ({label}) is not a concrete version; build the project to resolve it.");
+                return new WasdkVersionResult(null, WasdkVersionSource.Unresolved, path);
+            }
+
+            log(v == raw ? $"WASDK discovery: {v} ({label})." : $"WASDK discovery: {v} ({label}, from {raw}).");
+            return new WasdkVersionResult(v, source, path);
         }
 
         private static string? ReadVersionFromAssets(string assetsPath)
@@ -156,30 +176,6 @@ namespace WinUIXamlPreview.Protocol
             catch
             {
                 // unreadable xml — treat as not found
-            }
-
-            return null;
-        }
-
-        private static string? FindUpwards(string startDir, string fileName)
-        {
-            try
-            {
-                var dir = new DirectoryInfo(startDir);
-                for (int i = 0; dir != null && i < 30; i++)
-                {
-                    var p = Path.Combine(dir.FullName, fileName);
-                    if (File.Exists(p))
-                    {
-                        return p;
-                    }
-
-                    dir = dir.Parent;
-                }
-            }
-            catch
-            {
-                // ignore
             }
 
             return null;

@@ -1303,6 +1303,7 @@ namespace WinUIXamlPreview.UI
             if (FailedVersions.Contains(version!))
             {
                 Log.Write($"Fidelity upgrade for {version}: a build already failed this session — not retrying.");
+                ShowFidelityNote(BuildFailedNote(version!), sticky: true);
                 return;
             }
 
@@ -1362,6 +1363,7 @@ namespace WinUIXamlPreview.UI
                             FailedVersions.Add(version!);
                             Log.Write($"Fidelity upgrade for {version}: build did not yield a matched host ({outcome.Error}); staying on bundled 2.2.0.");
                             EndUpgrade(gen, note: null);
+                            ShowFidelityNote(BuildFailedNote(version!), sticky: true);
                         });
                         return;
                     }
@@ -1554,10 +1556,14 @@ namespace WinUIXamlPreview.UI
                 autoHide: TimeSpan.FromSeconds(4));
         }
 
-        private void ShowFidelityNote(string note)
+        private void ShowFidelityNote(string note, bool sticky = false)
         {
-            _fidelityBar.Show(BannerSeverity.Info, "Full-fidelity preview unavailable", note, autoHide: TimeSpan.FromSeconds(10));
+            _fidelityBar.Show(BannerSeverity.Info, "Full-fidelity preview unavailable", note,
+                autoHide: sticky ? (TimeSpan?)null : TimeSpan.FromSeconds(10));
         }
+
+        private static string BuildFailedNote(string version) =>
+            $"Couldn't build a WinAppSDK {version} preview host, so the bundled {MatchedHostResolver.BundledVersion ?? "host"} is used and some controls may not render. Details are in preview.log.";
 
         private void HideFidelityBanner()
         {

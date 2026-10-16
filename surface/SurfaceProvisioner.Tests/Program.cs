@@ -275,6 +275,30 @@ try
     TemplatePackages.Write(stagedTemplate, null);
     Check(!File.Exists(Path.Combine(stagedTemplate, TemplatePackages.FileName)), "template packages: fallback removes props");
 
+    // WinUI Gallery layout: per-project obj\<Name>\ assets, and a $(Property) version in the csproj.
+    var gallery = Path.Combine(root, "gallery");
+    Directory.CreateDirectory(Path.Combine(gallery, "obj", "Gallery"));
+    File.WriteAllText(Path.Combine(gallery, "Directory.Build.props"),
+        "<Project><Import Project=\"standalone.props\" /></Project>");
+    File.WriteAllText(Path.Combine(gallery, "standalone.props"),
+        "<Project><PropertyGroup><WindowsAppSdkPackageVersion>2.5.4-experimental</WindowsAppSdkPackageVersion></PropertyGroup></Project>");
+    var galleryProj = Path.Combine(gallery, "Gallery.csproj");
+    File.WriteAllText(galleryProj,
+        "<Project><ItemGroup><PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"$(WindowsAppSdkPackageVersion)\" /></ItemGroup></Project>");
+    var (gv, gsrc, _) = Provisioner.DiscoverVersion(galleryProj);
+    Check(gv == "2.5.4-experimental" && gsrc == VersionSourceKind.CsprojPackageReference, "discovery: $(Property) expanded via props chain");
+    File.WriteAllText(Path.Combine(gallery, "obj", "Gallery", "project.assets.json"), JsonSerializer.Serialize(new {
+        libraries = new Dictionary<string, object> {
+            ["Microsoft.WindowsAppSDK/2.5.5"] = new { type = "package", files = new[] { "x.nuspec" } },
+            ["Toolkit.Controls/8.2.1"] = new { type = "package", files = new[] { "lib/net8.0/Toolkit.Controls.pri" } } } }));
+    (gv, gsrc, _) = Provisioner.DiscoverVersion(galleryProj);
+    Check(gv == "2.5.5" && gsrc == VersionSourceKind.ProjectAssetsJson, "discovery: assets under obj\\<ProjectName>\\");
+    Check(TemplatePackages.Discover(galleryProj, _ => { })?.Count == 1, "template packages: assets under obj\\<ProjectName>\\");
+    File.WriteAllText(galleryProj,
+        "<Project><ItemGroup><PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"$(Unset)\" /></ItemGroup></Project>");
+    File.Delete(Path.Combine(gallery, "obj", "Gallery", "project.assets.json"));
+    Check(Provisioner.DiscoverVersion(galleryProj).version == null, "discovery: unexpandable $(Property) is not a version");
+
     // Only external dotnet execution is substituted. The actual --build dispatcher, HostBuilder,
     // identity, package matching, cache validation/publication and JSON/exit paths run unchanged.
     var buildFixture = Path.Combine(root, "build-fixture");
