@@ -213,12 +213,18 @@ async function discoverRunTargets(
 		// keeping both would turn an unambiguous workspace into a prompt.
 		candidates = collapseSolutionMigrationPairs(candidates);
 		solutionMembers = await mapSolutionMembers(candidates);
+		if (token.isCancellationRequested) {
+			return undefined;
+		}
 		candidates = filterSolutionsWithoutMembers(candidates, solutionMembers);
 		candidates = dedupeSolutionMembers(candidates, solutionMembers);
 		// Drop projects the project file itself identifies as a library or a
 		// test project. Solutions are left alone — the CLI resolves the
 		// runnable project inside one far more accurately than we can.
 		candidates = await filterOfferableCandidates(candidates);
+		if (token.isCancellationRequested) {
+			return undefined;
+		}
 	}
 
 	// Discovery either found nothing, or found only libraries and test
