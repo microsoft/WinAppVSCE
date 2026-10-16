@@ -23,6 +23,7 @@ const INTERFERING_EXTENSIONS = [
 ];
 
 const EXTENSION_ARGS = extensionLaunchArgs(INTERFERING_EXTENSIONS);
+const DEBUG_EXTENSION_ARGS = extensionLaunchArgs();
 
 /** A build, deploy, and launch takes far longer than the suite's default. */
 const LIVE_RUN_TIMEOUT_MS = 12 * 60 * 1000;
@@ -316,7 +317,10 @@ function findBuiltExecutable(projectDir: string, configuration: string, appName:
 
 const userDataDirs: string[] = [];
 
-async function launchVSCode(targetPath: string): Promise<{ app: ElectronApplication; page: Page }> {
+async function launchVSCode(
+    targetPath: string,
+    enableDebuggerExtensions = false
+): Promise<{ app: ElectronApplication; page: Page }> {
     const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), PROFILE_PREFIX));
     userDataDirs.push(userDataPath);
 
@@ -348,7 +352,12 @@ async function launchVSCode(targetPath: string): Promise<{ app: ElectronApplicat
             targetPath,
             '--new-window',
             `--user-data-dir=${userDataPath}`,
-            ...EXTENSION_ARGS,
+            ...(enableDebuggerExtensions
+                && process.env.E2E_USE_INSTALLED_EXTENSION !== '1'
+                && process.env.E2E_EXTENSIONS_DIR
+                ? [`--extensions-dir=${process.env.E2E_EXTENSIONS_DIR}`]
+                : []),
+            ...(enableDebuggerExtensions ? DEBUG_EXTENSION_ARGS : EXTENSION_ARGS),
             '--disable-telemetry',
             '--skip-release-notes',
             '--disable-workspace-trust',
@@ -604,6 +613,60 @@ test.describe('live winapp run (project mode)', () => {
             expect(exePath, 'a Debug build output should exist').toBeTruthy();
 
             console.log(`✅ PASS: built ${exePath}, registered ${app.identityName}, launched ${app.appName}`);
+        } finally {
+            if (codeApp) {
+                await codeApp.close().catch(() => {});
+            }
+            cleanUp(app);
+        }
+    });
+
+    test('launches and attaches to a WinUI project with F5', async () => {
+        test.setTimeout(LIVE_RUN_TIMEOUT_MS);
+
+        const app = scaffoldWinUiApp('f5');
+        const vscodeDir = path.join(app.projectDir, '.vscode');
+        fs.mkdirSync(vscodeDir, { recursive: true });
+        fs.writeFileSync(
+            path.join(vscodeDir, 'launch.json'),
+            JSON.stringify({
+                version: '0.2.0',
+                configurations: [{
+                    type: 'winapp',
+                    request: 'launch',
+                    name: 'WinApp live F5 attach',
+                    input: '${workspaceFolder}/' + `${app.appName}.csproj`,
+                    debuggerType: 'coreclr',
+                }],
+            }, null, 2)
+        );
+
+        let codeApp: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(app.projectDir, true);
+            codeApp = launched.app;
+            const page = launched.page;
+
+            // Invoke the same command as F5 through the palette. Function keys
+            // are intercepted by some Windows/keyboard layouts before
+            // Playwright reaches VS Code, which would turn this into a
+            // ten-minute no-op rather than a debugger test.
+            await runCommandPalette(page, 'Debug: Start Debugging');
+
+            await waitFor(
+                () => isProcessRunning(app.appName),
+                `F5 to launch ${app.appName}`,
+                page
+            );
+
+            // The app process proves project-mode build/deploy/launch. The
+            // toolbar appears only after VS Code has started the debug session;
+            // together they guard the adapter path rather than the palette.
+            await expect(page.locator('.debug-toolbar').first())
+                .toBeVisible({ timeout: 60_000 });
+
+            await page.keyboard.press('Shift+F5');
+            console.log(`✅ PASS: F5 launched and attached to ${app.appName}`);
         } finally {
             if (codeApp) {
                 await codeApp.close().catch(() => {});

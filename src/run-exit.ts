@@ -17,7 +17,14 @@ export class WinAppRunFailure extends Error { }
  * lets it end the debug session quietly rather than blaming the user with a
  * "Failed to launch and attach" toast.
  */
-export class DebugLaunchCancelled extends Error { }
+export class DebugLaunchCancelled extends Error {
+	constructor() {
+		// VS Code recognizes cancellation across the extension-host boundary
+		// only when both fields use its canonical spelling.
+		super('Canceled');
+		this.name = 'Canceled';
+	}
+}
 
 export interface RunExit {
 	/** Process exit code, or `null` when it was terminated by a signal. */
@@ -35,7 +42,7 @@ export interface RunExit {
  */
 export function classifyRunExit({ code, cancelled }: RunExit): Error {
 	if (cancelled) {
-		return new DebugLaunchCancelled('Launch cancelled.');
+		return new DebugLaunchCancelled();
 	}
 	if (code !== 0) {
 		// The full output is already in the channel; a toast is the wrong

@@ -14,6 +14,7 @@ import {
 	dedupeSolutionMembers,
 	DISCOVERABLE_TARGET_EXTENSIONS,
 	filterOfferableCandidates,
+	filterSolutionsWithoutMembers,
 	classifyOfferableProjects,
 	findOwningRoot,
 	isDirectory,
@@ -212,6 +213,7 @@ async function discoverRunTargets(
 		// keeping both would turn an unambiguous workspace into a prompt.
 		candidates = collapseSolutionMigrationPairs(candidates);
 		solutionMembers = await mapSolutionMembers(candidates);
+		candidates = filterSolutionsWithoutMembers(candidates, solutionMembers);
 		candidates = dedupeSolutionMembers(candidates, solutionMembers);
 		// Drop projects the project file itself identifies as a library or a
 		// test project. Solutions are left alone — the CLI resolves the
@@ -222,7 +224,8 @@ async function discoverRunTargets(
 	// Discovery either found nothing, or found only libraries and test
 	// projects. Both leave a build output folder as the one remaining way to
 	// run, so look for one before giving up on the workspace.
-	const onlyUnrunnableProjects = projects.length > 0 && candidates.length === 0;
+	const onlyUnrunnableProjects = projects.some(candidate => candidate.kind === 'project')
+		&& candidates.length === 0;
 	if (candidates.length === 0) {
 		progress.report({ message: BUILD_OUTPUT_FALLBACK_MESSAGE });
 		const folders = await findBuildOutputTargets(roots, token);

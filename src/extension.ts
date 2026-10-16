@@ -78,6 +78,7 @@ import {
 	chooseInstalledDebuggerType,
 	getDebuggerExtensionRequirement,
 	getDebuggerTypeFromChoice,
+	resolveDebuggerTypeForRun,
 	validateRunInput
 } from './debugger-resolver';
 import { NoOpDebugAdapter } from './noop-debug-adapter';
@@ -923,7 +924,13 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		// the session starts, so a first-run user isn't dropped into a half-started
 		// session (issue #32). When no debuggerType is configured, let the user
 		// choose the extension matching their project instead of assuming coreclr.
-		const debuggerType = await resolveDebuggerType(config.debuggerType);
+		const debuggerResolution = resolveDebuggerTypeForRun(config.debuggerType, config.aot);
+		if (debuggerResolution.error) {
+			vscode.window.showErrorMessage(debuggerResolution.error);
+			return undefined;
+		}
+
+		const debuggerType = await resolveDebuggerType(debuggerResolution.debuggerType);
 		if (!debuggerType) {
 			return undefined;
 		}
@@ -1038,7 +1045,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			if (!input) {
 				const selection = await pickRunTarget(folder);
 				if (!selection) {
-					throw new DebugLaunchCancelled('No run target selected, cancelling debug session.');
+					throw new DebugLaunchCancelled();
 				}
 				input = selection.target.path;
 
@@ -1047,7 +1054,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				if (shouldPromptForProject(config.project)) {
 					const projectSelection = await pickSolutionProject(selection);
 					if (projectSelection.cancelled) {
-						throw new DebugLaunchCancelled('No project selected, cancelling debug session.');
+						throw new DebugLaunchCancelled();
 					}
 					pickedProject = projectSelection.project;
 				}
@@ -1055,8 +1062,14 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 
 			const cliPath = getWinappCliPath(this.extensionPath);
 
-			// Determine the debugger type based on config or default to coreclr
-			const debuggerType = config.debuggerType || 'coreclr';
+			// Resolution normally sets this before the adapter starts, but keep
+			// the Native AOT constraint here too in case another caller bypasses
+			// the configuration provider.
+			const debuggerResolution = resolveDebuggerTypeForRun(config.debuggerType, config.aot);
+			if (debuggerResolution.error) {
+				throw new Error(debuggerResolution.error);
+			}
+			const debuggerType = debuggerResolution.debuggerType || 'coreclr';
 
 			// Safety net: resolveDebugConfiguration already verifies the required
 			// extension before the session starts, but re-check here so we never

@@ -12,6 +12,7 @@ import {
 	collapseSolutionMigrationPairs,
 	filterOfferableCandidates,
 	filterOfferableProjects,
+	filterSolutionsWithoutMembers,
 	findOwningRoot,
 	isProjectMode,
 	parseSolutionProjectPaths,
@@ -238,6 +239,38 @@ describe('dedupeSolutionMembers', () => {
 		);
 
 		assert.deepStrictEqual(result.map(c => c.path), [solution.path, loose.path]);
+	});
+
+	describe('filterSolutionsWithoutMembers', () => {
+		it('drops a native-only solution so build-output discovery can run', () => {
+			const solution = candidate('solution', 'C:/ws/AppA/App.sln');
+			const output = candidate('folder', 'C:/ws/AppA/x64/Debug/App');
+
+			assert.deepStrictEqual(
+				filterSolutionsWithoutMembers([solution, output], new Map([[solution.path, []]])),
+				[output]
+			);
+		});
+
+		it('keeps a solution with a supported project member', () => {
+			const solution = candidate('solution', 'C:/ws/AppA/App.sln');
+			const member = path.resolve('C:/ws/AppA/App/App.csproj');
+
+			assert.deepStrictEqual(
+				filterSolutionsWithoutMembers([solution], new Map([[solution.path, [member]]])),
+				[solution]
+			);
+		});
+
+		it('does not filter project or folder candidates', () => {
+			const project = candidate('project', 'C:/ws/AppA/App.csproj');
+			const folder = candidate('folder', 'C:/ws/AppA/bin/Debug');
+
+			assert.deepStrictEqual(
+				filterSolutionsWithoutMembers([project, folder], new Map()),
+				[project, folder]
+			);
+		});
 	});
 
 	it('compares paths case-insensitively and across separators', () => {

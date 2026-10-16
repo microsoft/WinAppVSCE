@@ -12,7 +12,8 @@ describe('classifyRunExit', () => {
 		const error = classifyRunExit({ code: 1, cancelled: true });
 		assert.ok(error instanceof DebugLaunchCancelled);
 		assert.ok(!(error instanceof WinAppRunFailure));
-		assert.equal(error.message, 'Launch cancelled.');
+		assert.equal(error.name, 'Canceled');
+		assert.equal(error.message, 'Canceled');
 	});
 
 	// Killing the process tree makes the exit code arbitrary — on Windows a

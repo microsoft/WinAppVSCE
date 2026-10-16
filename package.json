@@ -312,7 +312,7 @@
               },
               "aot": {
                 "type": "boolean",
-                "description": "Project mode only. Run the project's configured .NET Native AOT publish instead of an ordinary build. Requires an effective PublishAot=true. Ignored in folder mode.",
+                "description": "Project mode only. Run the project's configured .NET Native AOT publish instead of an ordinary build. Requires an effective PublishAot=true and uses the native cppvsdbg debugger; an explicitly configured debuggerType must be cppvsdbg. Ignored in folder mode.",
                 "default": false
               },
               "clean": {

@@ -353,7 +353,22 @@ export function dedupeSolutionMembers(
 	);
 }
 
-/** Solutions are never filtered; the CLI resolves them with full MSBuild. */
+/**
+ * The bundled CLI accepts only .NET projects in solution mode. A native-only
+ * solution therefore cannot run as a solution, but its built output can still
+ * run in folder mode. Dropping it here keeps that fallback reachable.
+ */
+export function filterSolutionsWithoutMembers(
+	candidates: readonly RunTargetCandidate[],
+	solutionMembers: ReadonlyMap<string, readonly string[]>
+): RunTargetCandidate[] {
+	return candidates.filter(candidate =>
+		candidate.kind !== 'solution'
+		|| (solutionMembers.get(candidate.path)?.length ?? 0) > 0
+	);
+}
+
+/** Project candidates are filtered; supported solutions defer to MSBuild. */
 export async function filterOfferableCandidates(
 	candidates: readonly RunTargetCandidate[]
 ): Promise<RunTargetCandidate[]> {

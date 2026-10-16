@@ -236,6 +236,7 @@ async function cancelAndExpectNoFollowUp(page: Page): Promise<void> {
     await page.waitForTimeout(1_500);
     await expect(page.locator('.quick-input-widget')).toBeHidden();
     await expect(page.locator('.notifications-toasts .notification-list-item')).toHaveCount(0);
+    await expect(page.locator('.monaco-dialog-box')).toHaveCount(0);
 }
 
 test.describe('run target picker', () => {
@@ -328,6 +329,49 @@ test.describe('run target picker', () => {
 
             await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: library-only workspace falls through to build output');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    // CLI v0.7.1 cannot build a .vcxproj through solution mode. Keeping the
+    // solution would auto-select an input that always fails and hide the
+    // folder-mode path the released extension used for native apps.
+    test('falls back to native build output when a solution has no supported members', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-native-e2e-'));
+        fs.writeFileSync(path.join(tmpDir, 'App.sln'), [
+            'Microsoft Visual Studio Solution File, Format Version 12.00',
+            'Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "App", "App\\App.vcxproj", "{11111111-1111-1111-1111-111111111111}"',
+            'EndProject',
+        ].join('\r\n'));
+
+        const appOutput = path.join(tmpDir, 'x64', 'Debug', 'App');
+        fs.mkdirSync(appOutput, { recursive: true });
+        fs.writeFileSync(path.join(appOutput, 'App.exe'), '');
+
+        // Keep the fallback picker visible so the selected candidate can be
+        // asserted instead of immediately dispatching a fake executable.
+        const toolOutput = path.join(tmpDir, 'x64', 'Debug', 'Tool');
+        fs.mkdirSync(toolOutput, { recursive: true });
+        fs.writeFileSync(path.join(toolOutput, 'Tool.exe'), '');
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
+
+            const joined = (await readRunTargetPicker(page)).join('\n');
+            expect(joined).not.toContain('App.sln');
+            expect(joined).toContain(path.join('x64', 'Debug', 'App'));
+
+            await cancelAndExpectNoFollowUp(page);
+            console.log('✅ PASS: native-only solution fell through to build output');
         } finally {
             if (app) {
                 await app.close().catch(() => {});

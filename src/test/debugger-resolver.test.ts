@@ -8,6 +8,7 @@ import {
 	chooseInstalledDebuggerType,
 	getDebuggerExtensionRequirement,
 	getDebuggerTypeFromChoice,
+	resolveDebuggerTypeForRun,
 	validateRunInput
 } from '../debugger-resolver';
 
@@ -17,6 +18,37 @@ describe('debugger resolver helpers', () => {
 			assert.deepEqual(getDebuggerExtensionRequirement('coreclr'), {
 				id: 'ms-dotnettools.csharp',
 				name: 'C# (ms-dotnettools.csharp)'
+			});
+
+			describe('resolveDebuggerTypeForRun', () => {
+				it('selects cppvsdbg for Native AOT when no debugger was configured', () => {
+					assert.deepEqual(resolveDebuggerTypeForRun(undefined, true), {
+						debuggerType: 'cppvsdbg'
+					});
+				});
+
+				it('keeps an explicit cppvsdbg selection for Native AOT', () => {
+					assert.deepEqual(resolveDebuggerTypeForRun('cppvsdbg', true), {
+						debuggerType: 'cppvsdbg'
+					});
+				});
+
+				it('rejects managed and JavaScript debuggers for Native AOT', () => {
+					for (const debuggerType of ['coreclr', 'node']) {
+						const result = resolveDebuggerTypeForRun(debuggerType, true);
+						assert.equal(result.debuggerType, debuggerType);
+						assert.match(result.error ?? '', /requires "debuggerType": "cppvsdbg"/);
+					}
+				});
+
+				it('does not constrain ordinary builds', () => {
+					assert.deepEqual(resolveDebuggerTypeForRun('coreclr', false), {
+						debuggerType: 'coreclr'
+					});
+					assert.deepEqual(resolveDebuggerTypeForRun(undefined, undefined), {
+						debuggerType: undefined
+					});
+				});
 			});
 			assert.deepEqual(getDebuggerExtensionRequirement('cppvsdbg'), {
 				id: 'ms-vscode.cpptools',

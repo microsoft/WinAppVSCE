@@ -97,6 +97,8 @@ The **WinApp: Initialize Project** command has additional behavior: when no proj
 
 The extension provides a **custom `winapp` debug type** that launches your app with package identity and automatically attaches the appropriate debugger — all from a single **F5** press.
 
+You can press F5 without creating `launch.json` first: WinApp contributes a default configuration and prompts for the run target when needed. When a WinApp workspace has no launch configuration yet, an activation-time notification also offers to add the default entry to `.vscode/launch.json`.
+
 **How it works:**
 
 1. You press **F5** (or start a debug session).
@@ -175,7 +177,7 @@ The extension provides a **custom `winapp` debug type** that launches your app w
 | `properties` | object | | *Project mode only.* MSBuild properties to pass to the build, as name/value pairs. |
 | `noBuild` | boolean | `false` | *Project mode only.* Run the existing build output without rebuilding. |
 | `noRestore` | boolean | `false` | *Project mode only.* Do not restore the project before building. Has no effect alongside `noBuild`. |
-| `aot` | boolean | `false` | *Project mode only.* Run the project's configured .NET Native AOT publish instead of an ordinary build. Requires an effective `PublishAot=true`. |
+| `aot` | boolean | `false` | *Project mode only.* Run the project's configured .NET Native AOT publish instead of an ordinary build. Requires an effective `PublishAot=true`. Native AOT has no managed CLR, so WinApp selects `cppvsdbg`; if `debuggerType` is explicitly set, it must be `cppvsdbg`. |
 | `clean` | boolean | `false` | Remove the existing package's application data (LocalState and settings) before deploying. |
 | `unregisterOnExit` | boolean | `false` | Remove the development package registration after the application exits. |
 | `withAlias` | boolean | `false` | Launch through the app's execution alias so stdin/stdout are inherited, instead of through AUMID activation. Console apps (`OutputType=Exe`) already launch this way, so this is for forcing it for a windowed app. The CLI adds the `uap5:ExecutionAlias` to the manifest it stages, so no manifest edit is needed. Cannot be combined with `withoutAlias`. |
@@ -334,7 +336,6 @@ For debugging, install the debugger extension that matches your app's language (
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | **Invalid `input` notification when pressing F5** | The configured path is missing, or (in folder mode) is not a directory or contains no `.exe`. | Select **Open debug configuration** in the notification to open the relevant debug or launch configuration, then correct `input`. |
-| **"No run target selected..."** when pressing F5 | The workspace contains no project or solution and nothing has been built yet, or the build output is in an unexpected location. | Set `input` in `launch.json` to a project file so WinApp builds it for you, or build first (e.g., `dotnet build`) and point `input` at the folder containing your `.exe`. |
 | **Debugger doesn't attach** | The required debugger extension isn't installed. | Install the matching extension for your language — see [Supported debuggers](#integrated-debugging). |
 | **App launches but changes aren't visible** | `input` points at a build output folder, which WinApp launches as-is without building. | Point `input` at your `.csproj` or `.sln` so WinApp builds before launching, rebuild manually before pressing F5, or add a `preLaunchTask` (see the tip in [Integrated Debugging](#integrated-debugging)). |
 | **Certificate trust error when running** | The development certificate isn't installed or has expired. | Run **WinApp: Generate Certificate** and choose to also install it, or run **WinApp: Install Certificate** with your existing `.pfx` file. Both prompt for admin (UAC) when VS Code isn't elevated. |

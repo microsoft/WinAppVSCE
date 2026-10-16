@@ -89,6 +89,38 @@ export const DEBUGGER_CHOICE_LABELS = {
 	useNode: 'Use Node.js / Electron (built-in)'
 } as const;
 
+export interface DebuggerTypeResolution {
+	debuggerType: string | undefined;
+	error?: string;
+}
+
+/**
+ * Native AOT has no managed CLR for `coreclr` to attach to. When the user did
+ * not choose a debugger, select the native debugger; when they did, reject a
+ * contradictory configuration before building and launching the app.
+ */
+export function resolveDebuggerTypeForRun(
+	explicitType: unknown,
+	aot: unknown
+): DebuggerTypeResolution {
+	const debuggerType = typeof explicitType === 'string' && explicitType.trim()
+		? explicitType
+		: undefined;
+
+	if (aot !== true) {
+		return { debuggerType };
+	}
+
+	if (debuggerType && debuggerType !== 'cppvsdbg') {
+		return {
+			debuggerType,
+			error: 'Native AOT debugging requires "debuggerType": "cppvsdbg" because the published process has no managed CLR for coreclr to attach to.'
+		};
+	}
+
+	return { debuggerType: 'cppvsdbg' };
+}
+
 export function getDebuggerExtensionRequirement(debuggerType: string): DebuggerExtensionRequirement | undefined {
 	return DEBUGGER_EXTENSION_REQUIREMENTS[debuggerType];
 }

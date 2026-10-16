@@ -14,7 +14,7 @@ resources:
 
 parameters:
   - name: CliReleaseTag
-    displayName: CLI release tag to bundle in VS Code extension (empty = latest stable)
+    displayName: CLI release tag to bundle in VS Code extension (empty = cli-version.json)
     type: string
     default: ''
   - name: SkipPublish
@@ -93,6 +93,18 @@ extends:
               filePath: $(System.DefaultWorkingDirectory)\scripts\package-vsc.ps1
               arguments: "-Stable -CliBinariesPath '$(System.DefaultWorkingDirectory)/artifacts/public-cli'"
           - task: PowerShell@2
+            displayName: Verify extension run contract against packaged CLI
+            inputs:
+              pwsh: true
+              targetType: inline
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              script: |
+                npx tsx --test src/test/run-cli-contract.test.ts
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "The extension run surface does not match the CLI selected for this release."
+                    exit $LASTEXITCODE
+                }
+          - task: PowerShell@2
             displayName: Run E2E tests
             inputs:
               pwsh: true
@@ -160,6 +172,12 @@ extends:
                 # or this exercises the agent's default extensions directory
                 # rather than the package being released.
                 $env:E2E_EXTENSIONS_DIR = "$(Agent.TempDirectory)/vscode-extensions"
+                $codeCli = Join-Path (Split-Path $codePath) "bin/code.cmd"
+                & $codeCli --extensions-dir $env:E2E_EXTENSIONS_DIR --install-extension ms-dotnettools.csharp --force
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "Failed to install the C# debugger required by the live F5 attach test."
+                    exit $LASTEXITCODE
+                }
                 # The spec still self-skips when the SDK or template is
                 # unavailable, so this is safe on images that cannot build.
                 $env:E2E_LIVE_RUN = "1"

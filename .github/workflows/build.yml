@@ -101,9 +101,17 @@ jobs:
       # worth reading in the logs, not a reason to block packaging a VSIX
       # whose own test suite already passed.
       continue-on-error: true
+      shell: pwsh
       env:
         E2E_LIVE_RUN: '1'
-      run: npm run test:e2e -- src/test/e2e/live-run.spec.ts --reporter=list --output=test-results-live
+        E2E_EXTENSIONS_DIR: ${{ runner.temp }}\vscode-live-extensions
+      run: |
+        $codeCli = Join-Path (Split-Path $env:VSCODE_PATH) "bin\code.cmd"
+        & $codeCli --extensions-dir $env:E2E_EXTENSIONS_DIR --install-extension ms-dotnettools.csharp --force
+        if ($LASTEXITCODE -ne 0) {
+          throw "Failed to install the C# debugger required by the live F5 attach test."
+        }
+        npm run test:e2e -- src/test/e2e/live-run.spec.ts --reporter=list --output=test-results-live
 
     - name: Upload Playwright report
       if: ${{ !cancelled() }}
