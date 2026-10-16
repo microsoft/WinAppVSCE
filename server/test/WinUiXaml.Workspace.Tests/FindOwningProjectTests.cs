@@ -25,6 +25,15 @@ namespace WinUiXaml.Workspace.Tests
         }
 
         [Fact]
+        public void FindsCppProjectBesideXaml()
+        {
+            var proj = Touch("App", "App.vcxproj");
+            var xaml = Touch("App", "MainWindow.xaml");
+
+            Assert.Equal(proj, XamlProjectResolver.FindOwningProject(xaml));
+        }
+
+        [Fact]
         public void WalksUpToAncestorProject()
         {
             var proj = Touch("App", "App.csproj");
@@ -91,6 +100,16 @@ namespace WinUiXaml.Workspace.Tests
 
             var result = XamlProjectResolver.FindOwningProject(xaml);
             Assert.Null(result);
+        }
+
+        [Fact]
+        public void MixedCSharpAndCppProjectsInDirectoryAreAmbiguous()
+        {
+            Touch("App", "Managed.csproj");
+            Touch("App", "Native.vcxproj");
+            var xaml = Touch("App", "Page.xaml");
+
+            Assert.Null(XamlProjectResolver.FindOwningProject(xaml));
         }
 
         [Fact]

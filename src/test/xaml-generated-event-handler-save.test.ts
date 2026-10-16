@@ -53,7 +53,7 @@ describe("generated event handler save", () => {
     assert.strictEqual(
       targetsDirtyGeneratedHandlerDocument(
         {
-          command: "winui-xaml.saveGeneratedEventHandler",
+          command: "winapp.xaml.saveGeneratedEventHandler",
           arguments: [target],
         },
         (uri) => uri === target,
@@ -72,7 +72,7 @@ describe("generated event handler save", () => {
 
 describe("applying a generated event handler", () => {
   const uri = "file:///c:/app/Page.xaml.cs";
-  const command = { command: "winui-xaml.saveGeneratedEventHandler", arguments: [uri] };
+  const command = { command: "winapp.xaml.saveGeneratedEventHandler", arguments: [uri] };
   type Target = { isDirty: boolean; version: number | undefined } | undefined;
   type Edit = { edit: boolean };
 

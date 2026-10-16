@@ -207,6 +207,23 @@ test("presents persistent loading and actionable error status", () => {
   );
 });
 
+test("presents C++ projects as intentional syntax-only support", () => {
+  assert.deepEqual(
+    getProjectContextStatusPresentation({
+      uri: "file:///MainPage.xaml",
+      state: "syntax-only",
+      message: "C++/WinRT projects use syntax-only XAML editing; project types are not loaded.",
+    }),
+    {
+      text: "$(code) WinApp: XAML Syntax Only",
+      tooltip:
+        "C++/WinRT projects use syntax-only XAML editing; project types are not loaded. " +
+        "Formatting, folding, outline, closing-tag completion, document links, and syntax diagnostics remain available.",
+      transient: false,
+    }
+  );
+});
+
 test("reports the restore as work in flight while the extension is running it", () => {
   // The extension restores without being asked, so during that window "restore required" would
   // tell the developer to run a command the extension is at that moment running.
@@ -386,7 +403,7 @@ test("names a missing SDK, outranks restore and build, and survives a reload", (
       text: "$(cloud-download) WinApp: .NET SDK Required for XAML IntelliSense",
       tooltip: `${PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE} Click for install and restart actions.`,
       transient: false,
-      command: "winui-xaml.showInfo",
+      command: "winapp.xaml.showInfo",
     }
   );
 
@@ -465,4 +482,3 @@ test("presents ready status briefly and hides idle status", () => {
     undefined
   );
 });
-

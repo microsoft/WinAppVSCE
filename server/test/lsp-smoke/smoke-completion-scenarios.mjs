@@ -1047,7 +1047,7 @@ export async function runCompletionScenarios(ctx) {
     if (gen.title !== "Generate event handler 'Foo_Click'") fail(`gap #3: wrong title: ${gen.title}`);
     if (gen.kind !== "quickfix") fail(`gap #3: action must be a quickfix, got ${gen.kind}`);
     if (gen.isPreferred !== true) fail(`gap #3: action must be preferred`);
-    if (gen.command?.command !== "winui-xaml.saveGeneratedEventHandler") {
+    if (gen.command?.command !== "winapp.xaml.saveGeneratedEventHandler") {
       fail(`gap #3: action should request code-behind save recovery, got ${JSON.stringify(gen.command)}`);
     }
     const changes = gen.edit?.changes || {};

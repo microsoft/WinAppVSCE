@@ -14,7 +14,7 @@ export function buildRequiredMessage(unresolvedAssemblies: readonly string[]): s
       ? "A referenced project could not be built"
       : `${named.join(", ")} could not be built`;
   return (
-    `${subject}, so WinUI XAML IntelliSense cannot see types defined there. ` +
+    `${subject}, so WinApp XAML IntelliSense cannot see types defined there. ` +
     "Framework and package types still work. Build it to see the errors."
   );
 }

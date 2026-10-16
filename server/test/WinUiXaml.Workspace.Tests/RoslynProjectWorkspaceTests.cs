@@ -430,6 +430,23 @@ public sealed class RoslynProjectWorkspaceTests : IDisposable
             XamlTypeSystem.GetCollectionElementType(rowSampleCollection)?.SpecialType);
     }
 
+    [Fact]
+    public async Task FullProjectCompilationRunsCurrentCommunityToolkitMvvmGenerators()
+    {
+        var projectPath = GetWinUiFixturePath("SmokeFixture.csproj");
+
+        using var workspace = await RoslynProjectWorkspace.LoadProjectAsync(
+            projectPath,
+            WinUiProperties);
+
+        Assert.Null(workspace.GeneratorFailure);
+        var viewModel = workspace.Compilation.GetTypeByMetadataName(
+            "SmokeFixture.ToolkitViewModel");
+        Assert.NotNull(viewModel);
+        Assert.NotNull(viewModel!.GetMembers("Title").SingleOrDefault());
+        Assert.NotNull(viewModel.GetMembers("RefreshCommand").SingleOrDefault());
+    }
+
     private static string GetWinUiFixturePath(string fileName)
     {
         return Path.GetFullPath(

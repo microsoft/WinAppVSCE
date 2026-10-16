@@ -216,6 +216,7 @@ internal static class Program
     private static List<ISourceGenerator> LoadGenerators(IReadOnlyList<string> analyzers)
     {
         var generators = new List<ISourceGenerator>();
+        var incompatibleGenerators = new List<string>();
         foreach (var analyzer in analyzers)
         {
             if (!File.Exists(analyzer))
@@ -287,7 +288,10 @@ internal static class Program
                     }
                     else
                     {
-                        WarnOnRoslynVersionMismatch(type, analyzer);
+                        if (TryDescribeRoslynVersionMismatch(type, analyzer) is { } mismatch)
+                        {
+                            incompatibleGenerators.Add(mismatch);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -299,24 +303,32 @@ internal static class Program
             }
         }
 
+        if (incompatibleGenerators.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "Source generators require a different Microsoft.CodeAnalysis version: " +
+                string.Join("; ", incompatibleGenerators));
+        }
+
         return generators;
     }
 
-    /// <summary>Reports a visible generator skipped because LoadFrom did not unify Roslyn identities, making its generator interface differ from the host's.</summary>
-    private static void WarnOnRoslynVersionMismatch(Type type, string analyzer)
+    /// <summary>Describes a visible generator whose Roslyn interface belongs to a different assembly version than the host's.</summary>
+    private static string? TryDescribeRoslynVersionMismatch(Type type, string analyzer)
     {
         foreach (var contract in type.GetInterfaces())
         {
             if (contract.FullName is "Microsoft.CodeAnalysis.IIncrementalGenerator"
                 or "Microsoft.CodeAnalysis.ISourceGenerator")
             {
-                Console.Error.WriteLine(
-                    $"[winui-xaml-genhost] '{type.FullName}' in '{analyzer}' implements {contract.FullName} " +
-                    "from a different Microsoft.CodeAnalysis version than the helper hosts, so it was skipped. " +
-                    "Generated members from this analyzer will not resolve.");
-                return;
+                return
+                    $"'{type.FullName}' in '{analyzer}' implements {contract.FullName} from " +
+                    $"{contract.Assembly.GetName().Version}, but the host uses " +
+                    $"{typeof(ISourceGenerator).Assembly.GetName().Version}";
             }
         }
+
+        return null;
     }
 
     private static LanguageVersion ParseLanguageVersion(string? value) =>

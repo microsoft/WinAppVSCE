@@ -92,7 +92,9 @@ namespace WinUiXaml.Workspace
                 FileInfo[] candidates;
                 try
                 {
-                    candidates = dir.GetFiles("*.csproj");
+                    candidates = dir.GetFiles("*.csproj")
+                        .Concat(dir.GetFiles("*.vcxproj"))
+                        .ToArray();
                 }
                 catch (IOException)
                 {

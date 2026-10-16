@@ -32,6 +32,7 @@ import { createDotnetChildEnvironment, resolveDotnetCommand } from "./dotnetRunt
 import {
   DIAGNOSTICS_LEVEL_KEY,
   DIAGNOSTICS_LEVEL_SETTING,
+  FORMATTING_PROVIDER_SETTING,
   DOTNET_DOWNLOAD_URL,
   EXTERNAL_COMMANDS,
   INTELLISENSE_ENABLE_KEY,
@@ -72,6 +73,7 @@ import {
   getXamlStatus,
   getXamlStatusEffect,
   readXamlLanguageServerConfiguration,
+  shouldEnableWinAppXamlFormatting,
   shouldRestartXamlLanguageServer,
   XamlStatusAction,
 } from "./xamlConfiguration";
@@ -90,9 +92,9 @@ import {
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
 let projectStatusItem: vscode.StatusBarItem | undefined;
-const APPLY_GENERATED_EVENT_HANDLER_COMMAND = "winui-xaml.applyGeneratedEventHandler";
-const PROMPT_TEXT_EDIT_COMMAND = "winui-xaml.promptTextEdit";
-const APPLY_GUARDED_TEXT_EDITS_COMMAND = "winui-xaml.applyGuardedTextEdits";
+const APPLY_GENERATED_EVENT_HANDLER_COMMAND = "winapp.xaml.applyGeneratedEventHandler";
+const PROMPT_TEXT_EDIT_COMMAND = "winapp.xaml.promptTextEdit";
+const APPLY_GUARDED_TEXT_EDITS_COMMAND = "winapp.xaml.applyGuardedTextEdits";
 
 function findOpenDocument(documentUri: string): vscode.TextDocument | undefined {
   const target = vscode.Uri.parse(documentUri);
@@ -145,13 +147,13 @@ function log(message: string): void {
 export async function activateXaml(context: vscode.ExtensionContext): Promise<void> {
   // Allow reactivation in the same host process.
   lifecycle.reset();
-  output = vscode.window.createOutputChannel("WinUI XAML");
+  output = vscode.window.createOutputChannel("WinApp XAML IntelliSense");
   projectStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   projectStatusItem.name = "WinApp XAML IntelliSense";
   projectStatusItem.command = XAML_COMMANDS.showOutput;
   context.subscriptions.push(output);
   context.subscriptions.push(projectStatusItem);
-  log("WinUI XAML Tools activating…");
+  log("WinApp XAML IntelliSense activating…");
 
   context.subscriptions.push(
     vscode.commands.registerCommand(XAML_COMMANDS.showInfo, () => showXamlInfo()),
@@ -303,6 +305,18 @@ export async function activateXaml(context: vscode.ExtensionContext): Promise<vo
           return;
         }
         log("XAML configuration changed — restarting language server.");
+        return restartClient(context);
+      }
+
+      if (
+        event.affectsConfiguration(FORMATTING_PROVIDER_SETTING) ||
+        event.affectsConfiguration("dotnet.enableXamlTools")
+      ) {
+        if (!shouldRestartXamlLanguageServer(client !== undefined, hasXamlDemand())) {
+          log("XAML formatter configuration changed — it will apply when a XAML document opens.");
+          return;
+        }
+        log("XAML formatter configuration changed — restarting language server.");
         return restartClient(context);
       }
 
@@ -527,7 +541,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     if (userInitiated) {
       void vscode.window
         .showInformationMessage(
-          "WinUI XAML IntelliSense is disabled in Settings.",
+          "WinApp XAML IntelliSense is disabled in Settings.",
           "Open Settings"
         )
         .then((selection) => {
@@ -542,7 +556,22 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     }
     return;
   }
-  const { diagnosticsLevel } = serverConfiguration.initializationOptions;
+  const { diagnosticsLevel, formattingProvider } = serverConfiguration.initializationOptions;
+  const csharpExtensionInstalled =
+    vscode.extensions.getExtension("ms-dotnettools.csharp") !== undefined;
+  const csharpXamlToolsEnabled = vscode.workspace
+    .getConfiguration("dotnet")
+    .get<boolean>("enableXamlTools", true);
+  const formattingEnabled = shouldEnableWinAppXamlFormatting(
+    formattingProvider,
+    csharpExtensionInstalled,
+    csharpXamlToolsEnabled
+  );
+  log(
+    formattingEnabled
+      ? "WinApp XAML formatting enabled."
+      : "WinApp XAML formatting disabled to avoid competing with the C# extension's XAML formatter."
+  );
 
   // Never evaluate projects in an untrusted workspace: MSBuild evaluation can execute attacker-controlled targets and tasks. Remain syntax-only until trust is granted. WINUI_XAML_FORCE_UNTRUSTED exercises this boundary in the integration harness.
   const forceUntrusted = process.env.WINUI_XAML_FORCE_UNTRUSTED === "1";
@@ -626,7 +655,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
   const allowedRoots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
 
   fileWatchers = [
-    vscode.workspace.createFileSystemWatcher("**/*.{cs,csproj,xaml,props,targets}"),
+    vscode.workspace.createFileSystemWatcher("**/*.{cs,csproj,vcxproj,xaml,props,targets}"),
     vscode.workspace.createFileSystemWatcher("**/obj/project.assets.json"),
   ];
 
@@ -636,7 +665,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
       { scheme: "untitled", language: "xaml" },
     ],
     outputChannel: output,
-    initializationOptions: { allowedRoots, diagnosticsLevel },
+    initializationOptions: { allowedRoots, diagnosticsLevel, formattingEnabled },
     synchronize: {
       fileEvents: fileWatchers,
     },
@@ -680,7 +709,7 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
 
   const candidate = new LanguageClient(
     "winui-xaml",
-    "WinUI XAML Language Server",
+    "WinApp XAML IntelliSense",
     serverOptions,
     clientOptions
   );

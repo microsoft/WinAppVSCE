@@ -1,4 +1,5 @@
 using WinUiXaml.LanguageServer.Lsp;
+using System.Collections.Immutable;
 using System.Text.Json;
 
 namespace WinUiXaml.LanguageServer.Tests;
@@ -81,5 +82,19 @@ public sealed class XamlDiagnosticConfigurationTests
             LspJson.Options);
 
         Assert.Contains($"\"code\":\"{XamlValidator.UnknownTypeCode}\"", payload);
+    }
+
+    [Fact]
+    public void SemanticDiagnosticsRequireAuthoritativeProjectAndGeneratorContext()
+    {
+        Assert.True(XamlLanguageServer.CanPublishSemanticDiagnostics(
+            ImmutableArray<string>.Empty,
+            null));
+        Assert.False(XamlLanguageServer.CanPublishSemanticDiagnostics(
+            ["BrokenLibrary"],
+            null));
+        Assert.False(XamlLanguageServer.CanPublishSemanticDiagnostics(
+            ImmutableArray<string>.Empty,
+            "generator host version mismatch"));
     }
 }

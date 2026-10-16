@@ -163,12 +163,12 @@
         "category": "WinApp"
       },
       {
-        "command": "winui-xaml.showInfo",
+        "command": "winapp.xaml.showInfo",
         "title": "Show XAML Language Server Status",
         "category": "WinApp"
       },
       {
-        "command": "winui-xaml.restartServer",
+        "command": "winapp.xaml.restartServer",
         "title": "Restart Language Server",
         "category": "WinApp"
       },
@@ -225,6 +225,17 @@
           ],
           "default": "all",
           "description": "Diagnostic filter for WinUI XAML validation."
+        },
+        "winapp.xaml.formatting.provider": {
+          "type": "string",
+          "enum": ["auto", "winapp", "disabled"],
+          "enumDescriptions": [
+            "Use the C# extension's XAML formatter when its XAML tools are enabled; otherwise use WinApp XAML IntelliSense.",
+            "Always use the WinApp XAML IntelliSense formatter.",
+            "Do not register the WinApp XAML formatter."
+          ],
+          "default": "auto",
+          "description": "Controls formatter coexistence with the C# extension's XAML tooling. Restart the XAML language server after changing this setting."
         }
       }
     },

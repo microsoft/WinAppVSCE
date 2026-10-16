@@ -8,17 +8,19 @@ export const XAML_SETTINGS_SECTION = "winapp.xaml";
 /** Keys within {@link XAML_SETTINGS_SECTION}. */
 export const INTELLISENSE_ENABLE_KEY = "intelliSense.enable";
 export const DIAGNOSTICS_LEVEL_KEY = "diagnostics.level";
+export const FORMATTING_PROVIDER_KEY = "formatting.provider";
 
 /** Fully qualified setting ids, for APIs that take an absolute path. */
 export const INTELLISENSE_ENABLE_SETTING = `${XAML_SETTINGS_SECTION}.${INTELLISENSE_ENABLE_KEY}`;
 export const DIAGNOSTICS_LEVEL_SETTING = `${XAML_SETTINGS_SECTION}.${DIAGNOSTICS_LEVEL_KEY}`;
+export const FORMATTING_PROVIDER_SETTING = `${XAML_SETTINGS_SECTION}.${FORMATTING_PROVIDER_KEY}`;
 
 /** Commands contributed by this extension. */
 export const XAML_COMMANDS = {
-  restartServer: "winui-xaml.restartServer",
-  showInfo: "winui-xaml.showInfo",
-  showOutput: "winui-xaml.showOutput",
-  saveGeneratedEventHandler: "winui-xaml.saveGeneratedEventHandler",
+  restartServer: "winapp.xaml.restartServer",
+  showInfo: "winapp.xaml.showInfo",
+  showOutput: "winapp.xaml.showOutput",
+  saveGeneratedEventHandler: "winapp.xaml.saveGeneratedEventHandler",
 } as const;
 
 /** Commands owned by VS Code or another extension. */
@@ -34,11 +36,11 @@ export const DOTNET_DOWNLOAD_URL =
   "https://dotnet.microsoft.com/download/dotnet/10.0";
 
 /** Prefix for the status summary. The error case gets its own prefix so the reason reads as the sentence after the colon instead of a second clause. */
-export const XAML_STATUS_PREFIX = "WinUI XAML Tools:";
+export const XAML_STATUS_PREFIX = "WinApp XAML IntelliSense:";
 export const XAML_INTELLISENSE_UNAVAILABLE_PREFIX =
-  "WinUI XAML IntelliSense Unavailable:";
+  "WinApp XAML IntelliSense Unavailable:";
 
-/** Buttons offered by the `winui-xaml.showInfo` status summary. */
+/** Buttons offered by the `winapp.xaml.showInfo` status summary. */
 export const XAML_STATUS_ACTIONS = {
   openSettings: "Open Settings",
   restartServer: "Restart Language Server",

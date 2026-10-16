@@ -55,7 +55,7 @@ async function assertGenerate(buffer, handlerName, expectedArgTypes = []) {
   const gen = generate(actions);
   assert.ok(gen, `expected generate action; got ${JSON.stringify(actions.map((a) => a.title))}`);
   assert.strictEqual(gen.title, `Generate event handler '${handlerName}'`);
-  assert.strictEqual(gen.command?.command, "winui-xaml.saveGeneratedEventHandler");
+  assert.strictEqual(gen.command?.command, "winapp.xaml.saveGeneratedEventHandler");
   assert.match(gen.command?.arguments?.[0] || "", /SmokePage\.xaml\.cs$/i);
   const edit = assertUserCodeBehindEdit(gen);
   assert.ok(edit.newText.includes(`private void ${handlerName}(`), `stub name mismatch; got ${JSON.stringify(edit.newText)}`);

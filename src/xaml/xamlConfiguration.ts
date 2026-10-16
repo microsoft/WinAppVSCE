@@ -5,6 +5,7 @@ import {
   EXTERNAL_COMMANDS,
   INTELLISENSE_ENABLE_KEY,
   INTELLISENSE_ENABLE_SETTING,
+  FORMATTING_PROVIDER_KEY,
   XAML_COMMANDS,
   XAML_INTELLISENSE_UNAVAILABLE_PREFIX,
   XAML_STATUS_ACTIONS,
@@ -26,6 +27,7 @@ import {
 export type { XamlStatusAction };
 
 export type XamlDiagnosticsLevel = "off" | "all" | "errorsOnly";
+export type XamlFormattingProvider = "auto" | "winapp" | "disabled";
 
 export interface DiagnosticsLevelInteractionHost {
   log(message: string): void;
@@ -40,6 +42,7 @@ export interface XamlLanguageServerConfiguration {
   enabled: boolean;
   initializationOptions: {
     diagnosticsLevel: XamlDiagnosticsLevel;
+    formattingProvider: XamlFormattingProvider;
   };
 }
 
@@ -142,6 +145,16 @@ export function getXamlStatus(
     if (projectContext?.state === "framework-ready") {
       return {
         message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE}`,
+        actions: [XAML_STATUS_ACTIONS.showOutput],
+      };
+    }
+    if (projectContext?.state === "syntax-only") {
+      return {
+        message:
+          `${XAML_STATUS_PREFIX} ${
+            projectContext.message ??
+            "C++/WinRT projects use syntax-only XAML editing."
+          }`,
         actions: [XAML_STATUS_ACTIONS.showOutput],
       };
     }
@@ -260,8 +273,29 @@ export function readXamlLanguageServerConfiguration(
       diagnosticsLevel: normalizeDiagnosticsLevel(
         get(DIAGNOSTICS_LEVEL_KEY, "all")
       ),
+      formattingProvider: normalizeFormattingProvider(
+        get(FORMATTING_PROVIDER_KEY, "auto")
+      ),
     },
   };
+}
+
+export function normalizeFormattingProvider(value: unknown): XamlFormattingProvider {
+  return value === "winapp" || value === "disabled" ? value : "auto";
+}
+
+export function shouldEnableWinAppXamlFormatting(
+  provider: XamlFormattingProvider,
+  csharpExtensionInstalled: boolean,
+  csharpXamlToolsEnabled: boolean
+): boolean {
+  if (provider === "disabled") {
+    return false;
+  }
+  if (provider === "winapp") {
+    return true;
+  }
+  return !csharpExtensionInstalled || !csharpXamlToolsEnabled;
 }
 
 export function shouldRestartXamlLanguageServer(

@@ -197,9 +197,9 @@ The extension includes a **visual editor** for `AppxManifest.xml` and `.appxmani
 
 When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer the visual editor as an option alongside the default text editor. You can switch between them at any time by right clicking on the file and selecting the **Open With…** command.
 
-### WinUI XAML Language Service
+### WinApp XAML IntelliSense
 
-The extension includes a **XAML language service** for WinUI 3 (`.xaml`) files. Beyond syntax highlighting, it provides project-aware editing that understands your app's types, `x:Class`, `x:Bind` targets, and `App.xaml` resources.
+**WinApp XAML IntelliSense** provides a XAML language service for WinUI 3 (`.xaml`) files. Beyond syntax highlighting, it provides project-aware editing that understands your app's types, `x:Class`, `x:Bind` targets, and `App.xaml` resources.
 
 | Feature | What it does |
 |---------|--------------|
@@ -233,6 +233,7 @@ Other statuses appear only when something needs attention — unrestored package
 |---------|---------|-------------|
 | `winapp.xaml.intelliSense.enable` | `true` | Starts the XAML language server when XAML files are opened. Disabling it keeps syntax highlighting active. |
 | `winapp.xaml.diagnostics.level` | `all` | Controls XAML diagnostics: `all`, `errorsOnly`, or `off`. Changes apply immediately to open XAML documents. |
+| `winapp.xaml.formatting.provider` | `auto` | Avoids competing formatters by using the C# extension's XAML formatter when its XAML tools are enabled. Set to `winapp` to opt into WinApp formatting, or `disabled` to register neither WinApp formatter. |
 
 #### C# code-behind IntelliSense
 

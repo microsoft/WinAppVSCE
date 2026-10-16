@@ -113,6 +113,13 @@ internal sealed partial class XamlLanguageServer
                 return;
             }
 
+            if (!CanPublishSemanticDiagnostics(
+                context.Resolution.UnresolvedProjectReferences,
+                context.Resolution.GeneratorFailure))
+            {
+                return;
+            }
+
             var resourceKeys = GetAppResourceKeys(context, LspUri.ToPath(doc.Uri))
                 .Concat(context.TypeSystem.GetThemeResources().Select(resource => resource.Key))
                 .Distinct(StringComparer.Ordinal)
@@ -161,6 +168,12 @@ internal sealed partial class XamlLanguageServer
             await cancellation.DisposeAsync().ConfigureAwait(false);
         }
     }
+
+    internal static bool CanPublishSemanticDiagnostics(
+        System.Collections.Immutable.ImmutableArray<string> unresolvedProjectReferences,
+        string? generatorFailure) =>
+        unresolvedProjectReferences.IsDefaultOrEmpty &&
+        string.IsNullOrEmpty(generatorFailure);
 
     private bool IsCurrent(TextDocument doc) =>
         _documents.TryGetValue(doc.Uri, out var current) && ReferenceEquals(current, doc);

@@ -654,7 +654,7 @@ async function codeActionsAtCaret(text) {
 }
 
 function normalizeCodeAction(action) {
-  const wrapped = action.command?.command === "winui-xaml.applyGeneratedEventHandler";
+  const wrapped = action.command?.command === "winapp.xaml.applyGeneratedEventHandler";
   const command = wrapped ? action.command.arguments?.[2] : action.command;
   const edit = wrapped ? action.command.arguments?.[1] : action.edit;
   return {

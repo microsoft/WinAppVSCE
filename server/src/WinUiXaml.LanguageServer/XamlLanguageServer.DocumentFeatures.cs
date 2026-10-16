@@ -1,4 +1,5 @@
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using WinUiXaml.LanguageServer.Lsp;
 using WinUiXaml.Workspace;
 using WinUiXaml.Xaml;
@@ -403,6 +404,7 @@ internal sealed partial class XamlLanguageServer
         var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
         var typeSystem = context?.TypeSystem;
         EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
+        EnsureNameRenameDoesNotLeaveCodeBehindReferences(doc, offset, context);
         return XamlRename.PrepareRename(
             doc,
             offset,
@@ -422,6 +424,7 @@ internal sealed partial class XamlLanguageServer
         var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
         var typeSystem = context?.TypeSystem;
         EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
+        EnsureNameRenameDoesNotLeaveCodeBehindReferences(doc, offset, context);
 
         // A resource key is declared in one file and used across the project, so renaming only the open document would leave every other use dangling.
         if (DetectSymbolAt(doc, offset, typeSystem) is not { Kind: XamlRenameKind.Key, Name: { Length: > 0 } key })
@@ -522,6 +525,68 @@ internal sealed partial class XamlLanguageServer
                 "be updated safely. Restore the project, reload the window, and use " +
                 "'WinApp: Show XAML Language Server Status' to check project resolution.");
         }
+    }
+
+    private void EnsureNameRenameDoesNotLeaveCodeBehindReferences(
+        TextDocument doc,
+        int offset,
+        XamlProjectContext? context)
+    {
+        if (context?.Resolution.ClassSymbol is not { } classSymbol ||
+            DetectSymbolAt(doc, offset, context.TypeSystem) is not
+                { Kind: XamlRenameKind.Name, Name: { Length: > 0 } name })
+        {
+            return;
+        }
+
+        if (HasUserCodeReferencesToNamedElement(
+            context.Resolution.Compilation,
+            classSymbol,
+            name,
+            file => TryGetAllowedRoot(file, out var canonical, out _) &&
+                !IsGeneratedCodeBehind(canonical)))
+        {
+            throw new RequestFailedException(
+                $"Rename cannot safely change x:Name '{name}' because code-behind references its " +
+                "generated field. Update the XAML name and code-behind references together.");
+        }
+    }
+
+    internal static bool HasUserCodeReferencesToNamedElement(
+        Compilation compilation,
+        INamedTypeSymbol classSymbol,
+        string name,
+        Func<string, bool>? includeFile = null)
+    {
+        var fields = classSymbol.GetMembers(name).OfType<IFieldSymbol>().ToArray();
+        if (fields.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var tree in compilation.SyntaxTrees)
+        {
+            if (string.IsNullOrEmpty(tree.FilePath) ||
+                (includeFile is not null && !includeFile(tree.FilePath)))
+            {
+                continue;
+            }
+
+            var model = compilation.GetSemanticModel(tree);
+            foreach (var identifier in tree.GetRoot()
+                .DescendantNodes()
+                .OfType<IdentifierNameSyntax>()
+                .Where(identifier => identifier.Identifier.ValueText == name))
+            {
+                var symbol = model.GetSymbolInfo(identifier).Symbol;
+                if (fields.Any(field => SymbolEqualityComparer.Default.Equals(field, symbol)))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static void EnsureCompleteNameReferenceSemantics(
@@ -783,7 +848,7 @@ internal sealed partial class XamlLanguageServer
             Command = new Command
             {
                 Title = "Save generated event handler",
-                Name = "winui-xaml.saveGeneratedEventHandler",
+                Name = "winapp.xaml.saveGeneratedEventHandler",
                 Arguments = new object[] { codeBehindUri },
             },
         };

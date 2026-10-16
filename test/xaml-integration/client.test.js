@@ -38,7 +38,7 @@ describe("WinUI XAML — cold hover contract", function () {
 
   before(async () => {
     await h.openProbe();
-    await vscode.commands.executeCommand("winui-xaml.restartServer");
+    await vscode.commands.executeCommand("winapp.xaml.restartServer");
   });
 
   it("serves directives immediately and framework syntax as soon as metadata is ready", async () => {
@@ -93,28 +93,28 @@ describe("WinUI XAML — client commands & lifecycle", function () {
   });
 
   after(async () => {
-    await vscode.commands.executeCommand("winui-xaml.restartServer");
+    await vscode.commands.executeCommand("winapp.xaml.restartServer");
     await h.warmUp();
     await h.revertProbe();
   });
 
-  it("registers the winui-xaml commands", async () => {
+  it("registers the WinApp XAML commands", async () => {
     const commands = await vscode.commands.getCommands(true);
-    assert.ok(commands.includes("winui-xaml.showInfo"), "expected winui-xaml.showInfo to be registered");
+    assert.ok(commands.includes("winapp.xaml.showInfo"), "expected winapp.xaml.showInfo to be registered");
     assert.ok(
-      commands.includes("winui-xaml.restartServer"),
-      "expected winui-xaml.restartServer to be registered"
+      commands.includes("winapp.xaml.restartServer"),
+      "expected winapp.xaml.restartServer to be registered"
     );
   });
 
-  it("executes winui-xaml.showInfo without throwing", async () => {
+  it("executes winapp.xaml.showInfo without throwing", async () => {
     // showInfo pops a non-blocking information message; executing it must resolve, not reject.
-    await assert.doesNotReject(() => vscode.commands.executeCommand("winui-xaml.showInfo"));
+    await assert.doesNotReject(() => vscode.commands.executeCommand("winapp.xaml.showInfo"));
   });
 
   it("restarts the server and keeps it healthy", async () => {
     await assert.doesNotReject(
-      () => vscode.commands.executeCommand("winui-xaml.restartServer"),
+      () => vscode.commands.executeCommand("winapp.xaml.restartServer"),
       "restartServer should never reject"
     );
     // A completion response confirms restart serialization.
@@ -126,9 +126,9 @@ describe("WinUI XAML — client commands & lifecycle", function () {
   it("tolerates rapid back-to-back restarts (no torn-down pending start)", async () => {
     // Fire several restarts without awaiting between them; the lifecycle mutex must keep these from stopping a still-pending start. All must settle without rejecting.
     const restarts = [
-      vscode.commands.executeCommand("winui-xaml.restartServer"),
-      vscode.commands.executeCommand("winui-xaml.restartServer"),
-      vscode.commands.executeCommand("winui-xaml.restartServer"),
+      vscode.commands.executeCommand("winapp.xaml.restartServer"),
+      vscode.commands.executeCommand("winapp.xaml.restartServer"),
+      vscode.commands.executeCommand("winapp.xaml.restartServer"),
     ];
     await assert.doesNotReject(() => Promise.all(restarts));
     await h.warmUp();
@@ -239,7 +239,7 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     try {
       // Restart must swallow the missing-DLL condition and resolve — activation stays syntax-only.
       await assert.doesNotReject(
-        () => vscode.commands.executeCommand("winui-xaml.restartServer"),
+        () => vscode.commands.executeCommand("winapp.xaml.restartServer"),
         "restartServer must not reject when the server DLL is absent"
       );
 
@@ -254,7 +254,7 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     } finally {
       // Recover: drop the seam and restart so the server comes back for later tests.
       delete process.env.WINUI_XAML_FORCE_NO_SERVER;
-      await vscode.commands.executeCommand("winui-xaml.restartServer");
+      await vscode.commands.executeCommand("winapp.xaml.restartServer");
       await h.warmUp();
     }
 
@@ -266,7 +266,7 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     process.env.WINUI_XAML_FORCE_NO_DOTNET = "1";
     try {
       await assert.doesNotReject(
-        () => vscode.commands.executeCommand("winui-xaml.restartServer"),
+        () => vscode.commands.executeCommand("winapp.xaml.restartServer"),
         "restartServer must not reject when .NET is absent"
       );
       const degraded = await waitForSemanticButton(false);
@@ -287,7 +287,7 @@ describe("WinUI XAML — client commands & lifecycle", function () {
       );
     } finally {
       delete process.env.WINUI_XAML_FORCE_NO_DOTNET;
-      await vscode.commands.executeCommand("winui-xaml.restartServer");
+      await vscode.commands.executeCommand("winapp.xaml.restartServer");
     }
 
     const recovered = await waitForSemanticButton(true, 60000);
@@ -300,7 +300,7 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     try {
       // Force syntax-only mode without starting the server.
       await assert.doesNotReject(
-        () => vscode.commands.executeCommand("winui-xaml.restartServer"),
+        () => vscode.commands.executeCommand("winapp.xaml.restartServer"),
         "restartServer must not reject when the workspace is untrusted"
       );
       const degraded = await hasSemanticButtonCompletion();
@@ -311,7 +311,7 @@ describe("WinUI XAML — client commands & lifecycle", function () {
     } finally {
       // Simulate granting trust.
       delete process.env.WINUI_XAML_FORCE_UNTRUSTED;
-      await vscode.commands.executeCommand("winui-xaml.restartServer");
+      await vscode.commands.executeCommand("winapp.xaml.restartServer");
       await h.warmUp();
     }
 

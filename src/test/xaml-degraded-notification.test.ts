@@ -25,7 +25,7 @@ describe('buildDegradedNotification', () => {
 
 		const restart = actions.find((a) => a.label === 'Restart Language Server');
 		assert.ok(restart);
-		assert.equal(restart.command, 'winui-xaml.restartServer');
+		assert.equal(restart.command, 'winapp.xaml.restartServer');
 
 		const openSettings = actions.find((a) => a.label === 'Open Settings');
 		assert.ok(openSettings);
@@ -78,7 +78,7 @@ describe('buildDegradedNotification', () => {
 		await executeDegradedAction(buildDegradedNotification('untrusted').actions[0], handlers);
 
 		assert.deepEqual(commands, [
-			['winui-xaml.restartServer', undefined],
+			['winapp.xaml.restartServer', undefined],
 			['workbench.action.openSettings', SERVER_SETTINGS_QUERY],
 			['workbench.trust.manage', undefined],
 			['workbench.action.manageTrust', undefined],

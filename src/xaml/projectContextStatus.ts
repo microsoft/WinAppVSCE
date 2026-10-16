@@ -12,6 +12,7 @@ export const PROJECT_CONTEXT_STATES = [
   "packages-not-restored",
   "generators-unavailable",
   "dotnet-sdk-required",
+  "syntax-only",
   "idle",
 ] as const;
 
@@ -24,7 +25,7 @@ export function isProjectContextState(
   return PROJECT_CONTEXT_STATES.includes(value as ProjectContextState);
 }
 
-/** Shared wording for the project-context states. The status bar and the `winui-xaml.showInfo` summary describe the same conditions, so they compose these sentences rather than each spelling them out. */
+/** Shared wording for the project-context states. The status bar and the `winapp.xaml.showInfo` summary describe the same conditions, so they compose these sentences rather than each spelling them out. */
 export const PROJECT_CONTEXT_LOADING_MESSAGE =
   "Loading the WinUI and package types for this project.";
 export const PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE =
@@ -82,6 +83,7 @@ const DURABLE_STATES: readonly ProjectContextState[] = [
   "packages-not-restored",
   "generators-unavailable",
   "dotnet-sdk-required",
+  "syntax-only",
 ];
 
 /** Decides whether incoming status replaces current; suppresses transient reload `loading` over durable states while still accepting real recovery states immediately. */
@@ -115,6 +117,7 @@ const PROJECT_CONTEXT_PRIORITY: Record<
   loading: 5,
   "framework-ready": 6,
   ready: 7,
+  "syntax-only": 8,
 };
 
 export function selectProjectContextStatus(
@@ -193,6 +196,14 @@ export function getProjectContextStatusPresentation(
       return {
         text: "$(warning) WinApp: XAML IntelliSense Unavailable",
         tooltip: `${status.message ?? PROJECT_CONTEXT_ERROR_FALLBACK_MESSAGE} ${SHOW_XAML_OUTPUT_HINT}`,
+        transient: false,
+      };
+    case "syntax-only":
+      return {
+        text: "$(code) WinApp: XAML Syntax Only",
+        tooltip:
+          `${status.message ?? "Project-aware XAML IntelliSense is unavailable for this project type."} ` +
+          "Formatting, folding, outline, closing-tag completion, document links, and syntax diagnostics remain available.",
         transient: false,
       };
     case "loading":

@@ -76,6 +76,7 @@ internal sealed class InitializationOptions
 {
     [JsonPropertyName("allowedRoots")] public string[]? AllowedRoots { get; set; }
     [JsonPropertyName("diagnosticsLevel")] public string? DiagnosticsLevel { get; set; }
+    [JsonPropertyName("formattingEnabled")] public bool? FormattingEnabled { get; set; }
 }
 
 internal sealed class DidChangeConfigurationParams
@@ -91,7 +92,7 @@ internal sealed class InitializeResult
 
 internal sealed class ServerInfo
 {
-    [JsonPropertyName("name")] public string Name { get; set; } = "WinUI XAML Language Server";
+    [JsonPropertyName("name")] public string Name { get; set; } = "WinApp XAML IntelliSense";
     [JsonPropertyName("version")] public string? Version { get; set; }
 }
 
@@ -574,7 +575,7 @@ internal sealed class CodeAction
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public WorkspaceEdit? SerializedEdit
     {
-        get => Command?.Name == "winui-xaml.applyGuardedTextEdits" ? null : Edit;
+        get => Command?.Name == "winapp.xaml.applyGuardedTextEdits" ? null : Edit;
         set => Edit = value;
     }
     [JsonPropertyName("command")]

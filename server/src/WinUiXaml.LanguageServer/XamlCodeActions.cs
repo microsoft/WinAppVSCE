@@ -42,8 +42,8 @@ internal sealed class GuardedTextEdit
 /// <summary>Builds textDocument/codeAction quick fixes from the diagnostics the client hands back.</summary>
 internal static class XamlCodeActions
 {
-    internal const string PromptTextEditCommand = "winui-xaml.promptTextEdit";
-    internal const string ApplyGuardedTextEditsCommand = "winui-xaml.applyGuardedTextEdits";
+    internal const string PromptTextEditCommand = "winapp.xaml.promptTextEdit";
+    internal const string ApplyGuardedTextEditsCommand = "winapp.xaml.applyGuardedTextEdits";
 
     // The unknown-name diagnostics whose data carries spelling suggestions.
     private static readonly HashSet<string> SuggestibleCodes = new(StringComparer.Ordinal)

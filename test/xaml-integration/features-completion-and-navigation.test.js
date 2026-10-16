@@ -582,8 +582,8 @@ describe("WinUI XAML — generate event handler (#3)", function () {
     assert.strictEqual(gen.title, "Generate event handler 'Foo_Click'");
     assert.strictEqual(gen.kind, "quickfix", "the generate action must be a quickfix");
     assert.strictEqual(gen.isPreferred, true, "the generate action must be preferred (lightbulb default)");
-    assert.strictEqual(gen.transportCommand, "winui-xaml.applyGeneratedEventHandler");
-    assert.strictEqual(gen.command?.command, "winui-xaml.saveGeneratedEventHandler");
+    assert.strictEqual(gen.transportCommand, "winapp.xaml.applyGeneratedEventHandler");
+    assert.strictEqual(gen.command?.command, "winapp.xaml.saveGeneratedEventHandler");
     assert.match(gen.command?.arguments?.[0] || "", /SmokePage\.xaml\.cs$/i);
     // The edit lands in the USER code-behind partial, never a generated .g.cs, with the delegate signature.
     const csEdit = gen.edits.find((e) => /SmokePage\.xaml\.cs$/i.test(e.fsPath));

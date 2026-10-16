@@ -181,6 +181,11 @@ internal sealed partial class XamlLanguageServer
     /// <summary> Resolves the document to its project <see cref="XamlResolution"/> (for the x:Class symbol) plus the cached <see cref="XamlTypeSystem"/> for its compilation.</summary>
     private async Task<XamlProjectContext?> GetContextAsync(string uri)
     {
+        if (_syntaxOnlyDocuments.ContainsKey(uri))
+        {
+            return null;
+        }
+
         if (_documents.TryGetValue(uri, out var document) &&
             TryGetAcceptedContext(document, out var accepted))
         {
@@ -219,6 +224,11 @@ internal sealed partial class XamlLanguageServer
         string uri,
         CancellationToken cancellationToken)
     {
+        if (_syntaxOnlyDocuments.ContainsKey(uri))
+        {
+            return null;
+        }
+
         var context = await GetOrStartContext(uri)
             .WaitAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -314,6 +324,21 @@ internal sealed partial class XamlLanguageServer
             const string message = "The XAML document path could not be resolved.";
             Console.Error.WriteLine($"[winui-xaml-ls] context: {message} Uri: '{uri}'");
             await NotifyProjectContextStatusAsync(uri, "error", message).ConfigureAwait(false);
+            return null;
+        }
+
+        if (TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot) &&
+            XamlProjectResolver.FindOwningProject(canonicalPath, allowedRoot) is { } projectPath &&
+            System.IO.Path.GetExtension(projectPath).Equals(
+                ".vcxproj",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _syntaxOnlyDocuments[uri] = 0;
+            await NotifyProjectContextStatusAsync(
+                uri,
+                "syntax-only",
+                "C++/WinRT projects use syntax-only XAML editing; project types are not loaded.")
+                .ConfigureAwait(false);
             return null;
         }
 

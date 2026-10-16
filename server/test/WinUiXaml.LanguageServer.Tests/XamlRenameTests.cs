@@ -102,6 +102,54 @@ public class XamlRenameTests
         return XamlTypeSystem.FromCompilation(compilation, ImmutableArray<IAssemblySymbol>.Empty);
     }
 
+    [Fact]
+    public void CodeBehindReferenceToGeneratedNameFieldIsDetected()
+    {
+        var compilation = CSharpCompilation.Create(
+            "RenameSafety",
+            [
+                CSharpSyntaxTree.ParseText(
+                    "public partial class Page { public object Target = new(); }",
+                    path: @"C:\proj\obj\Page.g.cs"),
+                CSharpSyntaxTree.ParseText(
+                    "public partial class Page { void Use() { _ = Target; } }",
+                    path: @"C:\proj\Page.xaml.cs"),
+            ],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+        var page = compilation.GetTypeByMetadataName("Page");
+
+        Assert.NotNull(page);
+        Assert.True(XamlLanguageServer.HasUserCodeReferencesToNamedElement(
+            compilation,
+            page!,
+            "Target",
+            path => !path.Contains(@"\obj\", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public void SameSpellingWithoutSymbolReferenceDoesNotBlockRename()
+    {
+        var compilation = CSharpCompilation.Create(
+            "RenameSafety",
+            [
+                CSharpSyntaxTree.ParseText(
+                    "public partial class Page { public object Target = new(); }",
+                    path: @"C:\proj\obj\Page.g.cs"),
+                CSharpSyntaxTree.ParseText(
+                    "public partial class Page { void Use() { var Target = 1; _ = Target; } }",
+                    path: @"C:\proj\Page.xaml.cs"),
+            ],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+        var page = compilation.GetTypeByMetadataName("Page");
+
+        Assert.NotNull(page);
+        Assert.False(XamlLanguageServer.HasUserCodeReferencesToNamedElement(
+            compilation,
+            page!,
+            "Target",
+            path => !path.Contains(@"\obj\", StringComparison.OrdinalIgnoreCase)));
+    }
+
     // ---- prepareRename gating ------------------------------------------------
 
     [Fact]

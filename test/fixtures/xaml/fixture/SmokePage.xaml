@@ -20,6 +20,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <!-- 2) Title TextBlock using the shared SmokeAccentBrush. -->
@@ -78,6 +79,11 @@
                     </DataTemplate>
                 </ItemsRepeater.ItemTemplate>
             </ItemsRepeater>
+
+            <TextBlock
+                Grid.Row="6"
+                AutomationProperties.AutomationId="GeneratedText"
+                Text="{x:Bind Toolkit.Title, Mode=OneWay}" />
         </Grid>
     </ScrollViewer>
 </Page>

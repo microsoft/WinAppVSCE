@@ -20,6 +20,8 @@ internal sealed partial class XamlLanguageServer
     private readonly JsonRpcConnection _connection;
     private readonly XamlProjectResolver _resolver;
     private readonly ConcurrentDictionary<string, TextDocument> _documents = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _syntaxOnlyDocuments =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly AsyncSingleFlightCache<string, XamlProjectContext> _contexts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, XamlTypeSystem> _typeSystems = new();
@@ -127,11 +129,18 @@ internal sealed partial class XamlLanguageServer
         _allowedRoots = ResolveAllowedRoots(p);
         _diagnosticsLevel = NormalizeDiagnosticsLevel(
             p.InitializationOptions?.DiagnosticsLevel);
+        var formattingEnabled = p.InitializationOptions?.FormattingEnabled != false;
         Console.Error.WriteLine(
             $"[winui-xaml-ls] allowed roots: {(_allowedRoots.Length == 0 ? "(none — project evaluation disabled)" : string.Join("; ", _allowedRoots))}");
         return new()
         {
-        Capabilities = new ServerCapabilities
+        Capabilities = CreateServerCapabilities(formattingEnabled),
+        ServerInfo = new ServerInfo { Version = ServerVersion },
+        };
+    }
+
+    internal static ServerCapabilities CreateServerCapabilities(bool formattingEnabled) =>
+        new()
         {
             TextDocumentSync = new TextDocumentSyncOptions { OpenClose = true, Change = 1 /* Full */ },
             DefinitionProvider = true,
@@ -139,12 +148,11 @@ internal sealed partial class XamlLanguageServer
             DocumentHighlightProvider = true,
             HoverProvider = true,
             DocumentSymbolProvider = true,
-            DocumentFormattingProvider = true,
-            DocumentRangeFormattingProvider = true,
-            DocumentOnTypeFormattingProvider = new DocumentOnTypeFormattingOptions
-            {
-                FirstTriggerCharacter = ">",
-            },
+            DocumentFormattingProvider = formattingEnabled,
+            DocumentRangeFormattingProvider = formattingEnabled,
+            DocumentOnTypeFormattingProvider = formattingEnabled
+                ? new DocumentOnTypeFormattingOptions { FirstTriggerCharacter = ">" }
+                : null,
             FoldingRangeProvider = true,
             ColorProvider = true,
             SelectionRangeProvider = true,
@@ -171,10 +179,7 @@ internal sealed partial class XamlLanguageServer
                 TriggerCharacters = new[] { "<", " ", ".", ":", "\"", "'", "{", "=", "/", "," },
                 ResolveProvider = false,
             },
-        },
-        ServerInfo = new ServerInfo { Version = ServerVersion },
         };
-    }
 
     /// <summary>The shipped server version, stamped into the assembly at publish time.</summary>
     private static string ServerVersion { get; } = ResolveServerVersion();
@@ -491,6 +496,7 @@ internal sealed partial class XamlLanguageServer
         try
         {
             _documents.TryRemove(p.TextDocument.Uri, out _);
+            _syntaxOnlyDocuments.TryRemove(p.TextDocument.Uri, out _);
             CancelSemanticDiagnostics(p.TextDocument.Uri);
             _contexts.Invalidate(p.TextDocument.Uri, discardLatest: true);
             await _connection.SendNotificationAsync(
@@ -547,12 +553,13 @@ internal sealed partial class XamlLanguageServer
             var ext = System.IO.Path.GetExtension(path);
             var isCs = ext.Equals(".cs", StringComparison.OrdinalIgnoreCase);
             var isCsproj = ext.Equals(".csproj", StringComparison.OrdinalIgnoreCase);
+            var isVcxproj = ext.Equals(".vcxproj", StringComparison.OrdinalIgnoreCase);
             var isXaml = ext.Equals(".xaml", StringComparison.OrdinalIgnoreCase);
             var isImportedBuildFile =
                 ext.Equals(".props", StringComparison.OrdinalIgnoreCase) ||
                 ext.Equals(".targets", StringComparison.OrdinalIgnoreCase);
             var isNuGetAssets = IsNuGetAssetsPath(path);
-            if (!isCs && !isCsproj && !isXaml && !isImportedBuildFile && !isNuGetAssets)
+            if (!isCs && !isCsproj && !isVcxproj && !isXaml && !isImportedBuildFile && !isNuGetAssets)
             {
                 continue;
             }
@@ -578,7 +585,7 @@ internal sealed partial class XamlLanguageServer
 
             // Source/project changes and added/removed XAML files affect the project graph.
             var structural =
-                isCs || isCsproj || isImportedBuildFile || isNuGetAssets ||
+                isCs || isCsproj || isVcxproj || isImportedBuildFile || isNuGetAssets ||
                 change.Type != FileChangeType.Changed;
             if (!structural)
             {
@@ -662,6 +669,7 @@ internal sealed partial class XamlLanguageServer
 
     private async Task ResetContextsAndRefreshDocumentsAsync()
     {
+        _syntaxOnlyDocuments.Clear();
         _contexts.RestartAllPreservingLatest();
 
         // Discard semantic diagnostics produced from the old compilation immediately, then rebuild
@@ -675,6 +683,7 @@ internal sealed partial class XamlLanguageServer
 
     private void InvalidateContextAndWarm(string uri)
     {
+        _syntaxOnlyDocuments.TryRemove(uri, out _);
         _contexts.Invalidate(uri);
         if (_documents.ContainsKey(uri))
         {

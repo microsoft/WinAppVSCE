@@ -6,7 +6,9 @@ import {
   getXamlStatus,
   getXamlStatusEffect,
   normalizeDiagnosticsLevel,
+  normalizeFormattingProvider,
   readXamlLanguageServerConfiguration,
+  shouldEnableWinAppXamlFormatting,
   shouldRestartXamlLanguageServer,
 } from "../xaml/xamlConfiguration";
 import {
@@ -24,10 +26,10 @@ import {
 } from "../xaml/xamlConstants";
 
 test("pins the status message prefixes", () => {
-  assert.equal(XAML_STATUS_PREFIX, "WinUI XAML Tools:");
+  assert.equal(XAML_STATUS_PREFIX, "WinApp XAML IntelliSense:");
   assert.equal(
     XAML_INTELLISENSE_UNAVAILABLE_PREFIX,
-    "WinUI XAML IntelliSense Unavailable:"
+    "WinApp XAML IntelliSense Unavailable:"
   );
 });
 
@@ -57,6 +59,17 @@ test("reports disabled, running, and degraded XAML status actions", () => {
     }),
     {
       message: `${XAML_STATUS_PREFIX} ${PROJECT_CONTEXT_FRAMEWORK_READY_MESSAGE}`,
+      actions: ["Show Output"],
+    }
+  );
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
+      state: "syntax-only",
+      message: "C++/WinRT projects use syntax-only XAML editing.",
+    }),
+    {
+      message:
+        `${XAML_STATUS_PREFIX} C++/WinRT projects use syntax-only XAML editing.`,
       actions: ["Show Output"],
     }
   );
@@ -176,7 +189,7 @@ test("maps every XAML status action to its recovery effect", () => {
     args: ["winapp.xaml.intelliSense.enable"],
   });
   assert.deepEqual(getXamlStatusEffect("Restart Language Server"), {
-    command: "winui-xaml.restartServer",
+    command: "winapp.xaml.restartServer",
   });
   assert.deepEqual(getXamlStatusEffect("Manage Workspace Trust"), {
     command: "workbench.trust.manage",
@@ -214,10 +227,11 @@ test("validates diagnostic levels and explains invalid values", () => {
   }
 });
 
-test("reads startup enablement and diagnostics initialization options together", () => {
+test("reads startup enablement, diagnostics, and formatter options together", () => {
   const values = new Map<string, unknown>([
     ["intelliSense.enable", false],
     ["diagnostics.level", "errorsOnly"],
+    ["formatting.provider", "winapp"],
   ]);
   const configuration = readXamlLanguageServerConfiguration(
     <T>(section: string, defaultValue: T) =>
@@ -226,8 +240,35 @@ test("reads startup enablement and diagnostics initialization options together",
 
   assert.deepEqual(configuration, {
     enabled: false,
-    initializationOptions: { diagnosticsLevel: "errorsOnly" },
+    initializationOptions: {
+      diagnosticsLevel: "errorsOnly",
+      formattingProvider: "winapp",
+    },
   });
+});
+
+test("avoids competing with C# XAML formatting unless the user opts in", () => {
+  assert.equal(normalizeFormattingProvider("unexpected"), "auto");
+  assert.equal(
+    shouldEnableWinAppXamlFormatting("auto", true, true),
+    false
+  );
+  assert.equal(
+    shouldEnableWinAppXamlFormatting("auto", true, false),
+    true
+  );
+  assert.equal(
+    shouldEnableWinAppXamlFormatting("auto", false, true),
+    true
+  );
+  assert.equal(
+    shouldEnableWinAppXamlFormatting("winapp", true, true),
+    true
+  );
+  assert.equal(
+    shouldEnableWinAppXamlFormatting("disabled", false, false),
+    false
+  );
 });
 
 test("transmits canonical diagnostic levels through mocked extension interactions", async () => {
