@@ -126,12 +126,19 @@ internal sealed partial class XamlLanguageServer
         // A resource key is a PROJECT-WIDE symbol: its x:Key is typically declared in App.xaml and used across pages.
         if (DetectSymbolAt(doc, offset, typeSystem) is { Kind: XamlRenameKind.Key, Name: { Length: > 0 } key })
         {
+            var target = ResolveResourceDeclarationTarget(
+                context,
+                p.TextDocument.Uri,
+                doc,
+                offset,
+                key);
             AddCrossFileResourceReferences(
                 context,
                 p.TextDocument.Uri,
                 key,
                 includeDeclaration,
                 GetCrossFileResourcePolicy(context, p.TextDocument.Uri, doc, offset),
+                target,
                 locations);
         }
 
@@ -145,6 +152,7 @@ internal sealed partial class XamlLanguageServer
         string key,
         bool includeDeclaration,
         CrossFileResourcePolicy policy,
+        ResourceDeclarationTarget? target,
         List<Lsp.Location> locations)
     {
         if (policy == CrossFileResourcePolicy.None)
@@ -152,7 +160,7 @@ internal sealed partial class XamlLanguageServer
             return;
         }
 
-        ForEachCrossFileResourceOccurrence(context, currentUri, key, (fileDoc, occurrences) =>
+        ForEachCrossFileResourceOccurrence(context, currentUri, key, target, (fileDoc, occurrences) =>
         {
             foreach (var occurrence in occurrences)
             {
@@ -265,6 +273,7 @@ internal sealed partial class XamlLanguageServer
         XamlProjectContext? context,
         string currentUri,
         string key,
+        ResourceDeclarationTarget? target,
         Action<TextDocument, List<(Lsp.Range Range, bool IsDeclaration)>> visit,
         bool includeDeclarations)
     {
@@ -276,6 +285,10 @@ internal sealed partial class XamlLanguageServer
         var currentPath = UriToPath(currentUri) is { } cp ? CanonicalizePath(cp) : null;
         var cancellationToken = _requestCancellation.Value;
         var openDocuments = BuildOpenDocumentPathIndex();
+        var projectTarget = ResolveProjectResourceDeclarationTarget(context, key);
+        bool targetIsProjectFallback = target is not null &&
+            projectTarget is not null &&
+            projectTarget.Value.Matches(target.Value);
 
         foreach (var file in context.Resolution.XamlFiles)
         {
@@ -344,21 +357,129 @@ internal sealed partial class XamlLanguageServer
 
             var fileOccurrences = new List<(Lsp.Range Range, bool IsDeclaration)>();
             var fileIndex = XamlSemanticFacts.CreateResourceIndex(fileRoot, context.TypeSystem);
-            // A page-local declaration elsewhere is a different resource that merely shares a key, so only a file that actually exposes its resources can own the one being renamed.
-            var fileOwnsResource = includeDeclarations &&
-                DocumentExposesResourcesToOtherFiles(context, canonicalFile, fileDoc);
-            CollectResourceOccurrences(
-                fileRoot,
-                key,
-                fileDoc,
-                fileOccurrences,
-                // When this file owns the resource its own usages bind to it and have to move with the declaration; otherwise only a reference that resolves nowhere locally can be bound to ours.
-                onlyUnresolvedReferences: !fileOwnsResource,
-                resourceIndex: fileIndex,
-                includeDeclarations: fileOwnsResource);
+            var targetDeclaration = target is not null && target.Value.IsIn(canonicalFile)
+                ? FindResourceDeclarationByStart(fileRoot, target.Value.DeclarationStart)
+                : null;
+            if (targetDeclaration is not null)
+            {
+                CollectResourceOccurrences(
+                    fileRoot,
+                    key,
+                    fileDoc,
+                    fileOccurrences,
+                    targetDeclaration,
+                    resourceIndex: fileIndex,
+                    includeDeclarations: includeDeclarations);
+            }
+            else if (targetIsProjectFallback || target is null)
+            {
+                // References with no declaration in their own lexical scope fall back to the
+                // first matching declaration in App.xaml's precedence-ordered resource graph.
+                // With no project declaration, unresolved references may still bind an SDK
+                // theme resource and remain useful Find All References results.
+                CollectResourceOccurrences(
+                    fileRoot,
+                    key,
+                    fileDoc,
+                    fileOccurrences,
+                    onlyUnresolvedReferences: true,
+                    resourceIndex: fileIndex,
+                    includeDeclarations: false);
+            }
 
             visit(fileDoc, DedupeAndSort(fileOccurrences));
         }
+    }
+
+    private ResourceDeclarationTarget? ResolveResourceDeclarationTarget(
+        XamlProjectContext? context,
+        string currentUri,
+        TextDocument doc,
+        int offset,
+        string key)
+    {
+        var declaration = FindResourceDeclarationAt(doc, offset);
+        if (declaration is null &&
+            doc.Parsed.Root is { } root &&
+            FindResourceKeyReferenceAt(doc, offset) is { } reference)
+        {
+            declaration = FindResourceDeclarationForReference(
+                doc,
+                reference.Span.Start,
+                key,
+                XamlSemanticFacts.CreateResourceIndex(root, context?.TypeSystem));
+        }
+
+        if (declaration is not null &&
+            UriToPath(currentUri) is { } currentPath &&
+            XamlSemanticFacts.GetKeyAttribute(declaration)?.Value is { } keyValue)
+        {
+            return new ResourceDeclarationTarget(
+                CanonicalizePath(currentPath),
+                TrimmedValueSpan(keyValue).Start);
+        }
+
+        return ResolveProjectResourceDeclarationTarget(context, key);
+    }
+
+    private ResourceDeclarationTarget? ResolveProjectResourceDeclarationTarget(
+        XamlProjectContext? context,
+        string key)
+    {
+        if (context is null ||
+            FindAppXamlPath(context.Resolution) is not { } appXaml)
+        {
+            return null;
+        }
+
+        var projectRoot = System.IO.Path.GetDirectoryName(context.Resolution.ProjectPath)!;
+        foreach (var resourceFile in ReadResourceGraph(appXaml, projectRoot, context.TypeSystem))
+        {
+            if (resourceFile.Parsed.Root is not { } root)
+            {
+                continue;
+            }
+
+            var declaration = XamlSemanticFacts.FindResourceDeclarationInScope(
+                XamlSemanticFacts.CreateResourceIndex(root, context.TypeSystem),
+                root,
+                key);
+            if (declaration is null ||
+                XamlSemanticFacts.GetKeyAttribute(declaration)?.Value is not { } keyValue)
+            {
+                continue;
+            }
+
+            return new ResourceDeclarationTarget(
+                CanonicalizePath(resourceFile.Path),
+                TrimmedValueSpan(keyValue).Start);
+        }
+
+        return null;
+    }
+
+    private static XamlElement? FindResourceDeclarationByStart(
+        XamlElement root,
+        int declarationStart) =>
+        root.DescendantNodesAndSelf()
+            .OfType<XamlElement>()
+            .FirstOrDefault(element =>
+                XamlSemanticFacts.GetKeyAttribute(element)?.Value is { } value &&
+                TrimmedValueSpan(value).Start == declarationStart);
+
+    private readonly record struct ResourceDeclarationTarget(
+        string CanonicalPath,
+        int DeclarationStart)
+    {
+        internal bool IsIn(string canonicalPath) =>
+            string.Equals(
+                CanonicalPath,
+                canonicalPath,
+                System.StringComparison.OrdinalIgnoreCase);
+
+        internal bool Matches(ResourceDeclarationTarget other) =>
+            IsIn(other.CanonicalPath) &&
+            DeclarationStart == other.DeclarationStart;
     }
 
     /// <summary>Indexes the open documents by canonical full path so cross-file work reads unsaved buffers rather than stale disk text.</summary>
@@ -452,7 +573,13 @@ internal sealed partial class XamlLanguageServer
             p.TextDocument.Uri,
             key,
             (p.NewName ?? string.Empty).Trim(),
-            GetCrossFileResourcePolicy(context, p.TextDocument.Uri, doc, offset));
+            GetCrossFileResourcePolicy(context, p.TextDocument.Uri, doc, offset),
+            ResolveResourceDeclarationTarget(
+                context,
+                p.TextDocument.Uri,
+                doc,
+                offset,
+                key));
         if (XamlRename.Rename(doc, offset, p.NewName ?? string.Empty, typeSystem, declaredElsewhere)
             is not { Changes: { } changes } edit)
         {
@@ -487,10 +614,17 @@ internal sealed partial class XamlLanguageServer
             return false;
         }
 
+        var target = ResolveResourceDeclarationTarget(context, currentUri, doc, offset, key);
+        if (target is null)
+        {
+            return false;
+        }
+
         ForEachCrossFileResourceOccurrence(
             context,
             currentUri,
             key,
+            target,
             (_, occurrences) => found |= occurrences.Any(o => o.IsDeclaration),
             includeDeclarations: true);
         return found;
@@ -502,16 +636,17 @@ internal sealed partial class XamlLanguageServer
         string currentUri,
         string key,
         string newName,
-        CrossFileResourcePolicy policy)
+        CrossFileResourcePolicy policy,
+        ResourceDeclarationTarget? target)
     {
         var edits = new Dictionary<string, List<TextEdit>>(System.StringComparer.Ordinal);
         bool hasDeclaration = false;
-        if (policy == CrossFileResourcePolicy.None)
+        if (policy == CrossFileResourcePolicy.None || target is null)
         {
             return (edits, hasDeclaration);
         }
 
-        ForEachCrossFileResourceOccurrence(context, currentUri, key, (fileDoc, occurrences) =>
+        ForEachCrossFileResourceOccurrence(context, currentUri, key, target, (fileDoc, occurrences) =>
         {
             if (occurrences.Count == 0)
             {

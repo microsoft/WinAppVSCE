@@ -339,6 +339,17 @@ describe("WinUI XAML — red-team 79 (cross-file resource references)", function
     assert.strictEqual(res.edits.length, 3, `expected only page usage plus merged declaration and usage; got ${JSON.stringify(res.edits)}`);
   });
 
+  it("renames only the precedence winner when reachable merged dictionaries duplicate a key", async () => {
+    const res = await h.renameAt(
+      page(`<Border Background="{StaticResource PrecedenceAccent|Brush}" />`),
+      "RenamedPrecedenceAccentBrush");
+    assert.ok(!res.error, `rename should succeed; got ${JSON.stringify(res)}`);
+    assert.strictEqual(currentRefs(res.edits).length, 1, "expected the initiating page usage edit");
+    assert.strictEqual(countBase(res.edits, "RootSourceTarget.xaml"), 2, "expected the later merged declaration and its internal usage");
+    assert.strictEqual(countBase(res.edits, "MergedResources.xaml"), 0, `shadowed earlier dictionary must remain intact; got ${JSON.stringify(res.edits)}`);
+    assert.strictEqual(res.edits.length, 3, `expected only the page usage plus winning declaration and usage; got ${JSON.stringify(res.edits)}`);
+  });
+
   it("keeps x:Name document-scoped even when another project file has the same name", async () => {
     const refs = await referencesAt(page([
       `<StackPanel x:Name="DiPage|Title">`,
