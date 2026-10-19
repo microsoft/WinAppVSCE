@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { isArtifactPath, stripArtifactExtension } from './artifact-types';
+import { parseWinappErrorMessage } from './winapp-cli-utils';
 
 /**
  * Pure helpers for interpreting the output of `winapp package` and building the
@@ -177,9 +178,15 @@ export function planPackCompletion(result: {
 
 	const artifactPath = parsePackagedArtifactPath(result.output);
 	if (result.code !== 0 || !artifactPath) {
+		const explicitError = result.output
+			.split(/\r?\n/)
+			.find(line => /^\s*(?:\[ERROR\]\s*-\s*|[❌✖✗]\s*)/u.test(line));
+		const detail = explicitError ? parseWinappErrorMessage(explicitError) : undefined;
 		return {
 			kind: 'error',
-			message: 'Packaging failed. See the WinApp output channel for details.'
+			message: detail
+				? `Packaging failed: ${detail}`
+				: 'Packaging failed. See the WinApp output channel for details.'
 		};
 	}
 

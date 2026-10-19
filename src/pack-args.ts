@@ -1,11 +1,13 @@
 /**
- * Pure helpers for turning a build-output folder selection into a
+ * Pure helpers for turning project or build-output selections into a
  * `winapp pack` invocation.
  *
  * These are kept free of the VS Code API so they can be unit-tested directly
  * (see `src/test/pack-args.test.ts`); the VS Code-facing picker lives in
  * `folder-picker.ts` and command orchestration lives in `extension.ts`.
  */
+
+import * as path from 'path';
 
 /**
  * The winapp CLI accepts a variadic `<input-folder>...` argument and switches
@@ -20,6 +22,36 @@
  */
 export function isBundleSelection(inputFolders: readonly string[]): boolean {
 	return inputFolders.length > 1;
+}
+
+export type PackArchitecture = 'x64' | 'arm64' | 'x86';
+
+export type PackInput =
+	| {
+		kind: 'folders';
+		folders: string[];
+		workspaceRoot: string;
+	}
+	| {
+		kind: 'project';
+		projectFile: string;
+		workspaceRoot: string;
+		architectures: readonly [PackArchitecture, ...PackArchitecture[]];
+	};
+
+export type PackSigningMode =
+	/** Use the source's default: unsigned folders or project signing settings. */
+	| 'default'
+	/** Generate and install a development certificate before signing. */
+	| 'generateDev'
+	/** Explicitly override project signing and produce an unsigned artifact. */
+	| 'unsigned';
+
+/** True when the selected input will produce an MSIX bundle. */
+export function isBundleInput(input: PackInput): boolean {
+	return input.kind === 'folders'
+		? isBundleSelection(input.folders)
+		: input.architectures.length > 1;
 }
 
 /** Outcome of interpreting a multi-select build-output QuickPick. */
@@ -68,10 +100,11 @@ export function resolveFolderSelection(
 
 /** Options collected from the pack prompts. */
 export interface PackOptions {
-	/** Generate and install a throwaway development certificate. */
-	generateCert: boolean;
+	signing: PackSigningMode;
 	/** Bundle the Windows App SDK runtime into the package(s). */
 	selfContained: boolean;
+	/** Project-mode MSBuild configuration. Omitted to use the CLI's Release default. */
+	configuration?: string;
 }
 
 /**
@@ -83,11 +116,24 @@ export interface PackOptions {
  * Every selected folder is passed positionally; the CLI decides between `.msix`
  * and `.msixbundle` from how many it receives.
  */
-export function buildPackArgs(inputFolders: readonly string[], options: PackOptions): string[] {
-	const args = ['pack', ...inputFolders];
+export function buildPackArgs(input: PackInput, options: PackOptions): string[] {
+	const args = input.kind === 'folders'
+		? ['pack', ...input.folders]
+		: ['pack', input.projectFile];
 
-	if (options.generateCert) {
+	if (input.kind === 'project') {
+		for (const architecture of input.architectures) {
+			args.push('--arch', architecture);
+		}
+		if (options.configuration) {
+			args.push('--configuration', options.configuration);
+		}
+	}
+
+	if (options.signing === 'generateDev') {
 		args.push('--generate-cert', '--install-cert');
+	} else if (options.signing === 'unsigned') {
+		args.push('--no-sign');
 	}
 
 	if (options.selfContained) {
@@ -109,13 +155,26 @@ export function buildPackArgs(inputFolders: readonly string[], options: PackOpti
  * architecture and the warning would be actively misleading.
  */
 export function shouldCheckSelfContainedArch(
-	inputFolders: readonly string[],
+	input: PackInput,
 	selfContained: boolean
 ): boolean {
-	return selfContained && !isBundleSelection(inputFolders);
+	return selfContained && input.kind === 'folders' && !isBundleSelection(input.folders);
 }
 
 /** Progress notification title for a pack run. */
-export function packProgressTitle(inputFolders: readonly string[]): string {
-	return isBundleSelection(inputFolders) ? 'Creating MSIX bundle...' : 'Packaging app...';
+export function packProgressTitle(input: PackInput): string {
+	return isBundleInput(input) ? 'Creating MSIX bundle...' : 'Packaging app...';
+}
+
+/** Roots under which the CLI is allowed to report the produced artifact. */
+export function getPackContainmentRoots(input: PackInput): string[] {
+	const roots = input.kind === 'folders'
+		? [input.workspaceRoot, ...input.folders]
+		: [input.workspaceRoot, path.dirname(input.projectFile)];
+
+	const unique = new Map<string, string>();
+	for (const root of roots) {
+		unique.set(root.toLowerCase(), root);
+	}
+	return [...unique.values()];
 }
