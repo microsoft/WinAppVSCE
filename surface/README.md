@@ -173,21 +173,29 @@ Long/deep source and cache paths are not passed to MakePRI as project paths.
 This avoids the historical deep-worktree MakePRI failure without global installs,
 drive mapping, symlinks, registry changes or touching another checkout.
 
-Both projects restore in staging at the resolved WASDK version before cache
-lookup. Identity includes:
+On a cold lookup both projects restore in staging at the resolved WASDK version.
+Identity includes:
 
 - Full renderer/template source and assets (not bin/obj or developer settings).
 - Shipped engine stamp, exact WASDK + WinUI component, x64/RID and SDK version.
-- Resolved engine/template/target TFM/RID target graphs.
-- Target project content plus package identities and **actual hashes of every
-  file listed by the resolved package closure**, including PRI/resource assets.
+- Resolved engine/template TFM/RID target graphs (the template carries the
+  target's PRI-bearing packages).
+- Package identities and **actual hashes of every file listed by the resolved
+  package closure**, including PRI/resource assets.
 - Cache-format version. Inputs are rechecked before publication; changes fail
   rather than publishing a host under a stale key.
 
-This is deliberately conservative and can over-invalidate. A hit still needs
-restore tooling and package files and can take tens of seconds; there is no
-offline “version-only cache” shortcut. Different target projects are not joined
-solely by version. VS resolves the exact entry via structured provisioner output.
+The target project itself is not part of the key: projects on the same WASDK
+with the same PRI-bearing packages share one host.
+
+This is deliberately conservative and can over-invalidate. A per-project memo
+(`v2/memo`) records the key plus witnesses (engine/template sources, the target
+csproj/assets, restored package files); while they're unchanged a hit skips
+staging and restore, so a built host is served offline. A cold cache with no
+NuGet access fails (or degrades to an explicit `--bundled-host`) with the
+restore error preserved and nothing published. If a target package can't be
+restored into the template, it retries with the template baseline.
+VS resolves the exact entry via structured provisioner output.
 The default VS cache root is `%LOCALAPPDATA%\WinUISurface\host-cache`;
 tests always use explicit new ignored output caches.
 
@@ -242,7 +250,7 @@ outputs and unchanged hashes of the entire pristine host, plus preservation of
 an existing destination and a destination created concurrently. These are
 deterministic command-path regressions, not timer-dependent process tests;
 the real-process suite separately exercises stdin EOF cancellation.
-The **107** focused fixtures also exercise contained/equal destinations, canonical
+The **161** focused fixtures also exercise contained/equal destinations, canonical
 case/trailing separators and harmless similarly-prefixed siblings. Deterministic
 `--build` tests cancel during cache validation, before cached success, during
 publication copying/validation, before/after generation commit and after pointer

@@ -454,6 +454,84 @@ try
         "unreadable memo falls back to full identity");
     Check(BuildOnce().restores == 0, "memo rewritten after full-identity cache hit");
 
+    // Offline / no NuGet feed: restore is the only network step. A warm cache must not need it; a cold cache
+    // fails (or degrades to an explicit bundled host) with the restore error preserved and nothing published.
+    const string offlineError = "error NU1301: Unable to load the service index for source https://api.nuget.org/v3/index.json.";
+    var offlineRestores = 0;
+    string OfflineTool(string exe, IEnumerable<string> arguments)
+    {
+        var toolArgs = arguments.ToArray();
+        if (toolArgs[0] == "restore") { offlineRestores++; throw new InvalidOperationException("dotnet exit 1:\n" + offlineError); }
+        return FakeTool(exe, toolArgs);
+    }
+    (int exit, JsonElement result) RunBuild(string[] args, Func<string, IEnumerable<string>, string> tool)
+    {
+        using var output = new StringWriter();
+        var exit = ProvisionerCommand.Run(args, CancellationToken.None, output, _ => { }, tool);
+        using var json = JsonDocument.Parse(output.ToString());
+        return (exit, json.RootElement.Clone());
+    }
+    string[] WithCache(string cacheDir, bool bundled) => buildArgs
+        .Select(a => a == fixtureCache ? cacheDir : a)
+        .Where((a, i) => bundled || (a != "--bundled-host" && (i == 0 || buildArgs[i - 1] != "--bundled-host")))
+        .ToArray();
+
+    var (warmExit, warm) = RunBuild(buildArgs, OfflineTool);
+    Check(warmExit == 0 && warm.GetProperty("status").GetString() == "cached" && offlineRestores == 0,
+        "offline: a previously built host is served from the memo without restore");
+
+    var coldCache = Path.Combine(buildFixture, "cold-cache");
+    var (coldExit, cold) = RunBuild(WithCache(coldCache, bundled: false), OfflineTool);
+    Check(coldExit == 1 && cold.GetProperty("status").GetString() == "failed" && !cold.GetProperty("success").GetBoolean() &&
+        cold.GetProperty("hostDir").ValueKind == JsonValueKind.Null && cold.GetProperty("error").GetString()!.Contains("NU1301"),
+        "offline cold cache: failed, restore error (NU1301) preserved, no host");
+    var coldV2 = Path.Combine(coldCache, "v2");
+    Check(!Directory.Exists(Path.Combine(coldV2, "entries")) || Directory.GetDirectories(Path.Combine(coldV2, "entries")).Length == 0,
+        "offline cold cache: nothing published");
+    Check(!Directory.Exists(Path.Combine(coldV2, "memo")) || Directory.GetFiles(Path.Combine(coldV2, "memo")).Length == 0,
+        "offline cold cache: no memo remembered");
+
+    var (degExit, deg) = RunBuild(WithCache(coldCache, bundled: true), OfflineTool);
+    Check(degExit == 3 && deg.GetProperty("status").GetString() == "degraded" && !deg.GetProperty("success").GetBoolean() &&
+        deg.GetProperty("usedFallback").GetBoolean() && deg.GetProperty("hostDir").GetString() == source &&
+        deg.GetProperty("error").GetString()!.Contains("NU1301"),
+        "offline cold cache + bundled host: degraded to bundled, restore error preserved");
+
+    // dotnet missing from PATH: Process.Start fails before any restore.
+    var (noSdkExit, noSdk) = RunBuild(WithCache(Path.Combine(buildFixture, "nosdk-cache"), bundled: false),
+        (exe, args) => throw new System.ComponentModel.Win32Exception(2, "The system cannot find the file specified"));
+    Check(noSdkExit == 1 && noSdk.GetProperty("status").GetString() == "failed" &&
+        noSdk.GetProperty("error").GetString()!.Contains("cannot find the file"),
+        "no dotnet on PATH: failed with the launch error");
+
+    // A target package the template can't restore (e.g. a private feed that's offline) retries with the
+    // template baseline and still builds the matched host.
+    var privateTarget = Path.Combine(buildFixture, "private-target", "Private.csproj");
+    Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(privateTarget)!, "obj"));
+    File.WriteAllText(privateTarget, "<Project><ItemGroup><PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"2.2.0\" /></ItemGroup></Project>");
+    File.WriteAllText(Path.Combine(Path.GetDirectoryName(privateTarget)!, "obj", "project.assets.json"), JsonSerializer.Serialize(new {
+        libraries = new Dictionary<string, object> {
+            ["Microsoft.WindowsAppSDK/2.2.0"] = new { type = "package", files = new[] { "x.nuspec" } },
+            ["Private.Controls/1.0.0"] = new { type = "package", files = new[] { "lib/net8.0/Private.Controls.pri" } } } }));
+    var templateRestores = new List<bool>();
+    string PrivateFeedTool(string exe, IEnumerable<string> arguments)
+    {
+        var toolArgs = arguments.ToArray();
+        if (toolArgs[0] == "restore" && Path.GetFileName(toolArgs[1]) == "DesignHost.csproj")
+        {
+            var withTargetPackages = File.Exists(Path.Combine(Path.GetDirectoryName(toolArgs[1])!, TemplatePackages.FileName));
+            templateRestores.Add(withTargetPackages);
+            if (withTargetPackages) throw new InvalidOperationException("dotnet exit 1:\nerror NU1101: Unable to find package Private.Controls.");
+        }
+        return FakeTool(exe, toolArgs);
+    }
+    var privateArgs = WithCache(Path.Combine(buildFixture, "private-cache"), bundled: false)
+        .Select(a => a == fixtureTarget ? privateTarget : a).ToArray();
+    var (privExit, priv) = RunBuild(privateArgs, PrivateFeedTool);
+    Check(privExit == 0 && priv.GetProperty("status").GetString() == "built" &&
+        templateRestores.SequenceEqual(new[] { true, false }),
+        "unrestorable target package: template retries with baseline and the matched host still builds");
+
     // P3 bounded cache GC + in-use-safe directory retirement.
     var gc = Path.Combine(root, "gc");
     var payloadFiles = new[] { "Surface.exe", "Surface.dll", "Surface.pri", "Surface.designtime.pri",

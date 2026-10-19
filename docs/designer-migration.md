@@ -117,8 +117,10 @@ validation. Its old stop/next-boundary statements are superseded by this section
 - Content identities cover source/template/assets, resolved WASDK/component,
   SDK, architecture/RID/TFMs and real resolved package-file closure. Cross-process
   file locks, hash-complete manifests and atomic immutable generation publication
-  live in the provisioner. Legacy user cache is untouched. Cache hits conservatively
-  restore and hash inputs; they are not instantaneous/offline version-only lookups.
+  live in the provisioner. Legacy user cache is untouched. A cold lookup restores and
+  hashes inputs; a per-project memo lets an unchanged repeat hit skip restore (so a
+  built host is served offline). A cold cache with no NuGet access fails or degrades
+  to the explicit bundled host with the restore error preserved.
 - `surface/Shared/HostPayload.cs` is a small linked internal helper in net8/net472,
   not a new public runtime library. Per-process disposable PRI run copies include
   warmed spares; `--user-pri` never launches against a pristine cache through the
