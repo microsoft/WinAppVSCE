@@ -317,6 +317,19 @@ describe('planPackCompletion', () => {
 		);
 	});
 
+	it('surfaces an explicit CLI error in the failure notification', () => {
+		assert.deepEqual(
+			planPackCompletion({
+				code: 1,
+				output: 'Building project...\n❌ The selected project is not packageable.\n'
+			}),
+			{
+				kind: 'error',
+				message: 'Packaging failed: The selected project is not packageable.'
+			}
+		);
+	});
+
 	it('plans an error for unparseable successful output', () => {
 		assert.deepEqual(
 			planPackCompletion({ code: 0, output: '✅ MSIX package creation completed.\n' }),
