@@ -14,7 +14,7 @@ resources:
 
 parameters:
   - name: CliReleaseTag
-    displayName: CLI release tag to bundle in VS Code extension (empty = latest stable)
+    displayName: CLI release tag to bundle in VS Code extension (empty = cli-version.json)
     type: string
     default: ''
   - name: SkipPublish
@@ -93,6 +93,18 @@ extends:
               filePath: $(System.DefaultWorkingDirectory)\scripts\package-vsc.ps1
               arguments: "-Stable -CliBinariesPath '$(System.DefaultWorkingDirectory)/artifacts/public-cli'"
           - task: PowerShell@2
+            displayName: Verify extension run contract against packaged CLI
+            inputs:
+              pwsh: true
+              targetType: inline
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              script: |
+                npx tsx --test src/test/run-cli-contract.test.ts
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "The extension run surface does not match the CLI selected for this release."
+                    exit $LASTEXITCODE
+                }
+          - task: PowerShell@2
             displayName: Run E2E tests
             inputs:
               pwsh: true
@@ -131,6 +143,10 @@ extends:
 
                 $env:VSCODE_PATH = $codePath
                 $env:E2E_USE_INSTALLED_EXTENSION = "1"
+                # Without this the harness launches VS Code against the
+                # agent's default extensions directory, testing a copy of the
+                # extension that was never installed here.
+                $env:E2E_EXTENSIONS_DIR = "$(Agent.TempDirectory)/vscode-extensions"
 
                 # The 'vscode' project drives the installed VSIX in real VS Code and needs no
                 # downloaded browser. The Chromium-only 'webview' project runs in PR CI instead,
@@ -138,6 +154,40 @@ extends:
                 npm run test:e2e -- --project=vscode --grep-invert "adding empty custom capability|adding invalid format custom capability|adding valid custom capability|custom capability appears in the custom capabilities list|invalid inputFolder|cancelling the artifact QuickPick|selecting Browse|cancelling the certificate QuickPick"
                 if ($LASTEXITCODE -ne 0) {
                     Write-Error "E2E tests failed"
+                    exit $LASTEXITCODE
+                }
+          - task: PowerShell@2
+            displayName: Run live build-and-launch E2E test
+            # Deliberately non-blocking. This test builds, deploys, and
+            # launches a real WinUI app, so it depends on the agent's .NET SDK,
+            # Windows App SDK, and template pack. A failure here is a signal
+            # worth reading in the logs, not a reason to block signing and
+            # publishing a VSIX whose own test suite already passed.
+            continueOnError: true
+            inputs:
+              pwsh: true
+              targetType: inline
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              script: |
+                $codePath = "$(Agent.TempDirectory)/vscode/Code.exe"
+                $env:VSCODE_PATH = $codePath
+                $env:E2E_USE_INSTALLED_EXTENSION = "1"
+                # Must match the directory the VSIX was installed into above,
+                # or this exercises the agent's default extensions directory
+                # rather than the package being released.
+                $env:E2E_EXTENSIONS_DIR = "$(Agent.TempDirectory)/vscode-extensions"
+                $codeCli = Join-Path (Split-Path $codePath) "bin/code.cmd"
+                & $codeCli --extensions-dir $env:E2E_EXTENSIONS_DIR --install-extension ms-dotnettools.csharp --force
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "Failed to install the C# debugger required by the live F5 attach test."
+                    exit $LASTEXITCODE
+                }
+                # The spec still self-skips when the SDK or template is
+                # unavailable, so this is safe on images that cannot build.
+                $env:E2E_LIVE_RUN = "1"
+                npm run test:e2e -- src/test/e2e/live-run.spec.ts --reporter=list --output=test-results-live
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "Live build-and-launch E2E test failed; see test-results-live."
                     exit $LASTEXITCODE
                 }
           - task: PowerShell@2
@@ -155,6 +205,9 @@ extends:
                 }
                 if (Test-Path "test-results") {
                     Copy-Item "test-results" "$stage/test-results" -Recurse -Force
+                }
+                if (Test-Path "test-results-live") {
+                    Copy-Item "test-results-live" "$stage/test-results-live" -Recurse -Force
                 }
           - task: 1ES.PublishPipelineArtifact@1
             displayName: Upload Playwright report

@@ -96,6 +96,28 @@ jobs:
     - name: Run E2E tests
       run: npm run test:e2e -- --grep-invert "adding empty custom capability|adding invalid format custom capability|adding valid custom capability|custom capability appears in the custom capabilities list|invalid inputFolder|cancelling the artifact QuickPick|selecting Browse|cancelling the certificate QuickPick"
 
+    - name: Run live build-and-launch E2E test
+      # The live-run spec needs a real CLI, SDK, and template pack, all of
+      # which the steps above install; without E2E_LIVE_RUN it self-skips.
+      #
+      # Deliberately non-blocking, matching .pipelines/release-vsc.yml. It
+      # builds, deploys, and launches a real WinUI app, so it depends on the
+      # runner's SDK state and can take tens of minutes. A failure is a signal
+      # worth reading in the logs, not a reason to block packaging a VSIX
+      # whose own test suite already passed.
+      continue-on-error: true
+      shell: pwsh
+      env:
+        E2E_LIVE_RUN: '1'
+        E2E_EXTENSIONS_DIR: ${{ runner.temp }}\vscode-live-extensions
+      run: |
+        $codeCli = Join-Path (Split-Path $env:VSCODE_PATH) "bin\code.cmd"
+        & $codeCli --extensions-dir $env:E2E_EXTENSIONS_DIR --install-extension ms-dotnettools.csharp --force
+        if ($LASTEXITCODE -ne 0) {
+          throw "Failed to install the C# debugger required by the live F5 attach test."
+        }
+        npm run test:e2e -- src/test/e2e/live-run.spec.ts --reporter=list --output=test-results-live
+
     - name: Upload Playwright report
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -104,6 +126,7 @@ jobs:
         path: |
           playwright-report
           test-results
+          test-results-live
         if-no-files-found: ignore
         retention-days: 7
 

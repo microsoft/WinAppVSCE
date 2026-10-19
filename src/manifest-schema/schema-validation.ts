@@ -10,7 +10,7 @@
 import type { Element } from '@xmldom/xmldom';
 import { SchemaElement, SchemaModel, SchemaAttribute, SchemaChildRef } from './schema-model';
 import { validateSemanticRules } from './semantic-validation';
-import { parseManifestXml } from './xml-parser';
+import { parseXml } from '../xml-read';
 import { resolvePatternConstraints } from './xsd-parser';
 
 const MAX_VALIDATION_DEPTH = 100;
@@ -44,7 +44,7 @@ export function validateManifestText(
     const diagnostics: ManifestDiagnostic[] = [];
     const lines = text.split(/\r?\n/);
 
-    const { doc, errors: parseErrors } = parseManifestXml(text);
+    const { doc, errors: parseErrors } = parseXml(text);
 
     for (const err of parseErrors) {
         const safeLine = clamp(err.line, 0, Math.max(lines.length - 1, 0));

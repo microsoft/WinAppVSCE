@@ -78,9 +78,10 @@ code path and real consumer, then prefer a before/after experiment.
   the extension **no exit code or output**; a design that needs the result must
   use `runWinappCapture` or another captured process path.
 - The CLI is bundled per architecture (`bin/win-x64`, `bin/win-arm64`) from
-  the latest stable `microsoft/WinAppCli` release at build time (overridable via
-  `-Tag` / `CliReleaseTag`); a feature that needs a new CLI verb depends on that
-  verb shipping in a stable CLI release first.
+  the stable `microsoft/WinAppCli` release pinned in `cli-version.json`
+  (overridable via `-Tag` / `CliReleaseTag` for deliberate validation); a
+  feature that needs a new CLI verb depends on that verb shipping in a stable
+  CLI release and the pin being advanced first.
 - Manifest schemas (`schemas/*.xsd`) are synced at build time, not committed.
 - Unit tests run outside VS Code (Node + tsx/mocha), so anything importing
   `vscode` must be mocked; behavior that only exists inside VS Code needs the
