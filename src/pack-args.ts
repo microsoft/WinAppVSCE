@@ -3,8 +3,8 @@
  * `winapp pack` invocation.
  *
  * These are kept free of the VS Code API so they can be unit-tested directly
- * (see `src/test/pack-args.test.ts`); the VS Code-facing wiring (QuickPick,
- * folder dialog, progress) lives in `extension.ts`.
+ * (see `src/test/pack-args.test.ts`); the VS Code-facing picker lives in
+ * `folder-picker.ts` and command orchestration lives in `extension.ts`.
  */
 
 /**
