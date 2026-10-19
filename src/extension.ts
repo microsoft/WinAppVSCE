@@ -50,6 +50,7 @@ import {
 } from './pack-result';
 import {
 	isSparseManifestXml,
+	decodeManifestXml,
 	isIdentityOnlyInput,
 	getPackInputRoot,
 	planSparseInitCommand,
@@ -781,7 +782,7 @@ async function findSparseManifests(
 				continue;
 			}
 			const bytes = await vscode.workspace.fs.readFile(uri);
-			if (isSparseManifestXml(Buffer.from(bytes).toString('utf8'))) {
+			if (isSparseManifestXml(decodeManifestXml(bytes))) {
 				sparsePaths.push(uri.fsPath);
 			}
 		} catch {
@@ -1018,7 +1019,7 @@ async function isSparseManifestFile(manifestPath: string): Promise<boolean> {
 			return false;
 		}
 		const bytes = await vscode.workspace.fs.readFile(uri);
-		return isSparseManifestXml(Buffer.from(bytes).toString('utf8'));
+		return isSparseManifestXml(decodeManifestXml(bytes));
 	} catch {
 		return false;
 	}

@@ -20,6 +20,26 @@ export const SPARSE_OUTPUT_FOLDER = 'sparse';
 /** File name the CLI writes inside the sparse output folder. */
 export const SPARSE_MANIFEST_FILENAME = 'appxmanifest.xml';
 
+/** Decode manifest bytes using the BOM-aware encodings accepted by Windows XML tools. */
+export function decodeManifestXml(bytes: Uint8Array): string {
+	const buffer = Buffer.from(bytes);
+	if (buffer.length >= 2 && buffer[0] === 0xFF && buffer[1] === 0xFE) {
+		return buffer.subarray(2).toString('utf16le');
+	}
+	if (buffer.length >= 2 && buffer[0] === 0xFE && buffer[1] === 0xFF) {
+		const content = Buffer.from(buffer.subarray(2));
+		if (content.length % 2 !== 0) {
+			return '';
+		}
+		content.swap16();
+		return content.toString('utf16le');
+	}
+	if (buffer.length >= 3 && buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
+		return buffer.subarray(3).toString('utf8');
+	}
+	return buffer.toString('utf8');
+}
+
 /**
  * Determine whether manifest XML declares `AllowExternalContent`, i.e. whether
  * it is a sparse identity-only manifest.

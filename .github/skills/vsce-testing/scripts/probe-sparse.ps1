@@ -122,3 +122,17 @@ Write-Host "  exe rewritten=$rewritten"
 
 Write-Host "`n=== RESULT ==="
 Write-Host "initSparse.manifest=$initOk pack.identityMsix=$([bool]$identityMsix) embed.modal=$sawWarning embed.rewroteExe=$rewritten"
+
+$failures = @()
+if (-not $onEditor) { $failures += 'VS Code editor did not become ready' }
+if (-not $initOk) { $failures += 'sparse manifest was not created' }
+if (-not $identityMsix) { $failures += 'identity MSIX was not created' }
+if (-not $sawReveal) { $failures += 'pack notification did not offer Reveal' }
+if (-not $sawSign) { $failures += 'pack notification did not offer Sign' }
+if ($sawInstall) { $failures += 'identity-only pack notification incorrectly offered Install' }
+if (-not $sawWarning) { $failures += 'embed identity warning was not shown' }
+if (-not $rewritten) { $failures += 'target executable was not rewritten' }
+
+if ($failures.Count -gt 0) {
+    throw "Sparse workflow probe failed: $($failures -join '; ')"
+}

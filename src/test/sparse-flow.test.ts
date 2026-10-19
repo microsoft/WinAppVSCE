@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as path from 'path';
 import {
 	isSparseManifestXml,
+	decodeManifestXml,
 	isIdentityOnlyInput,
 	getPackInputRoot,
 	buildSparseInitArgs,
@@ -19,6 +20,37 @@ import {
 	SPARSE_OUTPUT_FOLDER,
 	PackInput
 } from '../sparse-flow';
+
+describe('decodeManifestXml', () => {
+	const xml = '<?xml version="1.0"?><Package />';
+
+	it('decodes UTF-8 with or without a byte-order mark', () => {
+		assert.equal(decodeManifestXml(Buffer.from(xml, 'utf8')), xml);
+		assert.equal(
+			decodeManifestXml(Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), Buffer.from(xml, 'utf8')])),
+			xml
+		);
+	});
+
+	it('decodes UTF-16LE with a byte-order mark', () => {
+		assert.equal(
+			decodeManifestXml(Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(xml, 'utf16le')])),
+			xml
+		);
+	});
+
+	it('decodes UTF-16BE with a byte-order mark', () => {
+		const bigEndian = Buffer.from(Buffer.from(xml, 'utf16le')).swap16();
+		assert.equal(
+			decodeManifestXml(Buffer.concat([Buffer.from([0xFE, 0xFF]), bigEndian])),
+			xml
+		);
+	});
+
+	it('rejects an odd-length UTF-16BE payload', () => {
+		assert.equal(decodeManifestXml(Buffer.from([0xFE, 0xFF, 0x00])), '');
+	});
+});
 
 describe('isSparseManifestXml', () => {
 	it('detects the element with the conventional uap10 prefix', () => {
