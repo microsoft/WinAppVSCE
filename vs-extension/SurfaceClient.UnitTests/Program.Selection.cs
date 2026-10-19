@@ -39,6 +39,36 @@ internal static partial class Program
             DesignerSelection.Set(b);
             Check("Set with no subscribers is safe", ReferenceEquals(DesignerSelection.Current, b) && seen.Count == 4);
 
+            // Per-document: the panel follows the active tab instead of keeping the last file's selection.
+            DesignerSelection.Changed += record;
+            seen.Clear();
+            const string DocA = @"C:\p\A.xaml", DocB = @"C:\p\B.xaml";
+            DesignerSelection.SetActiveDocument(DocA);
+            DesignerSelection.Set(a, DocA);
+            Check("active document's selection is shown", ReferenceEquals(DesignerSelection.Current, a));
+
+            DesignerSelection.SetActiveDocument(DocB);
+            Check("switching to a file with no selection clears the panel", DesignerSelection.Current == null && seen[seen.Count - 1] == null);
+
+            int before = seen.Count;
+            DesignerSelection.Set(b, @"c:\P\a.XAML");
+            Check("a background document's selection doesn't replace the active one", DesignerSelection.Current == null && seen.Count == before);
+
+            DesignerSelection.SetActiveDocument(DocA);
+            Check("switching back restores that file's latest selection (case-insensitive path)", ReferenceEquals(DesignerSelection.Current, b));
+
+            DesignerSelection.Forget(DocA);
+            Check("Forget clears the shown selection", DesignerSelection.Current == null);
+            DesignerSelection.SetActiveDocument(DocB);
+            DesignerSelection.SetActiveDocument(DocA);
+            Check("forgotten selection is not restored", DesignerSelection.Current == null);
+
+            DesignerSelection.Set(a, DocA);
+            DesignerSelection.Set(null, DocA);
+            Check("Set(null, doc) clears the active document's selection", DesignerSelection.Current == null);
+            DesignerSelection.Changed -= record;
+            DesignerSelection.SetActiveDocument(null);
+
             // Fresh process: _autoShown starts false, so the first auto-open fires exactly once.
             DesignerSelection.RequestShowPropertiesWindow = () => shows++;
             DesignerSelection.ShowPropertiesWindowOnce();

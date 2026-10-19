@@ -253,6 +253,16 @@ try
     before = Identity();
     File.WriteAllText(Path.Combine(engine, "obj", "project.assets.json"), graph.Replace("net10.0/win-x64", "net11.0/win-x64"));
     Check(before != Identity(), "resolved TFM identity");
+    before = Identity();
+    var otherProject = Path.Combine(root, "other-project");
+    Directory.CreateDirectory(Path.Combine(otherProject, "obj"));
+    File.WriteAllText(Path.Combine(otherProject, "Other.csproj"), "<Project><!-- a different app --></Project>");
+    File.WriteAllText(Path.Combine(otherProject, "obj", "project.assets.json"), graph.Replace("net10.0/win-x64", "net9.0/win-x64"));
+    var otherWitnesses = new List<BuildStorage.Witness>();
+    Check(before == BuildStorage.Identity(engine, template, Path.Combine(otherProject, "Other.csproj"), "2.2.0", "2.2.1", "x64",
+        "win-x64", "engine", "sdk10", default, otherWitnesses), "different target project shares the cached host");
+    Check(otherWitnesses.Any(w => w.Path.EndsWith("Other.csproj")) && otherWitnesses.Any(w => w.Path.EndsWith("project.assets.json") && w.Path.StartsWith(otherProject)),
+        "target project still witnessed for memo invalidation");
 
     // F3: the template merges the target's PRI-bearing packages (not WASDK, not PRI-less ones).
     var target = Path.Combine(root, "target");

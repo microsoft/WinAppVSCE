@@ -25,12 +25,19 @@ namespace WinUIXamlPreview.UI
 
     /// <summary>
     /// Process-wide handoff between whichever <see cref="PreviewControl"/> owns the surface that raised a
-    /// selection and the shared design-time property panel. Last-writer-wins: the most recent selection (from
-    /// any open preview) drives the panel. Mirrors <see cref="PreviewPackageState"/>'s tiny-static pattern.
+    /// selection and the shared design-time property panel. Selections are remembered per document and the
+    /// panel shows the active document's: switching tabs swaps to that file's selection (or clears) instead of
+    /// leaving the previous file's element on display. Mirrors <see cref="PreviewPackageState"/>'s tiny-static pattern.
     /// </summary>
     internal static class DesignerSelection
     {
-        /// <summary>The most recent selection, or null when nothing is selected.</summary>
+        private static readonly Dictionary<string, SelectionSnapshot> ByDocument =
+            new Dictionary<string, SelectionSnapshot>(StringComparer.OrdinalIgnoreCase);
+
+        private static string? _activeDocument;
+        private static bool _activeKnown;
+
+        /// <summary>The selection shown in the panel, or null when nothing is selected.</summary>
         public static SelectionSnapshot? Current { get; private set; }
 
         /// <summary>Raised (on the UI thread) whenever the selection changes.</summary>
@@ -42,10 +49,64 @@ namespace WinUIXamlPreview.UI
         private static bool _autoShown;
 
         /// <summary>
-        /// Publish a new selection. Last-writer-wins: the most recent selection from any open preview drives
-        /// the panel.
+        /// Publish a new selection. With a <paramref name="documentPath"/> it is remembered for that document
+        /// and shown only while that document is active; without one it is shown unconditionally.
         /// </summary>
-        public static void Set(SelectionSnapshot? snapshot)
+        public static void Set(SelectionSnapshot? snapshot, string? documentPath = null)
+        {
+            if (!string.IsNullOrEmpty(documentPath))
+            {
+                if (snapshot == null)
+                {
+                    ByDocument.Remove(documentPath!);
+                }
+                else
+                {
+                    ByDocument[documentPath!] = snapshot;
+                }
+
+                if (_activeKnown && !string.Equals(_activeDocument, documentPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return; // a background preview (another tab's margin); keep showing the active one
+                }
+            }
+
+            Publish(snapshot);
+        }
+
+        /// <summary>The active editor document changed: show its remembered selection, or clear the panel.</summary>
+        public static void SetActiveDocument(string? documentPath)
+        {
+            _activeKnown = true;
+            _activeDocument = documentPath;
+            SelectionSnapshot? snapshot = null;
+            if (!string.IsNullOrEmpty(documentPath))
+            {
+                ByDocument.TryGetValue(documentPath!, out snapshot);
+            }
+
+            if (!ReferenceEquals(snapshot, Current))
+            {
+                Publish(snapshot);
+            }
+        }
+
+        /// <summary>Forget a document's selection (its preview went away); clears the panel if it was showing.</summary>
+        public static void Forget(string? documentPath)
+        {
+            if (string.IsNullOrEmpty(documentPath) || !ByDocument.TryGetValue(documentPath!, out var snapshot))
+            {
+                return;
+            }
+
+            ByDocument.Remove(documentPath!);
+            if (ReferenceEquals(snapshot, Current))
+            {
+                Publish(null);
+            }
+        }
+
+        private static void Publish(SelectionSnapshot? snapshot)
         {
             Current = snapshot;
             try { Changed?.Invoke(snapshot); }

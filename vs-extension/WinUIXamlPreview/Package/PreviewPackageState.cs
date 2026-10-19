@@ -114,6 +114,31 @@ namespace WinUIXamlPreview
         /// </summary>
         public static Action? RequestShowToolWindow { get; set; }
 
+        /// <summary>Set by the package: closes the separate preview tool window. UI thread only.</summary>
+        public static Action? RequestCloseToolWindow { get; set; }
+
+        /// <summary>
+        /// True while the separate preview tool window is open. "Window" MOVES the preview there: in-editor
+        /// margins collapse to their strip and release their surfaces until the window closes, so the same file
+        /// isn't rendered twice (and doesn't cost a second Surface process per tab).
+        /// </summary>
+        public static bool PoppedOut { get; private set; }
+
+        /// <summary>Raised on the UI thread when <see cref="PoppedOut"/> changes.</summary>
+        public static event Action? PopOutChanged;
+
+        public static void SetPoppedOut(bool poppedOut)
+        {
+            if (PoppedOut == poppedOut)
+            {
+                return;
+            }
+
+            PoppedOut = poppedOut;
+            try { PopOutChanged?.Invoke(); }
+            catch (Exception ex) { Logging.Log.Write("PopOutChanged handler failed: " + ex); }
+        }
+
         /// <summary>Full path of the active editor document, or null. Must be called on the UI thread.</summary>
         public static string? GetActiveXamlPath()
         {

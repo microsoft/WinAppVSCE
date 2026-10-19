@@ -91,6 +91,7 @@ namespace WinUIXamlPreview.UI
         // whether the next spare promotion is the same document (theme swap) and should restore it.
         private volatile ViewMsg? _lastView;
         private bool _carryViewOnPromote;
+        private bool _suspended; // released in favour of the preview tool window (Suspend/Resume)
 
         // ---- version-matched fidelity upgrade (nov-vsix-wire) --------------
         // The instant launch is ALWAYS the bundled 2.2.0 host. When the target project references a different
@@ -131,6 +132,31 @@ namespace WinUIXamlPreview.UI
         }
 
         private static void OnSurfaceIdentityRequired() => SurfaceIdentity.RequestFallback(Log.Write);
+
+        // A DPI change (display scale setting, or VS moved to a monitor with a different scale) leaves the hosted
+        // surface rendering at the scale it started with — blurry or wrongly sized until the file is reopened.
+        // The surface fixes its pixel scale at startup, so relaunch it (fresh process, no stale spare) in place.
+        protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            if (_disposed || Math.Abs(oldDpi.DpiScaleX - newDpi.DpiScaleX) < 0.01)
+            {
+                return;
+            }
+
+            var path = _pinnedPath ?? _currentPath;
+            if (_client == null || string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            Log.Write($"DPI changed {oldDpi.PixelsPerInchX:0} -> {newDpi.PixelsPerInchX:0}; relaunching the surface at the new scale.");
+            RememberMatchedHostForRecovery(path!);
+            _currentPath = null;
+            _carryViewOnPromote = true;
+            _perfNextOpenLabel = "dpi";
+            ShowDocument(path);
+        }
 
         private void OnIdentityFallbackRequested()
         {
@@ -178,6 +204,43 @@ namespace WinUIXamlPreview.UI
             if (IsLoaded)
             {
                 ShowDocument(path);
+            }
+        }
+
+        /// <summary>
+        /// Release the surface process while this preview is hidden in favour of another view (the margin while
+        /// the preview tool window is open). <see cref="Resume"/> restarts it. UI thread only.
+        /// </summary>
+        public void Suspend()
+        {
+            if (_disposed || _suspended)
+            {
+                return;
+            }
+
+            Log.Write("Preview suspended (shown in the preview window); releasing its surface.");
+            _suspended = true;
+            DesignerSelection.Forget(_pinnedPath);
+            DisposeClient();
+            _currentPath = null;
+            _hasFrame = false;
+            FrameImage.Source = null;
+            SetStatus("The preview is open in the WinUI XAML Preview window.", spinner: false);
+        }
+
+        /// <summary>Restart the preview after <see cref="Suspend"/>. UI thread only.</summary>
+        public void Resume()
+        {
+            if (_disposed || !_suspended)
+            {
+                return;
+            }
+
+            Log.Write("Preview resumed.");
+            _suspended = false;
+            if (IsLoaded)
+            {
+                ShowDocument(_pinnedPath ?? PreviewPackageState.GetActiveXamlPath());
             }
         }
 
@@ -255,6 +318,9 @@ namespace WinUIXamlPreview.UI
             ShowDocument(path);
         }
 
+        // The document this preview's designer selections belong to (keys the shared properties panel).
+        private string? SelectionDocument => _pinnedPath ?? _currentPath;
+
         private void OnActiveDocumentSaved(object? sender, string? path)
         {
             if (IsCurrent(path))
@@ -269,6 +335,12 @@ namespace WinUIXamlPreview.UI
         {
             if (_disposed)
             {
+                return;
+            }
+
+            if (_suspended)
+            {
+                Log.Write($"ShowDocument ignored while suspended: path='{path ?? "(null)"}'");
                 return;
             }
 
@@ -287,6 +359,11 @@ namespace WinUIXamlPreview.UI
             if (IsCurrent(path) && _client != null)
             {
                 return;
+            }
+
+            if (_pinnedPath == null && _currentPath != null && !IsCurrent(path))
+            {
+                DesignerSelection.Forget(_currentPath); // the surface (and its selection) moves to another file
             }
 
             _currentPath = path;
@@ -607,7 +684,7 @@ namespace WinUIXamlPreview.UI
             if (!design)
             {
                 _lastSelected = null;
-                DesignerSelection.Set(null);
+                DesignerSelection.Set(null, SelectionDocument);
             }
         }
 
@@ -894,7 +971,7 @@ namespace WinUIXamlPreview.UI
                 Id = sel.Id,
                 ElementType = sel.ElementType ?? "",
                 Name = sel.Name,
-            });
+            }, SelectionDocument);
 
             // Notify the in-editor margin so it can move the caret to this element's source span (#1).
             try { ElementSelected?.Invoke(sel); }
@@ -964,7 +1041,7 @@ namespace WinUIXamlPreview.UI
                 ElementType = sel.ElementType ?? "",
                 Name = sel.Name,
                 Props = rows,
-            });
+            }, SelectionDocument);
         }
 
         private void ReloadCurrent()
@@ -2236,7 +2313,7 @@ namespace WinUIXamlPreview.UI
             // We're intentionally tearing this client down; a Closed event it raises during teardown
             // must not trigger an auto-restart. Cancel any in-flight version-matched upgrade so it can't
             // promote into a document that has moved on (generation bump), release our interest in the shared
-            // build (cancels it if we were the last interested preview), and hide the banner. Invalidate any
+            // build (it keeps running to fill the cache; only an explicit Cancel stops it), and hide the banner. Invalidate any
             // in-flight spare warm (its launch config is about to be stale).
             _session.OnTeardown();
             _hangWatchdog?.Dispose();
@@ -2245,7 +2322,10 @@ namespace WinUIXamlPreview.UI
             _outputWatcher = null;
             if (_upgradeBuild != null)
             {
-                try { _upgradeBuild.Release(cancelIfLast: true); } catch { }
+                // Don't cancel: switching documents (or closing the preview) shouldn't throw away a minutes-long
+                // matched-host build — it finishes in the background and the next open of that project is a
+                // cache hit. Only the banner's Cancel stops it; VS exit kills it via the child-process job.
+                try { _upgradeBuild.Release(cancelIfLast: false); } catch { }
                 _upgradeBuild = null;
             }
             HideFidelityBanner();
@@ -2289,6 +2369,7 @@ namespace WinUIXamlPreview.UI
             }
 
             _disposed = true;
+            DesignerSelection.Forget(SelectionDocument);
             SurfaceIdentity.FallbackRequested -= OnIdentityFallbackRequested;
             SurfaceClient.IdentityRequired -= OnSurfaceIdentityRequired;
             PreviewPackageState.UnregisterSession(this);

@@ -110,6 +110,7 @@ internal sealed class RenderHost
         HideFromSwitchers(_renderWindow);
         SetToolWindowStyle(renderHwnd);
         SetCloaked(renderHwnd, true);
+        SetResizeFill(renderHwnd);
         _dpiScale = GetDpiForWindow(renderHwnd) / 96.0;
         _renderWindow.AppWindow.Move(new PointInt32(-32000, -32000));
         _renderWindow.AppWindow.Resize(new SizeInt32(800, 600));
@@ -1324,6 +1325,34 @@ internal sealed class RenderHost
         ex &= ~WS_EX_APPWINDOW;
         SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(ex));
     }
+
+    /// <summary>
+    /// While the IDE pane is dragged bigger, Windows exposes the new strip a frame or two before WinUI re-renders,
+    /// and the default (null) class brush shows it as black. Fill it with the design canvas grey instead so a fast
+    /// resize blends in. Class-wide (the anchor shares the class) and harmless: XAML paints over it every frame.
+    /// </summary>
+    private static void SetResizeFill(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        try
+        {
+            var brush = CreateSolidBrush(0x003C3C3C); // COLORREF 0x00BBGGRR — the DesignSurface canvas (#3C3C3C)
+            if (brush == IntPtr.Zero) return;
+            SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND, brush);
+            long ex = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+            App.Log($"Render window resize fill set (noRedirectionBitmap={(ex & WS_EX_NOREDIRECTIONBITMAP) != 0}).");
+        }
+        catch (Exception ex) { App.Log($"Render window resize fill skipped: {ex.Message}"); }
+    }
+
+    private const int GCLP_HBRBACKGROUND = -10;
+    private const long WS_EX_NOREDIRECTIONBITMAP = 0x00200000L;
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateSolidBrush(uint colorRef);
+
+    [DllImport("user32.dll", EntryPoint = "SetClassLongPtrW", SetLastError = true)]
+    private static extern IntPtr SetClassLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
     [DllImport("dwmapi.dll", PreserveSig = true)]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);

@@ -62,6 +62,8 @@ namespace WinUIXamlPreview
             if (rdt != null && dte != null)
             {
                 PreviewPackageState.EditorTracker = new EditorTracker(rdt, dte, JoinableTaskFactory);
+                // The properties panel follows the active tab: show that file's selection, not the last one made.
+                PreviewPackageState.EditorTracker.ActiveDocumentChanged += (_, path) => UI.DesignerSelection.SetActiveDocument(path);
                 Log.Write("EditorTracker started (following the active document).");
             }
             else
@@ -85,6 +87,7 @@ namespace WinUIXamlPreview
 
             // Let the in-editor margin's "Window" button reopen the separate tool window on demand.
             PreviewPackageState.RequestShowToolWindow = () => OnShowPreviewCommand(this, EventArgs.Empty);
+            PreviewPackageState.RequestCloseToolWindow = CloseToolWindow;
 
             // Let a selection in the design surface open (once) / the toolbar reopen the properties panel.
             DesignerSelection.RequestShowPropertiesWindow = ShowPropertiesWindow;
@@ -189,6 +192,25 @@ namespace WinUIXamlPreview
                     Log.Write("Show-preview command failed: " + ex);
                 }
             }).FileAndForget("winuixamlpreview/show-command");
+        }
+
+        private void CloseToolWindow()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                if (FindToolWindow(typeof(PreviewToolWindow), 0, create: false)?.Frame is IVsWindowFrame frame)
+                {
+                    frame.CloseFrame((uint)__FRAMECLOSE.FRAMECLOSE_NoSave);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Close preview tool window failed: " + ex);
+            }
+
+            // Belt and braces: the margins come back even if the frame never reported its close.
+            PreviewPackageState.SetPoppedOut(false);
         }
 
         private void ShowPreviewPaneDeferred()

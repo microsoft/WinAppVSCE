@@ -294,7 +294,8 @@ internal sealed class DesignSurface
         ToolTipService.SetToolTip(labelBtn, "Reset to 100%");
         AutomationProperties.SetName(labelBtn, "Zoom level");
         AutomationProperties.SetAutomationId(labelBtn, "DesignZoomLabel");
-        labelBtn.Click += (_, _) => ChangeZoom(1.0, null, keepFit: false);
+        // Reset shows the page from its top-left corner (where layouts start), not wherever the old anchor was.
+        labelBtn.Click += (_, _) => ChangeZoom(1.0, new Point(0, 0), keepFit: false);
 
         var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1, VerticalAlignment = VerticalAlignment.Center };
         panel.Children.Add(outBtn);
@@ -423,14 +424,12 @@ internal sealed class DesignSurface
 
         double cx = centerViewport?.X ?? (_scroll.ViewportWidth / 2.0);
         double cy = centerViewport?.Y ?? (_scroll.ViewportHeight / 2.0);
-        double contentX = (_scroll.HorizontalOffset + cx) / oldZoom;
-        double contentY = (_scroll.VerticalOffset + cy) / oldZoom;
-        double newOffsetX = contentX * factor - cx;
-        double newOffsetY = contentY * factor - cy;
+        double newOffsetX = ZoomMath.AnchoredOffset(_scroll.HorizontalOffset, _scroll.ViewportWidth, _canvasW, oldZoom, factor, cx);
+        double newOffsetY = ZoomMath.AnchoredOffset(_scroll.VerticalOffset, _scroll.ViewportHeight, _canvasH, oldZoom, factor, cy);
 
         _fitMode = keepFit;
         _applyingFit = keepFit;
-        _scroll.ChangeView(Math.Max(0, newOffsetX), Math.Max(0, newOffsetY), (float)factor, true);
+        _scroll.ChangeView(newOffsetX, newOffsetY, (float)factor, true);
         _applyingFit = false;
         UpdateZoomLabel(factor);
     }

@@ -18,6 +18,10 @@ namespace WinUIXamlPreview.Protocol
     /// </summary>
     internal static class ProjectDllLocator
     {
+        // The packaged-build note is the same on every open of the project; say it once per build output.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> WarnedPackaged =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+
         public static string? FindUserDll(string? xamlPath, Action<string>? log = null)
         {
             log ??= _ => { };
@@ -81,9 +85,12 @@ namespace WinUIXamlPreview.Protocol
 
                 if (unpackaged == null)
                 {
-                    log($"Only a packaged (MSIX) build of {assemblyName} was found ({dll}). The preview host " +
-                        "loads it with the WinAppSDK deployment initializer disabled; if that fails it falls back " +
-                        "to a sparse package identity (requires Windows Developer Mode).");
+                    if (WarnedPackaged.TryAdd(dll, 0))
+                    {
+                        log($"Only a packaged (MSIX) build of {assemblyName} was found ({dll}). The preview host " +
+                            "loads it with the WinAppSDK deployment initializer disabled; if that fails it falls back " +
+                            "to a sparse package identity (requires Windows Developer Mode).");
+                    }
                 }
                 else if (dlls.Count > 1)
                 {

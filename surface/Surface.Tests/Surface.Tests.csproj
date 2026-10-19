@@ -29,6 +29,7 @@
     <Compile Include="..\Surface\SampleListFiller.cs" Link="Production\SampleListFiller.cs" />
     <Compile Include="..\Surface\DesignTimeData.cs" Link="Production\DesignTimeData.cs" />
     <Compile Include="..\Surface\XamlErrorText.cs" Link="Production\XamlErrorText.cs" />
+    <Compile Include="..\Surface\ZoomMath.cs" Link="Production\ZoomMath.cs" />
   </ItemGroup>
 
   <ItemGroup>

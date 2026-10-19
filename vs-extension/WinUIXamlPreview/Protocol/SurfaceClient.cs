@@ -304,8 +304,21 @@ namespace WinUIXamlPreview.Protocol
 
         private void OnExited(object? sender, EventArgs e)
         {
-            var code = TryGetExitCode();
-            Fault($"Surface process exited (code={code}).");
+            var code = TryGetExitCode(sender as Process);
+            Fault($"Surface process exited (code={FormatExitCode(code)}).");
+        }
+
+        internal static string FormatExitCode(int? code)
+        {
+            if (code == null)
+            {
+                return "unknown";
+            }
+
+            // NTSTATUS-style crash codes (e.g. 0xC0000409) read better in hex.
+            return code.Value < 0 || code.Value > 0xFFFF
+                ? $"0x{(uint)code.Value:X8}"
+                : code.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
         /// <summary>
@@ -314,9 +327,25 @@ namespace WinUIXamlPreview.Protocol
         /// </summary>
         internal void TerminateUnresponsive(string reason) => Fault(reason);
 
-        private int? TryGetExitCode()
+        private int? TryGetExitCode(Process? exited = null)
         {
-            try { return _proc?.ExitCode; } catch { return null; }
+            // Exited can be raised before the exit code is observable; WaitForExit (already exited, so it
+            // returns at once) makes ExitCode readable. The sender is used because Dispose may have cleared _proc.
+            var proc = exited ?? _proc;
+            try
+            {
+                if (proc == null)
+                {
+                    return null;
+                }
+
+                proc.WaitForExit(1000);
+                return proc.ExitCode;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private void Connect(int port)

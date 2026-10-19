@@ -167,15 +167,15 @@ internal static class BuildStorage
             }
             AddResolvedClosure(Path.Combine(item.Item1, "obj", "project.assets.json"), lines, cancellation, witnesses);
         }
-        // Target graph/TFMs/resource closure affect identity; PRI-bearing target packages are merged into the template.
+        // The host is built only from the staged engine + template (the template already carries the target's
+        // PRI-bearing packages via TemplatePackages, and its restore closure is hashed above), so the target
+        // project is NOT part of the key: every project on the same WASDK shares one cached host. The target's
+        // csproj/assets are still witnessed so the per-project memo re-resolves when they change.
         witnesses?.Add(Witness.Of(project));
-        if (File.Exists(project)) lines.Add("project=" + HostPayload.Hash(project, cancellation));
         var targetDir = File.Exists(project) ? Path.GetDirectoryName(project)! : project;
         var targetAssets = ProjectFiles.FindAssetsFile(targetDir, ProjectFiles.ResolveCsproj(project))
             ?? Path.Combine(targetDir, "obj", "project.assets.json");
         witnesses?.Add(Witness.Of(targetAssets));
-        if (File.Exists(targetAssets)) AddResolvedClosure(targetAssets, lines, cancellation, witnesses);
-        else lines.Add("target-assets=unresolved");
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", lines)))).ToLowerInvariant();
     }
 

@@ -81,6 +81,7 @@ namespace Surface.Tests
             Run("DTD grammar", DtdGrammar);
             Run("DTD source paths + file prep", DtdPaths);
             Run("XAML error text", ErrorText);
+            Run("Zoom anchoring", ZoomAnchoring);
 
             foreach (var f in s_failures)
             {
@@ -91,6 +92,33 @@ namespace Surface.Tests
         }
 
         // ------------------------------------------------------------ harness
+
+        private static void ZoomAnchoring()
+        {
+            // 400px page in an 800px viewport at 50%: board is 200px, centred with 300px padding, offset 0.
+            // Zooming in to 400% about the viewport centre must keep the page centre under it (not jump past it).
+            double off = ZoomMath.AnchoredOffset(0, 800, 400, 0.5, 4.0, 400);
+            Check("zoom in from centred: page centre stays at the anchor", Math.Abs(off - (200 * 4.0 - 400)) < 0.001, off.ToString());
+
+            // Old code computed (0 + 400) / 0.5 * 4 - 400 = 2800 -> past the 800px max extent; must clamp in range.
+            Check("zoom in from centred: offset within the scrollable range", off >= 0 && off <= 400 * 4.0 - 800, off.ToString());
+
+            // Board smaller than the viewport after the zoom: it is centred, offset is 0.
+            Check("zoom out to smaller-than-viewport: offset 0", ZoomMath.AnchoredOffset(500, 800, 400, 4.0, 1.0, 400) == 0);
+
+            // Large board, anchor at a content point: the point stays under the anchor.
+            double o2 = ZoomMath.AnchoredOffset(100, 800, 1000, 1.0, 2.0, 200);
+            Check("large board: content under the anchor is preserved", Math.Abs(((o2 + 200) / 2.0) - 300) < 0.001, o2.ToString());
+
+            // Reset (top-left anchor) from a centred small board: page starts at the left edge.
+            Check("reset at top-left: offset 0", ZoomMath.AnchoredOffset(0, 800, 1000, 0.5, 1.0, 0) == 0);
+
+            // Anchor in the padding pins the nearest page edge rather than producing a negative content point.
+            double o3 = ZoomMath.AnchoredOffset(0, 800, 400, 0.5, 4.0, 0);
+            Check("anchor in padding: clamps to the page edge", o3 == 0, o3.ToString());
+
+            Check("degenerate viewport: 0", ZoomMath.AnchoredOffset(10, 0, 400, 1, 2, 0) == 0);
+        }
 
         private static void ErrorText()
         {
