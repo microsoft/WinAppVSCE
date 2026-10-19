@@ -14,10 +14,42 @@ namespace WinUIXamlPreview.IntegrationTests
 
         private static double Num(JsonNode? n) => n?.GetValue<double>() ?? double.NaN;
 
-        /// <summary>No open documents, default options (optionally pre-collapsed).</summary>
+        private static bool ToolWindowVisible() => Call("toolWindowVisible", new { guid = ToolWindowGuid })!.GetValue<bool>();
+
+        internal static void ShowWindow()
+        {
+            Call("raise", new { guid = CommandSetGuid, id = ShowPreviewCommandId });
+            WaitFor("tool window visible", _ => ToolWindowVisible(), 15_000);
+        }
+
+        internal static void HideWindow()
+        {
+            Call("hideToolWindow", new { guid = ToolWindowGuid });
+            WaitFor("tool window hidden", _ => !ToolWindowVisible(), 10_000);
+        }
+
+        /// <summary>While the preview window is open every editor margin is a strip (no surface of its own).</summary>
+        internal static bool IsStrip(JsonObject? margin) =>
+            margin != null && margin["contentVisible"]?.GetValue<bool>() == false && margin["collapsedBarVisible"]?.GetValue<bool>() == true
+            && margin["preview"]?["clientPid"] == null;
+
+        /// <summary>Opens <paramref name="path"/> with the preview window open: its margin is a strip and the window renders it.</summary>
+        private static JsonObject OpenInWindow(string path, int timeoutMs = 120_000)
+        {
+            Call("open", new { path });
+            WaitFor("margin is a strip: " + path, x => IsStrip(Margin(x, path)), 30_000);
+            return WaitFor("window rendered: " + path, x => ToolSession(x) is JsonObject t
+                                                          && SamePath((string?)t["currentPath"], path) && Rendered(t), timeoutMs);
+        }
+
+        /// <summary>No open documents, preview window closed, default options (optionally pre-collapsed).</summary>
         internal static void Fresh(bool collapsed = false)
         {
             Call("closeAll");
+            if (ToolWindowVisible())
+            {
+                HideWindow();
+            }
             Call("resetOptions");
             if (collapsed)
             {

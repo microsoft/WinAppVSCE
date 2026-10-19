@@ -70,12 +70,10 @@ namespace WinUIXamlPreview.IntegrationTests
             Run("Errors: the tool window recovers when moving from a broken page to a good one", () =>
             {
                 Fresh();
-                Call("raise", new { guid = CommandSetGuid, id = ShowPreviewCommandId });
-                OpenUntilStatus(_fx.BrokenPage, "XAML error");
-                WaitFor("tool window shows the error", x => (string?)ToolSession(x)?["statusText"] == "XAML error", 60_000);
-                OpenRendered(_fx.MainPage);
-                WaitFor("tool window rendered MainPage", x => SamePath((string?)ToolSession(x)?["currentPath"], _fx.MainPage)
-                                                              && Rendered(ToolSession(x)), 60_000);
+                ShowWindow();
+                Call("open", new { path = _fx.BrokenPage });
+                WaitFor("tool window shows the error", x => (string?)ToolSession(x)?["statusText"] == "XAML error", 120_000);
+                OpenInWindow(_fx.MainPage);
             });
         }
     }

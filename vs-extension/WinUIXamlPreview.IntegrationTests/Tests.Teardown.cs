@@ -37,33 +37,31 @@ namespace WinUIXamlPreview.IntegrationTests
             Run("Teardown: closing the tool window ends its surfaces", () =>
             {
                 Fresh();
-                Call("raise", new { guid = CommandSetGuid, id = ShowPreviewCommandId });
-                OpenRendered(_fx.MainPage);
-                var s = WaitFor("tool window rendered", x => ToolSession(x) is JsonObject t
-                                                            && SamePath((string?)t["currentPath"], _fx.MainPage) && Rendered(t), 60_000);
+                ShowWindow();
+                var s = OpenInWindow(_fx.MainPage);
                 var pids = Pids(ToolSession(s)).ToList();
-                Call("hideToolWindow", new { guid = ToolWindowGuid });
-                WaitFor("tool window hidden", _ => !Call("toolWindowVisible", new { guid = ToolWindowGuid })!.GetValue<bool>(), 10_000);
+                HideWindow();
                 AssertAllExited(pids, "after closing the tool window");
-                Assert(SurfaceAlive(Pid(Preview(s, _fx.MainPage)!, "clientPid")), "the margin's surface should be untouched");
+                WaitFor("margin renders again", x => Rendered(Preview(x, _fx.MainPage)), 120_000);
             });
 
-            Run("Teardown: reopening the tool window renders again", () =>
+            Run("Teardown: opening the tool window collapses the margin and ends its surfaces", () =>
             {
                 Fresh();
-                OpenRendered(_fx.MainPage);
-                Call("raise", new { guid = CommandSetGuid, id = ShowPreviewCommandId });
-                WaitFor("tool window rendered again", x => ToolSession(x) is JsonObject t
-                                                          && SamePath((string?)t["currentPath"], _fx.MainPage) && Rendered(t), 60_000);
+                var s = OpenRendered(_fx.MainPage);
+                var margin = Pids(Preview(s, _fx.MainPage)).ToList();
+                ShowWindow();
+                WaitFor("tool window rendered", x => ToolSession(x) is JsonObject t
+                                                    && SamePath((string?)t["currentPath"], _fx.MainPage) && Rendered(t), 60_000);
+                WaitFor("margin is a strip", x => IsStrip(Margin(x, _fx.MainPage)), 15_000);
+                AssertAllExited(margin, "margin after opening the tool window");
             });
 
             Run("Teardown: closing the last XAML tab releases the tool window's surfaces", () =>
             {
                 Fresh();
-                Call("raise", new { guid = CommandSetGuid, id = ShowPreviewCommandId });
-                OpenRendered(_fx.MainPage);
-                var s = WaitFor("tool window rendered", x => ToolSession(x) is JsonObject t
-                                                            && SamePath((string?)t["currentPath"], _fx.MainPage) && Rendered(t), 60_000);
+                ShowWindow();
+                var s = OpenInWindow(_fx.MainPage);
                 var tool = Pids(ToolSession(s)).ToList();
                 Call("close", new { path = _fx.MainPage });
                 s = WaitFor("tool window empty", x => ToolSession(x) is JsonObject t && t["currentPath"] == null, 15_000);
@@ -74,11 +72,9 @@ namespace WinUIXamlPreview.IntegrationTests
             Run("Teardown: closing one of two XAML tabs moves the tool window without a cold start", () =>
             {
                 Fresh();
-                Call("raise", new { guid = CommandSetGuid, id = ShowPreviewCommandId });
-                OpenRendered(_fx.MainPage);
-                OpenRendered(_fx.SecondPage);
-                WaitFor("tool window on SecondPage", x => ToolSession(x) is JsonObject t
-                                                          && SamePath((string?)t["currentPath"], _fx.SecondPage) && Rendered(t), 60_000);
+                ShowWindow();
+                OpenInWindow(_fx.MainPage);
+                OpenInWindow(_fx.SecondPage);
                 var mark = LogMark();
                 Call("close", new { path = _fx.SecondPage });
                 WaitFor("tool window on MainPage", x => ToolSession(x) is JsonObject t
@@ -91,13 +87,11 @@ namespace WinUIXamlPreview.IntegrationTests
             Run("Teardown: closing the solution ends every surface", () =>
             {
                 Fresh();
-                Call("raise", new { guid = CommandSetGuid, id = ShowPreviewCommandId });
-                OpenRendered(_fx.MainPage);
-                var s = WaitFor("tool window rendered", x => ToolSession(x) is JsonObject t && Rendered(t), 60_000);
+                ShowWindow();
+                var s = OpenInWindow(_fx.MainPage);
                 var tool = Pids(ToolSession(s)).ToList();
                 Call("closeSolution");
                 WaitFor("margin disposed", x => Margin(x, _fx.MainPage) == null, 30_000);
-                AssertAllExited(Pids(Preview(s, _fx.MainPage)), "margin after closing the solution");
                 WaitFor("tool window empty", x => ToolSession(x) is JsonObject t && t["currentPath"] == null, 15_000);
                 AssertAllExited(tool, "tool window after closing the solution");
             });

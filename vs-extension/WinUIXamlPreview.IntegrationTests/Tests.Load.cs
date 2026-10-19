@@ -21,12 +21,29 @@ namespace WinUIXamlPreview.IntegrationTests
 
             Run("Load: View > Other Windows command shows the tool window", () =>
             {
-                Call("raise", new { guid = CommandSetGuid, id = ShowPreviewCommandId });
-                WaitFor("tool window visible", _ => Call("toolWindowVisible", new { guid = ToolWindowGuid })!.GetValue<bool>(), 15_000);
+                ShowWindow();
+            });
+
+            Run("Load: with the preview window open, a WinUI page's margin is a strip and the window renders it", () =>
+            {
+                OpenInWindow(_fx.MainPage);
+                var m = Margin(Snap(), _fx.MainPage)!;
+                Eq("The preview is open in the WinUI XAML Preview window.", (string?)m["preview"]!["statusText"], "margin status");
+            });
+
+            Run("Load: closing the preview window brings the margin back and it renders", () =>
+            {
+                HideWindow();
+                var s = WaitFor("MainPage margin rendered", x => Rendered(Preview(x, _fx.MainPage)), 120_000);
+                var m = Margin(s, _fx.MainPage)!;
+                Eq("Right", (string?)m["location"], "margin location");
+                Eq(true, m["contentVisible"]!.GetValue<bool>(), "content visible");
+                Assert(m["preview"]!["clientPid"] != null, "surface pid reported");
             });
 
             Run("Load: opening a WinUI page attaches a margin that renders", () =>
             {
+                Call("closeAll");
                 Call("open", new { path = _fx.MainPage });
                 Eq("XAML", (string?)Call("viewInfo", new { path = _fx.MainPage })?["contentType"], "content type");
                 WaitFor("MainPage margin attached", x => Margin(x, _fx.MainPage) != null, 30_000);

@@ -58,11 +58,9 @@ namespace WinUIXamlPreview.IntegrationTests
             Run("Render: tool window follows the active XAML document", () =>
             {
                 Fresh();
-                Call("raise", new { guid = CommandSetGuid, id = ShowPreviewCommandId });
-                OpenRendered(_fx.MainPage);
-                WaitFor("tool window on MainPage", x => SamePath((string?)ToolSession(x)?["currentPath"], _fx.MainPage));
-                OpenRendered(_fx.SecondPage);
-                WaitFor("tool window on SecondPage", x => SamePath((string?)ToolSession(x)?["currentPath"], _fx.SecondPage));
+                ShowWindow();
+                OpenInWindow(_fx.MainPage);
+                OpenInWindow(_fx.SecondPage);
                 Call("activate", new { path = _fx.MainPage });
                 WaitFor("tool window back on MainPage", x => SamePath((string?)ToolSession(x)?["currentPath"], _fx.MainPage));
             });

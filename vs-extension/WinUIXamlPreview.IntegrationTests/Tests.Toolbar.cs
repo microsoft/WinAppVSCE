@@ -87,10 +87,9 @@ namespace WinUIXamlPreview.IntegrationTests
             {
                 Fresh();
                 OpenRendered(_fx.MainPage);
-                Call("hideToolWindow", new { guid = ToolWindowGuid });
-                WaitFor("tool window hidden", _ => !Call("toolWindowVisible", new { guid = ToolWindowGuid })!.GetValue<bool>(), 10_000);
                 Call("click", new { path = _fx.MainPage, automationId = "PreviewWindowButton" });
-                WaitFor("tool window visible", _ => Call("toolWindowVisible", new { guid = ToolWindowGuid })!.GetValue<bool>(), 15_000);
+                WaitFor("tool window visible", _ => ToolWindowVisible(), 15_000);
+                WaitFor("margin is a strip", x => IsStrip(Margin(x, _fx.MainPage)), 15_000);
             });
 
             Run("Toolbar: Reload re-renders the current buffer", () =>
