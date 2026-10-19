@@ -493,10 +493,11 @@ test.describe('WinApp packaging command input discovery', () => {
             await openSparsePackPicker(page);
             await choosePackRow(page, 'appxmanifest');
 
-            // The certificate question is common to both input kinds.
+            // Sparse pack can generate a signing certificate, but it must not
+            // promise a machine-store install from this non-elevated process.
             await expect(quickPickPlaceholder(page)).toHaveAttribute(
                 'placeholder',
-                /development certificate/,
+                'Generate a development certificate?',
                 { timeout: DISCOVERY_TIMEOUT }
             );
             await chooseQuickPickOption(page, 'No');

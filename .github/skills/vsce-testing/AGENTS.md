@@ -192,8 +192,9 @@ run-target picker, which needs a QuickPick answer rather than a dialog.
 - **`winapp.packSparse` takes a sparse identity manifest**, then raises only the development
   certificate QuickPick. It produces an identity-only `.msix` and deliberately skips the
   self-contained prompt and normal Install completion action. Live probes should select **No**
-  for certificate generation unless certificate creation/installation is the behavior under test;
-  this keeps package validation independent of certificate-store state and UAC.
+  for certificate generation unless certificate creation is the behavior under test; generated
+  certificates are trusted separately through `winapp.installCert`, which handles UAC. This keeps
+  package validation independent of certificate-store state.
 - **Pack is slow + fire-and-forget.** The driver returns `done` in ~11s but `winapp pack` keeps
   building in the terminal; **poll for the MSIX** (up to ~2 min). Output lands at
   `<proj>\.winapp\self-contained\<arch>\extracted\MSIX\Main.msix` (hidden, generically named).

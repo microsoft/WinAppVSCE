@@ -320,7 +320,7 @@ Sparse packaging grants package identity to an app that already builds and ships
 Run these three commands in order:
 
 1. **WinApp: Create Sparse Identity Manifest** — pick the executable you want to grant identity to. WinApp generates an identity-only `appxmanifest.xml` plus placeholder `Assets/` in a `sparse/` folder beside the project. Package name, publisher, and version are inferred from the executable's file version info; open the generated manifest in the **AppxManifest Editor** if you want to change them. If a manifest is already there, WinApp asks before overwriting it.
-2. **WinApp: Create Sparse Identity Package** — select the generated `sparse/appxmanifest.xml`. This produces a `.identity.msix`. Sign it with **WinApp: Sign File** (or let the pack step generate a development certificate).
+2. **WinApp: Create Sparse Identity Package** — select the generated `sparse/appxmanifest.xml`. This produces a `.identity.msix`. Sign it with **WinApp: Sign File** (or let the pack step generate a development certificate). To trust that generated certificate, run **WinApp: Install Certificate**, which handles the required administrator prompt.
 3. **WinApp: Embed Identity into Executable** — point at the same executable. WinApp records the package identity so Windows will associate the running process with the registered package.
 
 > **Important:** Embedding identity into an `.exe` rewrites the binary in place, which invalidates any existing Authenticode signature. WinApp asks for confirmation before doing this. Sign the executable *after* embedding, not before. Choosing a side-by-side `.manifest` target instead leaves the binary untouched.

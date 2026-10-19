@@ -255,7 +255,7 @@ describe('buildSparsePackArgs', () => {
 		);
 	});
 
-	it('can generate and install a development certificate', () => {
+	it('can generate a development certificate without attempting a machine-store install', () => {
 		assert.deepEqual(
 			buildSparsePackArgs({
 				manifestPath: 'C:\\repo\\sparse\\appxmanifest.xml',
@@ -264,8 +264,7 @@ describe('buildSparsePackArgs', () => {
 			[
 				'pack',
 				'C:\\repo\\sparse\\appxmanifest.xml',
-				'--generate-cert',
-				'--install-cert'
+				'--generate-cert'
 			]
 		);
 	});

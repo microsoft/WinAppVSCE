@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { parseManifestXml } from './manifest-schema/xml-parser';
+import { parseXml } from './xml-read';
 
 /**
  * Pure helpers for the sparse packaging workflow:
@@ -61,7 +61,7 @@ export function decodeManifestXml(bytes: Uint8Array): string {
  */
 export function isSparseManifestXml(xml: string): boolean {
 	const normalizedXml = xml.charCodeAt(0) === 0xFEFF ? xml.slice(1) : xml;
-	const { doc, errors } = parseManifestXml(normalizedXml);
+	const { doc, errors } = parseXml(normalizedXml);
 	if (errors.length > 0) {
 		return false;
 	}
@@ -123,7 +123,7 @@ export function buildSparsePackArgs(options: {
 }): string[] {
 	const args = ['pack', options.manifestPath];
 	if (options.generateCertificate) {
-		args.push('--generate-cert', '--install-cert');
+		args.push('--generate-cert');
 	}
 	return args;
 }

@@ -2014,7 +2014,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			const generateCert = await vscode.window.showQuickPick(
 				['Yes', 'No'],
-				{ placeHolder: 'Generate and install a development certificate?' }
+				{ placeHolder: 'Generate a development certificate?' }
 			);
 			if (generateCert === undefined) {
 				return;
