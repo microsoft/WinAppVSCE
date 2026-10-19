@@ -8,13 +8,14 @@ import {
 import { walkDirectoryTree, scanRoots, type ScanCancellationToken } from './directory-walk';
 import { resolveFolderSelection } from './pack-args';
 import { selectFolder } from './winapp-host';
+import type { WorkspaceRoot } from './workspace';
 
 /**
  * Folder selection shared by the run, pack, and project commands.
  *
- * Pack uses the single-root scan with a multi-select picker so multiple build
- * outputs can form a bundle. Run borrows the same scan while also offering
- * projects and solutions.
+ * Pack scans every workspace root with a multi-select picker so build outputs
+ * can form a bundle across roots. Run borrows the same scan while also
+ * offering projects and solutions.
  */
 
 export const FOLDER_PICKER_DETAIL = 'Open a folder picker';
@@ -142,19 +143,25 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 }
 
 /** Pick one or more build outputs; multiple folders produce an MSIX bundle. */
-export async function pickBuildOutputFolders(workspacePath: string): Promise<string[] | undefined> {
-	const outputFolders = await findBuildOutputFolders([workspacePath]);
+export async function pickBuildOutputFolders(
+	workspaceRoots: readonly WorkspaceRoot[]
+): Promise<string[] | undefined> {
+	const outputFolders = await findBuildOutputFolders(workspaceRoots.map(root => root.path));
 	if (!outputFolders) {
 		return undefined;
 	}
 
+	const defaultRoot = workspaceRoots[0];
 	if (outputFolders.length === 0) {
 		vscode.window.showWarningMessage(NO_BUILD_OUTPUT_MESSAGE);
-		return selectFolders('Select build output folder(s)', vscode.Uri.file(workspacePath));
+		return selectFolders(
+			'Select build output folder(s)',
+			defaultRoot ? vscode.Uri.file(defaultRoot.path) : undefined
+		);
 	}
 
 	const picked = await vscode.window.showQuickPick(
-		buildOutputFolderItems(workspacePath, outputFolders),
+		buildMultiRootOutputFolderItems(workspaceRoots, outputFolders),
 		{
 			placeHolder: 'Select build output folder(s) — pick two or more to create an MSIX bundle',
 			canPickMany: true
@@ -166,10 +173,36 @@ export async function pickBuildOutputFolders(workspacePath: string): Promise<str
 		case 'none':
 			return undefined;
 		case 'browse':
-			return selectFolders('Select build output folder(s)', vscode.Uri.file(workspacePath));
+			return selectFolders(
+				'Select build output folder(s)',
+				defaultRoot ? vscode.Uri.file(defaultRoot.path) : undefined
+			);
 		case 'folders':
 			return selection.folders;
 	}
+}
+
+function buildMultiRootOutputFolderItems(
+	workspaceRoots: readonly WorkspaceRoot[],
+	outputFolders: readonly BuildOutputFolder[]
+): BuildOutputQuickPickItem[] {
+	const onlyOutput = outputFolders.length === 1;
+	const rootsByPath = new Map(
+		workspaceRoots.map(root => [path.resolve(root.path).toLowerCase(), root])
+	);
+	const items: BuildOutputQuickPickItem[] = outputFolders.map(output => {
+		const root = rootsByPath.get(path.resolve(output.rootPath).toLowerCase());
+		const relative = path.relative(output.rootPath, output.path) || '.';
+		return {
+			label: workspaceRoots.length > 1 && root ? `${root.name} — ${relative}` : relative,
+			detail: output.path,
+			directory: output.path,
+			picked: onlyOutput
+		};
+	});
+
+	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, alwaysShow: true });
+	return items;
 }
 
 function buildOutputFolderItems(
