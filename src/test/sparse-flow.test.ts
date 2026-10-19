@@ -37,6 +37,10 @@ describe('decodeManifestXml', () => {
 		);
 	});
 
+	it('decodes UTF-16LE without a byte-order mark', () => {
+		assert.equal(decodeManifestXml(Buffer.from(xml, 'utf16le')), xml);
+	});
+
 	it('decodes UTF-16BE with a byte-order mark', () => {
 		const bigEndian = Buffer.from(Buffer.from(xml, 'utf16le')).swap16();
 		assert.equal(
@@ -45,8 +49,17 @@ describe('decodeManifestXml', () => {
 		);
 	});
 
+	it('decodes UTF-16BE without a byte-order mark', () => {
+		const bigEndian = Buffer.from(Buffer.from(xml, 'utf16le')).swap16();
+		assert.equal(decodeManifestXml(bigEndian), xml);
+	});
+
 	it('rejects an odd-length UTF-16BE payload', () => {
 		assert.equal(decodeManifestXml(Buffer.from([0xFE, 0xFF, 0x00])), '');
+	});
+
+	it('rejects an odd-length BOM-less UTF-16BE payload', () => {
+		assert.equal(decodeManifestXml(Buffer.from([0x00, 0x3C, 0x00])), '');
 	});
 });
 

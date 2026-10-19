@@ -14,7 +14,14 @@ import {
 	extractJsonObject,
 	resolveWorkingDirectory
 } from './winapp-cli-utils';
-import { detectProjects, BUILD_OUTPUT_EXCLUDE_GLOB } from './project-detection';
+import {
+	detectProjects,
+	deduplicateBuildOutputFolders,
+	BUILD_OUTPUT_EXCLUDE_GLOB,
+	BUILD_OUTPUT_MAX_RESULTS,
+	BUILD_OUTPUT_SKIP_DIRS
+} from './project-detection';
+import { walkDirectoryTree } from './directory-walk';
 import {
 	buildRunArgs,
 	resolveDebugInput,
@@ -723,8 +730,8 @@ function createCertGenerateFlowAdapter(
 	};
 }
 
-/** Upper bound on manifests read while looking for sparse ones. */
-const MAX_SCANNED_MANIFESTS = 20;
+/** Upper bound on sparse manifests offered before the user can choose Browse. */
+const MAX_DISCOVERED_SPARSE_MANIFESTS = 20;
 
 /** App manifests are small text files; skip hostile or accidental huge inputs. */
 const MAX_SPARSE_MANIFEST_BYTES = 1024 * 1024;
@@ -744,46 +751,47 @@ async function findSparseManifests(
 	workspacePath: string,
 	token: vscode.CancellationToken
 ): Promise<string[] | undefined> {
-	const matches = (await Promise.all(
-		MANIFEST_SELECTOR.map(selector =>
-			vscode.workspace.findFiles(
-				new vscode.RelativePattern(workspacePath, selector.pattern as string),
-				BUILD_OUTPUT_EXCLUDE_GLOB,
-				MAX_SCANNED_MANIFESTS,
-				token
-			)
-		)
-	)).flat();
+	const sparsePaths: string[] = [];
+	await walkDirectoryTree(
+		workspacePath,
+		async (directory, entries) => {
+			for (const entry of entries) {
+				if (token.isCancellationRequested) {
+					return 'stop';
+				}
+				if (!entry.isFile()) {
+					continue;
+				}
+
+				const manifestPath = path.join(directory, entry.name);
+				if (!isManifestPath(manifestPath)) {
+					continue;
+				}
+
+				try {
+					const stat = await fs.promises.stat(manifestPath);
+					if (stat.size > MAX_SPARSE_MANIFEST_BYTES) {
+						continue;
+					}
+					const bytes = await fs.promises.readFile(manifestPath);
+					if (isSparseManifestXml(decodeManifestXml(bytes))) {
+						sparsePaths.push(manifestPath);
+						if (sparsePaths.length >= MAX_DISCOVERED_SPARSE_MANIFESTS) {
+							return 'stop';
+						}
+					}
+				} catch {
+					// Unreadable or deleted between enumeration and read — skip it
+					// rather than failing the whole picker.
+				}
+			}
+			return 'descend';
+		},
+		{ skipDirs: BUILD_OUTPUT_SKIP_DIRS }
+	);
 
 	if (token.isCancellationRequested) {
 		return undefined;
-	}
-
-	const seen = new Set<string>();
-	const sparsePaths: string[] = [];
-	for (const uri of matches) {
-		if (token.isCancellationRequested) {
-			return undefined;
-		}
-		const key = uri.fsPath.toLowerCase();
-		if (seen.has(key)) {
-			continue;
-		}
-		seen.add(key);
-
-		try {
-			const stat = await vscode.workspace.fs.stat(uri);
-			if (stat.size > MAX_SPARSE_MANIFEST_BYTES) {
-				continue;
-			}
-			const bytes = await vscode.workspace.fs.readFile(uri);
-			if (isSparseManifestXml(decodeManifestXml(bytes))) {
-				sparsePaths.push(uri.fsPath);
-			}
-		} catch {
-			// Unreadable or deleted between discovery and read — skip it rather
-			// than failing the whole picker.
-		}
 	}
 
 	return sparsePaths.sort((a, b) => a.localeCompare(b));

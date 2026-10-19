@@ -37,6 +37,17 @@ export function decodeManifestXml(bytes: Uint8Array): string {
 	if (buffer.length >= 3 && buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
 		return buffer.subarray(3).toString('utf8');
 	}
+	if (buffer.length >= 2 && buffer[0] === 0x3C && buffer[1] === 0x00) {
+		return buffer.toString('utf16le');
+	}
+	if (buffer.length >= 2 && buffer[0] === 0x00 && buffer[1] === 0x3C) {
+		if (buffer.length % 2 !== 0) {
+			return '';
+		}
+		const content = Buffer.from(buffer);
+		content.swap16();
+		return content.toString('utf16le');
+	}
 	return buffer.toString('utf8');
 }
 

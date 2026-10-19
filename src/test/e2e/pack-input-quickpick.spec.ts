@@ -328,6 +328,42 @@ test.describe('WinApp packaging command input discovery', () => {
         }
     });
 
+    test('discovers sparse manifests after ordinary results and inside excluded folders', async () => {
+        const ordinaryManifests = Array.from(
+            { length: 25 },
+            (_, index) => path.join('ordinary', `App${index}`, 'AppxManifest.xml')
+        );
+        const tmpDir = createPackWorkspace({
+            includeBuildOutput: false,
+            fullManifests: ordinaryManifests,
+            sparseManifests: [path.join('identity', 'appxmanifest.xml')],
+        });
+        writeFile(
+            tmpDir,
+            path.join('.vscode', 'settings.json'),
+            JSON.stringify({ 'files.exclude': { identity: true } })
+        );
+
+        let app: ElectronApplication | undefined;
+        let userDataDir: string | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            userDataDir = launched.userDataDir;
+
+            const rows = await openSparsePackPicker(launched.page);
+            const rowText = await rows.allTextContents();
+            expect(rowText.some(text =>
+                text.toLowerCase().includes(path.join('identity', 'appxmanifest.xml').toLowerCase())
+            )).toBe(true);
+
+            await launched.page.keyboard.press('Escape');
+            console.log('✅ PASS: sparse discovery ignored raw result limits and files.exclude');
+        } finally {
+            await cleanup(app, tmpDir, userDataDir);
+        }
+    });
+
     test('discovers a sparse manifest saved as UTF-8 with a byte-order mark', async () => {
         const tmpDir = createPackWorkspace({ includeBuildOutput: false });
         writeFile(

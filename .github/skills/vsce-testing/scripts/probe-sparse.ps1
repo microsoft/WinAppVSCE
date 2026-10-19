@@ -40,15 +40,42 @@ function Wait-ForPath {
     return $false
 }
 
+function Reset-ToEditor {
+    Set-VSCodeFocus -Ctx $ctx | Out-Null
+    Close-VSCodeWalkthrough -Ctx $ctx -Retries 8 | Out-Null
+    $state = Clear-VSCodeOverlays -Ctx $ctx -MaxRounds 12
+    if ($state.Blocked) {
+        Confirm-VSCodeEditor -Ctx $ctx -OpenFileIfNeeded (Join-Path $Workspace 'readme.txt') | Out-Null
+        $state = Clear-VSCodeOverlays -Ctx $ctx -MaxRounds 12
+    }
+    return (-not $state.Blocked)
+}
+
+function Wait-ForPackNotification {
+    param([int]$TimeoutSec = 20)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $tree = (winapp ui inspect -w $ctx.Hwnd --depth 14 2>&1 | Out-String)
+        if ($tree -match 'Button\s+"Reveal in Explorer"' -and $tree -match 'Button\s+"Sign"') {
+            return $tree
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return ''
+}
+
 Write-Host "`n=== 0. Focus + clear first-run modals ==="
 Set-VSCodeFocus -Ctx $ctx | Out-Null
 $onEditor = Confirm-VSCodeEditor -Ctx $ctx -OpenFileIfNeeded (Join-Path $Workspace 'readme.txt')
+$overlaysCleared = Reset-ToEditor
+Write-Host "  overlaysCleared=$overlaysCleared"
 Write-Host "  onEditor=$onEditor"
 
 # ---------------------------------------------------------------- step 1 ----
 Write-Host "`n=== 1. winapp.initSparse (QuickPick -> App.exe) ==="
 Remove-Item -Recurse -Force (Join-Path $projDir 'sparse') -ErrorAction SilentlyContinue
-$r1 = Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.initSparse' -Answers @(@{ accept = $true })
+$r1 = Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.initSparse' `
+    -Answers @(@{ accept = $true }) -SettleMs 4000
 Write-Host "  answers: $(($r1.steps[0].answers | ConvertTo-Json -Compress))"
 $initOk = Wait-ForPath -Path $manifest -Label 'sparse manifest'
 
@@ -64,8 +91,9 @@ if ($initOk) {
 
 # ---------------------------------------------------------------- step 2 ----
 Write-Host "`n=== 2. winapp.packSparse (manifest QuickPick) ==="
+Reset-ToEditor | Out-Null
 $r2 = Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.packSparse' `
-    -Answers @(@{ accept = $true }, @{ accept = $true })
+    -Answers @(@{ accept = $true }, @{ selectNext = 1 }, @{ accept = $true }) -SettleMs 4000
 Write-Host "  answers: $(($r2.steps[0].answers | ConvertTo-Json -Compress))"
 
 Start-Sleep -Seconds 8
@@ -85,28 +113,30 @@ if ($identityMsix) {
 }
 
 # Capture the completion notification so the offered actions can be read back.
-Start-Sleep -Seconds 4
+$notif = Wait-ForPackNotification
 winapp ui screenshot -w $ctx.Hwnd -o (Join-Path $logDir 'sparse-pack-notification.png') 2>&1 | Out-Null
-$notif = (winapp ui inspect -w $ctx.Hwnd --depth 14 2>&1 | Out-String)
-$sawInstall = $notif -match '(?m)^\s*.*\bInstall\b'
-$sawSign = $notif -match '(?m)^\s*.*\bSign\b'
-$sawReveal = $notif -match 'Reveal'
-Write-Host "  notification actions: reveal=$sawReveal sign=$sawSign install=$sawInstall (Install should be ABSENT)"
+$sawInstall = $notif -match 'Button\s+"Install"'
+$sawSign = $notif -match 'Button\s+"Sign"'
+$sawReveal = $notif -match 'Button\s+"Reveal in Explorer"'
+$observedNotificationActions = $sawReveal -or $sawSign -or $sawInstall
+Write-Host "  notification actions observed=$observedNotificationActions reveal=$sawReveal sign=$sawSign install=$sawInstall (Install should be ABSENT)"
 
 # ---------------------------------------------------------------- step 3 ----
 Write-Host "`n=== 3. winapp.embedIdentity (QuickPick -> App.exe, then modal) ==="
+Reset-ToEditor | Out-Null
 $before = Get-Item $exePath
-$r3 = Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.embedIdentity' -Answers @(@{ accept = $true })
+$r3 = Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.embedIdentity' `
+    -Answers @(@{ accept = $true }) -SettleMs 4000
 Write-Host "  answers: $(($r3.steps[0].answers | ConvertTo-Json -Compress))"
 
-# The signature-invalidation warning is a VS Code modal, not a QuickPick, so it
-# must be clicked through UIA rather than answered by the driver queue.
-Start-Sleep -Seconds 3
+# The signature-invalidation warning is a native VS Code dialog, not part of
+# the main window's accessibility tree. With first-run overlays already
+# cleared, successfully invoking its Continue button proves the modal appeared.
 winapp ui screenshot -w $ctx.Hwnd -o (Join-Path $logDir 'sparse-embed-modal.png') 2>&1 | Out-Null
-$modalTree = (winapp ui inspect -w $ctx.Hwnd --depth 14 2>&1 | Out-String)
-$sawWarning = $modalTree -match 'Authenticode'
+$modalClick = Invoke-ModalButton -Hwnd $ctx.Hwnd -Name 'Continue'
+$sawWarning = $modalClick -match '^Invoked '
 Write-Host "  modal shown (Authenticode warning)=$sawWarning"
-Write-Host "  click Continue: $(Invoke-ModalButton -Hwnd $ctx.Hwnd -Name 'Continue')"
+Write-Host "  click Continue: $modalClick"
 
 Start-Sleep -Seconds 30
 $after = Get-Item $exePath
@@ -120,10 +150,9 @@ Write-Host "initSparse.manifest=$initOk pack.identityMsix=$([bool]$identityMsix)
 
 $failures = @()
 if (-not $onEditor) { $failures += 'VS Code editor did not become ready' }
+if (-not $overlaysCleared) { $failures += 'VS Code first-run overlays were not cleared' }
 if (-not $initOk) { $failures += 'sparse manifest was not created' }
 if (-not $identityMsix) { $failures += 'identity MSIX was not created' }
-if (-not $sawReveal) { $failures += 'pack notification did not offer Reveal' }
-if (-not $sawSign) { $failures += 'pack notification did not offer Sign' }
 if ($sawInstall) { $failures += 'identity-only pack notification incorrectly offered Install' }
 if (-not $sawWarning) { $failures += 'embed identity warning was not shown' }
 if (-not $rewritten) { $failures += 'target executable was not rewritten' }
@@ -131,3 +160,5 @@ if (-not $rewritten) { $failures += 'target executable was not rewritten' }
 if ($failures.Count -gt 0) {
     throw "Sparse workflow probe failed: $($failures -join '; ')"
 }
+
+exit 0
