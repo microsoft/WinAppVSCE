@@ -187,6 +187,8 @@ interface RunTargetDiscovery {
 	solutionMembers: Map<string, string[]>;
 	/** Projects were found, but every one was a library or a test project. */
 	onlyUnrunnableProjects: boolean;
+	/** Solutions were found, but none contained a project type the bundled CLI can build. */
+	unsupportedSolutionsFound: boolean;
 }
 
 /**
@@ -207,6 +209,7 @@ async function discoverRunTargets(
 
 	let candidates = projects;
 	let solutionMembers = new Map<string, string[]>();
+	let unsupportedSolutionsFound = false;
 
 	if (candidates.length > 0) {
 		// A workspace mid-.slnx-migration ships both files for one solution;
@@ -216,6 +219,10 @@ async function discoverRunTargets(
 		if (token.isCancellationRequested) {
 			return undefined;
 		}
+		unsupportedSolutionsFound = candidates.some(candidate =>
+			candidate.kind === 'solution'
+			&& (solutionMembers.get(candidate.path)?.length ?? 0) === 0
+		);
 		candidates = filterSolutionsWithoutMembers(candidates, solutionMembers);
 		candidates = dedupeSolutionMembers(candidates, solutionMembers);
 		// Drop projects the project file itself identifies as a library or a
@@ -241,7 +248,7 @@ async function discoverRunTargets(
 		candidates = folders;
 	}
 
-	return { candidates, solutionMembers, onlyUnrunnableProjects };
+	return { candidates, solutionMembers, onlyUnrunnableProjects, unsupportedSolutionsFound };
 }
 
 /** Pick what to run; the selection derives the CLI mode. */
@@ -265,13 +272,15 @@ export async function pickRunTarget(
 		return undefined;
 	}
 
-	const { candidates, solutionMembers, onlyUnrunnableProjects } = discovery;
+	const { candidates, solutionMembers, onlyUnrunnableProjects, unsupportedSolutionsFound } = discovery;
 
 	if (candidates.length === 0) {
 		// Nothing runnable at all. Say so before a file dialog appears
 		// unbidden — the user asked to run, not to browse.
 		vscode.window.showWarningMessage(
-			onlyUnrunnableProjects
+			unsupportedSolutionsFound
+				? 'Solutions were found, but none contained .NET projects supported by the bundled WinApp CLI, and no build output folders were found. Build the app first, then browse to its output folder.'
+				: onlyUnrunnableProjects
 				? 'Only library and test projects were found in this workspace, and winapp run needs an executable app project. Browse to the project or folder you want to run.'
 				: 'No projects, solutions, or build output folders were found in this workspace. Browse to the project or folder you want to run.'
 		);

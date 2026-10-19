@@ -337,6 +337,43 @@ test.describe('run target picker', () => {
         }
     });
 
+    test('explains why an unbuilt native-only solution is not offered', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-target-unbuilt-native-e2e-'));
+        fs.writeFileSync(path.join(tmpDir, 'App.sln'), [
+            'Microsoft Visual Studio Solution File, Format Version 12.00',
+            'Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "App", "App\\App.vcxproj", "{11111111-1111-1111-1111-111111111111}"',
+            'EndProject',
+        ].join('\r\n'));
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Run Application With Options');
+
+            const warning = page.locator('.notifications-toasts .notification-list-item');
+            await expect(warning).toContainText('Solutions were found');
+            await expect(warning).toContainText('Build the app first');
+            await expect(warning).not.toContainText('No projects, solutions');
+
+            const browseRows = (await readPickerRows(page, BROWSE_KIND_PLACEHOLDER)).join('\n');
+            expect(browseRows).toContain('Project or solution file');
+            expect(browseRows).toContain('Project directory or build output folder');
+
+            await page.keyboard.press('Escape');
+            await expect(page.locator('.quick-input-widget')).toBeHidden();
+            await expect(page.locator('.monaco-dialog-box')).toHaveCount(0);
+            console.log('✅ PASS: unbuilt native-only solution showed an accurate build-first warning');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
     // CLI v0.7.1 cannot build a .vcxproj through solution mode. Keeping the
     // solution would auto-select an input that always fails and hide the
     // folder-mode path the released extension used for native apps.
