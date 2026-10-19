@@ -251,7 +251,8 @@ production dispatch, building orchestration, hashing, validation, publication an
 JSON/exit mapping execute. Tests assert immutable predecessor hashes, no partial
 entry/index, cancellation without fallback/runnable paths, and retention and
 validation of any already-committed generation.
-It preserves `surface/obj/Foundation-*/results.json` as test evidence and leaves
+It preserves `%TEMP%\wxpf\Foundation-*\results.json` (override the root with
+`-CacheRoot`; kept short so deep checkouts stay under MAX_PATH) as test evidence and leaves
 no owned child processes. It never uses the default user cache. See
 [`docs/designer-migration.md`](../docs/designer-migration.md) for current results.
 

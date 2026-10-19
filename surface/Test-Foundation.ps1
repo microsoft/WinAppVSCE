@@ -1,6 +1,6 @@
 #requires -Version 7.0
 [CmdletBinding()]
-param([switch]$IncludeBuild, [switch]$IncludeRenderer)
+param([switch]$IncludeBuild, [switch]$IncludeRenderer, [string]$CacheRoot = "$env:TEMP\wxpf")
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path "$PSScriptRoot\..").Path
 & dotnet run --project "$PSScriptRoot\SurfaceProvisioner.Tests\SurfaceProvisioner.Tests.csproj"
@@ -19,7 +19,9 @@ $sdk = "$PSScriptRoot\obj\HostSDK"
 $exe = "$sdk\SurfaceProvisioner\SurfaceProvisioner.exe"
 if (-not (Test-Path $exe)) { throw "Build-Vsix.ps1 -NoDeploy first." }
 $stamp = Get-Content "$sdk\engine.stamp" -Raw
-$cache = "$PSScriptRoot\obj\Foundation-$([Guid]::NewGuid().ToString('N').Substring(0,12))"
+# Short root: cache entries nest two hashes deep, and the net472 renderer harness can't open paths over MAX_PATH
+# when the cache sits under a deep checkout/worktree.
+$cache = "$CacheRoot\Foundation-$([Guid]::NewGuid().ToString('N').Substring(0,12))"
 $arguments = @("--build", "--project", "$PSScriptRoot\TestUserApp\TestUserApp.csproj",
     "--surface-project", "$sdk\surface\Surface\Surface.csproj",
     "--designhostpri-project", "$sdk\DesignHost\DesignHost.csproj", "--cache", $cache, "--engine-stamp", $stamp)

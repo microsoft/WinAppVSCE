@@ -149,7 +149,8 @@ provisioner fixtures, strict `tsc`, linked-production C#/TS compatibility,
 two simultaneous real CLI requests against a new ignored cache, cancellation,
 failed/degraded result checks, shared run-copy and actual-user-PRI smoke.
 It records machine-readable test outcomes in
-`surface/obj/Foundation-<unique>/results.json`; these are ignored, not packaged.
+`%TEMP%\wxpf\Foundation-<unique>\results.json` (`-CacheRoot` overrides the root, which is
+kept short so deep checkouts stay under MAX_PATH); these are outside the repo, not packaged.
 All launched Surface/provisioner processes are owned and disposed by the harness.
 
 Independent no-native-tool compatibility commands:
