@@ -308,6 +308,12 @@ namespace WinUIXamlPreview.Protocol
             Fault($"Surface process exited (code={code}).");
         }
 
+        /// <summary>
+        /// Ends a surface whose window stopped responding (see <see cref="SurfaceHangWatchdog"/>): kills the process and
+        /// raises <see cref="Closed"/> like any other death, so the normal recovery restarts the preview. Thread-safe.
+        /// </summary>
+        internal void TerminateUnresponsive(string reason) => Fault(reason);
+
         private int? TryGetExitCode()
         {
             try { return _proc?.ExitCode; } catch { return null; }

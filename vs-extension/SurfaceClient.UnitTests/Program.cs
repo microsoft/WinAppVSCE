@@ -4,7 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using WinUIXamlPreview.Protocol;
 
 namespace WinUIXamlPreview.UnitTests;
@@ -42,6 +44,8 @@ internal static partial class Program
             Run("CommandLine", CommandLineTests);
             Run("Session", SessionTests);
             Run("EditorSync", EditorSyncTests);
+            Run("ProjectOutputWatcher", ProjectOutputWatcherTests);
+            Run("SurfaceHangWatchdog", SurfaceHangWatchdogTests);
         }
         finally
         {
@@ -90,6 +94,196 @@ internal static partial class Program
         Check(name, EqualityComparer<T>.Default.Equals(expected, actual), $"expected '{expected}', got '{actual}'");
 
     // ---------------------------------------------------------------- fixtures
+
+    private static void SurfaceHangWatchdogTests()
+    {
+        var tick = TimeSpan.FromMilliseconds(50);
+        var hungAfter = TimeSpan.FromMilliseconds(400);
+
+        // Brief unresponsiveness below the threshold never fires; the clock resets on a good probe.
+        var fired = 0;
+        var n = 0;
+        using (new SurfaceHangWatchdog(() => Interlocked.Increment(ref n) % 4 == 0, _ => Interlocked.Increment(ref fired), tick, hungAfter))
+        {
+            Thread.Sleep(1500);
+        }
+        Eq("intermittent stalls under the threshold: not fired", 0, fired);
+
+        // Continuously unresponsive fires exactly once, after the threshold.
+        var hung = new System.Collections.Concurrent.ConcurrentQueue<TimeSpan>();
+        using (new SurfaceHangWatchdog(() => false, hung.Enqueue, tick, hungAfter))
+        {
+            WaitFor(() => hung.Count > 0, 5000);
+            Thread.Sleep(500);
+        }
+        Eq("hung: fired once", 1, hung.Count);
+        Check("hung: after the threshold", hung.TryPeek(out var after) && after >= hungAfter, $"{after}");
+
+        // Window gone: stop watching, never fire.
+        fired = 0;
+        var probes = 0;
+        using (new SurfaceHangWatchdog(() => { Interlocked.Increment(ref probes); return null; }, _ => Interlocked.Increment(ref fired), tick, hungAfter))
+        {
+            Thread.Sleep(600);
+        }
+        Check("window gone: stops probing", probes == 1, $"probes={probes}");
+        Eq("window gone: not fired", 0, fired);
+
+        // Disposed: no callback afterwards.
+        fired = 0;
+        new SurfaceHangWatchdog(() => false, _ => Interlocked.Increment(ref fired), tick, hungAfter).Dispose();
+        Thread.Sleep(700);
+        Eq("disposed: not fired", 0, fired);
+
+        // Real window: responsive while its thread pumps, reported hung once the thread stops pumping.
+        using var win = new PumpedWindow();
+        hung = new System.Collections.Concurrent.ConcurrentQueue<TimeSpan>();
+        using (SurfaceHangWatchdog.Start(win.Hwnd, hung.Enqueue, TimeSpan.FromMilliseconds(200), TimeSpan.FromSeconds(1)))
+        {
+            Thread.Sleep(2000);
+            Eq("real window, pumping: not fired", 0, hung.Count);
+            win.Stall = true;
+            Check("real window, stalled: fired", WaitFor(() => hung.Count > 0, 8000));
+        }
+    }
+
+    /// <summary>A real top-level window on its own thread that pumps messages until <see cref="Stall"/> is set.</summary>
+    private sealed class PumpedWindow : IDisposable
+    {
+        private readonly Thread _thread;
+        private readonly ManualResetEventSlim _created = new();
+        private volatile bool _quit;
+        public volatile bool Stall;
+        public IntPtr Hwnd { get; private set; }
+
+        public PumpedWindow()
+        {
+            _thread = new Thread(() =>
+            {
+                Hwnd = CreateWindowEx(0, "STATIC", "hang-watchdog-test", 0, 0, 0, 10, 10, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+                _created.Set();
+                while (!_quit)
+                {
+                    if (Stall)
+                    {
+                        Thread.Sleep(50); // not pumping: the window is unresponsive
+                        continue;
+                    }
+                    while (PeekMessage(out var msg, IntPtr.Zero, 0, 0, 1))
+                    {
+                        TranslateMessage(ref msg);
+                        DispatchMessage(ref msg);
+                    }
+                    Thread.Sleep(10);
+                }
+                DestroyWindow(Hwnd);
+            }) { IsBackground = true };
+            _thread.SetApartmentState(ApartmentState.STA);
+            _thread.Start();
+            _created.Wait(5000);
+        }
+
+        public void Dispose()
+        {
+            Stall = false;
+            _quit = true;
+            _thread.Join(5000);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public int x, y; }
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr CreateWindowEx(int exStyle, string cls, string name, int style, int x, int y, int w, int h,
+            IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+        [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr hwnd);
+        [DllImport("user32.dll")] private static extern bool PeekMessage(out MSG msg, IntPtr hwnd, uint min, uint max, uint remove);
+        [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG msg);
+        [DllImport("user32.dll")] private static extern IntPtr DispatchMessage(ref MSG msg);
+    }
+
+    private static void ProjectOutputWatcherTests()
+    {
+        var quiet = TimeSpan.FromMilliseconds(300);
+
+        Check("no project: no watcher", ProjectOutputWatcher.Create(null, null, quiet, _ => { }, _ => { }) == null);
+
+        // A DLL rebuild settles once (a burst of writes is one event) and reports assetsChanged=false.
+        var d = NewDir("pow");
+        var csproj = Csproj(d, "App");
+        var assets = Write(Path.Combine(d, "obj", "project.assets.json"), "{\"v\":1}");
+        var dll = Write(Path.Combine(d, "bin", "x64", "Debug", "App.dll"), "a");
+        var events = new System.Collections.Concurrent.ConcurrentQueue<bool>();
+        using (var w = ProjectOutputWatcher.Create(csproj, dll, quiet, events.Enqueue, _ => { })!)
+        {
+            Check("watcher created", w != null);
+            Check("unchanged at start", !w!.HasChanged);
+            for (var i = 0; i < 4; i++) { File.WriteAllText(dll, new string('b', i + 2)); System.Threading.Thread.Sleep(50); }
+            WaitFor(() => events.Count > 0, 5000);
+            System.Threading.Thread.Sleep(800);
+            Eq("dll burst: one settle", 1, events.Count);
+            Check("dll burst: assets unchanged", events.TryPeek(out var a) && !a);
+
+            // A restore that changes the graph reports assetsChanged=true.
+            while (events.TryDequeue(out _)) { }
+            File.WriteAllText(assets, "{\"v\":22}");
+            WaitFor(() => events.Count > 0, 5000);
+            Check("assets change: assetsChanged", events.TryPeek(out var b) && b);
+
+            // Rewriting identical bytes with the same timestamp isn't a change.
+            while (events.TryDequeue(out _)) { }
+            var stamp = File.GetLastWriteTimeUtc(assets);
+            File.WriteAllText(assets, "{\"v\":22}");
+            File.SetLastWriteTimeUtc(assets, stamp);
+            System.Threading.Thread.Sleep(1000);
+            Eq("touch without change: no settle", 0, events.Count);
+        }
+
+        // HasChanged catches a change even when no event is delivered (e.g. after Dispose of the FSW).
+        var d2 = NewDir("pow2");
+        var csproj2 = Csproj(d2, "App");
+        var dll2 = Write(Path.Combine(d2, "bin", "App.dll"), "a");
+        using (var w2 = ProjectOutputWatcher.Create(csproj2, dll2, TimeSpan.FromMinutes(5), _ => { }, _ => { })!)
+        {
+            File.WriteAllText(dll2, "longer");
+            Check("HasChanged after DLL rewrite", w2.HasChanged);
+        }
+
+        // Not built yet (no obj/bin): the first build that creates them is still seen.
+        var d3 = NewDir("pow3");
+        var csproj3 = Csproj(d3, "Fresh");
+        var fresh = new System.Collections.Concurrent.ConcurrentQueue<bool>();
+        using (ProjectOutputWatcher.Create(csproj3, null, quiet, fresh.Enqueue, _ => { }))
+        {
+            Write(Path.Combine(d3, "obj", "project.assets.json"), "{}");
+            WaitFor(() => fresh.Count > 0, 5000);
+            Check("first restore seen without obj\\", fresh.TryPeek(out var c) && c);
+        }
+
+        // A clean that deletes obj\ doesn't kill the watcher: the next restore is still seen.
+        var d4 = NewDir("pow4");
+        var csproj4 = Csproj(d4, "App");
+        var obj4 = Path.Combine(d4, "obj");
+        Write(Path.Combine(obj4, "project.assets.json"), "{}");
+        var cleaned = new System.Collections.Concurrent.ConcurrentQueue<bool>();
+        using (ProjectOutputWatcher.Create(csproj4, null, quiet, cleaned.Enqueue, _ => { }))
+        {
+            Directory.Delete(obj4, recursive: true);
+            WaitFor(() => cleaned.Count > 0, 5000);
+            while (cleaned.TryDequeue(out _)) { }
+            System.Threading.Thread.Sleep(300);
+            Write(Path.Combine(obj4, "project.assets.json"), "{\"v\":2}");
+            WaitFor(() => cleaned.Count > 0, 5000);
+            Check("restore after obj\\ deleted is seen", cleaned.TryPeek(out var e) && e);
+        }
+    }
+
+    private static bool WaitFor(Func<bool> cond, int ms)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (!cond() && sw.ElapsedMilliseconds < ms) System.Threading.Thread.Sleep(25);
+        return cond();
+    }
 
     private static string NewDir(string name)
     {

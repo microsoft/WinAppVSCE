@@ -81,6 +81,9 @@ namespace WinUIXamlPreview.UI
         // the background upgrade (2–400+ s of cache validation / build). Consumed once by StartPreviewAsync for
         // the same document; a failed matched relaunch falls back to the normal bundled + upgrade path.
         private (string Path, string Exe, string Pri)? _recoverMatchedHost;
+        // B8: relaunches the preview when the project is rebuilt (new user DLL) or restored (new WinAppSDK version).
+        private ProjectOutputWatcher? _outputWatcher;
+        private SurfaceHangWatchdog? _hangWatchdog;
         // P6: a theme change warms a spare in the new theme (same exe/pri) while the old frame stays on screen,
         // then promotes it (see PreviewSessionState.ThemeSwapPendingFor).
         private System.Diagnostics.Stopwatch? _themeSwapSw;
@@ -320,6 +323,7 @@ namespace WinUIXamlPreview.UI
                 // preview) and whether/how to upgrade to a version-matched host in the background.
                 plan = MatchedHostResolver.Resolve(path, Log.Write);
                 surfaceExe = plan.ExePath;
+                ArmOutputWatcher(path, plan.TargetProject, userDll);
             }
             catch (Exception ex)
             {
@@ -463,6 +467,53 @@ namespace WinUIXamlPreview.UI
             }
         }
 
+        private void ArmOutputWatcher(string path, string? csproj, string? userDll)
+        {
+            _outputWatcher?.Dispose();
+            _outputWatcher = ProjectOutputWatcher.Create(csproj, userDll, TimeSpan.FromSeconds(2), assetsChanged =>
+            {
+                _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    if (!_disposed && _client != null && IsCurrent(path))
+                    {
+                        RestartForProjectChange(path, assetsChanged);
+                    }
+                });
+            }, Log.Write);
+        }
+
+        /// <summary>
+        /// The project was rebuilt or restored: relaunch so the surface loads the new user DLL, and re-run discovery
+        /// when the restore graph changed (it may now target another WinAppSDK version). A DLL-only rebuild stays on
+        /// the active version-matched host instead of dropping back to bundled. UI thread only.
+        /// </summary>
+        private void RestartForProjectChange(string path, bool assetsChanged)
+        {
+            Log.Write(assetsChanged
+                ? "Project restore changed; restarting the preview and re-checking the WinAppSDK version."
+                : "Project output rebuilt; restarting the preview to load it.");
+            if (!assetsChanged)
+            {
+                RememberMatchedHostForRecovery(path);
+            }
+
+            // Keep an in-flight matched-host build alive across the relaunch (the restarted preview re-acquires
+            // and joins it) instead of cancelling it and paying for the build again.
+            var inflight = assetsChanged ? null : _upgradeBuild;
+            if (inflight != null)
+            {
+                _upgradeBuild = null;
+                _ = System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(60)).ContinueWith(
+                    _ => { try { inflight.Release(cancelIfLast: true); } catch { } },
+                    System.Threading.Tasks.TaskScheduler.Default);
+            }
+
+            _currentPath = null;
+            _perfNextOpenLabel = "rebuild";
+            ShowDocument(path);
+        }
+
         private void ShowProtocolMismatch(string detail)
         {
             _hasFrame = false;
@@ -495,7 +546,11 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
-            if (_client != null && IsCurrent(path))
+            if (_client != null && IsCurrent(path) && _outputWatcher?.HasChanged == true)
+            {
+                RestartForProjectChange(path!, assetsChanged: true);
+            }
+            else if (_client != null && IsCurrent(path))
             {
                 ReloadCurrent();
             }
@@ -1682,6 +1737,7 @@ namespace WinUIXamlPreview.UI
                         NativeHostHolder.Visibility = Visibility.Visible;
                         NativeHostHolder.Child = host;
                         _nativeHost = host;
+                        ArmHangWatchdog(source, hwnd);
                         if (old != null)
                         {
                             try { old.Dispose(); } catch { }
@@ -1713,6 +1769,22 @@ namespace WinUIXamlPreview.UI
         private void OnNativeExited()
         {
             Log.Write("Surface acknowledged ExitNative (window re-cloaked off-screen).");
+        }
+
+        // B8: a hung Surface freezes VS input through the shared input queue of the reparented window. Kill it from
+        // the watchdog's thread (not via the Dispatcher: VS input is what's frozen); the client's Closed path then
+        // runs the usual crash recovery.
+        private void ArmHangWatchdog(SurfaceClient source, IntPtr hwnd)
+        {
+            _hangWatchdog?.Dispose();
+            var pid = source.ProcessId;
+            _hangWatchdog = SurfaceHangWatchdog.Start(hwnd, hungFor =>
+            {
+                var reason = $"Surface window stopped responding for {hungFor.TotalSeconds:0} s (pid={pid}); " +
+                             "restarting the preview so Visual Studio stays responsive.";
+                Log.Write(reason);
+                source.TerminateUnresponsive(reason);
+            });
         }
 
         private void OnView(SurfaceClient source, ViewMsg view)
@@ -2136,6 +2208,8 @@ namespace WinUIXamlPreview.UI
 
         private void TeardownNativeHost(bool surfaceDead = false)
         {
+            _hangWatchdog?.Dispose();
+            _hangWatchdog = null;
             var host = _nativeHost;
             _nativeHost = null;
             _hasNative = false;
@@ -2165,6 +2239,10 @@ namespace WinUIXamlPreview.UI
             // build (cancels it if we were the last interested preview), and hide the banner. Invalidate any
             // in-flight spare warm (its launch config is about to be stale).
             _session.OnTeardown();
+            _hangWatchdog?.Dispose();
+            _hangWatchdog = null;
+            _outputWatcher?.Dispose();
+            _outputWatcher = null;
             if (_upgradeBuild != null)
             {
                 try { _upgradeBuild.Release(cancelIfLast: true); } catch { }

@@ -16,7 +16,7 @@ namespace WinUISurface.Shared;
 /// </summary>
 internal static class ProjectFiles
 {
-    private const string AssetsFileName = "project.assets.json";
+    public const string AssetsFileName = "project.assets.json";
     private static readonly Regex PropertyRef = new Regex(@"\$\(([A-Za-z_][A-Za-z0-9_.-]*)\)");
     private static readonly Regex ConcreteVersion = new Regex(@"^\d+\.\d+\.\d+([.-][0-9A-Za-z.-]+)?$");
 

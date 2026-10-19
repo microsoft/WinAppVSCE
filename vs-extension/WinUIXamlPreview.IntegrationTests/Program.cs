@@ -43,6 +43,8 @@ namespace WinUIXamlPreview.IntegrationTests
             ("Toolbar", Group_Toolbar),
             ("Errors", Group_Errors),
             ("Crash", Group_Crash),
+            ("Rebuild", Group_Rebuild),
+            ("Hang", Group_Hang),
             ("Teardown", Group_Teardown),
         };
 
