@@ -70,39 +70,6 @@ export function isSparseManifestXml(xml: string): boolean {
 }
 
 /**
- * An input accepted by `winapp pack`.
- *
- * The CLI takes either one or more build-output folders (a full package
- * layout) or a single sparse `appxmanifest.xml` file (identity-only). The two
- * behave differently enough — identity-only packages have no binaries, no
- * architecture, and no runtime to bundle — that the extension must keep them
- * apart rather than passing an untyped path around.
- */
-export type PackInput =
-	| { kind: 'folder'; path: string }
-	| { kind: 'sparseManifest'; path: string };
-
-/**
- * Whether a pack input produces an identity-only package, and therefore
- * whether the self-contained / architecture prompts apply.
- */
-export function isIdentityOnlyInput(input: PackInput): boolean {
-	return input.kind === 'sparseManifest';
-}
-
-/**
- * The directory used as the containment root when validating the artifact
- * produced from `input`.
- *
- * `handlePackCompletion` checks the produced artifact lives under the
- * workspace or the input; for a manifest file the meaningful root is its
- * containing folder.
- */
-export function getPackInputRoot(input: PackInput): string {
-	return input.kind === 'folder' ? input.path : path.dirname(input.path);
-}
-
-/**
  * Build the argument list for a sparse `winapp init` run.
  *
  * Deliberately omits `--name` and `--publisher`: the CLI infers the package
@@ -135,6 +102,18 @@ export function buildSparseInitArgs(options: {
 		args.push('--force');
 	}
 
+	return args;
+}
+
+/** Build the argument list for an identity-only `winapp pack` run. */
+export function buildSparsePackArgs(options: {
+	manifestPath: string;
+	generateCertificate?: boolean;
+}): string[] {
+	const args = ['pack', options.manifestPath];
+	if (options.generateCertificate) {
+		args.push('--generate-cert', '--install-cert');
+	}
 	return args;
 }
 

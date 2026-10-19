@@ -1,5 +1,5 @@
 # Live-drive probe for the sparse packaging workflow:
-#   winapp.initSparse -> winapp.pack (sparse manifest) -> winapp.embedIdentity
+#   winapp.initSparse -> winapp.packSparse -> winapp.embedIdentity
 #
 # The test executable lives INSIDE the workspace, in a realistic project
 # layout, so every command resolves its target through the QuickPick path that
@@ -63,14 +63,9 @@ if ($initOk) {
 }
 
 # ---------------------------------------------------------------- step 2 ----
-Write-Host "`n=== 2. winapp.pack (QuickPick row 1 = sparse manifest) ==="
-# Row 0 is the win-x64 build-output folder, row 1 is the sparse manifest, so
-# one selectNext is needed before accepting. Then exactly ONE more accept for
-# the certificate prompt. If the identity-only gating regressed, a third
-# (self-contained) QuickPick would still be open afterwards and the pack would
-# never run -- caught by the missing-.msix check below.
-$r2 = Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.pack' `
-    -Answers @(@{ selectNext = 1 }, @{ accept = $true }, @{ accept = $true })
+Write-Host "`n=== 2. winapp.packSparse (manifest QuickPick) ==="
+$r2 = Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.packSparse' `
+    -Answers @(@{ accept = $true }, @{ accept = $true })
 Write-Host "  answers: $(($r2.steps[0].answers | ConvertTo-Json -Compress))"
 
 Start-Sleep -Seconds 8

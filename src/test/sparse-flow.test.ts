@@ -4,9 +4,8 @@ import * as path from 'path';
 import {
 	isSparseManifestXml,
 	decodeManifestXml,
-	isIdentityOnlyInput,
-	getPackInputRoot,
 	buildSparseInitArgs,
+	buildSparsePackArgs,
 	buildEmbedIdentityArgs,
 	planSparseInitCommand,
 	planEmbedIdentityCommand,
@@ -17,8 +16,7 @@ import {
 	findProjectRootIn,
 	findOwningWorkspacePath,
 	chooseSparseManifest,
-	SPARSE_OUTPUT_FOLDER,
-	PackInput
+	SPARSE_OUTPUT_FOLDER
 } from '../sparse-flow';
 
 describe('decodeManifestXml', () => {
@@ -236,6 +234,30 @@ describe('buildSparseInitArgs', () => {
 	});
 });
 
+describe('buildSparsePackArgs', () => {
+	it('packages the selected manifest as a single input', () => {
+		assert.deepEqual(
+			buildSparsePackArgs({ manifestPath: 'C:\\repo\\sparse\\appxmanifest.xml' }),
+			['pack', 'C:\\repo\\sparse\\appxmanifest.xml']
+		);
+	});
+
+	it('can generate and install a development certificate', () => {
+		assert.deepEqual(
+			buildSparsePackArgs({
+				manifestPath: 'C:\\repo\\sparse\\appxmanifest.xml',
+				generateCertificate: true
+			}),
+			[
+				'pack',
+				'C:\\repo\\sparse\\appxmanifest.xml',
+				'--generate-cert',
+				'--install-cert'
+			]
+		);
+	});
+});
+
 describe('buildEmbedIdentityArgs', () => {
 	it('omits --manifest when none is supplied, leaving the CLI to search', () => {
 		assert.deepEqual(
@@ -330,24 +352,6 @@ describe('embedRewritesBinary', () => {
 
 	it('does not match a name that merely contains .exe', () => {
 		assert.equal(embedRewritesBinary('C:\\app\\MyApp.exe.manifest'), false);
-	});
-});
-
-describe('pack input classification', () => {
-	const folder: PackInput = { kind: 'folder', path: 'C:\\repo\\bin\\Release' };
-	const manifest: PackInput = { kind: 'sparseManifest', path: 'C:\\repo\\sparse\\appxmanifest.xml' };
-
-	it('treats only a sparse manifest as identity-only', () => {
-		assert.equal(isIdentityOnlyInput(folder), false);
-		assert.equal(isIdentityOnlyInput(manifest), true);
-	});
-
-	it('uses the folder itself as the containment root', () => {
-		assert.equal(getPackInputRoot(folder), 'C:\\repo\\bin\\Release');
-	});
-
-	it('uses the containing directory as the root for a manifest file', () => {
-		assert.equal(getPackInputRoot(manifest), path.dirname('C:\\repo\\sparse\\appxmanifest.xml'));
 	});
 });
 

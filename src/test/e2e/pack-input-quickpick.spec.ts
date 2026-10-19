@@ -1,13 +1,14 @@
 /**
- * E2E tests for the `winapp.pack` command's input QuickPick (`pickPackInput`).
+ * E2E tests for the separate normal and sparse packaging commands.
  *
- * The picker offers two different kinds of input — build output folders and
- * sparse identity-only manifests — which the unit tests cannot cover because
- * discovery runs through the VS Code workspace APIs.
+ * `winapp.pack` offers build output folders for payload-containing packages.
+ * `winapp.packSparse` offers sparse manifests for identity-only packages.
+ * Keeping these surfaces separate prevents users from having to infer package
+ * type from a mixed folder/file picker.
  *
- * Test 1 — Mixed discovery:
- *   A workspace containing both a build output folder and a sparse manifest
- *   shows both, folders first, plus the two distinct Browse rows.
+ * Test 1 — Separate discovery:
+ *   The normal command lists only folders; the sparse command lists only
+ *   sparse manifests.
  *
  * Test 2 — Content-based sparse detection:
  *   A manifest is classified by its `AllowExternalContent` element, not by
@@ -15,8 +16,7 @@
  *   must not be offered, and a sparse manifest outside it must be.
  *
  * Test 3 — Browse rows:
- *   The single ambiguous "Browse…" row is split into explicit folder and
- *   manifest rows, since the command accepts both a folder and a file.
+ *   Each command has one unambiguous Browse row for its own input kind.
  *
  * Test 4 — Cancel:
  *   Escaping the picker aborts packing without opening a terminal.
@@ -121,9 +121,23 @@ async function openPackPicker(page: Page) {
     // The command palette is itself a QuickPick, so confirm we are looking at
     // the extension's picker before reading any rows.
     const inputBox = page.locator('.quick-input-widget .quick-input-filter input[type="text"]');
-    await expect(inputBox).toHaveAttribute('placeholder', /build output folder or sparse manifest/, {
+    await expect(inputBox).toHaveAttribute('placeholder', /build output folder containing your app/, {
         timeout: DISCOVERY_TIMEOUT,
     });
+
+    return rows;
+}
+
+async function openSparsePackPicker(page: Page) {
+    await runCommandPalette(page, 'WinApp: Create Sparse Identity Package');
+
+    const rows = packQuickPickRows(page);
+    await expect(rows.first()).toBeVisible({ timeout: DISCOVERY_TIMEOUT });
+    await expect(quickPickPlaceholder(page)).toHaveAttribute(
+        'placeholder',
+        /sparse identity manifest to package/,
+        { timeout: DISCOVERY_TIMEOUT }
+    );
 
     return rows;
 }
@@ -242,8 +256,8 @@ async function cleanup(
     }
 }
 
-test.describe('winapp.pack command — input discovery', () => {
-    test('offers build output folders and sparse manifests, folders first', async () => {
+test.describe('WinApp packaging command input discovery', () => {
+    test('keeps normal and sparse package inputs in separate commands', async () => {
         const tmpDir = createPackWorkspace({
             sparseManifests: [path.join('src', 'App', 'sparse', 'appxmanifest.xml')],
         });
@@ -255,22 +269,23 @@ test.describe('winapp.pack command — input discovery', () => {
             app = launched.app;
             userDataDir = launched.userDataDir;
 
-            const rows = await openPackPicker(launched.page);
-            const rowText = await rows.allTextContents();
+            const regularRows = await openPackPicker(launched.page);
+            const regularText = await regularRows.allTextContents();
+            expect(regularText).toHaveLength(2);
+            expect(regularText[0]).toContain('net8.0');
+            expect(regularText.some(text => text.includes('appxmanifest.xml'))).toBe(false);
+            expect(regularText[1]).toContain('Browse');
+            await launched.page.keyboard.press('Escape');
 
-            // Build output folder, then the sparse manifest, then both Browse rows.
-            expect(rowText).toHaveLength(4);
-            expect(rowText[0]).toContain('net8.0');
-            expect(rowText[1]).toContain('appxmanifest.xml');
-            expect(rowText[1]).toContain('sparse identity-only');
-            expect(rowText[2]).toContain('Browse for folder');
-            expect(rowText[3]).toContain('Browse for sparse manifest');
-
-            // The folder row must not be mislabelled as identity-only.
-            expect(rowText[0]).not.toContain('sparse identity-only');
+            const sparseRows = await openSparsePackPicker(launched.page);
+            const sparseText = await sparseRows.allTextContents();
+            expect(sparseText).toHaveLength(2);
+            expect(sparseText[0]).toContain('appxmanifest.xml');
+            expect(sparseText.some(text => text.includes('net8.0'))).toBe(false);
+            expect(sparseText[1]).toContain('Browse');
 
             await launched.page.keyboard.press('Escape');
-            console.log('✅ PASS: pack picker listed folder + sparse manifest + two Browse rows');
+            console.log('✅ PASS: normal and sparse package inputs use separate commands');
         } finally {
             await cleanup(app, tmpDir, userDataDir);
         }
@@ -292,7 +307,7 @@ test.describe('winapp.pack command — input discovery', () => {
             app = launched.app;
             userDataDir = launched.userDataDir;
 
-            const rows = await openPackPicker(launched.page);
+            const rows = await openSparsePackPicker(launched.page);
             const rowText = await rows.allTextContents();
             const manifestRows = rowText.filter(
                 text => text.includes('appxmanifest.xml') && !text.includes('Browse')
@@ -331,14 +346,9 @@ test.describe('winapp.pack command — input discovery', () => {
             app = launched.app;
             userDataDir = launched.userDataDir;
 
-            const rows = await openPackPicker(launched.page);
+            const rows = await openSparsePackPicker(launched.page);
             const rowText = await rows.allTextContents();
-            expect(
-                rowText.some(text =>
-                    text.includes('appxmanifest.xml') &&
-                    text.includes('sparse identity-only')
-                )
-            ).toBe(true);
+            expect(rowText.some(text => text.includes('appxmanifest.xml'))).toBe(true);
 
             await launched.page.keyboard.press('Escape');
             console.log('✅ PASS: UTF-8 BOM sparse manifest was discovered');
@@ -365,14 +375,9 @@ test.describe('winapp.pack command — input discovery', () => {
             app = launched.app;
             userDataDir = launched.userDataDir;
 
-            const rows = await openPackPicker(launched.page);
+            const rows = await openSparsePackPicker(launched.page);
             const rowText = await rows.allTextContents();
-            expect(
-                rowText.some(text =>
-                    text.includes('appxmanifest.xml') &&
-                    text.includes('sparse identity-only')
-                )
-            ).toBe(true);
+            expect(rowText.some(text => text.includes('appxmanifest.xml'))).toBe(true);
 
             await launched.page.keyboard.press('Escape');
             console.log('✅ PASS: UTF-16LE sparse manifest was discovered');
@@ -381,8 +386,10 @@ test.describe('winapp.pack command — input discovery', () => {
         }
     });
 
-    test('splits Browse into distinct folder and manifest rows', async () => {
-        const tmpDir = createPackWorkspace();
+    test('gives each package command one unambiguous Browse row', async () => {
+        const tmpDir = createPackWorkspace({
+            sparseManifests: [path.join('src', 'App', 'sparse', 'appxmanifest.xml')],
+        });
 
         let app: ElectronApplication | undefined;
         let userDataDir: string | undefined;
@@ -391,19 +398,14 @@ test.describe('winapp.pack command — input discovery', () => {
             app = launched.app;
             userDataDir = launched.userDataDir;
 
-            const rows = await openPackPicker(launched.page);
-            const rowText = await rows.allTextContents();
-            const browseRows = rowText.filter(text => text.includes('Browse'));
-
-            // A single bare "Browse…" would be ambiguous for a command that
-            // accepts both a folder and a file.
-            expect(browseRows).toHaveLength(2);
-            expect(browseRows.some(text => /Browse for folder/.test(text))).toBe(true);
-            expect(browseRows.some(text => /Browse for sparse manifest/.test(text))).toBe(true);
-            expect(rowText.filter(text => /Browse…\s*$/.test(text))).toHaveLength(0);
-
+            const regularRows = await openPackPicker(launched.page);
+            expect((await regularRows.allTextContents()).filter(text => text.includes('Browse'))).toHaveLength(1);
             await launched.page.keyboard.press('Escape');
-            console.log('✅ PASS: Browse row split into folder and manifest variants');
+
+            const sparseRows = await openSparsePackPicker(launched.page);
+            expect((await sparseRows.allTextContents()).filter(text => text.includes('Browse'))).toHaveLength(1);
+            await launched.page.keyboard.press('Escape');
+            console.log('✅ PASS: each package command has one unambiguous Browse row');
         } finally {
             await cleanup(app, tmpDir, userDataDir);
         }
@@ -452,7 +454,7 @@ test.describe('winapp.pack command — input discovery', () => {
             userDataDir = launched.userDataDir;
             const page = launched.page;
 
-            await openPackPicker(page);
+            await openSparsePackPicker(page);
             await choosePackRow(page, 'appxmanifest');
 
             // The certificate question is common to both input kinds.
@@ -525,7 +527,7 @@ test.describe('winapp.pack command — input discovery', () => {
             userDataDir = launched.userDataDir;
             const page = launched.page;
 
-            await openPackPicker(page);
+            await openSparsePackPicker(page);
             await choosePackRow(page, 'appxmanifest');
             await expect(quickPickPlaceholder(page)).toHaveAttribute(
                 'placeholder',
@@ -569,23 +571,29 @@ test.describe('winapp.pack command — input discovery', () => {
             app = launched.app;
             userDataDir = launched.userDataDir;
 
-            const rows = await openPackPicker(launched.page);
-            const rowText = await rows.allTextContents();
-            expect(rowText.some(text => text.includes('AppB') && text.includes('Debug'))).toBe(true);
-            expect(rowText.some(text => text.includes('AppB') && text.includes('appxmanifest.xml'))).toBe(true);
-
+            const regularRows = await openPackPicker(launched.page);
+            expect((await regularRows.allTextContents())
+                .some(text => text.includes('AppB') && text.includes('Debug'))).toBe(true);
             await launched.page.keyboard.press('Escape');
-            console.log('✅ PASS: pack discovery included the secondary workspace root');
+
+            const sparseRows = await openSparsePackPicker(launched.page);
+            expect((await sparseRows.allTextContents())
+                .some(text => text.includes('AppB') && text.includes('appxmanifest.xml'))).toBe(true);
+            await launched.page.keyboard.press('Escape');
+            console.log('✅ PASS: both package commands included the secondary workspace root');
         } finally {
             await cleanup(app, tmpDir, userDataDir);
         }
     });
 
     test('skips oversized manifest candidates', async () => {
-        const tmpDir = createPackWorkspace({ includeBuildOutput: false });
+        const tmpDir = createPackWorkspace({
+            includeBuildOutput: false,
+            sparseManifests: [path.join('identity', 'valid', 'appxmanifest.xml')],
+        });
         writeFile(
             tmpDir,
-            path.join('identity', 'appxmanifest.xml'),
+            path.join('identity', 'oversized', 'appxmanifest.xml'),
             SPARSE_MANIFEST + ' '.repeat(1024 * 1024)
         );
 
@@ -596,10 +604,13 @@ test.describe('winapp.pack command — input discovery', () => {
             app = launched.app;
             userDataDir = launched.userDataDir;
 
-            const rows = await openPackPicker(launched.page);
+            const rows = await openSparsePackPicker(launched.page);
             const rowText = await rows.allTextContents();
-            expect(rowText.filter(text => text.includes('appxmanifest.xml'))).toHaveLength(0);
-            expect(rowText.filter(text => text.includes('Browse'))).toHaveLength(2);
+            const manifestRows = rowText.filter(text => text.includes('appxmanifest.xml'));
+            expect(manifestRows).toHaveLength(1);
+            expect(manifestRows[0].toLowerCase()).toContain(path.join('identity', 'valid').toLowerCase());
+            expect(manifestRows[0].toLowerCase()).not.toContain('oversized');
+            expect(rowText.filter(text => text.includes('Browse'))).toHaveLength(1);
 
             await launched.page.keyboard.press('Escape');
             console.log('✅ PASS: oversized sparse manifest candidate was skipped');

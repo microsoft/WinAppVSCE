@@ -142,7 +142,7 @@ modal is up. `Confirm-VSCodeEditor` handles that; if you act manually, call `Cle
 ## Driver command IDs & answer schemas
 
 Real command IDs: `winapp.getWinappPath`, `winapp.init`, `winapp.restore`, `winapp.manifestGenerate`,
-`winapp.certGenerate`, `winapp.pack`, `winapp.run`, `winapp.createDebugIdentity`, `winapp.sign`,
+`winapp.certGenerate`, `winapp.pack`, `winapp.packSparse`, `winapp.run`, `winapp.createDebugIdentity`, `winapp.sign`,
 `winapp.certInstall`, `winapp.unregister`, `winapp.manifestAddAlias`, …
 
 Answers (ordered, one per prompt the command raises):
@@ -189,6 +189,9 @@ run-target picker, which needs a QuickPick answer rather than a dialog.
   input folder."* Pack then raises **two** QuickPicks: "Generate and install a development
   certificate?" and "Bundle Windows App SDK runtime (self-contained)?" → answer order for the driver
   is `@(@{nativeDialogPath=$buildOutput}, @{accept=$true}, @{accept=$true})`.
+- **`winapp.packSparse` takes a sparse identity manifest**, then raises only the development
+  certificate QuickPick. It produces an identity-only `.msix` and deliberately skips the
+  self-contained prompt and normal Install completion action.
 - **Pack is slow + fire-and-forget.** The driver returns `done` in ~11s but `winapp pack` keeps
   building in the terminal; **poll for the MSIX** (up to ~2 min). Output lands at
   `<proj>\.winapp\self-contained\<arch>\extracted\MSIX\Main.msix` (hidden, generically named).

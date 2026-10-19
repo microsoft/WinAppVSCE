@@ -39,6 +39,7 @@
     "onCommand:winapp.restore",
     "onCommand:winapp.update",
     "onCommand:winapp.pack",
+    "onCommand:winapp.packSparse",
     "onCommand:winapp.run",
     "onCommand:winapp.createDebugIdentity",
     "onCommand:winapp.manifestGenerate",
@@ -87,6 +88,11 @@
       {
         "command": "winapp.initSparse",
         "title": "Create Sparse Identity Manifest",
+        "category": "WinApp"
+      },
+      {
+        "command": "winapp.packSparse",
+        "title": "Create Sparse Identity Package",
         "category": "WinApp"
       },
       {
