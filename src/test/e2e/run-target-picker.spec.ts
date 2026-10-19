@@ -353,7 +353,10 @@ test.describe('run target picker', () => {
 
             await runCommandPalette(page, 'WinApp: Run Application With Options');
 
-            const warning = page.locator('.notifications-toasts .notification-list-item');
+            const warning = page
+                .locator('.notifications-toasts .notification-list-item')
+                .filter({ hasText: 'Solutions were found' });
+            await expect(warning).toHaveCount(1);
             await expect(warning).toContainText('Solutions were found');
             await expect(warning).toContainText('Build the app first');
             await expect(warning).not.toContainText('No projects, solutions');
