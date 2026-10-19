@@ -108,6 +108,19 @@ namespace Surface.Tests
             Check("malformed XML: uses the XML parser's message", m.StartsWith("XML error: ", StringComparison.Ordinal) && m.Contains("Border") && m.Contains("StackPanel"), m);
             Check("malformed XML: no duplicate position suffix", !m.Contains("Line 5, position"), m);
             Check("malformed XML: position kept", l == 5 && c == 5, $"{l},{c}");
+            Check("MalformedXml: null for well-formed", XamlErrorText.MalformedXml("<Page>\n<Grid/>\n</Page>") is null);
+            const string StaleKey = Opaque + "\r\n\r\nCannot find a Resource with the Name/Key NoSuchBrushKey [Line: 3 Position: 13]";
+            Check("stale: key absent from the document -> not informative",
+                XamlErrorText.Informative(StaleKey, "<Page>\n<Button Width=\"wide\"/>\n</Page>") is null);
+            Check("current: key present in the document -> kept",
+                XamlErrorText.Informative(StaleKey, "<Page>\n<Border Background=\"{StaticResource NoSuchBrushKey}\"/>\n</Page>") is not null);
+            const string StaleProp = Opaque + "\r\n\r\nThe property 'NotAProperty' was not found in type 'Microsoft.UI.Xaml.Controls.Button'. [Line: 3 Position: 13]";
+            Check("current: quoted names (short type name) present -> kept",
+                XamlErrorText.Informative(StaleProp, "<Page>\n<Button NotAProperty=\"1\"/>\n</Page>") is not null);
+            Check("stale: quoted property absent -> not informative",
+                XamlErrorText.Informative(StaleProp, "<Page>\n<Button Width=\"wide\"/>\n</Page>") is null);
+            Check("MalformedXml: message and position", XamlErrorText.MalformedXml(unclosed) is var (mm, ml, _)
+                && mm.StartsWith("XML error: ", StringComparison.Ordinal) && ml == 5, $"{XamlErrorText.MalformedXml(unclosed)}");
 
             var badValue = "<Page>\n  <StackPanel>\n    <Button Width=\"wide\" Content=\"x\"/>\n  </StackPanel>\n</Page>";
             (m, l, c) = XamlErrorText.Describe(badValue, 3, 13);

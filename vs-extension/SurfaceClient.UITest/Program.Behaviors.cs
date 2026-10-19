@@ -303,6 +303,13 @@ namespace WinUIXamlPreview.UITest
             Check("BEH-E3b malformed XML has readable text (no WinUI placeholder)",
                 e?.Message != null && e.Message.StartsWith("XML error:") && e.Message.Contains("Border") && !e.Message.Contains("could not be found"), Pos(e));
 
+            // E: an unresolved resource key (normally tolerated) ABOVE a syntax error must not hide the syntax error.
+            var keyThenBroken = "<Page " + BehNs + ">\n  <StackPanel>\n    <TextBlock Foreground=\"{StaticResource NoSuchBrushKey}\"/>\n" +
+                                "    <TextBlock Text=\"a\"\n  </StackPanel>\n</Page>";
+            e = await NextError(s, () => s.Client.UpdateXaml(keyThenBroken));
+            Check("BEH-E3c syntax error wins over a tolerated unresolved key",
+                e?.Message != null && e.Message.StartsWith("XML error:") && !e.Message.Contains("NoSuchBrushKey") && e.Line == 5, Pos(e));
+
             // Bad attribute value on line 3, column 15 (the Width attribute).
             var badValue = "<Page " + BehNs + ">\n  <StackPanel>\n    <Button Width=\"wide\" Content=\"x\"/>\n  </StackPanel>\n</Page>";
             e = await NextError(s, () => s.Client.UpdateXaml(badValue));

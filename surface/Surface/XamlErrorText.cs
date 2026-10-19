@@ -25,6 +25,10 @@ internal static class XamlErrorText
 
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // Names WinUI cites in an error: a resource key, or a 'quoted' identifier (property, type, member).
+    private static readonly Regex CitedName = new(
+        @"Name/Key (?<key>[^\s\[\]]+)|'(?<quoted>[A-Za-z_][\w.]*)'", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly Regex XmlPositionSuffix = new(
         @"\s*Line \d+, position \d+\.\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
@@ -47,6 +51,33 @@ internal static class XamlErrorText
         return rest.Length == 0 || SpecCode.IsMatch(rest) ? null : rest;
     }
 
+    /// <summary>
+    /// <see cref="Informative(string?)"/>, but null when the text names something absent from <paramref name="xaml"/>.
+    /// WinUI keeps the text of an earlier failed load and can attach it to a later, unrelated failure (e.g. a
+    /// "Cannot find a Resource … Key X" from the previous document); citing a name the document never mentions
+    /// is the tell, and the caller should describe the failure itself instead.
+    /// </summary>
+    public static string? Informative(string? flattened, string? xaml)
+    {
+        var text = Informative(flattened);
+        if (text is null || string.IsNullOrEmpty(xaml))
+        {
+            return text;
+        }
+
+        foreach (Match m in CitedName.Matches(text))
+        {
+            var name = m.Groups["key"].Success ? m.Groups["key"].Value : m.Groups["quoted"].Value;
+            var shortName = name.Substring(name.LastIndexOf('.') + 1);
+            if (shortName.Length > 0 && !xaml!.Contains(shortName, StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return text;
+    }
+
     /// <summary>True when <see cref="Informative"/> finds nothing useful in the message.</summary>
     public static bool IsOpaque(string? flattened) => Informative(flattened) is null;
 
@@ -56,9 +87,9 @@ internal static class XamlErrorText
     /// </summary>
     public static (string Message, int? Line, int? Column) Describe(string? xaml, int? line, int? column)
     {
-        if (!string.IsNullOrEmpty(xaml) && TryXmlError(xaml, out var xmlMessage, out var xl, out var xc))
+        if (MalformedXml(xaml) is var (xmlMessage, xl, xc))
         {
-            return ("XML error: " + xmlMessage, xl ?? line, xc ?? column);
+            return (xmlMessage, xl ?? line, xc ?? column);
         }
 
         if (!string.IsNullOrEmpty(xaml) && line is int l && column is int c && DescribeAt(xaml, l, c) is string at)
@@ -68,6 +99,16 @@ internal static class XamlErrorText
 
         return ("WinUI couldn't load this XAML and didn't report why.", line, column);
     }
+
+    /// <summary>
+    /// The XML syntax error in <paramref name="xaml"/>, or null when it is well-formed. Takes precedence over
+    /// whatever WinUI reported: on malformed markup the cleaner can't run, so WinUI often trips first over
+    /// something the cleaner would have tolerated (e.g. an unresolved resource key) and reports that instead.
+    /// </summary>
+    public static (string Message, int? Line, int? Column)? MalformedXml(string? xaml) =>
+        !string.IsNullOrEmpty(xaml) && TryXmlError(xaml!, out var m, out var l, out var c)
+            ? ("XML error: " + m, l, c)
+            : null;
 
     private static bool TryXmlError(string xaml, out string message, out int? line, out int? column)
     {

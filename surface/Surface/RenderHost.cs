@@ -305,7 +305,11 @@ internal sealed class RenderHost
                     {
                         App.Log($"Render parse error: {Flatten(ex)}");
                         var message = Flatten(ex);
-                        if (XamlErrorText.Informative(message) is string useful)
+                        if (XamlErrorText.MalformedXml(rawXaml) is var (xmlMessage, xl, xc))
+                        {
+                            (message, l, c) = (xmlMessage, xl ?? l, xc ?? c);
+                        }
+                        else if (XamlErrorText.Informative(message, rawXaml) is string useful)
                         {
                             message = useful;
                         }
