@@ -1814,14 +1814,7 @@ export function activate(context: vscode.ExtensionContext) {
 					findProjectRootForFile(targetWorkspacePath, exePath)
 				);
 			} else {
-				const selectedOutputDir = await selectFolder(
-					'Select sparse manifest output folder',
-					vscode.Uri.file(path.dirname(exePath))
-				);
-				if (!selectedOutputDir) {
-					return;
-				}
-				outputDir = selectedOutputDir;
+				outputDir = defaultSparseOutputDir(path.dirname(exePath));
 			}
 
 			// The CLI refuses to replace an existing manifest, so ask first

@@ -29,7 +29,8 @@ export const SPARSE_MANIFEST_FILENAME = 'appxmanifest.xml';
  * manifest may legitimately live anywhere.
  */
 export function isSparseManifestXml(xml: string): boolean {
-	const { doc, errors } = parseManifestXml(xml);
+	const normalizedXml = xml.charCodeAt(0) === 0xFEFF ? xml.slice(1) : xml;
+	const { doc, errors } = parseManifestXml(normalizedXml);
 	if (errors.length > 0) {
 		return false;
 	}

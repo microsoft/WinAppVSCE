@@ -30,6 +30,16 @@ describe('isSparseManifestXml', () => {
 		assert.equal(isSparseManifestXml(xml), true);
 	});
 
+	it('accepts a UTF-8 byte-order mark before the manifest', () => {
+		const xml =
+			'\uFEFF<?xml version="1.0" encoding="utf-8"?>' +
+			'<Package xmlns:uap10="urn:test"><Properties>' +
+			'<uap10:AllowExternalContent>true</uap10:AllowExternalContent>' +
+			'</Properties></Package>';
+
+		assert.equal(isSparseManifestXml(xml), true);
+	});
+
 	it('detects the element with no namespace prefix', () => {
 		assert.equal(
 			isSparseManifestXml('<AllowExternalContent>true</AllowExternalContent>'),
@@ -321,6 +331,13 @@ describe('defaultSparseOutputDir', () => {
 		assert.equal(
 			defaultSparseOutputDir('C:\\repo', 'C:\\repo\\src\\MyApp'),
 			path.join('C:\\repo\\src\\MyApp', SPARSE_OUTPUT_FOLDER)
+		);
+	});
+
+	it('uses an external executable directory as the sparse output anchor', () => {
+		assert.equal(
+			defaultSparseOutputDir('D:\\outside\\bin'),
+			path.join('D:\\outside\\bin', SPARSE_OUTPUT_FOLDER)
 		);
 	});
 

@@ -313,6 +313,40 @@ test.describe('winapp.pack command — input discovery', () => {
         }
     });
 
+    test('discovers a sparse manifest saved as UTF-8 with a byte-order mark', async () => {
+        const tmpDir = createPackWorkspace({ includeBuildOutput: false });
+        writeFile(
+            tmpDir,
+            path.join('identity', 'appxmanifest.xml'),
+            Buffer.concat([
+                Buffer.from([0xEF, 0xBB, 0xBF]),
+                Buffer.from(SPARSE_MANIFEST, 'utf8'),
+            ])
+        );
+
+        let app: ElectronApplication | undefined;
+        let userDataDir: string | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            userDataDir = launched.userDataDir;
+
+            const rows = await openPackPicker(launched.page);
+            const rowText = await rows.allTextContents();
+            expect(
+                rowText.some(text =>
+                    text.includes('appxmanifest.xml') &&
+                    text.includes('sparse identity-only')
+                )
+            ).toBe(true);
+
+            await launched.page.keyboard.press('Escape');
+            console.log('✅ PASS: UTF-8 BOM sparse manifest was discovered');
+        } finally {
+            await cleanup(app, tmpDir, userDataDir);
+        }
+    });
+
     test('splits Browse into distinct folder and manifest rows', async () => {
         const tmpDir = createPackWorkspace();
 
