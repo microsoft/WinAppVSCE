@@ -68,14 +68,12 @@ export async function pickPackInput(): Promise<PackInput | undefined> {
 	}
 
 	if (source.sourceKind === 'folders') {
-		const root = await pickFolderRoot(roots);
-		if (!root) {
+		const folders = await pickBuildOutputFolders(roots);
+		if (!folders || folders.length === 0) {
 			return undefined;
 		}
-		const folders = await pickBuildOutputFolders(root.path);
-		return folders && folders.length > 0
-			? { kind: 'folders', folders, workspaceRoot: root.path }
-			: undefined;
+		const workspaceRoot = findOwningRoot(roots, folders[0])?.path ?? roots[0].path;
+		return { kind: 'folders', folders, workspaceRoot };
 	}
 
 	const project = await pickPackProject(roots);
@@ -130,22 +128,6 @@ export async function pickPackOptions(input: PackInput): Promise<PackOptions | u
 		selfContained: selfContained.value,
 		configuration
 	};
-}
-
-async function pickFolderRoot(roots: readonly WorkspaceRoot[]): Promise<WorkspaceRoot | undefined> {
-	if (roots.length === 1) {
-		return roots[0];
-	}
-
-	const picked = await vscode.window.showQuickPick(
-		roots.map(root => ({
-			label: `$(root-folder) ${root.name}`,
-			description: root.path,
-			root
-		})),
-		{ placeHolder: 'Select the workspace folder containing the build output' }
-	);
-	return picked?.root;
 }
 
 async function pickPackProject(

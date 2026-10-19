@@ -1077,4 +1077,82 @@ test.describe('run target picker', () => {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
+
+    test('existing-output packaging discovers folders across every workspace root', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-folder-multiroot-e2e-'));
+        const frontend = path.join(tmpDir, 'frontend');
+        const backend = path.join(tmpDir, 'backend');
+        const x64 = path.join(frontend, 'publish', 'x64');
+        const arm64 = path.join(backend, 'publish', 'arm64');
+        fs.mkdirSync(x64, { recursive: true });
+        fs.mkdirSync(arm64, { recursive: true });
+        fs.writeFileSync(path.join(x64, 'App.exe'), '');
+        fs.writeFileSync(path.join(arm64, 'App.exe'), '');
+
+        const workspaceFile = path.join(tmpDir, 'combined.code-workspace');
+        fs.writeFileSync(workspaceFile, JSON.stringify({
+            folders: [{ path: 'frontend' }, { path: 'backend' }]
+        }, null, 2));
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(workspaceFile);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Create MSIX Package or Bundle');
+            await readPickerRows(page, /^What would you like to package\?$/);
+            await quickPickRows(page).filter({ hasText: /Package existing build output/ }).click();
+
+            const folders = (
+                await readPickerRows(page, /^Select build output folder\(s\)/)
+            ).join('\n');
+            expect(folders).toContain(`frontend — ${path.join('publish', 'x64')}`);
+            expect(folders).toContain(`backend — ${path.join('publish', 'arm64')}`);
+
+            await quickPickRows(page).filter({ hasText: /frontend — publish[\\/]x64/ }).click();
+            await quickPickRows(page).filter({ hasText: /backend — publish[\\/]arm64/ }).click();
+            await page.keyboard.press('Enter');
+
+            await readPickerRows(page, /^Generate and install a development certificate\?$/);
+            await cancelAndExpectNoFollowUp(page);
+            console.log('✅ PASS: pack bundle selection covered every workspace root');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    test('existing-output packaging preselects the sole discovered folder', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-folder-single-e2e-'));
+        const outputDir = path.join(tmpDir, 'publish', 'x64');
+        fs.mkdirSync(outputDir, { recursive: true });
+        fs.writeFileSync(path.join(outputDir, 'App.exe'), '');
+
+        let app: ElectronApplication | undefined;
+        try {
+            const launched = await launchVSCode(tmpDir);
+            app = launched.app;
+            const page = launched.page;
+
+            await runCommandPalette(page, 'WinApp: Create MSIX Package or Bundle');
+            await readPickerRows(page, /^What would you like to package\?$/);
+            await quickPickRows(page).filter({ hasText: /Package existing build output/ }).click();
+
+            const output = quickPickRows(page).filter({ hasText: /publish[\\/]x64/ });
+            await expectChecked(output, true);
+            await page.keyboard.press('Enter');
+
+            await readPickerRows(page, /^Generate and install a development certificate\?$/);
+            await cancelAndExpectNoFollowUp(page);
+            console.log('✅ PASS: sole pack output was preselected and Enter advanced');
+        } finally {
+            if (app) {
+                await app.close().catch(() => {});
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
 });
