@@ -586,10 +586,10 @@ export async function pickBuildSettings(): Promise<Partial<WinAppRunOptions> | u
  *
  * `--configuration` is an open string — a project is free to define `Staging`
  * or `Debug-Internal`, and `launch.json` already declares the field as a plain
- * string — so the two common names are offered as rows while anything typed is
- * taken as-is. Returns `undefined` when dismissed, or a wrapper whose `value`
- * is `undefined` for "let the CLI choose", which the two cases cannot otherwise
- * be told apart.
+ * string — so common names other than the displayed default are offered as
+ * rows while anything typed is taken as-is. Returns `undefined` when dismissed,
+ * or a wrapper whose `value` is `undefined` for "let the CLI choose", which the
+ * two cases cannot otherwise be told apart.
  */
 export async function pickConfiguration(
 	defaultConfiguration: string = 'Debug'
@@ -598,7 +598,9 @@ export async function pickConfiguration(
 	picker.placeholder = 'Build configuration, or type another name';
 	picker.items = [
 		{ label: 'Default', description: defaultConfiguration },
-		...[...COMMON_CONFIGURATIONS].map(name => ({ label: name }))
+		...[...COMMON_CONFIGURATIONS]
+			.filter(name => name !== defaultConfiguration)
+			.map(name => ({ label: name }))
 	];
 
 	try {
