@@ -736,6 +736,12 @@ const MAX_DISCOVERED_SPARSE_MANIFESTS = 20;
 /** App manifests are small text files; skip hostile or accidental huge inputs. */
 const MAX_SPARSE_MANIFEST_BYTES = 1024 * 1024;
 
+function sparseManifestPickerPlaceholder(label: string, resultCount: number): string {
+	return resultCount >= MAX_DISCOVERED_SPARSE_MANIFESTS
+		? `${label} (discovery limited to ${MAX_DISCOVERED_SPARSE_MANIFESTS} per workspace — use Browse… for others)`
+		: label;
+}
+
 /**
  * Search the workspace for sparse (identity-only) manifests.
  *
@@ -867,12 +873,15 @@ async function pickSparseManifestForEmbed(
 		description: path.relative(workspacePath, manifestPath),
 		detail: manifestPath
 	}));
-	items.push({ label: browseLabel });
+	items.push({ label: browseLabel, alwaysShow: true });
 
 	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: candidates.length > 0
-			? `Select the sparse manifest whose identity to embed into ${path.basename(target)}`
-			: `No sparse manifest found for ${path.basename(target)} — browse for one`,
+		placeHolder: sparseManifestPickerPlaceholder(
+			candidates.length > 0
+				? `Select the sparse manifest whose identity to embed into ${path.basename(target)}`
+				: `No sparse manifest found for ${path.basename(target)} — browse for one`,
+			candidates.length
+		),
 		ignoreFocusOut: true
 	});
 	if (!picked) {
@@ -983,10 +992,13 @@ async function pickSparseManifestToPack(workspacePaths: readonly string[]): Prom
 			manifestPath
 		};
 	});
-	items.push({ label: browseLabel });
+	items.push({ label: browseLabel, alwaysShow: true });
 
 	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select the sparse identity manifest to package'
+		placeHolder: sparseManifestPickerPlaceholder(
+			'Select the sparse identity manifest to package',
+			rootResults.length
+		)
 	});
 	if (!picked) {
 		return undefined;

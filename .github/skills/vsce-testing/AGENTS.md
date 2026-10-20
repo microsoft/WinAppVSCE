@@ -142,7 +142,8 @@ modal is up. `Confirm-VSCodeEditor` handles that; if you act manually, call `Cle
 ## Driver command IDs & answer schemas
 
 Real command IDs: `winapp.getWinappPath`, `winapp.init`, `winapp.restore`, `winapp.manifestGenerate`,
-`winapp.certGenerate`, `winapp.pack`, `winapp.packSparse`, `winapp.run`, `winapp.createDebugIdentity`, `winapp.sign`,
+`winapp.initSparse`, `winapp.certGenerate`, `winapp.pack`, `winapp.packSparse`, `winapp.embedIdentity`,
+`winapp.run`, `winapp.createDebugIdentity`, `winapp.sign`,
 `winapp.certInstall`, `winapp.unregister`, `winapp.manifestAddAlias`, …
 
 Answers (ordered, one per prompt the command raises):

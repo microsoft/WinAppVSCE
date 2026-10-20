@@ -448,6 +448,37 @@ test.describe('WinApp packaging command input discovery', () => {
         }
     });
 
+    test('keeps Browse visible when sparse manifest discovery is capped and filtered', async () => {
+        const sparseManifests = Array.from(
+            { length: 21 },
+            (_, index) => path.join('apps', `App${index.toString().padStart(2, '0')}`, 'Package.appxmanifest')
+        );
+        const tmpDir = createPackWorkspace({ sparseManifests });
+
+        let app: ElectronApplication | undefined;
+        let userDataDir: string | undefined;
+        try {
+            const launched = await launchVSCodeForFolder(tmpDir);
+            app = launched.app;
+            userDataDir = launched.userDataDir;
+
+            const sparseRows = await openSparsePackPicker(launched.page);
+            await expect(quickPickPlaceholder(launched.page)).toHaveAttribute(
+                'placeholder',
+                /limited to 20.*use Browse/i
+            );
+
+            await quickPickPlaceholder(launched.page).fill('manifest omitted from capped results');
+            await expect(sparseRows).toHaveCount(1);
+            await expect(sparseRows.first()).toContainText('Browse');
+
+            await launched.page.keyboard.press('Escape');
+            console.log('✅ PASS: Browse remained visible after filtering capped sparse results');
+        } finally {
+            await cleanup(app, tmpDir, userDataDir);
+        }
+    });
+
     test('cancelling the picker aborts packing without running the CLI', async () => {
         const tmpDir = createPackWorkspace({
             sparseManifests: [path.join('src', 'App', 'sparse', 'appxmanifest.xml')],
