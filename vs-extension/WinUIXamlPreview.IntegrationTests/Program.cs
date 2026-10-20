@@ -28,6 +28,17 @@ namespace WinUIXamlPreview.IntegrationTests
         private static StreamWriter? _log;
         private static Process? _vs;
         private static AgentClient? _agent;
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern uint GetLongPathName(string shortPath, System.Text.StringBuilder longPath, uint size);
+
+        private static string LongPath(string path)
+        {
+            var full = Path.GetFullPath(path);
+            var sb = new System.Text.StringBuilder(1024);
+            var n = GetLongPathName(full, sb, (uint)sb.Capacity);
+            return n > 0 && n < sb.Capacity ? sb.ToString() : full;
+        }
         private static Fixture _fx = null!;
         private static int _passed, _failed;
         private static readonly List<string> Failures = new List<string>();
@@ -77,6 +88,8 @@ namespace WinUIXamlPreview.IntegrationTests
             }
 
             Directory.CreateDirectory(_out);
+            // VS reports documents by their long path; an 8.3 %TEMP% (e.g. CI's C:\Users\RUNNER~1) would never match.
+            _out = LongPath(_out);
             _log = new StreamWriter(Path.Combine(_out, "results.log"), append: false) { AutoFlush = true };
             _fx = new Fixture(Path.Combine(_out, "fixture"));
 
