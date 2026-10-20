@@ -7,7 +7,11 @@ import {
 	isPackableDiscoveredOutput
 } from './project-detection';
 import { walkDirectoryTree, scanRoots, type ScanCancellationToken } from './directory-walk';
-import { mergeFolderSelections, resolveFolderSelection } from './pack-args';
+import {
+	countDuplicateFolderSelections,
+	mergeFolderSelections,
+	resolveFolderSelection
+} from './pack-args';
 import { selectFolder } from './winapp-host';
 import type { WorkspaceRoot } from './workspace';
 
@@ -174,29 +178,51 @@ export async function pickBuildOutputFolders(
 		);
 	}
 
-	const picked = await vscode.window.showQuickPick(
-		buildMultiRootOutputFolderItems(workspaceRoots, outputFolders),
-		{
-			placeHolder: 'Select build output folder(s) — pick two or more to create an MSIX bundle',
-			canPickMany: true
-		}
-	);
+	while (true) {
+		const picked = await vscode.window.showQuickPick(
+			buildMultiRootOutputFolderItems(workspaceRoots, outputFolders),
+			{
+				placeHolder: 'Select build output folder(s) — pick two or more to create an MSIX bundle',
+				canPickMany: true
+			}
+		);
 
-	const selection = resolveFolderSelection(picked, FOLDER_PICKER_DETAIL);
-	switch (selection.kind) {
-		case 'none':
+		if (!picked) {
 			return undefined;
-		case 'browse': {
-			const browsed = await selectFolders(
-				'Select build output folder(s)',
-				defaultRoot ? vscode.Uri.file(defaultRoot.path) : undefined
-			);
-			return browsed
-				? mergeFolderSelections(selection.folders, browsed)
-				: selection.folders.length > 0 ? selection.folders : undefined;
 		}
-		case 'folders':
-			return selection.folders;
+
+		const selection = resolveFolderSelection(picked, FOLDER_PICKER_DETAIL);
+		switch (selection.kind) {
+			case 'none':
+				vscode.window.showWarningMessage('Select at least one build output folder.');
+				continue;
+			case 'browse': {
+				const browsed = await selectFolders(
+					'Select build output folders — Ctrl/Shift-click to select multiple',
+					defaultRoot ? vscode.Uri.file(defaultRoot.path) : undefined
+				);
+				if (!browsed) {
+					return selection.folders.length > 0 ? selection.folders : undefined;
+				}
+
+				const folders = mergeFolderSelections(selection.folders, browsed);
+				if (countDuplicateFolderSelections(selection.folders, browsed) > 0) {
+					const result = await vscode.window.showWarningMessage(
+						folders.length === 1
+							? 'The same folder was selected more than once. Duplicates will be ignored, so this will create a single MSIX package.'
+							: 'The same folder was selected more than once. Duplicate selections will be ignored.',
+						{ modal: true },
+						'Continue'
+					);
+					if (result !== 'Continue') {
+						return undefined;
+					}
+				}
+				return folders;
+			}
+			case 'folders':
+				return selection.folders;
+		}
 	}
 }
 
