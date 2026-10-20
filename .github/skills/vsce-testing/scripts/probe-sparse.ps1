@@ -92,6 +92,9 @@ if ($initOk) {
 # ---------------------------------------------------------------- step 2 ----
 Write-Host "`n=== 2. winapp.packSparse (manifest QuickPick) ==="
 Reset-ToEditor | Out-Null
+$existingIdentityPackages = @{}
+Get-ChildItem $Workspace -Recurse -Filter '*.identity.msix' -File -ErrorAction SilentlyContinue |
+    ForEach-Object { $existingIdentityPackages[$_.FullName] = $_.LastWriteTimeUtc }
 $r2 = Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.packSparse' `
     -Answers @(@{ accept = $true }, @{ selectNext = 1 }, @{ accept = $true }) -SettleMs 4000
 Write-Host "  answers: $(($r2.steps[0].answers | ConvertTo-Json -Compress))"
@@ -102,7 +105,11 @@ winapp ui screenshot -w $ctx.Hwnd -o (Join-Path $logDir 'sparse-after-pack.png')
 $identityMsix = $null
 $deadline = (Get-Date).AddSeconds(180)
 while ((Get-Date) -lt $deadline -and -not $identityMsix) {
-    $identityMsix = Get-ChildItem $Workspace -Recurse -Filter '*.msix' -ErrorAction SilentlyContinue |
+    $identityMsix = Get-ChildItem $Workspace -Recurse -Filter '*.identity.msix' -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            -not $existingIdentityPackages.ContainsKey($_.FullName) -or
+            $_.LastWriteTimeUtc -gt $existingIdentityPackages[$_.FullName]
+        } |
         Select-Object -First 1
     if (-not $identityMsix) { Start-Sleep -Seconds 3 }
 }
@@ -118,8 +125,7 @@ winapp ui screenshot -w $ctx.Hwnd -o (Join-Path $logDir 'sparse-pack-notificatio
 $sawInstall = $notif -match 'Button\s+"Install"'
 $sawSign = $notif -match 'Button\s+"Sign"'
 $sawReveal = $notif -match 'Button\s+"Reveal in Explorer"'
-$observedNotificationActions = $sawReveal -or $sawSign -or $sawInstall
-Write-Host "  notification actions observed=$observedNotificationActions reveal=$sawReveal sign=$sawSign install=$sawInstall (Install should be ABSENT)"
+Write-Host "  notification actions reveal=$sawReveal sign=$sawSign install=$sawInstall (Reveal and Sign required; Install absent)"
 
 # ---------------------------------------------------------------- step 3 ----
 Write-Host "`n=== 3. winapp.embedIdentity (QuickPick -> App.exe, then modal) ==="
@@ -152,7 +158,9 @@ $failures = @()
 if (-not $onEditor) { $failures += 'VS Code editor did not become ready' }
 if (-not $overlaysCleared) { $failures += 'VS Code first-run overlays were not cleared' }
 if (-not $initOk) { $failures += 'sparse manifest was not created' }
-if (-not $identityMsix) { $failures += 'identity MSIX was not created' }
+if (-not $identityMsix) { $failures += 'a new identity MSIX was not created' }
+if (-not $sawReveal) { $failures += 'identity-only pack notification did not offer Reveal in Explorer' }
+if (-not $sawSign) { $failures += 'identity-only pack notification did not offer Sign' }
 if ($sawInstall) { $failures += 'identity-only pack notification incorrectly offered Install' }
 if (-not $sawWarning) { $failures += 'embed identity warning was not shown' }
 if (-not $rewritten) { $failures += 'target executable was not rewritten' }
