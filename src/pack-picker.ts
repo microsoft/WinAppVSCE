@@ -40,6 +40,10 @@ interface PackProjectSelection {
 	workspaceRoot: string;
 }
 
+interface PackSigningQuickPickItem extends vscode.QuickPickItem {
+	mode: PackSigningMode;
+}
+
 /** Pick the source and all source-specific input needed by `winapp pack`. */
 export async function pickPackInput(): Promise<PackInput | undefined> {
 	const roots = getWorkspaceRoots();
@@ -299,36 +303,35 @@ async function pickPackArchitectures(
 }
 
 async function pickPackSigning(inputKind: PackInput['kind']): Promise<PackSigningMode | undefined> {
-	if (inputKind === 'folders') {
-		const picked = await vscode.window.showQuickPick(
-			[
-				{ label: 'Yes', mode: 'generateDev' as const },
-				{ label: 'No', mode: 'default' as const }
-			],
-			{ placeHolder: 'Generate and install a development certificate?' }
-		);
-		return picked?.mode;
-	}
-
+	const generateDevItem: PackSigningQuickPickItem = {
+		label: 'Generate and install a development certificate',
+		detail: 'Create and trust a new local development certificate, then sign the package',
+		mode: 'generateDev'
+	};
+	const unsignedItem: PackSigningQuickPickItem = {
+		label: 'Create an unsigned package',
+		detail: 'Leave the package unsigned for Store submission or an external signing pipeline',
+		mode: 'unsigned'
+	};
+	const folderItems: PackSigningQuickPickItem[] = [
+		{
+			...unsignedItem,
+			description: 'Recommended'
+		},
+		generateDevItem
+	];
+	const projectItems: PackSigningQuickPickItem[] = [
+		{
+			label: 'Use project signing settings',
+			description: 'Recommended',
+			detail: 'Honor the certificate and signing properties configured by the project',
+			mode: 'default'
+		},
+		generateDevItem,
+		unsignedItem
+	];
 	const picked = await vscode.window.showQuickPick(
-		[
-			{
-				label: 'Use project signing settings',
-				description: 'Recommended',
-				detail: 'Honor the certificate and signing properties configured by the project',
-				mode: 'default' as const
-			},
-			{
-				label: 'Generate and install a development certificate',
-				detail: 'Override project signing with a new local development certificate',
-				mode: 'generateDev' as const
-			},
-			{
-				label: 'Create an unsigned package',
-				detail: 'Override project signing for Store submission or an external signing pipeline',
-				mode: 'unsigned' as const
-			}
-		],
+		inputKind === 'project' ? projectItems : folderItems,
 		{ placeHolder: 'How should the package be signed?' }
 	);
 	return picked?.mode;

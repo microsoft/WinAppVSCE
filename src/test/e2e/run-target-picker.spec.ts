@@ -1081,8 +1081,13 @@ test.describe('run target picker', () => {
             await quickPickRows(page).filter({ hasText: /publish[\\/]arm64/ }).click();
             await page.keyboard.press('Enter');
 
-            await readPickerRows(page, /^Generate and install a development certificate\?$/);
-            await quickPickRows(page).filter({ hasText: /^No/ }).click();
+            const signing = (
+                await readPickerRows(page, /^How should the package be signed\?$/)
+            ).join('\n');
+            expect(signing).toContain('Create an unsigned package');
+            expect(signing).toContain('Generate and install a development certificate');
+            expect(signing).not.toContain('Use project signing settings');
+            await page.keyboard.press('Enter');
 
             await readPickerRows(page, /runtime into each package/);
             await cancelAndExpectNoFollowUp(page);
