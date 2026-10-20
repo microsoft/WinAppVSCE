@@ -969,9 +969,10 @@ test.describe('run target picker', () => {
             await quickPickRows(page).filter({ hasText: new RegExp(`^${second}`) }).click();
             await page.keyboard.press('Enter');
 
-            const configurations = (await readPickerRows(page, /^Build configuration/)).join('\n');
-            expect(configurations).toContain('Default');
-            expect(configurations).toContain('Release');
+            const configurations = await readPickerRows(page, /^Build configuration/);
+            expect(configurations.join('\n')).toContain('Default');
+            expect(configurations.join('\n')).toContain('Release');
+            expect(configurations.filter(row => /^Release(?:\s|$)/.test(row.trim()))).toHaveLength(0);
             await quickPickRows(page).filter({ hasText: /^Debug/ }).click();
 
             const signing = (await readPickerRows(page, /^How should the package be signed\?$/)).join('\n');
