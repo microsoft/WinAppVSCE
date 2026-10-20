@@ -171,6 +171,16 @@ describe('buildPackArgs', () => {
 		);
 	});
 
+	it('explicitly creates unsigned output when requested', () => {
+		assert.deepEqual(
+			buildPackArgs(folderInput(['C:\\publish\\x64']), {
+				signing: 'unsigned',
+				selfContained: false
+			}),
+			['pack', 'C:\\publish\\x64', '--no-sign']
+		);
+	});
+
 	it('adds the self-contained flag when requested', () => {
 		assert.deepEqual(
 			buildPackArgs(folderInput(['C:\\publish\\x64']), {

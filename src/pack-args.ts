@@ -44,7 +44,7 @@ export type PackSigningMode =
 	| 'default'
 	/** Generate and install a development certificate before signing. */
 	| 'generateDev'
-	/** Explicitly override project signing and produce an unsigned artifact. */
+	/** Explicitly produce an unsigned artifact. */
 	| 'unsigned';
 
 /** True when the selected input will produce an MSIX bundle. */
