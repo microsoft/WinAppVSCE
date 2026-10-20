@@ -1136,7 +1136,7 @@ test.describe('run target picker', () => {
             await quickPickRows(page).filter({ hasText: /backend — publish[\\/]arm64/ }).click();
             await page.keyboard.press('Enter');
 
-            await readPickerRows(page, /^Generate and install a development certificate\?$/);
+            await readPickerRows(page, /^How should the package be signed\?$/);
             await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: pack bundle selection covered every workspace root');
         } finally {
@@ -1167,7 +1167,7 @@ test.describe('run target picker', () => {
             await expectChecked(output, true);
             await page.keyboard.press('Enter');
 
-            await readPickerRows(page, /^Generate and install a development certificate\?$/);
+            await readPickerRows(page, /^How should the package be signed\?$/);
             await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: sole pack output was preselected and Enter advanced');
         } finally {

@@ -24,6 +24,7 @@ import type { WorkspaceRoot } from './workspace';
  */
 
 export const FOLDER_PICKER_DETAIL = 'Open a folder picker';
+const ADD_ANOTHER_FOLDER_DETAIL = 'Open another folder picker';
 
 /** Shown whenever an executable scan comes up empty, in either picker. */
 export const NO_BUILD_OUTPUT_MESSAGE =
@@ -172,8 +173,8 @@ export async function pickBuildOutputFolders(
 	const defaultRoot = workspaceRoots[0];
 	if (outputFolders.length === 0) {
 		vscode.window.showWarningMessage(NO_BUILD_OUTPUT_MESSAGE);
-		return selectFolders(
-			'Select build output folder(s)',
+		return collectBrowsedBuildOutputFolders(
+			[],
 			defaultRoot ? vscode.Uri.file(defaultRoot.path) : undefined
 		);
 	}
@@ -197,28 +198,10 @@ export async function pickBuildOutputFolders(
 				vscode.window.showWarningMessage('Select at least one build output folder.');
 				continue;
 			case 'browse': {
-				const browsed = await selectFolders(
-					'Select build output folders — Ctrl/Shift-click to select multiple',
+				return collectBrowsedBuildOutputFolders(
+					selection.folders,
 					defaultRoot ? vscode.Uri.file(defaultRoot.path) : undefined
 				);
-				if (!browsed) {
-					return selection.folders.length > 0 ? selection.folders : undefined;
-				}
-
-				const folders = mergeFolderSelections(selection.folders, browsed);
-				if (countDuplicateFolderSelections(selection.folders, browsed) > 0) {
-					const result = await vscode.window.showWarningMessage(
-						folders.length === 1
-							? 'The same folder was selected more than once. Duplicates will be ignored, so this will create a single MSIX package.'
-							: 'The same folder was selected more than once. Duplicate selections will be ignored.',
-						{ modal: true },
-						'Continue'
-					);
-					if (result !== 'Continue') {
-						return undefined;
-					}
-				}
-				return folders;
 			}
 			case 'folders':
 				return selection.folders;
@@ -262,6 +245,85 @@ function buildOutputFolderItems(
 	// alwaysShow keeps the escape hatch reachable when filtering the list.
 	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, alwaysShow: true });
 	return items;
+}
+
+async function collectBrowsedBuildOutputFolders(
+	initialFolders: readonly string[],
+	defaultUri?: vscode.Uri
+): Promise<string[] | undefined> {
+	let folders = [...initialFolders];
+	let browseDefault = defaultUri;
+
+	while (true) {
+		const browsed = await selectFolders(
+			'Select one or more build output folders',
+			browseDefault
+		);
+		if (!browsed) {
+			if (folders.length === 0) {
+				return undefined;
+			}
+		} else {
+			const merged = mergeFolderSelections(folders, browsed);
+			if (countDuplicateFolderSelections(folders, browsed) > 0) {
+				const result = await vscode.window.showWarningMessage(
+					merged.length === 1
+						? 'The same folder was selected more than once. Duplicates will be ignored, so this will create a single MSIX package.'
+						: 'The same folder was selected more than once. Duplicate selections will be ignored.',
+					{ modal: true },
+					'Continue'
+				);
+				if (result !== 'Continue') {
+					return undefined;
+				}
+			}
+			folders = merged;
+			browseDefault = vscode.Uri.file(path.dirname(browsed[browsed.length - 1]));
+		}
+
+		while (true) {
+			const reviewed = await vscode.window.showQuickPick(
+				buildBrowsedFolderReviewItems(folders),
+				{
+					placeHolder: 'Review build output folders — press Enter to continue, or select Add another folder…',
+					canPickMany: true
+				}
+			);
+			if (!reviewed) {
+				return undefined;
+			}
+
+			const selection = resolveFolderSelection(reviewed, ADD_ANOTHER_FOLDER_DETAIL);
+			if (selection.kind === 'none') {
+				vscode.window.showWarningMessage('Select at least one build output folder.');
+				continue;
+			}
+
+			folders = selection.folders;
+			if (selection.kind === 'folders') {
+				return folders;
+			}
+			break;
+		}
+	}
+}
+
+function buildBrowsedFolderReviewItems(
+	folders: readonly string[]
+): BuildOutputQuickPickItem[] {
+	return [
+		...folders.map(folder => ({
+			label: `$(folder) ${path.basename(folder) || folder}`,
+			detail: folder,
+			directory: folder,
+			picked: true
+		})),
+		{
+			label: '$(folder-opened) Add another folder…',
+			detail: ADD_ANOTHER_FOLDER_DETAIL,
+			alwaysShow: true
+		}
+	];
 }
 
 async function selectFolders(title: string, defaultUri?: vscode.Uri): Promise<string[] | undefined> {
