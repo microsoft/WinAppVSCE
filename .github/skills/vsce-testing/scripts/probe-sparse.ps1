@@ -15,7 +15,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Import-Module "$PSScriptRoot\vscode-drive.psm1" -Force
-Import-Module "$PSScriptRoot\dialog-answer.psm1" -Force
 
 $ctx = Get-Content $CtxJson -Raw | ConvertFrom-Json
 $Workspace = (Resolve-Path $Workspace).Path

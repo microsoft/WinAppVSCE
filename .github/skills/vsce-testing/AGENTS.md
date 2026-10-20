@@ -148,6 +148,7 @@ Real command IDs: `winapp.getWinappPath`, `winapp.init`, `winapp.restore`, `wina
 
 Answers (ordered, one per prompt the command raises):
 - `@{accept=$true}` — accept the selected QuickPick item (e.g. certGenerate's Install Yes/No).
+- `@{selectNext=<count>}` — move the QuickPick highlight down before a following `accept`.
 - `@{nativeDialogPath='<path>'}` — a `showOpenDialog` folder picker (pack/run).
   Only typed when a `#32770` native dialog is foreground; a Chromium dialog is `SKIPPED`.
 - `@{nativeFileDialogPath='<path>'}` — a `showOpenDialog` file picker (createDebugIdentity,

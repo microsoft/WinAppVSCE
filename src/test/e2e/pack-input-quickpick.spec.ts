@@ -618,7 +618,7 @@ test.describe('WinApp packaging command input discovery', () => {
         }
     });
 
-    test('discovers pack inputs from every workspace root', async () => {
+    test('discovers sparse package inputs from every workspace root', async () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-multiroot-e2e-'));
         const rootA = path.join(tmpDir, 'AppA');
         const rootB = path.join(tmpDir, 'AppB');
@@ -640,16 +640,11 @@ test.describe('WinApp packaging command input discovery', () => {
             app = launched.app;
             userDataDir = launched.userDataDir;
 
-            const regularRows = await openPackPicker(launched.page);
-            expect((await regularRows.allTextContents())
-                .some(text => text.includes('AppB') && text.includes('Debug'))).toBe(true);
-            await launched.page.keyboard.press('Escape');
-
             const sparseRows = await openSparsePackPicker(launched.page);
             expect((await sparseRows.allTextContents())
                 .some(text => text.includes('AppB') && text.includes('appxmanifest.xml'))).toBe(true);
             await launched.page.keyboard.press('Escape');
-            console.log('✅ PASS: both package commands included the secondary workspace root');
+            console.log('✅ PASS: sparse packaging included the secondary workspace root');
         } finally {
             await cleanup(app, tmpDir, userDataDir);
         }

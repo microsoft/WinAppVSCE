@@ -16,9 +16,7 @@ import {
 } from './winapp-cli-utils';
 import {
 	detectProjects,
-	deduplicateBuildOutputFolders,
 	BUILD_OUTPUT_EXCLUDE_GLOB,
-	BUILD_OUTPUT_MAX_RESULTS,
 	BUILD_OUTPUT_SKIP_DIRS
 } from './project-detection';
 import { walkDirectoryTree } from './directory-walk';
@@ -64,6 +62,7 @@ import {
 	embedRewritesBinary,
 	defaultSparseOutputDir,
 	getSparseManifestPath,
+	hasExistingSparseOutput,
 	findProjectRootIn,
 	findOwningWorkspacePath,
 	chooseSparseManifest,
@@ -892,64 +891,6 @@ async function pickSparseManifestForEmbed(
 	}
 
 	return selectFile('Select sparse manifest', { 'App manifests': ['xml', 'appxmanifest'] });
-}
-
-/** Select a build output folder for the normal payload-containing pack command. */
-async function pickPackBuildOutputFolder(workspacePaths: readonly string[]): Promise<string | undefined> {
-	const defaultWorkspacePath = workspacePaths[0];
-	let cancelled = false;
-	const folders = await vscode.window.withProgress(
-		{
-			location: vscode.ProgressLocation.Notification,
-			title: 'Searching for build output folders...',
-			cancellable: true
-		},
-		async (_progress, token) => {
-			token.onCancellationRequested(() => { cancelled = true; });
-			const rootResults = await Promise.all(workspacePaths.map(async workspacePath => {
-				const exeMatches = await vscode.workspace.findFiles(
-					new vscode.RelativePattern(workspacePath, '**/*.exe'),
-					BUILD_OUTPUT_EXCLUDE_GLOB,
-					BUILD_OUTPUT_MAX_RESULTS,
-					token
-				);
-				return deduplicateBuildOutputFolders(exeMatches.map(match => match.fsPath), workspacePath);
-			}));
-			return token.isCancellationRequested
-				? undefined
-				: [...new Set(rootResults.flat())];
-		}
-	);
-
-	if (cancelled || !folders) {
-		return undefined;
-	}
-
-	if (folders.length === 0) {
-		return selectFolder('Select build output folder', vscode.Uri.file(defaultWorkspacePath));
-	}
-
-	const items: Array<vscode.QuickPickItem & { folderPath?: string }> = folders.map(folderPath => {
-		const owner = findOwningWorkspacePath(folderPath, workspacePaths) ?? defaultWorkspacePath;
-		const relative = path.relative(owner, folderPath) || '.';
-		return {
-			label: workspacePaths.length > 1 ? `${path.basename(owner)}\\${relative}` : relative,
-			detail: folderPath,
-			folderPath
-		};
-	});
-	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL });
-
-	const picked = await vscode.window.showQuickPick(items, {
-		placeHolder: 'Select the build output folder containing your app'
-	});
-	if (!picked) {
-		return undefined;
-	}
-	if (picked.detail === FOLDER_PICKER_DETAIL) {
-		return selectFolder('Select build output folder', vscode.Uri.file(defaultWorkspacePath));
-	}
-	return picked.folderPath;
 }
 
 /** Select a sparse manifest for the identity-only pack command. */
@@ -1804,15 +1745,15 @@ export function activate(context: vscode.ExtensionContext) {
 				outputDir = defaultSparseOutputDir(path.dirname(exePath));
 			}
 
-			// The CLI refuses to replace an existing manifest, so ask first
-			// rather than letting the run fail.
+			// The CLI refuses to replace an existing manifest or generated
+			// assets, so ask first rather than letting a partial rerun fail.
 			let force = false;
-			if (fs.existsSync(getSparseManifestPath(outputDir))) {
+			if (hasExistingSparseOutput(outputDir, fs.existsSync)) {
 				const relative = targetWorkspacePath
 					? path.relative(targetWorkspacePath, outputDir) || outputDir
 					: outputDir;
 				const proceed = await vscode.window.showWarningMessage(
-					`A sparse manifest already exists in ${relative}. Overwrite it and its generated assets?`,
+					`Sparse identity output already exists in ${relative}. Overwrite the manifest and generated assets?`,
 					{ modal: true },
 					'Overwrite'
 				);
@@ -1929,18 +1870,15 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register winapp.pack command
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.pack', async () => {
-			const workspacePaths = getWorkspacePaths();
-			if (!workspacePaths) {
+			const workspacePath = getWorkspacePath();
+			if (!workspacePath) {
 				return;
 			}
 
-			const inputFolder = await pickPackBuildOutputFolder(workspacePaths);
+			const inputFolder = await pickBuildOutputFolder(workspacePath);
 			if (!inputFolder) {
 				return;
 			}
-			const workspacePath =
-				findOwningWorkspacePath(inputFolder, workspacePaths) ??
-				inputFolder;
 
 			const generateCert = await vscode.window.showQuickPick(
 				['Yes', 'No'],

@@ -12,6 +12,7 @@ import {
 	embedRewritesBinary,
 	defaultSparseOutputDir,
 	getSparseManifestPath,
+	hasExistingSparseOutput,
 	isProjectMarker,
 	findProjectRootIn,
 	findOwningWorkspacePath,
@@ -423,6 +424,28 @@ describe('getSparseManifestPath', () => {
 			getSparseManifestPath('C:\\repo\\sparse'),
 			path.join('C:\\repo\\sparse', 'appxmanifest.xml')
 		);
+	});
+});
+
+describe('hasExistingSparseOutput', () => {
+	const outputDir = 'C:\\repo\\sparse';
+
+	it('detects an existing manifest', () => {
+		assert.equal(
+			hasExistingSparseOutput(outputDir, candidate => candidate === getSparseManifestPath(outputDir)),
+			true
+		);
+	});
+
+	it('detects generated assets when the manifest is missing', () => {
+		assert.equal(
+			hasExistingSparseOutput(outputDir, candidate => candidate === path.join(outputDir, 'Assets')),
+			true
+		);
+	});
+
+	it('ignores an empty output location', () => {
+		assert.equal(hasExistingSparseOutput(outputDir, () => false), false);
 	});
 });
 

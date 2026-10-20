@@ -245,6 +245,14 @@ export function getSparseManifestPath(outputDir: string): string {
 	return path.join(outputDir, SPARSE_MANIFEST_FILENAME);
 }
 
+/** Whether sparse init would overwrite a generated manifest or asset folder. */
+export function hasExistingSparseOutput(
+	outputDir: string,
+	exists: (candidate: string) => boolean
+): boolean {
+	return exists(getSparseManifestPath(outputDir)) || exists(path.join(outputDir, 'Assets'));
+}
+
 /**
  * Whether a directory entry marks its directory as a project root.
  *
