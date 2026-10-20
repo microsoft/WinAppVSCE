@@ -113,6 +113,15 @@ export function mergeFolderSelections(
 	return [...unique.values()];
 }
 
+/** Number of repeated paths removed when combining discovered and browsed folders. */
+export function countDuplicateFolderSelections(
+	discovered: readonly string[],
+	browsed: readonly string[]
+): number {
+	return discovered.length + browsed.length
+		- mergeFolderSelections(discovered, browsed).length;
+}
+
 /** Options collected from the pack prompts. */
 export interface PackOptions {
 	signing: PackSigningMode;

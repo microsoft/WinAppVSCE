@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	buildPackArgs,
+	countDuplicateFolderSelections,
 	getPackContainmentRoots,
 	isBundleInput,
 	isBundleSelection,
@@ -113,6 +114,28 @@ describe('mergeFolderSelections', () => {
 				['c:\\PUBLISH\\x64', 'C:\\publish\\arm64']
 			),
 			['C:\\publish\\x64', 'C:\\publish\\arm64']
+		);
+	});
+});
+
+describe('countDuplicateFolderSelections', () => {
+	it('counts overlap between discovered and browsed folders', () => {
+		assert.equal(
+			countDuplicateFolderSelections(
+				['C:\\publish\\x64'],
+				['c:\\PUBLISH\\x64']
+			),
+			1
+		);
+	});
+
+	it('returns zero for distinct folders', () => {
+		assert.equal(
+			countDuplicateFolderSelections(
+				['C:\\publish\\x64'],
+				['C:\\publish\\arm64']
+			),
+			0
 		);
 	});
 });

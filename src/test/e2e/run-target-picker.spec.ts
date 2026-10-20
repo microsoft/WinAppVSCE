@@ -1065,6 +1065,18 @@ test.describe('run target picker', () => {
             expect(folders).toContain(path.join('publish', 'arm64'));
             expect(folders).not.toContain(path.join('publish', 'x64', 'publish'));
 
+            await page.keyboard.press('Enter');
+            const emptySelectionWarning = page.locator('.notification-toast')
+                .filter({ hasText: 'Select at least one build output folder.' });
+            await expect(emptySelectionWarning).toBeVisible();
+            await readPickerRows(page, /^Select build output folder\(s\)/);
+            await emptySelectionWarning.hover();
+            const clearWarning = emptySelectionWarning.getByRole('button', {
+                name: /Clear Notification/
+            });
+            await expect(clearWarning).toBeVisible();
+            await clearWarning.click();
+
             await quickPickRows(page).filter({ hasText: /publish[\\/]x64/ }).click();
             await quickPickRows(page).filter({ hasText: /publish[\\/]arm64/ }).click();
             await page.keyboard.press('Enter');
