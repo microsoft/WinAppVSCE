@@ -83,18 +83,20 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
-    # Surface is framework-dependent on Windows App Runtime 2.2 (probe-3: x64 images lack it, exit 0x80670016).
-    - name: Install Windows App Runtime 2.2
-      shell: pwsh
+    # Surface's bootstrapper needs the runtime's Main/Singleton/DDLM packages, not just the framework.
+    # probe-4: x64 images have framework 2.5.1 but Surface still exits 0x80670016 (no DDLM match).
+    # Windows PowerShell: pwsh's Appx module fails on windows-2022.
+    - name: Install Windows App Runtime 2.5
+      shell: powershell
       run: |
-        $list = { Get-AppxPackage -AllUsers 'Microsoft.WindowsAppRuntime.2*' | ForEach-Object { "$($_.Name) $($_.Version) $($_.Architecture)" } }
+        $list = { Get-AppxPackage -AllUsers | Where-Object Name -match 'WinAppRuntime|WindowsAppRuntime\.2' | ForEach-Object { "$($_.Name) $($_.Version) $($_.Architecture)" } | Sort-Object }
         "Before:"; & $list
         $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
         $exe = "$env:RUNNER_TEMP\wasdk-runtime.exe"
-        Invoke-WebRequest "https://aka.ms/windowsappsdk/2.2/latest/windowsappruntimeinstall-$arch.exe" -OutFile $exe
+        Invoke-WebRequest "https://aka.ms/windowsappsdk/2.5/latest/windowsappruntimeinstall-$arch.exe" -OutFile $exe -UseBasicParsing
         & $exe --quiet --force; "installer exit: $LASTEXITCODE"
         "After:"; & $list
-        $global:LASTEXITCODE = 0
+        exit 0
 
     # Smallest group that still launches VS, installs both VSIXes, opens a WinUI page and waits for a render.
     - name: VS integration (Load group)
