@@ -81,6 +81,9 @@ internal static partial class CompletionProvider
     private static bool IsNameChar(char c) =>
         char.IsLetterOrDigit(c) || c is '_' or ':' or '.';
 
+    private static bool IsMarkupNameChar(char c) =>
+        char.IsLetterOrDigit(c) || c is '_' or ':';
+
     private static int IndexOfWhitespace(string s)
     {
         for (int i = 0; i < s.Length; i++)

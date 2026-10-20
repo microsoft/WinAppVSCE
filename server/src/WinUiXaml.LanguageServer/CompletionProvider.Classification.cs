@@ -466,7 +466,7 @@ internal static partial class CompletionProvider
         }
 
         int nameStart = i;
-        while (i < offset && (char.IsLetterOrDigit(text[i]) || text[i] == ':'))
+        while (i < offset && IsMarkupNameChar(text[i]))
         {
             i++;
         }
@@ -540,7 +540,7 @@ internal static partial class CompletionProvider
         }
 
         int nameStart = i;
-        while (i < offset && (char.IsLetterOrDigit(text[i]) || text[i] == ':'))
+        while (i < offset && IsMarkupNameChar(text[i]))
         {
             i++;
         }
@@ -612,7 +612,7 @@ internal static partial class CompletionProvider
         }
 
         int nameStart = i;
-        while (i < offset && (char.IsLetterOrDigit(text[i]) || text[i] == ':'))
+        while (i < offset && IsMarkupNameChar(text[i]))
         {
             i++;
         }

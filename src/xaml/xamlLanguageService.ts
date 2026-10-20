@@ -88,6 +88,11 @@ import {
   runGuardedTextEditCommand,
   runPromptedTextEdit,
 } from "./promptedTextEdit";
+import {
+  PROJECT_INPUTS_NOTIFICATION,
+  ProjectInputsNotification,
+  getProjectInputWatchSpecs,
+} from "./projectInputWatcher";
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
@@ -116,6 +121,11 @@ const projectContextStatuses = new Map<string, ProjectContextStatus>();
 
 // The client does not own caller-supplied watchers.
 let fileWatchers: vscode.FileSystemWatcher[] = [];
+const projectInputWatchers = new Map<
+  string,
+  { disposable: vscode.Disposable; owners: Set<string> }
+>();
+const projectInputWatchKeysByProject = new Map<string, Set<string>>();
 
 // Serialize lifecycle operations so starts and stops cannot overlap.
 const lifecycle = new ServerLifecycle();
@@ -731,6 +741,10 @@ async function doStart(context: vscode.ExtensionContext, userInitiated = false):
     PROJECT_CONTEXT_STATUS_NOTIFICATION,
     (status: ProjectContextStatus) => updateProjectContextStatus(status)
   );
+  candidate.onNotification(
+    PROJECT_INPUTS_NOTIFICATION,
+    (inputs: ProjectInputsNotification) => updateProjectInputWatchers(candidate, inputs)
+  );
 
   try {
     await candidate.start();
@@ -952,6 +966,74 @@ function disposeFileWatcher(): void {
     watcher.dispose();
   }
   fileWatchers = [];
+  for (const entry of projectInputWatchers.values()) {
+    entry.disposable.dispose();
+  }
+  projectInputWatchers.clear();
+  projectInputWatchKeysByProject.clear();
+}
+
+function updateProjectInputWatchers(
+  languageClient: LanguageClient,
+  inputs: ProjectInputsNotification
+): void {
+  if (inputs.projectPath === undefined || !path.isAbsolute(inputs.projectPath)) {
+    return;
+  }
+
+  const projectKey = normalizeWatchKey(path.normalize(inputs.projectPath));
+  const nextKeys = new Set<string>();
+  const workspaceRoots = (vscode.workspace.workspaceFolders ?? []).map(
+    (folder) => folder.uri.fsPath
+  );
+  for (const spec of getProjectInputWatchSpecs(inputs, workspaceRoots)) {
+    nextKeys.add(spec.key);
+    let entry = projectInputWatchers.get(spec.key);
+    if (entry === undefined) {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(spec.base, spec.pattern)
+      );
+      const send = (uri: vscode.Uri, type: 1 | 2 | 3): void => {
+        void languageClient
+          .sendNotification("workspace/didChangeWatchedFiles", {
+            changes: [{ uri: uri.toString(), type }],
+          })
+          .catch((error: unknown) => {
+            log(`Could not forward project input change: ${String(error)}`);
+          });
+      };
+      entry = {
+        disposable: vscode.Disposable.from(
+          watcher,
+          watcher.onDidCreate((uri) => send(uri, 1)),
+          watcher.onDidChange((uri) => send(uri, 2)),
+          watcher.onDidDelete((uri) => send(uri, 3))
+        ),
+        owners: new Set<string>(),
+      };
+      projectInputWatchers.set(spec.key, entry);
+    }
+    entry.owners.add(projectKey);
+  }
+
+  for (const oldKey of projectInputWatchKeysByProject.get(projectKey) ?? []) {
+    if (nextKeys.has(oldKey)) {
+      continue;
+    }
+
+    const entry = projectInputWatchers.get(oldKey);
+    entry?.owners.delete(projectKey);
+    if (entry !== undefined && entry.owners.size === 0) {
+      entry.disposable.dispose();
+      projectInputWatchers.delete(oldKey);
+    }
+  }
+
+  projectInputWatchKeysByProject.set(projectKey, nextKeys);
+}
+
+function normalizeWatchKey(value: string): string {
+  return process.platform === "win32" ? value.toLowerCase() : value;
 }
 
 function updateProjectContextStatus(status: ProjectContextStatus): void {

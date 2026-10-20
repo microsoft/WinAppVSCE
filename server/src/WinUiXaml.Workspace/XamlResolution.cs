@@ -16,7 +16,9 @@ namespace WinUiXaml.Workspace
             ImmutableArray<string> xamlFiles,
             string? applicationDefinitionPath,
             ImmutableArray<string> unresolvedProjectReferences = default,
-            string? generatorFailure = null)
+            string? generatorFailure = null,
+            ImmutableHashSet<string>? projectPaths = null,
+            ImmutableHashSet<string>? generatorInputFiles = null)
         {
             XamlPath = xamlPath;
             ProjectPath = projectPath;
@@ -27,6 +29,8 @@ namespace WinUiXaml.Workspace
             XamlFiles = xamlFiles;
             ApplicationDefinitionPath = applicationDefinitionPath;
             GeneratorFailure = generatorFailure;
+            ProjectPaths = projectPaths ?? ImmutableHashSet<string>.Empty;
+            GeneratorInputFiles = generatorInputFiles ?? ImmutableHashSet<string>.Empty;
             UnresolvedProjectReferences = unresolvedProjectReferences.IsDefault
                 ? ImmutableArray<string>.Empty
                 : unresolvedProjectReferences;
@@ -66,6 +70,12 @@ namespace WinUiXaml.Workspace
         /// </summary>
         public string? GeneratorFailure { get; }
 
+        /// <summary>Projects whose source contributes to the compilation, including referenced projects outside the workspace root.</summary>
+        public ImmutableHashSet<string> ProjectPaths { get; }
+
+        /// <summary>Analyzer-config and AdditionalFiles inputs consumed by source generators.</summary>
+        public ImmutableHashSet<string> GeneratorInputFiles { get; }
+
         /// <summary>Rebinds the document's in-memory <c>x:Class</c> against the same immutable project compilation. This avoids rebuilding project-wide XAML metadata for an XML-only edit.</summary>
         public XamlResolution WithClassName(string? className) =>
             new(
@@ -78,6 +88,8 @@ namespace WinUiXaml.Workspace
                 XamlFiles,
                 ApplicationDefinitionPath,
                 UnresolvedProjectReferences,
-                GeneratorFailure);
+                GeneratorFailure,
+                ProjectPaths,
+                GeneratorInputFiles);
     }
 }

@@ -109,6 +109,7 @@ namespace WinUiXaml.LanguageServer.Lsp;
 [JsonSerializable(typeof(List<DocumentSymbol>))]
 // winui-xaml/* notifications
 [JsonSerializable(typeof(ProjectContextStatusParams))]
+[JsonSerializable(typeof(ProjectInputsParams))]
 [JsonSerializable(typeof(ProjectRestoreRequiredParams))]
 [JsonSerializable(typeof(ProjectBuildRequiredParams))]
 // Primitives that can appear as a bare result

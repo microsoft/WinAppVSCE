@@ -39,6 +39,7 @@
 
   <ItemGroup>
     <Manifest Include="$(ApplicationManifest)" />
+    <AdditionalFiles Include="GeneratorInputs\settings.json" />
   </ItemGroup>
 
   <!--

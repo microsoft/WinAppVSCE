@@ -197,6 +197,32 @@ public sealed class MarkupExtensionCompletionTests
     }
 
     [Fact]
+    public void UnderscoreAliasedXBindOffersPathAndArgumentCompletion()
+    {
+        var pathLabels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x_lang="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:local="using:App">
+              <DataTemplate x_lang:DataType="local:ViewModel">
+                <TextBlock Text="{x_lang:Bind Gre|}" />
+              </DataTemplate>
+            </Page>
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+        var argumentLabels = Complete(
+            """
+            <Page xmlns="using:Microsoft.UI.Xaml"
+                  xmlns:x_lang="http://schemas.microsoft.com/winfx/2006/xaml"
+                  Tag="{x_lang:Bind Greeting, Mo|}" />
+            """,
+            CreateTypeSystem(includeMarkupExtensionBase: true));
+
+        Assert.Contains("Greeting", pathLabels);
+        Assert.Contains("Mode", argumentLabels);
+    }
+
+    [Fact]
     public void CustomMarkupElementNameArgumentDoesNotReceiveBindingNames()
     {
         var labels = Complete(

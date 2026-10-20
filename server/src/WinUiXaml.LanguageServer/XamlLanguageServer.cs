@@ -26,6 +26,7 @@ internal sealed partial class XamlLanguageServer
         new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, XamlTypeSystem> _typeSystems = new();
     private readonly XamlResourceGraph _resourceGraph = new();
+    private readonly ProjectInputTracker _projectInputs = new();
     private readonly AsyncLocal<CancellationToken> _requestCancellation = new();
 
     // Set for requests that must never queue behind a cold MSBuild design-time build. Defaults to
@@ -559,14 +560,32 @@ internal sealed partial class XamlLanguageServer
                 ext.Equals(".props", StringComparison.OrdinalIgnoreCase) ||
                 ext.Equals(".targets", StringComparison.OrdinalIgnoreCase);
             var isNuGetAssets = IsNuGetAssetsPath(path);
-            if (!isCs && !isCsproj && !isVcxproj && !isXaml && !isImportedBuildFile && !isNuGetAssets)
+            var isProjectDirectoryInput =
+                isCs || isCsproj || isVcxproj || isXaml || isImportedBuildFile;
+            var trackedProjects = _projectInputs.GetProjectsToInvalidate(
+                path,
+                includeProjectDirectories: isProjectDirectoryInput);
+            var isTrackedInput = trackedProjects.Count > 0;
+            if (!isProjectDirectoryInput && !isNuGetAssets && !isTrackedInput)
             {
                 continue;
             }
 
             if (!TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot))
             {
+                foreach (var trackedProject in trackedProjects)
+                {
+                    projectsToInvalidate.Add(trackedProject);
+                }
                 continue;
+            }
+
+            if (isTrackedInput)
+            {
+                foreach (var trackedProject in trackedProjects)
+                {
+                    projectsToInvalidate.Add(trackedProject);
+                }
             }
 
             if (!isNuGetAssets && IsGeneratedBuildPath(canonicalPath, allowedRoot))

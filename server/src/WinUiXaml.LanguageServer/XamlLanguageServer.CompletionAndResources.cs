@@ -495,6 +495,18 @@ internal sealed partial class XamlLanguageServer
         var fullTypeSystem = _typeSystems.GetValue(
             fullResolution.Compilation,
             _ => XamlTypeSystem.FromResolution(fullResolution));
+        _projectInputs.Register(
+            fullResolution.ProjectPath,
+            fullResolution.ProjectPaths,
+            fullResolution.GeneratorInputFiles);
+        await _connection.SendNotificationAsync(
+            "winui-xaml/projectInputs",
+            new ProjectInputsParams
+            {
+                ProjectPath = fullResolution.ProjectPath,
+                ProjectPaths = fullResolution.ProjectPaths.ToList(),
+                GeneratorInputFiles = fullResolution.GeneratorInputFiles.ToList(),
+            }).ConfigureAwait(false);
         return new XamlProjectContext(fullResolution, fullTypeSystem, XamlProjectStage.Full);
     }
 

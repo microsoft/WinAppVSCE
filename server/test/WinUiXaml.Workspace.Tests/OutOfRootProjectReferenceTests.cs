@@ -55,12 +55,15 @@ public sealed class OutOfRootProjectReferenceTests
             var resolver = new XamlProjectResolver();
 
             // searchRoot is the app folder: the sibling is outside it by construction.
-            var resolution = await resolver.ResolveFrameworkAsync(
+            var resolution = await resolver.ResolveAsync(
                 xamlPath, searchRoot: appDir, xamlText: xamlText);
 
             // The owning project must still be found -- it lives inside the root.
             Assert.NotNull(resolution);
             Assert.Equal(appProject, resolution!.ProjectPath, ignoreCase: true);
+            Assert.Contains(
+                resolution.ProjectPaths,
+                path => path.Equals(libProject, StringComparison.OrdinalIgnoreCase));
 
             // The load that matters: the out-of-root reference has to show up somewhere. Either it
             // resolved (its output is on the reference list) or it was reported unresolved. What
@@ -80,6 +83,59 @@ public sealed class OutOfRootProjectReferenceTests
         finally
         {
             TryDelete(solutionRoot);
+        }
+    }
+
+    [Fact]
+    public async Task GeneratorInputsAreExposedForFileWatching()
+    {
+        var projectDir = Path.Combine(
+            Path.GetTempPath(), "winui-xaml-generator-inputs", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(projectDir);
+        var inputPath = Path.Combine(projectDir, "settings.json");
+        File.WriteAllText(inputPath, "{}");
+        var editorConfigPath = Path.Combine(projectDir, "generator.editorconfig");
+        File.WriteAllText(editorConfigPath, "is_global = true");
+        var projectPath = Path.Combine(projectDir, "App.csproj");
+        File.WriteAllText(
+            projectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <ItemGroup>
+                <AdditionalFiles Include="settings.json" />
+                <EditorConfigFiles Include="generator.editorconfig" />
+              </ItemGroup>
+            </Project>
+            """);
+        var xamlPath = Path.Combine(projectDir, "MainWindow.xaml");
+        File.WriteAllText(xamlPath, "<Window />");
+
+        FixtureRestore.Run(projectPath);
+
+        try
+        {
+            using var resolver = new XamlProjectResolver();
+            var resolution = await resolver.ResolveAsync(
+                xamlPath,
+                searchRoot: projectDir,
+                xamlText: "<Window />");
+
+            Assert.NotNull(resolution);
+            Assert.Contains(
+                resolution!.GeneratorInputFiles,
+                path => path.Equals(inputPath, StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                resolution.GeneratorInputFiles,
+                path => path.Equals(editorConfigPath, StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
+                resolution.GeneratorInputFiles,
+                path => path.Split(Path.DirectorySeparatorChar)
+                    .Any(segment => segment.Equals("obj", StringComparison.OrdinalIgnoreCase)));
+        }
+        finally
+        {
+            TryDelete(projectDir);
         }
     }
 

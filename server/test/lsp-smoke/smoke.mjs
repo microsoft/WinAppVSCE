@@ -33,6 +33,12 @@ const EXPECTED_HANDLER_LINE = 26; // OnGo_Click is on line 27 (1-based) of Smoke
 const EXPECTED_GREETING_LINE = 15; // GreetingText is on line 16 (1-based) of SmokePage.xaml.cs
 const EXPECTED_APP_XAML = "app.xaml";
 const APP_XAML = resolve(dirname(XAML), "App.xaml");
+const FIXTURE_PROJECT = resolve(dirname(XAML), "SmokeFixture.csproj");
+
+function normalizePath(value) {
+  const normalized = resolve(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
 
 let server;
 
@@ -512,6 +518,14 @@ async function main() {
     90000,
     "project context ready status"
   );
+  const projectInputsPromise = waitFor(
+    (message) =>
+      message.method === "winui-xaml/projectInputs" &&
+      typeof message.params?.projectPath === "string" &&
+      normalizePath(message.params?.projectPath) === normalizePath(FIXTURE_PROJECT),
+    90000,
+    "project input watch notification"
+  );
   send({
     method: "textDocument/didOpen",
     params: { textDocument: { uri: xamlUri, languageId: "xaml", version: 1, text: xamlText } },
@@ -607,7 +621,53 @@ async function main() {
 
   await frameworkReadyStatusPromise;
   await readyStatusPromise;
+  const projectInputs = await projectInputsPromise;
+  const generatorInputPath = join(dirname(XAML), "GeneratorInputs", "settings.json");
+  if (!(projectInputs.params?.projectPaths ?? [])
+    .some((projectPath) => normalizePath(projectPath) === normalizePath(FIXTURE_PROJECT))) {
+    fail(`project input notification omitted the owning project: ${JSON.stringify(projectInputs.params)}`);
+  }
+  if (!(projectInputs.params?.generatorInputFiles ?? [])
+    .some((inputPath) => normalizePath(inputPath) === normalizePath(generatorInputPath))) {
+    fail(`project input notification omitted AdditionalFiles input: ${JSON.stringify(projectInputs.params)}`);
+  }
   console.log("[ok] project context status: loading -> framework-ready -> ready");
+
+  let generatorReloadStarted = false;
+  let generatorInputsRepublished = false;
+  const generatorReloadReady = waitFor(
+    (message) => {
+      if (
+        generatorReloadStarted &&
+        message.method === "winui-xaml/projectInputs" &&
+        typeof message.params?.projectPath === "string" &&
+        normalizePath(message.params.projectPath) === normalizePath(FIXTURE_PROJECT)
+      ) {
+        generatorInputsRepublished = true;
+        return false;
+      }
+      if (message.method !== "winui-xaml/projectContextStatus" || message.params?.uri !== xamlUri) {
+        return false;
+      }
+      if (message.params?.state === "loading") {
+        generatorReloadStarted = true;
+        return false;
+      }
+      return generatorReloadStarted &&
+        generatorInputsRepublished &&
+        message.params?.state === "ready";
+    },
+    90000,
+    "generator input reload"
+  );
+  send({
+    method: "workspace/didChangeWatchedFiles",
+    params: {
+      changes: [{ uri: pathToFileURL(generatorInputPath).href, type: 2 }],
+    },
+  });
+  await generatorReloadReady;
+  console.log("[ok] AdditionalFiles watcher input invalidates and reloads project context");
 
   // 4) the same F12, once the project is ready, resolves OnGo_Click to the C# code-behind.
   console.log(`[..] definition at ${caret.line}:${caret.character}`);

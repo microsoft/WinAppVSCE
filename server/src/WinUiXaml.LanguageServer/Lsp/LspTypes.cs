@@ -26,6 +26,13 @@ internal sealed class ProjectContextStatusParams
     [JsonPropertyName("message")] public string? Message { get; set; }
 }
 
+internal sealed class ProjectInputsParams
+{
+    [JsonPropertyName("projectPath")] public string? ProjectPath { get; set; }
+    [JsonPropertyName("projectPaths")] public List<string>? ProjectPaths { get; set; }
+    [JsonPropertyName("generatorInputFiles")] public List<string>? GeneratorInputFiles { get; set; }
+}
+
 internal sealed class ProjectRestoreRequiredParams
 {
     [JsonPropertyName("projectPath")] public string? ProjectPath { get; set; }

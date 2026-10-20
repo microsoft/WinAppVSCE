@@ -59,14 +59,13 @@ namespace WinUiXaml.Workspace
     /// </summary>
     public sealed class RoslynProjectWorkspace : IDisposable
     {
-        private readonly ImmutableHashSet<string> _projectPaths;
-
         private RoslynProjectWorkspace(
             Compilation compilation,
             ImmutableArray<MetadataReference> metadataReferences,
             CSharpCompilationOptions compilationOptions,
             string assemblyName,
             ImmutableHashSet<string> projectPaths,
+            ImmutableHashSet<string> generatorInputFiles,
             ImmutableArray<string> xamlFiles,
             string? applicationDefinitionPath,
             ImmutableArray<string> unresolvedProjectReferences,
@@ -76,7 +75,8 @@ namespace WinUiXaml.Workspace
             MetadataReferences = metadataReferences;
             CompilationOptions = compilationOptions;
             AssemblyName = assemblyName;
-            _projectPaths = projectPaths;
+            ProjectPaths = projectPaths;
+            GeneratorInputFiles = generatorInputFiles;
             XamlFiles = xamlFiles;
             ApplicationDefinitionPath = applicationDefinitionPath;
             GeneratorFailure = generatorFailure;
@@ -93,6 +93,8 @@ namespace WinUiXaml.Workspace
 
         public CSharpCompilationOptions CompilationOptions { get; }
         public string AssemblyName { get; }
+        public ImmutableHashSet<string> ProjectPaths { get; }
+        public ImmutableHashSet<string> GeneratorInputFiles { get; }
         public ImmutableArray<string> XamlFiles { get; }
         public string? ApplicationDefinitionPath { get; }
 
@@ -149,6 +151,7 @@ namespace WinUiXaml.Workspace
             var commandLine = arguments.IsDefaultOrEmpty
                 ? CscCommandLine.Empty
                 : CscCommandLine.Parse(arguments, Path.GetDirectoryName(fullPath)!);
+            graph.RecordGeneratorInputs(fullPath, commandLine);
             var assemblyName = commandLine.AssemblyName
                 ?? evaluation.AssemblyName
                 ?? Path.GetFileNameWithoutExtension(fullPath);
@@ -190,7 +193,9 @@ namespace WinUiXaml.Workspace
                 allReferences,
                 options,
                 assemblyName,
-                graph.KnownProjects.ToImmutable(),                evaluation.XamlFiles,
+                graph.KnownProjects.ToImmutable(),
+                graph.GeneratorInputFiles.ToImmutable(),
+                evaluation.XamlFiles,
                 evaluation.ApplicationDefinition,
                 unresolvedProjectReferences,
                 graph.GeneratorFailure);
@@ -279,12 +284,14 @@ namespace WinUiXaml.Workspace
             public ProjectGraphContext(string rootPath)
             {
                 KnownProjects = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+                GeneratorInputFiles = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
                 KnownProjects.Add(rootPath);
                 InProgress = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootPath };
                 Compilations = new Dictionary<string, Compilation?>(StringComparer.OrdinalIgnoreCase);
             }
 
             public ImmutableHashSet<string>.Builder KnownProjects { get; }
+            public ImmutableHashSet<string>.Builder GeneratorInputFiles { get; }
 
             /// <summary>Projects on the current recursion path; re-entering one is a cycle.</summary>
             public HashSet<string> InProgress { get; }
@@ -306,6 +313,26 @@ namespace WinUiXaml.Workspace
 
                 GeneratorFailure = $"{Path.GetFileName(projectPath)}: {reason}";
             }
+
+            public void RecordGeneratorInputs(string projectPath, CscCommandLine commandLine)
+            {
+                var projectDirectory = Path.GetDirectoryName(projectPath)!;
+                GeneratorInputFiles.UnionWith(
+                    commandLine.AnalyzerConfigs.Where(
+                        path => !IsGeneratedBuildPath(path, projectDirectory)));
+                GeneratorInputFiles.UnionWith(
+                    commandLine.AdditionalFiles.Where(
+                        path => !IsGeneratedBuildPath(path, projectDirectory)));
+            }
+
+            private static bool IsGeneratedBuildPath(string path, string projectDirectory) =>
+                Path.GetRelativePath(projectDirectory, Path.GetFullPath(path))
+                    .Split(
+                        new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                        StringSplitOptions.RemoveEmptyEntries)
+                    .Any(segment =>
+                        segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                        segment.Equals("obj", StringComparison.OrdinalIgnoreCase));
         }
 
 
@@ -422,6 +449,7 @@ namespace WinUiXaml.Workspace
             }
 
             var commandLine = CscCommandLine.Parse(arguments, Path.GetDirectoryName(projectPath)!);
+            context.RecordGeneratorInputs(projectPath, commandLine);
             if (commandLine.Sources.IsDefaultOrEmpty)
             {
                 return null;
@@ -705,7 +733,7 @@ namespace WinUiXaml.Workspace
             Task.FromResult<Compilation?>(Compilation);
 
         internal bool ContainsProject(string projectPath) =>
-            _projectPaths.Contains(Path.GetFullPath(projectPath));
+            ProjectPaths.Contains(Path.GetFullPath(projectPath));
 
         /// <summary>Creates a source-free compilation over MSBuild-selected references so framework metadata is available before sources and generators compile.</summary>
         public Compilation GetFrameworkCompilation() =>

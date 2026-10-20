@@ -169,7 +169,9 @@ namespace WinUiXaml.Workspace
                 workspace.XamlFiles,
                 workspace.ApplicationDefinitionPath,
                 workspace.UnresolvedProjectReferences,
-                workspace.GeneratorFailure);
+                workspace.GeneratorFailure,
+                workspace.ProjectPaths,
+                workspace.GeneratorInputFiles);
         }
 
         /// <summary>Resolves framework metadata from the owning project's exact MSBuild-selected references without compiling project sources or running source generators.</summary>

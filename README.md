@@ -379,7 +379,7 @@ The winapp CLI (and this extension) works with any Windows app framework:
 
 - Windows 10 or later
 - Visual Studio Code 1.109.0 or later
-- The [.NET SDK](https://dotnet.microsoft.com/download), for two optional features: 8.0.100 or later for **WinApp: Create WinUI App**, which delegates scaffolding to `dotnet new`, and .NET 10 for project-aware XAML IntelliSense in C# projects. The extension never installs or bundles it, and the XAML language server itself needs no .NET. See [WinUI XAML Language Service](#winui-xaml-language-service).
+- The [.NET SDK](https://dotnet.microsoft.com/download), for two optional features: 8.0.100 or later for **WinApp: Create WinUI App**, which delegates scaffolding to `dotnet new`, and .NET 10 for project-aware XAML IntelliSense in C# projects. The extension never installs or bundles it, and the XAML language server itself needs no .NET. See [WinApp XAML IntelliSense](#winapp-xaml-intellisense).
 
 The winapp CLI is bundled with the extension: no separate installation required.
 
