@@ -1855,8 +1855,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			if (embedRewritesBinary(target)) {
 				void vscode.window.showInformationMessage(
-					`Embedding package identity into ${path.basename(target)}. If this executable was previously ` +
-					'signed, use "WinApp: Sign File" again before distributing.'
+					`Embedding identity into ${path.basename(target)}. Previously signed? Re-sign before distributing.`
 				);
 			}
 
