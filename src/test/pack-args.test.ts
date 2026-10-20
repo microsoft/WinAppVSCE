@@ -88,6 +88,19 @@ describe('resolveFolderSelection', () => {
 		);
 	});
 
+	it('preserves accumulated folders when Add another folder… is selected', () => {
+		assert.deepEqual(
+			resolveFolderSelection(
+				[
+					{ detail: 'C:\\app-one\\x64', directory: 'C:\\app-one\\x64' },
+					{ detail: 'Open another folder picker' }
+				],
+				'Open another folder picker'
+			),
+			{ kind: 'browse', folders: ['C:\\app-one\\x64'] }
+		);
+	});
+
 	it('returns none when ticked items carry no directory', () => {
 		assert.deepEqual(
 			resolveFolderSelection([{ detail: 'something else' }], BROWSE_DETAIL),
