@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -71,6 +71,10 @@ namespace WinUIXamlPreview.UI
         private string? _activeSurfaceExe;
         private string? _activeUserDll;
         private string? _activeUserAppXaml;
+        private string? _activeProject;
+        // Documents whose "project not built" hint the user closed — don't re-nag on every edit.
+        private readonly System.Collections.Generic.HashSet<string> _buildHintDismissed =
+            new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string? _activeTheme;
         // The design-time (merged core+toolkit) pri staged for a version-MATCHED host via --user-pri. Null on
         // the bundled 2.2.0 leg (which launches byte-clean, no --user-pri). Kept in sync with _activeSurfaceExe
@@ -105,6 +109,7 @@ namespace WinUIXamlPreview.UI
         // the fidelity bar carries the background full-fidelity upgrade. Both live in BannerHost (row 0).
         private readonly PreviewInfoBar _messageBar = new PreviewInfoBar("PreviewMessageBar");
         private readonly PreviewInfoBar _fidelityBar = new PreviewInfoBar("PreviewFidelityBar");
+        private readonly PreviewInfoBar _buildHintBar = new PreviewInfoBar("PreviewBuildHintBar");
         private bool _reconnectShown;
         // Versions whose background build already FAILED this VS session — don't auto-retry (no retry loop).
         private static readonly System.Collections.Generic.HashSet<string> FailedVersions =
@@ -116,6 +121,14 @@ namespace WinUIXamlPreview.UI
 
             BannerHost.Children.Add(_messageBar);
             BannerHost.Children.Add(_fidelityBar);
+            BannerHost.Children.Add(_buildHintBar);
+            _buildHintBar.Dismissed += (_, __) =>
+            {
+                if (SelectionDocument is string doc)
+                {
+                    _buildHintDismissed.Add(doc);
+                }
+            };
 
             _resizeDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
             _resizeDebounce.Tick += OnResizeDebounceTick;
@@ -508,6 +521,7 @@ namespace WinUIXamlPreview.UI
             _activeSurfaceExe = surfaceExe;
             _activeUserDll = userDll;
             _activeUserAppXaml = userAppXaml;
+            _activeProject = plan?.TargetProject;
             _activeTheme = PreviewOptions.Theme;
             // The instant launch is the bundled 2.2.0 host — always byte-clean (no --user-pri). A version-
             // matched host (with its merged pri) is swapped in later by the background upgrade, which updates
@@ -1567,6 +1581,18 @@ namespace WinUIXamlPreview.UI
 
                 _upgradeBuild = build;
                 ShowFidelityBuilding(version!, building: true);
+                void OnCompiling() => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (ReferenceEquals(_upgradeBuild, build))
+                    {
+                        ShowFidelityBuilding(version!, building: true, compiling: true);
+                    }
+                }));
+                build.Compiling += OnCompiling;
+                if (build.IsCompiling)
+                {
+                    OnCompiling();
+                }
             }
             else
             {
@@ -1766,14 +1792,16 @@ namespace WinUIXamlPreview.UI
 
         // ---- fidelity banner (top info bar, non-blocking) -------------------
 
-        private void ShowFidelityBuilding(string version, bool building)
+        private void ShowFidelityBuilding(string version, bool building, bool compiling = false)
         {
             _fidelityBar.Show(
                 BannerSeverity.Progress,
-                "Preparing full-fidelity preview",
-                building
-                    ? $"Matching WinAppSDK {version} — checking shared inputs and cache…"
-                    : $"Matching WinAppSDK {version}…",
+                compiling ? "Building full-fidelity preview" : "Preparing full-fidelity preview",
+                compiling
+                    ? $"Matching WinAppSDK {version}. This takes longer on first run."
+                    : building
+                        ? $"Matching WinAppSDK {version} — checking shared inputs and cache…"
+                        : $"Matching WinAppSDK {version}…",
                 actionText: "Cancel",
                 onAction: OnFidelityCancel,
                 dismissible: false);
@@ -1800,6 +1828,31 @@ namespace WinUIXamlPreview.UI
         private void HideFidelityBanner()
         {
             _fidelityBar.Hide();
+        }
+
+        /// <summary>
+        /// Warn when an unbuilt project's page rendered with parts missing (custom controls placeholdered, app
+        /// resources unresolved) — a build restores them, and the output watcher relaunches the preview on its own.
+        /// </summary>
+        private void UpdateBuildHint(System.Collections.Generic.List<string>? missingKeys, System.Collections.Generic.List<string>? unmappedTypes)
+        {
+            var doc = SelectionDocument;
+            var unbuilt = _activeProject != null && _activeUserDll == null;
+            var text = BuildHint.Describe(unbuilt, missingKeys, unmappedTypes);
+            if (text == null || (doc != null && _buildHintDismissed.Contains(doc)))
+            {
+                if (_buildHintBar.IsShown)
+                {
+                    _buildHintBar.Hide();
+                }
+                return;
+            }
+
+            if (!_buildHintBar.IsShown)
+            {
+                Log.Write($"Build hint: unbuilt project; {missingKeys?.Count ?? 0} unresolved key(s), unmapped type(s): {string.Join(", ", unmappedTypes ?? new System.Collections.Generic.List<string>())}.");
+            }
+            _buildHintBar.Show(BannerSeverity.Warning, BuildHint.Title, text);
         }
 
         private void OnFidelityCancel()
@@ -1868,6 +1921,7 @@ namespace WinUIXamlPreview.UI
                     PerfEnd("frame");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
+                    UpdateBuildHint(frame.MissingKeys, frame.UnmappedTypes);
                     Log.Write($"Frame rendered: {frame.Width}x{frame.Height}px ({frame.DipWidth}x{frame.DipHeight} dip).");
                 }
                 catch (Exception ex)
@@ -1933,6 +1987,7 @@ namespace WinUIXamlPreview.UI
                     PerfEnd("hwnd");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
+                    UpdateBuildHint(msg.MissingKeys, msg.UnmappedTypes);
                     Log.Write($"Native surface hosted: hwnd=0x{msg.Hwnd:X} px={pxW}x{pxH} dip={dipW:0}x{dipH:0} scale={msg.Scale}.");
                 }
                 catch (Exception ex)
@@ -2008,6 +2063,7 @@ namespace WinUIXamlPreview.UI
                 }
 
                 PerfEnd(err.NotDesignable ? "notdesignable" : "error");
+                UpdateBuildHint(err.MissingKeys, err.UnmappedTypes);
 
                 // A promoted spare that answered with an error never rendered, so it is still fresh: a held
                 // edit (often the fix for a half-typed tag) can safely render in it now instead of waiting.
@@ -2429,6 +2485,7 @@ namespace WinUIXamlPreview.UI
                 _upgradeBuild = null;
             }
             HideFidelityBanner();
+            _buildHintBar.Hide();
 
             // Tear down the spare + any surface we were mid-swap retiring.
             if (_spareClient != null)

@@ -623,6 +623,8 @@ internal sealed class FrameServer
                 dipWidth = result.DipWidth,
                 dipHeight = result.DipHeight,
                 data = Convert.ToBase64String(result.Image!),
+                missingKeys = RenderHost.LastMissingKeys,
+                unmappedTypes = RenderHost.LastUnmappedTypes,
             });
         }
         else
@@ -635,6 +637,8 @@ internal sealed class FrameServer
                 line = result.Line,
                 column = result.Column,
                 notDesignable = result.NotDesignable,
+                missingKeys = RenderHost.LastMissingKeys,
+                unmappedTypes = RenderHost.LastUnmappedTypes,
             });
         }
     }
@@ -686,6 +690,8 @@ internal sealed class FrameServer
                 pixelWidth = result.PixelWidth,
                 pixelHeight = result.PixelHeight,
                 scale = result.DpiScale,
+                missingKeys = RenderHost.LastMissingKeys,
+                unmappedTypes = RenderHost.LastUnmappedTypes,
             });
 
             // Teach the client the authored subtree's custom content-property names (bug D1) so its XAML
@@ -703,6 +709,8 @@ internal sealed class FrameServer
                 line = result.Line,
                 column = result.Column,
                 notDesignable = result.NotDesignable,
+                missingKeys = RenderHost.LastMissingKeys,
+                unmappedTypes = RenderHost.LastUnmappedTypes,
             });
         }
     }

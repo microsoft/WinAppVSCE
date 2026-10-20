@@ -129,7 +129,10 @@ internal sealed class RenderHost
     internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false)
     {
         var missing = new SortedSet<string>(StringComparer.Ordinal);
-        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing);
+        var unmapped = new SortedSet<string>(StringComparer.Ordinal);
+        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped);
+        LastMissingKeys = missing.ToArray();
+        LastUnmappedTypes = unmapped.ToArray();
         // WS2-F5: name keys the preview can't resolve (e.g. added in App.xaml.cs), once per distinct set.
         var summary = string.Join(", ", missing);
         if (missing.Count > 0 && summary != _lastMissingKeys)
@@ -141,6 +144,12 @@ internal sealed class RenderHost
     }
 
     private static string? _lastMissingKeys;
+
+    /// <summary>Resource keys the most recent clean could not resolve (reported to the client with each render).</summary>
+    internal static string[] LastMissingKeys { get; private set; } = Array.Empty<string>();
+
+    /// <summary>Custom types the most recent clean had to placeholder/drop because nothing could map them.</summary>
+    internal static string[] LastUnmappedTypes { get; private set; } = Array.Empty<string>();
 
     /// <summary>
     /// WS2-F6: when true, <c>{x:Bind}</c> text properties render a placeholder and bound lists get dummy
@@ -233,6 +242,8 @@ internal sealed class RenderHost
     private (FrameworkElement? root, string? phase, string? message, int? line, int? column) TryParseRoot(
         string rawXaml, RenderTimings? timings = null)
     {
+        LastMissingKeys = Array.Empty<string>();
+        LastUnmappedTypes = Array.Empty<string>();
         try
         {
             // P1 (non-page classification): a structurally non-designable root — a ResourceDictionary

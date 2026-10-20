@@ -201,6 +201,9 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("dipHeight")] public int DipHeight { get; set; }
 
         [JsonPropertyName("data")] public string? Data { get; set; }
+
+        [JsonPropertyName("missingKeys")] public List<string>? MissingKeys { get; set; }
+        [JsonPropertyName("unmappedTypes")] public List<string>? UnmappedTypes { get; set; }
     }
 
     internal sealed class ErrorMsg
@@ -214,6 +217,9 @@ namespace WinUIXamlPreview.Protocol
         /// <summary>P1: true when this is a structurally non-designable root (ResourceDictionary/Window/
         /// template placeholder), not a broken preview — the UI can show a "not a page" note instead of an error.</summary>
         [JsonPropertyName("notDesignable")] public bool NotDesignable { get; set; }
+
+        [JsonPropertyName("missingKeys")] public List<string>? MissingKeys { get; set; }
+        [JsonPropertyName("unmappedTypes")] public List<string>? UnmappedTypes { get; set; }
     }
 
     /// <summary>
@@ -229,6 +235,12 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("pixelWidth")] public int PixelWidth { get; set; }
         [JsonPropertyName("pixelHeight")] public int PixelHeight { get; set; }
         [JsonPropertyName("scale")] public double Scale { get; set; }
+
+        /// <summary>Resource keys the surface couldn't resolve while cleaning this document.</summary>
+        [JsonPropertyName("missingKeys")] public List<string>? MissingKeys { get; set; }
+
+        /// <summary>Custom types the surface replaced with placeholders because nothing could map them.</summary>
+        [JsonPropertyName("unmappedTypes")] public List<string>? UnmappedTypes { get; set; }
     }
 
     /// <summary>Acknowledgement that the surface left native mode (window re-cloaked off-screen).</summary>

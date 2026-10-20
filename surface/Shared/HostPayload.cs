@@ -23,6 +23,8 @@ internal static class HostPayload
 {
     public const string ManifestName = ".payload.json";
     public const string RunMarker = ".surface-run";
+    /// <summary>Provisioner stderr line emitted on a cache miss, just before the slow compile starts.</summary>
+    public const string CompilingMarker = "PHASE: compiling matched host";
     public static string Hash(string path, CancellationToken cancellation = default)
     {
         cancellation.ThrowIfCancellationRequested();

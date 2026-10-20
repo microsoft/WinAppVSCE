@@ -495,6 +495,16 @@ namespace Surface.Tests
             var r2 = CleanRoot(Doc("<TextBlock x:Name=\"T\" Text=\"{StaticResource Greeting}\" />"), sample: true);
             Eq("sample on: missing text resource -> {Key} placeholder", "{}{Greeting}", Attr(Named(r2, "T"), "Text"));
             Check("null missing-set tolerated", Attr(Named(CleanRoot(Doc("<Border x:Name=\"B\" Background=\"{StaticResource Z}\" />")), "B"), "Background") is null);
+
+            // Rule 8: a Setter left without a value by Rule 6 is dropped (it would fail the whole document).
+            var r3 = CleanRoot(Doc(
+                "<Page.Resources><Style x:Key=\"S\" TargetType=\"Button\">" +
+                "<Setter Property=\"CornerRadius\" Value=\"{StaticResource Nope}\" />" +
+                "<Setter Property=\"Padding\" Value=\"4\" />" +
+                "<Setter Property=\"Template\"><Setter.Value><ControlTemplate /></Setter.Value></Setter>" +
+                "</Style></Page.Resources><Grid />"), sample: true);
+            var props = r3.Descendants().Where(e => e.Name.LocalName == "Setter").Select(e => Attr(e, "Property")).ToList();
+            Eq("valueless Setter dropped; others kept", "Padding,Template", string.Join(",", props));
         }
 
         // ------------------------------------------------------------ R7
@@ -553,6 +563,15 @@ namespace Surface.Tests
             var clr = CleanRoot(Doc("<legacy:Gauge x:Name=\"G\" xmlns:legacy=\"clr-namespace:Bad.Legacy;assembly=Bad\" />"),
                 provider: n => n != "Bad.Legacy.Gauge");
             Eq("clr-namespace: custom type resolved by full name", Pres + "Border", Named(clr, "G")?.Name.ToString());
+
+            // Unmapped-type report (drives the extension's "project not built" hint): every custom type the
+            // provider can't map, including forced and property-element owners; mapped+forced types excluded.
+            var unmapped = new SortedSet<string>(StringComparer.Ordinal);
+            XamlCleaner.Clean(raw, providerMapsFullName: GoodOnly, forcePlaceholderTypes: new HashSet<string> { "Good.Thrower", "Other" }, unmappedTypes: unmapped);
+            Eq("unmappedTypes: only provider-unmappable types", "Bad.Chart,Bad.Interaction,Bad.Outer", string.Join(",", unmapped));
+            var none = new SortedSet<string>(StringComparer.Ordinal);
+            XamlCleaner.Clean(Doc("<Grid><good:Card /></Grid>"), providerMapsFullName: GoodOnly, unmappedTypes: none);
+            Check("unmappedTypes: empty when everything maps", none.Count == 0, string.Join(",", none));
         }
 
         private static void Rule7abc()

@@ -154,13 +154,15 @@ internal static class XamlCleaner
     /// mark bound lists for <see cref="SampleListFiller"/>. False keeps the plain Rule 2 drop.
     /// </param>
     /// <param name="missingResourceKeys">Receives every <c>{StaticResource}</c>/<c>{ThemeResource}</c> key Rule 6 could not resolve. May be null.</param>
+    /// <param name="unmappedTypes">Receives the full name of every custom type Rule 7 removed because the provider chain couldn't map it (not forced swaps). May be null.</param>
     public static string Clean(
         string rawXaml,
         Func<string, bool>? isKnownResourceKey = null,
         Func<string, bool>? providerMapsFullName = null,
         ISet<string>? forcePlaceholderTypes = null,
         bool sampleData = false,
-        ISet<string>? missingResourceKeys = null)
+        ISet<string>? missingResourceKeys = null,
+        ISet<string>? unmappedTypes = null)
     {
         if (string.IsNullOrWhiteSpace(rawXaml))
         {
@@ -232,13 +234,24 @@ internal static class XamlCleaner
             var droppedKeys = new HashSet<string>(StringComparer.Ordinal);
             if (providerMapsFullName is not null)
             {
-                SubstituteUnresolvableElements(root, docKeys, droppedKeys, providerMapsFullName, forcePlaceholderTypes);
+                SubstituteUnresolvableElements(root, docKeys, droppedKeys, providerMapsFullName, forcePlaceholderTypes, unmappedTypes);
             }
 
             // Attribute pass over every surviving element.
             foreach (var el in root.DescendantsAndSelf().ToList())
             {
                 CleanElementAttributes(el, root, isKnownResourceKey, docKeys, droppedKeys, providerMapsFullName, sampleData, missingResourceKeys);
+            }
+
+            // Rule 8: a Setter whose Value was dropped above (Rule 6/2) is invalid and fails the whole
+            // document ("Cannot add instance of type Setter to SetterBaseCollection"); drop the Setter so
+            // its Style just lacks that one property.
+            foreach (var setter in root.Descendants(Pres + "Setter").ToList())
+            {
+                if (setter.Attribute("Value") is null && setter.Element(Pres + "Setter.Value") is null)
+                {
+                    setter.Remove();
+                }
             }
 
             // Drop the now-unused Blend/markup-compat namespace declarations for tidiness (all their
@@ -1014,7 +1027,8 @@ internal static class XamlCleaner
         HashSet<string> docKeys,
         HashSet<string> droppedKeys,
         Func<string, bool> providerMapsFullName,
-        ISet<string>? forcePlaceholderTypes = null)
+        ISet<string>? forcePlaceholderTypes = null,
+        ISet<string>? unmappedTypes = null)
     {
         foreach (var el in root.Descendants().ToList())
         {
@@ -1036,6 +1050,7 @@ internal static class XamlCleaner
                 var ownerFull = CustomTypeFullName(el.Name.NamespaceName, el.Name.LocalName[..ownerDot]);
                 if (ownerFull is not null && !SafeProviderMaps(providerMapsFullName, ownerFull))
                 {
+                    unmappedTypes?.Add(ownerFull);
                     el.Remove();
                 }
                 continue;
@@ -1059,9 +1074,15 @@ internal static class XamlCleaner
                   (forcePlaceholderTypes.Contains(ForceAllCustomTypes) && !IsResourceEntry(el))));
 
             // Keep any custom type the provider CAN map (it renders for real) — unless forced above.
-            if (!forced && SafeProviderMaps(providerMapsFullName, fullName))
+            bool maps = SafeProviderMaps(providerMapsFullName, fullName);
+            if (!forced && maps)
             {
                 continue;
+            }
+
+            if (!maps)
+            {
+                unmappedTypes?.Add(fullName);
             }
 
             if (IsResourceEntry(el))

@@ -279,6 +279,22 @@ internal static partial class Program
         Eq("format: empty → fallback", "The XAML could not be loaded.", PreviewErrorText.FormatXamlError(null, null, null));
         Eq("format: only placeholder → fallback", "Line 1, col 1 — The XAML could not be loaded.",
             PreviewErrorText.FormatXamlError("The text associated with this error code could not be found.", 1, 1));
+
+        // ---- unbuilt-project build hint ----
+        var someKeys = new[] { "PillCornerRadius", "AccentBrush" };
+        var someTypes = new[] { "Hangar.Controls.StatusPill", "Hangar.Controls.StatusPill", "Hangar.Controls.Gauge" };
+        Check("build hint: built project → none", BuildHint.Describe(false, someKeys, someTypes) == null);
+        Check("build hint: unbuilt but nothing lost → none", BuildHint.Describe(true, new string[0], null) == null);
+        Eq("build hint: types + keys",
+            "Parts of this page can't be previewed yet: 2 custom controls shown as placeholders (StatusPill, Gauge); " +
+            "2 app styles or resources not found. Build the project for a complete preview — it refreshes automatically when the build finishes.",
+            BuildHint.Describe(true, someKeys, someTypes));
+        Eq("build hint: single key only",
+            "Parts of this page can't be previewed yet: 1 app style or resource not found. Build the project for a complete preview — it refreshes automatically when the build finishes.",
+            BuildHint.Describe(true, new[] { "K" }, null));
+        Check("build hint: caps named types",
+            BuildHint.Describe(true, null, new[] { "A.T1", "A.T2", "A.T3", "A.T4", "A.T5" })!
+                .Contains("5 custom controls shown as placeholders (T1, T2, T3, +2 more)"));
     }
 
     /// <summary>Puts <paramref name="s"/> in "rendered once, spare warming, edit held". Returns the warm's gen.</summary>

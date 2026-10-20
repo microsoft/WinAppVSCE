@@ -40,6 +40,7 @@
     <Compile Include="..\WinUIXamlPreview\UI\RestartPolicy.cs" Link="UI\RestartPolicy.cs" />
     <Compile Include="..\WinUIXamlPreview\UI\PreviewSessionState.cs" Link="UI\PreviewSessionState.cs" />
     <Compile Include="..\WinUIXamlPreview\UI\PreviewErrorText.cs" Link="UI\PreviewErrorText.cs" />
+    <Compile Include="..\WinUIXamlPreview\UI\BuildHint.cs" Link="UI\BuildHint.cs" />
   </ItemGroup>
 
   <ItemGroup>

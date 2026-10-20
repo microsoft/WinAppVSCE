@@ -153,6 +153,7 @@ public static class HostBuilder
                 return r;
             }
             var part = Stopwatch.StartNew();
+            log(HostPayload.CompilingMarker);
             RunTool(BuildArgs("build", sp, version, opt));
             r.SurfaceBuildSeconds = part.Elapsed.TotalSeconds;
             part.Restart();

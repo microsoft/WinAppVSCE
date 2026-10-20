@@ -170,7 +170,28 @@ namespace WinUIXamlPreview.Protocol
         public string Version { get; }
         public Task<HostBuildOutcome> Completion { get; private set; } = Task.FromResult(new HostBuildOutcome { Success = false });
 
+        /// <summary>True once the provisioner missed its cache and started compiling (the slow first-run path).</summary>
+        public bool IsCompiling { get; private set; }
+
+        /// <summary>Raised once, on a background thread, when <see cref="IsCompiling"/> becomes true.</summary>
+        public event Action? Compiling;
+
         internal MatchedHostBuild(string version) => Version = version;
+
+        internal void MarkCompiling()
+        {
+            Action? handler;
+            lock (_gate)
+            {
+                if (IsCompiling)
+                {
+                    return;
+                }
+                IsCompiling = true;
+                handler = Compiling;
+            }
+            try { handler?.Invoke(); } catch { }
+        }
 
         internal void Start(Func<CancellationToken, Task<HostBuildOutcome>> run)
         {
@@ -243,7 +264,7 @@ namespace WinUIXamlPreview.Protocol
                 }
 
                 var build = new MatchedHostBuild(version);
-                build.Start(ct => Task.Run(() => RunBuildAsync(env, version, targetProject, log, ct)));
+                build.Start(ct => Task.Run(() => RunBuildAsync(env, version, targetProject, log, ct, build.MarkCompiling)));
                 Builds[buildKey] = build;
 
                 // Drop the dictionary entry once the build settles so a later re-open re-evaluates the cache.
@@ -262,7 +283,7 @@ namespace WinUIXamlPreview.Protocol
             }
         }
 
-        private static async Task<HostBuildOutcome> RunBuildAsync(HostBuildEnvironment env, string version, string targetProject, Action<string> log, CancellationToken ct)
+        private static async Task<HostBuildOutcome> RunBuildAsync(HostBuildEnvironment env, string version, string targetProject, Action<string> log, CancellationToken ct, Action? onCompiling = null)
         {
             var sw = Stopwatch.StartNew();
             Process? proc = null;
@@ -321,7 +342,7 @@ namespace WinUIXamlPreview.Protocol
                 ChildProcessJob.TryAdd(proc, log);
 
                 var stdout = proc.StandardOutput.ReadToEndAsync();
-                var stderr = proc.StandardError.ReadToEndAsync();
+                var stderr = ReadDiagnosticsAsync(proc.StandardError, onCompiling);
 
                 // Await exit asynchronously so the pooled build thread isn't parked in a blocking 250ms poll,
                 // and honor cancellation promptly: closing stdin asks the provisioner (--cancel-on-stdin) to
@@ -370,6 +391,22 @@ namespace WinUIXamlPreview.Protocol
                 return new HostBuildOutcome { Success = false, Error = ex.Message, DurationSeconds = sw.Elapsed.TotalSeconds };
             }
             finally { proc?.Dispose(); }
+        }
+
+        /// <summary>Reads the provisioner's stderr to the end (the log text), firing <paramref name="onCompiling"/> as soon as the cache-miss marker line arrives.</summary>
+        private static async Task<string> ReadDiagnosticsAsync(StreamReader reader, Action? onCompiling)
+        {
+            var text = new StringBuilder();
+            string? line;
+            while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) != null)
+            {
+                text.AppendLine(line);
+                if (onCompiling != null && line.Trim() == HostPayload.CompilingMarker)
+                {
+                    onCompiling();
+                }
+            }
+            return text.ToString();
         }
 
         /// <summary>
