@@ -970,10 +970,10 @@ test.describe('run target picker', () => {
             await page.keyboard.press('Enter');
 
             const configurations = await readPickerRows(page, /^Build configuration/);
-            expect(configurations.join('\n')).toContain('Default');
-            expect(configurations.join('\n')).toContain('Release');
-            expect(configurations.filter(row => /^Release(?:\s|$)/.test(row.trim()))).toHaveLength(0);
-            await quickPickRows(page).filter({ hasText: /^Debug/ }).click();
+            expect(configurations[0].trim().startsWith('Release')).toBe(true);
+            expect(configurations.join('\n')).not.toContain('Default');
+            expect(configurations.join('\n')).toContain('Debug');
+            await page.keyboard.press('Enter');
 
             const signing = (await readPickerRows(page, /^How should the package be signed\?$/)).join('\n');
             expect(signing).toContain('Use project signing settings');
@@ -981,9 +981,9 @@ test.describe('run target picker', () => {
             expect(signing).toContain('Create an unsigned package');
             await quickPickRows(page).filter({ hasText: /^Create an unsigned package/ }).click();
 
-            const selfContained = (await readPickerRows(page, /self-contained/)).join('\n');
-            expect(selfContained).toContain('Yes');
-            expect(selfContained).toContain('No');
+            const selfContained = await readPickerRows(page, /self-contained/);
+            expect(selfContained[0].trim().startsWith('No')).toBe(true);
+            expect(selfContained.join('\n')).toContain('Yes');
 
             await cancelAndExpectNoFollowUp(page);
             console.log('✅ PASS: project pack flow collected project-specific options');
@@ -1040,10 +1040,13 @@ test.describe('run target picker', () => {
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-folder-bundle-e2e-'));
         const x64 = path.join(tmpDir, 'publish', 'x64');
         const arm64 = path.join(tmpDir, 'publish', 'arm64');
+        const incompletePublish = path.join(x64, 'publish');
         fs.mkdirSync(x64, { recursive: true });
         fs.mkdirSync(arm64, { recursive: true });
+        fs.mkdirSync(incompletePublish, { recursive: true });
         fs.writeFileSync(path.join(x64, 'App.exe'), '');
         fs.writeFileSync(path.join(arm64, 'App.exe'), '');
+        fs.writeFileSync(path.join(incompletePublish, 'App.exe'), '');
 
         let app: ElectronApplication | undefined;
         try {
@@ -1060,6 +1063,7 @@ test.describe('run target picker', () => {
             ).join('\n');
             expect(folders).toContain(path.join('publish', 'x64'));
             expect(folders).toContain(path.join('publish', 'arm64'));
+            expect(folders).not.toContain(path.join('publish', 'x64', 'publish'));
 
             await quickPickRows(page).filter({ hasText: /publish[\\/]x64/ }).click();
             await quickPickRows(page).filter({ hasText: /publish[\\/]arm64/ }).click();

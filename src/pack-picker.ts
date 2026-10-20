@@ -96,7 +96,7 @@ export async function pickPackInput(): Promise<PackInput | undefined> {
 export async function pickPackOptions(input: PackInput): Promise<PackOptions | undefined> {
 	let configuration: string | undefined;
 	if (input.kind === 'project') {
-		const selected = await pickConfiguration('Release');
+		const selected = await pickConfiguration('Release', false);
 		if (!selected) {
 			return undefined;
 		}
@@ -110,8 +110,8 @@ export async function pickPackOptions(input: PackInput): Promise<PackOptions | u
 
 	const selfContained = await vscode.window.showQuickPick(
 		[
-			{ label: 'Yes', value: true },
-			{ label: 'No', value: false }
+			{ label: 'No', value: false },
+			{ label: 'Yes', value: true }
 		],
 		{
 			placeHolder: isBundleInput(input)
