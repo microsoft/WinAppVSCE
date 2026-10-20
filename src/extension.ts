@@ -10,7 +10,6 @@ import {
 	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
 	decideElevatedWinappCommand,
-	extractJsonObject,
 	resolveWorkingDirectory
 } from './winapp-cli-utils';
 import { detectProjects, BUILD_OUTPUT_EXCLUDE_GLOB } from './project-detection';
@@ -37,6 +36,7 @@ import { launchRunProcess } from './run-launch';
 import { DebugLaunchCancelled, WinAppRunFailure } from './run-exit';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
+import { activateXaml, deactivateXaml } from './xaml/xamlLanguageService';
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
 import { SchemaModel } from './manifest-schema/schema-model';
 import { loadSchemaModel } from './manifest-schema/xsd-parser';
@@ -1250,6 +1250,9 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register AppxManifest IntelliSense (completion, hover, diagnostics) — shares the same schema
 	registerManifestIntelliSense(context, getSharedSchema);
 
+	// Register the WinUI XAML language service. Its server starts lazily when a XAML document opens.
+	void activateXaml(context);
+
 	// When an appxmanifest file is opened in the default text editor,
 	// suggest switching to the Manifest Editor.
 	const dismissedKey = 'winapp.manifestEditorNotificationDismissed';
@@ -1799,7 +1802,8 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 }
 
-export function deactivate() {
+export async function deactivate(): Promise<void> {
 	debuggerLogChannel?.dispose();
 	debuggerLogChannel = undefined;
+	await deactivateXaml();
 }
