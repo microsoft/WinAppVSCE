@@ -4,7 +4,7 @@ export async function runCompletionScenarios(ctx) {
     completeWith, completeItemsWith, hoverAt, definitionWith, codeActionAtCaret,
     readFileSync, writeFileSync, pathToFileURL, dirname, resolve, join,
     mkdtempSync, rmSync, tmpdir, send, waitFor, responseFor,
-    colors, swatch, near, offsetToPosition,
+    colors, swatch, near, offsetToPosition, buildRequiredRoot,
   } = ctx;
 
   // 430) xmlns declaration VALUE completion (round 61) — an empty/partial xmlns value offers the well-known
@@ -1167,6 +1167,14 @@ export async function runCompletionScenarios(ctx) {
       const outUri = pathToFileURL(outFile).href;
       const handlerAt = outText.indexOf("OnOobClick") + 3;
       const outCaret = offsetToPosition(outText, handlerAt);
+      const outSyntaxOnly = waitFor(
+        (message) =>
+          message.method === "winui-xaml/projectContextStatus" &&
+          message.params?.uri === outUri &&
+          message.params?.state === "syntax-only",
+        30000,
+        "out-of-root syntax-only status"
+      );
 
       send({
         method: "textDocument/didOpen",
@@ -1178,17 +1186,110 @@ export async function runCompletionScenarios(ctx) {
         params: { textDocument: { uri: outUri }, position: outCaret },
       });
       const oobDef = await waitFor(responseFor(561), 30000, "out-of-root definition");
+      const outStatus = await outSyntaxOnly;
       if (oobDef.error) fail(`out-of-root definition errored: ${JSON.stringify(oobDef.error)}`);
       const oobLoc = Array.isArray(oobDef.result) ? oobDef.result[0] : oobDef.result;
       if (oobLoc && oobLoc.uri) {
         fail(`out-of-root document was project-resolved (boundary bypass): ${JSON.stringify(oobLoc)}`);
+      }
+      if (!outStatus.params.message?.includes("outside the trusted workspace")) {
+        fail(`out-of-root syntax-only status did not explain the trust boundary: ${JSON.stringify(outStatus.params)}`);
       }
       send({ method: "textDocument/didClose", params: { textDocument: { uri: outUri } } });
     } finally {
       try { rmSync(outDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
   }
-  console.log(`[ok] workspace-trust boundary: an out-of-root .xaml (with a sibling project) is served project-less (F12 handler -> no location), while the in-root fixture resolved`);
+  console.log(`[ok] workspace-trust boundary: an out-of-root .xaml is reported as syntax-only and served project-less, while the in-root fixture resolved`);
+
+  // A file can be inside a trusted root without belonging to a project. It is safe to inspect the
+  // root, but there is no project context to load, so report the usable syntax-only mode.
+  {
+    const looseFile = join(buildRequiredRoot, "LoosePage.xaml");
+    const looseText = `<Page ${NS}>\n  <Grid>\n    <Button x:Name="LooseButton" Content="Go" />\n  </Grid>\n</Page>`;
+    const looseUri = pathToFileURL(looseFile).href;
+    writeFileSync(looseFile, looseText, "utf8");
+    try {
+      const looseSyntaxOnly = waitFor(
+        (message) =>
+          message.method === "winui-xaml/projectContextStatus" &&
+          message.params?.uri === looseUri &&
+          message.params?.state === "syntax-only",
+        30000,
+        "loose-file syntax-only status"
+      );
+      send({
+        method: "textDocument/didOpen",
+        params: { textDocument: { uri: looseUri, languageId: "xaml", version: 1, text: looseText } },
+      });
+      send({
+        id: 1560,
+        method: "textDocument/definition",
+        params: {
+          textDocument: { uri: looseUri },
+          position: offsetToPosition(looseText, looseText.indexOf("LooseButton") + 3),
+        },
+      });
+      const looseDefinition = await waitFor(responseFor(1560), 30000, "loose-file definition");
+      const looseStatus = await looseSyntaxOnly;
+      if (looseDefinition.error || looseDefinition.result !== null) {
+        fail(`loose-file definition should return null without error: ${JSON.stringify(looseDefinition)}`);
+      }
+      if (!looseStatus.params.message?.includes("No owning project was found")) {
+        fail(`loose-file syntax-only status did not explain the missing project: ${JSON.stringify(looseStatus.params)}`);
+      }
+      send({ method: "textDocument/didClose", params: { textDocument: { uri: looseUri } } });
+    } finally {
+      try { rmSync(looseFile, { force: true }); } catch { /* best-effort */ }
+    }
+  }
+  console.log(`[ok] loose XAML: an in-root file without an owning project is reported as syntax-only`);
+
+  // Untitled buffers have no filesystem path or owning project, but project-independent language
+  // features remain useful. They should report intentional syntax-only support rather than an error.
+  {
+    const untitledUri = "untitled:Untitled-1";
+    const untitledText = `<Page ${NS}>\n  <Grid>\n    <Button x:Name="LooseButton" Content="Go" />\n  </Grid>\n</Page>`;
+    const untitledSyntaxOnly = waitFor(
+      (message) =>
+        message.method === "winui-xaml/projectContextStatus" &&
+        message.params?.uri === untitledUri &&
+        message.params?.state === "syntax-only",
+      30000,
+      "untitled syntax-only status"
+    );
+    send({
+      method: "textDocument/didOpen",
+      params: { textDocument: { uri: untitledUri, languageId: "xaml", version: 1, text: untitledText } },
+    });
+    send({
+      id: 1561,
+      method: "textDocument/definition",
+      params: {
+        textDocument: { uri: untitledUri },
+        position: offsetToPosition(untitledText, untitledText.indexOf("LooseButton") + 3),
+      },
+    });
+    const untitledDefinition = await waitFor(responseFor(1561), 30000, "untitled definition");
+    const untitledStatus = await untitledSyntaxOnly;
+    if (untitledDefinition.error || untitledDefinition.result !== null) {
+      fail(`untitled definition should return null without error: ${JSON.stringify(untitledDefinition)}`);
+    }
+    if (!untitledStatus.params.message?.includes("Untitled XAML documents use syntax-only editing")) {
+      fail(`untitled syntax-only status did not explain limited mode: ${JSON.stringify(untitledStatus.params)}`);
+    }
+    send({
+      id: 1562,
+      method: "textDocument/documentSymbol",
+      params: { textDocument: { uri: untitledUri } },
+    });
+    const untitledSymbols = await waitFor(responseFor(1562), 30000, "untitled document symbols");
+    if (untitledSymbols.error || !Array.isArray(untitledSymbols.result) || untitledSymbols.result.length !== 1) {
+      fail(`untitled syntax-only outline unavailable: ${JSON.stringify(untitledSymbols)}`);
+    }
+    send({ method: "textDocument/didClose", params: { textDocument: { uri: untitledUri } } });
+  }
+  console.log(`[ok] untitled XAML: syntax-only status plus project-independent outline support`);
 
 
   // 563) SDK theme resource hover (review finding #6): keys offered by completion but declared in

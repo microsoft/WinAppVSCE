@@ -1387,6 +1387,7 @@ async function main() {
     mkdtempSync,
     rmSync,
     tmpdir,
+    buildRequiredRoot,
   };
   await runCoreScenarios(scenarioContext);
   await runEditorScenarios(scenarioContext);

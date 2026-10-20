@@ -153,7 +153,7 @@ export function getXamlStatus(
         message:
           `${XAML_STATUS_PREFIX} ${
             projectContext.message ??
-            "C++/WinRT projects use syntax-only XAML editing."
+            "This document uses syntax-only XAML editing; project types are not loaded."
           }`,
         actions: [XAML_STATUS_ACTIONS.showOutput],
       };

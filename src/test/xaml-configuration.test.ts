@@ -75,6 +75,16 @@ test("reports disabled, running, and degraded XAML status actions", () => {
   );
   assert.deepEqual(
     getXamlStatus(true, true, true, true, {
+      state: "syntax-only",
+    }),
+    {
+      message:
+        `${XAML_STATUS_PREFIX} This document uses syntax-only XAML editing; project types are not loaded.`,
+      actions: ["Show Output"],
+    }
+  );
+  assert.deepEqual(
+    getXamlStatus(true, true, true, true, {
       state: "error",
       message: "Restore required.",
     }),

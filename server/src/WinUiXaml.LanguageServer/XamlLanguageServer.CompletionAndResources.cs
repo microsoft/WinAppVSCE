@@ -321,22 +321,29 @@ internal sealed partial class XamlLanguageServer
         var path = UriToPath(uri);
         if (path == null)
         {
-            const string message = "The XAML document path could not be resolved.";
-            Console.Error.WriteLine($"[winui-xaml-ls] context: {message} Uri: '{uri}'");
-            await NotifyProjectContextStatusAsync(uri, "error", message).ConfigureAwait(false);
+            await EnterSyntaxOnlyModeAsync(
+                uri,
+                "Untitled XAML documents use syntax-only editing; save the file inside a project to enable project-aware IntelliSense.")
+                .ConfigureAwait(false);
             return null;
         }
 
-        if (TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot) &&
-            XamlProjectResolver.FindOwningProject(canonicalPath, allowedRoot) is { } projectPath &&
+        if (!TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot))
+        {
+            await EnterSyntaxOnlyModeAsync(
+                uri,
+                "This XAML document is outside the trusted workspace and uses syntax-only editing; project files are not evaluated.")
+                .ConfigureAwait(false);
+            return null;
+        }
+
+        if (XamlProjectResolver.FindOwningProject(canonicalPath, allowedRoot) is { } projectPath &&
             System.IO.Path.GetExtension(projectPath).Equals(
                 ".vcxproj",
                 StringComparison.OrdinalIgnoreCase))
         {
-            _syntaxOnlyDocuments[uri] = 0;
-            await NotifyProjectContextStatusAsync(
+            await EnterSyntaxOnlyModeAsync(
                 uri,
-                "syntax-only",
                 "C++/WinRT projects use syntax-only XAML editing; project types are not loaded.")
                 .ConfigureAwait(false);
             return null;
@@ -409,10 +416,10 @@ internal sealed partial class XamlLanguageServer
         if (frameworkResolution == null)
         {
             Console.Error.WriteLine($"[winui-xaml-ls] context: resolver returned null for path '{path}'");
-            await NotifyProjectContextStatusAsync(
+            await EnterSyntaxOnlyModeAsync(
                 uri,
-                "error",
-                "No owning project was found for this XAML document.").ConfigureAwait(false);
+                "No owning project was found for this XAML document, so it uses syntax-only editing; project types are not loaded.")
+                .ConfigureAwait(false);
             return null;
         }
 
@@ -545,6 +552,12 @@ internal sealed partial class XamlLanguageServer
         _connection.SendNotificationAsync(
             "winui-xaml/projectContextStatus",
             new ProjectContextStatusParams { Uri = uri, State = state, Message = message });
+
+    private Task EnterSyntaxOnlyModeAsync(string uri, string message)
+    {
+        _syntaxOnlyDocuments[uri] = 0;
+        return NotifyProjectContextStatusAsync(uri, "syntax-only", message);
+    }
 
     /// <summary>Shared pipeline for definition/hover: map the caret to a member name on the page's x:Class type (either an event-handler attribute value or an x:Bind path segment) and resolve it</summary>
     private async Task<(ISymbol? Symbol, MemberTarget? Target)> ResolveSymbolAtAsync(TextDocumentPositionParams p)
