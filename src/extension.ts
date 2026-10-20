@@ -1846,29 +1846,20 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 			const targetWorkspacePath = getTargetWorkspacePath(target);
 
-			// EXE mode rewrites the binary in place with mt.exe, which
-			// invalidates any existing Authenticode signature. Confirm before
-			// running rather than warning afterwards: runWinappCommand returns as
-			// soon as the terminal is handed the command, so a later message
-			// would arrive after the binary had already been modified.
-			if (embedRewritesBinary(target)) {
-				const proceed = await vscode.window.showWarningMessage(
-					`Embedding identity rewrites ${path.basename(target)} with mt.exe, which invalidates any ` +
-					'existing Authenticode signature. Re-sign it with "WinApp: Sign File" before distributing.',
-					{ modal: true },
-					'Continue'
-				);
-				if (proceed !== 'Continue') {
-					return;
-				}
-			}
-
 			const manifestPath = targetWorkspacePath
 				? await resolveSparseManifestForTarget(targetWorkspacePath, target)
 				: await pickSparseManifestForEmbed(path.dirname(target), target, []);
 			if (!manifestPath) {
 				return;
 			}
+
+			if (embedRewritesBinary(target)) {
+				void vscode.window.showInformationMessage(
+					`Embedding package identity into ${path.basename(target)}. If this executable was previously ` +
+					'signed, use "WinApp: Sign File" again before distributing.'
+				);
+			}
+
 			const plan = planEmbedIdentityCommand({
 				target,
 				manifestPath,
