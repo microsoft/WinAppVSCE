@@ -19,21 +19,50 @@ const VSCODE_EXE =
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
 
 const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
-const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-    ? []
-    : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+
+/**
+ * VS Code CLI arguments selecting which copy of the extension to test.
+ *
+ * `E2E_USE_INSTALLED_EXTENSION=1` tests a VSIX that CI already installed; the
+ * default loads this working tree. In installed mode `E2E_EXTENSIONS_DIR` must
+ * name the directory the VSIX was installed into — CI installs into a
+ * dedicated directory, and without this VS Code would launch against the
+ * agent's default extensions directory and silently test nothing.
+ *
+ * @param interferingExtensions Extensions to disable in installed mode. Specs
+ * that pass any also disable all extensions in development mode, since there
+ * the extension under test is loaded separately.
+ */
+export function extensionLaunchArgs(interferingExtensions: readonly string[] = []): string[] {
+    if (process.env.E2E_USE_INSTALLED_EXTENSION !== '1') {
+        return interferingExtensions.length > 0
+            ? ['--disable-extensions', `--extensionDevelopmentPath=${EXTENSION_ROOT}`]
+            : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+    }
+
+    const extensionsDir = process.env.E2E_EXTENSIONS_DIR;
+    return [
+        ...(extensionsDir ? [`--extensions-dir=${extensionsDir}`] : []),
+        ...interferingExtensions.flatMap((id) => ['--disable-extension', id])
+    ];
+}
+
+const EXTENSION_ARGS = extensionLaunchArgs();
 
 const FIXTURES_DIR = path.resolve(__dirname, '..', 'fixtures');
 
 // VS Code hands the command line off to an already-running instance and exits
-// immediately when both share the default user-data dir, which makes
-// `app.firstWindow()` fail with "Target page, context or browser has been closed".
-// Give the test instance its own profile so it always opens a real window.
-const USER_DATA_DIR = path.join(os.tmpdir(), `vscode-e2e-${process.pid}`);
+// immediately when both share a user-data dir, which makes `app.firstWindow()`
+// fail with "Target page, context or browser has been closed". Specs that launch
+// their own instance alongside the shared one therefore need a profile each, not
+// just a profile separate from the developer's.
+const USER_DATA_ROOT = path.join(os.tmpdir(), `vscode-e2e-${process.pid}`);
 
-/** Seeds the throwaway profile so no welcome/walkthrough tab steals focus from the manifest. */
-function prepareUserDataDir(): void {
-    const userDir = path.join(USER_DATA_DIR, 'User');
+/** Seeds a fresh throwaway profile so no welcome/walkthrough tab steals focus from the manifest. */
+function prepareUserDataDir(): string {
+    fs.mkdirSync(USER_DATA_ROOT, { recursive: true });
+    const userDataDir = fs.mkdtempSync(path.join(USER_DATA_ROOT, 'profile-'));
+    const userDir = path.join(userDataDir, 'User');
     fs.mkdirSync(userDir, { recursive: true });
     fs.writeFileSync(
         path.join(userDir, 'settings.json'),
@@ -46,12 +75,13 @@ function prepareUserDataDir(): void {
             'security.workspace.trust.enabled': false,
         }, null, 2),
     );
+    return userDataDir;
 }
 
-/** Removes the throwaway profile. Call only after VS Code has exited. */
+/** Removes the throwaway profiles. Call only after VS Code has exited. */
 export function cleanupUserDataDir(): void {
     try {
-        fs.rmSync(USER_DATA_DIR, { recursive: true, force: true });
+        fs.rmSync(USER_DATA_ROOT, { recursive: true, force: true });
     } catch { /* best-effort — a locked file just leaves a temp dir behind */ }
 }
 
@@ -83,14 +113,14 @@ export function createTempWorkspace(fixtureName: string): string {
  */
 export async function launchVSCode(workspacePath: string): Promise<VSCodeTestContext> {
     const manifestPath = path.join(workspacePath, 'AppxManifest.xml');
-    prepareUserDataDir();
+    const userDataDir = prepareUserDataDir();
     const app = await electron.launch({
         executablePath: VSCODE_EXE,
         args: [
             workspacePath,
             manifestPath,
             '--new-window',
-            `--user-data-dir=${USER_DATA_DIR}`,
+            `--user-data-dir=${userDataDir}`,
             ...EXTENSION_ARGS,
             '--disable-telemetry',
             '--skip-release-notes',
@@ -148,6 +178,16 @@ export async function openManifestEditor(page: Page): Promise<FrameLocator> {
     await page.waitForTimeout(5_000);
 
     return getWebviewFrame(page);
+}
+
+/** Run a VS Code command through the Command Palette. */
+export async function runCommand(page: Page, command: string): Promise<void> {
+    await page.keyboard.press('Control+Shift+P');
+    await page.waitForTimeout(750);
+    await page.keyboard.type(command, { delay: 20 });
+    await page.waitForTimeout(1_000);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(1_500);
 }
 
 /**
@@ -259,11 +299,40 @@ export async function isCapabilityChecked(frame: FrameLocator, capability: strin
     return await frame.locator(`input[data-capability="${capability}"]`).isChecked();
 }
 
-/** Read the file content from the workspace (for verifying XML changes). Saves the file first with Ctrl+S. */
-export async function readManifestXml(page: Page, workspacePath: string): Promise<string> {
-    await page.keyboard.press('Control+S');
-    await page.waitForTimeout(1_000);
-    return fs.readFileSync(path.join(workspacePath, 'AppxManifest.xml'), 'utf-8');
+/**
+ * Read the file content from the workspace (for verifying XML changes). Saves the file
+ * first with Ctrl+S.
+ *
+ * The custom editor applies webview edits to the TextDocument asynchronously and the
+ * save itself is async, so a flat sleep races the disk write on a slow machine. Wait for
+ * VS Code to report no dirty editor, and when the caller names the substrings it is about
+ * to assert on, keep re-saving until they land on disk.
+ */
+export async function readManifestXml(
+    page: Page,
+    workspacePath: string,
+    expected: string | string[] = [],
+    timeoutMs = 15_000,
+): Promise<string> {
+    const manifestPath = path.join(workspacePath, 'AppxManifest.xml');
+    const wanted = typeof expected === 'string' ? [expected] : expected;
+    const deadline = Date.now() + timeoutMs;
+
+    for (;;) {
+        await page.keyboard.press('Control+S');
+        await page
+            .locator('.tabs-container .tab.dirty')
+            .first()
+            .waitFor({ state: 'detached', timeout: 5_000 })
+            .catch(() => undefined);
+        await page.waitForTimeout(250);
+
+        const xml = fs.readFileSync(manifestPath, 'utf-8');
+        if (wanted.every(fragment => xml.includes(fragment)) || Date.now() >= deadline) {
+            return xml;
+        }
+        await page.waitForTimeout(500);
+    }
 }
 
 /** Wait a short time for debounced edits to propagate to the document. */

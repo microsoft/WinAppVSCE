@@ -6,6 +6,7 @@
 
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
+import { killProcessTree } from './process-tree';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from './winapp-cli-utils';
 
 /** Where to send users whose .NET SDK is missing. */
@@ -79,22 +80,9 @@ export async function runWinappCapture(
 					}
 					cancelled = true;
 					outputChannel.appendLine('\nCancelled.');
-					if (child.pid) {
-						// On Windows, winapp commands may spawn helper processes (pack's
-						// SDK tools, new's `dotnet new`); taskkill /t terminates the whole
-						// tree instead of only the direct child.
-						const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
-							windowsHide: true
-						});
-						killer.on('error', () => child.kill());
-						killer.on('close', (code) => {
-							if (code !== 0) {
-								child.kill();
-							}
-						});
-					} else {
-						child.kill();
-					}
+					// winapp commands may spawn helper processes (pack's SDK
+					// tools, new's `dotnet new`); the whole tree has to go.
+					killProcessTree(child);
 				});
 
 				child.stdout!.on('data', (data: Buffer) => {

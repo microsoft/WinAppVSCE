@@ -15,7 +15,7 @@
 .PARAMETER Stable
     When packaging, produce a stable version (no prerelease suffix).
 .PARAMETER CliTag
-    CLI release tag to download (default: "latest").
+    CLI release tag to download. Defaults to cli-version.json.
 
 .EXAMPLE
     .\scripts\build-vsce.ps1
@@ -30,7 +30,7 @@ param(
     [switch]$SkipTests = $false,
     [switch]$Package = $false,
     [switch]$Stable = $false,
-    [string]$CliTag = "latest"
+    [string]$CliTag
 )
 
 $ErrorActionPreference = "Stop"

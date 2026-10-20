@@ -21,6 +21,7 @@ package-lock.json
 **/*.backup
 playwright-report/**
 test-results/**
+test-results-live/**
 playwright.config.ts
 PR_REVIEW.md
 EDITOR_SUPPORT.md

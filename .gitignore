@@ -430,6 +430,7 @@ bin/
 .drive-extensions/
 playwright-report/
 test-results/
+test-results-live/
 
 # Windows Installer files from build outputs
 *.cab

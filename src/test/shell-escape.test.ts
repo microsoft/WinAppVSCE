@@ -41,6 +41,17 @@ describe('escapePowerShellArg', () => {
 		assert.equal((escaped.match(/'/g) || []).length % 2, 0);
 	});
 
+	it('escapes the Unicode quotes PowerShell also accepts as single quotes', () => {
+		// PowerShell treats U+2018-U+201B as single quotes, so a project path
+		// discovered in the workspace could otherwise close the literal.
+		const attack = 'App\u2019;ni INJECTED;\u2019.csproj';
+		const escaped = escapePowerShellArg(attack);
+		assert.equal(escaped, "'App\u2019\u2019;ni INJECTED;\u2019\u2019.csproj'");
+		for (const quote of ["'", '\u2018', '\u2019', '\u201A', '\u201B']) {
+			assert.equal(escapePowerShellArg(`a${quote}b`), `'a${quote}${quote}b'`);
+		}
+	});
+
 	it('handles an empty string', () => {
 		assert.equal(escapePowerShellArg(''), "''");
 	});

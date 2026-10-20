@@ -27,6 +27,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Loc
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { extensionLaunchArgs } from './helpers';
 
 // ──────────────────────────────────────────────────────
 // Paths
@@ -36,17 +37,13 @@ const VSCODE_EXE =
     process.env.VSCODE_PATH ??
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
 
-const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
-
 /**
  * Height of a QuickPick row carrying only `label` + `description`, which is the
  * standard across our pickers (see `ProjectQuickPickItem` in project-resolver).
  * Adding a `detail` line doubles this to 44px.
  */
 const STANDARD_ROW_HEIGHT_PX = 22;
-const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-    ? []
-    : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+const EXTENSION_ARGS = extensionLaunchArgs();
 
 /**
  * Launch VS Code with our extension loaded, opening the given folder.

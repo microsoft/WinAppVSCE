@@ -41,13 +41,21 @@ export function getWinappCliPath(extensionPath: string): string {
  * `$(...)`, `$var` and backtick escapes, which lets a crafted file path inject
  * arbitrary commands (e.g. a path containing `$(Remove-Item ...)`). A
  * single-quoted PowerShell literal performs no such expansion; the only
- * metacharacter is the single quote itself, which is escaped by doubling it.
+ * metacharacters are the quote characters themselves, which are escaped by
+ * doubling them.
  *
- * @param value The raw argument (typically a user-selected file path).
+ * PowerShell accepts the Unicode quotation marks U+2018-U+201B as single
+ * quotes too, so a path containing one would otherwise close the literal and
+ * run the rest as commands. Values no longer come only from a file dialog —
+ * project and solution paths are discovered in the workspace and read out of
+ * `.sln`/`.slnx` files — so cloning a repository must never be enough to run
+ * attacker-chosen commands.
+ *
+ * @param value The raw argument (typically a file path).
  * @returns The value wrapped in a single-quoted PowerShell literal.
  */
 export function escapePowerShellArg(value: string): string {
-	return `'${value.replace(/'/g, "''")}'`;
+	return `'${value.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&')}'`;
 }
 
 /**

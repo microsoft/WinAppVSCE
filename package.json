@@ -13,7 +13,19 @@
     "vscode": "^1.109.0"
   },
   "categories": [
-    "Other"
+    "Debuggers",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "winapp",
+    "winui",
+    "windows app sdk",
+    "winappsdk",
+    "msix",
+    "appx",
+    "appxmanifest",
+    "packaging",
+    "windows"
   ],
   "activationEvents": [
     "workspaceContains:**/[Aa]ppx[Mm]anifest.xml",
@@ -39,7 +51,12 @@
     "onCommand:winapp.unregister",
     "onCommand:winapp.certInfo",
     "onCommand:winapp.openManifestEditor",
-    "onLanguage:xaml"
+    "onLanguage:xaml",
+    "onCommand:winapp.xaml.showInfo",
+    "onCommand:winapp.xaml.restartServer",
+    "onCommand:winapp.runWithOptions",
+    "onDebugInitialConfigurations",
+    "onDebugDynamicConfigurations:winapp"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -105,6 +122,11 @@
       {
         "command": "winapp.run",
         "title": "Run Application",
+        "category": "WinApp"
+      },
+      {
+        "command": "winapp.runWithOptions",
+        "title": "Run Application With Options...",
         "category": "WinApp"
       },
       {
@@ -268,20 +290,117 @@
         }
       ]
     },
+    "breakpoints": [
+      {
+        "language": "csharp"
+      },
+      {
+        "language": "cpp"
+      },
+      {
+        "language": "javascript"
+      },
+      {
+        "language": "typescript"
+      }
+    ],
     "debuggers": [
       {
         "type": "winapp",
         "label": "WinApp",
+        "languages": [
+          "csharp",
+          "cpp",
+          "javascript",
+          "typescript"
+        ],
         "configurationAttributes": {
           "launch": {
             "properties": {
+              "input": {
+                "type": "string",
+                "description": "What to run: a project file (.csproj), a solution (.sln/.slnx), a directory containing one, or a build output folder containing your app binaries (e.g., '${workspaceFolder}/bin/Debug/net8.0-windows10.0.22621'). If not set, you will be prompted to select a target."
+              },
               "inputFolder": {
                 "type": "string",
-                "description": "Path to the build output folder containing your app binaries (e.g., '${workspaceFolder}/bin/Debug/net8.0-windows10.0.22621'). If not set, you will be prompted to select a folder."
+                "description": "Path to the build output folder containing your app binaries. If not set, you will be prompted to select a folder.",
+                "deprecationMessage": "Use \"input\" instead, which also accepts a project or solution file. If both are set, \"input\" wins."
+              },
+              "project": {
+                "type": "string",
+                "description": "Project mode only. The project to launch when \"input\" is a solution, or a directory holding more than one runnable app project. Accepts a project name or path. Ignored in folder mode. Defaults to the only runnable project, when there is exactly one."
+              },
+              "configuration": {
+                "type": "string",
+                "description": "Project mode only. The build configuration to use. Ignored in folder mode.",
+                "default": "Debug"
+              },
+              "arch": {
+                "type": "string",
+                "enum": [
+                  "x64",
+                  "arm64",
+                  "x86"
+                ],
+                "description": "Project mode only. Target architecture to build for. Ignored in folder mode, and ignored when \"runtime\" is set. Defaults to the current process architecture."
+              },
+              "framework": {
+                "type": "string",
+                "description": "Project mode only. Target framework moniker to build, for multi-targeted projects (e.g., 'net8.0-windows10.0.19041.0'). Ignored in folder mode. Defaults to the project's own target framework, which is unambiguous unless the project multi-targets."
+              },
+              "runtime": {
+                "type": "string",
+                "description": "Project mode only. Runtime identifier to build for (e.g., 'win-x64'). Overrides \"arch\". Only Windows RIDs are supported. Ignored in folder mode. Defaults to the RID for \"arch\", or for the current process architecture when neither is set."
+              },
+              "properties": {
+                "type": "object",
+                "description": "Project mode only. MSBuild properties to pass to the build, as name/value pairs. Ignored in folder mode. Defaults to none.",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "noBuild": {
+                "type": "boolean",
+                "description": "Project mode only. Run the existing build output without rebuilding. Ignored in folder mode, which never builds.",
+                "default": false
+              },
+              "noRestore": {
+                "type": "boolean",
+                "description": "Project mode only. Do not restore the project before building. Ignored in folder mode, and has no effect when \"noBuild\" is set.",
+                "default": false
+              },
+              "aot": {
+                "type": "boolean",
+                "description": "Project mode only. Run the project's configured .NET Native AOT publish instead of an ordinary build. Requires an effective PublishAot=true and uses the native cppvsdbg debugger; an explicitly configured debuggerType must be cppvsdbg. Ignored in folder mode.",
+                "default": false
+              },
+              "clean": {
+                "type": "boolean",
+                "description": "Both modes. Remove the existing package's application data (LocalState and settings) before deploying. Application data is otherwise preserved across re-deployments.",
+                "default": false
+              },
+              "unregisterOnExit": {
+                "type": "boolean",
+                "description": "Both modes. Remove the development package registration after the application exits. Only removes packages registered in development mode.",
+                "default": false
+              },
+              "withAlias": {
+                "type": "boolean",
+                "description": "Both modes. Launch through the app's execution alias so stdin/stdout are inherited, instead of through AUMID activation. Console apps (OutputType=Exe) already launch this way, so this is for forcing it for a windowed app. The CLI adds the uap5:ExecutionAlias to the manifest it stages, so no manifest edit is needed. Cannot be combined with \"withoutAlias\".",
+                "default": false
+              },
+              "withoutAlias": {
+                "type": "boolean",
+                "description": "Both modes. Launch through AUMID activation even for a console app, which would otherwise use its execution alias. The app then runs without a console and prints nothing to the terminal. Cannot be combined with \"withAlias\".",
+                "default": false
+              },
+              "executable": {
+                "type": "string",
+                "description": "Folder mode only. Which executable to launch, relative to the input folder, when the manifest uses a $targetnametoken$ placeholder and the folder holds more than one .exe. Defaults to auto-detection."
               },
               "manifest": {
                 "type": "string",
-                "description": "Path to the AppxManifest.xml file. If not set, the CLI auto-detects from the input folder or current directory."
+                "description": "Both modes. Path to the Package.appxmanifest file. Defaults to auto-detection from the input folder or the current directory; the CLI locates an existing manifest and never generates one."
               },
               "debuggerType": {
                 "type": "string",
@@ -294,15 +413,15 @@
               },
               "workingDirectory": {
                 "type": "string",
-                "description": "Working directory for the application"
+                "description": "Both modes. Working directory for the launched application. Defaults to the workspace folder."
               },
               "args": {
                 "type": "string",
-                "description": "Command-line arguments to pass to the application"
+                "description": "Both modes. Command-line arguments to pass to the application. Defaults to none."
               },
               "outputAppxDirectory": {
                 "type": "string",
-                "description": "Output directory for the loose layout package. If not specified, a directory named AppX inside the input folder will be used."
+                "description": "Both modes. Output directory for the loose layout package. Defaults to a directory named AppX inside the input directory."
               }
             }
           }
@@ -351,7 +470,7 @@
     "download-cli:latest": "pwsh -NoProfile -Command \"& ./scripts/download-cli.ps1 -Tag latest\"",
     "sync-schemas": "pwsh -NoProfile -Command \"& ./scripts/sync-schemas.ps1\"",
     "verify-schemas": "node -e \"const fs=require('fs'),p=require('path'),d=p.join(__dirname,'schemas');if(!fs.existsSync(d)||fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length===0){console.error('ERROR: schemas/ contains no XSD files. Run npm run sync-schemas first.');process.exit(1);}console.log('schemas/ verified:',fs.readdirSync(d).filter(f=>f.endsWith('.xsd')).length,'XSD files');\"",
-    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && node --test scripts/test/server-delivery.test.mjs scripts/test/get-build-number.test.mjs && npx tsx --test src/test/artifact-types.test.ts src/test/arch-detection.test.ts src/test/asset-copy-token-store.test.ts src/test/cert-utils.test.ts src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/flush-changes.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-path.test.ts src/test/manifest-validator.test.ts src/test/image-utils.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/cli-json-output.test.ts src/test/noop-debug-adapter.test.ts src/test/pack-result.test.ts src/test/new-command-utils.test.ts src/test/sign-utils.test.ts src/test/sign-flow.test.ts src/test/tool-command-utils.test.ts src/test/xsd-parser.test.ts src/test/xml-context.test.ts src/test/intellisense-integration.test.ts src/test/intellisense-validation.test.ts src/test/schema-shared.test.ts src/test/semantic-validation.test.ts src/test/working-directory.test.ts src/test/csharp-dev-kit-notification.test.ts src/test/project-restore-notification.test.ts src/test/project-build-notification.test.ts src/test/notification-dismissal.test.ts src/test/xaml-generated-event-handler-save.test.ts src/test/xaml-prompted-text-edit.test.ts src/test/xaml-auto-restore-failure.test.ts src/test/xaml-attribute-suggestion-trigger.test.ts src/test/xaml-configuration.test.ts src/test/xaml-degraded-notification.test.ts src/test/xaml-dotnet-runtime.test.ts src/test/xaml-dotnet-host-usage.test.ts src/test/xaml-project-context-status.test.ts src/test/xaml-server-arch.test.ts src/test/xaml-server-lifecycle.test.ts src/test/xaml-workspace-activation.test.ts"
+    "test:unit": "tsc -p ./ && node -e \"require('fs').cpSync('src/test/fixtures','out/test/fixtures',{recursive:true})\" && mocha out/test/project-detection.test.js && node --test scripts/test/server-delivery.test.mjs scripts/test/get-build-number.test.mjs && npx tsx --test src/test/artifact-types.test.ts src/test/arch-detection.test.ts src/test/asset-copy-token-store.test.ts src/test/cert-utils.test.ts src/test/debugger-resolver.test.ts src/test/extension-field-validator.test.ts src/test/extension-templates.test.ts src/test/flush-changes.test.ts src/test/manifest-edge-cases.test.ts src/test/manifest-parser.test.ts src/test/manifest-path.test.ts src/test/manifest-validator.test.ts src/test/image-utils.test.ts src/test/project-resolver.test.ts src/test/redos-prevention.test.ts src/test/xml-utils.test.ts src/test/shell-escape.test.ts src/test/cli-json-output.test.ts src/test/noop-debug-adapter.test.ts src/test/pack-result.test.ts src/test/new-command-utils.test.ts src/test/sign-utils.test.ts src/test/sign-flow.test.ts src/test/tool-command-utils.test.ts src/test/xsd-parser.test.ts src/test/xml-context.test.ts src/test/intellisense-integration.test.ts src/test/intellisense-validation.test.ts src/test/schema-shared.test.ts src/test/semantic-validation.test.ts src/test/working-directory.test.ts src/test/run-target.test.ts src/test/project-runnability.test.ts src/test/run-options.test.ts src/test/launch-config.test.ts src/test/run-exit.test.ts src/test/scan-roots.test.ts src/test/package-contributions.test.ts src/test/run-cli-contract.test.ts src/test/csharp-dev-kit-notification.test.ts src/test/project-restore-notification.test.ts src/test/project-build-notification.test.ts src/test/notification-dismissal.test.ts src/test/xaml-generated-event-handler-save.test.ts src/test/xaml-prompted-text-edit.test.ts src/test/xaml-auto-restore-failure.test.ts src/test/xaml-attribute-suggestion-trigger.test.ts src/test/xaml-configuration.test.ts src/test/xaml-degraded-notification.test.ts src/test/xaml-dotnet-runtime.test.ts src/test/xaml-dotnet-host-usage.test.ts src/test/xaml-project-context-status.test.ts src/test/xaml-server-arch.test.ts src/test/xaml-server-lifecycle.test.ts src/test/xaml-workspace-activation.test.ts"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",

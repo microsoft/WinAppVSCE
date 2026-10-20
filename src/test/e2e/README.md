@@ -8,8 +8,6 @@ Automated Playwright tests that launch VS Code as an Electron app. The suite cov
 ## Quick start
 
 ```powershell
-cd src/winapp-VSC
-
 # Install dependencies (first time only)
 npm install
 
@@ -30,7 +28,7 @@ npm run test:e2e
 
 > **Prerequisites** – VS Code must be installed at the default location. Each run creates its own throwaway VS Code profile (`--user-data-dir` / `--extensions-dir`), so other VS Code windows can stay open.
 
-> **`@playwright/test` version** – pinned with a caret range starting at `1.61.1` (not `1.62.1`) because the approved package feed does not mirror a stable `1.62.1` for `@playwright/test`/`playwright`/`playwright-core` (only prereleases). `^1.61.1` still resolves through that feed and picks up newer compatible stable releases (e.g. `1.62.0`) as they land, without requiring a version the feed can't serve.
+> **`@playwright/test` version** – pinned to an exact version (`1.63.0`) rather than a range, because the approved package feed does not mirror every upstream release. An exact pin keeps `npm install` reproducible and keeps it from resolving to a version the feed cannot serve; bump it deliberately once the feed carries the newer release.
 
 ## Architecture
 
@@ -58,7 +56,7 @@ Tests run against real AppxManifest files stored in `src/test/fixtures/`:
 
 ---
 
-## Test inventory (167 tests)
+## Test inventory (257 tests)
 
 ### `webview-state.spec.ts` — 19 tests
 
@@ -101,6 +99,11 @@ visual editor. Launches its own VS Code instance.
 | 5 | the save-flush echo refreshes validation instead of rebuilding the form | The document change the flush itself produces posts `validationErrors`, not a second `update`, so it never rebuilds the Applications inputs over text typed since the save |
 | 6 | saving while the XML is unparseable stores the raw text instead of rewriting the document | The save-flush guard resolves with no edits when the document can't be parsed, so Ctrl+S persists the user's raw text and never hangs |
 
+The remaining sections cover the VS Code suites with per-test tables. Four smaller specs are
+not tabulated but are part of the total: `mrt-validation.spec.ts` (6),
+`semantic-diagnostics.spec.ts` (4), `new-command-quickpick.spec.ts` (3), and
+`new-command-scaffold.spec.ts` (2).
+
 ### `sign-quickpick.spec.ts` — 9 tests
 
 Validates that `winapp.sign` discovers signable files and certificates in workspace QuickPicks.
@@ -119,11 +122,74 @@ Validates that `winapp.sign` discovers signable files and certificates in worksp
 
 ### `input-folder-validation.spec.ts` — 1 test
 
-Validates that an invalid configured `inputFolder` offers to open its owning debug configuration.
+Validates that an invalid configured run input offers to open its owning debug configuration.
+
+The `winapp` launch.json property is called `input`. `inputFolder` is its older
+name, kept working so launch.json files written before project mode still run.
+Error messages quote whichever of the two the user actually set —
+`validateRunInput` takes the name as a parameter and `extension.ts` passes
+`config.input ? 'input' : 'inputFolder'` — so this test sets the old name and
+asserts the message says `inputFolder`. Quoting `"input"` at someone whose
+launch.json does not contain that word would send them hunting for a property
+they never wrote.
 
 | # | Test | Validates |
 |---|------|-----------|
 | 1 | invalid inputFolder offers to open its debug configuration | Validation cancels debugging, shows the resource-neutral action, and opens the correct folder `launch.json` with its unique configuration content |
+
+### `run-target-picker.spec.ts` — 17 tests
+
+Covers run-target discovery for `winapp.run` / `winapp.runWithOptions`, which depends on VS Code's own `findFiles` indexing and workspace-folder resolution and so cannot be unit tested. Every test dismisses the picker with `cancelAndExpectNoFollowUp`, which presses `Escape` and then asserts the quick input is gone and no notification replaced it — so the CLI is never invoked, and a flow that swallowed the cancellation would fail rather than pass silently.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | hides class libraries and test projects | Non-runnable projects are filtered out rather than offered as targets the CLI would reject |
+| 2 | falls back to build output when the only project is a library | With nothing runnable found, the build-output scan still supplies targets |
+| 3 | explains why an unbuilt native-only solution is not offered | A `.sln` containing only unsupported `.vcxproj` members and no built output reports that the solution was found and tells the user to build before browsing, rather than claiming no solution exists |
+| 4 | falls back to native build output when a solution has no supported members | A `.sln` containing only `.vcxproj` members does not hide runnable `.exe` output from the bundled CLI's folder mode |
+| 5 | prefers the project over its own build output folder | A project and its `bin` output collapse to the project entry |
+| 6 | finds output for a project-less app without surfacing node_modules | Electron/Rust-shaped workspaces reach the `.exe` scan, and excluded directories stay excluded |
+| 7 | asks which project to run inside a multi-app solution | A multi-app `.sln` is auto-selected, then raises the second prompt that supplies `--project` |
+| 8 | skips the project prompt when a solution holds one runnable app | A single-app solution goes straight on, landing on the build-configuration prompt |
+| 9 | keeps every project reachable by typing when many are found | Typing a project name past the top of the list still finds it, because every candidate is handed to the QuickPick |
+| 10 | lists every discovered project in the workspace | Both `.csproj` files appear alongside a single browse entry, with no separate build-output search row |
+| 11 | Browse opens a sub-prompt that chooses between a file and a folder dialog | Selecting the single browse entry raises the "What would you like to browse for?" sub-prompt offering both a project/solution *file* dialog and a project-directory-or-build-output *folder* dialog, and Escape unwinds without opening a native dialog |
+| 12 | shows a solution once rather than also listing its member projects | A `.sln` and its member `.csproj` collapse to a single entry |
+| 13 | discovers projects in every folder of a multi-root workspace | Projects from *both* folders of a `.code-workspace` appear — previously only `workspaceFolders[0]` was searched |
+| 14 | With Options command skips the target prompt for a single project | `winapp.runWithOptions` auto-selects the only candidate, matching `winapp.run`, and goes straight to the build prompt |
+| 15 | F5 with no input in launch.json prompts for a run target | A `winapp` launch configuration that omits `input` falls through to the picker instead of failing with a missing-argument error |
+| 16 | With Options skips the build prompts in folder mode | A build-output target goes straight to the toggle prompt, and project-only toggles stay hidden there |
+| 17 | checking Download symbols also checks Capture debug output | Selecting the symbols toggle turns on the debug-output toggle it requires, so the pair cannot be submitted half-set |
+
+> When matching the picker, assert on the full placeholder. The command palette's own placeholder is "Type the name of a command **to run**", so a loose `/to run/` match silently reads the palette's rows instead of the picker's.
+
+### `live-run.spec.ts` — 3 tests (opt-in)
+
+The only tests that actually execute the CLI. Everything else stops at the argument vector: the unit tests assert `buildRunArgs` emits what was intended, `run-cli-contract.test.ts` checks those flags against the CLI's schema, and `run-target-picker.spec.ts` escapes out before anything runs. These scaffold a real WinUI app with `dotnet new winui` and drive a full build, deploy, and launch through the command palette.
+
+This also covers the only unverified layer in the palette path: `runWinappRun` joins the argv with `escapePowerShellArg` and sends it to a PowerShell terminal, so the arguments are re-parsed by a shell between the array under test and the process that runs.
+
+**Opt-in**, because unlike the rest of the suite it mutates the machine — registering an MSIX package and launching a GUI app — and takes minutes:
+
+```powershell
+$env:E2E_LIVE_RUN=1; npx playwright test live-run
+```
+
+It skips with a diagnostic when the .NET SDK, WinUI templates, or the winapp CLI are unavailable. Assertions read the OS (`Get-AppxPackage`, `Get-Process`) rather than terminal text, so they verify what happened rather than what was printed.
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | builds, deploys, and launches a WinUI project | A single `.csproj` auto-selects, builds, registers in development mode, and the process starts |
+| 2 | launches and attaches to a WinUI project with F5 | A real `winapp` launch configuration builds and starts the app and VS Code enters a debug session using the C# debugger |
+| 3 | applies the With Options build prompts to a project-mode build | Answering the configuration and architecture prompts with `Release` and `x64` reaches the CLI — a `win-x64` Release build appears and the Debug default does not |
+
+Notes for anyone changing this spec:
+
+- Palette tests launch with `--disable-extensions`. C# Dev Kit otherwise recognises the scaffolded project, opens an announcement tab that steals focus from the palette, and builds the project itself, which corrupts the build-output assertions. The F5 test deliberately enables the C# debugger and CI installs it into the isolated extensions directory.
+- Seed `User/settings.json` in the temp profile. A fresh profile opens the Welcome tab and focuses the chat input, and either swallows the palette shortcut; no CLI flag covers this.
+- `terminal.integrated.gpuAcceleration: "off"` is required for the failure diagnostic. xterm renders to a canvas when accelerated, so `.xterm-rows` is empty and the diagnostic reports "no terminal was opened" even when one is open — actively misleading.
+- Each scaffold generates a **new GUID package identity**, so a leaked package cannot be overwritten by a later run; it accumulates. Cleanup kills the app and waits for it to exit, waits for deregistration, then deletes — in that order, because each step holds handles the next one needs released.
+- Cleanup is **verified, not best-effort**. If the run cannot remove its own app, package, or directory, `afterAll` throws and names what survived, so a leak fails the suite rather than printing a warning nobody reads. Residue from *earlier* runs is swept too, but only warns: a crashed run can leave VS Code holding its profile directory, which the current run cannot remove and is not responsible for.
 
 ### `editor-launch.spec.ts` — 11 tests
 
@@ -143,7 +209,7 @@ Validates that the custom editor launches correctly, all tabs render, and global
 | 10 | View XML button is visible | View XML button exists with the expected label |
 | 11 | info banner with feedback link is visible | Info banner and GitHub feedback link are present |
 
-### `identity-tab.spec.ts` — 18 tests
+### `identity-tab.spec.ts` — 19 tests
 
 Validates all Identity tab fields, validation rules, processor architecture, ResourceID, and PhoneIdentity.
 
@@ -168,7 +234,7 @@ Validates all Identity tab fields, validation rules, processor architecture, Res
 | 17 | editing Phone Identity updates the XML | Phone Product ID edits persist to XML |
 | 18 | remove Phone Identity button removes the section | Removing PhoneIdentity deletes it from XML |
 
-### `properties-tab.spec.ts` — 10 tests
+### `properties-tab.spec.ts` — 18 tests
 
 Validates Properties tab fields, validation, logo browse button, and package type selector.
 
@@ -185,7 +251,7 @@ Validates Properties tab fields, validation, logo browse button, and package typ
 | 9 | restoring values clears errors | Restoring both values clears error states |
 | 10 | package type selector is visible | Package type dropdown is rendered |
 
-### `dependencies-tab.spec.ts` — 16 tests
+### `dependencies-tab.spec.ts` — 17 tests
 
 Validates target device families, package dependencies, and all dependency sub-types (add/edit/remove).
 
@@ -208,7 +274,7 @@ Validates target device families, package dependencies, and all dependency sub-t
 | 15 | add external dependency button is visible | External dependency add control exists |
 | 16 | can add and remove a main package dependency | Main package dependency round-trip works |
 
-### `resources-tab.spec.ts` — 6 tests
+### `resources-tab.spec.ts` — 7 tests
 
 Validates resource list rendering, add/edit/move/remove operations.
 
@@ -221,7 +287,7 @@ Validates resource list rendering, add/edit/move/remove operations.
 | 5 | can edit resource language | Resource language edits persist to XML |
 | 6 | can remove a resource | Removing a resource decreases the count |
 
-### `applications-tab.spec.ts` — 18 tests
+### `applications-tab.spec.ts` — 58 tests
 
 Validates application cards, sub-tabs (Info, Extensions, Visual Assets), extension CRUD, visual asset CRUD, and add/remove applications.
 
@@ -246,7 +312,7 @@ Validates application cards, sub-tabs (Info, Extensions, Visual Assets), extensi
 | 17 | can remove the newly added application | Removing an app decreases card count |
 | 18 | browse executable button is visible | Executable browse button exists |
 
-### `capabilities-tab.spec.ts` — 16 tests
+### `capabilities-tab.spec.ts` — 20 tests
 
 Validates all four capability categories, checkbox toggling, hover descriptions, and custom capability CRUD.
 
