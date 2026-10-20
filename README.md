@@ -323,7 +323,7 @@ Run these three commands in order:
 2. **WinApp: Create Sparse Identity Package** — select the generated `sparse/appxmanifest.xml`. This produces a `.identity.msix`. Sign it with **WinApp: Sign File** (or let the pack step generate a development certificate). To trust that generated certificate, run **WinApp: Install Certificate**, which handles the required administrator prompt.
 3. **WinApp: Embed Identity into Executable** — point at the same executable. WinApp records the package identity so Windows will associate the running process with the registered package.
 
-> **Important:** Embedding identity into an `.exe` rewrites the binary in place, which invalidates any existing Authenticode signature. WinApp asks for confirmation before doing this. Sign the executable *after* embedding, not before. Choosing a side-by-side `.manifest` target instead leaves the binary untouched.
+> **Important:** Embedding identity into an `.exe` rewrites the binary in place, which invalidates any existing Authenticode signature. WinApp displays a reminder while embedding; sign the executable *after* embedding, not before. Choosing a side-by-side `.manifest` target instead leaves the binary untouched.
 
 For local testing, finish the workflow by deploying the generated assets beside
 the executable and registering the identity package against that external

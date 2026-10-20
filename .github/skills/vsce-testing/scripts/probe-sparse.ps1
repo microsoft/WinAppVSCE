@@ -128,21 +128,12 @@ $sawReveal = $notif -match 'Button\s+"Reveal in Explorer"'
 Write-Host "  notification actions reveal=$sawReveal sign=$sawSign install=$sawInstall (Reveal and Sign required; Install absent)"
 
 # ---------------------------------------------------------------- step 3 ----
-Write-Host "`n=== 3. winapp.embedIdentity (QuickPick -> App.exe, then modal) ==="
+Write-Host "`n=== 3. winapp.embedIdentity (QuickPick -> App.exe) ==="
 Reset-ToEditor | Out-Null
 $before = Get-Item $exePath
 $r3 = Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.embedIdentity' `
     -Answers @(@{ accept = $true }) -SettleMs 4000
 Write-Host "  answers: $(($r3.steps[0].answers | ConvertTo-Json -Compress))"
-
-# The signature-invalidation warning is a native VS Code dialog, not part of
-# the main window's accessibility tree. With first-run overlays already
-# cleared, successfully invoking its Continue button proves the modal appeared.
-winapp ui screenshot -w $ctx.Hwnd -o (Join-Path $logDir 'sparse-embed-modal.png') 2>&1 | Out-Null
-$modalClick = Invoke-ModalButton -Hwnd $ctx.Hwnd -Name 'Continue'
-$sawWarning = $modalClick -match '^Invoked '
-Write-Host "  modal shown (Authenticode warning)=$sawWarning"
-Write-Host "  click Continue: $modalClick"
 
 Start-Sleep -Seconds 30
 $after = Get-Item $exePath
@@ -152,7 +143,7 @@ Write-Host "  exe after : len=$($after.Length) mtime=$($after.LastWriteTimeUtc.T
 Write-Host "  exe rewritten=$rewritten"
 
 Write-Host "`n=== RESULT ==="
-Write-Host "initSparse.manifest=$initOk pack.identityMsix=$([bool]$identityMsix) embed.modal=$sawWarning embed.rewroteExe=$rewritten"
+Write-Host "initSparse.manifest=$initOk pack.identityMsix=$([bool]$identityMsix) embed.rewroteExe=$rewritten"
 
 $failures = @()
 if (-not $onEditor) { $failures += 'VS Code editor did not become ready' }
@@ -162,7 +153,6 @@ if (-not $identityMsix) { $failures += 'a new identity MSIX was not created' }
 if (-not $sawReveal) { $failures += 'identity-only pack notification did not offer Reveal in Explorer' }
 if (-not $sawSign) { $failures += 'identity-only pack notification did not offer Sign' }
 if ($sawInstall) { $failures += 'identity-only pack notification incorrectly offered Install' }
-if (-not $sawWarning) { $failures += 'embed identity warning was not shown' }
 if (-not $rewritten) { $failures += 'target executable was not rewritten' }
 
 if ($failures.Count -gt 0) {
