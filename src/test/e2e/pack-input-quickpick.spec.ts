@@ -31,15 +31,20 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { extensionLaunchArgs } from './helpers';
 
 const VSCODE_EXE =
     process.env.VSCODE_PATH ??
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
 
-const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
-const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-    ? []
-    : [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+/** C# tooling can steal focus while command pickers are opening. */
+const INTERFERING_EXTENSIONS = [
+    'ms-dotnettools.csdevkit',
+    'ms-dotnettools.csharp',
+    'ms-dotnettools.vscode-dotnet-runtime',
+];
+
+const EXTENSION_ARGS = extensionLaunchArgs(INTERFERING_EXTENSIONS);
 
 // Discovery scans the whole workspace, and VS Code's search service needs a
 // moment to come up, so these run well past the default per-test timeout.
@@ -59,6 +64,9 @@ const SPARSE_MANIFEST = `<?xml version="1.0" encoding="utf-8"?>
     <Logo>Assets\\StoreLogo.png</Logo>
     <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
   </Properties>
+  <Applications>
+    <Application Id="App" Executable="App.exe" EntryPoint="Windows.FullTrustApplication" />
+  </Applications>
 </Package>`;
 
 /** A normal packaged manifest — same file name, but no `AllowExternalContent`. */
@@ -75,11 +83,9 @@ const FULL_MANIFEST = `<?xml version="1.0" encoding="utf-8"?>
 async function launchVSCodeForFolder(
     folderPath: string
 ): Promise<{ app: ElectronApplication; page: Page; userDataDir: string }> {
-    // A throwaway profile plus --disable-extensions keeps startup fast and
-    // deterministic: no unrelated extensions competing for activation, and no
-    // Welcome/sign-in surfaces stealing focus from the QuickPick. The
-    // extension under test is still loaded, since
-    // --extensionDevelopmentPath is exempt from --disable-extensions.
+    // A throwaway profile keeps user state from affecting the picker. The
+    // shared extension arguments load this worktree in development and the
+    // installed VSIX from E2E_EXTENSIONS_DIR in release validation.
     const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-e2e-udd-'));
 
     const app = await electron.launch({
@@ -89,7 +95,6 @@ async function launchVSCodeForFolder(
             '--new-window',
             ...EXTENSION_ARGS,
             `--user-data-dir=${userDataDir}`,
-            '--disable-extensions',
             '--disable-telemetry',
             '--disable-updates',
             '--skip-release-notes',
@@ -215,10 +220,6 @@ async function chooseQuickPickOption(page: Page, option: string): Promise<void> 
     await page.keyboard.type(option, { delay: 30 });
     await page.waitForTimeout(500);
     await page.keyboard.press('Enter');
-}
-
-async function expectWinAppTerminal(page: Page): Promise<void> {
-    await expect(page.locator('.terminal-wrapper')).toBeVisible({ timeout: DISCOVERY_TIMEOUT });
 }
 
 /** Close VS Code and remove the throwaway workspace and profile. */
@@ -658,6 +659,9 @@ test.describe('WinApp packaging command input discovery', () => {
 
     test('dispatches sparse init with the selected executable and project output', async () => {
         const tmpDir = createPackWorkspace();
+        const exePath = path.join(tmpDir, 'src', 'App', 'bin', 'x64', 'Debug', 'net8.0', 'App.exe');
+        fs.copyFileSync(path.join(process.env.WINDIR ?? 'C:\\Windows', 'System32', 'notepad.exe'), exePath);
+        const generatedManifest = path.join(tmpDir, 'src', 'App', 'sparse', 'appxmanifest.xml');
 
         let app: ElectronApplication | undefined;
         let userDataDir: string | undefined;
@@ -675,9 +679,13 @@ test.describe('WinApp packaging command input discovery', () => {
             );
             await choosePackRow(page, 'App.exe');
 
-            await expectWinAppTerminal(page);
+            await expect.poll(
+                () => fs.existsSync(generatedManifest),
+                { timeout: DISCOVERY_TIMEOUT, message: 'sparse init did not create the project-root manifest' }
+            ).toBe(true);
+            expect(fs.readFileSync(generatedManifest, 'utf8')).toContain('AllowExternalContent');
 
-            console.log('✅ PASS: sparse init dispatched the expected CLI arguments');
+            console.log('✅ PASS: sparse init created the manifest at the selected executable project root');
         } finally {
             await cleanup(app, tmpDir, userDataDir);
         }
@@ -687,7 +695,14 @@ test.describe('WinApp packaging command input discovery', () => {
         const tmpDir = createPackWorkspace({
             sparseManifests: [path.join('src', 'App', 'sparse', 'appxmanifest.xml')],
         });
-        writeFile(tmpDir, path.join('src', 'App', 'app.manifest'), '<assembly />');
+        const targetManifest = writeFile(
+            tmpDir,
+            path.join('src', 'App', 'app.manifest'),
+            '<?xml version="1.0" encoding="utf-8"?>' +
+            '<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">' +
+            '<assemblyIdentity version="1.0.0.0" processorArchitecture="*" name="Test.App" type="win32" />' +
+            '</assembly>'
+        );
 
         let app: ElectronApplication | undefined;
         let userDataDir: string | undefined;
@@ -707,9 +722,15 @@ test.describe('WinApp packaging command input discovery', () => {
             // without depending on VS Code's native modal-button accessibility.
             await choosePackRow(page, 'app.manifest');
 
-            await expectWinAppTerminal(page);
+            await expect.poll(
+                () => fs.readFileSync(targetManifest, 'utf8'),
+                { timeout: DISCOVERY_TIMEOUT, message: 'embed identity did not update the side-by-side manifest' }
+            ).toContain('<msix');
+            const updatedManifest = fs.readFileSync(targetManifest, 'utf8');
+            expect(updatedManifest).toContain('packageName="MyApp"');
+            expect(updatedManifest).toContain('applicationId="App"');
 
-            console.log('✅ PASS: embed identity dispatched an explicit sparse manifest');
+            console.log('✅ PASS: embed identity updated the target from the resolved sparse manifest');
         } finally {
             await cleanup(app, tmpDir, userDataDir);
         }
