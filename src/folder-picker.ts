@@ -3,20 +3,28 @@ import * as path from 'path';
 import {
 	BUILD_OUTPUT_MAX_RESULTS,
 	BUILD_OUTPUT_SKIP_DIRS,
-	deduplicateBuildOutputFolders
+	deduplicateBuildOutputFolders,
+	isPackableDiscoveredOutput
 } from './project-detection';
 import { walkDirectoryTree, scanRoots, type ScanCancellationToken } from './directory-walk';
+import {
+	countDuplicateFolderSelections,
+	mergeFolderSelections,
+	resolveFolderSelection
+} from './pack-args';
 import { selectFolder } from './winapp-host';
+import type { WorkspaceRoot } from './workspace';
 
 /**
  * Folder selection shared by the run, pack, and project commands.
  *
- * `winapp package` only ever accepts a build output folder, so it uses the
- * build-output picker directly. The run picker lives in `run-utils` because it
- * also offers projects and solutions, and borrows the scan from here.
+ * Pack scans every workspace root with a multi-select picker so build outputs
+ * can form a bundle across roots. Run borrows the same scan while also
+ * offering projects and solutions.
  */
 
 export const FOLDER_PICKER_DETAIL = 'Open a folder picker';
+const ADD_ANOTHER_FOLDER_DETAIL = 'Open another folder picker';
 
 /** Shown whenever an executable scan comes up empty, in either picker. */
 export const NO_BUILD_OUTPUT_MESSAGE =
@@ -36,6 +44,8 @@ export interface BuildOutputFolder {
 	rootPath: string;
 	path: string;
 }
+
+type BuildOutputQuickPickItem = vscode.QuickPickItem & { directory?: string };
 
 /**
  * Prompt the user to select a folder.
@@ -58,7 +68,8 @@ export { selectFolder };
  */
 export async function scanBuildOutputFolders(
 	rootPaths: readonly string[],
-	token: ScanCancellationToken
+	token: ScanCancellationToken,
+	packOnly: boolean = false
 ): Promise<BuildOutputFolder[] | undefined> {
 	const found: BuildOutputFolder[] = [];
 
@@ -69,8 +80,16 @@ export async function scanBuildOutputFolders(
 		await walkDirectoryTree(
 			rootPath,
 			(directory, entries) => {
+				const packable = !packOnly || isPackableDiscoveredOutput(
+					directory,
+					entries.filter(entry => entry.isFile()).map(entry => entry.name)
+				);
 				for (const entry of entries) {
-					if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.exe') {
+					if (
+						!packable
+						|| !entry.isFile()
+						|| path.extname(entry.name).toLowerCase() !== '.exe'
+					) {
 						continue;
 					}
 					executables.push(path.join(directory, entry.name));
@@ -103,11 +122,12 @@ export async function scanBuildOutputFolders(
  * multi-root run picker share this.
  */
 export async function findBuildOutputFolders(
-	rootPaths: readonly string[]
+	rootPaths: readonly string[],
+	packOnly: boolean = false
 ): Promise<BuildOutputFolder[] | undefined> {
 	return vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: BUILD_OUTPUT_PROGRESS_TITLE, cancellable: true },
-		async (_progress, token) => scanBuildOutputFolders(rootPaths, token)
+		async (_progress, token) => scanBuildOutputFolders(rootPaths, token, packOnly)
 	);
 }
 
@@ -123,17 +143,7 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 		return selectFolder(SELECT_BUILD_OUTPUT_TITLE, vscode.Uri.file(workspacePath));
 	}
 
-	const items: Array<vscode.QuickPickItem & { directory?: string }> = outputFolders.map(({ path: folderPath }) => ({
-		label: path.relative(workspacePath, folderPath) || '.',
-		detail: folderPath,
-		directory: folderPath
-	}));
-
-	// alwaysShow keeps the escape hatch reachable: without it, typing a path
-	// that matches no discovered folder filters Browse… out of the list too.
-	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, alwaysShow: true });
-
-	const picked = await vscode.window.showQuickPick(items, {
+	const picked = await vscode.window.showQuickPick(buildOutputFolderItems(workspacePath, outputFolders), {
 		placeHolder: SELECT_BUILD_OUTPUT_PLACEHOLDER
 	});
 
@@ -146,4 +156,185 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 	}
 
 	return picked.directory;
+}
+
+/** Pick one or more build outputs; multiple folders produce an MSIX bundle. */
+export async function pickBuildOutputFolders(
+	workspaceRoots: readonly WorkspaceRoot[]
+): Promise<string[] | undefined> {
+	const outputFolders = await findBuildOutputFolders(
+		workspaceRoots.map(root => root.path),
+		true
+	);
+	if (!outputFolders) {
+		return undefined;
+	}
+
+	const defaultRoot = workspaceRoots[0];
+	if (outputFolders.length === 0) {
+		vscode.window.showWarningMessage(NO_BUILD_OUTPUT_MESSAGE);
+		return collectBrowsedBuildOutputFolders(
+			[],
+			defaultRoot ? vscode.Uri.file(defaultRoot.path) : undefined
+		);
+	}
+
+	while (true) {
+		const picked = await vscode.window.showQuickPick(
+			buildMultiRootOutputFolderItems(workspaceRoots, outputFolders),
+			{
+				placeHolder: 'Select build output folder(s) — pick two or more to create an MSIX bundle',
+				canPickMany: true
+			}
+		);
+
+		if (!picked) {
+			return undefined;
+		}
+
+		const selection = resolveFolderSelection(picked, FOLDER_PICKER_DETAIL);
+		switch (selection.kind) {
+			case 'none':
+				vscode.window.showWarningMessage('Select at least one build output folder.');
+				continue;
+			case 'browse': {
+				return collectBrowsedBuildOutputFolders(
+					selection.folders,
+					defaultRoot ? vscode.Uri.file(defaultRoot.path) : undefined
+				);
+			}
+			case 'folders':
+				return selection.folders;
+		}
+	}
+}
+
+function buildMultiRootOutputFolderItems(
+	workspaceRoots: readonly WorkspaceRoot[],
+	outputFolders: readonly BuildOutputFolder[]
+): BuildOutputQuickPickItem[] {
+	const onlyOutput = outputFolders.length === 1;
+	const rootsByPath = new Map(
+		workspaceRoots.map(root => [path.resolve(root.path).toLowerCase(), root])
+	);
+	const items: BuildOutputQuickPickItem[] = outputFolders.map(output => {
+		const root = rootsByPath.get(path.resolve(output.rootPath).toLowerCase());
+		const relative = path.relative(output.rootPath, output.path) || '.';
+		return {
+			label: workspaceRoots.length > 1 && root ? `${root.name} — ${relative}` : relative,
+			detail: output.path,
+			directory: output.path,
+			picked: onlyOutput
+		};
+	});
+
+	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, alwaysShow: true });
+	return items;
+}
+
+function buildOutputFolderItems(
+	workspacePath: string,
+	outputFolders: readonly BuildOutputFolder[]
+): BuildOutputQuickPickItem[] {
+	const items: BuildOutputQuickPickItem[] = outputFolders.map(({ path: folderPath }) => ({
+		label: path.relative(workspacePath, folderPath) || '.',
+		detail: folderPath,
+		directory: folderPath
+	}));
+
+	// alwaysShow keeps the escape hatch reachable when filtering the list.
+	items.push({ label: '$(folder-opened) Browse…', detail: FOLDER_PICKER_DETAIL, alwaysShow: true });
+	return items;
+}
+
+async function collectBrowsedBuildOutputFolders(
+	initialFolders: readonly string[],
+	defaultUri?: vscode.Uri
+): Promise<string[] | undefined> {
+	let folders = [...initialFolders];
+	let browseDefault = defaultUri;
+
+	while (true) {
+		const browsed = await selectFolders(
+			'Select one or more build output folders',
+			browseDefault
+		);
+		if (!browsed) {
+			if (folders.length === 0) {
+				return undefined;
+			}
+		} else {
+			const merged = mergeFolderSelections(folders, browsed);
+			if (countDuplicateFolderSelections(folders, browsed) > 0) {
+				const result = await vscode.window.showWarningMessage(
+					merged.length === 1
+						? 'The same folder was selected more than once. Duplicates will be ignored, so this will create a single MSIX package.'
+						: 'The same folder was selected more than once. Duplicate selections will be ignored.',
+					{ modal: true },
+					'Continue'
+				);
+				if (result !== 'Continue') {
+					return undefined;
+				}
+			}
+			folders = merged;
+			browseDefault = vscode.Uri.file(path.dirname(browsed[browsed.length - 1]));
+		}
+
+		while (true) {
+			const reviewed = await vscode.window.showQuickPick(
+				buildBrowsedFolderReviewItems(folders),
+				{
+					placeHolder: 'Review build output folders — press Enter to continue, or select Add another folder…',
+					canPickMany: true
+				}
+			);
+			if (!reviewed) {
+				return undefined;
+			}
+
+			const selection = resolveFolderSelection(reviewed, ADD_ANOTHER_FOLDER_DETAIL);
+			if (selection.kind === 'none') {
+				vscode.window.showWarningMessage('Select at least one build output folder.');
+				continue;
+			}
+
+			folders = selection.folders;
+			if (selection.kind === 'folders') {
+				return folders;
+			}
+			break;
+		}
+	}
+}
+
+function buildBrowsedFolderReviewItems(
+	folders: readonly string[]
+): BuildOutputQuickPickItem[] {
+	return [
+		...folders.map(folder => ({
+			label: `$(folder) ${path.basename(folder) || folder}`,
+			detail: folder,
+			directory: folder,
+			picked: true
+		})),
+		{
+			label: '$(folder-opened) Add another folder…',
+			detail: ADD_ANOTHER_FOLDER_DETAIL,
+			alwaysShow: true
+		}
+	];
+}
+
+async function selectFolders(title: string, defaultUri?: vscode.Uri): Promise<string[] | undefined> {
+	const result = await vscode.window.showOpenDialog({
+		canSelectFiles: false,
+		canSelectFolders: true,
+		canSelectMany: true,
+		title,
+		openLabel: 'Select folder(s)',
+		defaultUri
+	});
+
+	return result?.length ? result.map(uri => uri.fsPath) : undefined;
 }

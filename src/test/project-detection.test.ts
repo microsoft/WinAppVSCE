@@ -9,6 +9,7 @@ import {
 	getDisplayFilePath,
 	DetectedProject,
 	deduplicateBuildOutputFolders,
+	isPackableDiscoveredOutput,
 	isContainedIn,
 	BUILD_OUTPUT_MAX_DEPTH
 } from '../project-detection';
@@ -193,6 +194,47 @@ describe('project-detection', () => {
 			const result = await detectProjectAt(tempDir, tempDir);
 			assert.ok(result);
 			assert.strictEqual(result.type, 'Tauri');
+		});
+
+		describe('isPackableDiscoveredOutput', () => {
+			it('rejects a manifest-less nested publish folder', async () => {
+				const root = createTempDir();
+				try {
+					const publish = path.join(root, 'bin', 'Release', 'win-x64', 'publish');
+					createFile(path.join(publish, 'App.exe'));
+					assert.strictEqual(
+						isPackableDiscoveredOutput(publish, ['App.exe', 'resources.pri']),
+						false
+					);
+				} finally {
+					removeTempDir(root);
+				}
+			});
+
+			it('keeps a publish folder that is a complete package layout', async () => {
+				const root = createTempDir();
+				try {
+					const publish = path.join(root, 'publish');
+					createFile(path.join(publish, 'App.exe'));
+					createFile(path.join(publish, 'AppxManifest.xml'));
+					assert.strictEqual(
+						isPackableDiscoveredOutput(publish, ['App.exe', 'AppxManifest.xml']),
+						true
+					);
+				} finally {
+					removeTempDir(root);
+				}
+			});
+
+			it('keeps arbitrary output folder names for non-.NET layouts', async () => {
+				assert.strictEqual(
+					isPackableDiscoveredOutput(
+						path.join('dist', 'win-unpacked'),
+						['App.exe']
+					),
+					true
+				);
+			});
 		});
 	});
 

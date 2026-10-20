@@ -24,8 +24,7 @@ import {
 	type WinAppRunOptions
 } from './run-options';
 import {
-	FOLDER_PICKER_DETAIL,
-	pickBuildOutputFolder
+	FOLDER_PICKER_DETAIL
 } from './folder-picker';
 import {
 	pickRunTarget,
@@ -47,6 +46,13 @@ import {
 	isArtifactWithinRoot,
 	planPackCompletion
 } from './pack-result';
+import {
+	buildPackArgs,
+	getPackContainmentRoots,
+	packProgressTitle,
+	shouldCheckSelfContainedArch
+} from './pack-args';
+import { pickPackInput, pickPackOptions } from './pack-picker';
 import {
 	findWorkspaceArtifacts,
 	buildSignCommand,
@@ -676,11 +682,14 @@ function installPackage(artifactPath: string, cwd: string): void {
  * Surface the result of a pack run. On success, show a completion notification
  * naming the produced artifact with Reveal / Sign / Install actions. On
  * failure, direct the user to the WinApp output channel.
+ *
+ * @param allowedRoots Workspace and input roots under which the CLI may place
+ *   the produced artifact.
  */
 async function handlePackCompletion(
 	extensionPath: string,
 	workspacePath: string,
-	inputFolder: string,
+	allowedRoots: readonly string[],
 	result: { code: number | null; output: string; cancelled?: boolean }
 ): Promise<void> {
 	const plan = planPackCompletion(result);
@@ -695,8 +704,7 @@ async function handlePackCompletion(
 
 	if (
 		!fs.existsSync(plan.artifactPath) ||
-		(!isArtifactWithinRoot(plan.artifactPath, workspacePath) &&
-			!isArtifactWithinRoot(plan.artifactPath, inputFolder))
+		!allowedRoots.some((root) => isArtifactWithinRoot(plan.artifactPath, root))
 	) {
 		getWinappOutputChannel().show();
 		vscode.window.showErrorMessage('Packaging failed. See the WinApp output channel for details.');
@@ -1409,29 +1417,28 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register winapp.pack command
 	context.subscriptions.push(
 		vscode.commands.registerCommand('winapp.pack', async () => {
-			const workspacePath = getWorkspacePath();
-			if (!workspacePath) {
+			const input = await pickPackInput();
+			if (!input) {
 				return;
 			}
 
-			const inputFolder = await pickBuildOutputFolder(workspacePath);
-			if (!inputFolder) {
+			const packOptions = await pickPackOptions(input);
+			if (!packOptions) {
 				return;
 			}
-
-			const generateCert = await vscode.window.showQuickPick(
-				['Yes', 'No'],
-				{ placeHolder: 'Generate and install a development certificate?' }
-			);
-
-			const selfContained = await vscode.window.showQuickPick(
-				['Yes', 'No'],
-				{ placeHolder: 'Bundle Windows App SDK runtime (self-contained)?' }
-			);
 
 			// --- Architecture mismatch warning for self-contained packages ---
-			if (selfContained === 'Yes') {
-				const detectedArch = detectArchFromPath(inputFolder);
+			// Only meaningful for a single package: the CLI resolves the runtime
+			// from the *machine's* architecture there, so packaging x64 output on
+			// an arm64 host silently mixes architectures. For bundles the CLI
+			// packs each slice with an explicit per-slice architecture override,
+			// so the runtime always matches its package and the warning would be
+			// misleading.
+			if (
+				input.kind === 'folders'
+				&& shouldCheckSelfContainedArch(input, packOptions.selfContained)
+			) {
+				const detectedArch = detectArchFromPath(input.folders[0]);
 				const machineArch = getMachineArch();
 				const mismatchResult = checkSelfContainedArchMismatch(detectedArch, machineArch);
 				if (mismatchResult.mismatch) {
@@ -1447,23 +1454,21 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			}
 
-			// Build the argument array for spawn (shell: false) so paths and flags
-			// are passed literally — no PowerShell parsing/escaping required.
-			const args = ['pack', inputFolder];
-			if (generateCert === 'Yes') {
-				args.push('--generate-cert', '--install-cert');
-			}
-			if (selfContained === 'Yes') {
-				args.push('--self-contained');
-			}
+			// Spawned with shell: false, so paths and flags are passed literally.
+			const args = buildPackArgs(input, packOptions);
 
 			const result = await runWinappCapture(
 				extensionPath,
 				args,
-				workspacePath,
-				'Packaging app...'
+				input.workspaceRoot,
+				packProgressTitle(input)
 			);
-			await handlePackCompletion(extensionPath, workspacePath, inputFolder, result);
+			await handlePackCompletion(
+				extensionPath,
+				input.workspaceRoot,
+				getPackContainmentRoots(input),
+				result
+			);
 		})
 	);
 

@@ -30,7 +30,7 @@ All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **Wi
 | **WinApp: Run Application With Options...** | Same as **Run Application**, but prompts for the build configuration, target architecture, and options such as cleaning app data, skipping the build, detaching, or unregistering on exit. |
 | **WinApp: Create Debug Identity** | Add sparse package identity to an existing executable so you can launch and debug it directly from VS Code with identity. |
 | **WinApp: Unregister Package** | Unregister a sideloaded development package (e.g., one registered via Run or Create Debug Identity). |
-| **WinApp: Create MSIX Package** | Package your application into an MSIX, with options to generate a certificate and bundle the runtime self-contained. If self-contained packaging appears to target a different architecture than your machine, WinApp shows a warning before continuing. On completion, a notification names the built package and offers **Reveal in Explorer**, **Sign**, and **Install** actions. |
+| **WinApp: Create MSIX Package or Bundle** | Build and package a `.csproj`, or package existing build output. Select multiple project architectures or build output folders to produce a multi-architecture `.msixbundle`. Project mode supports Release, Debug, and custom build configurations and can honor project signing, generate a development certificate, or create unsigned output. On completion, a notification names the artifact and offers **Reveal in Explorer**, **Sign**, and **Install** actions. |
 | **WinApp: Generate Manifest** | Generate an `AppxManifest.xml` from a template (packaged or sparse). |
 | **WinApp: Add Manifest Execution Alias** | Add an execution alias to the manifest so the packaged app can be launched from the command line. |
 | **WinApp: Update Manifest Assets** | Auto-generate all required app icon assets from a single source image (PNG, JPG, GIF, or BMP). |
@@ -54,9 +54,9 @@ When you run a project-context WinApp command — such as **Initialize Project**
 2. **Project at workspace root** — If a recognized project exists at the root, commands run there immediately.
 3. **Automatic scan** — Searches the workspace for compatible projects and prompts if multiple are found.
 
-Commands that already take an explicit target — such as **Create MSIX Package** (input folder), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file or folder you select and do not run project detection.
+Commands that already take an explicit file target — such as **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file you select and do not run project detection.
 
-**Run Application and F5** use their own target discovery rather than the project detection above. They auto-discover runnable `.csproj` and `.sln` files for .NET apps and prompt only if several are found. If none is found, they fall back to discovering build output folders. You can always pick something that wasn't listed with **Browse…**, which then asks whether you want a project or solution file or a build output folder. Running a build output folder needs a `Package.appxmanifest` (or `AppxManifest.xml`) in it. Run **WinApp: Generate Manifest** if you don't have one.
+**Run Application**, **F5**, and project-mode **Create MSIX Package or Bundle** share runnable `.csproj` and `.sln` discovery rather than the project-directory detection above. Run falls back to build output when no runnable project is available; packaging asks up front whether to build a project or package existing output. You can always pick something that wasn't listed with **Browse…**. Running or packaging a build output folder needs a `Package.appxmanifest` (or `AppxManifest.xml`) in it. Run **WinApp: Generate Manifest** if you don't have one.
 
 **Configuration (optional):**
 
@@ -306,7 +306,9 @@ Use **WinApp: Generate Manifest** to create an `Package.appxmanifest` from a tem
 
 ### Package and sign
 
-Use **WinApp: Create MSIX Package** to package your application. If you choose **self-contained** packaging and the selected build output path appears to target a different architecture than your machine, WinApp shows a warning before continuing so you can avoid bundling the wrong Windows App SDK runtime. When packaging finishes, a completion notification names the built `.msix` and offers three actions: **Reveal in Explorer** (open the package in File Explorer), **Sign** (sign the just-built package), and **Install** (sideload it via `Add-AppxPackage`). Use **WinApp: Sign File** to sign MSIX/APPX packages, `.exe` files, and `.dll` files with a `.pfx` certificate.
+Use **WinApp: Create MSIX Package or Bundle** to package either a .NET `.csproj` or existing build output. A single target produces an `.msix`; selecting multiple architectures or build output folders produces an `.msixbundle`.
+
+When packaging finishes, you can reveal, sign, or install the generated package. Use **WinApp: Sign File** to sign MSIX/APPX packages, `.exe` files, and `.dll` files with a `.pfx` certificate.
 
 ### Access Windows SDK tools
 

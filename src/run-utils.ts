@@ -182,7 +182,7 @@ function buildRunTargetItems(
 }
 
 /** Everything discovery learned about a workspace, under one progress popup. */
-interface RunTargetDiscovery {
+export interface ProjectTargetDiscovery {
 	candidates: RunTargetCandidate[];
 	solutionMembers: Map<string, string[]>;
 	/** Projects were found, but every one was a library or a test project. */
@@ -192,16 +192,16 @@ interface RunTargetDiscovery {
 }
 
 /**
- * Project discovery, with a build-output scan as the fallback.
+ * Discover project-mode targets without applying a command-specific fallback.
  *
- * Both scans share the caller's token and progress reporter so the whole
- * search is one cancellable notification rather than two in sequence.
+ * `winapp run` and `winapp pack` both consume this result, then apply their
+ * own final-input rules: run may fall back to build-output folders or pass a
+ * solution through to the CLI, while pack must resolve a concrete `.csproj`.
  */
-async function discoverRunTargets(
+export async function discoverProjectTargets(
 	roots: readonly WorkspaceRoot[],
-	progress: vscode.Progress<{ message?: string }>,
 	token: ScanCancellationToken
-): Promise<RunTargetDiscovery | undefined> {
+): Promise<ProjectTargetDiscovery | undefined> {
 	const projects = await findProjectTargets(roots, token);
 	if (token.isCancellationRequested) {
 		return undefined;
@@ -234,11 +234,38 @@ async function discoverRunTargets(
 		}
 	}
 
+	const onlyUnrunnableProjects = projects.some(candidate => candidate.kind === 'project')
+		&& candidates.length === 0;
+
+	return { candidates, solutionMembers, onlyUnrunnableProjects, unsupportedSolutionsFound };
+}
+
+/**
+ * Project discovery, with a build-output scan as the run-specific fallback.
+ *
+ * Both scans share the caller's token and progress reporter so the whole
+ * search is one cancellable notification rather than two in sequence.
+ */
+async function discoverRunTargets(
+	roots: readonly WorkspaceRoot[],
+	progress: vscode.Progress<{ message?: string }>,
+	token: ScanCancellationToken
+): Promise<ProjectTargetDiscovery | undefined> {
+	const discovery = await discoverProjectTargets(roots, token);
+	if (!discovery) {
+		return undefined;
+	}
+
+	const {
+		solutionMembers,
+		onlyUnrunnableProjects,
+		unsupportedSolutionsFound
+	} = discovery;
+	let { candidates } = discovery;
+
 	// Discovery either found nothing, or found only libraries and test
 	// projects. Both leave a build output folder as the one remaining way to
 	// run, so look for one before giving up on the workspace.
-	const onlyUnrunnableProjects = projects.some(candidate => candidate.kind === 'project')
-		&& candidates.length === 0;
 	if (candidates.length === 0) {
 		progress.report({ message: BUILD_OUTPUT_FALLBACK_MESSAGE });
 		const folders = await findBuildOutputTargets(roots, token);
@@ -559,18 +586,30 @@ export async function pickBuildSettings(): Promise<Partial<WinAppRunOptions> | u
  *
  * `--configuration` is an open string — a project is free to define `Staging`
  * or `Debug-Internal`, and `launch.json` already declares the field as a plain
- * string — so the two common names are offered as rows while anything typed is
- * taken as-is. Returns `undefined` when dismissed, or a wrapper whose `value`
- * is `undefined` for "let the CLI choose", which the two cases cannot otherwise
- * be told apart.
+ * string — so common names other than the displayed default are offered as
+ * rows while anything typed is taken as-is. Returns `undefined` when dismissed,
+ * or a wrapper whose `value` is `undefined` for "let the CLI choose", which the
+ * two cases cannot otherwise be told apart.
  */
-async function pickConfiguration(): Promise<{ value: string | undefined } | undefined> {
+export async function pickConfiguration(
+	defaultConfiguration: string = 'Debug',
+	showDefaultChoice: boolean = true
+): Promise<{ value: string | undefined } | undefined> {
 	const picker = vscode.window.createQuickPick<vscode.QuickPickItem>();
 	picker.placeholder = 'Build configuration, or type another name';
-	picker.items = [
-		{ label: 'Default', description: 'Debug' },
-		...[...COMMON_CONFIGURATIONS].map(name => ({ label: name }))
-	];
+	picker.items = showDefaultChoice
+		? [
+			{ label: 'Default', description: defaultConfiguration },
+			...[...COMMON_CONFIGURATIONS]
+				.filter(name => name !== defaultConfiguration)
+				.map(name => ({ label: name }))
+		]
+		: [
+			{ label: defaultConfiguration },
+			...[...COMMON_CONFIGURATIONS]
+				.filter(name => name !== defaultConfiguration)
+				.map(name => ({ label: name }))
+		];
 
 	try {
 		const picked = await new Promise<vscode.QuickPickItem | string | undefined>(resolve => {
