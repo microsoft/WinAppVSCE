@@ -20,6 +20,21 @@ export const SPARSE_OUTPUT_FOLDER = 'sparse';
 /** File name the CLI writes inside the sparse output folder. */
 export const SPARSE_MANIFEST_FILENAME = 'appxmanifest.xml';
 
+function startsWithBomlessUtf16Xml(buffer: Buffer, bigEndian: boolean): boolean {
+	for (let index = 0; index + 1 < buffer.length; index += 2) {
+		const codeUnit = bigEndian
+			? (buffer[index] << 8) | buffer[index + 1]
+			: buffer[index] | (buffer[index + 1] << 8);
+		if (codeUnit === 0x3C) {
+			return true;
+		}
+		if (codeUnit !== 0x20 && codeUnit !== 0x09 && codeUnit !== 0x0A && codeUnit !== 0x0D) {
+			return false;
+		}
+	}
+	return false;
+}
+
 /** Decode manifest bytes using the BOM-aware encodings accepted by Windows XML tools. */
 export function decodeManifestXml(bytes: Uint8Array): string {
 	const buffer = Buffer.from(bytes);
@@ -37,10 +52,10 @@ export function decodeManifestXml(bytes: Uint8Array): string {
 	if (buffer.length >= 3 && buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
 		return buffer.subarray(3).toString('utf8');
 	}
-	if (buffer.length >= 2 && buffer[0] === 0x3C && buffer[1] === 0x00) {
+	if (startsWithBomlessUtf16Xml(buffer, false)) {
 		return buffer.toString('utf16le');
 	}
-	if (buffer.length >= 2 && buffer[0] === 0x00 && buffer[1] === 0x3C) {
+	if (startsWithBomlessUtf16Xml(buffer, true)) {
 		if (buffer.length % 2 !== 0) {
 			return '';
 		}

@@ -41,6 +41,11 @@ describe('decodeManifestXml', () => {
 		assert.equal(decodeManifestXml(Buffer.from(xml, 'utf16le')), xml);
 	});
 
+	it('decodes BOM-less UTF-16LE when XML starts with whitespace', () => {
+		const xmlWithWhitespace = ` \t\r\n${xml}`;
+		assert.equal(decodeManifestXml(Buffer.from(xmlWithWhitespace, 'utf16le')), xmlWithWhitespace);
+	});
+
 	it('decodes UTF-16BE with a byte-order mark', () => {
 		const bigEndian = Buffer.from(Buffer.from(xml, 'utf16le')).swap16();
 		assert.equal(
@@ -52,6 +57,12 @@ describe('decodeManifestXml', () => {
 	it('decodes UTF-16BE without a byte-order mark', () => {
 		const bigEndian = Buffer.from(Buffer.from(xml, 'utf16le')).swap16();
 		assert.equal(decodeManifestXml(bigEndian), xml);
+	});
+
+	it('decodes BOM-less UTF-16BE when XML starts with whitespace', () => {
+		const xmlWithWhitespace = ` \t\r\n${xml}`;
+		const bigEndian = Buffer.from(Buffer.from(xmlWithWhitespace, 'utf16le')).swap16();
+		assert.equal(decodeManifestXml(bigEndian), xmlWithWhitespace);
 	});
 
 	it('rejects an odd-length UTF-16BE payload', () => {
@@ -81,6 +92,15 @@ describe('isSparseManifestXml', () => {
 			'</Properties></Package>';
 
 		assert.equal(isSparseManifestXml(xml), true);
+	});
+
+	it('detects a whitespace-prefixed BOM-less UTF-16 sparse manifest', () => {
+		const xml =
+			' \r\n<Package xmlns:uap10="urn:test"><Properties>' +
+			'<uap10:AllowExternalContent>true</uap10:AllowExternalContent>' +
+			'</Properties></Package>';
+
+		assert.equal(isSparseManifestXml(decodeManifestXml(Buffer.from(xml, 'utf16le'))), true);
 	});
 
 	it('detects the element with no namespace prefix', () => {
