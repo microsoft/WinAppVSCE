@@ -306,14 +306,9 @@ Use **WinApp: Generate Manifest** to create an `Package.appxmanifest` from a tem
 
 ### Package and sign
 
-Use **WinApp: Create MSIX Package or Bundle** and choose a packaging source:
+Use **WinApp: Create MSIX Package or Bundle** to package either a .NET `.csproj` or existing build output. A single target produces an `.msix`; selecting multiple architectures or build output folders produces an `.msixbundle`.
 
-- **Build and package a .NET project** discovers `.csproj`, `.sln`, and `.slnx` files using the same project discovery as **Run Application**. A solution is used to choose a concrete application project; the extension always passes the selected `.csproj` to `winapp pack`. Select one architecture for an `.msix`, or two or more architectures for an `.msixbundle`. Project packaging defaults to the CLI's Release configuration, or you can choose Debug or type a custom MSBuild configuration. You can honor the project's signing settings, generate and install a development certificate, or explicitly create unsigned output.
-- **Package existing build output** keeps the multi-select folder flow. Pick one folder to build an `.msix`, or two or more folders (for example `publish/x64` and `publish/arm64`) to build an `.msixbundle`. Each selected folder must target a distinct architecture. Selecting **Browse…** alongside discovered folders adds manually chosen folders instead of replacing the checked selection. In the Windows folder dialog, use Ctrl-click or Shift-click to choose multiple sibling folders. To combine folders under different parent directories, select **Add another folder…** from the review picker and browse again; the review picker also lets you remove an accumulated selection before continuing. Manifest-less inner `publish` directories produced by project-mode builds are omitted because they are runnable output, not complete package layouts. Existing-output packaging then asks whether to create unsigned output or generate, install, and use a development certificate.
-
-If you choose **self-contained** packaging for a single existing-output folder and the selected path appears to target a different architecture than your machine, WinApp shows a warning before continuing so you can avoid bundling the wrong Windows App SDK runtime. This path-based warning does not apply to bundles or project mode, where the selected target architecture is passed explicitly to the CLI.
-
-When packaging finishes, a completion notification names the built `.msix` or `.msixbundle` and offers three actions: **Reveal in Explorer** (open the package in File Explorer), **Sign** (sign the just-built package), and **Install** (sideload it via `Add-AppxPackage`). Use **WinApp: Sign File** to sign MSIX/APPX packages, `.exe` files, and `.dll` files with a `.pfx` certificate.
+When packaging finishes, you can reveal, sign, or install the generated package. Use **WinApp: Sign File** to sign MSIX/APPX packages, `.exe` files, and `.dll` files with a `.pfx` certificate.
 
 ### Access Windows SDK tools
 
