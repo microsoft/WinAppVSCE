@@ -57,6 +57,9 @@ namespace WinUIXamlPreview.Protocol
         private static string? _pendingDir;
         private static int _fallbackRequested;
 
+        /// <summary>Test seam: replaces the PowerShell registration step (surfaceDir, manifest, log) → success.</summary>
+        internal static Func<string, string, Action<string>, bool>? RegisterOverride = null;
+
         /// <summary>
         /// True once a surface reported <see cref="SurfaceClient.IdentityRequiredMarker"/> this VS session.
         /// Registration is skipped until then: the surface normally loads packaged builds without identity
@@ -184,7 +187,7 @@ namespace WinUIXamlPreview.Protocol
                 return true;
             }
 
-            var ok = RunRegister(surfaceDir, manifest, log);
+            var ok = RegisterOverride != null ? RegisterOverride(surfaceDir, manifest, log) : RunRegister(surfaceDir, manifest, log);
             if (ok)
             {
                 lock (Gate)

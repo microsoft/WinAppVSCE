@@ -19,7 +19,12 @@ namespace WinUIXamlPreview.IntegrationTests
                 Process? hung = null;
                 try
                 {
-                    var pid = Pid(Preview(OpenRendered(_fx.MainPage), _fx.MainPage)!, "clientPid");
+                    OpenRendered(_fx.MainPage);
+                    // The watchdog is armed only once the live window is hosted; suspending mid-EnterNative
+                    // (first frame already painted) would leave nothing to watch.
+                    var hosted = WaitFor("native window hosted", x => Preview(x, _fx.MainPage) is JsonObject p
+                                                                   && p["hasNative"]?.GetValue<bool>() == true, 30_000);
+                    var pid = Pid(Preview(hosted, _fx.MainPage)!, "clientPid");
                     hung = Process.GetProcessById(pid);
                     var mark = LogMark();
                     if (NtSuspendProcess(hung.Handle) != 0) throw new Exception("NtSuspendProcess failed.");

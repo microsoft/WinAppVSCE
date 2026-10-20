@@ -129,9 +129,84 @@ namespace WinUIXamlPreview.UI
             PreviewPackageState.RegisterSession(this);
             SurfaceIdentity.FallbackRequested += OnIdentityFallbackRequested;
             SurfaceClient.IdentityRequired += OnSurfaceIdentityRequired;
+            PreviewOptions.PreviewSettingsChanged += OnPreviewSettingsChanged;
+            IsVisibleChanged += (_, e) => { if ((bool)e.NewValue && _settingsSyncDeferred) { OnPreviewSettingsChanged(); } };
         }
 
         private static void OnSurfaceIdentityRequired() => SurfaceIdentity.RequestFallback(Log.Write);
+
+        // ---- shared settings sync -------------------------------------------
+        //
+        // Theme, size, sample data and select/interact are global (PreviewOptions), but each preview applies
+        // them to its own surface. When another preview (or the options page) changes one, catch this surface
+        // up and tell the toolbar to refresh its labels. Deferred to the dispatcher so the preview that made
+        // the change has finished applying it first; theme and sample-data re-renders wait until visible.
+
+        private bool _appliedDesignMode = PreviewOptions.DesignMode;
+        private double _appliedCanvasWidth = PreviewOptions.CanvasWidth;
+        private double _appliedCanvasHeight = PreviewOptions.CanvasHeight;
+        private bool _settingsSyncQueued;
+        private bool _settingsSyncDeferred;
+
+        /// <summary>Raised on the UI thread after this preview caught up with a shared settings change.</summary>
+        internal event Action? SettingsSynced;
+
+        private void OnPreviewSettingsChanged()
+        {
+            if (_disposed || _settingsSyncQueued)
+            {
+                return;
+            }
+
+            _settingsSyncQueued = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(SyncSettings));
+        }
+
+        private void SyncSettings()
+        {
+            _settingsSyncQueued = false;
+            if (_disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                if (_appliedDesignMode != PreviewOptions.DesignMode)
+                {
+                    ApplyDesignMode(PreviewOptions.DesignMode);
+                }
+
+                double w = PreviewOptions.CanvasWidth, h = PreviewOptions.CanvasHeight;
+                if (_appliedCanvasWidth != w || _appliedCanvasHeight != h)
+                {
+                    ApplyCanvasSize(w, h);
+                }
+
+                var live = _client != null && !_suspended;
+                if (live && !IsVisible)
+                {
+                    _settingsSyncDeferred = true;
+                }
+                else
+                {
+                    _settingsSyncDeferred = false;
+                    if (live && _client!.SampleData != PreviewOptions.DesignTimeData)
+                    {
+                        ApplyDesignTimeData(PreviewOptions.DesignTimeData);
+                    }
+
+                    var theme = PreviewOptions.Theme;
+                    if (live && _activeTheme != null && !string.Equals(_activeTheme, theme, StringComparison.Ordinal))
+                    {
+                        ApplyTheme(theme);
+                    }
+                }
+            }
+            catch (Exception ex) { Log.Write("Settings sync failed: " + ex); }
+
+            SettingsSynced?.Invoke();
+        }
 
         // A DPI change (display scale setting, or VS moved to a monitor with a different scale) leaves the hosted
         // surface rendering at the scale it started with — blurry or wrongly sized until the file is reopened.
@@ -651,6 +726,11 @@ namespace WinUIXamlPreview.UI
             }
 
             PreviewOptions.DesignTimeData = on;
+            ApplyDesignTimeData(on);
+        }
+
+        private void ApplyDesignTimeData(bool on)
+        {
             Log.Write($"Sample data toggled {(on ? "ON" : "off")}; re-rendering.");
             if (_client != null)
             {
@@ -677,6 +757,12 @@ namespace WinUIXamlPreview.UI
             }
 
             PreviewOptions.DesignMode = design;
+            ApplyDesignMode(design);
+        }
+
+        private void ApplyDesignMode(bool design)
+        {
+            _appliedDesignMode = design;
             Log.Write($"Design mode toggled {(design ? "ON (select)" : "off (interact)")}.");
             try { _client?.SetMode(design); }
             catch (Exception ex) { Log.Write("SetMode send failed: " + ex.Message); }
@@ -705,12 +791,18 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
-            if (string.Equals(PreviewOptions.Theme, theme, StringComparison.Ordinal))
+            if (string.Equals(PreviewOptions.Theme, theme, StringComparison.Ordinal)
+                && (_activeTheme == null || string.Equals(_activeTheme, theme, StringComparison.Ordinal)))
             {
                 return; // no change — avoid a needless relaunch
             }
 
             PreviewOptions.Theme = theme;
+            ApplyTheme(theme);
+        }
+
+        private void ApplyTheme(string theme)
+        {
             if (TryBeginThemeSwap(theme))
             {
                 return;
@@ -819,6 +911,14 @@ namespace WinUIXamlPreview.UI
             bool auto = !(width > 0 && height > 0);
             PreviewOptions.CanvasWidth = auto ? 0 : width;
             PreviewOptions.CanvasHeight = auto ? 0 : height;
+            ApplyCanvasSize(width, height);
+        }
+
+        private void ApplyCanvasSize(double width, double height)
+        {
+            bool auto = !(width > 0 && height > 0);
+            _appliedCanvasWidth = auto ? 0 : width;
+            _appliedCanvasHeight = auto ? 0 : height;
             Log.Write($"Preview canvas size set to {(auto ? "auto" : $"{width:0}x{height:0}")}.");
             try { _client?.SetCanvasSize(auto ? 0 : width, auto ? 0 : height); }
             catch (Exception ex) { Log.Write("SetCanvasSize send failed: " + ex.Message); }
@@ -2372,6 +2472,7 @@ namespace WinUIXamlPreview.UI
             DesignerSelection.Forget(SelectionDocument);
             SurfaceIdentity.FallbackRequested -= OnIdentityFallbackRequested;
             SurfaceClient.IdentityRequired -= OnSurfaceIdentityRequired;
+            PreviewOptions.PreviewSettingsChanged -= OnPreviewSettingsChanged;
             PreviewPackageState.UnregisterSession(this);
             _resizeDebounce.Stop();
             DisposeClient();

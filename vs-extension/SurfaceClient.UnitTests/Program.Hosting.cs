@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using WinUIXamlPreview.Protocol;
@@ -73,6 +74,39 @@ internal static partial class Program
             Check("EnsureRegisteredAsync failure surfaces as false", first.Wait(10000) && !first.Result);
             var retry = SurfaceIdentity.EnsureRegisteredAsync(bareExe);
             Check("a failed registration is not cached: next caller retries", !ReferenceEquals(first, retry) && retry.Wait(10000) && !retry.Result);
+
+            // Concurrent callers share one in-flight registration (fake PowerShell step, held open until released).
+            int runs = 0;
+            bool succeed = false;
+            using (var release = new ManualResetEventSlim(false))
+            {
+                SurfaceIdentity.RegisterOverride = (dir, manifest, log) => { Interlocked.Increment(ref runs); release.Wait(10000); return succeed; };
+                try
+                {
+                    var payloadExe = Path.Combine(payload, "Surface.exe");
+                    var callers = Enumerable.Range(0, 8).Select(_ => Task.Factory.StartNew(() => SurfaceIdentity.EnsureRegisteredAsync(payloadExe))).ToArray();
+                    Task.WaitAll(callers, 10000);
+                    var shared = callers.Select(c => c.Result).Distinct().Count();
+                    SpinWait.SpinUntil(() => Volatile.Read(ref runs) > 0, 5000);
+                    release.Set();
+                    var all = callers.Select(c => c.Result).ToArray();
+                    Check("concurrent EnsureRegisteredAsync callers share one registration",
+                        shared == 1 && Task.WaitAll(all, 10000) && runs == 1 && all.All(t => !t.Result), $"tasks={shared} runs={runs}");
+
+                    succeed = true;
+                    var again = SurfaceIdentity.EnsureRegisteredAsync(payloadExe);
+                    var joined = SurfaceIdentity.EnsureRegisteredAsync(payloadExe);
+                    Check("after a failure the next caller retries and later callers join it",
+                        ReferenceEquals(again, joined) && again.Wait(10000) && again.Result && runs == 2, "runs=" + runs);
+                    var cached = SurfaceIdentity.EnsureRegisteredAsync(payloadExe);
+                    Check("a successful registration is reused without running again",
+                        ReferenceEquals(cached, again) && SurfaceIdentity.EnsureRegistered(payloadExe) && runs == 2, "runs=" + runs);
+                }
+                finally
+                {
+                    SurfaceIdentity.RegisterOverride = null;
+                }
+            }
 
             // Identity prewarm is a no-op until a surface asks for the fallback (checked BEFORE RequestFallback:
             // the fallback flag is process-wide and never resets).

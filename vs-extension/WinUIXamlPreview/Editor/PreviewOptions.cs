@@ -15,6 +15,9 @@ namespace WinUIXamlPreview.Editor
     /// </summary>
     internal static class PreviewOptions
     {
+        /// <summary>Raised after a preview setting shared by every preview (theme, size, sample data, select/interact) changes.</summary>
+        public static event Action? PreviewSettingsChanged;
+
         private const string Collection = "WinUIXamlPreview";
         private const string LocationKey = "PreviewLocation";
         private const string RightWidthKey = "RightWidth";
@@ -118,6 +121,7 @@ namespace WinUIXamlPreview.Editor
 
                 _designTimeData = value;
                 Save();
+                PreviewSettingsChanged?.Invoke();
             }
         }
 
@@ -140,6 +144,7 @@ namespace WinUIXamlPreview.Editor
 
                 _designMode = value;
                 Save();
+                PreviewSettingsChanged?.Invoke();
             }
         }
 
@@ -183,6 +188,7 @@ namespace WinUIXamlPreview.Editor
 
                 _theme = v;
                 Save();
+                PreviewSettingsChanged?.Invoke();
             }
         }
 
@@ -201,6 +207,7 @@ namespace WinUIXamlPreview.Editor
 
                 _canvasWidth = v;
                 Save();
+                PreviewSettingsChanged?.Invoke();
             }
         }
 
@@ -219,6 +226,7 @@ namespace WinUIXamlPreview.Editor
 
                 _canvasHeight = v;
                 Save();
+                PreviewSettingsChanged?.Invoke();
             }
         }
 

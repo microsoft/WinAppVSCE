@@ -45,6 +45,20 @@ namespace WinUIXamlPreview.Editor
         {
             _preview = preview;
             Element = BuildToolbar(hostGroup);
+            _preview.SettingsSynced += RefreshSettingLabels;
+        }
+
+        // Another preview (or the options page) changed a shared setting; show the current values.
+        private void RefreshSettingLabels()
+        {
+            try
+            {
+                SetButton(_selectButton, SelectMoniker(), SelectLabel(), SelectTooltip());
+                SetMenuButton(_themeButton, KnownMonikers.DarkTheme, ThemeLabel(), ThemeTooltip(), BuildThemeMenu());
+                SetMenuButton(_sizeButton, KnownMonikers.Monitor, SizeLabel(), SizeTooltip(), BuildSizeMenu());
+                SetButton(_dtdButton, DtdMoniker(), DtdLabel(), DtdTooltip());
+            }
+            catch (Exception ex) { Log.Write("Toolbar label refresh failed: " + ex); }
         }
 
         public FrameworkElement Element { get; }

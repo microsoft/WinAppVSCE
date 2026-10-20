@@ -83,6 +83,24 @@ namespace WinUIXamlPreview.IntegrationTests
                 Eq("Dark", (string?)Preview(s, _fx.SecondPage)!["activeTheme"], "surface theme");
             });
 
+            Run("Toolbar: a change in one tab updates the other open tab's labels and surface", () =>
+            {
+                Fresh();
+                OpenRendered(_fx.MainPage);
+                OpenRendered(_fx.SecondPage);
+                Call("menu", new { path = _fx.SecondPage, button = "PreviewThemeButton", item = "PreviewThemeDark" });
+                Call("menu", new { path = _fx.SecondPage, button = "PreviewSizeButton", item = "PreviewSizePhone" });
+                Call("click", new { path = _fx.SecondPage, automationId = "PreviewDtdToggle" });
+                Call("click", new { path = _fx.SecondPage, automationId = "PreviewSelectToggle" });
+                WaitFor("MainPage labels follow", x => Label(x, _fx.MainPage, "themeLabel") == "Dark"
+                                                     && Label(x, _fx.MainPage, "sizeLabel") == "Phone"
+                                                     && Label(x, _fx.MainPage, "dtdLabel") == "Sample data: Off"
+                                                     && Label(x, _fx.MainPage, "selectLabel") == "Interact", 15_000);
+                Call("activate", new { path = _fx.MainPage });
+                WaitFor("MainPage surface re-themed", x => (string?)Preview(x, _fx.MainPage)!["activeTheme"] == "Dark"
+                                                         && Rendered(Preview(x, _fx.MainPage)), 60_000);
+            });
+
             Run("Toolbar: Window button shows the preview tool window", () =>
             {
                 Fresh();

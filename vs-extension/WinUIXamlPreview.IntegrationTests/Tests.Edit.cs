@@ -39,17 +39,38 @@ namespace WinUIXamlPreview.IntegrationTests
             {
                 Fresh();
                 OpenRendered(_fx.MainPage);
-                var mark = LogMark();
-                foreach (var word in new[] { "One", "Two", "Three", "Four", "Five" })
+                // Each replace is a pipe round-trip into VS; under load one can stall past the 500ms debounce,
+                // and then the "burst" really was two bursts. Only judge a burst whose gaps stayed well inside it.
+                for (var attempt = 1; ; attempt++)
                 {
+                    var mark = LogMark();
                     var text = (string)Call("text", new { path = _fx.MainPage })!;
-                    var m = Regex.Match(text, "Text=\"([^\"]*)\" />");
-                    Call("replace", new { path = _fx.MainPage, start = m.Groups[1].Index, length = m.Groups[1].Length, text = word });
-                    Thread.Sleep(100);
+                    var g = Regex.Match(text, "Text=\"([^\"]*)\" />").Groups[1];
+                    int start = g.Index, length = g.Length;
+                    var maxGap = 0L;
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    foreach (var word in new[] { "One", "Two", "Three", "Four", "Five" })
+                    {
+                        Call("replace", new { path = _fx.MainPage, start, length, text = word });
+                        length = word.Length;
+                        maxGap = Math.Max(maxGap, sw.ElapsedMilliseconds);
+                        sw.Restart();
+                        Thread.Sleep(50);
+                    }
+                    WaitFor("edit render", _ => EditRenders(mark) >= 1, 30_000);
+                    Thread.Sleep(1500);
+                    var renders = EditRenders(mark);
+                    if (renders == 1)
+                    {
+                        return;
+                    }
+                    if (maxGap < 350 || attempt == 3)
+                    {
+                        Eq(1, renders, $"renders for a 5-edit burst (largest gap {maxGap}ms, attempt {attempt})");
+                    }
+                    Log($"      burst gap {maxGap}ms exceeded the debounce margin ({renders} renders); retrying");
+                    WaitFor("rendered", x => Rendered(Preview(x, _fx.MainPage)), 30_000);
                 }
-                WaitFor("edit render", _ => EditRenders(mark) >= 1, 30_000);
-                Thread.Sleep(1500);
-                Eq(1, EditRenders(mark), "renders for a 5-edit burst");
             });
 
             Run("Edit: no renders while collapsed; one reload on expand", () =>
