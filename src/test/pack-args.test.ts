@@ -6,6 +6,7 @@ import {
 	isBundleInput,
 	isBundleSelection,
 	packProgressTitle,
+	mergeFolderSelections,
 	resolveFolderSelection,
 	shouldCheckSelfContainedArch,
 	type PackInput
@@ -69,14 +70,11 @@ describe('resolveFolderSelection', () => {
 	it('returns browse when only the Browse… row is ticked', () => {
 		assert.deepEqual(
 			resolveFolderSelection([{ detail: BROWSE_DETAIL }], BROWSE_DETAIL),
-			{ kind: 'browse' }
+			{ kind: 'browse', folders: [] }
 		);
 	});
 
-	it('prefers browse when Browse… is ticked alongside real folders', () => {
-		// Browse… keeps the same styling as every other picker, so under
-		// multi-select it can be ticked together with discovered folders. An
-		// explicit request to browse wins.
+	it('preserves checked folders when Browse… is also ticked', () => {
 		assert.deepEqual(
 			resolveFolderSelection(
 				[
@@ -85,7 +83,7 @@ describe('resolveFolderSelection', () => {
 				],
 				BROWSE_DETAIL
 			),
-			{ kind: 'browse' }
+			{ kind: 'browse', folders: ['C:\\publish\\x64'] }
 		);
 	});
 
@@ -93,6 +91,28 @@ describe('resolveFolderSelection', () => {
 		assert.deepEqual(
 			resolveFolderSelection([{ detail: 'something else' }], BROWSE_DETAIL),
 			{ kind: 'none' }
+		);
+	});
+});
+
+describe('mergeFolderSelections', () => {
+	it('appends browsed folders to discovered folders', () => {
+		assert.deepEqual(
+			mergeFolderSelections(
+				['C:\\publish\\x64'],
+				['C:\\publish\\arm64']
+			),
+			['C:\\publish\\x64', 'C:\\publish\\arm64']
+		);
+	});
+
+	it('removes duplicate folders case-insensitively', () => {
+		assert.deepEqual(
+			mergeFolderSelections(
+				['C:\\publish\\x64'],
+				['c:\\PUBLISH\\x64', 'C:\\publish\\arm64']
+			),
+			['C:\\publish\\x64', 'C:\\publish\\arm64']
 		);
 	});
 });

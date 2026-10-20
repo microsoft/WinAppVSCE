@@ -56,8 +56,8 @@ export function isBundleInput(input: PackInput): boolean {
 
 /** Outcome of interpreting a multi-select build-output QuickPick. */
 export type FolderSelection =
-	/** The user ticked "Browse…"; fall back to the native folder dialog. */
-	| { kind: 'browse' }
+	/** The user ticked "Browse…"; append native-dialog choices to these folders. */
+	| { kind: 'browse'; folders: string[] }
 	/** The user ticked one or more discovered folders. */
 	| { kind: 'folders'; folders: string[] }
 	/** Nothing usable was selected (dismissed, or an empty selection). */
@@ -68,9 +68,9 @@ export type FolderSelection =
  *
  * "Browse…" is rendered as an ordinary row so it keeps the same appearance as
  * every other picker in the extension. Under multi-select that means it can be
- * ticked *alongside* real folders, which is ambiguous — we resolve it in favour
- * of the dialog, since asking to browse is an explicit request that the
- * discovered list is insufficient.
+ * ticked *alongside* real folders. Browse augments those checked folders rather
+ * than replacing them, so a user can combine discovered and manually selected
+ * outputs in one bundle.
  *
  * @param picked Items selected by the user, or `undefined` when dismissed.
  * @param browseDetail The `detail` value that marks the "Browse…" entry.
@@ -83,19 +83,34 @@ export function resolveFolderSelection(
 		return { kind: 'none' };
 	}
 
-	if (picked.some((item) => item.detail === browseDetail)) {
-		return { kind: 'browse' };
-	}
-
 	const folders = picked
 		.map((item) => item.directory)
 		.filter((directory): directory is string => directory !== undefined);
+
+	if (picked.some((item) => item.detail === browseDetail)) {
+		return { kind: 'browse', folders };
+	}
 
 	if (folders.length === 0) {
 		return { kind: 'none' };
 	}
 
 	return { kind: 'folders', folders };
+}
+
+/** Append manually browsed folders without passing duplicates to the CLI. */
+export function mergeFolderSelections(
+	discovered: readonly string[],
+	browsed: readonly string[]
+): string[] {
+	const unique = new Map<string, string>();
+	for (const folder of [...discovered, ...browsed]) {
+		const key = path.resolve(folder).toLowerCase();
+		if (!unique.has(key)) {
+			unique.set(key, folder);
+		}
+	}
+	return [...unique.values()];
 }
 
 /** Options collected from the pack prompts. */

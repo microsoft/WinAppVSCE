@@ -592,16 +592,24 @@ export async function pickBuildSettings(): Promise<Partial<WinAppRunOptions> | u
  * two cases cannot otherwise be told apart.
  */
 export async function pickConfiguration(
-	defaultConfiguration: string = 'Debug'
+	defaultConfiguration: string = 'Debug',
+	showDefaultChoice: boolean = true
 ): Promise<{ value: string | undefined } | undefined> {
 	const picker = vscode.window.createQuickPick<vscode.QuickPickItem>();
 	picker.placeholder = 'Build configuration, or type another name';
-	picker.items = [
-		{ label: 'Default', description: defaultConfiguration },
-		...[...COMMON_CONFIGURATIONS]
-			.filter(name => name !== defaultConfiguration)
-			.map(name => ({ label: name }))
-	];
+	picker.items = showDefaultChoice
+		? [
+			{ label: 'Default', description: defaultConfiguration },
+			...[...COMMON_CONFIGURATIONS]
+				.filter(name => name !== defaultConfiguration)
+				.map(name => ({ label: name }))
+		]
+		: [
+			{ label: defaultConfiguration },
+			...[...COMMON_CONFIGURATIONS]
+				.filter(name => name !== defaultConfiguration)
+				.map(name => ({ label: name }))
+		];
 
 	try {
 		const picked = await new Promise<vscode.QuickPickItem | string | undefined>(resolve => {

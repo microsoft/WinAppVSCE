@@ -210,6 +210,27 @@ export function deduplicateBuildOutputFolders(
 }
 
 /**
+ * Project-mode builds can leave an inner `publish` directory containing the
+ * executable but not the generated package manifest. That directory can run,
+ * but it is not a complete package layout and `winapp pack` rejects it.
+ *
+ * Keep other folder names eligible because non-.NET apps may use arbitrary
+ * output conventions and can resolve their manifest from the command cwd.
+ */
+export function isPackableDiscoveredOutput(
+	folderPath: string,
+	fileNames: readonly string[]
+): boolean {
+	if (path.basename(folderPath).toLowerCase() !== 'publish') {
+		return true;
+	}
+
+	const normalizedNames = fileNames.map(name => name.toLowerCase());
+	return normalizedNames.includes('appxmanifest.xml')
+		|| normalizedNames.includes('package.appxmanifest');
+}
+
+/**
  * VS Code-compatible glob exclude pattern for build-output scanning.
  */
 export const BUILD_OUTPUT_EXCLUDE_GLOB = `{${[...BUILD_OUTPUT_SKIP_DIRS].map(d => `**/${d}/**`).join(',')}}`;

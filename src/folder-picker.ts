@@ -3,10 +3,11 @@ import * as path from 'path';
 import {
 	BUILD_OUTPUT_MAX_RESULTS,
 	BUILD_OUTPUT_SKIP_DIRS,
-	deduplicateBuildOutputFolders
+	deduplicateBuildOutputFolders,
+	isPackableDiscoveredOutput
 } from './project-detection';
 import { walkDirectoryTree, scanRoots, type ScanCancellationToken } from './directory-walk';
-import { resolveFolderSelection } from './pack-args';
+import { mergeFolderSelections, resolveFolderSelection } from './pack-args';
 import { selectFolder } from './winapp-host';
 import type { WorkspaceRoot } from './workspace';
 
@@ -62,7 +63,8 @@ export { selectFolder };
  */
 export async function scanBuildOutputFolders(
 	rootPaths: readonly string[],
-	token: ScanCancellationToken
+	token: ScanCancellationToken,
+	packOnly: boolean = false
 ): Promise<BuildOutputFolder[] | undefined> {
 	const found: BuildOutputFolder[] = [];
 
@@ -73,8 +75,16 @@ export async function scanBuildOutputFolders(
 		await walkDirectoryTree(
 			rootPath,
 			(directory, entries) => {
+				const packable = !packOnly || isPackableDiscoveredOutput(
+					directory,
+					entries.filter(entry => entry.isFile()).map(entry => entry.name)
+				);
 				for (const entry of entries) {
-					if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.exe') {
+					if (
+						!packable
+						|| !entry.isFile()
+						|| path.extname(entry.name).toLowerCase() !== '.exe'
+					) {
 						continue;
 					}
 					executables.push(path.join(directory, entry.name));
@@ -107,11 +117,12 @@ export async function scanBuildOutputFolders(
  * multi-root run picker share this.
  */
 export async function findBuildOutputFolders(
-	rootPaths: readonly string[]
+	rootPaths: readonly string[],
+	packOnly: boolean = false
 ): Promise<BuildOutputFolder[] | undefined> {
 	return vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: BUILD_OUTPUT_PROGRESS_TITLE, cancellable: true },
-		async (_progress, token) => scanBuildOutputFolders(rootPaths, token)
+		async (_progress, token) => scanBuildOutputFolders(rootPaths, token, packOnly)
 	);
 }
 
@@ -146,7 +157,10 @@ export async function pickBuildOutputFolder(workspacePath: string): Promise<stri
 export async function pickBuildOutputFolders(
 	workspaceRoots: readonly WorkspaceRoot[]
 ): Promise<string[] | undefined> {
-	const outputFolders = await findBuildOutputFolders(workspaceRoots.map(root => root.path));
+	const outputFolders = await findBuildOutputFolders(
+		workspaceRoots.map(root => root.path),
+		true
+	);
 	if (!outputFolders) {
 		return undefined;
 	}
@@ -172,11 +186,15 @@ export async function pickBuildOutputFolders(
 	switch (selection.kind) {
 		case 'none':
 			return undefined;
-		case 'browse':
-			return selectFolders(
+		case 'browse': {
+			const browsed = await selectFolders(
 				'Select build output folder(s)',
 				defaultRoot ? vscode.Uri.file(defaultRoot.path) : undefined
 			);
+			return browsed
+				? mergeFolderSelections(selection.folders, browsed)
+				: selection.folders.length > 0 ? selection.folders : undefined;
+		}
 		case 'folders':
 			return selection.folders;
 	}
@@ -226,6 +244,7 @@ async function selectFolders(title: string, defaultUri?: vscode.Uri): Promise<st
 		canSelectFolders: true,
 		canSelectMany: true,
 		title,
+		openLabel: 'Select folder(s)',
 		defaultUri
 	});
 
