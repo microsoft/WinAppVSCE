@@ -156,6 +156,7 @@ namespace WinUIXamlPreview.UI
         // the change has finished applying it first; theme and sample-data re-renders wait until visible.
 
         private bool _appliedDesignMode = PreviewOptions.DesignMode;
+        private bool _appliedFullFidelity = PreviewOptions.FullFidelityAutoBuild;
         private double _appliedCanvasWidth = PreviewOptions.CanvasWidth;
         private double _appliedCanvasHeight = PreviewOptions.CanvasHeight;
         private bool _settingsSyncQueued;
@@ -213,6 +214,11 @@ namespace WinUIXamlPreview.UI
                     if (live && _activeTheme != null && !string.Equals(_activeTheme, theme, StringComparison.Ordinal))
                     {
                         ApplyTheme(theme);
+                    }
+
+                    if (_appliedFullFidelity != PreviewOptions.FullFidelityAutoBuild)
+                    {
+                        ApplyFullFidelity(PreviewOptions.FullFidelityAutoBuild);
                     }
                 }
             }
@@ -600,6 +606,7 @@ namespace WinUIXamlPreview.UI
                 // the background upgrade (run-copy a cached host, or provisioner --build) → hot-swap when ready.
                 // A P7 matched recovery is already on the matched host, so there's nothing to upgrade. Under the
                 // identity fallback the matched host (an unregistered run-copy) can't get identity, so stay bundled.
+                _fidelityPlan = recoverPri == null && !identityFallback ? plan : null;
                 if (recoverPri == null && !identityFallback)
                 {
                     KickFidelityUpgrade(plan);
@@ -1853,6 +1860,57 @@ namespace WinUIXamlPreview.UI
                 Log.Write($"Build hint: unbuilt project; {missingKeys?.Count ?? 0} unresolved key(s), unmapped type(s): {string.Join(", ", unmappedTypes ?? new System.Collections.Generic.List<string>())}.");
             }
             _buildHintBar.Show(BannerSeverity.Warning, BuildHint.Title, text);
+        }
+
+        // The host plan of the current document when it may upgrade (null under recovery / identity fallback),
+        // so turning full fidelity back on can start the upgrade without relaunching.
+        private HostSelection? _fidelityPlan;
+
+        /// <summary>
+        /// Toolbar "Full fidelity" toggle. Persists the preference and applies it to this preview right away;
+        /// other previews catch up through the shared settings sync. UI thread only.
+        /// </summary>
+        public void SetFullFidelity(bool on)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            PreviewOptions.FullFidelityAutoBuild = on;
+            ApplyFullFidelity(on);
+        }
+
+        private void ApplyFullFidelity(bool on)
+        {
+            _appliedFullFidelity = on;
+            Log.Write($"Full fidelity toggled {(on ? "ON" : "off")}.");
+            var path = _pinnedPath ?? _currentPath;
+            var action = _session.OnFullFidelityToggled(on, live: _client != null,
+                onMatchedHost: !string.IsNullOrEmpty(_activeUserPri), upgradable: _fidelityPlan != null);
+            if (action == FullFidelityToggleAction.StopUpgrade || action == FullFidelityToggleAction.RelaunchBundled)
+            {
+                if (_upgradeBuild != null)
+                {
+                    try { _upgradeBuild.Release(cancelIfLast: true); } catch { }
+                    _upgradeBuild = null;
+                }
+                HideFidelityBanner();
+            }
+
+            if (action == FullFidelityToggleAction.RelaunchBundled && !string.IsNullOrEmpty(path))
+            {
+                Log.Write("Full fidelity off: relaunching on the bundled host.");
+                _recoverMatchedHost = null;
+                _currentPath = null;
+                _carryViewOnPromote = true;
+                _perfNextOpenLabel = "fidelity";
+                ShowDocument(path);
+            }
+            else if (action == FullFidelityToggleAction.StartUpgrade)
+            {
+                KickFidelityUpgrade(_fidelityPlan);
+            }
         }
 
         private void OnFidelityCancel()

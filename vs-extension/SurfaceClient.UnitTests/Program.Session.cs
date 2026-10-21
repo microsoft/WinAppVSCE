@@ -264,6 +264,38 @@ internal static partial class Program
             Check("upgrade: aborted start frees the slot", s.CanStartUpgrade && s.IsUpgradeCurrent(gen));
         }
 
+        // ---- full fidelity toggle ----
+        {
+            var s = new PreviewSessionState();
+            Eq("fidelity: no live preview → nothing (off)", FullFidelityToggleAction.None, s.OnFullFidelityToggled(false, live: false, onMatchedHost: true, upgradable: true));
+            Eq("fidelity: no live preview → nothing (on)", FullFidelityToggleAction.None, s.OnFullFidelityToggled(true, false, false, true));
+            Eq("fidelity: on, bundled-version project → nothing", FullFidelityToggleAction.None, s.OnFullFidelityToggled(true, true, false, upgradable: false));
+            Eq("fidelity: on, already on matched host → nothing", FullFidelityToggleAction.None, s.OnFullFidelityToggled(true, true, onMatchedHost: true, upgradable: true));
+            Eq("fidelity: on, upgradable → start", FullFidelityToggleAction.StartUpgrade, s.OnFullFidelityToggled(true, true, false, true));
+        }
+
+        {
+            var s = new PreviewSessionState();
+            var gen = s.BeginUpgrade();
+            Eq("fidelity: off mid-build → stop", FullFidelityToggleAction.StopUpgrade, s.OnFullFidelityToggled(false, true, false, true));
+            Check("fidelity: off supersedes the build", s.UpgradeSuperseded(gen, false) && !s.EndUpgrade(gen));
+            Check("fidelity: off frees the slot (not a user cancel)", s.CanStartUpgrade && !s.FullFidelityCancelled);
+        }
+
+        {
+            var s = new PreviewSessionState();
+            Eq("fidelity: off on matched host → relaunch bundled", FullFidelityToggleAction.RelaunchBundled, s.OnFullFidelityToggled(false, true, onMatchedHost: true, upgradable: true));
+        }
+
+        {
+            var s = new PreviewSessionState();
+            s.BeginUpgrade();
+            s.CancelUpgrade(byUser: true); // banner Cancel
+            Check("fidelity: banner cancel blocks re-arm", !s.CanStartUpgrade);
+            Eq("fidelity: explicit on → start", FullFidelityToggleAction.StartUpgrade, s.OnFullFidelityToggled(true, true, false, true));
+            Check("fidelity: explicit on clears the banner cancel", s.CanStartUpgrade && !s.FullFidelityCancelled);
+        }
+
         // ---- error presentation ----
         Eq("classify: not designable wins", ErrorDisplay.NotDesignable, PreviewErrorText.Classify(true, true));
         Eq("classify: banner over render", ErrorDisplay.BannerOverLastRender, PreviewErrorText.Classify(false, true));

@@ -235,7 +235,7 @@ namespace WinUIXamlPreview.Editor
         /// bundled 2.2.0 host, the extension automatically builds a version-matched self-contained host in the
         /// background (once per version) and hot-swaps to it for full fidelity (version-new controls upgrade
         /// from placeholder to real). Opt-out: when false, the preview stays on the instant bundled host. The
-        /// build is always non-blocking and cancelable — this toggle only governs whether it is auto-started.
+        /// build is always non-blocking and cancelable. Toggled from the preview toolbar ("Full fidelity").
         /// </summary>
         public static bool FullFidelityAutoBuild
         {
@@ -250,6 +250,7 @@ namespace WinUIXamlPreview.Editor
 
                 _fullFidelityAutoBuild = value;
                 Save();
+                PreviewSettingsChanged?.Invoke();
             }
         }
 

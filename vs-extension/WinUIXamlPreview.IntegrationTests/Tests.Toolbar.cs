@@ -57,6 +57,34 @@ namespace WinUIXamlPreview.IntegrationTests
                 WaitFor("on", x => Label(x, _fx.MainPage, "dtdLabel") == "Sample data: On" && Opt(x)["designTimeData"]!.GetValue<bool>());
             });
 
+            Run("Toolbar: full-fidelity toggle flips the option", () =>
+            {
+                Fresh(); // test reset turns full fidelity off
+                OpenRendered(_fx.MainPage);
+                var mark = LogMark();
+                Call("click", new { path = _fx.MainPage, automationId = "PreviewFidelityToggle" });
+                var s = WaitFor("on", x => Label(x, _fx.MainPage, "fidelityLabel") == "Full fidelity: On");
+                Eq(true, Opt(s)["fullFidelityAutoBuild"]!.GetValue<bool>(), "fullFidelityAutoBuild");
+                WaitForLog(mark, "Full fidelity toggled ON");
+                Call("click", new { path = _fx.MainPage, automationId = "PreviewFidelityToggle" });
+                WaitFor("off", x => Label(x, _fx.MainPage, "fidelityLabel") == "Full fidelity: Off" && !Opt(x)["fullFidelityAutoBuild"]!.GetValue<bool>());
+                // The fixture targets the bundled WinAppSDK, so neither direction relaunches the surface.
+                Assert(!LogSince(mark).Contains("relaunching on the bundled host"), "no relaunch on a bundled-version page");
+                Assert(Rendered(Preview(Snap(), _fx.MainPage)), "still rendered");
+            });
+
+            Run("Toolbar: full-fidelity toggle syncs to other tabs and persists into new ones", () =>
+            {
+                Fresh();
+                OpenRendered(_fx.MainPage);
+                OpenRendered(_fx.SecondPage);
+                Call("click", new { path = _fx.SecondPage, automationId = "PreviewFidelityToggle" });
+                WaitFor("MainPage label follows", x => Label(x, _fx.MainPage, "fidelityLabel") == "Full fidelity: On", 15_000);
+                Call("close", new { path = _fx.SecondPage });
+                var s = OpenRendered(_fx.SecondPage);
+                Eq("Full fidelity: On", Label(s, _fx.SecondPage, "fidelityLabel"), "reopened tab label");
+            });
+
             Run("Toolbar: select toggle switches Select <-> Interact", () =>
             {
                 Fresh();

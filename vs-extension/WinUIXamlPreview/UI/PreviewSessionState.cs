@@ -13,6 +13,8 @@ namespace WinUIXamlPreview.UI
 
     internal enum ActiveDeathAction { Ignore, ProtocolMismatch, Recover, GiveUp }
 
+    internal enum FullFidelityToggleAction { None, StopUpgrade, RelaunchBundled, StartUpgrade }
+
     /// <summary>
     /// The preview pane's session bookkeeping, separated from the processes, WPF and dispatcher so the
     /// orderings that matter (stale spares, held edits, theme swaps, upgrades superseded by a doc switch,
@@ -285,6 +287,33 @@ namespace WinUIXamlPreview.UI
 
         /// <summary>A new document is opening: a cancel for the previous one doesn't carry over.</summary>
         public void OnNewDocument() => FullFidelityCancelled = false;
+
+        /// <summary>
+        /// The user flipped the "Full fidelity" toggle. Off supersedes any in-flight upgrade and leaves a
+        /// version-matched host for the bundled one; on starts an upgrade (clearing an earlier banner cancel)
+        /// when the document could have one and isn't already on its matched host.
+        /// </summary>
+        public FullFidelityToggleAction OnFullFidelityToggled(bool on, bool live, bool onMatchedHost, bool upgradable)
+        {
+            if (!live)
+            {
+                return FullFidelityToggleAction.None;
+            }
+
+            if (!on)
+            {
+                CancelUpgrade(byUser: false);
+                return onMatchedHost ? FullFidelityToggleAction.RelaunchBundled : FullFidelityToggleAction.StopUpgrade;
+            }
+
+            if (onMatchedHost || !upgradable)
+            {
+                return FullFidelityToggleAction.None;
+            }
+
+            FullFidelityCancelled = false;
+            return FullFidelityToggleAction.StartUpgrade;
+        }
 
         // ---- teardown ------------------------------------------------------------
 

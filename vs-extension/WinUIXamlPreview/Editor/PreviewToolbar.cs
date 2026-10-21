@@ -27,6 +27,7 @@ namespace WinUIXamlPreview.Editor
     {
         private readonly PreviewControl _preview;
         private Button? _dtdButton;
+        private Button? _fidelityButton;
         private Button? _selectButton;
         private Button? _themeButton;
         private Button? _sizeButton;
@@ -57,6 +58,7 @@ namespace WinUIXamlPreview.Editor
                 SetMenuButton(_themeButton, KnownMonikers.DarkTheme, ThemeLabel(), ThemeTooltip(), BuildThemeMenu());
                 SetMenuButton(_sizeButton, KnownMonikers.Monitor, SizeLabel(), SizeTooltip(), BuildSizeMenu());
                 SetButton(_dtdButton, DtdMoniker(), DtdLabel(), DtdTooltip());
+                SetButton(_fidelityButton, FidelityMoniker(), FidelityLabel(), FidelityTooltip());
             }
             catch (Exception ex) { Log.Write("Toolbar label refresh failed: " + ex); }
         }
@@ -67,6 +69,7 @@ namespace WinUIXamlPreview.Editor
         internal string? ThemeLabelState => _themeButton != null ? AutomationProperties.GetName(_themeButton) : null;
         internal string? SizeLabelState => _sizeButton != null ? AutomationProperties.GetName(_sizeButton) : null;
         internal string? DtdLabelState => _dtdButton != null ? AutomationProperties.GetName(_dtdButton) : null;
+        internal string? FidelityLabelState => _fidelityButton != null ? AutomationProperties.GetName(_fidelityButton) : null;
         internal int Level => _toolbarLevel;
         internal bool OverflowVisible => _overflowButton?.Visibility == Visibility.Visible;
 
@@ -109,6 +112,7 @@ namespace WinUIXamlPreview.Editor
             _themeButton = MakeMenuButton(KnownMonikers.DarkTheme, ThemeLabel(), ThemeTooltip(), "PreviewThemeButton", BuildThemeMenu());
             _sizeButton = MakeMenuButton(KnownMonikers.Monitor, SizeLabel(), SizeTooltip(), "PreviewSizeButton", BuildSizeMenu());
             _dtdButton = MakeButton(DtdMoniker(), DtdLabel(), DtdTooltip(), OnToggleDtdClick, "PreviewDtdToggle");
+            _fidelityButton = MakeButton(FidelityMoniker(), FidelityLabel(), FidelityTooltip(), OnToggleFidelityClick, "PreviewFidelityToggle");
 
             _toolbarGroups.Add(new List<ToolbarItem> { new ToolbarItem(reload, 0, null) });
             _toolbarGroups.Add(new List<ToolbarItem>
@@ -124,6 +128,7 @@ namespace WinUIXamlPreview.Editor
             _toolbarGroups.Add(new List<ToolbarItem>
             {
                 new ToolbarItem(_dtdButton, 3, () => MakeOverflowCommand(DtdMoniker(), DtdLabel(), OnToggleDtdClick, "PreviewOverflowDtd")),
+                new ToolbarItem(_fidelityButton, 2, () => MakeOverflowCommand(FidelityMoniker(), FidelityLabel(), OnToggleFidelityClick, "PreviewOverflowFidelity")),
             });
             var host = hostGroup?.Invoke(this);
             if (host != null && host.Count > 0)
@@ -835,6 +840,29 @@ namespace WinUIXamlPreview.Editor
                 SetButton(_dtdButton, DtdMoniker(), DtdLabel(), DtdTooltip());
             }
             catch (Exception ex) { Log.Write("Toggle design-time data failed: " + ex); }
+        }
+
+        // ---- full fidelity toggle -------------------------------------------
+        //
+        // Flips PreviewOptions.FullFidelityAutoBuild: whether a project on a WinAppSDK version other than the
+        // bundled host gets a version-matched host built and swapped in. Applied live by the preview.
+
+        private static string FidelityLabel() => PreviewOptions.FullFidelityAutoBuild ? "Full fidelity: On" : "Full fidelity: Off";
+
+        private static ImageMoniker FidelityMoniker() => KnownMonikers.BuildSelection;
+
+        private static string FidelityTooltip() => PreviewOptions.FullFidelityAutoBuild
+            ? "Full fidelity is ON: projects on another Windows App SDK version get a matching preview host, built in the background. Click to turn it off."
+            : "Full fidelity is OFF: the preview always uses the bundled host, so controls newer than it show as placeholders. Click to turn it on.";
+
+        private void OnToggleFidelityClick(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                _preview.SetFullFidelity(!PreviewOptions.FullFidelityAutoBuild);
+                SetButton(_fidelityButton, FidelityMoniker(), FidelityLabel(), FidelityTooltip());
+            }
+            catch (Exception ex) { Log.Write("Toggle full fidelity failed: " + ex); }
         }
 
 
