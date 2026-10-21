@@ -29,7 +29,7 @@ namespace WinUIXamlPreview.UI
     /// panel shows the active document's: switching tabs swaps to that file's selection (or clears) instead of
     /// leaving the previous file's element on display. Mirrors <see cref="PreviewPackageState"/>'s tiny-static pattern.
     /// </summary>
-    internal static class DesignerSelection
+    internal static class PreviewerSelection
     {
         private static readonly Dictionary<string, SelectionSnapshot> ByDocument =
             new Dictionary<string, SelectionSnapshot>(StringComparer.OrdinalIgnoreCase);

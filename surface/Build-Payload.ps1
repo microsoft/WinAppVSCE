@@ -16,8 +16,8 @@ function Copy-SourceTree([string]$Source, [string]$Destination) {
         /XF .gitignore *.bak *.user *.log *.vsix /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Host
     if ($LASTEXITCODE -ge 8) { throw "Source staging failed: $Source (robocopy $LASTEXITCODE)" }
 }
-foreach ($file in @("Surface\Surface.csproj", "Surface\App.cs", "DesignHost\DesignHost.csproj",
-    "DesignHost\Package.appxmanifest", "SurfaceProvisioner\SurfaceProvisioner.csproj",
+foreach ($file in @("Surface\Surface.csproj", "Surface\App.cs", "PreviewHost\PreviewHost.csproj",
+    "PreviewHost\Package.appxmanifest", "SurfaceProvisioner\SurfaceProvisioner.csproj",
     "SurfaceProvisioner\HostBuilder.cs", "Shared\HostPayload.cs", "LICENSE.winui-vsc.txt")) {
     Assert-File "$PSScriptRoot\$file"
 }
@@ -34,7 +34,7 @@ try {
     Copy-SourceTree "$PSScriptRoot\Surface" "$work\Surface"
     Copy-SourceTree "$PSScriptRoot\SurfaceProvisioner" "$work\SurfaceProvisioner"
     Copy-SourceTree "$PSScriptRoot\Shared" "$work\Shared"
-    Copy-SourceTree "$PSScriptRoot\DesignHost" "$work\DesignHost"
+    Copy-SourceTree "$PSScriptRoot\PreviewHost" "$work\PreviewHost"
     # One bundled surface per supported architecture: an x64 surface on an ARM64 machine runs under
     # emulation (slow) and cannot load the user's ARM64 build, so ARM64 gets its own native copy.
     $rawDirs = @{}
@@ -45,28 +45,28 @@ try {
         $raw = "$work\Surface\bin\$($arch.Platform)\$Configuration\net10.0-windows10.0.26100.0\$($arch.Rid)"
         foreach ($file in @("Surface.exe", "Surface.dll", "Surface.deps.json", "Surface.runtimeconfig.json",
             "Surface.pri", "Microsoft.WinUI.dll")) { Assert-File "$raw\$file" }
-        # Bake DesignHost's merged PRI (baseline Toolkit templates) in as Surface.pri: the same swap a
+        # Bake PreviewHost's merged PRI (baseline Toolkit templates) in as Surface.pri: the same swap a
         # matched host does at startup via --user-pri, so bundled-version projects get Toolkit templates.
-        & dotnet build "$work\DesignHost\DesignHost.csproj" -c $Configuration "-p:Platform=$($arch.Platform)" `
+        & dotnet build "$work\PreviewHost\PreviewHost.csproj" -c $Configuration "-p:Platform=$($arch.Platform)" `
             "-p:RuntimeIdentifier=$($arch.Rid)" "-p:WinUISurfaceWasdkVersion=$WinUISurfaceWasdkVersion" --nologo -v minimal | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw "DesignHost $($arch.Platform) build failed (exit $LASTEXITCODE)." }
-        $mergedPri = "$work\DesignHost\bin\$($arch.Platform)\$Configuration\net10.0-windows10.0.26100.0\$($arch.Rid)\resources.pri"
+        if ($LASTEXITCODE -ne 0) { throw "PreviewHost $($arch.Platform) build failed (exit $LASTEXITCODE)." }
+        $mergedPri = "$work\PreviewHost\bin\$($arch.Platform)\$Configuration\net10.0-windows10.0.26100.0\$($arch.Rid)\resources.pri"
         Assert-File $mergedPri
         Copy-Item -LiteralPath $mergedPri "$raw\Surface.pri" -Force
         if ($arch.Platform -eq "x64") {
             # The resolved (transitive) PRI packages baked in above; VS asks for a matched host only beyond these.
-            $assets = Get-Content "$work\DesignHost\obj\project.assets.json" -Raw | ConvertFrom-Json
+            $assets = Get-Content "$work\PreviewHost\obj\project.assets.json" -Raw | ConvertFrom-Json
             $baselinePackages = @($assets.libraries.PSObject.Properties | Where-Object {
                     $_.Value.type -eq "package" -and $_.Name -notmatch '^Microsoft\.WindowsAppSDK' -and
                     @($_.Value.files | Where-Object { $_ -like "*.pri" }).Count -gt 0 } | ForEach-Object { $_.Name } | Sort-Object)
-            if ($baselinePackages.Count -eq 0) { throw "DesignHost resolved no PRI-bearing template packages." }
+            if ($baselinePackages.Count -eq 0) { throw "PreviewHost resolved no PRI-bearing template packages." }
         }
         Set-Content "$raw\Surface.wasdk.version" $WinUISurfaceWasdkVersion -NoNewline -Encoding ASCII
         $rawDirs[$arch.Platform] = $raw
     }
     # Installed SDK layout is deliberately backward compatible, NOT source ownership.
     Copy-SourceTree "$PSScriptRoot\Surface" "$sdk\surface\Surface"
-    Copy-SourceTree "$PSScriptRoot\DesignHost" "$sdk\DesignHost"
+    Copy-SourceTree "$PSScriptRoot\PreviewHost" "$sdk\PreviewHost"
     Copy-Item "$PSScriptRoot\LICENSE.winui-vsc.txt" "$sdk\LICENSE.winui-vsc.txt"
     Set-Content "$sdk\template-baseline.txt" ($baselinePackages -join "`n") -NoNewline -Encoding ASCII
     & dotnet build "$work\SurfaceProvisioner\SurfaceProvisioner.csproj" -c $Configuration `
@@ -78,7 +78,7 @@ try {
     }
     # Every source/asset and the provisioner implementation affect this distribution identity.
     # Explicit source tree enumeration avoids compiled MVID/build timestamp fingerprints.
-    $lines = foreach ($name in @("Surface", "DesignHost", "SurfaceProvisioner", "Shared")) {
+    $lines = foreach ($name in @("Surface", "PreviewHost", "SurfaceProvisioner", "Shared")) {
         Get-ChildItem "$PSScriptRoot\$name" -Recurse -File |
             Where-Object { $_.FullName.Substring($PSScriptRoot.Length) -notmatch '\\(bin|obj|Properties)\\' } |
             ForEach-Object { "$($_.FullName.Substring($PSScriptRoot.Length))=$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)" }

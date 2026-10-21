@@ -9,7 +9,7 @@ namespace WinUIXamlPreview.Editor
     /// A pure (no VS types) bridge between XAML source text and the surface's authored-tree index paths
     /// (plan §41 #1/#2). It parses the buffer text into an <see cref="XDocument"/> with line info and walks
     /// the authored element tree in the SAME child-ordering model the surface uses at runtime
-    /// (<c>DesignSurface.AuthoredChildren</c>), so a path like <c>"0.1.0"</c> means the same element on both
+    /// (<c>PreviewSurface.AuthoredChildren</c>), so a path like <c>"0.1.0"</c> means the same element on both
     /// sides. It exposes:
     /// <list type="bullet">
     ///   <item><see cref="TryGetSpan"/> — path -> [startOffset, endOffset) text span (for selection -> caret);</item>
@@ -28,7 +28,7 @@ namespace WinUIXamlPreview.Editor
 
         // The XAML *language* namespace (conventionally the "x:" prefix). Its elements are language
         // primitives/directives — x:String, x:Int32, x:Double, x:Boolean, x:Null, x:Array, x:Reference, … —
-        // which are never FrameworkElements, so the surface's FE-only DesignSurface.AuthoredChildren prunes
+        // which are never FrameworkElements, so the surface's FE-only PreviewSurface.AuthoredChildren prunes
         // them. The client must prune them too: a non-FE item placed before an FE sibling in a walked content
         // collection (e.g. <x:String> before <ComboBoxItem>) would otherwise shift every following sibling
         // index and desync the selection paths (bug D2).
@@ -50,7 +50,7 @@ namespace WinUIXamlPreview.Editor
 
         // .NET BCL primitive/value types commonly authored as XAML content via a CLR namespace (e.g.
         // xmlns:sys="using:System" then <sys:String>Alpha</sys:String>). None derive from FrameworkElement,
-        // so the surface's FE-only DesignSurface.AuthoredChildren prunes them; the client must prune them too
+        // so the surface's FE-only PreviewSurface.AuthoredChildren prunes them; the client must prune them too
         // or a primitive placed before an FE sibling shifts every following sibling index and desyncs the
         // selection paths (bug D2 / d2-sysstring-residual). Matched only in the System CLR namespace (see
         // IsSystemClrNamespace) so an unrelated control that happens to share one of these names is untouched.
@@ -65,7 +65,7 @@ namespace WinUIXamlPreview.Editor
 
         // Content-property elements the surface recurses INTO (Panel.Children, *.Content, Border/Viewbox.Child,
         // ItemsControl.Items). Any other property element (RowDefinitions, Resources, attached props, Flyout…)
-        // is skipped, matching DesignSurface.AuthoredChildren.
+        // is skipped, matching PreviewSurface.AuthoredChildren.
         private static readonly HashSet<string> ContentProps =
             new HashSet<string>(StringComparer.Ordinal) { "Children", "Content", "Child", "Items" };
 
@@ -156,7 +156,7 @@ namespace WinUIXamlPreview.Editor
                 }
             }
 
-            // The XML root maps to surface path "0" (the design canvas's single child == the page root).
+            // The XML root maps to surface path "0" (the preview canvas's single child == the page root).
             Walk(rootEl, "0", 0, lineStarts, text!.Length, pathToSpan, preorder, elements, contentPropByType, ends);
             if (ends != null)
             {
@@ -320,7 +320,7 @@ namespace WinUIXamlPreview.Editor
 
         /// <summary>
         /// The authored child elements of <paramref name="parent"/> in document order, mirroring the surface's
-        /// <c>DesignSurface.AuthoredChildren</c>: skip design/mc-namespace elements AND elements that can never
+        /// <c>PreviewSurface.AuthoredChildren</c>: skip design/mc-namespace elements AND elements that can never
         /// be a <c>FrameworkElement</c> (XAML language primitives like <c>x:String</c> and text/inline
         /// <c>TextElement</c>s like <c>Run</c>) — the surface's FE-only enumeration prunes these, so counting
         /// them here would shift sibling indices (bug D2); recurse INTO a content-property element

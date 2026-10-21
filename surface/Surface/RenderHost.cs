@@ -49,34 +49,34 @@ internal sealed class RenderHost
     private IntPtr _renderHwnd = IntPtr.Zero;
     private double _dpiScale = 1.0;
 
-    // Design-time selection layer (plan §41). The designer defaults to "design" (select) mode: clicks pick
+    // Design-time selection layer (plan §41). The previewer defaults to "design" (select) mode: clicks pick
     // an element instead of interacting with the live app. _design is the layer mounted by the current
     // native host (null in frame mode); _designMode persists the mode across re-hosts so a toggle sticks.
     private bool _designMode = true;
-    private DesignSurface? _design;
+    private PreviewSurface? _design;
 
     // Size preview (user-requested) + the image-path theme baseline. _currentTheme is baked into the
     // IMAGE path's host Grid (RenderElementAsync) and stays Light so the streamed-image (VS Code) preview
     // renders Light regardless of the app-global theme. The NATIVE (VS) path ignores this and inherits the
     // per-process Application.RequestedTheme (set at startup from the SURFACE_THEME env — see App.ctor),
     // because a runtime RequestedTheme flip cannot re-resolve {ThemeResource} in a code-only Application.
-    // _sizeOverride pins the design canvas to a device preset (null = auto: the page's own size / default
+    // _sizeOverride pins the preview canvas to a device preset (null = auto: the page's own size / default
     // canvas). _designCanvasHost is the host Grid of the mounted surface.
     private ElementTheme _currentTheme = ElementTheme.Light;
     private (double w, double h)? _sizeOverride;
     private FrameworkElement? _designCanvasHost;
-    // Persistent native-mode content root: successive design surfaces are cross-swapped inside it so a live
+    // Persistent native-mode content root: successive preview surfaces are cross-swapped inside it so a live
     // edit never shows an empty/unfitted frame (see HostLiveAsync).
     private Grid? _liveStage;
 
-    /// <summary>Raised (UI thread) when the user picks an element in the mounted design surface.</summary>
+    /// <summary>Raised (UI thread) when the user picks an element in the mounted preview surface.</summary>
     public event Action<DesignSelectionPayload>? SelectionChanged;
 
     /// <summary>Raised (UI thread) after a live property edit re-reads the selected element (Phase C).</summary>
     public event Action<DesignSelectionPayload>? PropsRefreshed;
 
-    /// <summary>Raised (UI thread) when the user's zoom/scroll on the native design surface settles.</summary>
-    public event Action<DesignSurface.ViewState>? ViewStateChanged;
+    /// <summary>Raised (UI thread) when the user's zoom/scroll on the native preview surface settles.</summary>
+    public event Action<PreviewSurface.ViewState>? ViewStateChanged;
 
     // Supersample bounds for the output frame. We render the tree at canvasDIP × outputScale so the
     // webview can display the frame at its logical DIP size and stay crisp on a HiDPI display. 1.0 =
@@ -205,7 +205,7 @@ internal sealed class RenderHost
         if (root is null)
         {
             // P1: a structurally non-designable root (ResourceDictionary, Window, VS template placeholder)
-            // is reported as a DISTINCT NonPage status, not a generic failure, so the designer shows a
+            // is reported as a DISTINCT NonPage status, not a generic failure, so the previewer shows a
             // sensible message and an oracle need not count these non-pages as broken previews.
             return phase == NonPagePhase
                 ? RenderResult.NonPage(message!)
@@ -253,7 +253,7 @@ internal sealed class RenderHost
             // (styles/themes/control-template dictionary), a Window/WindowEx (a window is not a page), or a
             // Visual Studio project-template placeholder ($safeprojectname$, never a resolvable type) — is
             // not a broken preview, it is simply not a designable page. Detect it from the markup up front
-            // and return a DISTINCT NonPage status so the designer shows a sensible message and an oracle
+            // and return a DISTINCT NonPage status so the previewer shows a sensible message and an oracle
             // stops scoring these as failures. Cheap + defensive; fires ONLY on non-visual roots, so every
             // real Page/UserControl/Control is completely unaffected (certified default path untouched).
             var nonPageReason = ClassifyNonDesignableMarkup(rawXaml);
@@ -486,36 +486,36 @@ internal sealed class RenderHost
         }
     }
 
-    // Fixed default design canvas (DIP) used when the parsed root declares no explicit/design size.
+    // Fixed default preview canvas (DIP) used when the parsed root declares no explicit/design size.
     // A Page/UserControl normally derives its size from the window/frame; headless we pick a sensible
-    // design surface rather than stretching to the client's webview viewport.
+    // preview surface rather than stretching to the client's webview viewport.
     private const double DefaultCanvasWidthDip = 1024;
     private const double DefaultCanvasHeightDip = 720;
 
-    /// <summary>One-time guard so the resolved design-canvas background brush is logged once, not per render.</summary>
+    /// <summary>One-time guard so the resolved preview-canvas background brush is logged once, not per render.</summary>
     private static bool _canvasBrushLogged;
 
     private async Task<RenderResult> RenderElementAsync(FrameworkElement root, double width, double height, double scale, RenderTimings? timings)
     {
         var window = _renderWindow!;
 
-        // ---------------- design-canvas sizing ----------------
+        // ---------------- preview-canvas sizing ----------------
         // The incoming width/height is the webview PANEL size, not a design size: it is only a
         // non-authoritative hint here (the webview rescales the JPEG to fit its panel), so we do NOT
         // stretch the canvas to it. Honor an explicit page size when present (Width/Height, which the
         // cleaner also derives from d:DesignWidth/d:DesignHeight); otherwise render on the fixed
-        // default design canvas so content doesn't float or depend on panel size.
+        // default preview canvas so content doesn't float or depend on panel size.
         var (canvasW, canvasH) = ResolveCanvasSize(root);
 
         // Wrap the parsed root in a themed host canvas: a Light-theme surface painted with a real,
         // opaque page background so a transparent Page/UserControl doesn't capture as black. The user
         // root is a child ON TOP of the canvas, so a page that sets its own Background still wins.
-        var host = BuildDesignCanvas(root, canvasW, canvasH, _currentTheme);
+        var host = BuildPreviewCanvas(root, canvasW, canvasH, _currentTheme);
 
         // ---------------- layout phase ----------------
         long tLayout = Stopwatch.GetTimestamp();
 
-        // Size the window client area to the design canvas so the host lays out at full size.
+        // Size the window client area to the preview canvas so the host lays out at full size.
         window.AppWindow.Resize(new SizeInt32(
             (int)Math.Ceiling(canvasW * _dpiScale) + 16,
             (int)Math.Ceiling(canvasH * _dpiScale) + 16));
@@ -567,7 +567,7 @@ internal sealed class RenderHost
     }
 
     /// <summary>
-    /// Chooses the design-canvas size (DIP). Honors an explicit root <see cref="FrameworkElement.Width"/>/
+    /// Chooses the preview-canvas size (DIP). Honors an explicit root <see cref="FrameworkElement.Width"/>/
     /// <see cref="FrameworkElement.Height"/> (the cleaner maps <c>d:DesignWidth</c>/<c>d:DesignHeight</c>
     /// onto these) so a page renders at its own size; each dimension that is unset falls back to the
     /// fixed default canvas. The incoming client viewport is intentionally ignored.
@@ -592,7 +592,7 @@ internal sealed class RenderHost
     /// child (default Stretch alignment) so it lays out on top of the canvas, centered when it declares an
     /// intrinsic size; a root that sets its own Background paints over it.
     /// </summary>
-    private static Grid BuildDesignCanvas(FrameworkElement root, double width, double height, ElementTheme theme)
+    private static Grid BuildPreviewCanvas(FrameworkElement root, double width, double height, ElementTheme theme)
     {
         // Build via markup so the {ThemeResource} background resolves against the host's OWN RequestedTheme
         // (rather than the app/OS theme) — Light by default, or the user-chosen preview theme. Try the
@@ -615,7 +615,7 @@ internal sealed class RenderHost
         if (!_canvasBrushLogged)
         {
             _canvasBrushLogged = true;
-            App.Log($"Design-canvas background brush: {source} ({theme} theme).");
+            App.Log($"Preview-canvas background brush: {source} ({theme} theme).");
         }
 
         host.RequestedTheme = theme;
@@ -779,7 +779,7 @@ internal sealed class RenderHost
 #endif
 
     /// <summary>
-    /// Toggle design (select) vs interact mode for the mounted design surface (plan §41). Design mode
+    /// Toggle design (select) vs interact mode for the mounted preview surface (plan §41). Design mode
     /// intercepts pointer input so a click selects an element; interact mode passes input to the live
     /// content. Persisted on the host so the next re-host keeps the mode. UI thread only.
     /// </summary>
@@ -793,8 +793,8 @@ internal sealed class RenderHost
     }
 
     /// <summary>
-    /// Pin the design canvas to a device-size preset (or <c>null</c> to restore auto — the page's own size /
-    /// default canvas). Stored for the next (re)host; the caller re-hosts so the design surface re-fits the
+    /// Pin the preview canvas to a device-size preset (or <c>null</c> to restore auto — the page's own size /
+    /// default canvas). Stored for the next (re)host; the caller re-hosts so the preview surface re-fits the
     /// new board into the pane. UI thread only.
     /// </summary>
     internal void SetCanvasSizeOverride((double w, double h)? size)
@@ -803,22 +803,22 @@ internal sealed class RenderHost
     }
 
     /// <summary>
-    /// Select the element at an authored-tree path in the mounted design surface (editor caret -> designer,
-    /// plan §41 #2). No-op returning false when no design surface is mounted or the path doesn't resolve.
+    /// Select the element at an authored-tree path in the mounted preview surface (editor caret -> previewer,
+    /// plan §41 #2). No-op returning false when no preview surface is mounted or the path doesn't resolve.
     /// UI thread only.
     /// </summary>
     internal bool SelectByPath(string? path) => _design?.SelectByPath(path) ?? false;
 
     /// <summary>
-    /// TEST-ONLY headless pick (bug D3 regression): run the mounted design surface's pointer-pick logic at
+    /// TEST-ONLY headless pick (bug D3 regression): run the mounted preview surface's pointer-pick logic at
     /// (<paramref name="x"/>, <paramref name="y"/>) in artboard/host DIP coordinates and report the usual
-    /// selection. No-op returning false when no design surface is mounted. UI thread only.
+    /// selection. No-op returning false when no preview surface is mounted. UI thread only.
     /// </summary>
     internal bool PickAt(double x, double y) => _design?.PickAt(x, y) ?? false;
 
     /// <summary>
-    /// The custom (non-standard) content-property map for the mounted design surface's authored tree, keyed by
-    /// simple type name (bug D1). Empty when no design surface is mounted. UI thread only.
+    /// The custom (non-standard) content-property map for the mounted preview surface's authored tree, keyed by
+    /// simple type name (bug D1). Empty when no preview surface is mounted. UI thread only.
     /// </summary>
     internal Dictionary<string, string> CollectContentProps() =>
         _design?.CollectContentProps() ?? new Dictionary<string, string>();
@@ -830,9 +830,9 @@ internal sealed class RenderHost
 
     private void OnDesignPropsRefreshed(DesignSelectionPayload payload) => PropsRefreshed?.Invoke(payload);
 
-    private void OnDesignViewStateChanged(DesignSurface.ViewState v) => ViewStateChanged?.Invoke(v);
+    private void OnDesignViewStateChanged(PreviewSurface.ViewState v) => ViewStateChanged?.Invoke(v);
 
-    // ---- Phase B: native HWND reparent (live design surface) ----------------
+    // ---- Phase B: native HWND reparent (live preview surface) ----------------
     // Instead of RTB→PNG→socket, host the parsed page LIVE in the warm window and hand its HWND to
     // the IDE client, which SetParent()s it into a tool window (zero-copy, real WinUI pixels + input).
     // devenv is .NET-Framework/WPF and cannot load WinUI 3 in-proc, so out-of-proc + reparent is the
@@ -841,12 +841,12 @@ internal sealed class RenderHost
 
     /// <summary>
     /// Parse + host <paramref name="rawXaml"/> LIVE in the warm window (wrapped in the same themed
-    /// Light-theme design canvas as the image path) and leave it mounted so a client can reparent
+    /// Light-theme preview canvas as the image path) and leave it mounted so a client can reparent
     /// <see cref="RenderWindowHwnd"/>. When <paramref name="prepareWindow"/> is true (first entry) the
     /// window is stripped of its border/title bar and un-cloaked; on subsequent live updates it is left
     /// as the client positioned it. No capture/encode — the pixels stay on the GPU-composed window.
     /// </summary>
-    internal async Task<LiveResult> HostLiveAsync(string rawXaml, bool prepareWindow, int panePixelW = 0, int panePixelH = 0, DesignSurface.ViewState? initialView = null)
+    internal async Task<LiveResult> HostLiveAsync(string rawXaml, bool prepareWindow, int panePixelW = 0, int panePixelH = 0, PreviewSurface.ViewState? initialView = null)
     {
         if (_renderWindow is null)
         {
@@ -866,14 +866,14 @@ internal sealed class RenderHost
         {
             var window = _renderWindow;
             var (canvasW, canvasH) = ResolveCanvasSize(root);
-            // Build the native design canvas at the app-default (neutral) theme; the preview theme is applied
+            // Build the native preview canvas at the app-default (neutral) theme; the preview theme is applied
             // as a post-mount CHANGE on the artboard below (see the theme flip after PumpFramesAsync) so
             // {ThemeResource} brushes actually re-resolve. Baking a non-default theme here would leave the
             // content at the default anyway (RequestedTheme set before tree entry doesn't re-resolve).
-            var host = BuildDesignCanvas(root, canvasW, canvasH, ElementTheme.Default);
+            var host = BuildPreviewCanvas(root, canvasW, canvasH, ElementTheme.Default);
             _designCanvasHost = host;
 
-            // Size the window client area to the design canvas at surface DPI. The client sizes the
+            // Size the window client area to the preview canvas at surface DPI. The client sizes the
             // child to match (pixelWidth/pixelHeight below) so native pixels map 1:1.
             int pixelW = Math.Max(1, (int)Math.Ceiling(canvasW * _dpiScale));
             int pixelH = Math.Max(1, (int)Math.Ceiling(canvasH * _dpiScale));
@@ -893,7 +893,7 @@ internal sealed class RenderHost
             // So we touch no geometry: just re-mount content. The client resizes the child itself when the
             // canvas size changed, using the pixelWidth/pixelHeight in the Hwnd reply below.
 
-            // Native path: mount the fixed-size canvas inside the design surface (plan §41) — a zoom-to-fit
+            // Native path: mount the fixed-size canvas inside the preview surface (plan §41) — a zoom-to-fit
             // Viewbox on a neutral-gray artboard, wrapped with the selection/hover adorner + input overlay.
             // The client resizes the reparented child to fill the tool-window pane (a native HWND can't
             // clip/scroll inside a WPF region — see PreviewControl.xaml), so the Viewbox scales the whole
@@ -901,7 +901,7 @@ internal sealed class RenderHost
             // fit but never upscales past 100%, re-fitting automatically on every pane resize. In design mode
             // the overlay intercepts input for selection; in interact mode it is collapsed so input reaches
             // the live content.
-            var design = new DesignSurface(host, Windows.UI.Color.FromArgb(0xFF, 0x3C, 0x3C, 0x3C))
+            var design = new PreviewSurface(host, Windows.UI.Color.FromArgb(0xFF, 0x3C, 0x3C, 0x3C))
             {
                 DesignMode = _designMode,
             };
@@ -976,7 +976,7 @@ internal sealed class RenderHost
 
     /// <summary>
     /// Make the warm render window ready to be reparented into a foreign (IDE) HWND: strip the title
-    /// bar + border (so only the design canvas shows) and un-cloak it so DWM composes its pixels. The
+    /// bar + border (so only the preview canvas shows) and un-cloak it so DWM composes its pixels. The
     /// client then <c>SetParent()</c>s <see cref="RenderWindowHwnd"/> and applies <c>WS_CHILD</c>.
     /// </summary>
     internal void PrepareRenderWindowForReparent()
@@ -1348,7 +1348,7 @@ internal sealed class RenderHost
 
     /// <summary>
     /// While the IDE pane is dragged bigger, Windows exposes the new strip a frame or two before WinUI re-renders,
-    /// and the default (null) class brush shows it as black. Fill it with the design canvas grey instead so a fast
+    /// and the default (null) class brush shows it as black. Fill it with the preview canvas grey instead so a fast
     /// resize blends in. Class-wide (the anchor shares the class) and harmless: XAML paints over it every frame.
     /// </summary>
     private static void SetResizeFill(IntPtr hwnd)
@@ -1356,7 +1356,7 @@ internal sealed class RenderHost
         if (hwnd == IntPtr.Zero) return;
         try
         {
-            var brush = CreateSolidBrush(0x003C3C3C); // COLORREF 0x00BBGGRR — the DesignSurface canvas (#3C3C3C)
+            var brush = CreateSolidBrush(0x003C3C3C); // COLORREF 0x00BBGGRR — the PreviewSurface canvas (#3C3C3C)
             if (brush == IntPtr.Zero) return;
             SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND, brush);
             long ex = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
@@ -1473,7 +1473,7 @@ internal readonly struct RenderResult
 
 /// <summary>
 /// Outcome of a native live-host request (<see cref="RenderHost.HostLiveAsync"/>): either the HWND of
-/// the warm window now hosting the live design canvas (for the client to reparent) plus its logical
+/// the warm window now hosting the live preview canvas (for the client to reparent) plus its logical
 /// (DIP) and device-pixel size, or a categorised failure sharing the render path's phase vocabulary.
 /// </summary>
 internal readonly struct LiveResult

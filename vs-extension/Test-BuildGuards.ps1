@@ -15,10 +15,10 @@ try {
         $path = Join-Path $check $missing
         Move-Item $path "$path.hidden"
         try {
-            $output = & $msbuild "$projectDir\WinUIXamlPreview.csproj" /t:ValidateDesignerPayload `
+            $output = & $msbuild "$projectDir\WinUIXamlPreview.csproj" /t:ValidatePreviewerPayload `
                 /p:DotnetVsixBuild=false /p:DeployExtension=false `
                 /p:SurfaceOutDir="$check\Surface" /p:HostSdkStageDir="$check\HostSDK" /nologo /v:minimal 2>&1
-            if ($LASTEXITCODE -eq 0 -or ($output -join "`n") -notmatch "Required designer payload missing") {
+            if ($LASTEXITCODE -eq 0 -or ($output -join "`n") -notmatch "Required previewer payload missing") {
                 throw "Expected missing-input failure not observed: $missing`n$($output -join '`n')"
             }
             Write-Host "PASS: packaging rejects missing $missing"

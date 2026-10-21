@@ -338,12 +338,12 @@ namespace WinUIXamlPreview.UITest
 
         // ---- Bug D2 regression: non-FrameworkElement inline/primitive items must not shift sibling indices ----
         //
-        // The surface's DesignSurface.AuthoredChildren is FE-only; the client's XamlSourceMap.AuthoredChildElements
+        // The surface's PreviewSurface.AuthoredChildren is FE-only; the client's XamlSourceMap.AuthoredChildElements
         // now prunes the SAME non-FrameworkElements (XAML language primitives like <x:String>, text/inline
         // TextElements like <Run>) so both sides assign identical child indices. This page mixes a TextBlock with
         // inline <Run>s and a ComboBox whose first item is a non-FE <x:String> placed BEFORE a real
         // <ComboBoxItem>; post-fix the ComboBoxItem must resolve to child index 0 (path 0.0.1.0, NOT 0.0.1.1),
-        // its span (designer->editor) must point at <ComboBoxItem> not <x:String>, and the trailing <Button> must
+        // its span (previewer->editor) must point at <ComboBoxItem> not <x:String>, and the trailing <Button> must
         // stay at 0.0.2. Pure client-side — no surface required (safe for the implementer to author under the
         // "Red-team is sole Surface runner" policy; Red-team executes it).
         private static readonly string D2InlineAndPrimitiveXaml =
@@ -385,7 +385,7 @@ namespace WinUIXamlPreview.UITest
             int alphaOffset = D2InlineAndPrimitiveXaml.IndexOf("Alpha", StringComparison.Ordinal);
             int buttonOffset = D2InlineAndPrimitiveXaml.IndexOf("<Button", StringComparison.Ordinal);
 
-            // editor -> designer (caret offset -> authored path)
+            // editor -> previewer (caret offset -> authored path)
             string? tbPath = map.PathForOffset(textBlockOffset + 1);
             Check("D2-1 TextBlock resolves to 0.0.0", tbPath == "0.0.0", "actual " + (tbPath ?? "(null)"));
 
@@ -401,7 +401,7 @@ namespace WinUIXamlPreview.UITest
             string? alphaPath = map.PathForOffset(alphaOffset);
             Check("D2-5 caret inside <x:String> maps to container ComboBox 0.0.1 (not a child)", alphaPath == "0.0.1", "actual " + (alphaPath ?? "(null)"));
 
-            // designer -> editor (authored path -> span): the SAME element resolves both directions
+            // previewer -> editor (authored path -> span): the SAME element resolves both directions
             bool haveItemSpan = map.TryGetSpan("0.0.1.0", out int itemStart, out int itemEnd);
             Check("D2-6 span exists for ComboBoxItem 0.0.1.0", haveItemSpan, haveItemSpan ? $"[{itemStart},{itemEnd})" : "no span");
             Check("D2-7 ComboBoxItem span starts at <ComboBoxItem>, not <x:String>", haveItemSpan && itemStart == comboItemOffset, $"start={itemStart} expected={comboItemOffset}");
@@ -426,7 +426,7 @@ namespace WinUIXamlPreview.UITest
         // reskewing sibling indices (same symptom class as D2). The fix also prunes SystemPrimitiveNames in the
         // System CLR namespace. Here <sys:String> sits before a real <ComboBoxItem> (StackPanel is the design
         // root, so ComboBox == 0.0): post-fix the ComboBoxItem is ComboBox child index 0 (path 0.0.0), its span
-        // (designer->editor) points at <ComboBoxItem> not <sys:String>, and no phantom 0.0.1 sibling exists.
+        // (previewer->editor) points at <ComboBoxItem> not <sys:String>, and no phantom 0.0.1 sibling exists.
         // Pure client-side — no surface required (Red-team executes it).
         private static readonly string D2ResidualSysStringXaml =
             "<StackPanel\n" +
@@ -461,11 +461,11 @@ namespace WinUIXamlPreview.UITest
             int comboItemOffset = D2ResidualSysStringXaml.IndexOf("<ComboBoxItem", StringComparison.Ordinal);
             int alphaOffset = D2ResidualSysStringXaml.IndexOf("Alpha", StringComparison.Ordinal);
 
-            // editor -> designer: <sys:String> is pruned, so <ComboBoxItem> is ComboBox child index 0 (0.0.0)
+            // editor -> previewer: <sys:String> is pruned, so <ComboBoxItem> is ComboBox child index 0 (0.0.0)
             string? itemPath = map.PathForOffset(comboItemOffset + 1);
             Check("D2R-1 ComboBoxItem resolves to 0.0.0 (sys:String NOT counted)", itemPath == "0.0.0", "actual " + (itemPath ?? "(null)"));
 
-            // designer -> editor: the 0.0.0 span points at <ComboBoxItem>, not <sys:String>
+            // previewer -> editor: the 0.0.0 span points at <ComboBoxItem>, not <sys:String>
             bool haveItemSpan = map.TryGetSpan("0.0.0", out int itemStart, out int itemEnd);
             Check("D2R-2 ComboBoxItem span 0.0.0 starts at <ComboBoxItem>, not <sys:String>", haveItemSpan && itemStart == comboItemOffset, haveItemSpan ? $"start={itemStart} expected={comboItemOffset}" : "no span");
 

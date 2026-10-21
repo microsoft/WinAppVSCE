@@ -97,7 +97,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Renderer smoke failed (exit $LASTEXITCODE)." }
     # I2: every client source-map path must select the same element on the live surface.
     & $ui --parity --surface "$run\Surface.exe" --out $results
-    if ($LASTEXITCODE -ne 0) { throw "Caret/designer parity failed (exit $LASTEXITCODE)." }
+    if ($LASTEXITCODE -ne 0) { throw "Caret/previewer parity failed (exit $LASTEXITCODE)." }
     # D3: click-to-select (PickAt) incl. transparent-panel padding; framework XAML, no Gallery.
     & $ui --d3 --surface "$run\Surface.exe" --out $results
     if ($LASTEXITCODE -ne 0) { throw "Click-to-select (D3) failed (exit $LASTEXITCODE)." }

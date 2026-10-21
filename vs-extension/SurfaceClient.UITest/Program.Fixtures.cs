@@ -12,7 +12,7 @@ namespace WinUIXamlPreview.UITest
     // Q-suite fixtures: render the pages in surface\TestFixtureApp\Fixtures against the built TestFixtureApp.dll
     // and check that user-code controls (custom, other-project, Community Toolkit) load as themselves rather than
     // placeholders, and that resources resolve from every scope (page, project dictionaries, App.xaml, framework)
-    // in both Light and Dark. Each page also goes through the I2 caret<->designer parity check.
+    // in both Light and Dark. Each page also goes through the I2 caret<->previewer parity check.
     internal static partial class Program
     {
         private sealed class Expect

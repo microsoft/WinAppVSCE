@@ -134,7 +134,7 @@ export interface PropItem {
 }
 export interface ElementProps { type: 'ElementProps'; id: number; props: PropItem[] }
 export interface ContentProps { type: 'ContentProps'; map: Record<string, string> }
-/** Zoom/scroll changed in the native design surface; the client stores it to carry across process swaps. */
+/** Zoom/scroll changed in the native preview surface; the client stores it to carry across process swaps. */
 export interface View extends ViewState { type: 'View' }
 export type ServerMessage = Ready | Frame | ErrorMessage | Hwnd | NativeExited | Pong
     | Selected | ElementProps | ContentProps | View;

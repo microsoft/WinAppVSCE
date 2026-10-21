@@ -49,8 +49,8 @@ namespace WinUIXamlPreview.Editor
             };
         }
 
-        /// <summary>Feeds a designer selection through the real designer -> editor path (no surface click needed).</summary>
-        internal void TestSimulateDesignerSelection(string elementPath)
-            => OnDesignerElementSelected(new SelectedMsg { Type = "selected", Path = elementPath });
+        /// <summary>Feeds a previewer selection through the real previewer -> editor path (no surface click needed).</summary>
+        internal void TestSimulatePreviewerSelection(string elementPath)
+            => OnPreviewerElementSelected(new SelectedMsg { Type = "selected", Path = elementPath });
     }
 }

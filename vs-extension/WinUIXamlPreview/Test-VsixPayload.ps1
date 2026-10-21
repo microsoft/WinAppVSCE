@@ -25,7 +25,7 @@ try {
         "Surface-arm64/Assets/MedTile.png", "Surface-arm64/Assets/AppList.png",
         "HostSDK/engine.stamp", "HostSDK/LICENSE.winui-vsc.txt", "HostSDK/template-baseline.txt",
         "HostSDK/surface/Surface/Surface.csproj", "HostSDK/surface/Surface/App.cs",
-        "HostSDK/DesignHost/DesignHost.csproj", "HostSDK/DesignHost/Package.appxmanifest",
+        "HostSDK/PreviewHost/PreviewHost.csproj", "HostSDK/PreviewHost/Package.appxmanifest",
         "HostSDK/SurfaceProvisioner/SurfaceProvisioner.exe",
         "HostSDK/SurfaceProvisioner/SurfaceProvisioner.dll",
         "HostSDK/SurfaceProvisioner/SurfaceProvisioner.deps.json",

@@ -484,7 +484,7 @@ namespace WinUIXamlPreview.Editor
         // A VS-icon toolbar button that opens a checkable ContextMenu (like a WPF/Blend "device" + theme
         // picker). The button label reflects the current selection; the checked menu item confirms it.
 
-        // Device-size presets for the design canvas (DIP). "Auto" (0,0) clears the override so the page
+        // Device-size presets for the preview canvas (DIP). "Auto" (0,0) clears the override so the page
         // renders at its own size / the default canvas. Kept in sync with the surface's SetCanvasSize.
         private static readonly (string Name, double W, double H)[] SizePresets =
         {
@@ -766,7 +766,7 @@ namespace WinUIXamlPreview.Editor
         }
 
         private static string SizeTooltip() =>
-            $"Design surface size: {SizeLabel()}. Click to preview the page at a device size (or Auto for its own size).";
+            $"Preview surface size: {SizeLabel()}. Click to preview the page at a device size (or Auto for its own size).";
 
         private ContextMenu BuildSizeMenu()
         {
@@ -840,8 +840,8 @@ namespace WinUIXamlPreview.Editor
 
         // ---- select / interact toggle -------------------------------------
         //
-        // Flips the design surface between SELECT (click an element to select + inspect it — the WPF/Blend
-        // designer behavior) and INTERACT (clicks reach the running content). Applied live by the surface
+        // Flips the preview surface between SELECT (click an element to select + inspect it — the WPF/Blend
+        // previewer behavior) and INTERACT (clicks reach the running content). Applied live by the surface
         // with no re-render (plan §41). Selecting an element populates the Properties panel.
 
         private static string SelectLabel() => PreviewOptions.DesignMode ? "Select" : "Interact";
@@ -864,7 +864,7 @@ namespace WinUIXamlPreview.Editor
 
         private void OnPropertiesClick(object sender, RoutedEventArgs e)
         {
-            try { DesignerSelection.ShowPropertiesWindow(); }
+            try { PreviewerSelection.ShowPropertiesWindow(); }
             catch (Exception ex) { Log.Write("Show properties failed: " + ex); }
         }
 

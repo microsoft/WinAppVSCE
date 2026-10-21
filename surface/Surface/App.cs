@@ -592,7 +592,7 @@ public partial class App : Application, IXamlMetadataProvider
         // main provider does not chain, so <tkcontrols:SettingsCard> in runtime markup is otherwise
         // type-not-found and the whole page fails to parse. Discover + chain the provider-bearing
         // assemblies in the user's bin closure so those controls resolve and REAL-render (what a compiled
-        // app and a design surface such as VS both do for referenced assemblies).
+        // app and a preview surface such as VS both do for referenced assemblies).
         try
         {
             ChainClosureMetadataProviders(Path.GetDirectoryName(userAssemblyPath)!);
@@ -853,7 +853,7 @@ public partial class App : Application, IXamlMetadataProvider
     /// style overrides the framework default. Previously-added user dictionaries are removed first so
     /// repeated calls never leak dictionaries across renders.
     ///
-    /// Production note: instead of scanning the whole tree, a shipping visualizer should walk the
+    /// Production note: instead of scanning the whole tree, a shipping previewer should walk the
     /// user <c>App.xaml</c> merged-dictionary graph — parse <c>&lt;Application.Resources&gt;</c>, follow
     /// each <c>&lt;ResourceDictionary Source="..."/&gt;</c> (and nested <c>MergedDictionaries</c>/
     /// <c>ThemeDictionaries</c>) in declared order, resolving ms-appx and relative URIs and de-duping —

@@ -15,7 +15,7 @@ using Windows.UI;
 
 namespace Surface;
 
-/// <summary>The data the surface hands the client when an element is picked in the design surface.</summary>
+/// <summary>The data the surface hands the client when an element is picked in the preview surface.</summary>
 internal sealed class DesignSelectionPayload
 {
     public int Id;
@@ -28,7 +28,7 @@ internal sealed class DesignSelectionPayload
 
     /// <summary>
     /// The authored-tree index path (e.g. <c>"0.1.0"</c>) of the selected element, relative to the content
-    /// host: a sequence of child indices through <see cref="DesignSurface.AuthoredChildren"/>. The client
+    /// host: a sequence of child indices through <see cref="PreviewSurface.AuthoredChildren"/>. The client
     /// computes the identical path from the XAML source so selection maps to a text span (plan §41 #1/#2).
     /// Null when the element has no resolvable authored path.
     /// </summary>
@@ -51,7 +51,7 @@ internal sealed class DesignSelectionPayload
 /// behavior). Selection results are raised via <see cref="SelectionChanged"/>; the adorner is drawn in the
 /// surface's own window (same compositor as the content) so it is always pixel-aligned with no airspace seam.
 /// </summary>
-internal sealed class DesignSurface
+internal sealed class PreviewSurface
 {
     // Visual-Studio-designer selection blue.
     private static readonly Color AccentColor = Color.FromArgb(0xFF, 0x00, 0x78, 0xD4);
@@ -60,13 +60,13 @@ internal sealed class DesignSurface
     private readonly Grid _artboard;
     private readonly Canvas _adornerCanvas;
     private readonly Border _inputOverlay;
-    private readonly Canvas _chromeCanvas; // hit-testable designer chrome (selection tag) above the input overlay
+    private readonly Canvas _chromeCanvas; // hit-testable previewer chrome (selection tag) above the input overlay
     private readonly Border _selectionTag; // accent chip at the selection's top-left: type + name + props icon
     private readonly TextBlock _tagType;
     private readonly TextBlock _tagName;
     private readonly Button _propsButton;
     private readonly Flyout _propsFlyout;
-    private readonly FrameworkElement _contentHost; // the design canvas — the hit-test subtree
+    private readonly FrameworkElement _contentHost; // the preview canvas — the hit-test subtree
 
     private readonly Rectangle _selectRect;
     private readonly Border _hoverOutline;
@@ -82,9 +82,9 @@ internal sealed class DesignSurface
     private FrameworkElement? _walkLeaf;
     private bool _designMode = true;
 
-    // ---- artboard grid backdrop + zoom/pan (designer polish) ----
+    // ---- artboard grid backdrop + zoom/pan (previewer polish) ----
     private readonly ScrollViewer _scroll;
-    private readonly Border _board;         // the "page": fixed-size design canvas, floated on the grid
+    private readonly Border _board;         // the "page": fixed-size preview canvas, floated on the grid
     private readonly Microsoft.UI.Xaml.Shapes.Path _gridPath;        // faint grid backdrop that fills the artboard
     private readonly Border _zoomBar;       // in-surface zoom control (bottom-left corner)
     private TextBlock? _zoomLabel;
@@ -108,14 +108,14 @@ internal sealed class DesignSurface
     /// </summary>
     public event Action<DesignSelectionPayload>? PropsRefreshed;
 
-    public DesignSurface(FrameworkElement contentHost, Color letterbox)
+    public PreviewSurface(FrameworkElement contentHost, Color letterbox)
     {
         _contentHost = contentHost;
 
         _canvasW = (!double.IsNaN(contentHost.Width) && contentHost.Width > 0) ? contentHost.Width : 400;
         _canvasH = (!double.IsNaN(contentHost.Height) && contentHost.Height > 0) ? contentHost.Height : 300;
 
-        // The "page": the fixed-size design canvas floated on the artboard with a hairline edge, so it reads
+        // The "page": the fixed-size preview canvas floated on the artboard with a hairline edge, so it reads
         // as a sheet resting on the grid backdrop (Blend/WPF-designer feel). Zoom scales this board.
         _board = new Border
         {
@@ -178,7 +178,7 @@ internal sealed class DesignSurface
         _inputOverlay.PointerMoved += OnPointerMoved;
         _inputOverlay.PointerExited += (_, _) => _hoverOutline.Visibility = Visibility.Collapsed;
 
-        // Designer chrome that must be clickable (the selection tag) rides on its own canvas above the input
+        // Previewer chrome that must be clickable (the selection tag) rides on its own canvas above the input
         // overlay. A Canvas with no Background is hit-transparent except where its children are, so clicks that
         // miss the tag still fall through to the overlay's selection hit-test.
         _propsFlyout = new Flyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.Bottom };
@@ -274,11 +274,11 @@ internal sealed class DesignSurface
             TextAlignment = TextAlignment.Center,
         };
 
-        var outBtn = MakeZoomButton("\uE738", "Zoom out (Ctrl+scroll)", "DesignZoomOut");
+        var outBtn = MakeZoomButton("\uE738", "Zoom out (Ctrl+scroll)", "PreviewZoomOut");
         outBtn.Click += (_, _) => ChangeZoom(_scroll.ZoomFactor / 1.25, null, keepFit: false);
-        var inBtn = MakeZoomButton("\uE710", "Zoom in (Ctrl+scroll)", "DesignZoomIn");
+        var inBtn = MakeZoomButton("\uE710", "Zoom in (Ctrl+scroll)", "PreviewZoomIn");
         inBtn.Click += (_, _) => ChangeZoom(_scroll.ZoomFactor * 1.25, null, keepFit: false);
-        var fitBtn = MakeZoomButton("\uE9A6", "Zoom to fit", "DesignZoomFit");
+        var fitBtn = MakeZoomButton("\uE9A6", "Zoom to fit", "PreviewZoomFit");
         fitBtn.Click += (_, _) => ApplyFit();
 
         var labelBtn = new Button
@@ -293,7 +293,7 @@ internal sealed class DesignSurface
         };
         ToolTipService.SetToolTip(labelBtn, "Reset to 100%");
         AutomationProperties.SetName(labelBtn, "Zoom level");
-        AutomationProperties.SetAutomationId(labelBtn, "DesignZoomLabel");
+        AutomationProperties.SetAutomationId(labelBtn, "PreviewZoomLabel");
         // Reset shows the page from its top-left corner (where layouts start), not wherever the old anchor was.
         labelBtn.Click += (_, _) => ChangeZoom(1.0, new Point(0, 0), keepFit: false);
 
@@ -345,7 +345,7 @@ internal sealed class DesignSurface
         else { ReflowSelectionChrome(); }
     }
 
-    /// <summary>Zoom/scroll snapshot carried from one design surface to the next across a live re-host.</summary>
+    /// <summary>Zoom/scroll snapshot carried from one preview surface to the next across a live re-host.</summary>
     public readonly record struct ViewState(bool Fit, double Zoom, double OffsetX, double OffsetY);
 
     /// <summary>The view to start in (from the previous surface). Null = zoom-to-fit.</summary>
@@ -568,7 +568,7 @@ internal sealed class DesignSurface
         }
         catch (Exception ex)
         {
-            App.Log("DesignSurface selection callback failed: " + ex.Message);
+            App.Log("PreviewSurface selection callback failed: " + ex.Message);
         }
     }
 
@@ -583,12 +583,12 @@ internal sealed class DesignSurface
         W = bounds.Width,
         H = bounds.Height,
         Path = PathForElement(fe),
-        Props = DesignInspector.Describe(fe),
+        Props = PreviewInspector.Describe(fe),
     };
 
     /// <summary>
     /// Phase C: apply a live property edit from the panel. Resolves the element by <paramref name="id"/>,
-    /// writes the value through <see cref="DesignInspector.TrySet"/> (which converts the string to the
+    /// writes the value through <see cref="PreviewInspector.TrySet"/> (which converts the string to the
     /// property's type), then re-lays-out, redraws the adorner (the element may have resized), and re-emits
     /// the element's properties via <see cref="PropsRefreshed"/> so the panel shows the applied value — or
     /// reverts if the edit didn't convert. The live HWND repaints itself; no frame round-trip. Returns whether
@@ -607,7 +607,7 @@ internal sealed class DesignSurface
             return false;
         }
 
-        bool applied = DesignInspector.TrySet(fe, name, value ?? "", out var error);
+        bool applied = PreviewInspector.TrySet(fe, name, value ?? "", out var error);
         if (!applied && error != null)
         {
             App.Log($"SetProperty #{id} {name}='{value}' rejected: {error}");
@@ -639,7 +639,7 @@ internal sealed class DesignSurface
     }
 
     /// <summary>
-    /// Select the element at the given authored-tree <paramref name="path"/> (editor caret -> designer, #2).
+    /// Select the element at the given authored-tree <paramref name="path"/> (editor caret -> previewer, #2).
     /// Resolves the path via <see cref="ElementForPath"/>, draws the adorner, and raises
     /// <see cref="SelectionChanged"/> exactly as a pointer pick would. Returns false when the path resolves to
     /// nothing (stale/out-of-range) — the caller leaves the current selection untouched. UI thread only.
@@ -660,14 +660,14 @@ internal sealed class DesignSurface
         if (ReferenceEquals(fe, _selected))
         {
             // Already selected — nothing to redraw and don't re-echo, but STILL reset the walk anchor (D4):
-            // an editor echo of the current selection must not leave a stale _walkLeaf, or the next designer
+            // an editor echo of the current selection must not leave a stale _walkLeaf, or the next previewer
             // click on this element would immediately walk UP instead of fresh-picking its leaf.
             _walkLeaf = null;
             return true;
         }
 
         _selected = fe;
-        _walkLeaf = null; // editor-driven selection; the next designer click starts a fresh leaf pick
+        _walkLeaf = null; // editor-driven selection; the next previewer click starts a fresh leaf pick
         _hoverOutline.Visibility = Visibility.Collapsed;
         SelectAndReport(fe);
         return true;
@@ -698,7 +698,7 @@ internal sealed class DesignSurface
 
     // ---- authored-element hit-testing + drill-down (#3) --------------------
     //
-    // Designers select the elements the user *authored in the XAML*, never a control's template internals.
+    // Previewers select the elements the user *authored in the XAML*, never a control's template internals.
     // We therefore consider only elements in the authored (logical) tree — reconstructed via AuthoredSet() from
     // the public content/children accessors — and ignore anything realized from a ControlTemplate. The first
     // click on a region selects its outermost authored element (the "high-level" element); clicking again drills
@@ -760,7 +760,7 @@ internal sealed class DesignSurface
 
     // The authored (logical) element set — every element reachable through AuthoredChildren from the content
     // host. A control's template internals are never returned by AuthoredChildren, so they're excluded by
-    // construction. Built once per host mount (the design surface is recreated on every re-render) and cached.
+    // construction. Built once per host mount (the preview surface is recreated on every re-render) and cached.
     // This same authored tree powers source mapping (#1/#2).
     private HashSet<FrameworkElement>? _authoredSet;
 
@@ -1113,7 +1113,7 @@ internal sealed class DesignSurface
         return chain.Count == 0 ? null : chain[chain.Count - 1];
     }
 
-    // ---- selection tag + properties flyout inside the designer (#1, #4) ----
+    // ---- selection tag + properties flyout inside the previewer (#1, #4) ----
 
     /// <summary>Sets the selection tag's type/name text from the current selection payload.</summary>
     private void UpdateSelectionTag(DesignSelectionPayload p)
@@ -1209,7 +1209,7 @@ internal sealed class DesignSurface
         }
 
         string? lastCategory = null;
-        foreach (var pr in p.Props) // DesignInspector returns rows already grouped/sorted by category
+        foreach (var pr in p.Props) // PreviewInspector returns rows already grouped/sorted by category
         {
             if (!string.Equals(pr.Category, lastCategory, StringComparison.Ordinal))
             {

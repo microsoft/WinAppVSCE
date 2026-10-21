@@ -5,7 +5,7 @@ Source ownership:
 | Path | Responsibility |
 | --- | --- |
 | `Surface/` | Existing net10 renderer; frame-stream and optional native-HWND hosting. |
-| `DesignHost/` | Resource template, never launched. Merges the target's PRI-bearing NuGet packages (`UserPackages.g.props`); falls back to a fixed CommunityToolkit closure. |
+| `PreviewHost/` | Resource template, never launched. Merges the target's PRI-bearing NuGet packages (`UserPackages.g.props`); falls back to a fixed CommunityToolkit closure. |
 | `SurfaceProvisioner/` | BCL-only net8 executable; resolved host build, cache identity, publication and CLI. |
 | `Shared/HostPayload.cs` | Small internal linked net8/net472 payload manifest validator/run-copy helper; no public runtime library. |
 | `protocol/` | Complete descriptive v1 wire specification, TS shapes and linked-production compatibility fixtures. |
@@ -48,7 +48,7 @@ The **installed** backward-compatible HostSDK layout is:
 ```text
 HostSDK/
   surface/Surface/           # renderer sources, not binaries
-  DesignHost/                # resource template sources/assets
+  PreviewHost/                # resource template sources/assets
   SurfaceProvisioner/        # compiled net8 executable + runtime/deps files
   engine.stamp               # SHA256 of shared source/template/assets/helper/provisioner inputs
   LICENSE.winui-vsc.txt
@@ -64,7 +64,7 @@ compiled registration configuration are validated together; registration refuses
 an existing different location and never unregisters it. AppX registration is
 current-user, **not** isolated by a VS suffix. See the migration record for the
 approved dedicated-hive deployment, actual IDE evidence, retained registration,
-and the existing designer-property source-writeback/undo limitation.
+and the existing previewer-property source-writeback/undo limitation.
 
 ## Rendering fidelity
 
@@ -77,7 +77,7 @@ runs, and there is no app `Window`.
 | --- | --- |
 | In-app `AcrylicBrush`, `ThemeShadow` / `Translation` | Faithful |
 | Control-template animations (`ProgressRing`, indeterminate `ProgressBar`, visual-state transitions) | Faithful, animating |
-| Window backdrop (`Window.SystemBackdrop` Mica/DesktopAcrylic) behind a page with no opaque background | Approximated: the design canvas paints `ApplicationPageBackgroundThemeBrush` (no wallpaper tint) |
+| Window backdrop (`Window.SystemBackdrop` Mica/DesktopAcrylic) behind a page with no opaque background | Approximated: the preview canvas paints `ApplicationPageBackgroundThemeBrush` (no wallpaper tint) |
 | Storyboards begun by code-behind (`Begin()` in `Loaded`, etc.) | Not started; shows the initial frame |
 | `{x:Bind}` values, resources added in `App.xaml.cs` | Placeholders (see sample data) |
 
@@ -98,7 +98,7 @@ $sdk = "$PWD\surface\obj\HostSDK"
 & "$sdk\SurfaceProvisioner\SurfaceProvisioner.exe" --build `
   --project "$PWD\surface\TestUserApp\TestUserApp.csproj" `
   --surface-project "$sdk\surface\Surface\Surface.csproj" `
-  --designhostpri-project "$sdk\DesignHost\DesignHost.csproj" `
+  --previewhostpri-project "$sdk\PreviewHost\PreviewHost.csproj" `
   --cache "$PWD\surface\obj\my-disposable-cache" `
   --engine-stamp (Get-Content "$sdk\engine.stamp" -Raw)
 ```
@@ -262,12 +262,12 @@ validation of any already-committed generation.
 It preserves `%TEMP%\wxpf\Foundation-*\results.json` (override the root with
 `-CacheRoot`; kept short so deep checkouts stay under MAX_PATH) as test evidence and leaves
 no owned child processes. It never uses the default user cache. See
-[`docs/designer-migration.md`](../docs/designer-migration.md) for current results.
+[`docs/previewer-migration.md`](../docs/previewer-migration.md) for current results.
 
 The full wire contract/test boundary is in [`protocol/README.md`](protocol/README.md).
 Protocol v1 has no request IDs/stale-result guarantees or version enforcement;
 SetTheme is a compatibility no-op. No renderer rewrite or SURFACE_GUARDS change.
-DesignHost's fixed Toolkit closure is still a release limitation, not arbitrary
+PreviewHost's fixed Toolkit closure is still a release limitation, not arbitrary
 application resource merging. Real IDE hot-swap, consent/trust, clean-machine
 install, broader runtime/architecture matrix, signing, dependency-license audit,
 publishing and CI ownership remain explicit later gates.

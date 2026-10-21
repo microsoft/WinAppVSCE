@@ -10,7 +10,7 @@ public static class HostBuilder
     {
         public required string ProjectPath { get; init; }
         public required string SurfaceProjectPath { get; init; }
-        public required string DesignHostPriProjectPath { get; init; }
+        public required string PreviewHostPriProjectPath { get; init; }
         public required string CacheRoot { get; init; }
         public string? BundledHostDir { get; init; }
         public string Platform { get; init; } = "x64";
@@ -68,7 +68,7 @@ public static class HostBuilder
             cancellation.ThrowIfCancellationRequested();
             if (!((opt.Platform == "x64" && opt.Rid == "win-x64") || (opt.Platform == "ARM64" && opt.Rid == "win-arm64")))
                 throw new NotSupportedException("This build lane supports only x64 / win-x64 and ARM64 / win-arm64.");
-            foreach (var file in new[] { opt.SurfaceProjectPath, opt.DesignHostPriProjectPath })
+            foreach (var file in new[] { opt.SurfaceProjectPath, opt.PreviewHostPriProjectPath })
                 if (!File.Exists(file)) throw new FileNotFoundException("Required source project missing.", file);
             var (version, source, path) = Provisioner.DiscoverVersion(opt.ProjectPath, log);
             r.DiscoveredVersion = version; r.VersionSource = source; r.VersionSourcePath = path;
@@ -77,7 +77,7 @@ public static class HostBuilder
             if (!System.Text.RegularExpressions.Regex.IsMatch(version, @"^\d+\.\d+\.\d+([.-][0-9A-Za-z.-]+)?$"))
                 throw new InvalidDataException("A concrete resolved WindowsAppSDK version is required: " + version);
             var surfaceSource = Path.GetDirectoryName(Path.GetFullPath(opt.SurfaceProjectPath))!;
-            var templateSource = Path.GetDirectoryName(Path.GetFullPath(opt.DesignHostPriProjectPath))!;
+            var templateSource = Path.GetDirectoryName(Path.GetFullPath(opt.PreviewHostPriProjectPath))!;
             string RunTool(IEnumerable<string> args) => runTool == null
                 ? Run("dotnet", args, opt, log, cancellation) : runTool("dotnet", args);
             var toolchain = RunTool(new[] { "--version" }).Trim();
@@ -116,7 +116,7 @@ public static class HostBuilder
             BuildStorage.CopySource(surfaceSource, surface, cancellation);
             BuildStorage.CopySource(templateSource, template, cancellation);
             var sp = Path.Combine(surface, Path.GetFileName(opt.SurfaceProjectPath));
-            var dp = Path.Combine(template, Path.GetFileName(opt.DesignHostPriProjectPath));
+            var dp = Path.Combine(template, Path.GetFileName(opt.PreviewHostPriProjectPath));
             // F3: merge the target's own PRI-bearing packages (not a fixed list) so their templates resolve.
             TemplatePackages.Write(template, TemplatePackages.Discover(opt.ProjectPath, log));
             RunTool(BuildArgs("restore", sp, version, opt));
@@ -162,7 +162,7 @@ public static class HostBuilder
             var host = OutputDir(surface, opt);
             var priDir = OutputDir(template, opt);
             var mergedPri = Path.Combine(priDir, "resources.pri");
-            if (!File.Exists(mergedPri)) throw new FileNotFoundException("DesignHost merged resources.pri missing.", mergedPri);
+            if (!File.Exists(mergedPri)) throw new FileNotFoundException("PreviewHost merged resources.pri missing.", mergedPri);
             HostPayload.CopyFile(mergedPri, Path.Combine(host, "Surface.designtime.pri"), cancellation);
             VerifyMatched(host, component, opt, r, cancellation);
             HostPayload.Seal(host, key, version, opt.EngineStamp ?? "", cancellation);

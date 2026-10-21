@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Summarizes WinUI XAML Preview latency markers (WS3-P0) from the designer log.
+    Summarizes WinUI XAML Preview latency markers (WS3-P0) from the previewer log.
 .DESCRIPTION
     Parses "PERF <name> ms=<n> [key=value ...]" lines written by the VS extension to
     %LOCALAPPDATA%\WinUIXamlPreview\preview.log and prints count / min / median / p90 / max per marker.

@@ -80,7 +80,7 @@ internal sealed class FrameServer
     private double _lastHeight = 600;
     private double _lastScale = 1.0;
 
-    // When true the client has entered native-HWND mode: the warm window hosts the live design canvas
+    // When true the client has entered native-HWND mode: the warm window hosts the live preview canvas
     // and its HWND is reparented into the IDE tool window, so edits re-host in place (no Frame reply).
     private bool _nativeMode;
 
@@ -441,11 +441,11 @@ internal sealed class FrameServer
                 int paneW = (int)GetPositiveDouble(root, "paneWidthPx", 0);
                 int paneH = (int)GetPositiveDouble(root, "paneHeightPx", 0);
                 App.Log($"<- EnterNative ({xaml.Length} chars, pane {paneW}x{paneH} px) — hosting live for reparent");
-                DesignSurface.ViewState? initialView = null;
+                PreviewSurface.ViewState? initialView = null;
                 if (root.TryGetProperty("view", out var viewEl) && viewEl.ValueKind == JsonValueKind.Object)
                 {
                     bool fit = viewEl.TryGetProperty("fit", out var fitEl) && fitEl.ValueKind == JsonValueKind.True;
-                    initialView = new DesignSurface.ViewState(fit, GetPositiveDouble(viewEl, "zoom", 1.0),
+                    initialView = new PreviewSurface.ViewState(fit, GetPositiveDouble(viewEl, "zoom", 1.0),
                         GetPositiveDouble(viewEl, "offsetX", 0), GetPositiveDouble(viewEl, "offsetY", 0));
                 }
                 HostLiveAndReply(prepareWindow: true, paneW, paneH, initialView);
@@ -472,7 +472,7 @@ internal sealed class FrameServer
                 if (_nativeMode)
                 {
                     // In native mode the client owns the child window's on-screen rect (MoveWindow); the
-                    // design canvas is a fixed size, so a pane resize needs no surface round-trip.
+                    // preview canvas is a fixed size, so a pane resize needs no surface round-trip.
                     App.Log("Resize ignored in native mode (client owns child placement).");
                 }
                 else if (_lastXaml != null)
@@ -490,7 +490,7 @@ internal sealed class FrameServer
             {
                 // Design mode intercepts input for element selection (plan §41); interact mode passes
                 // input to the live content. A launch-independent runtime toggle — applies live to the
-                // mounted design surface without a re-render.
+                // mounted preview surface without a re-render.
                 bool design = root.TryGetProperty("design", out var dm) && dm.ValueKind == JsonValueKind.True;
                 App.Log($"<- SetMode design={design}");
                 bool ok = _uiDispatcher.TryEnqueue(() => _host.SetDesignMode(design));
@@ -500,7 +500,7 @@ internal sealed class FrameServer
 
             case "SelectByPath":
             {
-                // Editor caret -> designer selection (plan §41 #2). The client resolved the caret to an
+                // Editor caret -> previewer selection (plan §41 #2). The client resolved the caret to an
                 // authored-tree path; select that element on the UI thread. The surface replies with the
                 // usual Selected + ElementProps, which the client suppresses echoing back to the caret.
                 string? path = root.TryGetProperty("path", out var pp) && pp.ValueKind == JsonValueKind.String
@@ -583,8 +583,8 @@ internal sealed class FrameServer
 
             case "SetCanvasSize":
             {
-                // Pin the design canvas to a device-size preset (width/height <= 0 => auto). Store the
-                // override and re-host so the design surface re-fits the new board into the pane.
+                // Pin the preview canvas to a device-size preset (width/height <= 0 => auto). Store the
+                // override and re-host so the preview surface re-fits the new board into the pane.
                 double w = GetPositiveDouble(root, "width", 0);
                 double h = GetPositiveDouble(root, "height", 0);
                 bool auto = !(w > 0 && h > 0);
@@ -674,7 +674,7 @@ internal sealed class FrameServer
     /// warm window on the UI thread and write back an <c>Hwnd</c> message (the reparent target + its
     /// DIP/pixel size) on success, or an <c>Error</c> on a parse/activation failure.
     /// </summary>
-    private void HostLiveAndReply(bool prepareWindow, int panePixelW = 0, int panePixelH = 0, DesignSurface.ViewState? initialView = null)
+    private void HostLiveAndReply(bool prepareWindow, int panePixelW = 0, int panePixelH = 0, PreviewSurface.ViewState? initialView = null)
     {
         LiveResult result = HostLiveOnUiThreadAsync(_lastXaml!, prepareWindow, panePixelW, panePixelH, initialView)
             .GetAwaiter().GetResult();
@@ -716,7 +716,7 @@ internal sealed class FrameServer
     }
 
     /// <summary>
-    /// Collects the mounted design surface's custom content-property map on the UI thread and sends it to the
+    /// Collects the mounted preview surface's custom content-property map on the UI thread and sends it to the
     /// client as a <c>ContentProps</c> message (bug D1). Harmless when empty. Called after each successful host.
     /// </summary>
     private void SendContentProps()
@@ -745,7 +745,7 @@ internal sealed class FrameServer
         Send(new { type = "ContentProps", map });
     }
 
-    private Task<LiveResult> HostLiveOnUiThreadAsync(string xaml, bool prepareWindow, int panePixelW, int panePixelH, DesignSurface.ViewState? initialView)
+    private Task<LiveResult> HostLiveOnUiThreadAsync(string xaml, bool prepareWindow, int panePixelW, int panePixelH, PreviewSurface.ViewState? initialView)
     {
         var tcs = new TaskCompletionSource<LiveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
 

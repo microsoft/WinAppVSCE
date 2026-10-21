@@ -63,7 +63,7 @@ namespace WinUIXamlPreview
             {
                 PreviewPackageState.EditorTracker = new EditorTracker(rdt, dte, JoinableTaskFactory);
                 // The properties panel follows the active tab: show that file's selection, not the last one made.
-                PreviewPackageState.EditorTracker.ActiveDocumentChanged += (_, path) => UI.DesignerSelection.SetActiveDocument(path);
+                PreviewPackageState.EditorTracker.ActiveDocumentChanged += (_, path) => UI.PreviewerSelection.SetActiveDocument(path);
                 Log.Write("EditorTracker started (following the active document).");
             }
             else
@@ -89,8 +89,8 @@ namespace WinUIXamlPreview
             PreviewPackageState.RequestShowToolWindow = () => OnShowPreviewCommand(this, EventArgs.Empty);
             PreviewPackageState.RequestCloseToolWindow = CloseToolWindow;
 
-            // Let a selection in the design surface open (once) / the toolbar reopen the properties panel.
-            DesignerSelection.RequestShowPropertiesWindow = ShowPropertiesWindow;
+            // Let a selection in the preview surface open (once) / the toolbar reopen the properties panel.
+            PreviewerSelection.RequestShowPropertiesWindow = ShowPropertiesWindow;
 
             // No .vsct command yet, so surface the pane automatically once the shell is up. This
             // makes the preview visible without a menu entry (a proper View menu command is a
@@ -261,7 +261,7 @@ namespace WinUIXamlPreview
 
         protected override string GetToolWindowTitle(Type toolWindowType, int id)
             => toolWindowType == typeof(PropertiesToolWindow)
-                ? "WinUI Designer — Properties"
+                ? "WinUI Previewer — Properties"
                 : "WinUI XAML Preview";
 
         protected override Task<object?> InitializeToolWindowAsync(Type toolWindowType, int id, CancellationToken cancellationToken)

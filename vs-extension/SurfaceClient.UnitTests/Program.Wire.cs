@@ -9,7 +9,7 @@ using WinUIXamlPreview.Protocol;
 
 namespace WinUIXamlPreview.UnitTests;
 
-/// <summary>Edge cases for the socket line framing and the caret/designer source map.</summary>
+/// <summary>Edge cases for the socket line framing and the caret/previewer source map.</summary>
 internal static partial class Program
 {
     // ------------------------------------------------------------ LineDecoder

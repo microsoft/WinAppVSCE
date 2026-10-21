@@ -128,7 +128,7 @@ spelled out rather than inferred from C# property types.
 | `PickAt` | `x: number`, `y: number` | **Test-only** headless pick in artboard/host DIP coordinates. Negative/fractional coordinates are accepted. A hit can cause selection events; a miss is silent. Not sent by production VS UI. |
 | `SetProperty` | `id: integer`, `name: string`, `value?: string \| null` | Require nonnegative Int32 ID and nonempty name. Missing/null/non-string value becomes `""`. Forward a live edit; a host property refresh emits `ElementProps` only, not `Selected` or `Frame`. There is no success ack. |
 | `SetTheme` | `theme?: string` (convention: `Light`, `Dark`, `Default`) | **Compatibility no-op**, only logged. Missing/non-string becomes `"Light"` for logging. Change themes by relaunching with `SURFACE_THEME` (the VS client warm-swaps to a surface started in the new theme and never sends this message). |
-| `SetCanvasSize` | `width?: number`, `height?: number` | Both positive numbers set the design-canvas override; otherwise clear **both** dimensions to auto. Rehost/reply only when native mode and a document are present. Frame mode stores the override silently for the next render. |
+| `SetCanvasSize` | `width?: number`, `height?: number` | Both positive numbers set the preview-canvas override; otherwise clear **both** dimensions to auto. Rehost/reply only when native mode and a document are present. Frame mode stores the override silently for the next render. |
 
 ### Viewport and default distinctions
 
@@ -157,7 +157,7 @@ These are **server state defaults**, not DTO construction defaults:
   nullable request path/name/value fields default null. Default serialization
   includes nulls and zeros; no “omit default values” options are configured.
 
-Viewport size is **not a promise about returned design-canvas size**. RenderHost
+Viewport size is **not a promise about returned preview-canvas size**. RenderHost
 chooses the canvas from an explicit device override, authored page/design sizes,
 or its default canvas; incoming panel width/height are non-authoritative.
 Requested scale affects frame raster density (subject to renderer clamping).
@@ -182,7 +182,7 @@ optional compatibility fields.
 | `Selected` | `id: integer`, `elementType: string`, `name: string \| null`, `path: string \| null`, `x`, `y`, `w`, `h`: numeric artboard bounds in DIPs. `name` is optional authored x:Name; `path` may be unresolved. Receivers can tolerate omission of name/path. |
 | `ElementProps` | `id: integer`, `props: PropItem[]` (may be empty). ID identifies the described runtime element. |
 | `ContentProps` | `map: { [simpleRuntimeTypeName: string]: contentPropertyName }` (may be empty), e.g. `{"ControlExample":"Example"}`. Sent after successful native (re)hosting, following Hwnd. If collection fails the server sends an empty map; if collection cannot be enqueued, it sends no ContentProps. |
-| `View` | `fit: boolean`, `zoom: number`, `offsetX: number`, `offsetY: number`. Unsolicited, native mode only: the design surface's zoom/scroll changed. The client stores the latest value and sends it back as `EnterNative.view` when it swaps processes, so zoom survives a recycle. |
+| `View` | `fit: boolean`, `zoom: number`, `offsetX: number`, `offsetY: number`. Unsolicited, native mode only: the preview surface's zoom/scroll changed. The client stores the latest value and sends it back as `EnterNative.view` when it swaps processes, so zoom survives a recycle. |
 
 Each `PropItem` includes `name`, `category`, `type`, `value` (all strings),
 `readOnly: boolean`, and `options: string[] | null`. `type` here is the reflected
@@ -244,7 +244,7 @@ from the custom map. Refresh the custom map after rehosting so explicit custom
 property elements produce the same authored path on both sides.
 
 IDs are stable only within a mounted design tree; they are not stable across
-rehosts and can be reused. The design surface starts allocating at 1 (wire
+rehosts and can be reused. The preview surface starts allocating at 1 (wire
 validation accepts 0). Property editing requires a resolvable live ID and design
 mode. Conversion failure can refresh the old property values; an unresolved ID,
 interact mode, dispatcher rejection, or host failure can be silent. There is no

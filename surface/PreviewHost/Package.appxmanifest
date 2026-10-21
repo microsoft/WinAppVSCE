@@ -16,7 +16,7 @@
   <mp:PhoneIdentity PhoneProductId="EBF59ED6-AA05-450C-AF45-CE53997F0CF4" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
-    <DisplayName>DesignHost</DisplayName>
+    <DisplayName>PreviewHost</DisplayName>
     <PublisherDisplayName>AppPublisher</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -35,8 +35,8 @@
       Executable="$targetnametoken$.exe"
       EntryPoint="$targetentrypoint$">
       <uap:VisualElements
-        DisplayName="DesignHost"
-        Description="DesignHost"
+        DisplayName="PreviewHost"
+        Description="PreviewHost"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">

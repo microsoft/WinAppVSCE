@@ -10,7 +10,7 @@ using WinUIXamlPreview.Protocol;
 
 namespace WinUIXamlPreview.UITest
 {
-    // I2 caret <-> designer parity: for every element the editor-side XamlSourceMap knows about, ask the live
+    // I2 caret <-> previewer parity: for every element the editor-side XamlSourceMap knows about, ask the live
     // surface to select that path and check it lands on the same element type at the same path. Any drift
     // between the client's XML walk and the surface's authored-tree walk shows up as a FAIL here.
     internal static partial class Program
@@ -115,7 +115,7 @@ namespace WinUIXamlPreview.UITest
                 }
             }
 
-            Console.WriteLine("I2 caret<->designer parity: client source-map paths vs. live surface selection");
+            Console.WriteLine("I2 caret<->previewer parity: client source-map paths vs. live surface selection");
             Console.WriteLine("Surface.exe: " + surfaceExe);
             Console.WriteLine("User DLL:    " + (userDll ?? "(none)"));
             Console.WriteLine();

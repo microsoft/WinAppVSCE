@@ -135,7 +135,7 @@ namespace WinUIXamlPreview.Editor
 
                 // Only attach to WinUI 3 XAML. WPF and UWP share WinUI's default namespace URI, so they can't
                 // be told apart from the markup alone — we inspect the owning project. A non-WinUI document gets
-                // no margin (and, returning null, no cached surface) so the designer never shows for WPF/UWP.
+                // no margin (and, returning null, no cached surface) so the previewer never shows for WPF/UWP.
                 var path = ResolveDocument(host.TextView, docFactory)?.FilePath;
                 if (!host.TextView.TextBuffer.ContentType.IsOfType("XAML")
                     && (path == null || !path.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)))
@@ -238,9 +238,9 @@ namespace WinUIXamlPreview.Editor
                 _buffer.Changed += OnBufferChanged;
             }
 
-            // Two-way selection sync (plan §41): designer selection -> editor caret (#1), editor caret ->
-            // designer selection (#2). Both are best-effort and guarded against echo looping.
-            _preview.ElementSelected += OnDesignerElementSelected;
+            // Two-way selection sync (plan §41): previewer selection -> editor caret (#1), editor caret ->
+            // previewer selection (#2). Both are best-effort and guarded against echo looping.
+            _preview.ElementSelected += OnPreviewerElementSelected;
             _preview.ContentPropMapChanged += OnContentPropMapChanged;
             try { _textView.Caret.PositionChanged += OnCaretPositionChanged; }
             catch (Exception ex) { Log.Write("Caret sync subscribe failed: " + ex.Message); }
@@ -318,7 +318,7 @@ namespace WinUIXamlPreview.Editor
         //
         // Collapsed, the margin shrinks to a thin strip on its docked edge so the editor reclaims the space;
         // clicking the strip restores it. The choice persists (PreviewOptions.Collapsed) so it sticks across
-        // tabs and sessions. The strip is always present, so the designer is one click away — the "how do I get
+        // tabs and sessions. The strip is always present, so the previewer is one click away — the "how do I get
         // it back?" problem is gone.
 
         private void OnHideClick(object sender, RoutedEventArgs e) => SetCollapsed(true);
@@ -488,10 +488,10 @@ namespace WinUIXamlPreview.Editor
             return _sourceMap;
         }
 
-        /// <summary>#1 — the designer selected an element; move the editor caret to its source span.</summary>
-        private void OnDesignerElementSelected(SelectedMsg sel)
+        /// <summary>#1 — the previewer selected an element; move the editor caret to its source span.</summary>
+        private void OnPreviewerElementSelected(SelectedMsg sel)
         {
-            if (_disposed || !_caretSync.AcceptsDesignerSelection(sel?.Path))
+            if (_disposed || !_caretSync.AcceptsPreviewerSelection(sel?.Path))
             {
                 return;
             }
@@ -528,7 +528,7 @@ namespace WinUIXamlPreview.Editor
             }
             catch (Exception ex)
             {
-                Log.Write("Designer->editor caret sync failed: " + ex.Message);
+                Log.Write("Previewer->editor caret sync failed: " + ex.Message);
             }
         }
 
@@ -548,11 +548,11 @@ namespace WinUIXamlPreview.Editor
             }
             catch (Exception ex)
             {
-                Log.Write("Designer->editor horizontal reveal failed: " + ex.Message);
+                Log.Write("Previewer->editor horizontal reveal failed: " + ex.Message);
             }
         }
 
-        /// <summary>#2 — the editor caret moved; select the innermost enclosing element in the designer.</summary>
+        /// <summary>#2 — the editor caret moved; select the innermost enclosing element in the previewer.</summary>
         private void OnCaretPositionChanged(object sender, CaretPositionChangedEventArgs e)
         {
             if (_disposed || !_caretSync.TracksCaret(PreviewOptions.DesignMode))
@@ -579,7 +579,7 @@ namespace WinUIXamlPreview.Editor
             }
             catch (Exception ex)
             {
-                Log.Write("Editor->designer selection sync failed: " + ex.Message);
+                Log.Write("Editor->previewer selection sync failed: " + ex.Message);
             }
         }
 
@@ -829,7 +829,7 @@ namespace WinUIXamlPreview.Editor
 
             try
             {
-                _preview.ElementSelected -= OnDesignerElementSelected;
+                _preview.ElementSelected -= OnPreviewerElementSelected;
                 _preview.ContentPropMapChanged -= OnContentPropMapChanged;
                 _textView.Caret.PositionChanged -= OnCaretPositionChanged;
             }

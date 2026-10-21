@@ -1188,7 +1188,7 @@ internal static class XamlCleaner
         el.ReplaceWith(placeholder);
     }
 
-    /// <summary>Tag value on a placeholder <c>Border</c>; the design surface treats it as a leaf so the stand-in
+    /// <summary>Tag value on a placeholder <c>Border</c>; the preview surface treats it as a leaf so the stand-in
     /// label is never mistaken for one of the original control's children.</summary>
     internal const string PlaceholderTag = "__wxp_placeholder";
 

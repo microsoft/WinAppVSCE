@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    DesignHost — merged core+third-party PRI source for the per-version Surface host (nov-pvh-productize).
+    PreviewHost — merged core+third-party PRI source for the per-version Surface host (nov-pvh-productize).
 
     WHY THIS EXISTS:
     The self-contained per-version Surface host ships its own ~2 MB Surface.pri, which is the MRT PRIMARY
@@ -29,7 +29,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
-    <RootNamespace>DesignHost</RootNamespace>
+    <RootNamespace>PreviewHost</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x86;x64;ARM64</Platforms>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
@@ -118,7 +118,7 @@
     <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
   </PropertyGroup>
 
-  <!-- Publish Properties: DesignHost is only built for its merged PRI, never published; trimming a
+  <!-- Publish Properties: PreviewHost is only built for its merged PRI, never published; trimming a
        framework-dependent build fails (NETSDK1102) on current SDKs. -->
   <PropertyGroup>
     <PublishReadyToRun>False</PublishReadyToRun>

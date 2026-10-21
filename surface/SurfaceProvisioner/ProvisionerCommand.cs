@@ -36,7 +36,7 @@ internal static class ProvisionerCommand
                 result = HostBuilder.Build(new()
                 {
                     ProjectPath = Required("--project"), SurfaceProjectPath = Required("--surface-project"),
-                    DesignHostPriProjectPath = Required("--designhostpri-project"), CacheRoot = Required("--cache"),
+                    PreviewHostPriProjectPath = Required("--previewhostpri-project"), CacheRoot = Required("--cache"),
                     BundledHostDir = Arg("--bundled-host"), Platform = Arg("--platform") ?? "x64",
                     Rid = Arg("--rid") ?? "win-x64", NuGetCache = Arg("--nuget-cache"),
                     EngineStamp = Arg("--engine-stamp"), StagingRoot = Arg("--staging-root"),

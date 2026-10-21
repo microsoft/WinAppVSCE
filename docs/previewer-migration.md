@@ -1,4 +1,4 @@
-# Visual Studio designer migration
+# Visual Studio previewer migration
 
 ## Collaborator handoff
 
@@ -13,7 +13,7 @@ Source provenance: the selected full tree at
 `microsoft/WinAppVSCE@b023f007d85064fdc62bf99ad9c28d2f076680e4`. Original MIT
 notices are retained. Renderer/provisioner ownership is under `surface`; the
 net472 WPF/VSSDK adapter is under `vs-extension`. No LSP migration or VS Code
-designer UI is required or included.
+previewer UI is required or included.
 
 ### Build from a checkout without installing into VS
 
@@ -45,7 +45,7 @@ artifact hashes below identify historical builds, not downloadable releases.
 
 The experimental AppX identity is **current-user scoped**, not VS-hive scoped.
 Never install the default package to test side-by-side with an existing normal
-designer. Experimental registration refuses an existing different location.
+previewer. Experimental registration refuses an existing different location.
 Deployment is a separate explicit action: inspect the selected VS installation,
 existing suffix and registration first; do not copy another machine's instance
 ID, extension location or cleanup paths from the evidence below.
@@ -57,7 +57,7 @@ ID, extension location or cleanup paths from the evidence below.
 2. Cover reverse source navigation, Properties refresh, narrow-toolbar layout and
    IDE lifecycle regressions. Actual Gallery bundled/matched native rendering,
    cancellation and cache reopen were observed; source-editor undo/redo is not
-   proof of designer-property undo.
+   proof of previewer-property undo.
 3. Harden production multi-IDE identity ownership. The default registration path
    still replaces an existing package when its location differs; the opt-in
    experimental path does not.
@@ -89,7 +89,7 @@ validation. Its old stop/next-boundary statements are superseded by this section
 ### Intentional deltas and current ownership
 
 - Moved `vs-extension/tools/SurfaceProvisioner` → `surface/SurfaceProvisioner`
-  and `vs-extension/tools/DesignHost` → `surface/DesignHost`. Renderer stays in
+  and `vs-extension/tools/PreviewHost` → `surface/PreviewHost`. Renderer stays in
   `surface/Surface`; only its provisioner-path comment changed. No renderer source
   behavior, protocol dispatcher, WASDK/BuildTools/Toolkit pins or guards changed.
 - `surface/Build-Payload.ps1` now owns pristine payload/source SDK compilation;
@@ -99,7 +99,7 @@ validation. Its old stop/next-boundary statements are superseded by this section
 - Shared build outputs: `surface/obj/PayloadBuild`, `surface/obj/HostSDK`.
   VS shipping identity copy: `vs-extension/WinUIXamlPreview/obj/IdentityPayload`.
   Installed HostSDK paths remain backward-compatible (`surface/Surface`,
-  `DesignHost`, compiled `SurfaceProvisioner`). Distribution layout is **not**
+  `PreviewHost`, compiled `SurfaceProvisioner`). Distribution layout is **not**
   source ownership. Shared notice is `surface/LICENSE.winui-vsc.txt`; separate
   VS notice remains. Both shipped notices are compared to owning source notices.
 - Full descriptive canonical v1 contract, typed TS shapes, 40 shared fixtures and
@@ -214,7 +214,7 @@ degradation cannot masquerade as success, and expected negative build tests no
 longer leak a failing `$LASTEXITCODE`. Private Surface launch diagnostics identify
 the actual run-copy executable; cleanup I/O/access failures are logged rather
 than silently swallowed. Checkpoint housekeeping removes five imported
-trailing-whitespace lines in `DesignHost/App.xaml.cs` and the DesignHost/Surface
+trailing-whitespace lines in `PreviewHost/App.xaml.cs` and the PreviewHost/Surface
 `app.manifest` files so the staged whitespace check passes. No manifest semantics
 or renderer behavior changed; the final replay/hash includes that normalization.
 
@@ -360,7 +360,7 @@ WASDK **2.2.2-experimental9**, WinUI component **2.2.2-experimental**.
   Save, Undo, Save, Redo, Save and final Undo/Save all passed file-content
   assertions. The last file hash exactly matched the original. Actual VS
   screenshots show source, hosted preview and Properties together. This proves
-  **source-editor undo/redo**, not designer-property writeback/undo.
+  **source-editor undo/redo**, not previewer-property writeback/undo.
 - UIA's broad searches can revisit the reparented native tree and be slow.
   Explicit main VS HWND targeting plus focusing the actual WPF Text Editor
   made native clicks reliable; rejected foreground operations were not counted
@@ -428,7 +428,7 @@ Actual IDE images include `vs-settings-bundled-building.png`,
 and `vs-source-property-edit.png`.
 
 The isolated deployment/runtime milestone is demonstrated, **not a fully passed
-designer acceptance/release gate**: designer-property source writeback/undo,
+previewer acceptance/release gate**: previewer-property source writeback/undo,
 the visual issues above, independent reverse-navigation coverage, clean-machine
 installation, broader runtime/architecture coverage, trust policy, signing and
 publishing remain explicit follow-up work.
@@ -461,7 +461,7 @@ non-elevated side-by-side registration is not yet proven. The existing
 `18.0_14a6ebd8Exp` hive must not be reset or reused blindly; supported deployment
 to a fresh dedicated suffix still needs confirmation. Global multi-IDE identity
 ownership remains separate production hardening, not a reason to disturb the
-installed designer for a demo.
+installed previewer for a demo.
 
 - No real VS installation, docking, upgrade/uninstall or IDE bundled-to-matched
   hot-swap was performed. The new net472 glue builds; its real-process client is
@@ -471,7 +471,7 @@ installed designer for a demo.
   does not authorize launching/deploying it. The imported warmed-spare reflection
   fallback omission in `PreviewControl` remains a known baseline warning.
 - Only existing x64 toolchain/runtime and WASDK 2.2.0 / WinUI 2.2.1 validated.
-  DesignHost still has its fixed Toolkit 8.2.250402 closure; no arbitrary Gallery,
+  PreviewHost still has its fixed Toolkit 8.2.250402 closure; no arbitrary Gallery,
   user-project resource generation, recovered-page or broader runtime claims.
 - Wire v1 has no request/document version correlation or stale-result guarantee,
   does not reject mismatched Hello/Ready versions, and still reports fixed Ready.wasdk.
@@ -505,12 +505,12 @@ Inventory established **before import**:
 | --- | --- |
 | `surface/Surface` | Complete renderer source/assets/project, excluding user launch settings. net10.0-windows10.0.26100.0; Windows SDK BuildTools 10.0.28000.2270; default WASDK 2.2.0 with `WinUISurfaceWasdkVersion` override. No project references or IDE/LSP dependencies. |
 | `vs-extension/WinUIXamlPreview` | Complete net472 WPF/VSSDK adapter, protocol, handcrafted pkgdef, VSCT, manifests and build script. VS SDK 17.14.40265, VSSDK BuildTools 18.6.38345, threading analyzers 18.7.23, SDK analyzers 17.7.113, System.Text.Json 10.0.9, MessagePack 2.5.301. Packages supply transitive assembly closure. |
-| `vs-extension/tools/SurfaceProvisioner` | Complete BCL-only net8.0 executable: native-overlay and matched-source-build paths. Builds Surface and DesignHost via dotnet; no TypeScript host builder. |
-| `vs-extension/tools/DesignHost` | Complete resource template/assets, never launched. Same renderer TFM/WASDK override and SDK BuildTools pin; BuildTools.WinApp 0.4.0; eleven CommunityToolkit 8.2.250402 package references and their transitive resource closure. |
+| `vs-extension/tools/SurfaceProvisioner` | Complete BCL-only net8.0 executable: native-overlay and matched-source-build paths. Builds Surface and PreviewHost via dotnet; no TypeScript host builder. |
+| `vs-extension/tools/PreviewHost` | Complete resource template/assets, never launched. Same renderer TFM/WASDK override and SDK BuildTools pin; BuildTools.WinApp 0.4.0; eleven CommunityToolkit 8.2.250402 package references and their transitive resource closure. |
 | `vs-extension/SurfaceClient.Smoke` | Complete console harness. Links the production protocol/client files; System.Text.Json 10.0.9; optional custom-control coverage requires TestUserApp. Raw-socket checks against the real surface cover the launch token (wrong, missing or non-Hello first messages are dropped; the right token still gets Ready) and the connect watchdog exit. |
 | `vs-extension/SurfaceClient.UITest/{Program.cs,Program.Behaviors.cs,Program.Behaviors2.cs,SurfaceClient.UITest.csproj}` | Existing native selection/property and source-map regression harness; links production protocol plus XamlSourceMap. D2/D2Residual are independent of external Gallery; other modes may require explicit external Gallery inputs. `--behaviors` (`Program.Behaviors.cs`) is the renderer behaviour lane run by `Test-Migration.ps1 -IncludeRenderer` against TestFixtureApp: frame sizing/output scale, parse-error positions, native canvas presets, property-edit conversions and rejections, native enter/exit transitions, the constructor-throw safety net (`Fixtures/HazardsPage.xaml` compiles `ThrowingControl` and `ThrowingControlB`–`F` into the app's type info; each throwing type is retired once by name, well-behaved custom controls stay real, and a page with more throwing types than the 5-retry budget falls back to placeholdering every custom control instead of failing), design-time data failure paths, `d:DataContext` grammar end to end (positional type, `IsDesignTimeCreatable=False`, `DesignData` paths relative to the user assembly, BOM + XML declaration) and sample rows for every list kind; `Program.Behaviors2.cs` adds the root-type matrix (UserControl/Grid/Border/custom/Button roots render; ResourceDictionary/Window/Application/template roots report `nonpage`), resource precedence (merged-dictionary order, element > page > App.xaml, ThemeDictionaries, implicit styles, undefined StaticResource dropped), App.xaml failure paths (malformed, no Resources, bad type, missing file), App.xaml `MergedDictionaries` `Source=` handling (leading-slash and bare relative paths normalized to `ms-appx:///`, absolute URIs, per-Source fallback when the full load fails), never-settling pages (a forever storyboard plus the fixture's always-running `TickerControl` DispatcherTimer still render and re-render), and malformed client payloads sent raw (wrong-typed or missing `SetProperty`/`PickAt` fields are `parse` errors, never `render` server errors; bad `SetCanvasSize` sizes mean auto; non-boolean `sampleData` is ignored; the connection survives), huge canvases (a 100000×100000 preset or page and a 20000×20 page at 2× still answer with a Frame, which `RenderTargetBitmap` scales down to at most 4096 px per side; native mode re-hosts; a normal page renders afterwards), and matched-host PRI handling (`--matched-host <sealed host>`; run by `Test-Foundation.ps1 -IncludeRenderer` against the real provisioned host and skipped elsewhere: a sealed garbage, empty or truncated `Surface.designtime.pri` still starts and renders framework XAML, a PRI changed after sealing fails the payload hash check and a PRI from outside the payload is refused, both before any process launches). `--group <name>` runs only matching groups. |
 | `vs-extension/SurfaceClient.FaultTests/{Program.cs,SurfaceClient.FaultTests.csproj}` | Deterministic resilience/fault-injection harness. Drives the production `SurfaceClient` against a controllable fake surface (the same exe re-launched via the inherited `FAKE_SURFACE_MODE`), so it needs no Windows App SDK or real renderer. Asserts the failure funnel raises exactly one `Closed` and leaks no child process across never-Ready, no-port, pre/post-Ready crash, mid-stream kill, send-after-close, and intentional-dispose cases; a malformed or wrongly-typed message after Ready is logged and ignored (connection stays up), while a malformed Ready still fails start fast. Also checks that each launch sends a fresh `SURFACE_AUTH_TOKEN` in Hello, and that a surface dies when its host is hard-killed (the kill-on-close job object; the exe re-launches itself as a fake host via `FAKE_HOST_MODE`). Run unconditionally by `Test-Migration.ps1`. |
-| `vs-extension/SurfaceClient.UnitTests/{Program.cs,Program.Wire.cs,Program.Selection.cs,Program.Hosting.cs,SurfaceClient.UnitTests.csproj}` | Pure-logic unit tests for the extension's wire framing, source map and host/project discovery, compiled from the production sources: `WasdkVersionDiscovery` source precedence (project.assets.json → Directory.Packages.props → csproj, malformed fall-through), `MatchedHostResolver` upgrade/note decisions and `engine.stamp` validation, `ProjectDllLocator` (newest / host-loadable arch / unpackaged preference, App.xaml, WinUI-vs-WPF/UWP detection incl. parent props), `HostArch` PE parsing and `SurfaceResolver` order; `LineDecoder` framing (CRLF, chunk-split lines and UTF-8 characters, invalid bytes, partial `count`, multi-MB lines) and `XamlSourceMap` (skipped d:/mc:/x:/text/System elements, content-property walking incl. custom content props, CRLF/tab/surrogate offsets, caret→path, malformed input) and `DesignerSelection` (last-writer-wins, throwing handlers/openers contained, properties window auto-opens once), `MatchedHostBuild` shared-build ref counting/cancellation and `SurfaceIdentity`/`IdentityPrewarm` (identity payload detection, failed registration not cached, one-shot fallback, prewarm skips). Temp-dir fixtures only. Run unconditionally by `Test-Migration.ps1`. |
+| `vs-extension/SurfaceClient.UnitTests/{Program.cs,Program.Wire.cs,Program.Selection.cs,Program.Hosting.cs,SurfaceClient.UnitTests.csproj}` | Pure-logic unit tests for the extension's wire framing, source map and host/project discovery, compiled from the production sources: `WasdkVersionDiscovery` source precedence (project.assets.json → Directory.Packages.props → csproj, malformed fall-through), `MatchedHostResolver` upgrade/note decisions and `engine.stamp` validation, `ProjectDllLocator` (newest / host-loadable arch / unpackaged preference, App.xaml, WinUI-vs-WPF/UWP detection incl. parent props), `HostArch` PE parsing and `SurfaceResolver` order; `LineDecoder` framing (CRLF, chunk-split lines and UTF-8 characters, invalid bytes, partial `count`, multi-MB lines) and `XamlSourceMap` (skipped d:/mc:/x:/text/System elements, content-property walking incl. custom content props, CRLF/tab/surrogate offsets, caret→path, malformed input) and `PreviewerSelection` (last-writer-wins, throwing handlers/openers contained, properties window auto-opens once), `MatchedHostBuild` shared-build ref counting/cancellation and `SurfaceIdentity`/`IdentityPrewarm` (identity payload detection, failed registration not cached, one-shot fallback, prewarm skips). Temp-dir fixtures only. Run unconditionally by `Test-Migration.ps1`. |
 | `surface/Surface.Tests/{Program.cs,Surface.Tests.csproj}` | Rule-by-rule tests for `XamlCleaner` (R1–R7c, sample data, x:Bind parsing, malformed input, idempotence), plus `DesignTimeData` grammar (`d:DataContext` `DesignInstance`/`DesignData` parsing: positional and named args, quoting, case-insensitive keys and booleans, `using:`/`clr-namespace:` types, rejection of malformed specs), sample-file path resolution (relative, leading slash, absolute, missing) and BOM/XML-declaration stripping. Reflects over WinUI types without starting the runtime; sits beside `surface/Surface` so it is not staged into HostSDK. Run unconditionally by `Test-Migration.ps1`. |
 | `surface/TestUserApp` | Complete minimal fixture library, design-time samples and controls used by Smoke and renderer benchmarks. WASDK 2.2.0. Never shipped. |
 
@@ -535,7 +535,7 @@ normalization. The five deliberately edited original files are Build-Vsix.ps1,
 WinUIXamlPreview.csproj, Smoke/Program.cs (repo discovery and capability assertions),
 UITest/Program.cs (remove developer-machine defaults; require explicit external
 inputs), and UITest/SurfaceClient.UITest.csproj (exclude disposable test output
-from default compile items). Renderer, provisioner and DesignHost source/project contents are unchanged.
+from default compile items). Renderer, provisioner and PreviewHost source/project contents are unchanged.
 New files provide migration docs, source license, ignores and validation scripts.
 
 ## Build prerequisites and command
@@ -573,7 +573,7 @@ unchanged WASDK 2.2.0 pin and the net8 provisioner, and packages:
 
 - `Surface/`: fresh framework-dependent renderer closure; sparse identity embedded
   into a **shipping copy** with mt.exe; AppxManifest and its three logo files.
-- `HostSDK/`: pristine renderer source, DesignHost source/assets, compiled provisioner,
+- `HostSDK/`: pristine renderer source, PreviewHost source/assets, compiled provisioner,
   original source license and the baseline engine fingerprint.
 - Adapter DLL, handcrafted pkgdef, forced runtime DLLs and original source license.
 
@@ -649,7 +649,7 @@ $stamp = Get-Content "$sdk\engine.stamp" -Raw
 & "$sdk\SurfaceProvisioner\SurfaceProvisioner.exe" --build `
   --project "$PWD\surface\TestUserApp\TestUserApp.csproj" `
   --surface-project "$sdk\surface\Surface\Surface.csproj" `
-  --designhostpri-project "$sdk\DesignHost\DesignHost.csproj" `
+  --previewhostpri-project "$sdk\PreviewHost\PreviewHost.csproj" `
   --cache "$PWD\vs-extension\obj\matched" --platform x64 --rid win-x64 `
   --engine-stamp $stamp --force-rebuild
 ```
@@ -747,7 +747,7 @@ release matrix.
 - The renderer still negotiates both `frame-stream` and `native-hwnd`. Protocol
   integer equality alone is not compatibility proof; full C#/TypeScript contract
   extraction/fixtures remain the next milestone.
-- DesignHost retains its particular CommunityToolkit 8.2.250402 closure. Arbitrary
+- PreviewHost retains its particular CommunityToolkit 8.2.250402 closure. Arbitrary
   project/resource compatibility, other WASDK versions and external Gallery
   scenarios were not validated.
 - In-process build locks, cache keys/fingerprints, immutable publication,

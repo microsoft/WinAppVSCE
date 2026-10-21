@@ -42,7 +42,7 @@ namespace WinUIXamlPreview.UI
         // ignored while pinned; saves of the pinned document still refresh it.
         private string? _pinnedPath;
 
-        // Native-HWND ("real designer") path: reparent the live surface window instead of streaming
+        // Native-HWND ("real previewer") path: reparent the live surface window instead of streaming
         // a PNG. Preferred when the surface advertises the native-hwnd capability; image is fallback.
         private const bool PreferNative = true;
         private SurfaceHwndHost? _nativeHost;
@@ -58,7 +58,7 @@ namespace WinUIXamlPreview.UI
         private readonly PreviewSessionState _session = new PreviewSessionState();
 
         // WS3-P0 latency markers: one pending "action → paint" span, closed by the next Hwnd/Frame/Error.
-        // Emits greppable "PERF <label>.paint ms=<n> outcome=<x>" lines (see scripts\designer-perf-summary.ps1).
+        // Emits greppable "PERF <label>.paint ms=<n> outcome=<x>" lines (see scripts\previewer-perf-summary.ps1).
         private System.Diagnostics.Stopwatch? _perfSw;
         private string? _perfLabel;
         private string _perfNextOpenLabel = "open";
@@ -308,7 +308,7 @@ namespace WinUIXamlPreview.UI
 
             Log.Write("Preview suspended (shown in the preview window); releasing its surface.");
             _suspended = true;
-            DesignerSelection.Forget(_pinnedPath);
+            PreviewerSelection.Forget(_pinnedPath);
             DisposeClient();
             _currentPath = null;
             _hasFrame = false;
@@ -406,7 +406,7 @@ namespace WinUIXamlPreview.UI
             ShowDocument(path);
         }
 
-        // The document this preview's designer selections belong to (keys the shared properties panel).
+        // The document this preview's previewer selections belong to (keys the shared properties panel).
         private string? SelectionDocument => _pinnedPath ?? _currentPath;
 
         private void OnActiveDocumentSaved(object? sender, string? path)
@@ -451,7 +451,7 @@ namespace WinUIXamlPreview.UI
 
             if (_pinnedPath == null && _currentPath != null && !IsCurrent(path))
             {
-                DesignerSelection.Forget(_currentPath); // the surface (and its selection) moves to another file
+                PreviewerSelection.Forget(_currentPath); // the surface (and its selection) moves to another file
             }
 
             _currentPath = path;
@@ -574,13 +574,13 @@ namespace WinUIXamlPreview.UI
                 var (w, h, scale) = await GetViewportAsync();
 
                 // Push the design/interact mode BEFORE the first render: the surface reads it when it builds
-                // the design surface artboard in HostLiveAsync, and the single ordered TCP stream guarantees
+                // the preview surface artboard in HostLiveAsync, and the single ordered TCP stream guarantees
                 // SetMode is processed before EnterNative/LoadXaml (plan §41).
                 client.SetMode(PreviewOptions.DesignMode);
 
                 if (PreferNative && _nativeSupported)
                 {
-                    // Real-designer path: host the live surface window in the tool window (no image).
+                    // Real-previewer path: host the live surface window in the tool window (no image).
                     Log.Write("Surface supports native-hwnd; entering native reparent mode.");
                     SetStatus("Hosting native surface…", spinner: true, detail: Path.GetFileName(path));
                     SendStickyCanvasSize(client);
@@ -784,7 +784,7 @@ namespace WinUIXamlPreview.UI
             if (!design)
             {
                 _lastSelected = null;
-                DesignerSelection.Set(null, SelectionDocument);
+                PreviewerSelection.Set(null, SelectionDocument);
             }
         }
 
@@ -911,7 +911,7 @@ namespace WinUIXamlPreview.UI
         }
 
         /// <summary>
-        /// Pin the design canvas to a device-size preset (DIP), or pass <c>0,0</c> to restore auto (the page's
+        /// Pin the preview canvas to a device-size preset (DIP), or pass <c>0,0</c> to restore auto (the page's
         /// own size / default canvas). Persists the preference and sends <c>SetCanvasSize</c> to the active
         /// surface, which re-hosts at the new artboard size and re-fits it into the pane. UI thread only.
         /// </summary>
@@ -969,7 +969,7 @@ namespace WinUIXamlPreview.UI
         /// <summary>
         /// Raised (on the UI thread) when the surface reports an element selection, carrying the full
         /// <see cref="SelectedMsg"/> including its authored-tree <c>Path</c>. The in-editor margin uses this to
-        /// move the caret to the element's source span (designer -> editor, plan §41 #1).
+        /// move the caret to the element's source span (previewer -> editor, plan §41 #1).
         /// </summary>
         internal event Action<SelectedMsg>? ElementSelected;
 
@@ -988,7 +988,7 @@ namespace WinUIXamlPreview.UI
         internal event Action? ContentPropMapChanged;
 
         /// <summary>
-        /// Select the element at an authored-tree index path in the design surface (editor caret -> designer,
+        /// Select the element at an authored-tree index path in the preview surface (editor caret -> previewer,
         /// plan §41 #2). No-op if no surface is live or not in design mode. UI thread only.
         /// </summary>
         public void SelectByPath(string path)
@@ -1080,7 +1080,7 @@ namespace WinUIXamlPreview.UI
             _lastSelected = sel;
 
             // Show the header immediately; the properties follow in ElementProps (usually same tick).
-            DesignerSelection.Set(new SelectionSnapshot
+            PreviewerSelection.Set(new SelectionSnapshot
             {
                 Id = sel.Id,
                 ElementType = sel.ElementType ?? "",
@@ -1092,8 +1092,8 @@ namespace WinUIXamlPreview.UI
             catch (Exception ex) { Log.Write("ElementSelected handler failed: " + ex.Message); }
 
             // Note: we intentionally do NOT auto-open the VS "Properties" tool window here anymore. The
-            // in-designer Properties flyout (surface-side, feature #4) is now the primary property view, so a
-            // selection shouldn't surprise-pop a VS pane. DesignerSelection.Set above still keeps an
+            // in-previewer Properties flyout (surface-side, feature #4) is now the primary property view, so a
+            // selection shouldn't surprise-pop a VS pane. PreviewerSelection.Set above still keeps an
             // already-open tool window in sync, and the margin "Properties" button reopens it on demand.
         }
 
@@ -1149,7 +1149,7 @@ namespace WinUIXamlPreview.UI
                 }
             }
 
-            DesignerSelection.Set(new SelectionSnapshot
+            PreviewerSelection.Set(new SelectionSnapshot
             {
                 Id = sel.Id,
                 ElementType = sel.ElementType ?? "",
@@ -1950,7 +1950,7 @@ namespace WinUIXamlPreview.UI
                 {
                     // The holder fills the tool window (see PreviewControl.xaml); HwndHost sizes the
                     // reparented child to the holder's arranged rect — i.e. to the pane, never to the
-                    // (possibly larger) design canvas — so it can't overflow into neighboring VS panes.
+                    // (possibly larger) preview canvas — so it can't overflow into neighboring VS panes.
                     // The surface zooms/fits the canvas inside that viewport, so the canvas pixel size in
                     // msg is informational only: the child is never sized to it.
                     if (_nativeHost == null || _nativeHost.SurfaceHwnd != hwnd)
@@ -2216,7 +2216,7 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
-            // Native mode: the child is a fixed-size design canvas; a pane resize is handled locally by
+            // Native mode: the child is a fixed-size preview canvas; a pane resize is handled locally by
             // the ScrollViewer, so no surface round-trip is needed.
             if (_nativeHost != null)
             {
@@ -2526,7 +2526,7 @@ namespace WinUIXamlPreview.UI
             }
 
             _disposed = true;
-            DesignerSelection.Forget(SelectionDocument);
+            PreviewerSelection.Forget(SelectionDocument);
             SurfaceIdentity.FallbackRequested -= OnIdentityFallbackRequested;
             SurfaceClient.IdentityRequired -= OnSurfaceIdentityRequired;
             PreviewOptions.PreviewSettingsChanged -= OnPreviewSettingsChanged;

@@ -31,7 +31,7 @@
     <Compile Include="..\WinUIXamlPreview\Protocol\CommandLine.cs" Link="Protocol\CommandLine.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Protocol\LineDecoder.cs" />
     <Compile Include="..\WinUIXamlPreview\Editor\XamlSourceMap.cs" Link="Editor\XamlSourceMap.cs" />
-    <Compile Include="..\WinUIXamlPreview\UI\DesignerSelection.cs" Link="UI\DesignerSelection.cs" />
+    <Compile Include="..\WinUIXamlPreview\UI\PreviewerSelection.cs" Link="UI\PreviewerSelection.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceIdentity.cs" Link="Protocol\SurfaceIdentity.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\IdentityPrewarm.cs" Link="Protocol\IdentityPrewarm.cs" />
     <Compile Include="..\WinUIXamlPreview\Editor\PreviewSettingsParser.cs" Link="Editor\PreviewSettingsParser.cs" />

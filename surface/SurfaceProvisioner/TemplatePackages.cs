@@ -6,10 +6,10 @@ using WinUISurface.Shared;
 namespace SurfaceProvisioner;
 
 /// <summary>
-/// Makes the DesignHost merged PRI follow the target project's own packages instead of a fixed list.
+/// Makes the PreviewHost merged PRI follow the target project's own packages instead of a fixed list.
 /// <para>
 /// Third-party control templates (<c>Themes/Generic.xbf</c>) ship only inside each package's <c>.pri</c>.
-/// Every package in the target's resolved graph that carries a <c>.pri</c> is added to the staged DesignHost
+/// Every package in the target's resolved graph that carries a <c>.pri</c> is added to the staged PreviewHost
 /// copy at the target's exact resolved version, so its templates land in the merged index. Windows App SDK
 /// packages are excluded (the template already references the matched version). When the target graph is
 /// unavailable the template keeps its fixed CommunityToolkit baseline.
@@ -44,7 +44,7 @@ internal static class TemplatePackages
     }
 
     /// <summary>
-    /// Writes (or, for <paramref name="packages"/> null, removes) the props the staged DesignHost imports.
+    /// Writes (or, for <paramref name="packages"/> null, removes) the props the staged PreviewHost imports.
     /// An empty list still replaces the baseline: a target without toolkit packages needs no toolkit templates.
     /// </summary>
     public static void Write(string templateDir, IReadOnlyList<(string Id, string Version)>? packages)

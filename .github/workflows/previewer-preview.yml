@@ -1,12 +1,12 @@
-name: XAML Designer Preview VSIX
+name: XAML Previewer Preview VSIX
 
-# Runs the non-VS test lane, then builds the Visual Studio WinUI XAML designer VSIX for teammate testing.
-# Trigger: push a tag, e.g. `git tag designer-preview-1 && git push origin designer-preview-1`.
+# Runs the non-VS test lane, then builds the Visual Studio WinUI XAML previewer VSIX for teammate testing.
+# Trigger: push a tag, e.g. `git tag previewer-preview-1 && git push origin previewer-preview-1`.
 # Tag-push workflows run from the tagged commit, so this works without merging to main.
 
 on:
   push:
-    tags: [ "designer-preview-*" ]
+    tags: [ "previewer-preview-*" ]
 
 permissions:
   contents: read
@@ -57,7 +57,7 @@ jobs:
         ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
       run: |
         @"
-        ## WinUI XAML Designer preview ``$env:GITHUB_REF_NAME``
+        ## WinUI XAML Previewer preview ``$env:GITHUB_REF_NAME``
 
         **Download:** $env:ARTIFACT_URL
 

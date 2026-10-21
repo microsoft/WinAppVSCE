@@ -22,7 +22,7 @@ namespace Surface
         public static void Log(string message) { }
     }
 
-    internal static class DesignSurface
+    internal static class PreviewSurface
     {
         public readonly record struct ViewState(bool Fit, double Zoom, double OffsetX, double OffsetY);
     }
@@ -30,13 +30,13 @@ namespace Surface
     internal sealed class RenderHost
     {
         public event Action<DesignSelectionPayload>? SelectionChanged;
-        public event Action<DesignSurface.ViewState>? ViewStateChanged;
+        public event Action<PreviewSurface.ViewState>? ViewStateChanged;
         public event Action<DesignSelectionPayload>? PropsRefreshed;
         public (string Xaml, double Width, double Height, double Scale)? LastRender;
         public (string Xaml, bool Prepare)? LastHost;
-        public DesignSurface.ViewState? LastInitialView;
+        public PreviewSurface.ViewState? LastInitialView;
         public (int W, int H)? LastPane;
-        public void RaiseViewState(DesignSurface.ViewState v) => ViewStateChanged?.Invoke(v);
+        public void RaiseViewState(PreviewSurface.ViewState v) => ViewStateChanged?.Invoke(v);
         public (double, double)? Canvas;
         public bool Design;
         public bool Restored;
@@ -70,7 +70,7 @@ namespace Surface
             Rendered.Add(xaml);
             return Task.FromResult(Render);
         }
-        public Task<LiveResult> HostLiveAsync(string xaml, bool prepareWindow, int panePixelW = 0, int panePixelH = 0, DesignSurface.ViewState? initialView = null)
+        public Task<LiveResult> HostLiveAsync(string xaml, bool prepareWindow, int panePixelW = 0, int panePixelH = 0, PreviewSurface.ViewState? initialView = null)
         {
             LastInitialView = initialView;
             LastPane = (panePixelW, panePixelH);

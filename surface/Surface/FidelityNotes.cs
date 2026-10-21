@@ -12,7 +12,7 @@ namespace Surface;
 /// surface/README.md). Read-only and best-effort; it never changes the tree and never fails a render.
 /// <list type="bullet">
 /// <item>Window backdrop: a page with no opaque background shows the window's Mica/Acrylic at run time,
-/// but the preview has no app window, so the design canvas paints the theme page brush behind it.</item>
+/// but the preview has no app window, so the preview canvas paints the theme page brush behind it.</item>
 /// <item>Code-started storyboards: keyed storyboards in element resources are begun by code-behind, which
 /// the preview never runs, so they show their initial frame.</item>
 /// </list>

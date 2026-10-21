@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 namespace WinUIXamlPreview.Protocol
 {
     /// <summary>
-    /// Newline-delimited JSON wire protocol for the WinUI visualizer surface. Kept in lockstep
+    /// Newline-delimited JSON wire protocol for the WinUI previewer surface. Kept in lockstep
     /// with <c>surface/protocol/protocol.ts</c> (the shared contract, see its README) and the surface's
     /// <c>FrameServer</c>. Image frames are base64 (no embedded newlines) so newline framing is safe.
     /// </summary>
@@ -105,8 +105,8 @@ namespace WinUIXamlPreview.Protocol
     }
 
     /// <summary>
-    /// Toggle the design surface between "design" (clicks select an element) and "interact" (clicks reach
-    /// the live content). A runtime toggle — the surface applies it live to the mounted design surface with
+    /// Toggle the preview surface between "design" (clicks select an element) and "interact" (clicks reach
+    /// the live content). A runtime toggle — the surface applies it live to the mounted preview surface with
     /// no re-render (plan §41).
     /// </summary>
     internal sealed class SetModeMsg
@@ -116,7 +116,7 @@ namespace WinUIXamlPreview.Protocol
     }
 
     /// <summary>
-    /// Client -> surface: select the element at an authored-tree index path (editor caret -> designer, plan
+    /// Client -> surface: select the element at an authored-tree index path (editor caret -> previewer, plan
     /// §41 #2). The client computes the path from the XAML source; the surface resolves it to a live element
     /// and replies with the usual <see cref="SelectedMsg"/>/props.
     /// </summary>
@@ -165,10 +165,10 @@ namespace WinUIXamlPreview.Protocol
     }
 
     /// <summary>
-    /// Client -> surface: override the design-canvas size to a device preset so the page lays out at a fixed
+    /// Client -> surface: override the preview-canvas size to a device preset so the page lays out at a fixed
     /// artboard size (the WPF/Blend "device" presets). <see cref="Width"/>/<see cref="Height"/> &lt;= 0 clears
     /// the override (auto — the page's own size / default canvas). The surface re-hosts and replies with a
-    /// fresh <see cref="HwndMsg"/>; the design surface re-fits the new board into the pane.
+    /// fresh <see cref="HwndMsg"/>; the preview surface re-fits the new board into the pane.
     /// </summary>
     internal sealed class SetCanvasSizeMsg
     {
@@ -253,7 +253,7 @@ namespace WinUIXamlPreview.Protocol
     }
 
     /// <summary>
-    /// Surface -> client: the user picked an element in the design surface (plan §41). Carries the element's
+    /// Surface -> client: the user picked an element in the preview surface (plan §41). Carries the element's
     /// runtime id (stable for the mounted document), type, optional x:Name, and the adorner bounds (in
     /// artboard coordinates — echoed for reference; the adorner itself is drawn in the surface window).
     /// </summary>
@@ -305,7 +305,7 @@ namespace WinUIXamlPreview.Protocol
     }
 
     /// <summary>
-    /// Surface -> client: the native design surface's zoom/scroll after the user changes it (not sent per
+    /// Surface -> client: the native preview surface's zoom/scroll after the user changes it (not sent per
     /// intermediate pan frame). The client hands it back on <see cref="EnterNativeMsg"/> when a new surface
     /// process replaces the old one for the same document (theme swap / fidelity upgrade) so the view is kept.
     /// </summary>

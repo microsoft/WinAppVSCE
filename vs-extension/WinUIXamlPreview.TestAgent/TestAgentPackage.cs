@@ -152,8 +152,8 @@ namespace WinUIXamlPreview.TestAgent
                 case "click": return Click((string?)req["path"], Str(req, "automationId"));
                 case "menu": return Menu((string?)req["path"], Str(req, "button"), Str(req, "item"));
                 case "find": return Find((string?)req["path"], Str(req, "automationId")) is FrameworkElement fe ? Describe(fe) : null;
-                case "designerSelect":
-                    return (bool)Hooks().GetMethod("SimulateDesignerSelection", BindingFlags.Public | BindingFlags.Static)!
+                case "previewerSelect":
+                    return (bool)Hooks().GetMethod("SimulatePreviewerSelection", BindingFlags.Public | BindingFlags.Static)!
                         .Invoke(null, new object[] { Str(req, "path"), Str(req, "elementPath") })!;
                 case "raise": return Raise(Str(req, "guid"), (int)req["id"]!);
                 case "dteCommand": Dte().ExecuteCommand(Str(req, "name"), (string?)req["args"] ?? ""); return true;

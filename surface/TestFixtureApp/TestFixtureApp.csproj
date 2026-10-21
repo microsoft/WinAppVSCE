@@ -19,7 +19,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(TestWasdkVersion)" />
-    <!-- Same version as the toolkit templates harvested into the bundled surface (DesignHost.csproj). -->
+    <!-- Same version as the toolkit templates harvested into the bundled surface (PreviewHost.csproj). -->
     <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.250402" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Segmented" Version="8.2.250402" />
   </ItemGroup>

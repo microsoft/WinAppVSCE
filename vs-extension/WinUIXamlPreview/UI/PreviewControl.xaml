@@ -38,8 +38,8 @@
 
         <!-- Native path: the reparented live WinUI window is inserted here as Child. It FILLS the content row
              and clips to it. A native HWND ignores WPF ScrollViewer/visual clips (airspace), so it must be
-             sized to the pane, not the design canvas — otherwise it paints over neighboring VS panes. The
-             surface hosts a FIXED-size design canvas anchored top-left, so filling the pane yields a 1:1
+             sized to the pane, not the preview canvas — otherwise it paints over neighboring VS panes. The
+             surface hosts a FIXED-size preview canvas anchored top-left, so filling the pane yields a 1:1
              viewport onto that canvas, clipped to the pane (no reflow, no overlap). -->
         <Border x:Name="NativeHostHolder"
                 Grid.Row="1"

@@ -43,7 +43,7 @@ $@"<Page x:Class=""TestUserApp.DemoPage""
       mc:Ignorable=""d""
       Background=""White"">
     <StackPanel Spacing=""16"" Padding=""24"">
-        <TextBlock Text=""WinUI Live Visualizer"" Style=""{{StaticResource HeaderTextStyle}}""/>
+        <TextBlock Text=""WinUI Live Previewer"" Style=""{{StaticResource HeaderTextStyle}}""/>
         <TextBlock TextWrapping=""Wrap"" Opacity=""0.7""
                    Text=""A real Page: x:Class, x:Bind, Click, d:/mc: and StaticResource are all handled.""/>
         <Button Content=""Click me"" Click=""OnClick"" Foreground=""{{StaticResource AccentBrush}}""/>

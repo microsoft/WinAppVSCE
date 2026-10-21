@@ -231,15 +231,15 @@ namespace WinUIXamlPreview.Protocol
                 if (csproj != null)
                 {
                     var verdict = Classify(SafeRead(csproj));
-                    if (verdict == FrameworkKind.WinUi) { log("WinUI 3 project detected — designer enabled."); return true; }
-                    if (verdict == FrameworkKind.Wpf) { log("WPF project detected — WinUI designer suppressed."); return false; }
-                    if (verdict == FrameworkKind.Uwp) { log("UWP project detected — WinUI designer suppressed."); return false; }
+                    if (verdict == FrameworkKind.WinUi) { log("WinUI 3 project detected — previewer enabled."); return true; }
+                    if (verdict == FrameworkKind.Wpf) { log("WPF project detected — WinUI previewer suppressed."); return false; }
+                    if (verdict == FrameworkKind.Uwp) { log("UWP project detected — WinUI previewer suppressed."); return false; }
 
                     // csproj was inconclusive (e.g. UseWinUI lives in a shared props file): scan up the tree.
                     var propsVerdict = ScanParentProps(Path.GetDirectoryName(csproj));
-                    if (propsVerdict == FrameworkKind.WinUi) { log("WinUI 3 markers found in Directory.Build.props — designer enabled."); return true; }
-                    if (propsVerdict == FrameworkKind.Wpf) { log("WPF markers found in shared props — WinUI designer suppressed."); return false; }
-                    if (propsVerdict == FrameworkKind.Uwp) { log("UWP markers found in shared props — WinUI designer suppressed."); return false; }
+                    if (propsVerdict == FrameworkKind.WinUi) { log("WinUI 3 markers found in Directory.Build.props — previewer enabled."); return true; }
+                    if (propsVerdict == FrameworkKind.Wpf) { log("WPF markers found in shared props — WinUI previewer suppressed."); return false; }
+                    if (propsVerdict == FrameworkKind.Uwp) { log("UWP markers found in shared props — WinUI previewer suppressed."); return false; }
                 }
 
                 // No project verdict — fall back to a markup heuristic. WPF maps CLR namespaces with
@@ -247,7 +247,7 @@ namespace WinUIXamlPreview.Protocol
                 var markup = SafeRead(xamlPath!);
                 if (markup != null && markup.IndexOf("clr-namespace:", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    log("Markup uses clr-namespace: (WPF) — WinUI designer suppressed.");
+                    log("Markup uses clr-namespace: (WPF) — WinUI previewer suppressed.");
                     return false;
                 }
 

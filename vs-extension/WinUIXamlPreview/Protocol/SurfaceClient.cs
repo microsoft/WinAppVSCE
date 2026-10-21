@@ -598,14 +598,14 @@ namespace WinUIXamlPreview.Protocol
             => Send(new ExitNativeMsg());
 
         /// <summary>
-        /// Set the design surface mode: <c>true</c> = design (clicks select an element), <c>false</c> =
+        /// Set the preview surface mode: <c>true</c> = design (clicks select an element), <c>false</c> =
         /// interact (clicks reach the live content). Applied live by the surface with no re-render (plan §41).
         /// </summary>
         public bool SetMode(bool design)
             => Send(new SetModeMsg { Design = design });
 
         /// <summary>
-        /// Select the element at an authored-tree index path (editor caret -> designer, plan §41 #2). The
+        /// Select the element at an authored-tree index path (editor caret -> previewer, plan §41 #2). The
         /// surface resolves the path to a live element and replies with the usual <c>Selected</c>/props.
         /// </summary>
         public bool SelectByPath(string path)
@@ -629,9 +629,9 @@ namespace WinUIXamlPreview.Protocol
             => Send(new SetPropertyMsg { Id = id, Name = name, Value = value });
 
         /// <summary>
-        /// Pin the design canvas to a device-size preset so the page lays out at a fixed artboard size;
+        /// Pin the preview canvas to a device-size preset so the page lays out at a fixed artboard size;
         /// <paramref name="width"/>/<paramref name="height"/> &lt;= 0 restores auto (the page's own size). The
-        /// surface re-hosts and replies with a fresh <c>Hwnd</c>; the design surface re-fits the new board.
+        /// surface re-hosts and replies with a fresh <c>Hwnd</c>; the preview surface re-fits the new board.
         /// </summary>
         public bool SetCanvasSize(double width, double height)
             => Send(new SetCanvasSizeMsg { Width = width, Height = height });

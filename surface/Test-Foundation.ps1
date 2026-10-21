@@ -24,7 +24,7 @@ $stamp = Get-Content "$sdk\engine.stamp" -Raw
 $cache = "$CacheRoot\Foundation-$([Guid]::NewGuid().ToString('N').Substring(0,12))"
 $arguments = @("--build", "--project", "$PSScriptRoot\TestUserApp\TestUserApp.csproj",
     "--surface-project", "$sdk\surface\Surface\Surface.csproj",
-    "--designhostpri-project", "$sdk\DesignHost\DesignHost.csproj", "--cache", $cache, "--engine-stamp", $stamp)
+    "--previewhostpri-project", "$sdk\PreviewHost\PreviewHost.csproj", "--cache", $cache, "--engine-stamp", $stamp)
 function Start-Provisioner([string[]]$Arguments) {
     $psi = [Diagnostics.ProcessStartInfo]::new($exe)
     $psi.UseShellExecute = $false
@@ -58,7 +58,7 @@ try {
     }
     Write-Host "PASS: concurrent real provisioning => one built, one cached; identical immutable host."
     $active += Start-Provisioner @("--build", "--cancel-on-stdin", "--project", "$PSScriptRoot\TestUserApp\TestUserApp.csproj",
-        "--surface-project", "$sdk\surface\Surface\Surface.csproj", "--designhostpri-project", "$sdk\DesignHost\DesignHost.csproj",
+        "--surface-project", "$sdk\surface\Surface\Surface.csproj", "--previewhostpri-project", "$sdk\PreviewHost\PreviewHost.csproj",
         "--cache", "$cache\cancelled")
     $active[-1].Process.StandardInput.Close()
     $cancelled = Complete-Provisioner $active[-1]
@@ -67,7 +67,7 @@ try {
     }
     Write-Host "PASS: cooperative CLI cancellation => failed/cancelled, exit 130."
     $missingArgs = @("--build", "--project", "$PSScriptRoot\TestUserApp\TestUserApp.csproj",
-        "--surface-project", "$cache\missing.csproj", "--designhostpri-project", "$sdk\DesignHost\DesignHost.csproj",
+        "--surface-project", "$cache\missing.csproj", "--previewhostpri-project", "$sdk\PreviewHost\PreviewHost.csproj",
         "--cache", "$cache\missing")
     $active += Start-Provisioner $missingArgs
     $failed = Complete-Provisioner $active[-1]

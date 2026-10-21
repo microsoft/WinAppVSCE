@@ -23,7 +23,7 @@ internal static partial class Program
             Check("edit: disposed → skip", !g.OnDebounceElapsed(collapsed: false, disposed: true));
         }
 
-        // ---- caret → designer ----
+        // ---- caret → previewer ----
         {
             var c = new CaretSyncGuard();
             Eq("caret: interact mode → nothing", null, c.OnCaretMoved("0/1", designMode: false));
@@ -33,29 +33,29 @@ internal static partial class Program
             Eq("caret: another element → select", "0/2", c.OnCaretMoved("0/2", true));
         }
 
-        // ---- designer → caret ----
+        // ---- previewer → caret ----
         {
             var c = new CaretSyncGuard();
-            Check("designer: empty path ignored", !c.AcceptsDesignerSelection(""));
-            Check("designer: null path ignored", !c.AcceptsDesignerSelection(null));
-            Check("designer: accepted", c.AcceptsDesignerSelection("0/3"));
-            Check("designer: caret at start is an echo", c.IsEchoOfCaret("0/3", caret: 10, start: 10, end: 20));
-            Eq("designer: echo records the path", "0/3", c.LastPath);
-            Eq("designer: so the caret doesn't re-select it", null, c.OnCaretMoved("0/3", true));
-            Check("designer: caret at end is an echo (inclusive)", c.IsEchoOfCaret("0/3", 20, 10, 20));
-            Check("designer: caret past end is not", !c.IsEchoOfCaret("0/4", 21, 10, 20));
-            Check("designer: caret before start is not", !c.IsEchoOfCaret("0/4", 9, 10, 20));
-            Eq("designer: non-echo leaves the path alone", "0/3", c.LastPath);
+            Check("previewer: empty path ignored", !c.AcceptsPreviewerSelection(""));
+            Check("previewer: null path ignored", !c.AcceptsPreviewerSelection(null));
+            Check("previewer: accepted", c.AcceptsPreviewerSelection("0/3"));
+            Check("previewer: caret at start is an echo", c.IsEchoOfCaret("0/3", caret: 10, start: 10, end: 20));
+            Eq("previewer: echo records the path", "0/3", c.LastPath);
+            Eq("previewer: so the caret doesn't re-select it", null, c.OnCaretMoved("0/3", true));
+            Check("previewer: caret at end is an echo (inclusive)", c.IsEchoOfCaret("0/3", 20, 10, 20));
+            Check("previewer: caret past end is not", !c.IsEchoOfCaret("0/4", 21, 10, 20));
+            Check("previewer: caret before start is not", !c.IsEchoOfCaret("0/4", 9, 10, 20));
+            Eq("previewer: non-echo leaves the path alone", "0/3", c.LastPath);
 
             using (c.BeginCaretMove())
             {
-                Check("moving: designer selections ignored", !c.AcceptsDesignerSelection("0/5"));
+                Check("moving: previewer selections ignored", !c.AcceptsPreviewerSelection("0/5"));
                 Check("moving: caret not tracked", !c.TracksCaret(true));
                 Eq("moving: caret event swallowed", null, c.OnCaretMoved("0/4", true));
                 c.CaretMovedTo("0/4");
             }
 
-            Check("after move: tracked again", c.TracksCaret(true) && c.AcceptsDesignerSelection("0/5"));
+            Check("after move: tracked again", c.TracksCaret(true) && c.AcceptsPreviewerSelection("0/5"));
             Eq("after move: caret in the moved-to element → nothing", null, c.OnCaretMoved("0/4", true));
 
             var scope = c.BeginCaretMove();

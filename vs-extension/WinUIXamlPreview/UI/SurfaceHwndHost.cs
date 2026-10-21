@@ -18,7 +18,7 @@ namespace WinUIXamlPreview.UI
         private int _pixelH;
         private bool _surfaceAlive = true;
 
-        /// <param name="pixelW">Initial child width in device pixels — the PANE's size, not the design canvas.
+        /// <param name="pixelW">Initial child width in device pixels — the PANE's size, not the preview canvas.
         /// WPF re-sizes the child to the host's arranged rect on every layout pass; starting at the pane size
         /// avoids a visible jump (and an overdraw into neighboring VS panes) before that first pass.</param>
         /// <param name="pixelH">Initial child height in device pixels (see <paramref name="pixelW"/>).</param>

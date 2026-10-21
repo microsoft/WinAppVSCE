@@ -70,7 +70,7 @@ namespace WinUIXamlPreview.Smoke
         // P1 non-page classification inputs. A ResourceDictionary root is a styles/themes/control-template
         // dictionary — it has no visual root and is not a designable page. The host must return a distinct
         // NonPage result (phase="nonpage", NotDesignable=true) with a reason, NOT a generic parse error, so
-        // the designer shows a sensible note and the oracle stops counting it as a failure.
+        // the previewer shows a sensible note and the oracle stops counting it as a failure.
         private const string ResourceDictionaryXaml =
             "<ResourceDictionary xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
             "xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">" +
@@ -454,7 +454,7 @@ namespace WinUIXamlPreview.Smoke
 
         /// <summary>
         /// Proves the design-time selection + live property-edit round-trip (plan §41 Phase B/C) against the
-        /// real surface, headlessly. Enters native mode (mounts the design surface), selects the TextBlock by
+        /// real surface, headlessly. Enters native mode (mounts the preview surface), selects the TextBlock by
         /// its authored path, then edits its Text via SetProperty and asserts the echoed ElementProps carries
         /// the new value — i.e. the string was converted and applied to the live element.
         /// </summary>
@@ -467,7 +467,7 @@ namespace WinUIXamlPreview.Smoke
 
             await client.StartAsync(TimeSpan.FromSeconds(20));
 
-            // Native mode mounts the live design surface (SelectByPath/SetProperty only work there).
+            // Native mode mounts the live preview surface (SelectByPath/SetProperty only work there).
             var hwndTask = box.NextHwnd(TimeSpan.FromSeconds(20));
             client.EnterNative(FrameworkXaml, 400, 300, 1.0);
             var hwnd = await hwndTask;
@@ -508,7 +508,7 @@ namespace WinUIXamlPreview.Smoke
             "<StackPanel Padding=\"24\" Spacing=\"8\">" +
             "<TextBlock Text=\"{x:Bind ViewModel.UserName, Mode=OneWay}\"/>" +
             "<TextBlock Text=\"{x:Bind ViewModel.Status, FallbackValue='Loading status'}\"/>" +
-            "<TextBlock Text=\"{x:Bind ViewModel.Title}\" d:Text=\"Designer title\"/>" +
+            "<TextBlock Text=\"{x:Bind ViewModel.Title}\" d:Text=\"Previewer title\"/>" +
             "<Button Content=\"{x:Bind local:Fmt.Greeting(ViewModel.UserName)}\"/>" +
             "<ListView ItemsSource=\"{x:Bind ViewModel.Orders}\" Height=\"150\"/>" +
             "<TextBlock Text=\"{StaticResource KeyAddedInAppCode}\"/>" +
@@ -543,7 +543,7 @@ namespace WinUIXamlPreview.Smoke
 
             Check("x:Bind path renders a value named after it", await ReadText("0.0.0", "Text") == "User name");
             Check("x:Bind FallbackValue wins", await ReadText("0.0.1", "Text") == "Loading status");
-            Check("d:Text wins over x:Bind placeholder", await ReadText("0.0.2", "Text") == "Designer title");
+            Check("d:Text wins over x:Bind placeholder", await ReadText("0.0.2", "Text") == "Previewer title");
             Check("function binding renders a value named after it", await ReadText("0.0.3", "Content") == "Greeting");
             Check("unresolved StaticResource renders {Key} (WS2-F5)", await ReadText("0.0.5", "Text") == "{KeyAddedInAppCode}");
 
@@ -561,7 +561,7 @@ namespace WinUIXamlPreview.Smoke
             client.UpdateXaml(SampleDataXaml);
             await rehost;
             Check("sample data off: x:Bind text left empty", string.IsNullOrEmpty(await ReadText("0.0.0", "Text")));
-            Check("sample data off: d:Text still applies", await ReadText("0.0.2", "Text") == "Designer title");
+            Check("sample data off: d:Text still applies", await ReadText("0.0.2", "Text") == "Previewer title");
             Check("sample data off: unresolved StaticResource left empty", string.IsNullOrEmpty(await ReadText("0.0.5", "Text")));
         }
         private static PropItemMsg? FindProp(ElementPropsMsg? msg, string name)
@@ -616,7 +616,7 @@ namespace WinUIXamlPreview.Smoke
 
             await client.StartAsync(TimeSpan.FromSeconds(20));
 
-            // Native mode mounts the live design surface so SelectByPath can read back the resolved binding.
+            // Native mode mounts the live preview surface so SelectByPath can read back the resolved binding.
             var hwndTask = box.NextHwnd(TimeSpan.FromSeconds(20));
             client.EnterNative(DesignDataXaml, 400, 300, 1.0);
             var hwnd = await hwndTask;

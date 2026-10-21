@@ -313,7 +313,7 @@ try
     // identity, package matching, cache validation/publication and JSON/exit paths run unchanged.
     var buildFixture = Path.Combine(root, "build-fixture");
     var fixtureSurface = Path.Combine(buildFixture, "surface", "Surface.csproj");
-    var fixtureTemplate = Path.Combine(buildFixture, "template", "DesignHost.csproj");
+    var fixtureTemplate = Path.Combine(buildFixture, "template", "PreviewHost.csproj");
     var fixtureTarget = Path.Combine(buildFixture, "target", "Target.csproj");
     foreach (var project in new[] { fixtureSurface, fixtureTemplate, fixtureTarget })
     {
@@ -359,7 +359,7 @@ try
     }
     var fixtureCache = Path.Combine(buildFixture, "cache");
     var buildArgs = new[] { "--build", "--project", fixtureTarget, "--surface-project", fixtureSurface,
-        "--designhostpri-project", fixtureTemplate, "--cache", fixtureCache, "--nuget-cache", packageRoot,
+        "--previewhostpri-project", fixtureTemplate, "--cache", fixtureCache, "--nuget-cache", packageRoot,
         "--staging-root", root, "--bundled-host", source };
     string fixtureHost;
     using (var output = new StringWriter())
@@ -517,7 +517,7 @@ try
     string PrivateFeedTool(string exe, IEnumerable<string> arguments)
     {
         var toolArgs = arguments.ToArray();
-        if (toolArgs[0] == "restore" && Path.GetFileName(toolArgs[1]) == "DesignHost.csproj")
+        if (toolArgs[0] == "restore" && Path.GetFileName(toolArgs[1]) == "PreviewHost.csproj")
         {
             var withTargetPackages = File.Exists(Path.Combine(Path.GetDirectoryName(toolArgs[1])!, TemplatePackages.FileName));
             templateRestores.Add(withTargetPackages);
@@ -617,7 +617,7 @@ try
     using (BuildStorage.AcquireLock(lockPath, CancellationToken.None)) Check(true, "cross-process lock released");
     HostBuilder.BuildOptions Options(string? bundled = null) => new() {
         ProjectPath = sourceTree, SurfaceProjectPath = Path.Combine(root, "missing.csproj"),
-        DesignHostPriProjectPath = Path.Combine(root, "missing-template.csproj"), CacheRoot = cache, BundledHostDir = bundled };
+        PreviewHostPriProjectPath = Path.Combine(root, "missing-template.csproj"), CacheRoot = cache, BundledHostDir = bundled };
     var failed = HostBuilder.Build(Options());
     Check(failed.Status == "failed" && !failed.Success && failed.Error!.Contains("Required source"), "missing inputs fail without tool invocation");
     var degraded = HostBuilder.Build(Options(source));

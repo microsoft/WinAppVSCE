@@ -44,7 +44,7 @@ namespace WinUIXamlPreview.Editor
         private static double _rightWidth = DefaultWidth;
         private static double _bottomHeight = DefaultHeight;
         private static bool _designTimeData = true; // default ON — placeholder sample data for {x:Bind} pages (WS2-F6)
-        private static bool _designMode = true; // default ON — the designer selects, it doesn't interact (plan §41)
+        private static bool _designMode = true; // default ON — the previewer selects, it doesn't interact (plan §41)
         private static bool _collapsed; // default expanded — the preview shows when a WinUI xaml opens
         private static string _theme = "Light"; // preview theme: Light (default, historical) | Dark | Default
         private static double _canvasWidth;  // 0 = auto (page's own size / default canvas)
@@ -126,7 +126,7 @@ namespace WinUIXamlPreview.Editor
         }
 
         /// <summary>
-        /// When true (default), the preview is a <b>design surface</b>: clicking an element selects it (drawing
+        /// When true (default), the preview is a <b>preview surface</b>: clicking an element selects it (drawing
         /// a selection adorner and populating the property panel) instead of interacting with the live app —
         /// the WPF/Blend designer behavior (plan §41). When false, the preview is fully interactive (clicks
         /// reach the running content). A runtime toggle; the surface applies it live with no re-render.
@@ -151,7 +151,7 @@ namespace WinUIXamlPreview.Editor
         /// <summary>
         /// When true, the in-editor preview margin is collapsed to a thin strip along its docked edge,
         /// reclaiming the editor space; a single click on the strip restores it. Persisted so the choice
-        /// sticks across tabs and sessions. The strip stays visible so the designer is always one click away.
+        /// sticks across tabs and sessions. The strip stays visible so the previewer is always one click away.
         /// </summary>
         public static bool Collapsed
         {
@@ -172,7 +172,7 @@ namespace WinUIXamlPreview.Editor
         /// <summary>
         /// The theme the mounted page is previewed under: <c>Light</c> (default, the historical hard-coded
         /// theme), <c>Dark</c>, or <c>Default</c> (follow the host/OS theme). The surface applies it live to
-        /// the design canvas; only the page sheet re-themes (the neutral artboard chrome stays constant).
+        /// the preview canvas; only the page sheet re-themes (the neutral artboard chrome stays constant).
         /// </summary>
         public static string Theme
         {
@@ -192,7 +192,7 @@ namespace WinUIXamlPreview.Editor
             }
         }
 
-        /// <summary>Design-canvas width override in DIP (0 = auto — the page's own size / default canvas).</summary>
+        /// <summary>Preview-canvas width override in DIP (0 = auto — the page's own size / default canvas).</summary>
         public static double CanvasWidth
         {
             get { EnsureLoaded(); return _canvasWidth; }
@@ -211,7 +211,7 @@ namespace WinUIXamlPreview.Editor
             }
         }
 
-        /// <summary>Design-canvas height override in DIP (0 = auto — the page's own size / default canvas).</summary>
+        /// <summary>Preview-canvas height override in DIP (0 = auto — the page's own size / default canvas).</summary>
         public static double CanvasHeight
         {
             get { EnsureLoaded(); return _canvasHeight; }

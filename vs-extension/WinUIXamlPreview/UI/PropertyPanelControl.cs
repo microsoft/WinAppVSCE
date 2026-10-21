@@ -13,7 +13,7 @@ namespace WinUIXamlPreview.UI
     /// The design-time property panel (plan §41) — read-only. A code-built WPF control that shows the
     /// currently-selected element's type/name header and a category-grouped Name/Value list. Everything is
     /// themed via VS environment colors/fonts (no stock ListView/GridView/ComboBox chrome, which renders light
-    /// in dark themes). Subscribes to <see cref="DesignerSelection"/> and rebuilds on each selection.
+    /// in dark themes). Subscribes to <see cref="PreviewerSelection"/> and rebuilds on each selection.
     /// </summary>
     internal sealed class PropertyPanelControl : UserControl
     {
@@ -90,13 +90,13 @@ namespace WinUIXamlPreview.UI
 
         private void OnLoaded(object sender, RoutedEventArgs e)
         {
-            DesignerSelection.Changed += OnSelectionChanged;
-            Render(DesignerSelection.Current);
+            PreviewerSelection.Changed += OnSelectionChanged;
+            Render(PreviewerSelection.Current);
         }
 
         private void OnUnloaded(object sender, RoutedEventArgs e)
         {
-            DesignerSelection.Changed -= OnSelectionChanged;
+            PreviewerSelection.Changed -= OnSelectionChanged;
         }
 
         private void OnSelectionChanged(SelectionSnapshot? snapshot)

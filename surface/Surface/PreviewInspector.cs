@@ -33,13 +33,13 @@ internal sealed class DesignPropInfo
 }
 
 /// <summary>
-/// Clean-room, reflection-based property reader for the design surface. Given a selected element it
+/// Clean-room, reflection-based property reader for the preview surface. Given a selected element it
 /// returns a curated, grouped list of its scalar/convertible properties (the kind a WPF/Blend property
 /// browser shows) — skipping object graphs, collections, and non-displayable types so the panel stays
 /// readable. <see cref="Describe"/> reads; <see cref="TrySet"/> is the Phase C write-back path (same
 /// name/value contract), converting the panel's string back to the property type.
 /// </summary>
-internal static class DesignInspector
+internal static class PreviewInspector
 {
     private const int MaxProps = 120;
 

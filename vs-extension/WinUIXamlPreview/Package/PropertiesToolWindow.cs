@@ -18,7 +18,7 @@ namespace WinUIXamlPreview
         public PropertiesToolWindow()
             : base(null)
         {
-            Caption = "WinUI Designer — Properties";
+            Caption = "WinUI Previewer — Properties";
             Content = new PropertyPanelControl();
         }
     }

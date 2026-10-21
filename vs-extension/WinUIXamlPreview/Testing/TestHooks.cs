@@ -87,7 +87,7 @@ namespace WinUIXamlPreview.Testing
         /// <summary>The WPF root of the margin pinned to <paramref name="path"/>, or null.</summary>
         public static object? MarginRoot(string path) => FindMargin(path)?.TestRoot;
 
-        public static bool SimulateDesignerSelection(string path, string elementPath)
+        public static bool SimulatePreviewerSelection(string path, string elementPath)
         {
             var margin = FindMargin(path);
             if (margin == null)
@@ -95,7 +95,7 @@ namespace WinUIXamlPreview.Testing
                 return false;
             }
 
-            margin.TestSimulateDesignerSelection(elementPath);
+            margin.TestSimulatePreviewerSelection(elementPath);
             return true;
         }
 

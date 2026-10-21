@@ -308,8 +308,8 @@ internal static class Compatibility
         var restore = Request(WireFixture("enter-restore").ToJsonString());
         Check(restore.Length == 2, "native restore entry replies Hwnd + ContentProps");
         Check(host.LastPane == (1200, 900), "paneWidthPx/paneHeightPx forwarded to the host");
-        Check(host.LastInitialView == new DesignSurface.ViewState(false, 1.5, 40.5, 12), "EnterNative.view restores zoom/scroll");
-        host.RaiseViewState(new DesignSurface.ViewState(false, 1.5, 40.5, 12));
+        Check(host.LastInitialView == new PreviewSurface.ViewState(false, 1.5, 40.5, 12), "EnterNative.view restores zoom/scroll");
+        host.RaiseViewState(new PreviewSurface.ViewState(false, 1.5, 40.5, 12));
         server.Write("{\"type\":\"Ping\"}");
         var viewReplies = server.ReadUntilPong();
         Check(viewReplies.Length == 1, "view-state change emits one View message");

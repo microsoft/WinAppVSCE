@@ -37,7 +37,7 @@ internal static partial class Program
             Run("MatchedHostResolver", MatchedHostResolverTests);
             Run("LineDecoder", LineDecoderTests);
             Run("XamlSourceMap", XamlSourceMapTests);
-            Run("DesignerSelection", DesignerSelectionTests);
+            Run("PreviewerSelection", PreviewerSelectionTests);
             Run("MatchedHostBuild", MatchedHostBuildTests);
             Run("SurfaceIdentity", SurfaceIdentityTests);
             Run("PreviewSettings", PreviewSettingsTests);
@@ -723,7 +723,7 @@ internal static partial class Program
         Write(Path.Combine(sdk, "surface", "Surface", "Surface.csproj"), "<Project/>");
         if (complete)
         {
-            Write(Path.Combine(sdk, "DesignHost", "DesignHost.csproj"), "<Project/>");
+            Write(Path.Combine(sdk, "PreviewHost", "PreviewHost.csproj"), "<Project/>");
         }
     }
 

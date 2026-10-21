@@ -15,7 +15,7 @@ namespace WinUIXamlPreview.Protocol
     /// <summary>
     /// Probes for the on-machine ability to BUILD a version-matched host: a resolvable <c>dotnet</c> (the
     /// build-on-demand path shells <c>dotnet build</c>) plus the build inputs shipped inside the VSIX under
-    /// <c>HostSDK\</c> (the certified Surface source, the DesignHost merged-pri source, and the pre-built
+    /// <c>HostSDK\</c> (the certified Surface source, the PreviewHost merged-pri source, and the pre-built
     /// framework-dependent net8 provisioner). When any piece is missing the preview stays on the bundled
     /// 2.2.0 host — never attempt an invocation that can't succeed.
     /// </summary>
@@ -27,7 +27,7 @@ namespace WinUIXamlPreview.Protocol
         public string? ProvisionerExe { get; private set; }
         public string? ProvisionerDll { get; private set; }
         public string? SurfaceProject { get; private set; }
-        public string? DesignHostProject { get; private set; }
+        public string? PreviewHostProject { get; private set; }
         public string? Reason { get; private set; }
 
         public static HostBuildEnvironment Probe(Action<string>? log = null)
@@ -46,13 +46,13 @@ namespace WinUIXamlPreview.Protocol
 
                 env.HostSdkDir = Path.Combine(asmDir!, "HostSDK");
                 env.SurfaceProject = Path.Combine(env.HostSdkDir, "surface", "Surface", "Surface.csproj");
-                env.DesignHostProject = Path.Combine(env.HostSdkDir, "DesignHost", "DesignHost.csproj");
+                env.PreviewHostProject = Path.Combine(env.HostSdkDir, "PreviewHost", "PreviewHost.csproj");
                 env.ProvisionerExe = Path.Combine(env.HostSdkDir, "SurfaceProvisioner", "SurfaceProvisioner.exe");
                 env.ProvisionerDll = Path.Combine(env.HostSdkDir, "SurfaceProvisioner", "SurfaceProvisioner.dll");
                 env.DotnetPath = FindDotnet();
 
                 var haveProvisioner = File.Exists(env.ProvisionerExe) || File.Exists(env.ProvisionerDll);
-                var haveInputs = File.Exists(env.SurfaceProject) && File.Exists(env.DesignHostProject);
+                var haveInputs = File.Exists(env.SurfaceProject) && File.Exists(env.PreviewHostProject);
 
                 if (env.DotnetPath == null)
                 {
@@ -295,13 +295,13 @@ namespace WinUIXamlPreview.Protocol
                 var bundledHostDir = BundledHostDir();
                 var stamp = MatchedHostResolver.ShippedEngineStamp;
 
-                // Provisioner --build: discover version from --project, build certified Surface + DesignHost
+                // Provisioner --build: discover version from --project, build certified Surface + PreviewHost
                 // self-contained at that version, verify managed/native, resolve the complete input-keyed cache.
                 var args = new StringBuilder();
                 args.Append("--build --cancel-on-stdin");
                 args.Append(" --project ").Append(Quote(targetProject));
                 args.Append(" --surface-project ").Append(Quote(env.SurfaceProject!));
-                args.Append(" --designhostpri-project ").Append(Quote(env.DesignHostProject!));
+                args.Append(" --previewhostpri-project ").Append(Quote(env.PreviewHostProject!));
                 args.Append(" --cache ").Append(Quote(cache));
                 args.Append(" --engine-stamp ").Append(Quote(stamp));
                 args.Append(" --platform ").Append(HostArch.Platform).Append(" --rid ").Append(HostArch.Rid);

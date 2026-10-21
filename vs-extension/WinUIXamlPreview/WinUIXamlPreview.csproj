@@ -56,7 +56,7 @@
     <CreatePkgDefAssemblyToProcess Condition="'$(DotnetVsixBuild)' != 'true' and '$(CreatePkgDefAssemblyToProcess)' == ''">$(MSBuildProjectDirectory)\bin\$(Configuration)\$(IdentityOutputSuffix)$(AssemblyName).dll</CreatePkgDefAssemblyToProcess>
   </PropertyGroup>
 
-  <Target Name="ValidateSurfaceIdentityConfiguration" BeforeTargets="PrepareForBuild;ValidateDesignerPayload">
+  <Target Name="ValidateSurfaceIdentityConfiguration" BeforeTargets="PrepareForBuild;ValidatePreviewerPayload">
     <Error Condition="'$(WinUISurfaceIdentity)' != 'Shipping' and '$(WinUISurfaceIdentity)' != 'Migration24e47e37'"
            Text="Unsupported WinUISurfaceIdentity. Use Shipping or explicit Migration24e47e37." />
   </Target>
@@ -174,7 +174,7 @@
 
   <!--
     Bundle the build-on-demand HostSDK payload into the VSIX under `HostSDK\`. This carries OUR source
-    (the certified Surface engine + the DesignHost merged-pri project) plus the pre-built framework-dependent
+    (the certified Surface engine + the PreviewHost merged-pri project) plus the pre-built framework-dependent
     net8 SurfaceProvisioner and an engine.stamp, so an installed extension on a machine WITH the .NET SDK can
     build a version-matched self-contained host on demand (progressive full-fidelity preview). The staging dir
     is assembled by surface\Build-Payload.ps1 (source/assets sans bin/obj, compiled
@@ -196,14 +196,14 @@
              Text="WinUIXamlPreview: HostSDK stage dir '$(HostSdkStageDir)' not found. Run Build-Vsix.ps1 -NoDeploy to stage it." />
   </Target>
 
-  <Target Name="ValidateDesignerPayload" BeforeTargets="GetVsixSourceItems" Condition="'$(DotnetVsixBuild)' != 'true'">
+  <Target Name="ValidatePreviewerPayload" BeforeTargets="GetVsixSourceItems" Condition="'$(DotnetVsixBuild)' != 'true'">
     <ItemGroup>
-      <_RequiredDesignerFile Include="$(SurfaceOutDir)\Surface.wasdk.version;$(HostSdkStageDir)\LICENSE.winui-vsc.txt;$(MSBuildProjectDirectory)\..\LICENSE.winui-vsc.txt" />
-      <_RequiredDesignerFile Include="$(SurfaceOutDir)\Surface.exe;$(SurfaceOutDir)\Surface.dll;$(SurfaceOutDir)\Surface.pri;$(SurfaceOutDir)\Surface.deps.json;$(SurfaceOutDir)\Surface.runtimeconfig.json;$(SurfaceOutDir)\Microsoft.WinUI.dll;$(SurfaceOutDir)\AppxManifest.xml;$(SurfaceOutDir)\Assets\StoreLogo.png;$(SurfaceOutDir)\Assets\MedTile.png;$(SurfaceOutDir)\Assets\AppList.png" />
-      <_RequiredDesignerFile Include="$(SurfaceArm64OutDir)\Surface.wasdk.version;$(SurfaceArm64OutDir)\Surface.exe;$(SurfaceArm64OutDir)\Surface.dll;$(SurfaceArm64OutDir)\Surface.pri;$(SurfaceArm64OutDir)\Surface.deps.json;$(SurfaceArm64OutDir)\Surface.runtimeconfig.json;$(SurfaceArm64OutDir)\Microsoft.WinUI.dll;$(SurfaceArm64OutDir)\AppxManifest.xml;$(SurfaceArm64OutDir)\Assets\StoreLogo.png;$(SurfaceArm64OutDir)\Assets\MedTile.png;$(SurfaceArm64OutDir)\Assets\AppList.png" />
-      <_RequiredDesignerFile Include="$(HostSdkStageDir)\engine.stamp;$(HostSdkStageDir)\template-baseline.txt;$(HostSdkStageDir)\surface\Surface\Surface.csproj;$(HostSdkStageDir)\surface\Surface\App.cs;$(HostSdkStageDir)\DesignHost\DesignHost.csproj;$(HostSdkStageDir)\DesignHost\Package.appxmanifest;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.exe;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.dll;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.runtimeconfig.json;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.deps.json" />
+      <_RequiredPreviewerFile Include="$(SurfaceOutDir)\Surface.wasdk.version;$(HostSdkStageDir)\LICENSE.winui-vsc.txt;$(MSBuildProjectDirectory)\..\LICENSE.winui-vsc.txt" />
+      <_RequiredPreviewerFile Include="$(SurfaceOutDir)\Surface.exe;$(SurfaceOutDir)\Surface.dll;$(SurfaceOutDir)\Surface.pri;$(SurfaceOutDir)\Surface.deps.json;$(SurfaceOutDir)\Surface.runtimeconfig.json;$(SurfaceOutDir)\Microsoft.WinUI.dll;$(SurfaceOutDir)\AppxManifest.xml;$(SurfaceOutDir)\Assets\StoreLogo.png;$(SurfaceOutDir)\Assets\MedTile.png;$(SurfaceOutDir)\Assets\AppList.png" />
+      <_RequiredPreviewerFile Include="$(SurfaceArm64OutDir)\Surface.wasdk.version;$(SurfaceArm64OutDir)\Surface.exe;$(SurfaceArm64OutDir)\Surface.dll;$(SurfaceArm64OutDir)\Surface.pri;$(SurfaceArm64OutDir)\Surface.deps.json;$(SurfaceArm64OutDir)\Surface.runtimeconfig.json;$(SurfaceArm64OutDir)\Microsoft.WinUI.dll;$(SurfaceArm64OutDir)\AppxManifest.xml;$(SurfaceArm64OutDir)\Assets\StoreLogo.png;$(SurfaceArm64OutDir)\Assets\MedTile.png;$(SurfaceArm64OutDir)\Assets\AppList.png" />
+      <_RequiredPreviewerFile Include="$(HostSdkStageDir)\engine.stamp;$(HostSdkStageDir)\template-baseline.txt;$(HostSdkStageDir)\surface\Surface\Surface.csproj;$(HostSdkStageDir)\surface\Surface\App.cs;$(HostSdkStageDir)\PreviewHost\PreviewHost.csproj;$(HostSdkStageDir)\PreviewHost\Package.appxmanifest;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.exe;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.dll;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.runtimeconfig.json;$(HostSdkStageDir)\SurfaceProvisioner\SurfaceProvisioner.deps.json" />
     </ItemGroup>
-    <Error Condition="!Exists('%(_RequiredDesignerFile.Identity)')" Text="Required designer payload missing: %(_RequiredDesignerFile.Identity). Run Build-Vsix.ps1 -NoDeploy." />
+    <Error Condition="!Exists('%(_RequiredPreviewerFile.Identity)')" Text="Required previewer payload missing: %(_RequiredPreviewerFile.Identity). Run Build-Vsix.ps1 -NoDeploy." />
   </Target>
 
   <Import Project="$(VSSDKTargetsPath)\Microsoft.VsSDK.targets" Condition="'$(DotnetVsixBuild)' != 'true' and Exists('$(VSSDKTargetsPath)\Microsoft.VsSDK.targets')" />
