@@ -26,6 +26,10 @@ namespace WinUIXamlPreview.UI
     public partial class PreviewControl : UserControl, IDisposable
     {
         private readonly DispatcherTimer _resizeDebounce;
+        // Closing a tab can briefly report "no active document" before VS activates the next tab (seen on VS 2026);
+        // hold off emptying the tool window so it doesn't tear down a preview that's about to be reused.
+        private readonly DispatcherTimer _emptyDebounce;
+        private string? _pendingEmptyPath;
         private SurfaceClient? _client;
         // R1: per-client unsubscribe actions. Handlers are bound to their source client so a reply from a
         // client we've swapped away from (doc switch, spare promotion, matched upgrade) — one already queued
@@ -132,6 +136,8 @@ namespace WinUIXamlPreview.UI
 
             _resizeDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
             _resizeDebounce.Tick += OnResizeDebounceTick;
+            _emptyDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            _emptyDebounce.Tick += (_, __) => { _emptyDebounce.Stop(); ShowDocument(_pendingEmptyPath); };
 
             Loaded += OnLoaded;
             Unloaded += OnUnloaded;
@@ -409,6 +415,15 @@ namespace WinUIXamlPreview.UI
                 return; // pinned to one document (in-editor margin) — don't follow the active tab
             }
 
+            _emptyDebounce.Stop();
+            var isXaml = !string.IsNullOrEmpty(path) && path!.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase);
+            if (!isXaml && _currentPath != null)
+            {
+                _pendingEmptyPath = path;
+                _emptyDebounce.Start();
+                return;
+            }
+
             ShowDocument(path);
         }
 
@@ -436,6 +451,11 @@ namespace WinUIXamlPreview.UI
             {
                 Log.Write($"ShowDocument ignored while suspended: path='{path ?? "(null)"}'");
                 return;
+            }
+
+            if (!string.IsNullOrEmpty(path))
+            {
+                _emptyDebounce.Stop(); // a real document wins over a pending "no document"
             }
 
             Log.Write($"ShowDocument: path='{path ?? "(null)"}'");
@@ -2625,6 +2645,7 @@ namespace WinUIXamlPreview.UI
             PreviewOptions.PreviewSettingsChanged -= OnPreviewSettingsChanged;
             PreviewPackageState.UnregisterSession(this);
             _resizeDebounce.Stop();
+            _emptyDebounce.Stop();
             DisposeClient();
         }
     }

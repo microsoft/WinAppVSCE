@@ -26,8 +26,11 @@ namespace WinUIXamlPreview.IntegrationTests
                 Fresh();
                 OpenRendered(_fx.MainPage);
                 OpenRendered(_fx.SecondPage);
+                // A background tab's margin may be unloaded by VS (seen on VS 2026 x64), which releases its surfaces;
+                // otherwise it keeps its warm spare. Either is fine — every surface still running must end on close.
                 var s = WaitFor("spares warm", x => new[] { _fx.MainPage, _fx.SecondPage }
-                    .All(p => Preview(x, p)?["spareReady"]?.GetValue<bool>() == true), 60_000);
+                    .All(p => Preview(x, p) is JsonObject pv
+                              && (pv["spareReady"]?.GetValue<bool>() == true || pv["isLoaded"]?.GetValue<bool>() == false)), 60_000);
                 var pids = Pids(Preview(s, _fx.MainPage)).Concat(Pids(Preview(s, _fx.SecondPage))).ToList();
                 Call("closeAll");
                 WaitFor("no margins left", x => x["margins"]!.AsArray().Count(m => m?["disposed"]?.GetValue<bool>() != true) == 0, 15_000);
