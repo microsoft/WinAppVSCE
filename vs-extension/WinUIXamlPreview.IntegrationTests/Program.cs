@@ -182,9 +182,20 @@ namespace WinUIXamlPreview.IntegrationTests
             }
 
             // A brand-new hive shows the first-run sign-in dialog, which blocks automation. Resetting to the General
-            // profile and exiting once marks first-run as complete.
+            // profile and exiting once marks first-run as complete. On hosted runners this takes ~2.5-4.5 min but
+            // occasionally hangs outright, so give each attempt 5 min and retry once.
             Log("Priming VS hive '" + _rootSuffix + "' (first-run)...");
-            var code = RunProcess(_devenv, $"/rootsuffix {_rootSuffix} /resetsettings General.vssettings /command File.Exit", 600); // ~3 min on hosted runners
+            var primeArgs = $"/rootsuffix {_rootSuffix} /resetsettings General.vssettings /command File.Exit";
+            int code;
+            try
+            {
+                code = RunProcess(_devenv, primeArgs, 300, onTimeout: LogVisibleWindows);
+            }
+            catch (TimeoutException)
+            {
+                Log("  prime attempt 1 hung; retrying");
+                code = RunProcess(_devenv, primeArgs, 300, onTimeout: LogVisibleWindows);
+            }
             Log("  prime exit " + code);
 
             // Startup = "Empty environment": the Start window otherwise replaces the main window until dismissed.
@@ -237,15 +248,46 @@ namespace WinUIXamlPreview.IntegrationTests
                             return true;
         }
 
-        private static int RunProcess(string exe, string args, int timeoutSeconds)
+        private static int RunProcess(string exe, string args, int timeoutSeconds, Action<int>? onTimeout = null)
         {
             using var p = Process.Start(new ProcessStartInfo(exe, args) { UseShellExecute = false })!;
             if (!p.WaitForExit(timeoutSeconds * 1000))
             {
-                try { p.Kill(); } catch { }
+                try { onTimeout?.Invoke(p.Id); } catch { }
+                try { p.Kill(); p.WaitForExit(30000); } catch { }
                 throw new TimeoutException($"{Path.GetFileName(exe)} timed out");
             }
             return p.ExitCode;
+        }
+
+        private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hwnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern int GetWindowText(IntPtr hwnd, System.Text.StringBuilder text, int max);
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder text, int max);
+
+        /// <summary>Logs the visible top-level windows of <paramref name="pid"/> (what a hung VS is showing).</summary>
+        private static void LogVisibleWindows(int pid)
+        {
+            var found = 0;
+            EnumWindows((hwnd, _) =>
+            {
+                GetWindowThreadProcessId(hwnd, out var owner);
+                if (owner == pid && IsWindowVisible(hwnd))
+                {
+                    var title = new System.Text.StringBuilder(256);
+                    var cls = new System.Text.StringBuilder(256);
+                    GetWindowText(hwnd, title, title.Capacity);
+                    GetClassName(hwnd, cls, cls.Capacity);
+                    Log($"  hung window: \"{title}\" [{cls}]");
+                    found++;
+                }
+                return true;
+            }, IntPtr.Zero);
+            Log($"  {found} visible window(s) for pid {pid}");
         }
 
         private static void LaunchVs()
