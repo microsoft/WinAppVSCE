@@ -56,6 +56,7 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("scale")] public double Scale { get; set; }
         /// <summary>WS2-F6: placeholder sample data for {x:Bind}; null omits the field (server keeps its setting).</summary>
         [JsonPropertyName("sampleData"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? SampleData { get; set; }
+        [JsonPropertyName("documentPath"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? DocumentPath { get; set; }
     }
 
     internal sealed class UpdateXamlMsg
@@ -64,6 +65,7 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("xaml")] public string Xaml { get; set; } = "";
         /// <summary>WS2-F6: placeholder sample data for {x:Bind}; null omits the field (server keeps its setting).</summary>
         [JsonPropertyName("sampleData"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? SampleData { get; set; }
+        [JsonPropertyName("documentPath"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? DocumentPath { get; set; }
     }
 
     internal sealed class ResizeMsg
@@ -87,6 +89,7 @@ namespace WinUIXamlPreview.Protocol
         [JsonPropertyName("scale")] public double Scale { get; set; }
         /// <summary>WS2-F6: placeholder sample data for {x:Bind}; null omits the field (server keeps its setting).</summary>
         [JsonPropertyName("sampleData"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? SampleData { get; set; }
+        [JsonPropertyName("documentPath"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? DocumentPath { get; set; }
         /// <summary>Initial window size in device pixels — the tool-window pane the HWND will be reparented into —
         /// so the surface fits the canvas to the final viewport before the reparent (no visible re-fit jump).</summary>
         [JsonPropertyName("paneWidthPx"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? PaneWidthPx { get; set; }

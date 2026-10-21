@@ -555,7 +555,7 @@ namespace WinUIXamlPreview.UI
             }
 
             Log.Write($"Constructing surface client (surfaceExe='{surfaceExe}', userDll='{userDll ?? "(none)"}', appXaml='{userAppXaml ?? "(none)"}', xaml={xaml.Length} chars)…");
-            var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, PreviewOptions.Theme, userPri: recoverPri) { SampleData = PreviewOptions.DesignTimeData };
+            var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, PreviewOptions.Theme, userPri: recoverPri) { SampleData = PreviewOptions.DesignTimeData, DocumentPathSource = () => _currentPath ?? _pinnedPath };
             AttachClient(client);
             _client = client;
             // A fresh process (it hasn't rendered yet); allow its unexpected death to trigger an auto-restart.
@@ -1237,7 +1237,7 @@ namespace WinUIXamlPreview.UI
                 SurfaceClient? spare = null;
                 try
                 {
-                    spare = new SurfaceClient(exe, dll, Log.Write, appx, theme, userPri: userPri) { SampleData = PreviewOptions.DesignTimeData };
+                    spare = new SurfaceClient(exe, dll, Log.Write, appx, theme, userPri: userPri) { SampleData = PreviewOptions.DesignTimeData, DocumentPathSource = () => _currentPath ?? _pinnedPath };
                     await spare.StartAsync(TimeSpan.FromSeconds(25));
                 }
                 catch (Exception ex)
@@ -1655,7 +1655,7 @@ namespace WinUIXamlPreview.UI
                 ReadyMsg matchedReady;
                 try
                 {
-                    matched = new SurfaceClient(matchedExe, userDll, Log.Write, userAppXaml, theme, userPri: matchedPri) { SampleData = PreviewOptions.DesignTimeData };
+                    matched = new SurfaceClient(matchedExe, userDll, Log.Write, userAppXaml, theme, userPri: matchedPri) { SampleData = PreviewOptions.DesignTimeData, DocumentPathSource = () => _currentPath ?? _pinnedPath };
                     matchedReady = await matched.StartAsync(TimeSpan.FromSeconds(25));
                 }
                 catch (Exception ex)

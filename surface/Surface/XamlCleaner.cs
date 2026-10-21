@@ -155,6 +155,7 @@ internal static class XamlCleaner
     /// </param>
     /// <param name="missingResourceKeys">Receives every <c>{StaticResource}</c>/<c>{ThemeResource}</c> key Rule 6 could not resolve. May be null.</param>
     /// <param name="unmappedTypes">Receives the full name of every custom type Rule 7 removed because the provider chain couldn't map it (not forced swaps). May be null.</param>
+    /// <param name="sampleTypes">Source type model of the page's project, so sample values follow the bound types (see <see cref="SamplePlanner"/>). May be null (name-based values).</param>
     public static string Clean(
         string rawXaml,
         Func<string, bool>? isKnownResourceKey = null,
@@ -162,7 +163,8 @@ internal static class XamlCleaner
         ISet<string>? forcePlaceholderTypes = null,
         bool sampleData = false,
         ISet<string>? missingResourceKeys = null,
-        ISet<string>? unmappedTypes = null)
+        ISet<string>? unmappedTypes = null,
+        SampleTypeModel? sampleTypes = null)
     {
         if (string.IsNullOrWhiteSpace(rawXaml))
         {
@@ -188,6 +190,9 @@ internal static class XamlCleaner
             {
                 return rawXaml;
             }
+
+            // Sample data is planned on the untouched document: it needs x:Class and x:DataType, which the rules drop.
+            var samples = sampleData ? SamplePlanner.Plan(root, sampleTypes) : null;
 
             // Rule 1: an x:Class names a compiler-generated partial that does not exist at runtime and
             // is invalid for XamlReader.Load on ANY element. On the root, dropping it makes the root
@@ -240,7 +245,19 @@ internal static class XamlCleaner
             // Attribute pass over every surviving element.
             foreach (var el in root.DescendantsAndSelf().ToList())
             {
-                CleanElementAttributes(el, root, isKnownResourceKey, docKeys, droppedKeys, providerMapsFullName, sampleData, missingResourceKeys);
+                CleanElementAttributes(el, root, isKnownResourceKey, docKeys, droppedKeys, providerMapsFullName, samples, missingResourceKeys);
+            }
+
+            // Values the code-behind assigns to named elements (never over a property the markup sets).
+            if (samples is not null)
+            {
+                foreach (var (el, name, value) in samples.Adds)
+                {
+                    if (el.Document == doc && el.Attribute(name) is null)
+                    {
+                        el.SetAttributeValue(name, value);
+                    }
+                }
             }
 
             // Rule 8: a Setter whose Value was dropped above (Rule 6/2) is invalid and fails the whole
@@ -283,9 +300,10 @@ internal static class XamlCleaner
         HashSet<string> docKeys,
         HashSet<string> droppedKeys,
         Func<string, bool>? providerMapsFullName,
-        bool sampleData,
+        SamplePlan? samples,
         ISet<string>? missingResourceKeys)
     {
+        bool sampleData = samples is not null;
         var toRemove = new List<XAttribute>();
         var toAdd = new List<(XName name, string value)>();
         var toRewrite = new List<(XAttribute attr, string value)>();
@@ -348,21 +366,29 @@ internal static class XamlCleaner
 
             // Rule 2: {x:Bind ...} — drop so the property takes its default. (Classic {Binding} stays;
             // it binds to a null DataContext and renders empty, which is intended.)
-            // WS2-F6 (sample data on): a text property gets a placeholder instead, and a bound list is
-            // marked so SampleListFiller can give it dummy rows. A d: value on the same property still wins.
+            // Sample data on: the SamplePlanner's generated value replaces it (a literal, or a {Binding} into
+            // the generated row inside an item template), and a bound list is marked so SampleListFiller can
+            // give it generated rows. A d: value on the same property still wins.
             if (IsMarkupExtension(el, value, "Bind", Xaml))
             {
-                if (sampleData && TryBindPlaceholder(el, a, out var placeholder))
+                if (samples is not null && samples.Binds.TryGetValue(a, out var sample))
                 {
-                    toRewrite.Add((a, placeholder));
+                    if (sample.Value is not null)
+                    {
+                        toRewrite.Add((a, sample.Value));
+                    }
+                    else
+                    {
+                        toRemove.Add(a);
+                    }
+                    if (sample.Tag is not null && el.Attribute("Tag") is null)
+                    {
+                        toAdd.Add(("Tag", sample.Tag));
+                    }
                     continue;
                 }
 
                 toRemove.Add(a);
-                if (sampleData && TryBindListMarker(el, a, out var marker))
-                {
-                    toAdd.Add(("Tag", marker));
-                }
                 continue;
             }
 
@@ -480,45 +506,6 @@ internal static class XamlCleaner
     };
 
     /// <summary>
-    /// The placeholder value for an <c>{x:Bind}</c> on a known text property: <c>FallbackValue</c> /
-    /// <c>TargetNullValue</c> when given, else <c>{LastPathSegment}</c>, or <c>Func(…)</c> for a function
-    /// binding. False (drop as usual) when the property isn't an allow-listed string/object property, a
-    /// <c>d:</c> value exists for it, or the binding can't be parsed confidently.
-    /// </summary>
-    private static bool TryBindPlaceholder(XElement el, XAttribute a, out string placeholder)
-    {
-        placeholder = string.Empty;
-        if (!IsPlaceholderTextAttribute(el, a))
-        {
-            return false;
-        }
-
-        if (!TryParseBind(a.Value, out var path, out var named))
-        {
-            return false;
-        }
-
-        foreach (var key in new[] { "FallbackValue", "TargetNullValue" })
-        {
-            if (named.TryGetValue(key, out var literal) && literal.Length > 0 && literal[0] != '{')
-            {
-                placeholder = literal;
-                return true;
-            }
-        }
-
-        var label = BindPathLabel(path);
-        if (label is null)
-        {
-            return false;
-        }
-
-        // "{}" escapes a literal that starts with '{' so XamlReader doesn't read it as a markup extension.
-        placeholder = label[0] == '{' ? "{}" + label : label;
-        return true;
-    }
-
-    /// <summary>
     /// True for an allow-listed, writable string/object text property with no <c>d:</c> override — the
     /// attributes that may receive a sample-data placeholder.
     /// </summary>
@@ -542,27 +529,6 @@ internal static class XamlCleaner
         }
 
         return prop is not null && prop.CanWrite && (prop.PropertyType == typeof(string) || prop.PropertyType == typeof(object));
-    }
-
-    /// <summary>Marker for a list whose <c>ItemsSource</c> is an <c>{x:Bind}</c>; consumed by <see cref="SampleListFiller"/>.</summary>
-    private static bool TryBindListMarker(XElement el, XAttribute a, out string marker)
-    {
-        marker = string.Empty;
-        if (a.Name.Namespace != XNamespace.None || a.Name.LocalName != "ItemsSource" || el.Attribute("Tag") is not null)
-        {
-            return false;
-        }
-
-        var type = ResolveElementType(el);
-        if (type is null || !typeof(Microsoft.UI.Xaml.FrameworkElement).IsAssignableFrom(type) ||
-            type.GetProperty("ItemsSource", BindingFlags.Public | BindingFlags.Instance) is null)
-        {
-            return false;
-        }
-
-        var path = TryParseBind(a.Value, out var p, out _) ? p : null;
-        marker = SampleListFiller.TagPrefix + (BindPathLabel(path) ?? "item");
-        return true;
     }
 
     /// <summary>
@@ -684,7 +650,7 @@ internal static class XamlCleaner
     }
 
     /// <summary>Index of <paramref name="c"/> outside quotes, braces, parentheses and brackets; -1 if none.</summary>
-    private static int IndexOfTopLevel(string s, char c)
+    internal static int IndexOfTopLevel(string s, char c)
     {
         int depth = 0;
         bool quoted = false;
@@ -706,7 +672,7 @@ internal static class XamlCleaner
     }
 
     /// <summary>Splits on <paramref name="sep"/> outside quotes and nesting; null when unbalanced.</summary>
-    private static List<string>? SplitTopLevel(string s, char sep)
+    internal static List<string>? SplitTopLevel(string s, char sep)
     {
         var parts = new List<string>();
         int depth = 0, start = 0;
@@ -852,7 +818,7 @@ internal static class XamlCleaner
 
     // ---- CLR type resolution -------------------------------------------------
 
-    private static Type? ResolveElementType(XElement el)
+    internal static Type? ResolveElementType(XElement el)
         => ResolveType(el.Name.NamespaceName, el.Name.LocalName);
 
     /// <summary>

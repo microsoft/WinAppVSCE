@@ -571,11 +571,14 @@ namespace WinUIXamlPreview.Protocol
         /// </summary>
         public bool? SampleData { get; set; }
 
+        /// <summary>Path of the XAML file being previewed, sent with every document message so the surface can type sample values from the project's source. Null omits the field.</summary>
+        public Func<string?>? DocumentPathSource { get; set; }
+
         public bool LoadXaml(string xaml, int width, int height, double scale)
-            => Send(new LoadXamlMsg { Xaml = xaml, Width = width, Height = height, Scale = scale, SampleData = SampleData });
+            => Send(new LoadXamlMsg { Xaml = xaml, Width = width, Height = height, Scale = scale,             SampleData = SampleData, DocumentPath = DocumentPathSource?.Invoke() });
 
         public bool UpdateXaml(string xaml)
-            => Send(new UpdateXamlMsg { Xaml = xaml, SampleData = SampleData });
+            => Send(new UpdateXamlMsg { Xaml = xaml, SampleData = SampleData, DocumentPath = DocumentPathSource?.Invoke() });
 
         public bool Resize(int width, int height, double scale)
             => Send(new ResizeMsg { Width = width, Height = height, Scale = scale });
@@ -584,7 +587,7 @@ namespace WinUIXamlPreview.Protocol
         public bool EnterNative(string xaml, double width, double height, double scale, int paneWidthPx = 0, int paneHeightPx = 0, ViewMsg? view = null)
             => Send(new EnterNativeMsg
             {
-                Xaml = xaml, Width = width, Height = height, Scale = scale, SampleData = SampleData,
+                Xaml = xaml, Width = width, Height = height, Scale = scale, SampleData = SampleData, DocumentPath = DocumentPathSource?.Invoke(),
                 PaneWidthPx = paneWidthPx > 0 ? paneWidthPx : (int?)null,
                 PaneHeightPx = paneHeightPx > 0 ? paneHeightPx : (int?)null,
                 View = view,

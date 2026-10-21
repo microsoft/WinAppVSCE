@@ -38,6 +38,34 @@ namespace Surface.Tests.Fixtures
 
         internal void Raise() => Pinged?.Invoke(this, EventArgs.Empty);
     }
+
+    // SampleObjects fixtures: app-style models built by reflection.
+    public enum FlightState { Healthy, Attention, Maintenance }
+
+    public class Plane
+    {
+        public string Tail { get; init; } = string.Empty;
+        public int Cycles { get; init; }
+        public string NextCheck { get; init; } = "A-check";
+        public FlightState State { get; set; }
+        public DateTime LastSeen { get; set; }
+        public Engine? Engine { get; set; }
+        public List<string> Notes { get; set; } = null!;
+        public System.Collections.ObjectModel.ObservableCollection<Engine> Spares { get; } = new();
+        public bool IsHero => Tail == "X";
+    }
+
+    public class Engine
+    {
+        public Engine(string serial, double hours) { Serial = serial; Hours = hours; }
+        public string Serial { get; }
+        public double Hours { get; }
+    }
+
+    public class Exploding
+    {
+        public Exploding() => throw new InvalidOperationException("boom");
+    }
 }
 
 namespace Surface.Tests
@@ -71,6 +99,8 @@ namespace Surface.Tests
             Run("R1b root rebase", Rule1b);
             Run("R2 x:Bind", Rule2);
             Run("R2 sample data", Rule2SampleData);
+            Run("R2 sample data (source-typed)", SampleDataTyped);
+            Run("R2 sample data (typed objects)", SampleDataObjects);
             Run("R2 TryParseBind/BindPathLabel", BindParsing);
             Run("R3 x: directives", Rule3);
             Run("R4 events", Rule4);
@@ -229,8 +259,9 @@ namespace Surface.Tests
             Func<string, bool>? provider = null,
             ISet<string>? force = null,
             bool sample = false,
-            ISet<string>? missing = null) =>
-            XDocument.Parse(XamlCleaner.Clean(xaml, known, provider, force, sample, missing)).Root!;
+            ISet<string>? missing = null,
+            SampleTypeModel? types = null) =>
+            XDocument.Parse(XamlCleaner.Clean(xaml, known, provider, force, sample, missing, null, types)).Root!;
 
         private static XElement? First(XElement root, string localName) =>
             root.DescendantsAndSelf().FirstOrDefault(e => e.Name.LocalName == localName);
@@ -345,18 +376,112 @@ namespace Surface.Tests
                 "<ListView x:Name=\"Tagged\" Tag=\"Mine\" ItemsSource=\"{x:Bind Orders}\" />" +
                 "<Border x:Name=\"NoItems\" Tag=\"{x:Bind T}\" />" +
                 "</StackPanel>"), sample: true);
-            Eq("path -> {LastSegment} (escaped)", "{}{Name}", Attr(Named(r, "Path"), "Text"));
+            Eq("untyped path -> humanized last segment", "Name", Attr(Named(r, "Path"), "Text"));
             Eq("FallbackValue wins (single quotes stripped)", "Hello, world", Attr(Named(r, "Fallback"), "Text"));
             Eq("TargetNullValue used", "Nothing", Attr(Named(r, "NullValue"), "Text"));
-            Eq("function binding -> Func(…)", "Format(…)", Attr(Named(r, "Func"), "Text"));
-            Eq("object-typed Content gets placeholder", "{}{Label}", Attr(Named(r, "Btn"), "Content"));
-            Check("non-text property still dropped", Attr(Named(r, "Width"), "Width") is null);
+            Eq("formatter function -> named from its argument", "Value", Attr(Named(r, "Func"), "Text"));
+            Eq("object-typed Content gets a sample", "Label", Attr(Named(r, "Btn"), "Content"));
+            Eq("Width gets a sample size", "120", Attr(Named(r, "Width"), "Width"));
             Eq("d: value wins over x:Bind placeholder", "Design value", Attr(Named(r, "DWins"), "Text"));
             Check("unparsable binding (positional after first) dropped", Attr(Named(r, "Unparsable"), "Text") is null);
             Check("bound list: ItemsSource dropped", Attr(Named(r, "List"), "ItemsSource") is null);
-            Eq("bound list: sample marker in Tag", SampleListFiller.TagPrefix + "{Orders}", Attr(Named(r, "List"), "Tag"));
+            Eq("bound list: sample marker with rows in Tag", SampleListFiller.TagPrefix + "Orders|[\"Order\",\"Order 2\",\"Order 3\"]", Attr(Named(r, "List"), "Tag"));
             Eq("bound list with existing Tag: Tag untouched", "Mine", Attr(Named(r, "Tagged"), "Tag"));
             Check("x:Bind Tag on non-list just dropped", Attr(Named(r, "NoItems"), "Tag") is null);
+        }
+
+        private static void SampleDataTyped()
+        {
+            var types = SampleTypeModel.FromSources(
+                "using System; using System.Collections.ObjectModel;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class MainPage {\n" +
+                "  public MainViewModel ViewModel { get; } = new();\n" +
+                "  public MainPage() { Greeting.Text = $\"Hello, {ViewModel.Count} orders\"; }\n" +
+                "  private void OnClick(object sender, RoutedEventArgs e) { Status.Text = \"Clicked\"; }\n" +
+                "}\n" +
+                "public class MainViewModel { public int Count { get; set; } public DateTime Due { get; set; } public bool IsReady { get; set; }\n" +
+                "  public ObservableCollection<Order> Orders { get; } = new(); }\n" +
+                "public class Order { public string Customer { get; set; } public decimal Total { get; set; } public OrderState State { get; set; } }\n" +
+                "public enum OrderState { InProgress, Done }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<TextBlock x:Name=\"Greeting\" />" +
+                "<TextBlock x:Name=\"Status\" />" +
+                "<TextBlock x:Name=\"Kept\" Text=\"Markup wins\" />" +
+                "<TextBlock x:Name=\"Num\" Text=\"{x:Bind ViewModel.Count}\" />" +
+                "<TextBlock x:Name=\"When\" Text=\"{x:Bind ViewModel.Due}\" />" +
+                "<TextBlock x:Name=\"Ref\" Text=\"{x:Bind Greeting.Text}\" />" +
+                "<ListView x:Name=\"List\" ItemsSource=\"{x:Bind ViewModel.Orders}\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Order\"><StackPanel>" +
+                "<TextBlock x:Name=\"Cust\" Text=\"{x:Bind Customer}\" /><TextBlock x:Name=\"St\" Text=\"{x:Bind State}\" />" +
+                "</StackPanel></DataTemplate></ListView.ItemTemplate></ListView>" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.MainPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+            Eq("code-behind interpolation typed", "Hello, 12 orders", Attr(Named(r, "Greeting"), "Text"));
+            Check("event-handler assignment skipped", Attr(Named(r, "Status"), "Text") is null, Attr(Named(r, "Status"), "Text"));
+            Eq("markup value never overwritten", "Markup wins", Attr(Named(r, "Kept"), "Text"));
+            Eq("int member -> number", "12", Attr(Named(r, "Num"), "Text"));
+            Eq("DateTime member -> date", "18 Nov 2026", Attr(Named(r, "When"), "Text"));
+            Check("binding to a named element dropped", Attr(Named(r, "Ref"), "Text") is null, Attr(Named(r, "Ref"), "Text"));
+            var tag = Attr(Named(r, "List"), "Tag") ?? "";
+            Check("typed list rows carry template fields", tag.StartsWith(SampleListFiller.TagPrefix + "Orders|", StringComparison.Ordinal)
+                && tag.Contains("\"Customer\"") && tag.Contains("\"State\":\"In progress\""), tag);
+            Check("template x:Bind -> {Binding} into the row", (Attr(Named(r, "Cust"), "Text") ?? "").StartsWith("{Binding Customer", StringComparison.Ordinal), Attr(Named(r, "Cust"), "Text"));
+
+            var rows = SampleListFiller.BuildRows(tag[SampleListFiller.TagPrefix.Length..], 2, out var label);
+            Eq("filler label", "Orders", label);
+            Check("filler rows are dictionaries capped to max", rows.Count == 2 && rows[0] is Dictionary<string, object> d && d.ContainsKey("Customer"));
+            var plain = SampleListFiller.BuildRows("Items", 3, out label);
+            Check("bare label -> repeated strings", plain.Count == 3 && (string)plain[0] == "Items" && label == "Items");
+        }
+
+        private static void SampleDataObjects()
+        {
+            var types = SampleTypeModel.FromSources(
+                "using System.Collections.Generic;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class MainPage { public List<Order> Orders { get; } = new(); }\n" +
+                "public class Order { public string Customer { get; set; } public Order Parent { get; set; } }\n" +
+                "public class Tile { public Order Item { get; set; } public string Caption { get; set; } }\n" +
+                "public class Outer { public class Inner { } }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<local:Tile x:Name=\"PageTile\" Item=\"{x:Bind Orders}\" />" +
+                "<ListView x:Name=\"List\" ItemsSource=\"{x:Bind Orders}\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Order\"><StackPanel>" +
+                "<local:Tile x:Name=\"Whole\" Item=\"{x:Bind Mode=OneWay}\" />" +
+                "<local:Tile x:Name=\"Member\" Item=\"{x:Bind Parent}\" />" +
+                "<local:Tile x:Name=\"Call\" Item=\"{x:Bind Pick(Parent)}\" />" +
+                "</StackPanel></DataTemplate></ListView.ItemTemplate></ListView>" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.MainPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+            Eq("template whole-row object binding -> {Binding}", "{Binding}", Attr(Named(r, "Whole"), "Item"));
+            Eq("template member object binding -> {Binding path}", "{Binding Parent}", Attr(Named(r, "Member"), "Item"));
+            Check("template function object binding dropped", Attr(Named(r, "Call"), "Item") is null, Attr(Named(r, "Call"), "Item"));
+            Check("page-level object binding dropped", Attr(Named(r, "PageTile"), "Item") is null, Attr(Named(r, "PageTile"), "Item"));
+            var tag = Attr(Named(r, "List"), "Tag") ?? "";
+            Check("list marker names the item type", tag.Contains("\"type\":\"App1.Order\"") && tag.Contains("\"rows\":["), tag);
+            var rows = SampleListFiller.BuildRows(tag[SampleListFiller.TagPrefix.Length..], 3, out var label, out var typeName);
+            Check("typed payload parses", label == "Orders" && typeName == "App1.Order" && rows.Count == 3, $"{label} {typeName} {rows.Count}");
+            Eq("nested type reflection name", "App1.Outer+Inner", SamplePlanner.ReflectionName(types.FindType("App1.Outer.Inner")!));
+
+            Check("resolve type across loaded assemblies", SampleObjects.ResolveType(typeof(Fixtures.Plane).FullName!) == typeof(Fixtures.Plane));
+            var row = new Dictionary<string, object> { ["Tail"] = "N123AB" };
+            var planes = Enumerable.Range(0, 3).Select(i => SampleObjects.Create(typeof(Fixtures.Plane), i == 0 ? row : null, i) as Fixtures.Plane).ToList();
+            var p0 = planes[0]!;
+            Eq("row string wins", "N123AB", p0.Tail);
+            Eq("generated string by name", "Tail 2", planes[1]!.Tail);
+            Check("init int generated", p0.Cycles > 0, p0.Cycles.ToString());
+            Eq("type's own default kept", "A-check", p0.NextCheck);
+            Check("enum varies by row", p0.State == Fixtures.FlightState.Healthy && planes[1]!.State == Fixtures.FlightState.Attention, $"{p0.State} {planes[1]!.State}");
+            Check("DateTime generated", p0.LastSeen != default, p0.LastSeen.ToString("o"));
+            Check("nested object via parameterized ctor", p0.Engine is { Serial: "Serial", Hours: > 0 }, p0.Engine?.Serial);
+            Check("list property generated", p0.Notes is { Count: 3 } && p0.Notes[0] == "Note", string.Join(",", p0.Notes ?? new()));
+            Check("get-only collection filled", p0.Spares.Count == 3);
+            Check("throwing ctor -> null, no throw", SampleObjects.Create(typeof(Fixtures.Exploding), null, 0) is null);
         }
 
         private static void BindParsing()

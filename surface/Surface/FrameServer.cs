@@ -895,6 +895,10 @@ internal sealed class FrameServer
         {
             _host.SampleData = v.GetBoolean();
         }
+        if (root.TryGetProperty("documentPath", out var d) && d.ValueKind == JsonValueKind.String)
+        {
+            _host.DocumentPath = d.GetString();
+        }
     }
 
     private static string? GetString(JsonElement el, string name)

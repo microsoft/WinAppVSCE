@@ -126,11 +126,11 @@ internal sealed class RenderHost
     /// resource-scope key resolver (Layer 2) is passed through so the cleaner can distinguish a resolvable
     /// <c>{StaticResource}</c> from a genuinely-undefined one.
     /// </summary>
-    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false)
+    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false, SampleTypeModel? sampleTypes = null)
     {
         var missing = new SortedSet<string>(StringComparer.Ordinal);
         var unmapped = new SortedSet<string>(StringComparer.Ordinal);
-        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped);
+        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes);
         LastMissingKeys = missing.ToArray();
         LastUnmappedTypes = unmapped.ToArray();
         // WS2-F5: name keys the preview can't resolve (e.g. added in App.xaml.cs), once per distinct set.
@@ -156,6 +156,9 @@ internal sealed class RenderHost
     /// rows (see <see cref="SampleListFiller"/>). Set by the client's <c>sampleData</c> message field.
     /// </summary>
     public bool SampleData { get; set; } = true;
+
+    /// <summary>Path of the XAML file being previewed (from the client); locates the project source the sample values are typed from. Null: name-based values.</summary>
+    public string? DocumentPath { get; set; }
 
     /// <summary>
     /// Rule 7 (T2) predicate for <see cref="XamlCleaner"/>: true when the runtime provider chain that
@@ -270,10 +273,12 @@ internal sealed class RenderHost
             // pathological page cannot loop; hanging constructors are avoided earlier by the cleaner's
             // pre-swap list (a hang can never reach a catch).
             HashSet<string>? forced = null;
+            // Bounded wait: a cold project parse that runs long finishes in the background for the next render.
+            var sampleTypes = SampleData ? SampleTypeModel.ForDocument(DocumentPath, TimeSpan.FromSeconds(3)) : null;
             const int maxSafetyNetRetries = 5;
             for (int attempt = 0; ; attempt++)
             {
-                var xaml = CleanXaml(rawXaml, forced, SampleData);
+                var xaml = CleanXaml(rawXaml, forced, SampleData, sampleTypes);
                 if (attempt == 0 && timings is not null) timings.CleanMs = ElapsedMs(tClean);
 
                 object? parsed;
@@ -367,6 +372,10 @@ internal sealed class RenderHost
                 if (SampleData && xaml.Contains(SampleListFiller.TagPrefix, StringComparison.Ordinal))
                 {
                     SampleListFiller.Attach(fe);
+                }
+                if (SampleData)
+                {
+                    SampleChartFiller.Attach(fe);
                 }
 
                 return (fe, null, null, null, null);

@@ -136,6 +136,9 @@ namespace WinUIXamlPreview.Smoke
             Console.WriteLine($"TestUserApp.dll: {(userDll ?? "(not found — custom test skipped)")}");
             Console.WriteLine();
 
+            var galleryOnly = Environment.GetEnvironmentVariable("WINUI_GALLERY_ONLY") == "1";
+            if (!galleryOnly)
+            {
             await RunFrameworkClient(surfaceExe);
             RunIncompatibleHello(surfaceExe);
             RunSurfaceAuth(surfaceExe);
@@ -150,6 +153,7 @@ namespace WinUIXamlPreview.Smoke
                 await RunCustomClient(surfaceExe, userDll);
                 await RunDesignDataClient(surfaceExe, userDll);
                 await RunDesignDataSourceClient(surfaceExe, userDll);
+            }
             }
 
             // Real-project path (opt-in): set WINUI_GALLERY_PAGE to a page .xaml inside a built WinUI app
@@ -512,7 +516,7 @@ namespace WinUIXamlPreview.Smoke
 
         /// <summary>
         /// WS2-F6: with sample data on (the surface default) an {x:Bind} text property renders a placeholder —
-        /// FallbackValue when given, a d: value when present, else {PathName} / Func(…) — and a bound list gets
+        /// FallbackValue when given, a d: value when present, else a value generated from the path (see SamplePlanner) — and a bound list gets
         /// dummy rows. Toggling it off (UpdateXaml with sampleData=false) re-hosts with bindings simply dropped.
         /// </summary>
         private static async Task RunSampleDataClient(string surfaceExe)
@@ -537,10 +541,10 @@ namespace WinUIXamlPreview.Smoke
                 return FindProp(await t, prop)?.Value;
             }
 
-            Check("x:Bind path renders {LastSegment}", await ReadText("0.0.0", "Text") == "{UserName}");
+            Check("x:Bind path renders a value named after it", await ReadText("0.0.0", "Text") == "User name");
             Check("x:Bind FallbackValue wins", await ReadText("0.0.1", "Text") == "Loading status");
             Check("d:Text wins over x:Bind placeholder", await ReadText("0.0.2", "Text") == "Designer title");
-            Check("function binding renders Func(…)", await ReadText("0.0.3", "Content") == "Greeting(…)");
+            Check("function binding renders a value named after it", await ReadText("0.0.3", "Content") == "Greeting");
             Check("unresolved StaticResource renders {Key} (WS2-F5)", await ReadText("0.0.5", "Text") == "{KeyAddedInAppCode}");
 
             bool filled = false;
@@ -686,6 +690,8 @@ namespace WinUIXamlPreview.Smoke
 
             var xaml = File.ReadAllText(pagePath);
             using var client = CreateClient(surfaceExe, dll, s => Console.Error.WriteLine("  " + s), appXaml);
+            client.DocumentPathSource = () => pagePath;
+            if (Environment.GetEnvironmentVariable("WINUI_SAMPLE_DATA") == "1") client.SampleData = true;
             var box = new FrameBox(client);
 
             var ready = await client.StartAsync(TimeSpan.FromSeconds(30));
@@ -696,6 +702,17 @@ namespace WinUIXamlPreview.Smoke
             if (frame != null)
             {
                 Console.WriteLine($"    frame {frame.Width}x{frame.Height}px @ {frame.DipWidth}x{frame.DipHeight}dip");
+                // Sample list rows fill on later layout passes; keep the newest frame for a short while.
+                for (var later = await box.NextFrame(TimeSpan.FromSeconds(3)); later != null; later = await box.NextFrame(TimeSpan.FromSeconds(3)))
+                {
+                    frame = later;
+                }
+                var png = Environment.GetEnvironmentVariable("WINUI_GALLERY_PNG");
+                if (!string.IsNullOrEmpty(png))
+                {
+                    File.WriteAllBytes(png, Convert.FromBase64String(frame.Data!));
+                    Console.WriteLine($"    saved {png}");
+                }
             }
         }
 
