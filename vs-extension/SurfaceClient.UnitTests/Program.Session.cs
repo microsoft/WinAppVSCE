@@ -54,6 +54,22 @@ internal static partial class Program
             Check("theme: blocked during upgrade", !s.CanThemeSwap(true, true, true));
         }
 
+        // ---- hold render errors while a full-fidelity upgrade is in flight ----
+        {
+            var s = new PreviewSessionState();
+            Check("held error: no upgrade → show", !s.ShouldHoldError(false, false, false));
+            var gen = s.BeginUpgrade();
+            Check("held error: bundled error during upgrade → hold", s.ShouldHoldError(false, false, false));
+            Check("held error: not-designable → show", !s.ShouldHoldError(true, false, false));
+            Check("held error: has a render → banner, not held", !s.ShouldHoldError(false, true, false));
+            Check("held error: matched host's own error → show", !s.ShouldHoldError(false, false, true));
+            s.AbortUpgradeStart();
+            Check("held error: upgrade aborted → show", !s.ShouldHoldError(false, false, false));
+            s.BeginUpgrade();
+            s.CancelUpgrade(byUser: true);
+            Check("held error: cancelled → show", !s.ShouldHoldError(false, false, false));
+        }
+
         {
             var s = new PreviewSessionState();
             var oldGen = s.TryBeginSpareWarm(false, true, false)!.Value; // old-theme spare warming

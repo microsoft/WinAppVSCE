@@ -289,6 +289,13 @@ namespace WinUIXamlPreview.UI
         public void OnNewDocument() => FullFidelityCancelled = false;
 
         /// <summary>
+        /// Whether to hold back a render error behind a spinner: the bundled host failed before rendering
+        /// anything, but a version-matched host is on its way and may well load the page (newer controls).
+        /// </summary>
+        public bool ShouldHoldError(bool notDesignable, bool hasRender, bool onMatchedHost) =>
+            UpgradeInProgress && !notDesignable && !hasRender && !onMatchedHost;
+
+        /// <summary>
         /// The user flipped the "Full fidelity" toggle. Off supersedes any in-flight upgrade and leaves a
         /// version-matched host for the bundled one; on starts an upgrade (clearing an earlier banner cancel)
         /// when the document could have one and isn't already on its matched host.

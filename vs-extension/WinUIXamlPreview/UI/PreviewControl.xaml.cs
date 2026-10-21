@@ -534,6 +534,7 @@ namespace WinUIXamlPreview.UI
             // _activeUserPri at promote time. A P7 matched recovery launches the matched host + pri directly.
             _activeUserPri = recoverPri;
             _session.OnNewDocument();
+            _heldError = null;
 
             // Packaged (MSIX) user builds normally load without identity: the surface neutralizes the WinAppSDK
             // deployment auto-initializer in memory (PackagedAppShim). Only when that fails does the surface
@@ -1497,6 +1498,7 @@ namespace WinUIXamlPreview.UI
         private void OnRenderSucceeded()
         {
             _session.OnRenderSucceeded(); // refunds the restart budget; a later crash is a 2nd-render case
+            _heldError = null;
 
             var retiring = _retiringClient;
             if (retiring != null)
@@ -1767,6 +1769,7 @@ namespace WinUIXamlPreview.UI
             }
 
             Log.Write($"Fidelity upgrade: hot-swapped to the version-matched WinAppSDK {version} host.");
+            _heldError = null; // the matched host's own render (or error) decides now
             EndUpgrade(gen, note: null);
             ShowFidelityReady(version);
         }
@@ -1793,6 +1796,8 @@ namespace WinUIXamlPreview.UI
             {
                 HideFidelityBanner();
             }
+
+            ReleaseHeldError();
         }
 
         private System.Threading.Tasks.Task MarshalAsync(Action action) => Dispatcher.InvokeAsync(action).Task;
@@ -1896,6 +1901,10 @@ namespace WinUIXamlPreview.UI
                     _upgradeBuild = null;
                 }
                 HideFidelityBanner();
+                if (action == FullFidelityToggleAction.StopUpgrade)
+                {
+                    ReleaseHeldError();
+                }
             }
 
             if (action == FullFidelityToggleAction.RelaunchBundled && !string.IsNullOrEmpty(path))
@@ -1926,6 +1935,22 @@ namespace WinUIXamlPreview.UI
 
             Log.Write("Fidelity upgrade cancelled by user.");
             HideFidelityBanner();
+            ReleaseHeldError();
+        }
+
+        // A bundled-host render error held back while a full-fidelity upgrade was in flight (see OnError).
+        private string? _heldError;
+
+        /// <summary>The upgrade ended without a matched host: show the held error after all. UI thread.</summary>
+        private void ReleaseHeldError()
+        {
+            var held = _heldError;
+            _heldError = null;
+            if (held != null && !_disposed && !_hasFrame && !_hasNative)
+            {
+                Log.Write("Full-fidelity host unavailable; showing the held error.");
+                SetStatus("XAML error", spinner: false, detail: held, severity: BannerSeverity.Error);
+            }
         }
 
         private (int w, int h, double scale) GetViewportSync()
@@ -2149,6 +2174,16 @@ namespace WinUIXamlPreview.UI
                 var text = $"{err.Phase}: {err.Message}{where}";
                 Log.Write("Surface error — " + text);
                 var display = PreviewErrorText.FormatXamlError(err.Message, err.Line, err.Column);
+
+                if (_session.ShouldHoldError(err.NotDesignable, _hasFrame || _hasNative, !string.IsNullOrEmpty(_activeUserPri)))
+                {
+                    Log.Write("Holding the error until the full-fidelity host has tried this page.");
+                    _heldError = display;
+                    SetStatus("Preparing full-fidelity preview…", spinner: true, detail: Path.GetFileName(_currentPath ?? _pinnedPath ?? ""));
+                    return;
+                }
+
+                _heldError = null;
 
                 if (kind == ErrorDisplay.BannerOverLastRender)
                 {
