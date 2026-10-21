@@ -482,6 +482,27 @@ namespace Surface.Tests
             Check("list property generated", p0.Notes is { Count: 3 } && p0.Notes[0] == "Note", string.Join(",", p0.Notes ?? new()));
             Check("get-only collection filled", p0.Spares.Count == 3);
             Check("throwing ctor -> null, no throw", SampleObjects.Create(typeof(Fixtures.Exploding), null, 0) is null);
+
+            var types2 = SampleTypeModel.FromSources(
+                "namespace App1 {\n" +
+                "public sealed partial class MainPage { public MainPage() { Coded.ItemsSource = Unknown.Wrap(null); } }\n" +
+                "public class Order { public string Customer { get; set; } }\n" +
+                "}");
+            const string Tmpl = "<DataTemplate x:DataType=\"local:Order\"><TextBlock Text=\"{x:Bind Customer}\" /></DataTemplate>";
+            var u = CleanRoot(Doc(
+                "<StackPanel>" +
+                $"<ListView x:Name=\"Coded\"><ListView.ItemTemplate>{Tmpl}</ListView.ItemTemplate></ListView>" +
+                $"<ListView x:Name=\"Unbound\"><ListView.ItemTemplate>{Tmpl}</ListView.ItemTemplate></ListView>" +
+                $"<ListView x:Name=\"Inline\"><ListView.ItemTemplate>{Tmpl}</ListView.ItemTemplate><ListViewItem /></ListView>" +
+                "<ListView x:Name=\"Untyped\" />" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.MainPage\" xmlns:local=\"using:App1\""), sample: true, types: types2);
+            var coded = Attr(Named(u, "Coded"), "Tag") ?? "";
+            Check("code-behind source of unknown type -> rows typed by template", coded.Contains("\"type\":\"App1.Order\"") && coded.Contains("\"Customer\""), coded);
+            var unbound = Attr(Named(u, "Unbound"), "Tag") ?? "";
+            Check("no ItemsSource -> rows typed by template", unbound.StartsWith(SampleListFiller.TagPrefix + "Unbound|", StringComparison.Ordinal) && unbound.Contains("\"type\":\"App1.Order\""), unbound);
+            Check("inline items left alone", Attr(Named(u, "Inline"), "Tag") is null, Attr(Named(u, "Inline"), "Tag"));
+            Check("untyped list left alone", Attr(Named(u, "Untyped"), "Tag") is null, Attr(Named(u, "Untyped"), "Tag"));
         }
 
         private static void BindParsing()

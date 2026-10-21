@@ -122,6 +122,11 @@ internal static class SamplePlanner
             {
                 PlanCodeBehind(ctx, rootClass, plan);
             }
+
+            if (model is not null)
+            {
+                PlanUnboundLists(ctx, plan);
+            }
         }
         catch (Exception ex)
         {
@@ -601,6 +606,41 @@ internal static class SamplePlanner
         return found.Distinct();
     }
 
+    /// <summary>The first app-defined <c>x:DataType</c> among <paramref name="list"/>'s own item/cell templates.</summary>
+    private static ITypeSymbol? TemplateItemType(Context ctx, XElement list) =>
+        TemplatesFor(ctx, list, null)
+            .Select(t => TemplateType(ctx, t))
+            .FirstOrDefault(t => t is not null && t.SpecialType == SpecialType.None && t.Locations.Any(l => l.IsInSource));
+
+    /// <summary>
+    /// Items controls with no <c>ItemsSource</c> in markup (filled from code the planner can't follow) still get
+    /// sample rows when their templates declare an app-defined row type. Lists with inline items are left alone.
+    /// </summary>
+    private static void PlanUnboundLists(Context ctx, SamplePlan plan)
+    {
+        var tagged = new HashSet<XElement>(plan.Adds.Where(a => a.name == "Tag").Select(a => a.element));
+        foreach (var el in ctx.Root.Descendants())
+        {
+            try
+            {
+                if (el.Attribute("ItemsSource") is not null || el.Attribute("Tag") is not null || tagged.Contains(el) ||
+                    el.Name.LocalName == "DataTemplate" || NearestTemplate(el) is not null ||
+                    el.Elements().Any(c => !c.Name.LocalName.Contains('.')) ||
+                    TargetKindOf(ctx, el, "ItemsSource") != TargetKind.Items ||
+                    TemplateItemType(ctx, el) is not { } itemType)
+                {
+                    continue;
+                }
+                var label = (string?)el.Attribute(Xaml + "Name") ?? (string?)el.Attribute("Name") ?? itemType.Name + "s";
+                plan.Adds.Add((el, "Tag", ListMarker(ctx, el, itemType, label)));
+            }
+            catch (Exception ex)
+            {
+                App.Log($"SAMPLE: unbound list {el.Name.LocalName}: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
+
     private static string Singular(string label)
     {
         var l = label.Trim('{', '}');
@@ -636,7 +676,8 @@ internal static class SamplePlanner
                 if (kind == TargetKind.Items && el.Attribute("Tag") is null)
                 {
                     var t = model.GetTypeInfo(value).Type;
-                    var itemType = t is null or { TypeKind: TypeKind.Error } ? null : SampleTypeModel.ElementType(t);
+                    var itemType = (t is null or { TypeKind: TypeKind.Error } ? null : SampleTypeModel.ElementType(t))
+                        ?? TemplateItemType(ctx, el);
                     if (itemType is not null)
                     {
                         plan.Adds.Add((el, "Tag", ListMarker(ctx, el, itemType, LastName(value) ?? target)));
