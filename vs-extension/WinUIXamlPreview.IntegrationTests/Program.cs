@@ -184,7 +184,7 @@ namespace WinUIXamlPreview.IntegrationTests
             // A brand-new hive shows the first-run sign-in dialog, which blocks automation. Resetting to the General
             // profile and exiting once marks first-run as complete.
             Log("Priming VS hive '" + _rootSuffix + "' (first-run)...");
-            var code = RunProcess(_devenv, $"/rootsuffix {_rootSuffix} /resetsettings General.vssettings /command File.Exit", 300);
+            var code = RunProcess(_devenv, $"/rootsuffix {_rootSuffix} /resetsettings General.vssettings /command File.Exit", 600); // ~3 min on hosted runners
             Log("  prime exit " + code);
 
             // Startup = "Empty environment": the Start window otherwise replaces the main window until dismissed.
