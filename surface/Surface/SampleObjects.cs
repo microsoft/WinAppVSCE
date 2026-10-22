@@ -152,7 +152,7 @@ internal static class SampleObjects
             {
                 return; // the type's own default ("A-check") reads better than a generated one
             }
-            value = ValueFor(p.PropertyType, p.Name, index, depth);
+            value = ValueFor(p.PropertyType, p.Name, index, depth, obj.GetType().Name);
         }
         if (value is not null)
         {
@@ -182,9 +182,9 @@ internal static class SampleObjects
 
     private static bool IsUnset(object? current, Type type)
     {
-        if (current is null || current is string { Length: 0 })
+        if (current is null || current is string { Length: 0 } || current is ICollection { Count: 0 })
         {
-            return true;
+            return true; // an empty "= new()" list reads as "0 lines" next to rows that look filled
         }
         var t = Nullable.GetUnderlyingType(type) ?? type;
         if (t.IsEnum)
@@ -195,10 +195,10 @@ internal static class SampleObjects
     }
 
     /// <summary>A generated value of <paramref name="type"/> for a member named <paramref name="name"/>.</summary>
-    internal static object? ValueFor(Type type, string name, int index, int depth)
+    internal static object? ValueFor(Type type, string name, int index, int depth, string? owner = null)
     {
         var t = Nullable.GetUnderlyingType(type) ?? type;
-        if (t == typeof(string) || t == typeof(object)) return SamplePlanner.TextByName(name, index);
+        if (t == typeof(string) || t == typeof(object)) return SamplePlanner.TextByName(name, index, owner);
         if (t == typeof(bool)) return index % 2 == 0;
         if (t == typeof(char)) return (char)('A' + index % 26);
         if (t.IsEnum)

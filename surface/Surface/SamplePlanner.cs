@@ -69,7 +69,7 @@ internal static partial class SamplePlanner
     internal enum TargetKind { None, Text, Bool, Number, Visibility, Items, Object }
 
     /// <summary>A resolved binding path: its type (null when unknown) and the member name that labels it.</summary>
-    private readonly record struct Resolved(ITypeSymbol? Type, string Name, bool IsFunction, bool IsSimple, bool IsElementRef);
+    private readonly record struct Resolved(ITypeSymbol? Type, string Name, bool IsFunction, bool IsSimple, bool IsElementRef, ITypeSymbol? Owner = null);
 
     private sealed class Context
     {
@@ -130,6 +130,7 @@ internal static partial class SamplePlanner
             {
                 PlanUnboundLists(ctx, plan);
             }
+            PlanBindingLists(ctx, plan);
         }
         catch (Exception ex)
         {
@@ -200,16 +201,98 @@ internal static partial class SamplePlanner
                 }
             }
 
-            var text = TextValue(r.Type, r.Name, 0);
+            if (template is null && el.Name.LocalName is "TextBox" or "AutoSuggestBox" or "PasswordBox" or "RichEditBox" or "NumberBox")
+            {
+                // An input box starts with what the page puts in it, usually nothing (its PlaceholderText shows):
+                // a generated "Query" or "Draft" reads as typed-in text.
+                return !r.IsFunction && r.IsSimple && InitialOfPath(ctx, path) is { IsDefault: false, Value: string { Length: > 0 } s }
+                    ? new BindSample(EscapeLiteral(s), null)
+                    : drop;
+            }
+
+            var text = TextValue(r.Type, r.Name, 0, r.Owner?.Name);
             if (template is not null && RowBindingPath(path, r) is { } rowPath)
             {
                 return new BindSample($"{{Binding {rowPath}, FallbackValue='{QuoteSafe(text)}'}}", null);
             }
+            if (template is not null && !r.IsFunction && (path?.Trim() ?? "") is "" or ".")
+            {
+                // {x:Bind} of the row itself (a list of strings): show the row.
+                return new BindSample("{Binding}", null);
+            }
             return new BindSample(EscapeLiteral(text), null);
         }
 
-        var literalValue = ScalarValue(kind, propName, r.Type, r.Name);
+        if (template is null && !r.IsFunction && r.IsSimple && kind is TargetKind.Bool or TargetKind.Visibility or TargetKind.Number &&
+            InitialOfPath(ctx, path) is { } initial && InitialLiteral(initial, kind, el, propName) is { } known)
+        {
+            return new BindSample(known, null);
+        }
+
+        if (template is not null && kind is TargetKind.Bool or TargetKind.Visibility && RowBindingPath(path, r) is { } boolPath &&
+            (r.Type is null || IsBoolLike(r.Type)))
+        {
+            // The row varies it (true, false, true), so templates show both states.
+            return new BindSample(kind == TargetKind.Bool
+                ? $"{{Binding {boolPath}}}"
+                : $"{{Binding {boolPath}, Converter={{StaticResource {SampleConverters.VisibilityKey}}}}}", null);
+        }
+
+        var literalValue = ScalarValue(kind, propName, r.Type, r.Name, el);
         return new BindSample(literalValue, null);
+    }
+
+    private static bool IsBoolLike(ITypeSymbol t)
+    {
+        if (t is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } n) t = n.TypeArguments[0];
+        return t.SpecialType == SpecialType.System_Boolean || t.Name == "Visibility";
+    }
+
+    /// <summary>A literal for <paramref name="kind"/> from a proven initial value, or null when it doesn't fit.</summary>
+    private static string? InitialLiteral(Initial initial, TargetKind kind, XElement el, string property)
+    {
+        switch (kind)
+        {
+            case TargetKind.Bool:
+                return initial.Value switch
+                {
+                    bool b => b ? "True" : "False",
+                    null when initial.EnumMember is null => "False", // unset bool?
+                    _ => null,
+                };
+            case TargetKind.Visibility:
+                if (initial.EnumMember is "Visible" or "Collapsed") return initial.EnumMember;
+                return initial.Value switch
+                {
+                    bool b => b ? "Visible" : "Collapsed",
+                    null when initial.EnumMember is null => "Collapsed", // x:Bind of a null bool? or object
+                    _ => null,
+                };
+            case TargetKind.Number when !initial.IsDefault && initial.Value is not null and not bool and not string:
+            {
+                var d = System.Convert.ToDouble(initial.Value, CultureInfo.InvariantCulture);
+                if (d == 0 && property is "Width" or "Height" or "MaxWidth" or "MaxHeight" or "FontSize")
+                {
+                    return null; // an unset size, not a real zero
+                }
+                return (IsIntegerTarget(el, property) ? Math.Round(d) : d).ToString(CultureInfo.InvariantCulture);
+            }
+        }
+        return null;
+    }
+
+    private static bool IsIntegerTarget(XElement el, string property)
+    {
+        try
+        {
+            var t = XamlCleaner.ResolveElementType(el)?.GetProperty(property, BindingFlags.Public | BindingFlags.Instance)?.PropertyType;
+            t = t is null ? null : Nullable.GetUnderlyingType(t) ?? t;
+            return t == typeof(int) || t == typeof(long);
+        }
+        catch (AmbiguousMatchException)
+        {
+            return false;
+        }
     }
 
     /// <summary>The <c>{Binding}</c> path for a template text binding that reads its value from the row, or null.</summary>
@@ -308,6 +391,7 @@ internal static partial class SamplePlanner
         }
 
         ITypeSymbol? cur = scope;
+        ITypeSymbol? owner = scope;
         string last = first;
         bool simple = true;
         foreach (var raw in segments)
@@ -321,6 +405,7 @@ internal static partial class SamplePlanner
                 continue;
             }
 
+            owner = cur;
             var next = SampleTypeModel.MemberType(cur, last);
             if (next is not null && indexed)
             {
@@ -329,7 +414,7 @@ internal static partial class SamplePlanner
             cur = next;
         }
 
-        return new Resolved(cur is { TypeKind: TypeKind.Error } ? null : cur, last, false, simple, false);
+        return new Resolved(cur is { TypeKind: TypeKind.Error } ? null : cur, last, false, simple, false, owner);
     }
 
     private static Resolved ResolveFunction(Context ctx, XElement el, ITypeSymbol? scope, string p, int call)
@@ -364,8 +449,27 @@ internal static partial class SamplePlanner
         }
 
         var type = owner is null ? null : SampleTypeModel.MemberType(owner, method);
-        var name = FormatterNames.Contains(method) ? argName : method;
-        return new Resolved(type is { TypeKind: TypeKind.Error } ? null : type, name, true, false, false);
+        if (type is { TypeKind: TypeKind.Error })
+        {
+            type = null;
+        }
+        if (firstArg.Length == 0)
+        {
+            // GetTitle() reads as its Title.
+            var bare = Regex.Replace(method, "^(Get|Format|Compute|Calc|Calculate|Build|Make|To)(?=[A-Z])", "");
+            return new Resolved(type, bare.Length > 0 ? bare : method, true, false, false);
+        }
+        if (Regex.IsMatch(method, "Initials?$") && type is null or { SpecialType: SpecialType.System_String })
+        {
+            return new Resolved(null, "__initials", true, false, false);
+        }
+        if (type is null or { SpecialType: SpecialType.System_String } || FormatterNames.Contains(method))
+        {
+            // FormatPrice(Price), Describe(Order): text about the argument, so show the argument.
+            var arg = Regex.IsMatch(firstArg, @"^[A-Za-z_][\w.]*$") ? Resolve(ctx, el, scope, false, firstArg) : default;
+            return new Resolved(arg.Name is null ? null : arg.Type, argName, true, false, false, arg.Owner);
+        }
+        return new Resolved(type, argName, true, false, false);
     }
 
     private static string? LastIdentifier(string expr)
@@ -397,6 +501,12 @@ internal static partial class SamplePlanner
 
     private static TargetKind TargetKindOf(Context? ctx, XElement el, string property)
     {
+        if (property is "TabItemsSource" or "MenuItemsSource")
+        {
+            return XamlCleaner.ResolveElementType(el)?.GetProperty(property, BindingFlags.Public | BindingFlags.Instance) is not null
+                ? TargetKind.Items
+                : TargetKind.None;
+        }
         if (property == "ItemsSource")
         {
             var t = XamlCleaner.ResolveElementType(el);
@@ -484,10 +594,10 @@ internal static partial class SamplePlanner
 
     // ---- lists --------------------------------------------------------------------------------------------
 
-    /// <summary><c>__wxp-sample:{label}|{rows JSON}</c> for a list of <paramref name="itemType"/>.</summary>
-    private static string ListMarker(Context ctx, XElement list, ITypeSymbol? itemType, string label)
+    /// <summary>Generated rows for a list of <paramref name="itemType"/>, and the type the filler should build them as.</summary>
+    private static List<object> ListRows(Context ctx, XElement list, ITypeSymbol? itemType, string label, out string? typeName)
     {
-        var paths = new Dictionary<string, (ITypeSymbol? type, string name)>(StringComparer.Ordinal);
+        var paths = new Dictionary<string, (ITypeSymbol? type, string name, TargetKind kind, string? owner)>(StringComparer.Ordinal);
         foreach (var template in TemplatesFor(ctx, list, itemType))
         {
             var scope = TemplateType(ctx, template) ?? itemType;
@@ -499,32 +609,51 @@ internal static partial class SamplePlanner
                 }
                 foreach (var a in el.Attributes())
                 {
-                    if (a.IsNamespaceDeclaration || a.Name.Namespace != XNamespace.None || !IsXBind(el, a.Value) ||
-                        !XamlCleaner.TryParseBind(a.Value, out var path, out _) ||
-                        TargetKindOf(ctx, el, a.Name.LocalName) != TargetKind.Text)
+                    if (a.IsNamespaceDeclaration || a.Name.Namespace != XNamespace.None)
+                    {
+                        continue;
+                    }
+                    string? path;
+                    if (IsXBind(el, a.Value))
+                    {
+                        if (!XamlCleaner.TryParseBind(a.Value, out path, out _)) continue;
+                    }
+                    else if (Regex.Match(a.Value, @"^\{\s*Binding\s+(?:Path\s*=\s*)?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*[,}]") is { Success: true } m)
+                    {
+                        path = m.Groups[1].Value; // a classic {Binding} reads the same row
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                    var kind = TargetKindOf(ctx, el, a.Name.LocalName);
+                    if (kind is not (TargetKind.Text or TargetKind.Bool or TargetKind.Visibility))
                     {
                         continue;
                     }
                     var r = Resolve(ctx, el, scope, false, path);
-                    if (RowBindingPath(path, r) is { } rowPath)
+                    if (RowBindingPath(path, r) is { } rowPath && (kind == TargetKind.Text || r.Type is null || IsBoolLike(r.Type)))
                     {
-                        paths.TryAdd(rowPath, (r.Type, r.Name));
+                        paths.TryAdd(rowPath, (r.Type, r.Name, kind, r.Owner?.Name));
                     }
                 }
             }
         }
 
         var rows = new List<object>(Rows);
+        var rowName = itemType is null || itemType.SpecialType != SpecialType.None || !itemType.Locations.Any(l => l.IsInSource)
+            ? Singular(label) // a list of strings or numbers: name its rows after the list ("Tag", "Tag 2")
+            : itemType.Name;
         for (int i = 0; i < Rows; i++)
         {
             if (paths.Count == 0)
             {
-                rows.Add(TextValue(itemType, itemType?.Name ?? Singular(label), i));
+                rows.Add(TextValue(itemType, rowName, i));
                 continue;
             }
 
             var row = new Dictionary<string, object>(StringComparer.Ordinal);
-            foreach (var (path, (type, name)) in paths)
+            foreach (var (path, (type, name, kind, owner)) in paths)
             {
                 var segs = path.Split('.');
                 var node = row;
@@ -540,17 +669,28 @@ internal static partial class SamplePlanner
                 }
                 if (ok && !node.ContainsKey(segs[^1]))
                 {
-                    node[segs[^1]] = TextValue(type, name, i);
+                    node[segs[^1]] = kind == TargetKind.Text ? TextValue(type, name, i, owner) : i % 2 == 0;
                 }
             }
             rows.Add(row);
         }
 
-        var json = JsonSerializer.Serialize(rows);
-        if (itemType is not null && ReflectionName(itemType) is { } typeName)
-        {
-            json = JsonSerializer.Serialize(new Dictionary<string, object> { ["type"] = typeName, ["rows"] = rows });
-        }
+        // A platform list with no template shows each row's ToString(): readable text beats "App.Order".
+        bool showsToString = paths.Count == 0 && IsPlatformElement(list) && !TemplatesFor(ctx, list, null).Any() &&
+            !list.Attributes().Any(a => a.Name.LocalName is "ItemTemplate" or "ItemTemplateSelector" or "DisplayMemberPath") &&
+            !list.Elements().Any(e => e.Name.LocalName.EndsWith(".ItemTemplate", StringComparison.Ordinal) ||
+                                      e.Name.LocalName.EndsWith(".ItemTemplateSelector", StringComparison.Ordinal));
+        typeName = itemType is not null && !showsToString ? ReflectionName(itemType) : null;
+        return rows;
+    }
+
+    /// <summary><c>__wxp-sample:{label}|{rows JSON}</c> for a list of <paramref name="itemType"/>.</summary>
+    private static string ListMarker(Context ctx, XElement list, ITypeSymbol? itemType, string label)
+    {
+        var rows = ListRows(ctx, list, itemType, label, out var typeName);
+        var json = typeName is null
+            ? JsonSerializer.Serialize(rows)
+            : JsonSerializer.Serialize(new Dictionary<string, object> { ["type"] = typeName, ["rows"] = rows });
         return SampleListFiller.TagPrefix + label + "|" + json;
     }
 
@@ -588,7 +728,7 @@ internal static partial class SamplePlanner
             }
         }
 
-        foreach (var attr in new[] { "ItemTemplate", "ContentTemplate" })
+        foreach (var attr in new[] { "ItemTemplate", "ContentTemplate", "TabItemTemplate", "MenuItemTemplate" })
         {
             var v = (string?)list.Attribute(attr);
             var m = v is null ? null : Regex.Match(v, @"^\{\s*(?:Static|Theme)Resource\s+([^}\s]+)\s*\}$");
@@ -668,11 +808,14 @@ internal static partial class SamplePlanner
                 }
 
                 var kind = TargetKindOf(ctx, el, prop);
+                var constant = kind is TargetKind.Number or TargetKind.Bool or TargetKind.Visibility ? ConstantOf(value, model) : null;
                 string? literal = kind switch
                 {
                     TargetKind.Text => EscapeLiteral(TextOf(value, model, target)),
-                    TargetKind.Number => ScalarValue(kind, prop, model.GetTypeInfo(value).Type, LastName(value) ?? prop),
+                    _ when constant is { } c => InitialLiteral(c, kind, el, prop),
+                    TargetKind.Number => ScalarValue(kind, prop, model.GetTypeInfo(value).Type, LastName(value) ?? prop, el),
                     TargetKind.Bool => ScalarValue(kind, prop, null, prop),
+                    TargetKind.Visibility => ScalarValue(kind, prop, null, prop),
                     _ => null,
                 };
 
@@ -707,7 +850,10 @@ internal static partial class SamplePlanner
     /// </summary>
     private static bool IsEventHandlerCode(SyntaxNode node, BaseMethodDeclarationSyntax? method)
     {
+        // RefreshButton_Click is a click, whatever it refreshes.
         static bool InitialState(string name) =>
+            !Regex.IsMatch(name, "Click|Tapped|Changed|Changing|Pressed|Released|Toggled|Checked|Invoked|Submitted|Selected|KeyDown|KeyUp|Drop|Drag",
+                RegexOptions.IgnoreCase) &&
             Regex.IsMatch(name, "Load|Navigat|Activat|Init|Construct|Refresh|Populate|Render|Update|Bind", RegexOptions.IgnoreCase);
 
         foreach (var lambda in node.Ancestors().OfType<AnonymousFunctionExpressionSyntax>())
@@ -758,6 +904,8 @@ internal static partial class SamplePlanner
                 return b.Right is LiteralExpressionSyntax ? TextOf(b.Right, model, target) : TextOf(b.Left, model, target);
             case SwitchExpressionSyntax s when s.Arms.Count > 0:
                 return TextOf(s.Arms[0].Expression, model, target);
+            case InvocationExpressionSyntax inv when JoinedText(inv, model) is { } joined:
+                return joined;
             case InvocationExpressionSyntax inv when IsStringFormat(inv, out var format, out var args):
                 return Regex.Replace(format, @"\{(\d+)(?:[,:][^}]*)?\}", m =>
                 {
@@ -766,6 +914,56 @@ internal static partial class SamplePlanner
                 });
             default:
                 return Hole(expr, model);
+        }
+    }
+
+    /// <summary><c>string.Join(", ", Tags)</c> / <c>string.Concat(...)</c>: sample elements joined the same way.</summary>
+    private static string? JoinedText(InvocationExpressionSyntax inv, SemanticModel model)
+    {
+        if (inv.Expression is not MemberAccessExpressionSyntax { Name.Identifier.Text: "Join" or "Concat" } ma ||
+            ma.Expression.ToString() is not ("string" or "String" or "System.String") ||
+            inv.ArgumentList.Arguments.Count == 0)
+        {
+            return null;
+        }
+        var all = inv.ArgumentList.Arguments.Select(a => a.Expression).ToList();
+        var separator = "";
+        if (ma.Name.Identifier.Text == "Join")
+        {
+            separator = all[0] is LiteralExpressionSyntax sep ? sep.Token.ValueText : ", ";
+            all.RemoveAt(0);
+        }
+        if (all.Count != 1)
+        {
+            return string.Join(separator, all.Select(a => TextOf(a, model, "")));
+        }
+
+        // One collection argument, perhaps projected: Items.Select(i => i.Name).
+        var source = all[0];
+        string? name = null;
+        ITypeSymbol? elementType = null;
+        if (source is InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: "Select" } sel } proj &&
+            proj.ArgumentList.Arguments.FirstOrDefault()?.Expression is LambdaExpressionSyntax { ExpressionBody: { } body })
+        {
+            name = LastName(body);
+            elementType = TryType(body, model);
+            source = sel.Expression;
+        }
+        var sourceType = TryType(source, model);
+        elementType ??= sourceType is null ? null : SampleTypeModel.ElementType(sourceType);
+        name ??= Singular(LastName(source) ?? "Item");
+        return string.Join(separator, Enumerable.Range(0, Rows).Select(i => TextValue(elementType, name, i)));
+    }
+
+    private static ITypeSymbol? TryType(ExpressionSyntax expr, SemanticModel model)
+    {
+        try
+        {
+            return model.GetTypeInfo(expr).Type is { TypeKind: not TypeKind.Error } t ? t : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -838,7 +1036,7 @@ internal static partial class SamplePlanner
     /// Display text for a value of <paramref name="type"/> named <paramref name="name"/> in row <paramref name="index"/>:
     /// from the type when known, else from the name.
     /// </summary>
-    internal static string TextValue(ITypeSymbol? type, string name, int index)
+    internal static string TextValue(ITypeSymbol? type, string name, int index, string? owner = null)
     {
         if (type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } n)
         {
@@ -847,14 +1045,14 @@ internal static partial class SamplePlanner
 
         if (type is null || type.TypeKind == TypeKind.Error)
         {
-            return TextByName(name, index);
+            return TextByName(name, index, owner);
         }
 
         switch (type.SpecialType)
         {
             case SpecialType.System_String:
             case SpecialType.System_Object:
-                return TextByName(name, index);
+                return TextByName(name, index, owner);
             case SpecialType.System_Boolean:
                 return index % 2 == 0 ? "True" : "False";
             case SpecialType.System_Byte: case SpecialType.System_Int16: case SpecialType.System_Int32: case SpecialType.System_Int64:
@@ -863,17 +1061,22 @@ internal static partial class SamplePlanner
             case SpecialType.System_Single: case SpecialType.System_Double: case SpecialType.System_Decimal:
                 return DoubleByName(name, index).ToString("0.##", CultureInfo.CurrentCulture);
             case SpecialType.System_DateTime:
-                return SampleDate(index).ToString("d MMM yyyy", CultureInfo.CurrentCulture);
+                // What the app shows for the value SampleObjects generates: the runtime's own ToString.
+                return SampleDate(index).ToString(CultureInfo.CurrentCulture);
             case SpecialType.System_Char:
                 return ((char)('A' + index % 26)).ToString();
         }
 
         switch (type.Name)
         {
-            case "DateTimeOffset": case "DateOnly":
-                return SampleDate(index).ToString("d MMM yyyy", CultureInfo.CurrentCulture);
-            case "TimeSpan": case "TimeOnly":
-                return $"{2 + index}:{(15 * index) % 60:00}";
+            case "DateTimeOffset":
+                return new DateTimeOffset(SampleDate(index)).ToString(CultureInfo.CurrentCulture);
+            case "DateOnly":
+                return DateOnly.FromDateTime(SampleDate(index)).ToString(CultureInfo.CurrentCulture);
+            case "TimeSpan":
+                return new TimeSpan(2 + index, 15 * index % 60, 0).ToString();
+            case "TimeOnly":
+                return new TimeOnly(2 + index, 15 * index % 60).ToString(CultureInfo.CurrentCulture);
             case "Guid":
                 return $"00000000-0000-0000-0000-{1001 + index:000000000000}";
             case "Uri":
@@ -883,7 +1086,7 @@ internal static partial class SamplePlanner
         if (type.TypeKind == TypeKind.Enum)
         {
             var members = type.GetMembers().OfType<IFieldSymbol>().Where(f => f.HasConstantValue).ToList();
-            return members.Count == 0 ? TextByName(name, index) : Humanize(members[index % members.Count].Name);
+            return members.Count == 0 ? TextByName(name, index, owner) : members[index % members.Count].Name; // as Enum.ToString
         }
 
         if (SampleTypeModel.ElementType(type) is not null)
@@ -896,16 +1099,35 @@ internal static partial class SamplePlanner
         {
             if (SampleTypeModel.MemberType(type, display) is { SpecialType: SpecialType.System_String })
             {
-                return TextByName(display == "Name" || display == "DisplayName" ? type.Name + "Name" : display, index);
+                return TextByName(display, index, type.Name);
             }
         }
         return Humanize(type.Name) + (index > 0 ? $" {index + 1}" : "");
     }
 
-    /// <summary>Text for a string (or unknown) value from its name alone.</summary>
-    internal static string TextByName(string name, int index)
+    private static readonly string[] People = { "Avery Chen", "Jordan Patel", "Sam Rivera", "Riley Novak" };
+    private static readonly string[] FirstNames = { "Avery", "Jordan", "Sam", "Riley" };
+    private static readonly string[] LastNames = { "Chen", "Patel", "Rivera", "Novak" };
+    private static readonly string[] Cities = { "Seattle", "Austin", "Denver", "Toronto" };
+    private static readonly string[] Countries = { "United States", "Canada", "Mexico", "Ireland" };
+    private static readonly string[] Companies = { "Contoso", "Fabrikam", "Northwind Traders", "Adventure Works" };
+    private static readonly string[] Statuses = { "Active", "Pending", "Done", "On hold" };
+    private static readonly string[] Sentences =
+        { "Needs a quick review before Friday.", "Waiting on parts from the supplier.", "Ready for sign-off.", "Follow up next week." };
+
+    private const string PersonWords =
+        "person|people|customer|client|employee|user|contact|member|author|technician|pilot|owner|assignee|staff|student|" +
+        "teacher|patient|driver|mechanic|engineer|agent|manager|reviewer|requester|requestor|creator|inspector|lead|signer";
+
+    /// <summary>
+    /// Text for a string (or unknown) value from its name alone. <paramref name="owner"/> is the type that declares
+    /// it, when known (<c>Name</c> on a <c>Person</c> reads as a person's name).
+    /// </summary>
+    internal static string TextByName(string name, int index, string? owner = null)
     {
         var n = name.ToLowerInvariant();
+        string Pick(string[] values) => values[index % values.Length];
+        if (name == "__initials") return string.Concat(Pick(People).Split(' ').Select(w => w[0]));
         if (Regex.IsMatch(n, "(url|uri|link|website|href)$")) return "https://example.com";
         if (n.Contains("email")) return index == 0 ? "name@example.com" : $"name{index + 1}@example.com";
         if (n.Contains("phone")) return $"(555) 010-{100 + index:0000}";
@@ -915,6 +1137,26 @@ internal static partial class SamplePlanner
         if (Regex.IsMatch(n, "(percent|pct)")) return $"{40 + 15 * index}%";
         if (Regex.IsMatch(n, "(^|[^a-z])id$") || name.EndsWith("Id", StringComparison.Ordinal) || name.EndsWith("ID", StringComparison.Ordinal))
             return (1001 + index).ToString(CultureInfo.InvariantCulture);
+        if (n.Contains("firstname") || n == "givenname") return Pick(FirstNames);
+        if (n.Contains("lastname") || n == "surname" || n == "familyname") return Pick(LastNames);
+        if (Regex.IsMatch(n, $"^({PersonWords})(name|fullname|displayname)?$") || n is "fullname" or "username" or "assignedto" or "createdby" or "modifiedby" ||
+            (n is "name" or "displayname" && owner is not null && Regex.IsMatch(owner, PersonWords, RegexOptions.IgnoreCase)))
+            return Pick(People);
+        if (n.EndsWith("city")) return Pick(Cities);
+        if (n.EndsWith("country")) return Pick(Countries);
+        if (Regex.IsMatch(n, "(company|organization|organisation|vendor|supplier|publisher|manufacturer)(name)?$")) return Pick(Companies);
+        if (Regex.IsMatch(n, "(status|state)(text|label)?$")) return Pick(Statuses);
+        if (Regex.IsMatch(n, "(description|notes?|summary|comments?|details|remarks|body|message)$")) return Pick(Sentences);
+        if (Regex.IsMatch(name, "(Number|No|Code|Sku|SKU|Serial|Ref|Reference|Tail|Registration)$"))
+        {
+            // An identifier: initials and a number ("TailNumber" -> "TN-1042").
+            var initials = string.Concat(Regex.Matches(Humanize(name), @"\b\w").Select(m => char.ToUpperInvariant(m.Value[0])));
+            return $"{initials}-{1001 + 41 * index}";
+        }
+        if (n is "name" or "displayname" && owner is not null && !Regex.IsMatch(owner, "(Page|ViewModel|Window|Control|View|Model|Dialog)$"))
+        {
+            return $"{Humanize(owner)} {index + 1}"; // an Order's Name: "Order 1", "Order 2"
+        }
         var label = Humanize(name);
         return index > 0 ? $"{label} {index + 1}" : label;
     }
@@ -925,7 +1167,10 @@ internal static partial class SamplePlanner
         if (n.EndsWith("id")) return 1001 + index;
         if (n.Contains("year")) return 2026 - index;
         if (n.Contains("percent") || n.Contains("pct")) return Math.Min(100, 40 + 15 * index);
-        return 12 + 7 * index;
+        // Varied by name (stable across runs) so a page of counts doesn't read 12, 12, 12.
+        uint h = 2166136261;
+        foreach (var c in n) h = (h ^ c) * 16777619;
+        return 3 + h % 46 + 7 * index;
     }
 
     internal static double DoubleByName(string name, int index)
@@ -943,7 +1188,7 @@ internal static partial class SamplePlanner
     internal static DateTime SampleDate(int index) => new DateTime(2026, 11, 18).AddDays(index);
 
     /// <summary>A literal for a non-text target property; null keeps the property's default.</summary>
-    private static string? ScalarValue(TargetKind kind, string property, ITypeSymbol? sourceType, string name)
+    private static string? ScalarValue(TargetKind kind, string property, ITypeSymbol? sourceType, string name, XElement? el = null)
     {
         switch (kind)
         {
@@ -953,24 +1198,46 @@ internal static partial class SamplePlanner
                 return PreviewBoolProperties.Contains(property) ? "True" : null;
             case TargetKind.Number:
             {
+                var element = el?.Name.LocalName;
                 double? v = property switch
                 {
                     "Width" => 120,
                     "Height" => 32,
+                    "Value" when element == "RatingControl" => 3,
                     "Value" => Regex.IsMatch(name, "percent|pct|rate|availability|progress|utilization", RegexOptions.IgnoreCase) ? 72.5 : 60,
                     "Maximum" => 100,
                     "Minimum" => 0,
                     "Opacity" => 1,
+                    "NumberOfPages" or "MaxRating" => 5,
+                    "SelectedIndex" or "SelectedPageIndex" => 0,
                     _ => null,
                 };
-                if (v is null && sourceType is { } st && IsNumeric(st))
+                if (v is null && sourceType is { } st && IsNumeric(st) && !IsPlatformElement(el))
                 {
-                    v = DoubleByName(name, 0);
+                    // An app control's own number (a tile's Count); a platform control's other numbers (FontSize,
+                    // MaxLength, Spacing…) read best at their defaults.
+                    v = IsInteger(st) ? IntByName(name, 0) : DoubleByName(name, 0);
+                }
+                if (v is { } d && el is not null && IsIntegerTarget(el, property))
+                {
+                    v = Math.Round(d);
                 }
                 return v?.ToString(CultureInfo.InvariantCulture);
             }
         }
         return null;
+    }
+
+    private static bool IsPlatformElement(XElement? el)
+    {
+        var t = el is null ? null : XamlCleaner.ResolveElementType(el);
+        return t is not null && IsPlatformNamespace(t.Namespace);
+    }
+
+    private static bool IsInteger(ITypeSymbol t)
+    {
+        if (t is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } n) t = n.TypeArguments[0];
+        return t.SpecialType is SpecialType.System_Int32 or SpecialType.System_Int64 or SpecialType.System_Int16;
     }
 
     private static bool IsNumeric(ITypeSymbol t)

@@ -59,6 +59,12 @@ internal sealed class SampleTypeModel
 
             var state = Projects.GetOrAdd(csproj, p => new ProjectState(p));
             var task = state.Refresh();
+            if (state.Last is null && wait < FirstBuildWait)
+            {
+                // The first parse of a large project takes seconds; a name-based first render that changes on the
+                // next edit is worse than a slower first render.
+                wait = FirstBuildWait;
+            }
             if (!task.Wait(wait))
             {
                 App.Log($"SAMPLE: type model for {Path.GetFileName(csproj)} not ready after {wait.TotalMilliseconds:0} ms; using name-based values.");
@@ -73,6 +79,8 @@ internal sealed class SampleTypeModel
         }
     }
 
+    private static readonly TimeSpan FirstBuildWait = TimeSpan.FromSeconds(10);
+
     internal static string? FindProject(string? xamlPath)
     {
         if (string.IsNullOrEmpty(xamlPath))
@@ -82,13 +90,30 @@ internal sealed class SampleTypeModel
 
         for (var dir = Path.GetDirectoryName(Path.GetFullPath(xamlPath)); dir is not null; dir = Path.GetDirectoryName(dir))
         {
-            var proj = Directory.EnumerateFiles(dir, "*.csproj").FirstOrDefault();
-            if (proj is not null)
+            var projects = Directory.EnumerateFiles(dir, "*.csproj").ToList();
+            if (projects.Count > 0)
             {
-                return proj;
+                // Several projects in one folder: the WinUI app, else the one named after the folder.
+                return projects.FirstOrDefault(IsWinUIProject)
+                    ?? projects.FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals(Path.GetFileName(dir), StringComparison.OrdinalIgnoreCase))
+                    ?? projects.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).First();
             }
         }
         return null;
+    }
+
+    private static readonly Regex UseWinUI = new(@"<UseWinUI>\s*true\s*</UseWinUI>", RegexOptions.IgnoreCase);
+
+    private static bool IsWinUIProject(string csproj)
+    {
+        try
+        {
+            return UseWinUI.IsMatch(File.ReadAllText(csproj));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     // ---- type queries ---------------------------------------------------------------------------------
@@ -312,11 +337,41 @@ internal sealed class SampleTypeModel
         private SyntaxTree? _usingsTree;
         private CSharpCompilation? _compilation;
         private Task<SampleTypeModel?>? _pending;
+        private readonly FileSystemWatcher? _watcher;
+        private volatile bool _dirty = true;
 
         public ProjectState(string csproj)
         {
             _csproj = csproj;
             _dir = Path.GetDirectoryName(csproj)!;
+            try
+            {
+                // Re-enumerating a large tree on every render is the expensive part; only rescan after a change.
+                _watcher = new FileSystemWatcher(_dir)
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
+                };
+                _watcher.Changed += OnChange;
+                _watcher.Created += OnChange;
+                _watcher.Deleted += OnChange;
+                _watcher.Renamed += (_, _) => _dirty = true;
+                _watcher.Error += (_, _) => _dirty = true;
+                _watcher.EnableRaisingEvents = true;
+            }
+            catch (Exception ex)
+            {
+                _watcher = null; // scan on every refresh instead
+                App.Log($"SAMPLE: no file watcher for {Path.GetFileName(csproj)}: {ex.Message}");
+            }
+        }
+
+        private void OnChange(object sender, FileSystemEventArgs e)
+        {
+            if (e.FullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || !Path.HasExtension(e.FullPath))
+            {
+                _dirty = true; // a .cs file, or a folder (its files come and go with it)
+            }
         }
 
         public SampleTypeModel? Last { get; private set; }
@@ -337,6 +392,12 @@ internal sealed class SampleTypeModel
         {
             try
             {
+                if (!_dirty && _watcher is not null && Last is not null)
+                {
+                    return Last;
+                }
+                _dirty = false; // cleared before scanning: a change during the scan marks it dirty again
+
                 var sw = Stopwatch.StartNew();
                 var files = Directory.EnumerateFiles(_dir, "*.cs", SearchOption.AllDirectories)
                     .Where(f => !IsBuildOutput(f))
@@ -399,6 +460,7 @@ internal sealed class SampleTypeModel
             }
             catch (Exception ex)
             {
+                _dirty = true;
                 App.Log($"SAMPLE: type model update failed: {ex.GetType().Name}: {ex.Message}");
                 return Last;
             }
@@ -406,11 +468,11 @@ internal sealed class SampleTypeModel
 
         private bool IsBuildOutput(string file)
         {
-            var rel = Path.GetRelativePath(_dir, file);
-            var first = rel.Split(Path.DirectorySeparatorChar, 2)[0];
-            return first.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-                   first.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
-                   first.StartsWith(".", StringComparison.Ordinal);
+            // Any folder on the way: a nested project's bin\ and obj\ hold generated copies too.
+            var folders = Path.GetRelativePath(_dir, file).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[..^1];
+            return folders.Any(f => f.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                                    f.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+                                    f.StartsWith(".", StringComparison.Ordinal));
         }
     }
 }

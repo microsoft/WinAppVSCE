@@ -341,6 +341,7 @@ public partial class App : Application, IXamlMetadataProvider
         {
             Program.Boot("OnLaunched: XamlControlsResources FAILED (continuing) " + ex.Message);
         }
+        SampleConverters.Register(Resources);
 
         // Start the warm frame server; the app stays alive serving renders until the client
         // disconnects (or stdin closes / it is killed) — it does NOT exit after one render.

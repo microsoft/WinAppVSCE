@@ -66,6 +66,11 @@ namespace Surface.Tests.Fixtures
     {
         public Exploding() => throw new InvalidOperationException("boom");
     }
+
+    public class Card
+    {
+        public List<string> Lines { get; set; } = new();
+    }
 }
 
 namespace Surface.Tests
@@ -102,6 +107,7 @@ namespace Surface.Tests
             Run("R2 sample data (source-typed)", SampleDataTyped);
             Run("R2 sample data (typed objects)", SampleDataObjects);
             Run("R2 sample data (charts)", SampleDataCharts);
+            Run("R2 sample data (initial state, functions, list forms)", SampleDataStates);
             Run("R2 TryParseBind/BindPathLabel", BindParsing);
             Run("R3 x: directives", Rule3);
             Run("R4 events", Rule4);
@@ -428,15 +434,15 @@ namespace Surface.Tests
                 "</StackPanel></DataTemplate></ListView.ItemTemplate></ListView>" +
                 "</StackPanel>",
                 rootAttrs: "x:Class=\"App1.MainPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
-            Eq("code-behind interpolation typed", "Hello, 12 orders", Attr(Named(r, "Greeting"), "Text"));
+            Eq("code-behind interpolation typed", $"Hello, {SamplePlanner.IntByName("Count", 0):N0} orders", Attr(Named(r, "Greeting"), "Text"));
             Check("event-handler assignment skipped", Attr(Named(r, "Status"), "Text") is null, Attr(Named(r, "Status"), "Text"));
             Eq("markup value never overwritten", "Markup wins", Attr(Named(r, "Kept"), "Text"));
-            Eq("int member -> number", "12", Attr(Named(r, "Num"), "Text"));
-            Eq("DateTime member -> date", "18 Nov 2026", Attr(Named(r, "When"), "Text"));
+            Eq("int member -> number", SamplePlanner.IntByName("Count", 0).ToString("N0"), Attr(Named(r, "Num"), "Text"));
+            Eq("DateTime member -> as the app shows it", SamplePlanner.SampleDate(0).ToString(System.Globalization.CultureInfo.CurrentCulture), Attr(Named(r, "When"), "Text"));
             Check("binding to a named element dropped", Attr(Named(r, "Ref"), "Text") is null, Attr(Named(r, "Ref"), "Text"));
             var tag = Attr(Named(r, "List"), "Tag") ?? "";
             Check("typed list rows carry template fields", tag.StartsWith(SampleListFiller.TagPrefix + "Orders|", StringComparison.Ordinal)
-                && tag.Contains("\"Customer\"") && tag.Contains("\"State\":\"In progress\""), tag);
+                && tag.Contains("\"Customer\":\"Avery Chen\"") && tag.Contains("\"State\":\"InProgress\""), tag);
             Check("template x:Bind -> {Binding} into the row", (Attr(Named(r, "Cust"), "Text") ?? "").StartsWith("{Binding Customer", StringComparison.Ordinal), Attr(Named(r, "Cust"), "Text"));
 
             var rows = SampleListFiller.BuildRows(tag[SampleListFiller.TagPrefix.Length..], 2, out var label);
@@ -444,6 +450,121 @@ namespace Surface.Tests
             Check("filler rows are dictionaries capped to max", rows.Count == 2 && rows[0] is Dictionary<string, object> d && d.ContainsKey("Customer"));
             var plain = SampleListFiller.BuildRows("Items", 3, out label);
             Check("bare label -> repeated strings", plain.Count == 3 && (string)plain[0] == "Items" && label == "Items");
+        }
+
+        private static void SampleDataStates()
+        {
+            var types = SampleTypeModel.FromSources(
+                "using System; using System.Collections.Generic; using System.Collections.ObjectModel; using Microsoft.UI.Xaml;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class StatesPage {\n" +
+                "  public double Quantity { get; set; } = 3;\n" +
+                "  public double Volume { get; set; } = 40;\n" +
+                "  public bool? Agreed { get; set; }\n" +
+                "  public bool IsLoading { get; set; } = true;\n" +
+                "  public bool IsBusy { get; set; }\n" +
+                "  public bool HasOrders { get; set; }\n" +
+                "  public Visibility EmptyVisibility { get; set; } = Visibility.Collapsed;\n" +
+                "  public string Draft { get; set; } = \"\";\n" +
+                "  public string Query { get; set; } = \"rivets\";\n" +
+                "  public Person Owner { get; } = new();\n" +
+                "  public List<string> Tags { get; } = new();\n" +
+                "  public ObservableCollection<Order> Orders { get; } = new();\n" +
+                "  public ObservableCollection<string> Tabs { get; } = new();\n" +
+                "  public static string Initials(string name) => name;\n" +
+                "  public static string FormatPrice(decimal price) => price.ToString();\n" +
+                "  public string GetTitle() => \"\";\n" +
+                "  public StatesPage() { Summary.Text = string.Join(\", \", Tags); }\n" +
+                "  private void OnLoaded(object sender, RoutedEventArgs e) { IsLoading = false; HasOrders = true; }\n" +
+                "  private void Refresh_Click(object sender, RoutedEventArgs e) { IsBusy = true; Status.Text = \"Refreshed!\"; }\n" +
+                "}\n" +
+                "public class Person { public string Name { get; set; } public string City { get; set; } }\n" +
+                "public class Order { public string Name { get; set; } public string Customer { get; set; } public decimal Price { get; set; } public bool IsRush { get; set; } public bool IsDone { get; set; } }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<NumberBox x:Name=\"Qty\" Value=\"{x:Bind Quantity}\" />" +
+                "<Slider x:Name=\"Vol\" Value=\"{x:Bind Volume}\" />" +
+                "<CheckBox x:Name=\"Agree\" IsChecked=\"{x:Bind Agreed}\" />" +
+                "<ProgressRing x:Name=\"Spin\" IsActive=\"{x:Bind IsLoading}\" />" +
+                "<ProgressBar x:Name=\"Busy\" IsIndeterminate=\"{x:Bind IsBusy}\" />" +
+                "<StackPanel x:Name=\"Empty\" Visibility=\"{x:Bind EmptyVisibility}\" />" +
+                "<ListView x:Name=\"Filled\" Visibility=\"{x:Bind HasOrders}\" />" +
+                "<TextBox x:Name=\"DraftBox\" Text=\"{x:Bind Draft}\" />" +
+                "<AutoSuggestBox x:Name=\"Search\" Text=\"{x:Bind Query}\" />" +
+                "<TextBlock x:Name=\"OwnerName\" Text=\"{x:Bind Owner.Name}\" />" +
+                "<TextBlock x:Name=\"OwnerCity\" Text=\"{x:Bind Owner.City}\" />" +
+                "<TextBlock x:Name=\"Init\" Text=\"{x:Bind local:StatesPage.Initials(Owner.Name)}\" />" +
+                "<TextBlock x:Name=\"Title\" Text=\"{x:Bind GetTitle()}\" />" +
+                "<TextBlock x:Name=\"Summary\" />" +
+                "<TextBlock x:Name=\"Status\" />" +
+                "<ListView x:Name=\"List\" ItemsSource=\"{x:Bind Orders}\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Order\"><StackPanel>" +
+                "<TextBlock x:Name=\"Price\" Text=\"{x:Bind local:StatesPage.FormatPrice(Price)}\" />" +
+                "<Border x:Name=\"Rush\" Visibility=\"{x:Bind IsRush}\" />" +
+                "<CheckBox x:Name=\"Done\" IsChecked=\"{x:Bind IsDone}\" />" +
+                "</StackPanel></DataTemplate></ListView.ItemTemplate></ListView>" +
+                "<ItemsControl x:Name=\"TagList\" ItemsSource=\"{x:Bind Tags}\"><ItemsControl.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"x:String\"><TextBlock x:Name=\"TagText\" Text=\"{x:Bind}\" /></DataTemplate>" +
+                "</ItemsControl.ItemTemplate></ItemsControl>" +
+                "<TabView x:Name=\"Tabs\" TabItemsSource=\"{x:Bind Tabs}\" />" +
+                "<ListView x:Name=\"Classic\" ItemsSource=\"{Binding Orders}\" />" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.StatesPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+
+            // Initial state comes from the page's own initializers and load code, not from interaction handlers.
+            Eq("number initializer (NumberBox)", "3", Attr(Named(r, "Qty"), "Value"));
+            Eq("number initializer (Slider)", "40", Attr(Named(r, "Vol"), "Value"));
+            Check("unset bool? -> not checked", Attr(Named(r, "Agree"), "IsChecked") is null or "False", Attr(Named(r, "Agree"), "IsChecked"));
+            Eq("bool cleared in Loaded handler", "False", Attr(Named(r, "Spin"), "IsActive"));
+            Eq("bool set only in a click handler stays false", "False", Attr(Named(r, "Busy"), "IsIndeterminate"));
+            Eq("Visibility.Collapsed initializer", "Collapsed", Attr(Named(r, "Empty"), "Visibility"));
+            Eq("bool set in Loaded -> Visible", "Visible", Attr(Named(r, "Filled"), "Visibility"));
+            Check("empty-string TextBox -> no prefill", Attr(Named(r, "DraftBox"), "Text") is null or "", Attr(Named(r, "DraftBox"), "Text"));
+            Eq("input box shows its known initial text", "rivets", Attr(Named(r, "Search"), "Text"));
+
+            // Vocabulary: names read as what they are.
+            Eq("Person.Name -> a person's name", "Avery Chen", Attr(Named(r, "OwnerName"), "Text"));
+            Eq("City -> a city", "Seattle", Attr(Named(r, "OwnerCity"), "Text"));
+            Eq("TextByName: Customer", "Avery Chen", SamplePlanner.TextByName("Customer", 0));
+            Eq("TextByName: Name on Order", "Order 2", SamplePlanner.TextByName("Name", 1, "Order"));
+            Eq("TextByName: Name on a page stays generic", "Name", SamplePlanner.TextByName("Name", 0, "MainPage"));
+            Check("TextByName: Description -> a sentence", SamplePlanner.TextByName("Description", 0).EndsWith('.'), SamplePlanner.TextByName("Description", 0));
+
+            // Functions show what they compute, not their own name.
+            Eq("Initials(Name) -> initials", "AC", Attr(Named(r, "Init"), "Text"));
+            Eq("GetTitle() -> Title", "Title", Attr(Named(r, "Title"), "Text"));
+            Check("FormatPrice(Price) -> the price", Attr(Named(r, "Price"), "Text") is { } price && !price.Contains("Format", StringComparison.OrdinalIgnoreCase) &&
+                System.Text.RegularExpressions.Regex.IsMatch(price, @"\d"), Attr(Named(r, "Price"), "Text"));
+            Eq("string.Join(\", \", Tags) -> joined sample tags", "Tag, Tag 2, Tag 3", Attr(Named(r, "Summary"), "Text"));
+            Check("text set in Refresh_Click is interaction, not initial", Attr(Named(r, "Status"), "Text") is null, Attr(Named(r, "Status"), "Text"));
+
+            // Row templates bind each row's own values.
+            Eq("row Visibility -> converter binding", "{Binding IsRush, Converter={StaticResource __wxpSampleVisibility}}", Attr(Named(r, "Rush"), "Visibility"));
+            Eq("row bool -> binding", "{Binding IsDone}", Attr(Named(r, "Done"), "IsChecked"));
+            Eq("{x:Bind} of a string row -> {Binding}", "{Binding}", Attr(Named(r, "TagText"), "Text"));
+            var tag = Attr(Named(r, "List"), "Tag") ?? "";
+            Check("row bools vary", tag.Contains("\"IsRush\":true") && tag.Contains("\"IsRush\":false"), tag);
+            Check("TabItemsSource filled", (Attr(Named(r, "Tabs"), "Tag") ?? "").StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal), Attr(Named(r, "Tabs"), "Tag"));
+            Check("classic {Binding} ItemsSource filled", (Attr(Named(r, "Classic"), "Tag") ?? "").StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal), Attr(Named(r, "Classic"), "Tag"));
+            Check("string list rows are readable", (Attr(Named(r, "TagList"), "Tag") ?? "").Contains("\"Tag 2\""), Attr(Named(r, "TagList"), "Tag"));
+
+            // Typed objects: an empty "= new()" collection is filled like a null one.
+            var withLines = SampleObjects.Create(typeof(Fixtures.Card), null, 0) as Fixtures.Card;
+            Check("empty initialized list filled", withLines?.Lines.Count > 0, withLines?.Lines.Count.ToString());
+
+            // Project discovery: a folder with several projects picks the WinUI app.
+            var dir = Directory.CreateTempSubdirectory("wxp-proj-").FullName;
+            try
+            {
+                File.WriteAllText(Path.Combine(dir, "A.Tests.csproj"), "<Project><PropertyGroup /></Project>");
+                File.WriteAllText(Path.Combine(dir, "Zeta.csproj"), "<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup></Project>");
+                Eq("FindProject prefers <UseWinUI>", Path.Combine(dir, "Zeta.csproj"), SampleTypeModel.FindProject(Path.Combine(dir, "MainPage.xaml")));
+            }
+            finally
+            {
+                Directory.Delete(dir, true);
+            }
         }
 
         private static void SampleDataCharts()
@@ -511,7 +632,7 @@ namespace Surface.Tests
             Eq("bool assigned in code -> shown", "Visible", Attr(Named(r, "Live"), "Visibility") ?? "Visible");
             Eq("Visibility.Collapsed initializer", "Collapsed", Attr(Named(r, "Hidden"), "Visibility"));
             Check("converter -> not planned as hidden", Attr(Named(r, "Conv"), "Visibility") != "Collapsed", Attr(Named(r, "Conv"), "Visibility"));
-            Check("non-chart Visibility unchanged by chart rule", Attr(Named(r, "Label"), "Visibility") != "Collapsed", Attr(Named(r, "Label"), "Visibility"));
+            Eq("non-chart Visibility follows its never-assigned bool", "Collapsed", Attr(Named(r, "Label"), "Visibility"));
 
             var noSample = new List<ChartFixup>();
             XamlCleaner.Clean(xaml, sampleData: false, sampleTypes: types, chartFixups: noSample);
@@ -572,13 +693,13 @@ namespace Surface.Tests
             var planes = Enumerable.Range(0, 3).Select(i => SampleObjects.Create(typeof(Fixtures.Plane), i == 0 ? row : null, i) as Fixtures.Plane).ToList();
             var p0 = planes[0]!;
             Eq("row string wins", "N123AB", p0.Tail);
-            Eq("generated string by name", "Tail 2", planes[1]!.Tail);
+            Eq("generated identifier by name", "T-1042", planes[1]!.Tail);
             Check("init int generated", p0.Cycles > 0, p0.Cycles.ToString());
             Eq("type's own default kept", "A-check", p0.NextCheck);
             Check("enum varies by row", p0.State == Fixtures.FlightState.Healthy && planes[1]!.State == Fixtures.FlightState.Attention, $"{p0.State} {planes[1]!.State}");
             Check("DateTime generated", p0.LastSeen != default, p0.LastSeen.ToString("o"));
             Check("nested object via parameterized ctor", p0.Engine is { Serial: "Serial", Hours: > 0 }, p0.Engine?.Serial);
-            Check("list property generated", p0.Notes is { Count: 3 } && p0.Notes[0] == "Note", string.Join(",", p0.Notes ?? new()));
+            Check("list property generated", p0.Notes is { Count: 3 } && p0.Notes[0].Length > 0 && p0.Notes[0] != p0.Notes[1], string.Join(",", p0.Notes ?? new()));
             Check("get-only collection filled", p0.Spares.Count == 3);
             Check("throwing ctor -> null, no throw", SampleObjects.Create(typeof(Fixtures.Exploding), null, 0) is null);
 
