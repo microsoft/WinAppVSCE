@@ -21,8 +21,9 @@ namespace Surface;
 /// sample values for <c>Samples.ItemsSource</c> and the element references (<c>XAxis="{x:Bind MonthX}"</c>,
 /// <c>XValues="{x:Bind Month}"</c>) that only compiled bindings can express.</item>
 /// <item>A WinAppSDK <c>Chart</c> still without data after load (series built in code-behind, which the preview never
-/// runs) is given a sample line series through its own API, so it renders with the app's chart styles. If the app
-/// later supplies data (a custom control's code does run), the sample series is removed.</item>
+/// runs) is given a sample line through its own API: the overlay's look (accent stroke, faint grid, Y axis fitted to
+/// the data) on the app's chart background. An author's own empty series keep their styling and axis range. If the
+/// app later supplies data (a custom control's code does run), the sample series is removed.</item>
 /// <item>Anything else chart-like (a control typed <c>*Chart</c>/<c>*Graph</c>/<c>*Plot</c>/<c>*Sparkline</c> with no
 /// data, or an element named like a chart whose shapes are all empty) gets a generated line drawn in a separate,
 /// non-interactive layer above the page (<see cref="CreateOverlay"/>), clipped to the scroll viewers around it. The
@@ -448,11 +449,22 @@ internal static class SampleChartFiller
 
                 if (existing.Count == 0)
                 {
+                    // The preview's own line: the overlay's look (accent stroke, faint grid, no X labels) drawn by
+                    // the real chart, with the Y axis fitted to the data.
+                    var values = SamplePlanner.ChartSeriesValues(chart.Name, SamplePlanner.ChartLinePoints).ToList();
+                    xAxis = Activator.CreateInstance(ChartsType("CategoryAxis"))!;
+                    yAxis = Activator.CreateInstance(ChartsType("LinearAxis"))!;
+                    StyleSampleAxes(asm, xAxis, yAxis, values.Min(), values.Max());
+                    fill.Add(axes, axesProp.PropertyType, xAxis);
+                    fill.Add(axes, axesProp.PropertyType, yAxis);
+
                     var series = Activator.CreateInstance(ChartsType("LineSeries"))!;
-                    Set(series, "XAxis", NewAxes(true));
-                    Set(series, "YAxis", NewAxes(false));
-                    Set(series, "XValues", NewSamples(XValuesFor(xAxis)));
-                    Set(series, "YValues", NewSamples(SamplePlanner.ChartSeriesValues(chart.Name).ToList()));
+                    Set(series, "XAxis", xAxis);
+                    Set(series, "YAxis", yAxis);
+                    Set(series, "XValues", NewSamples(Enumerable.Range(0, values.Count).Select(i => (double)i).ToList()));
+                    Set(series, "YValues", NewSamples(values));
+                    TrySet(series, "Stroke", new SolidColorBrush(Accent()));
+                    TrySet(series, "StrokeThickness", 2.0);
                     fill.Add(Get(chart, "Series")!, seriesProp.PropertyType, series);
                     fill._ourSeries.Add(series);
                     return fill;
@@ -481,9 +493,12 @@ internal static class SampleChartFiller
                         fill.Undo();
                         return null;
                     }
-                    FillValues(fill, series, "XValues", XValuesFor(x), NewSamples);
+                    // Match any X data the author already has, and stay inside an axis range they pinned.
+                    int count = CountAll(Get(Get(series, "XValues"), "ItemsSource")) is var xs and > 0 ? xs : SamplePlanner.ChartPoints;
+                    var (min, max) = PinnedRange(y) ?? (20, 80);
+                    FillValues(fill, series, "XValues", XValuesFor(x, count), NewSamples);
                     FillValues(fill, series, "YValues",
-                        SamplePlanner.ChartSeriesValues((chart.Name ?? "") + existing.IndexOf(series)).ToList(), NewSamples);
+                        SamplePlanner.ChartSeriesValues((chart.Name ?? "") + existing.IndexOf(series), count, min, max).ToList(), NewSamples);
                 }
                 return fill;
             }
@@ -495,10 +510,72 @@ internal static class SampleChartFiller
             }
         }
 
-        private static IList XValuesFor(object? xAxis) =>
+        private static IList XValuesFor(object? xAxis, int count) =>
             xAxis?.GetType().Name == "CategoryAxis"
-                ? SamplePlanner.ChartCategories().ToList()
-                : Enumerable.Range(0, SamplePlanner.ChartPoints).Select(i => (double)i).ToList();
+                ? SamplePlanner.ChartCategories(count).ToList()
+                : Enumerable.Range(0, count).Select(i => (double)i).ToList();
+
+        /// <summary>The author's Minimum/Maximum on a Y axis, when both are set and sensible.</summary>
+        private static (double, double)? PinnedRange(object yAxis)
+        {
+            try
+            {
+                if (Get(yAxis, "Minimum") is double lo && Get(yAxis, "Maximum") is double hi &&
+                    double.IsFinite(lo) && double.IsFinite(hi) && hi > lo)
+                {
+                    // Keep a margin so the line doesn't sit on the axis edges.
+                    double pad = (hi - lo) * 0.1;
+                    return (lo + pad, hi - pad);
+                }
+            }
+            catch
+            {
+            }
+            return null;
+        }
+
+        /// <summary>Hidden X axis and a faint-gridded Y axis fitted to [<paramref name="min"/>, <paramref name="max"/>].
+        /// Cosmetic only: each setter is optional, so an older or newer Charts API still gets a working line.</summary>
+        private static void StyleSampleAxes(System.Reflection.Assembly asm, object xAxis, object yAxis, double min, double max)
+        {
+            double span = Math.Max(max - min, 1);
+            double step = NiceStep(span / 4);
+            double lo = Math.Floor((min - span * 0.15) / step) * step;
+            double hi = Math.Ceiling((max + span * 0.15) / step) * step;
+            var transparent = new SolidColorBrush(Color.FromArgb(0, 0, 0, 0));
+            var grid = new SolidColorBrush(Color.FromArgb(0x30, 0x80, 0x80, 0x80));
+            object? GridLines(string name)
+            {
+                var t = asm.GetType(SamplePlanner.ChartsNamespace + ".GridLines");
+                return t is { IsEnum: true } && Enum.TryParse(t, name, out var v) ? v : null;
+            }
+
+            TrySet(xAxis, "ShowTickLabels", false);
+            TrySet(xAxis, "ShowTickMarks", false);
+            TrySet(xAxis, "AxisLineBrush", transparent);
+            if (GridLines("None") is { } none)
+            {
+                TrySet(xAxis, "GridLines", none);
+            }
+
+            // Tick labels stay on: with them hidden the chart auto-ranges and ignores Minimum/Maximum.
+            TrySet(yAxis, "Minimum", lo);
+            TrySet(yAxis, "Maximum", hi);
+            TrySet(yAxis, "ShowTickMarks", false);
+            TrySet(yAxis, "AxisLineBrush", transparent);
+            if (GridLines("Major") is { } major)
+            {
+                TrySet(yAxis, "GridLines", major);
+                TrySet(yAxis, "GridLineMajorBrush", grid);
+            }
+        }
+
+        private static double NiceStep(double raw)
+        {
+            double mag = Math.Pow(10, Math.Floor(Math.Log10(raw)));
+            double n = raw / mag;
+            return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+        }
 
         private static void FillValues(ChartFill fill, object series, string property, IList values, Func<IList, object> newSamples)
         {
@@ -815,11 +892,28 @@ internal static class SampleChartFiller
             _piece.Children.Add(line);
         }
 
-        private static Color Accent() =>
-            Application.Current?.Resources.TryGetValue("SystemAccentColor", out var c) == true && c is Color ac
-                ? ac
-                : Color.FromArgb(0xFF, 0x00, 0x78, 0xD4);
     }
+
+    private static Color Accent() =>
+        Application.Current?.Resources.TryGetValue("SystemAccentColor", out var c) == true && c is Color ac
+            ? ac
+            : Color.FromArgb(0xFF, 0x00, 0x78, 0xD4);
+
+    /// <summary>Best-effort cosmetic set: false (never a throw) when the property is missing or rejects the value.</summary>
+    private static bool TrySet(object target, string property, object? value)
+    {
+        try
+        {
+            return Set(target, property, value);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int CountAll(object? items) =>
+        items is IEnumerable e and not string ? e.Cast<object?>().Count() : 0;
 
     private static object? Get(object? target, string property) =>
         target?.GetType().GetProperty(property)?.GetValue(target);

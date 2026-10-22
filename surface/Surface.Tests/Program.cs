@@ -528,6 +528,12 @@ namespace Surface.Tests
 
             Check("series values deterministic", SamplePlanner.ChartSeriesValues("A").SequenceEqual(SamplePlanner.ChartSeriesValues("A")));
             Check("series values in 20..80", SamplePlanner.ChartSeriesValues("B").All(v => v is >= 20 and <= 80));
+            var pinned = SamplePlanner.ChartSeriesValues("C", 30, 94, 100);
+            Check("series values scale into a pinned range", pinned.Length == 30 && pinned.All(v => v is >= 94 and <= 100), string.Join(",", pinned));
+            var twelve = SamplePlanner.ChartSeriesValues("D", 12);
+            var line = SamplePlanner.ChartSeriesValues("D", SamplePlanner.ChartLinePoints);
+            Check("12 and 24 points trace the same wave", twelve[0] == line[0] && twelve[^1] == line[^1]);
+            Check("twelve month categories", string.Join(",", SamplePlanner.ChartCategories()) == "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec");
         }
 
         private static void SampleDataObjects()

@@ -27,7 +27,10 @@ internal static partial class SamplePlanner
     internal const string ChartsNamespace = "Microsoft.UI.Xaml.Controls.Charts";
 
     /// <summary>Points generated for a chart series.</summary>
-    internal const int ChartPoints = 6;
+    internal const int ChartPoints = 12;
+
+    /// <summary>Points in a sample line the preview builds itself (no labelled X axis), matching the overlay line.</summary>
+    internal const int ChartLinePoints = 24;
 
     private const int MaxLiteralItems = 64;
     private const string GeneratedNamePrefix = "__wxpChart";
@@ -44,7 +47,7 @@ internal static partial class SamplePlanner
     private static readonly string[] MonthNames = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
 
     /// <summary>A gentle deterministic wave in [0.1, 0.9] that reads as real-ish data.</summary>
-    internal static double ChartWave(int i) =>
+    internal static double ChartWave(double i) =>
         0.5 + 0.22 * Math.Sin(i * 0.45) + 0.1 * Math.Sin(i * 1.3 + 0.7) + 0.08 * Math.Cos(i * 0.21);
 
     /// <summary>Stable across runs and processes (unlike <see cref="string.GetHashCode()"/>), so a chart keeps its shape.</summary>
@@ -62,10 +65,18 @@ internal static partial class SamplePlanner
     }
 
     /// <summary>Numbers for a sample series named <paramref name="name"/>: a wave between 20 and 80.</summary>
-    internal static double[] ChartSeriesValues(string? name, int count = ChartPoints)
+    internal static double[] ChartSeriesValues(string? name, int count = ChartPoints) =>
+        ChartSeriesValues(name, count, 20, 80);
+
+    /// <summary>Numbers for a sample series, scaled into [<paramref name="min"/>, <paramref name="max"/>]. Any count
+    /// spans the same stretch of the wave, so 12 and 24 points draw the same shape.</summary>
+    internal static double[] ChartSeriesValues(string? name, int count, double min, double max)
     {
         int phase = StableHash(name) % 16;
-        return Enumerable.Range(0, count).Select(i => Math.Round(20 + 60 * ChartWave(i * 2 + phase), 1)).ToArray();
+        double step = count > 1 ? (ChartLinePoints - 1.0) / (count - 1) : 1;
+        return Enumerable.Range(0, count)
+            .Select(i => Math.Round(min + (max - min) * ChartWave(i * step + phase), 2))
+            .ToArray();
     }
 
     /// <summary>Category labels for a sample series: month abbreviations.</summary>
