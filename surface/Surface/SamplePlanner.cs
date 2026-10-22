@@ -25,6 +25,9 @@ internal sealed class SamplePlan
 
     /// <summary>Attributes to add for values the code-behind assigns to named elements.</summary>
     public List<(XElement element, XName name, string value)> Adds { get; } = new();
+
+    /// <summary>Chart properties the host restores after load (see <see cref="ChartFixup"/>).</summary>
+    public List<ChartFixup> ChartFixups { get; } = new();
 }
 
 /// <summary>
@@ -36,7 +39,7 @@ internal sealed class SamplePlan
 /// become <c>{Binding}</c>s so each row shows its own values. Assignments to named elements in the page's
 /// code-behind (outside event handlers) are typed the same way. Deterministic; never throws.
 /// </summary>
-internal static class SamplePlanner
+internal static partial class SamplePlanner
 {
     private static readonly XNamespace Xaml = "http://schemas.microsoft.com/winfx/2006/xaml";
     private static readonly XNamespace Design = "http://schemas.microsoft.com/expression/blend/2008";
@@ -108,7 +111,7 @@ internal static class SamplePlanner
                     {
                         try
                         {
-                            plan.Binds[a] = PlanBind(ctx, el, a);
+                            plan.Binds[a] = PlanChartBind(ctx, el, a, plan) ?? PlanBind(ctx, el, a);
                         }
                         catch (Exception ex)
                         {

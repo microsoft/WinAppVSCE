@@ -81,6 +81,32 @@ internal static class XamlErrorText
     /// <summary>True when <see cref="Informative"/> finds nothing useful in the message.</summary>
     public static bool IsOpaque(string? flattened) => Informative(flattened) is null;
 
+    private static readonly Regex ChartsResourceKey = new(
+        @"Name/Key (?<key>Charts\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A message for a page using the WinAppSDK charts whose app never merged the chart styles: WinUI reports a
+    /// missing <c>Charts…</c> resource key (which <see cref="Informative(string?, string?)"/> rejects, since the page
+    /// never names it) or nothing at all. Null when the page doesn't use charts, the styles are loaded, or the failure
+    /// cites some other resource.
+    /// </summary>
+    public static string? ChartsHint(string? flattened, string? xaml, bool chartsResourcesLoaded)
+    {
+        if (chartsResourcesLoaded || string.IsNullOrEmpty(xaml) ||
+            !xaml.Contains("Microsoft.UI.Xaml.Controls.Charts", StringComparison.Ordinal))
+        {
+            return null;
+        }
+        var key = flattened is null ? null : ChartsResourceKey.Match(flattened);
+        if (key is { Success: false } && !IsOpaque(flattened))
+        {
+            return null;
+        }
+        var missing = key is { Success: true } ? $" (missing resource '{key.Groups["key"].Value}')" : "";
+        return $"Chart styles aren't loaded{missing}. Add <charts:XamlChartsResources /> to the MergedDictionaries " +
+               "of Application.Resources in App.xaml (xmlns:charts=\"using:Microsoft.UI.Xaml.Controls.Charts\").";
+    }
+
     /// <summary>
     /// A replacement message (and possibly a more precise position) for an opaque failure loading
     /// <paramref name="xaml"/>. <paramref name="line"/>/<paramref name="column"/> are 1-based, as WinUI reports them.

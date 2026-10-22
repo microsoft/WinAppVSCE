@@ -126,11 +126,11 @@ internal sealed class RenderHost
     /// resource-scope key resolver (Layer 2) is passed through so the cleaner can distinguish a resolvable
     /// <c>{StaticResource}</c> from a genuinely-undefined one.
     /// </summary>
-    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false, SampleTypeModel? sampleTypes = null)
+    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false, SampleTypeModel? sampleTypes = null, IList<ChartFixup>? chartFixups = null)
     {
         var missing = new SortedSet<string>(StringComparer.Ordinal);
         var unmapped = new SortedSet<string>(StringComparer.Ordinal);
-        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes);
+        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes, chartFixups);
         LastMissingKeys = missing.ToArray();
         LastUnmappedTypes = unmapped.ToArray();
         // WS2-F5: name keys the preview can't resolve (e.g. added in App.xaml.cs), once per distinct set.
@@ -278,7 +278,8 @@ internal sealed class RenderHost
             const int maxSafetyNetRetries = 5;
             for (int attempt = 0; ; attempt++)
             {
-                var xaml = CleanXaml(rawXaml, forced, SampleData, sampleTypes);
+                var chartFixups = new List<ChartFixup>();
+                var xaml = CleanXaml(rawXaml, forced, SampleData, sampleTypes, chartFixups);
                 if (attempt == 0 && timings is not null) timings.CleanMs = ElapsedMs(tClean);
 
                 object? parsed;
@@ -325,6 +326,10 @@ internal sealed class RenderHost
                         if (XamlErrorText.MalformedXml(rawXaml) is var (xmlMessage, xl, xc))
                         {
                             (message, l, c) = (xmlMessage, xl ?? l, xc ?? c);
+                        }
+                        else if (XamlErrorText.ChartsHint(message, rawXaml, ChartsResourcesLoaded()) is string chartsHint)
+                        {
+                            message = chartsHint;
                         }
                         else if (XamlErrorText.Informative(message, rawXaml) is string useful)
                         {
@@ -375,7 +380,7 @@ internal sealed class RenderHost
                 }
                 if (SampleData)
                 {
-                    SampleChartFiller.Attach(fe);
+                    SampleChartFiller.Attach(fe, chartFixups);
                 }
 
                 return (fe, null, null, null, null);
@@ -384,6 +389,30 @@ internal sealed class RenderHost
         catch (Exception ex)
         {
             return (null, "parse", Flatten(ex), null, null);
+        }
+    }
+
+    /// <summary>
+    /// True when the app's merged resources include the WinAppSDK chart styles (<c>XamlChartsResources</c>), searched
+    /// through merged dictionaries. Any failure counts as loaded so no misleading hint is shown.
+    /// </summary>
+    private static bool ChartsResourcesLoaded()
+    {
+        static bool Has(ResourceDictionary rd, int depth)
+        {
+            if (rd.GetType().Name == "XamlChartsResources" || rd.ContainsKey("ChartsControlBackgroundBrush"))
+            {
+                return true;
+            }
+            return depth < 8 && rd.MergedDictionaries.Any(m => m is not null && Has(m, depth + 1));
+        }
+        try
+        {
+            return Application.Current?.Resources is { } res && Has(res, 0);
+        }
+        catch
+        {
+            return true;
         }
     }
 
@@ -628,6 +657,11 @@ internal sealed class RenderHost
         host.HorizontalAlignment = HorizontalAlignment.Left;
         host.VerticalAlignment = VerticalAlignment.Top;
         host.Children.Add(root);
+        // Sample-data chart lines draw in a layer above the page, never inside the app's own elements.
+        if (SampleChartFiller.CreateOverlay(root) is { } overlay)
+        {
+            host.Children.Add(overlay);
+        }
         return host;
     }
 

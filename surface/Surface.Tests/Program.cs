@@ -101,6 +101,7 @@ namespace Surface.Tests
             Run("R2 sample data", Rule2SampleData);
             Run("R2 sample data (source-typed)", SampleDataTyped);
             Run("R2 sample data (typed objects)", SampleDataObjects);
+            Run("R2 sample data (charts)", SampleDataCharts);
             Run("R2 TryParseBind/BindPathLabel", BindParsing);
             Run("R3 x: directives", Rule3);
             Run("R4 events", Rule4);
@@ -156,6 +157,14 @@ namespace Surface.Tests
             Check("opaque: placeholder + type name", XamlErrorText.IsOpaque(Opaque));
             Check("opaque: with position suffix and chain", XamlErrorText.IsOpaque(Opaque + " [Line: 3 Position: 13] -> COMException: " + XamlErrorText.OpaqueWinUiText));
             Check("opaque: empty", XamlErrorText.IsOpaque(""));
+            const string ChartsPage = "<Page xmlns:charts=\"using:Microsoft.UI.Xaml.Controls.Charts\"><charts:Chart /></Page>";
+            const string MissingChartsKey = "XamlParseException: Cannot find a Resource with the Name/Key ChartsControlBackgroundBrush [Line: 1 Position: 70]";
+            var hint = XamlErrorText.ChartsHint(MissingChartsKey, ChartsPage, chartsResourcesLoaded: false);
+            Check("charts hint: names the missing key and the fix", hint is not null && hint.Contains("ChartsControlBackgroundBrush") && hint.Contains("XamlChartsResources"), hint);
+            Check("charts hint: opaque failure on a charts page", XamlErrorText.ChartsHint(Opaque, ChartsPage, false)?.Contains("XamlChartsResources") == true);
+            Check("charts hint: none when styles loaded", XamlErrorText.ChartsHint(MissingChartsKey, ChartsPage, true) is null);
+            Check("charts hint: none without charts", XamlErrorText.ChartsHint(MissingChartsKey, "<Page><Grid /></Page>", false) is null);
+            Check("charts hint: none for an unrelated real error", XamlErrorText.ChartsHint("XamlParseException: The property 'Foo' was not found in type 'Chart'.", ChartsPage, false) is null);
             Check("not opaque: real WinUI text kept", !XamlErrorText.IsOpaque("XamlParseException: Cannot find a Resource with the Name/Key Foo [Line: 2 Position: 4]"));
             Check("opaque: bare wfc code (as WinUI really reports)", XamlErrorText.IsOpaque(Opaque + "\r\n\r\nwfc: element type match [Line: 5 Position: 5]"));
             Eq("informative: real text extracted from the WinUI shape", "The property 'NotAProperty' was not found in type 'Button'.",
@@ -435,6 +444,90 @@ namespace Surface.Tests
             Check("filler rows are dictionaries capped to max", rows.Count == 2 && rows[0] is Dictionary<string, object> d && d.ContainsKey("Customer"));
             var plain = SampleListFiller.BuildRows("Items", 3, out label);
             Check("bare label -> repeated strings", plain.Count == 3 && (string)plain[0] == "Items" && label == "Items");
+        }
+
+        private static void SampleDataCharts()
+        {
+            var types = SampleTypeModel.FromSources(
+                "using System.Collections.Generic; using Microsoft.UI.Xaml;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class ChartsPage {\n" +
+                "  public string[] Months { get; } = [\"Jan\", \"Feb\", \"Mar\"];\n" +
+                "  public double[] Profits { get; } = new[] { 1.5, 2, 3.25 };\n" +
+                "  public List<double> Coded { get; } = new();\n" +
+                "  public List<string> Regions { get; } = new();\n" +
+                "  public bool ShowTrend { get; set; }\n" +
+                "  public bool ShowLive { get; set; }\n" +
+                "  public bool ShowInit { get; set; } = true;\n" +
+                "  public Visibility HiddenVis { get; } = Visibility.Collapsed;\n" +
+                "  public bool ShowLabel { get; set; }\n" +
+                "  public ChartsPage() { ShowLive = Compute(); Coded.Add(1); }\n" +
+                "}\n" +
+                "}");
+            var fixups = new List<ChartFixup>();
+            var xaml = Doc(
+                "<StackPanel>" +
+                "<charts:Chart x:Name=\"R1\" Visibility=\"{x:Bind ShowInit}\">" +
+                "<charts:Chart.Data>" +
+                "<charts:Samples x:Name=\"Month\" ItemsSource=\"{x:Bind Months}\" />" +
+                "<charts:Samples x:Name=\"Profit\" ItemsSource=\"{x:Bind Profits}\" />" +
+                "<charts:Samples ItemsSource=\"{x:Bind Coded}\" />" +
+                "<charts:Samples x:Name=\"Region\" ItemsSource=\"{x:Bind Regions}\" />" +
+                "</charts:Chart.Data>" +
+                "<charts:Chart.Axes><charts:CategoryAxis x:Name=\"MonthX\" /><charts:LinearAxis x:Name=\"ProfitY\" /></charts:Chart.Axes>" +
+                "<charts:Chart.Series><charts:LineSeries x:Name=\"Line\" XAxis=\"{x:Bind MonthX}\" YAxis=\"{x:Bind ProfitY}\" " +
+                "XValues=\"{x:Bind Month}\" YValues=\"{x:Bind Profit}\" Title=\"{x:Bind Missing}\" />" +
+                "<charts:LineSeries XValues=\"{x:Bind Month}\" />" +
+                "</charts:Chart.Series></charts:Chart>" +
+                "<charts:Chart x:Name=\"Trend\" Visibility=\"{x:Bind ShowTrend}\" />" +
+                "<charts:Chart x:Name=\"Live\" Visibility=\"{x:Bind ShowLive}\" />" +
+                "<charts:Chart x:Name=\"Hidden\" Visibility=\"{x:Bind HiddenVis}\" />" +
+                "<charts:Chart x:Name=\"Conv\" Visibility=\"{x:Bind ShowTrend, Converter={StaticResource C}}\" />" +
+                "<TextBlock x:Name=\"Label\" Visibility=\"{x:Bind ShowLabel}\" />" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.ChartsPage\" xmlns:charts=\"using:Microsoft.UI.Xaml.Controls.Charts\"");
+            var r = XDocument.Parse(XamlCleaner.Clean(xaml, sampleData: true, sampleTypes: types, chartFixups: fixups)).Root!;
+            ChartFixup? Fix(string element, string prop) => fixups.FirstOrDefault(f => f.Element == element && f.Property == prop);
+
+            Eq("axis reference -> fixup", "MonthX", Fix("Line", "XAxis")?.RefName);
+            Eq("samples reference -> fixup", "Profit", Fix("Line", "YValues")?.RefName);
+            Check("reference attributes dropped", Attr(Named(r, "Line"), "XAxis") is null && Attr(Named(r, "Line"), "YValues") is null);
+            Check("non-reference scalar falls through (dropped/placeholdered, not a fixup)", Fix("Line", "Title") is null);
+            var month = Fix("Month", "ItemsSource");
+            Check("string[] literal kept", month is { Numeric: false } && string.Join(",", month.Values!) == "Jan,Feb,Mar", string.Join(",", month?.Values ?? []));
+            var profit = Fix("Profit", "ItemsSource");
+            Check("double[] literal kept", profit is { Numeric: true } && string.Join(",", profit.Values!) == "1.5,2,3.25", string.Join(",", profit?.Values ?? []));
+            Check("samples ItemsSource attribute dropped", Attr(Named(r, "Month"), "ItemsSource") is null);
+            var coded = fixups.FirstOrDefault(f => f.Element.StartsWith("__wxpChart", StringComparison.Ordinal) && f.Property == "ItemsSource");
+            Check("unnamed samples gets a generated name", coded is not null && Named(r, coded.Element) is { Name.LocalName: "Samples" }, coded?.Element);
+            Check("code-filled List<double> -> typed wave", coded is { Numeric: true } && coded.Values!.Count == SamplePlanner.ChartPoints);
+            var region = Fix("Region", "ItemsSource");
+            Check("List<string> -> month categories", region is { Numeric: false } && region.Values!.Count == SamplePlanner.ChartPoints && region.Values[0] == "Jan", string.Join(",", region?.Values ?? []));
+            var unnamedSeries = fixups.Where(f => f.Element.StartsWith("__wxpChart", StringComparison.Ordinal) && f.Property == "XValues").ToList();
+            Check("unnamed series reference gets its own generated name", unnamedSeries.Count == 1 && unnamedSeries[0].Element != coded?.Element);
+
+            Eq("bool with true initializer -> Visible", "Visible", Attr(Named(r, "R1"), "Visibility"));
+            Eq("never-assigned bool -> Collapsed (default false)", "Collapsed", Attr(Named(r, "Trend"), "Visibility"));
+            Eq("bool assigned in code -> shown", "Visible", Attr(Named(r, "Live"), "Visibility") ?? "Visible");
+            Eq("Visibility.Collapsed initializer", "Collapsed", Attr(Named(r, "Hidden"), "Visibility"));
+            Check("converter -> not planned as hidden", Attr(Named(r, "Conv"), "Visibility") != "Collapsed", Attr(Named(r, "Conv"), "Visibility"));
+            Check("non-chart Visibility unchanged by chart rule", Attr(Named(r, "Label"), "Visibility") != "Collapsed", Attr(Named(r, "Label"), "Visibility"));
+
+            var noSample = new List<ChartFixup>();
+            XamlCleaner.Clean(xaml, sampleData: false, sampleTypes: types, chartFixups: noSample);
+            Check("sample data off -> no fixups", noSample.Count == 0, noSample.Count.ToString());
+
+            var noTypes = new List<ChartFixup>();
+            XamlCleaner.Clean(Doc(
+                "<charts:Chart><charts:Chart.Data><charts:Samples x:Name=\"X\" ItemsSource=\"{x:Bind Xs}\" /><charts:Samples x:Name=\"Y\" ItemsSource=\"{x:Bind Ys}\" /></charts:Chart.Data>" +
+                "<charts:Chart.Axes><charts:CategoryAxis x:Name=\"Cat\" /></charts:Chart.Axes>" +
+                "<charts:Chart.Series><charts:BarSeries XAxis=\"{x:Bind Cat}\" XValues=\"{x:Bind X}\" YValues=\"{x:Bind Y}\" /></charts:Chart.Series></charts:Chart>",
+                rootAttrs: "xmlns:charts=\"using:Microsoft.UI.Xaml.Controls.Charts\""), sampleData: true, chartFixups: noTypes);
+            Check("untyped samples on a category axis -> month labels", noTypes.FirstOrDefault(f => f.Element == "X") is { Numeric: false } x && x.Values![0] == "Jan");
+            Check("untyped Y samples -> numbers", noTypes.FirstOrDefault(f => f.Element == "Y") is { Numeric: true });
+
+            Check("series values deterministic", SamplePlanner.ChartSeriesValues("A").SequenceEqual(SamplePlanner.ChartSeriesValues("A")));
+            Check("series values in 20..80", SamplePlanner.ChartSeriesValues("B").All(v => v is >= 20 and <= 80));
         }
 
         private static void SampleDataObjects()

@@ -156,6 +156,7 @@ internal static class XamlCleaner
     /// <param name="missingResourceKeys">Receives every <c>{StaticResource}</c>/<c>{ThemeResource}</c> key Rule 6 could not resolve. May be null.</param>
     /// <param name="unmappedTypes">Receives the full name of every custom type Rule 7 removed because the provider chain couldn't map it (not forced swaps). May be null.</param>
     /// <param name="sampleTypes">Source type model of the page's project, so sample values follow the bound types (see <see cref="SamplePlanner"/>). May be null (name-based values).</param>
+    /// <param name="chartFixups">Receives the chart properties the host must restore after load (see <see cref="ChartFixup"/>). May be null.</param>
     public static string Clean(
         string rawXaml,
         Func<string, bool>? isKnownResourceKey = null,
@@ -164,7 +165,8 @@ internal static class XamlCleaner
         bool sampleData = false,
         ISet<string>? missingResourceKeys = null,
         ISet<string>? unmappedTypes = null,
-        SampleTypeModel? sampleTypes = null)
+        SampleTypeModel? sampleTypes = null,
+        IList<ChartFixup>? chartFixups = null)
     {
         if (string.IsNullOrWhiteSpace(rawXaml))
         {
@@ -281,6 +283,26 @@ internal static class XamlCleaner
                              .ToList())
                 {
                     decl.Remove();
+                }
+            }
+
+            if (chartFixups is not null && samples is not null && samples.ChartFixups.Count > 0)
+            {
+                // Only for elements that survived the rules (Rule 7 may have replaced an unmappable chart).
+                var names = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var el in root.DescendantsAndSelf())
+                {
+                    if (((string?)el.Attribute(Xaml + "Name") ?? (string?)el.Attribute("Name")) is { Length: > 0 } n)
+                    {
+                        names.Add(n);
+                    }
+                }
+                foreach (var fix in samples.ChartFixups)
+                {
+                    if (names.Contains(fix.Element) && (fix.RefName is null || names.Contains(fix.RefName)))
+                    {
+                        chartFixups.Add(fix);
+                    }
                 }
             }
 
