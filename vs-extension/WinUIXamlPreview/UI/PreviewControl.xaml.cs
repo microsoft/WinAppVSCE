@@ -1,0 +1,2652 @@
+﻿#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using EnvDTE;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
+using WinUIXamlPreview.Editor;
+using WinUIXamlPreview.Logging;
+using WinUIXamlPreview.Protocol;
+
+namespace WinUIXamlPreview.UI
+{
+    /// <summary>
+    /// The WPF surface hosted inside the tool window. Owns a <see cref="SurfaceClient"/>, follows
+    /// the active <c>.xaml</c> document, streams PNG frames from the surface, and paints them into
+    /// an <see cref="Image"/> at the design's logical (DIP) size for crisp output. VS's UI thread is
+    /// the WPF dispatcher thread; surface events arrive on socket threads and are marshaled back.
+    /// </summary>
+    public partial class PreviewControl : UserControl, IDisposable
+    {
+        private readonly DispatcherTimer _resizeDebounce;
+        // Closing a tab can briefly report "no active document" before VS activates the next tab (seen on VS 2026);
+        // hold off emptying the tool window so it doesn't tear down a preview that's about to be reused.
+        private readonly DispatcherTimer _emptyDebounce;
+        private string? _pendingEmptyPath;
+        private SurfaceClient? _client;
+        // R1: per-client unsubscribe actions. Handlers are bound to their source client so a reply from a
+        // client we've swapped away from (doc switch, spare promotion, matched upgrade) — one already queued
+        // on the dispatcher when we unhooked — is recognised as stale and dropped instead of painting.
+        private readonly System.Collections.Generic.Dictionary<SurfaceClient, Action> _clientWiring = new();
+        private EditorTracker? _tracker;
+        private string? _currentPath;
+        private bool _hasFrame;
+        private bool _disposed;
+        private double _lastScale = 1.5;
+
+        // When set, this control previews ONE fixed document (an in-editor margin pins itself to its
+        // own .xaml tab) instead of following the globally-active document. Active-document changes are
+        // ignored while pinned; saves of the pinned document still refresh it.
+        private string? _pinnedPath;
+
+        // Native-HWND ("real previewer") path: reparent the live surface window instead of streaming
+        // a PNG. Preferred when the surface advertises the native-hwnd capability; image is fallback.
+        private const bool PreferNative = true;
+        private SurfaceHwndHost? _nativeHost;
+        private bool _nativeSupported;
+        private bool _hasNative;
+
+        // Session bookkeeping (spare generations, held edits, theme swap, upgrade generations, the bounded
+        // auto-restart budget, risky docs). Pure and unit-tested; this control owns the processes and UI.
+        // Self-healing: a render can fail-fast the surface on certain content (plan §36); an unexpected death
+        // auto-restarts and re-renders, bounded by the restart budget, which resets on any successful render.
+        // Process recycling: a pre-warmed idle spare renders a "risky" document (one that has crashed the
+        // surface before) in a fresh, unarmed process without a visible cold-restart blip.
+        private readonly PreviewSessionState _session = new PreviewSessionState();
+
+        // WS3-P0 latency markers: one pending "action → paint" span, closed by the next Hwnd/Frame/Error.
+        // Emits greppable "PERF <label>.paint ms=<n> outcome=<x>" lines (see scripts\previewer-perf-summary.ps1).
+        private System.Diagnostics.Stopwatch? _perfSw;
+        private string? _perfLabel;
+        private string _perfNextOpenLabel = "open";
+
+        private SurfaceClient? _spareClient;
+        private Action<string>? _spareClosedSub; // the spare's Closed subscription (carries which client died)
+        private bool _spareReady;
+        private System.Diagnostics.Stopwatch? _editAwaitSw;
+        private SurfaceClient? _retiringClient;
+        private string? _activeSurfaceExe;
+        private string? _activeUserDll;
+        private string? _activeUserAppXaml;
+        private string? _activeProject;
+        // Documents whose "project not built" hint the user closed — don't re-nag on every edit.
+        private readonly System.Collections.Generic.HashSet<string> _buildHintDismissed =
+            new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private string? _activeTheme;
+        // The design-time (merged core+toolkit) pri staged for a version-MATCHED host via --user-pri. Null on
+        // the bundled 2.2.0 leg (which launches byte-clean, no --user-pri). Kept in sync with _activeSurfaceExe
+        // so a crash-recycle spare of a matched host also stages the pri and preserves toolkit chrome.
+        private string? _activeUserPri;
+        // P7: when a matched host is active and the surface dies with no warm spare, the cold restart relaunches
+        // straight onto that matched host (exe + merged pri) instead of dropping to bundled 2.2.0 and re-running
+        // the background upgrade (2–400+ s of cache validation / build). Consumed once by StartPreviewAsync for
+        // the same document; a failed matched relaunch falls back to the normal bundled + upgrade path.
+        private (string Path, string Exe, string Pri)? _recoverMatchedHost;
+        // B8: relaunches the preview when the project is rebuilt (new user DLL) or restored (new WinAppSDK version).
+        private ProjectOutputWatcher? _outputWatcher;
+        private SurfaceHangWatchdog? _hangWatchdog;
+        // P6: a theme change warms a spare in the new theme (same exe/pri) while the old frame stays on screen,
+        // then promotes it (see PreviewSessionState.ThemeSwapPendingFor).
+        private System.Diagnostics.Stopwatch? _themeSwapSw;
+        // Latest zoom/scroll reported by the active native surface (socket thread writes, UI thread reads), and
+        // whether the next spare promotion is the same document (theme swap) and should restore it.
+        private volatile ViewMsg? _lastView;
+        private bool _carryViewOnPromote;
+        private bool _suspended; // released in favour of the preview tool window (Suspend/Resume)
+
+        // ---- version-matched fidelity upgrade (nov-vsix-wire) --------------
+        // The instant launch is ALWAYS the bundled 2.2.0 host. When the target project references a different
+        // WASDK version, a version-matched self-contained host is produced in the BACKGROUND (a run-copy of a
+        // verified cached host, or a provisioner --build) and hot-swapped in, so version-new controls (e.g.
+        // GridSplitter) upgrade from placeholder to real. Kept deliberately separate from the crash-recycle
+        // spare so neither path regresses the other. Every doc-switch/dispose bumps the session's upgrade
+        // generation to cancel any in-flight upgrade before it can promote into a document that has moved on.
+        private MatchedHostBuild? _upgradeBuild; // shared per-version build we hold interest in (release on cancel/dispose/promote)
+        // U2 top banners: the message bar carries the XAML-error-over-last-good-render note;
+        // the fidelity bar carries the background full-fidelity upgrade. Both live in BannerHost (row 0).
+        private readonly PreviewInfoBar _messageBar = new PreviewInfoBar("PreviewMessageBar");
+        private readonly PreviewInfoBar _fidelityBar = new PreviewInfoBar("PreviewFidelityBar");
+        private readonly PreviewInfoBar _buildHintBar = new PreviewInfoBar("PreviewBuildHintBar");
+        private bool _reconnectShown;
+        // Versions whose background build already FAILED this VS session — don't auto-retry (no retry loop).
+        private static readonly System.Collections.Generic.HashSet<string> FailedVersions =
+            new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public PreviewControl()
+        {
+            InitializeComponent();
+
+            BannerHost.Children.Add(_messageBar);
+            BannerHost.Children.Add(_fidelityBar);
+            BannerHost.Children.Add(_buildHintBar);
+            _buildHintBar.Dismissed += (_, __) =>
+            {
+                if (SelectionDocument is string doc)
+                {
+                    _buildHintDismissed.Add(doc);
+                }
+            };
+
+            _resizeDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
+            _resizeDebounce.Tick += OnResizeDebounceTick;
+            _emptyDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            _emptyDebounce.Tick += (_, __) => { _emptyDebounce.Stop(); ShowDocument(_pendingEmptyPath); };
+
+            Loaded += OnLoaded;
+            Unloaded += OnUnloaded;
+            SizeChanged += (_, __) => { _resizeDebounce.Stop(); _resizeDebounce.Start(); };
+
+            // Hand the package ownership of this session so a VS shutdown disposes it (and its surface
+            // process) even if this control's tab/margin teardown never fires (T7).
+            PreviewPackageState.RegisterSession(this);
+            SurfaceIdentity.FallbackRequested += OnIdentityFallbackRequested;
+            SurfaceClient.IdentityRequired += OnSurfaceIdentityRequired;
+            PreviewOptions.PreviewSettingsChanged += OnPreviewSettingsChanged;
+            IsVisibleChanged += (_, e) => { if ((bool)e.NewValue && _settingsSyncDeferred) { OnPreviewSettingsChanged(); } };
+        }
+
+        private static void OnSurfaceIdentityRequired() => SurfaceIdentity.RequestFallback(Log.Write);
+
+        // ---- shared settings sync -------------------------------------------
+        //
+        // Theme, size, sample data and select/interact are global (PreviewOptions), but each preview applies
+        // them to its own surface. When another preview (or the options page) changes one, catch this surface
+        // up and tell the toolbar to refresh its labels. Deferred to the dispatcher so the preview that made
+        // the change has finished applying it first; theme and sample-data re-renders wait until visible.
+
+        private bool _appliedDesignMode = PreviewOptions.DesignMode;
+        private bool _appliedFullFidelity = PreviewOptions.FullFidelityAutoBuild;
+        private double _appliedCanvasWidth = PreviewOptions.CanvasWidth;
+        private double _appliedCanvasHeight = PreviewOptions.CanvasHeight;
+        private bool _settingsSyncQueued;
+        private bool _settingsSyncDeferred;
+
+        /// <summary>Raised on the UI thread after this preview caught up with a shared settings change.</summary>
+        internal event Action? SettingsSynced;
+
+        private void OnPreviewSettingsChanged()
+        {
+            if (_disposed || _settingsSyncQueued)
+            {
+                return;
+            }
+
+            _settingsSyncQueued = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(SyncSettings));
+        }
+
+        private void SyncSettings()
+        {
+            _settingsSyncQueued = false;
+            if (_disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                if (_appliedDesignMode != PreviewOptions.DesignMode)
+                {
+                    ApplyDesignMode(PreviewOptions.DesignMode);
+                }
+
+                double w = PreviewOptions.CanvasWidth, h = PreviewOptions.CanvasHeight;
+                if (_appliedCanvasWidth != w || _appliedCanvasHeight != h)
+                {
+                    ApplyCanvasSize(w, h);
+                }
+
+                var live = _client != null && !_suspended;
+                if (live && !IsVisible)
+                {
+                    _settingsSyncDeferred = true;
+                }
+                else
+                {
+                    _settingsSyncDeferred = false;
+                    if (live && _client!.SampleData != PreviewOptions.DesignTimeData)
+                    {
+                        ApplyDesignTimeData(PreviewOptions.DesignTimeData);
+                    }
+
+                    var theme = PreviewOptions.Theme;
+                    if (live && _activeTheme != null && !string.Equals(_activeTheme, theme, StringComparison.Ordinal))
+                    {
+                        ApplyTheme(theme);
+                    }
+
+                    if (_appliedFullFidelity != PreviewOptions.FullFidelityAutoBuild)
+                    {
+                        ApplyFullFidelity(PreviewOptions.FullFidelityAutoBuild);
+                    }
+                }
+            }
+            catch (Exception ex) { Log.Write("Settings sync failed: " + ex); }
+
+            SettingsSynced?.Invoke();
+        }
+
+        // A DPI change (display scale setting, or VS moved to a monitor with a different scale) leaves the hosted
+        // surface rendering at the scale it started with — blurry or wrongly sized until the file is reopened.
+        // The surface fixes its pixel scale at startup, so relaunch it (fresh process, no stale spare) in place.
+        protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            if (_disposed || Math.Abs(oldDpi.DpiScaleX - newDpi.DpiScaleX) < 0.01)
+            {
+                return;
+            }
+
+            var path = _pinnedPath ?? _currentPath;
+            if (_client == null || string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            Log.Write($"DPI changed {oldDpi.PixelsPerInchX:0} -> {newDpi.PixelsPerInchX:0}; relaunching the surface at the new scale.");
+            RememberMatchedHostForRecovery(path!);
+            _currentPath = null;
+            _carryViewOnPromote = true;
+            _perfNextOpenLabel = "dpi";
+            ShowDocument(path);
+        }
+
+        private void OnIdentityFallbackRequested()
+        {
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                if (_disposed || _activeUserDll == null || !ProjectDllLocator.IsPackagedBuild(_activeUserDll))
+                {
+                    return;
+                }
+
+                var path = _pinnedPath ?? _currentPath;
+                if (string.IsNullOrEmpty(path))
+                {
+                    return;
+                }
+
+                Log.Write("Packaged preview: the surface could not load the app without package identity; registering identity and restarting on the bundled host.");
+                _currentPath = null;
+                _carryViewOnPromote = true;
+                ShowDocument(path);
+            });
+        }
+
+        private void OnLoaded(object sender, RoutedEventArgs e)
+        {
+            _tracker = PreviewPackageState.EditorTracker;
+            if (_tracker != null)
+            {
+                _tracker.ActiveDocumentChanged += OnActiveDocumentChanged;
+                _tracker.ActiveDocumentSaved += OnActiveDocumentSaved;
+                _tracker.DocumentRenamed += OnTrackerDocumentRenamed;
+            }
+
+            ShowDocument(_pinnedPath ?? PreviewPackageState.GetActiveXamlPath());
+        }
+
+        /// <summary>
+        /// Pin this preview to a single document (used by the in-editor margin, which belongs to one
+        /// .xaml tab). After pinning, the control ignores active-document changes and always previews
+        /// <paramref name="path"/>. Safe to call before or after the control is loaded.
+        /// </summary>
+        public void PinToDocument(string path)
+        {
+            _pinnedPath = path;
+            if (IsLoaded)
+            {
+                ShowDocument(path);
+            }
+        }
+
+        /// <summary>
+        /// Release the surface process while this preview is hidden in favour of another view (the margin while
+        /// the preview tool window is open). <see cref="Resume"/> restarts it. UI thread only.
+        /// </summary>
+        public void Suspend()
+        {
+            if (_disposed || _suspended)
+            {
+                return;
+            }
+
+            Log.Write("Preview suspended (shown in the preview window); releasing its surface.");
+            _suspended = true;
+            PreviewerSelection.Forget(_pinnedPath);
+            DisposeClient();
+            _currentPath = null;
+            _hasFrame = false;
+            FrameImage.Source = null;
+            SetStatus("The preview is open in the WinUI XAML Preview window.", spinner: false);
+        }
+
+        /// <summary>Restart the preview after <see cref="Suspend"/>. UI thread only.</summary>
+        public void Resume()
+        {
+            if (_disposed || !_suspended)
+            {
+                return;
+            }
+
+            Log.Write("Preview resumed.");
+            _suspended = false;
+            if (IsLoaded)
+            {
+                ShowDocument(_pinnedPath ?? PreviewPackageState.GetActiveXamlPath());
+            }
+        }
+
+        private void OnUnloaded(object sender, RoutedEventArgs e)
+        {
+            if (_tracker != null)
+            {
+                _tracker.ActiveDocumentChanged -= OnActiveDocumentChanged;
+                _tracker.ActiveDocumentSaved -= OnActiveDocumentSaved;
+                _tracker.DocumentRenamed -= OnTrackerDocumentRenamed;
+            }
+
+            DisposeClient();
+        }
+
+        private void OnTrackerDocumentRenamed(object? sender, DocumentRenamedEventArgs e) => OnDocumentRenamed(e.OldPath, e.NewPath);
+
+        /// <summary>
+        /// The previewed file was renamed or moved (Solution Explorer drag, Save As). Follow it: within the same
+        /// project the running preview just adopts the new path (nothing to re-render); a move to another project
+        /// restarts so the right user assembly and host are used. Idempotent — the margin and the RDT tracker can
+        /// both report the same rename. UI thread only.
+        /// </summary>
+        internal void OnDocumentRenamed(string? oldPath, string newPath)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (_disposed || string.IsNullOrEmpty(oldPath) || string.IsNullOrEmpty(newPath))
+            {
+                return;
+            }
+
+            bool pinned = string.Equals(_pinnedPath, oldPath, StringComparison.OrdinalIgnoreCase);
+            bool current = IsCurrent(oldPath);
+            if (!pinned && !current)
+            {
+                return;
+            }
+
+            if (pinned)
+            {
+                _pinnedPath = newPath;
+            }
+
+            if (!current)
+            {
+                return;
+            }
+
+            string? newDll = null;
+            if (newPath.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase))
+            {
+                try { newDll = ProjectDllLocator.FindUserDll(newPath, Log.Write); }
+                catch (Exception ex) { Log.Write("Rename: user DLL lookup failed: " + ex.Message); }
+            }
+
+            if (_client != null && newDll != null && string.Equals(newDll, _activeUserDll, StringComparison.OrdinalIgnoreCase))
+            {
+                _currentPath = newPath;
+                Log.Write($"Rename: now previewing '{newPath}' (same project; preview kept).");
+                return;
+            }
+
+            Log.Write($"Rename: '{oldPath}' -> '{newPath}' changed project or type; restarting preview.");
+            _currentPath = null;
+            ShowDocument(newPath);
+        }
+
+        private void OnActiveDocumentChanged(object? sender, string? path)
+        {
+            if (_pinnedPath != null)
+            {
+                return; // pinned to one document (in-editor margin) — don't follow the active tab
+            }
+
+            _emptyDebounce.Stop();
+            var isXaml = !string.IsNullOrEmpty(path) && path!.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase);
+            if (!isXaml && _currentPath != null)
+            {
+                _pendingEmptyPath = path;
+                _emptyDebounce.Start();
+                return;
+            }
+
+            ShowDocument(path);
+        }
+
+        // The document this preview's previewer selections belong to (keys the shared properties panel).
+        private string? SelectionDocument => _pinnedPath ?? _currentPath;
+
+        private void OnActiveDocumentSaved(object? sender, string? path)
+        {
+            if (IsCurrent(path))
+            {
+                ReloadCurrent();
+            }
+        }
+
+        // ---- preview lifecycle ---------------------------------------------
+
+        private void ShowDocument(string? path)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (_suspended)
+            {
+                Log.Write($"ShowDocument ignored while suspended: path='{path ?? "(null)"}'");
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(path))
+            {
+                _emptyDebounce.Stop(); // a real document wins over a pending "no document"
+            }
+
+            Log.Write($"ShowDocument: path='{path ?? "(null)"}'");
+
+            if (string.IsNullOrEmpty(path) || !path!.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase))
+            {
+                DisposeClient();
+                _currentPath = null;
+                _hasFrame = false;
+                FrameImage.Source = null;
+                SetStatus("Open a .xaml file to preview it.", spinner: false);
+                return;
+            }
+
+            if (IsCurrent(path) && _client != null)
+            {
+                return;
+            }
+
+            if (_pinnedPath == null && _currentPath != null && !IsCurrent(path))
+            {
+                PreviewerSelection.Forget(_currentPath); // the surface (and its selection) moves to another file
+            }
+
+            _currentPath = path;
+            _hasFrame = false;
+            FrameImage.Source = null;
+            SetStatus("Starting preview…", spinner: true, detail: Path.GetFileName(path));
+            PerfBegin(_perfNextOpenLabel);
+            _perfNextOpenLabel = "open";
+
+            _ = StartPreviewAsync(path).ContinueWith(
+                t => Log.Write("StartPreviewAsync faulted: " + t.Exception),
+                System.Threading.CancellationToken.None,
+                System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,
+                System.Threading.Tasks.TaskScheduler.Default);
+        }
+
+        private async System.Threading.Tasks.Task StartPreviewAsync(string path)
+        {
+            DisposeClient();
+
+            string xaml;
+            string? userDll;
+            string? userAppXaml;
+            string? surfaceExe;
+            HostSelection? plan;
+
+            try
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                xaml = ReadDocumentText(path);
+                userDll = ProjectDllLocator.FindUserDll(path, Log.Write);
+                userAppXaml = ProjectDllLocator.FindAppXaml(path, Log.Write);
+                // Resolve the host PLAN: which host to launch now (always the bundled 2.2.0 host for the instant
+                // preview) and whether/how to upgrade to a version-matched host in the background.
+                plan = MatchedHostResolver.Resolve(path, Log.Write);
+                surfaceExe = plan.ExePath;
+                ArmOutputWatcher(path, plan.TargetProject, userDll);
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Failed to read document.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
+                return;
+            }
+
+            string? recoverPri = null;
+            var recover = _recoverMatchedHost;
+            _recoverMatchedHost = null;
+            if (recover.HasValue
+                && string.Equals(recover.Value.Path, path, StringComparison.OrdinalIgnoreCase)
+                && File.Exists(recover.Value.Exe))
+            {
+                surfaceExe = recover.Value.Exe;
+                recoverPri = recover.Value.Pri;
+                Log.Write($"Recovery: relaunching on the active version-matched host ({surfaceExe}); skipping the bundled leg + upgrade.");
+            }
+
+            if (surfaceExe == null)
+            {
+                SetStatus(
+                    "Surface.exe not found.",
+                    spinner: false,
+                    detail: "Set the WINUI_SURFACE_EXE environment variable to the built Surface.exe, then reopen the preview.",
+                    severity: BannerSeverity.Error);
+                return;
+            }
+
+            _activeSurfaceExe = surfaceExe;
+            _activeUserDll = userDll;
+            _activeUserAppXaml = userAppXaml;
+            _activeProject = plan?.TargetProject;
+            _activeTheme = PreviewOptions.Theme;
+            // The instant launch is the bundled 2.2.0 host — always byte-clean (no --user-pri). A version-
+            // matched host (with its merged pri) is swapped in later by the background upgrade, which updates
+            // _activeUserPri at promote time. A P7 matched recovery launches the matched host + pri directly.
+            _activeUserPri = recoverPri;
+            _session.OnNewDocument();
+            _heldError = null;
+
+            // Packaged (MSIX) user builds normally load without identity: the surface neutralizes the WinAppSDK
+            // deployment auto-initializer in memory (PackagedAppShim). Only when that fails does the surface
+            // report WXP:IDENTITY-REQUIRED; we then register the sparse package (external location = the surface
+            // folder) and relaunch the bundled host with identity. Off the UI thread (spawns PowerShell);
+            // non-fatal on failure — we still launch and render framework types.
+            var identityFallback = recoverPri == null && userDll != null && SurfaceIdentity.FallbackActive
+                && ProjectDllLocator.IsPackagedBuild(userDll) && SurfaceIdentity.HasIdentityPayload(surfaceExe);
+            if (identityFallback)
+            {
+                SetStatus("Preparing packaged preview…", spinner: true, detail: Path.GetFileName(path));
+                var exeForReg = surfaceExe;
+                var idSw = System.Diagnostics.Stopwatch.StartNew();
+                var registered = await SurfaceIdentity.EnsureRegisteredAsync(exeForReg, Log.Write);
+                Log.Write($"PERF open.identity ms={idSw.ElapsedMilliseconds} registered={registered}");
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                if (_disposed)
+                {
+                    return;
+                }
+
+                Log.Write(registered
+                    ? "Packaged preview: surface identity is active."
+                    : "Packaged preview: surface identity NOT active; custom controls from this packaged build may not resolve.");
+            }
+
+            Log.Write($"Constructing surface client (surfaceExe='{surfaceExe}', userDll='{userDll ?? "(none)"}', appXaml='{userAppXaml ?? "(none)"}', xaml={xaml.Length} chars)…");
+            var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, PreviewOptions.Theme, userPri: recoverPri) { SampleData = PreviewOptions.DesignTimeData, DocumentPathSource = () => _currentPath ?? _pinnedPath };
+            AttachClient(client);
+            _client = client;
+            // A fresh process (it hasn't rendered yet); allow its unexpected death to trigger an auto-restart.
+            _session.OnNewActiveClient();
+
+            try
+            {
+                Log.Write($"Starting surface client (userDll='{userDll ?? "(none)"}')…");
+                var ready = await client.StartAsync(TimeSpan.FromSeconds(25));
+                if (_disposed || !ReferenceEquals(_client, client))
+                {
+                    return;
+                }
+
+                _nativeSupported = ready.Caps != null && ready.Caps.Contains("native-hwnd");
+                var (w, h, scale) = await GetViewportAsync();
+
+                // Push the design/interact mode BEFORE the first render: the surface reads it when it builds
+                // the preview surface artboard in HostLiveAsync, and the single ordered TCP stream guarantees
+                // SetMode is processed before EnterNative/LoadXaml (plan §41).
+                client.SetMode(PreviewOptions.DesignMode);
+
+                if (PreferNative && _nativeSupported)
+                {
+                    // Real-previewer path: host the live surface window in the tool window (no image).
+                    Log.Write("Surface supports native-hwnd; entering native reparent mode.");
+                    SetStatus("Hosting native surface…", spinner: true, detail: Path.GetFileName(path));
+                    SendStickyCanvasSize(client);
+                    var (paneW, paneH) = GetPanePixelSize(0, 0);
+                    var carryView = _carryViewOnPromote ? _lastView : null;
+                    _carryViewOnPromote = false;
+                    _lastView = carryView;
+                    client.EnterNative(xaml, 0, 0, 1.0, paneW, paneH, carryView);
+                }
+                else
+                {
+                    Log.Write($"Using image mode; sending LoadXaml ({w}x{h} @ {scale}x, {xaml.Length} chars)…");
+                    client.LoadXaml(xaml, w, h, scale);
+                }
+
+                // Instant bundled preview is now on its way. If this project needs a version-matched host, kick
+                // the background upgrade (run-copy a cached host, or provisioner --build) → hot-swap when ready.
+                // A P7 matched recovery is already on the matched host, so there's nothing to upgrade. Under the
+                // identity fallback the matched host (an unregistered run-copy) can't get identity, so stay bundled.
+                _fidelityPlan = recoverPri == null && !identityFallback ? plan : null;
+                if (recoverPri == null && !identityFallback)
+                {
+                    KickFidelityUpgrade(plan);
+                }
+                else if (identityFallback)
+                {
+                    Log.Write("Packaged preview: identity fallback active; staying on the bundled host (matched hosts run without identity).");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("StartPreviewAsync failed: " + ex);
+                if (ReferenceEquals(_client, client))
+                {
+                    if (client.IsFaulted)
+                    {
+                        // The client's Closed handler owns this outcome (recover, "Preview disconnected", or
+                        // protocol mismatch); setting a status here would race it.
+                        return;
+                    }
+
+                    if (ex is SurfaceProtocolException)
+                    {
+                        ShowProtocolMismatch(ex.Message);
+                    }
+                    else
+                    {
+                        SetStatus("Could not start the surface.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
+                    }
+                }
+            }
+        }
+
+        private void ArmOutputWatcher(string path, string? csproj, string? userDll)
+        {
+            _outputWatcher?.Dispose();
+            _outputWatcher = ProjectOutputWatcher.Create(csproj, userDll, TimeSpan.FromSeconds(2), assetsChanged =>
+            {
+                _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    if (!_disposed && _client != null && IsCurrent(path))
+                    {
+                        RestartForProjectChange(path, assetsChanged);
+                    }
+                });
+            }, Log.Write);
+        }
+
+        /// <summary>
+        /// The project was rebuilt or restored: relaunch so the surface loads the new user DLL, and re-run discovery
+        /// when the restore graph changed (it may now target another WinAppSDK version). A DLL-only rebuild stays on
+        /// the active version-matched host instead of dropping back to bundled. UI thread only.
+        /// </summary>
+        private void RestartForProjectChange(string path, bool assetsChanged)
+        {
+            Log.Write(assetsChanged
+                ? "Project restore changed; restarting the preview and re-checking the WinAppSDK version."
+                : "Project output rebuilt; restarting the preview to load it.");
+            if (!assetsChanged)
+            {
+                RememberMatchedHostForRecovery(path);
+            }
+
+            // Keep an in-flight matched-host build alive across the relaunch (the restarted preview re-acquires
+            // and joins it) instead of cancelling it and paying for the build again.
+            var inflight = assetsChanged ? null : _upgradeBuild;
+            if (inflight != null)
+            {
+                _upgradeBuild = null;
+                _ = System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(60)).ContinueWith(
+                    _ => { try { inflight.Release(cancelIfLast: true); } catch { } },
+                    System.Threading.Tasks.TaskScheduler.Default);
+            }
+
+            _currentPath = null;
+            _perfNextOpenLabel = "rebuild";
+            ShowDocument(path);
+        }
+
+        private void ShowProtocolMismatch(string detail)
+        {
+            _hasFrame = false;
+            _hasNative = false;
+            SetStatus("The preview surface is incompatible with this extension version.", spinner: false,
+                detail: detail + " Reinstall the extension, or clear the WINUI_SURFACE_EXE override if one is set.",
+                severity: BannerSeverity.Error, offerReload: false);
+        }
+
+        /// <summary>
+        /// Toolbar reload: re-render the pinned/current document. Pushes an UpdateXaml when a surface is
+        /// live (in place, no flicker); otherwise restarts the preview from scratch (e.g. after the surface
+        /// died). Safe to call from the UI thread.
+        /// </summary>
+        public void Reload()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            var path = _pinnedPath ?? _currentPath;
+            if (string.IsNullOrEmpty(path))
+            {
+                path = PreviewPackageState.GetActiveXamlPath();
+            }
+
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            if (_client != null && IsCurrent(path) && _outputWatcher?.HasChanged == true)
+            {
+                RestartForProjectChange(path!, assetsChanged: true);
+            }
+            else if (_client != null && IsCurrent(path))
+            {
+                ReloadCurrent();
+            }
+            else
+            {
+                _currentPath = null; // force a fresh start; the surface may have exited
+                ShowDocument(path);
+            }
+        }
+
+        /// <summary>
+        /// Apply the "Sample data" toggle (WS2-F6). Persists the preference, sends it with every later document
+        /// message, and re-renders the current document so <c>{x:Bind}</c> placeholders and dummy list rows
+        /// appear or disappear right away. UI thread only.
+        /// </summary>
+        public void SetDesignTimeData(bool on)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            PreviewOptions.DesignTimeData = on;
+            ApplyDesignTimeData(on);
+        }
+
+        private void ApplyDesignTimeData(bool on)
+        {
+            Log.Write($"Sample data toggled {(on ? "ON" : "off")}; re-rendering.");
+            if (_client != null)
+            {
+                _client.SampleData = on;
+            }
+            if (_spareClient != null)
+            {
+                _spareClient.SampleData = on;
+            }
+
+            ReloadCurrent();
+        }
+
+        /// <summary>
+        /// Apply a design/interact-mode toggle at runtime (plan §41). Persists the preference and sends
+        /// <c>SetMode</c> to the active surface, which flips its input overlay live — no re-render. Switching
+        /// to interact mode clears any current selection. UI thread only.
+        /// </summary>
+        public void SetDesignMode(bool design)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            PreviewOptions.DesignMode = design;
+            ApplyDesignMode(design);
+        }
+
+        private void ApplyDesignMode(bool design)
+        {
+            _appliedDesignMode = design;
+            Log.Write($"Design mode toggled {(design ? "ON (select)" : "off (interact)")}.");
+            try { _client?.SetMode(design); }
+            catch (Exception ex) { Log.Write("SetMode send failed: " + ex.Message); }
+
+            if (!design)
+            {
+                _lastSelected = null;
+                PreviewerSelection.Set(null, SelectionDocument);
+            }
+        }
+
+        /// <summary>
+        /// Preview the mounted page under a different theme (<c>Light</c>/<c>Dark</c>/<c>Default</c>). Because
+        /// the surface is a code-only WinUI <c>Application</c> (no App.xaml — required to own the metadata-
+        /// provider chain), a runtime <c>RequestedTheme</c> flip does NOT re-resolve <c>{ThemeResource}</c>
+        /// brushes (plan §47). The only reliable mechanism is the app-global <c>Application.RequestedTheme</c>,
+        /// which is immutable after the first window content — so a theme change is a per-process decision baked
+        /// at launch via the <c>SURFACE_THEME</c> env. We persist the preference and, when a surface is running,
+        /// warm a spare in the new theme on the SAME host (bundled or version-matched) and swap to it, keeping
+        /// the old frame on screen meanwhile (P6). Otherwise we relaunch the surface. UI thread only.
+        /// </summary>
+        public void SetTheme(string theme)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (string.Equals(PreviewOptions.Theme, theme, StringComparison.Ordinal)
+                && (_activeTheme == null || string.Equals(_activeTheme, theme, StringComparison.Ordinal)))
+            {
+                return; // no change — avoid a needless relaunch
+            }
+
+            PreviewOptions.Theme = theme;
+            ApplyTheme(theme);
+        }
+
+        private void ApplyTheme(string theme)
+        {
+            if (TryBeginThemeSwap(theme))
+            {
+                return;
+            }
+
+            RestartForTheme(theme);
+        }
+
+        /// <summary>
+        /// P6: start a warm swap to <paramref name="theme"/>: drop the old-theme spare, warm a new-theme spare
+        /// on the active host, and promote it once Ready (see <see cref="WarmSpare"/>). Returns false when there
+        /// is nothing to swap from or a fidelity upgrade is still in flight (it would promote the old theme).
+        /// </summary>
+        private bool TryBeginThemeSwap(string theme)
+        {
+            if (!_session.CanThemeSwap(_client != null, _currentPath != null, !string.IsNullOrEmpty(_activeSurfaceExe)))
+            {
+                return false;
+            }
+
+            _activeTheme = theme;
+            _session.BeginThemeSwap(); // the old-theme spare (ready or warming) is now stale
+            if (_spareClient != null)
+            {
+                _spareClient.Closed -= _spareClosedSub;
+                try { _spareClient.Dispose(); } catch { }
+                _spareClient = null;
+                _spareReady = false;
+            }
+
+            _themeSwapSw = System.Diagnostics.Stopwatch.StartNew();
+            WarmSpare();
+            if (!_session.SpareWarming)
+            {
+                _session.ClearThemeSwap();
+                _themeSwapSw = null;
+                return false;
+            }
+
+            Log.Write($"Preview theme set to {theme} — warming a {theme} surface; the current frame stays until it swaps in.");
+            return true;
+        }
+
+        /// <summary>The ready spare is in the new theme: render the latest text on it and swap it in.</summary>
+        private void CompleteThemeSwap()
+        {
+            _session.ClearThemeSwap();
+            var sw = _themeSwapSw;
+            _themeSwapSw = null;
+            string xaml;
+            try { xaml = ReadDocumentText(_currentPath ?? string.Empty); }
+            catch (Exception ex)
+            {
+                Log.Write("Theme swap: could not read the document (" + ex.Message + "); restarting instead.");
+                RestartForTheme(PreviewOptions.Theme);
+                return;
+            }
+
+            Log.Write($"PERF theme.spare ms={sw?.ElapsedMilliseconds ?? 0}");
+            _carryViewOnPromote = true;
+            if (TryPromoteSpare(xaml))
+            {
+                PerfBegin("theme.swap");
+            }
+            else
+            {
+                _carryViewOnPromote = false;
+                RestartForTheme(PreviewOptions.Theme);
+            }
+        }
+
+        /// <summary>The cold path: tear down and relaunch the surface with the new <c>SURFACE_THEME</c>.</summary>
+        private void RestartForTheme(string theme)
+        {
+            _session.ClearThemeSwap();
+            _themeSwapSw = null;
+            Log.Write($"Preview theme set to {theme} — restarting preview (per-process app theme).");
+
+            var path = _pinnedPath ?? _currentPath;
+            if (string.IsNullOrEmpty(path))
+            {
+                path = PreviewPackageState.GetActiveXamlPath();
+            }
+
+            _currentPath = null; // force a full restart so the surface relaunches with the new SURFACE_THEME env
+            if (!string.IsNullOrEmpty(path))
+            {
+                _perfNextOpenLabel = "theme";
+                _carryViewOnPromote = true; // same document: the cold-started surface restores the current zoom
+                ShowDocument(path);
+            }
+        }
+
+        /// <summary>
+        /// Pin the preview canvas to a device-size preset (DIP), or pass <c>0,0</c> to restore auto (the page's
+        /// own size / default canvas). Persists the preference and sends <c>SetCanvasSize</c> to the active
+        /// surface, which re-hosts at the new artboard size and re-fits it into the pane. UI thread only.
+        /// </summary>
+        public void SetCanvasSize(double width, double height)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            bool auto = !(width > 0 && height > 0);
+            PreviewOptions.CanvasWidth = auto ? 0 : width;
+            PreviewOptions.CanvasHeight = auto ? 0 : height;
+            ApplyCanvasSize(width, height);
+        }
+
+        private void ApplyCanvasSize(double width, double height)
+        {
+            bool auto = !(width > 0 && height > 0);
+            _appliedCanvasWidth = auto ? 0 : width;
+            _appliedCanvasHeight = auto ? 0 : height;
+            Log.Write($"Preview canvas size set to {(auto ? "auto" : $"{width:0}x{height:0}")}.");
+            try { _client?.SetCanvasSize(auto ? 0 : width, auto ? 0 : height); }
+            catch (Exception ex) { Log.Write("SetCanvasSize send failed: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// Send the sticky canvas-size preference to a new surface process BEFORE its <c>EnterNative</c>, so it
+        /// survives file switches / restarts / theme swaps. Outside native mode the surface only stores the
+        /// override, so the first live host is already at the right size (sending it after the first host made
+        /// a visible re-host from the default size). Theme is NOT sent — it is baked at launch via the
+        /// <c>SURFACE_THEME</c> env (plan §47). UI thread only.
+        /// </summary>
+        private void SendStickyCanvasSize(SurfaceClient client)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                double w = PreviewOptions.CanvasWidth, h = PreviewOptions.CanvasHeight;
+                if (w > 0 && h > 0)
+                {
+                    client.SetCanvasSize(w, h);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("SendStickyCanvasSize failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Raised (on the UI thread) when the surface reports an element selection, carrying the full
+        /// <see cref="SelectedMsg"/> including its authored-tree <c>Path</c>. The in-editor margin uses this to
+        /// move the caret to the element's source span (previewer -> editor, plan §41 #1).
+        /// </summary>
+        internal event Action<SelectedMsg>? ElementSelected;
+
+        // The latest custom content-property map from the surface (bug D1): simple type name -> content-prop
+        // name (e.g. "ControlExample" -> "Example"). The margin reads it via ContentPropMap to build a source
+        // map that recurses into explicit property elements. Null until the first ContentProps arrives.
+        private IReadOnlyDictionary<string, string>? _contentPropMap;
+
+        /// <summary>
+        /// The most recent custom content-property map reported by the surface (bug D1), or null if none yet.
+        /// Keyed by simple runtime type name -> its non-standard XAML content-property name.
+        /// </summary>
+        internal IReadOnlyDictionary<string, string>? ContentPropMap => _contentPropMap;
+
+        /// <summary>Raised (on the UI thread) when a fresh <see cref="ContentPropsMsg"/> updates the map.</summary>
+        internal event Action? ContentPropMapChanged;
+
+        /// <summary>
+        /// Select the element at an authored-tree index path in the preview surface (editor caret -> previewer,
+        /// plan §41 #2). No-op if no surface is live or not in design mode. UI thread only.
+        /// </summary>
+        public void SelectByPath(string path)
+        {
+            if (_disposed || string.IsNullOrEmpty(path) || !PreviewOptions.DesignMode)
+            {
+                return;
+            }
+
+            try { _client?.SelectByPath(path); }
+            catch (Exception ex) { Log.Write("SelectByPath send failed: " + ex.Message); }
+        }
+
+        // The most recent Selected message, held until its ElementProps arrives so the panel updates once with
+        // a complete snapshot (header + properties). Correlated by element id.
+        private SelectedMsg? _lastSelected;
+
+        // R1: subscribe every reply handler bound to its source client. Each handler re-checks ownership on
+        // the UI thread (IsStale) because a reply raised on the reader thread just before DetachClient is
+        // already queued on the dispatcher — unhooking alone can't stop it.
+        private void AttachClient(SurfaceClient c)
+        {
+            DetachClient(c);
+            Action<FrameMsg> frame = m => OnFrame(c, m);
+            Action<ErrorMsg> error = m => OnError(c, m);
+            Action<HwndMsg> hwnd = m => OnHwnd(c, m);
+            Action<SelectedMsg> selected = m => OnSelected(c, m);
+            Action<ElementPropsMsg> props = m => OnElementProps(c, m);
+            Action<ContentPropsMsg> contentProps = m => OnContentProps(c, m);
+            Action<ViewMsg> view = m => OnView(c, m);
+            Action<string> closed = r => OnClosed(c, r);
+            c.Frame += frame;
+            c.Error += error;
+            c.Hwnd += hwnd;
+            c.NativeExited += OnNativeExited;
+            c.Selected += selected;
+            c.ElementProps += props;
+            c.ContentProps += contentProps;
+            c.View += view;
+            c.Closed += closed;
+            _clientWiring[c] = () =>
+            {
+                c.Frame -= frame;
+                c.Error -= error;
+                c.Hwnd -= hwnd;
+                c.NativeExited -= OnNativeExited;
+                c.Selected -= selected;
+                c.ElementProps -= props;
+                c.ContentProps -= contentProps;
+                c.View -= view;
+                c.Closed -= closed;
+            };
+        }
+
+        private void DetachClient(SurfaceClient c)
+        {
+            if (_clientWiring.TryGetValue(c, out var unwire))
+            {
+                _clientWiring.Remove(c);
+                unwire();
+            }
+        }
+
+        // True when a reply came from a client that is no longer the active one (logged, then dropped).
+        private bool IsStale(SurfaceClient source, string what)
+        {
+            if (ReferenceEquals(source, _client))
+            {
+                return false;
+            }
+
+            Log.Write($"Dropped stale {what} from a superseded surface.");
+            return true;
+        }
+
+        private void OnSelected(SurfaceClient source, SelectedMsg sel)
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                _ = Dispatcher.BeginInvoke(new Action(() => OnSelected(source, sel)));
+                return;
+            }
+
+            if (_disposed || IsStale(source, "Selected"))
+            {
+                return;
+            }
+
+            _lastSelected = sel;
+
+            // Show the header immediately; the properties follow in ElementProps (usually same tick).
+            PreviewerSelection.Set(new SelectionSnapshot
+            {
+                Id = sel.Id,
+                ElementType = sel.ElementType ?? "",
+                Name = sel.Name,
+            }, SelectionDocument);
+
+            // Notify the in-editor margin so it can move the caret to this element's source span (#1).
+            try { ElementSelected?.Invoke(sel); }
+            catch (Exception ex) { Log.Write("ElementSelected handler failed: " + ex.Message); }
+
+            // Note: we intentionally do NOT auto-open the VS "Properties" tool window here anymore. The
+            // in-previewer Properties flyout (surface-side, feature #4) is now the primary property view, so a
+            // selection shouldn't surprise-pop a VS pane. PreviewerSelection.Set above still keeps an
+            // already-open tool window in sync, and the margin "Properties" button reopens it on demand.
+        }
+
+        // Bug D1: the surface reported the authored subtree's custom content-property map. Store it and notify
+        // the margin so it rebuilds its XAML source map to recurse into explicit property elements. No UI
+        // marshalling needed — this only swaps a reference and the margin handler just flips a dirty flag.
+        private void OnContentProps(SurfaceClient source, ContentPropsMsg msg)
+        {
+            // Runs on the reader thread; a reference compare is enough (a late map from an old surface would
+            // otherwise overwrite the new document's map, which only arrives after its render).
+            if (!ReferenceEquals(source, _client))
+            {
+                Log.Write("Dropped stale ContentProps from a superseded surface.");
+                return;
+            }
+
+            _contentPropMap = msg?.Map;
+            try { ContentPropMapChanged?.Invoke(); }
+            catch (Exception ex) { Log.Write("ContentPropMapChanged handler failed: " + ex.Message); }
+        }
+
+        private void OnElementProps(SurfaceClient source, ElementPropsMsg msg)
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                _ = Dispatcher.BeginInvoke(new Action(() => OnElementProps(source, msg)));
+                return;
+            }
+
+            if (_disposed || IsStale(source, "ElementProps"))
+            {
+                return;
+            }
+
+            var sel = _lastSelected;
+            if (sel == null || sel.Id != msg.Id)
+            {
+                return; // stale (selection changed before its props arrived)
+            }
+
+            var rows = new System.Collections.Generic.List<PropRow>();
+            if (msg.Props != null)
+            {
+                foreach (var p in msg.Props)
+                {
+                    rows.Add(new PropRow
+                    {
+                        Name = p.Name ?? "",
+                        Category = string.IsNullOrEmpty(p.Category) ? "Misc" : p.Category!,
+                        TypeName = p.Type ?? "",
+                        Value = p.Value ?? "",
+                    });
+                }
+            }
+
+            PreviewerSelection.Set(new SelectionSnapshot
+            {
+                Id = sel.Id,
+                ElementType = sel.ElementType ?? "",
+                Name = sel.Name,
+                Props = rows,
+            }, SelectionDocument);
+        }
+
+        private void ReloadCurrent()
+        {
+            if (_disposed || _client == null || _currentPath == null)
+            {
+                return;
+            }
+
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                if (_disposed || _currentPath == null)
+                {
+                    return;
+                }
+
+                var xaml = ReadDocumentText(_currentPath);
+
+                // Proactive recycle: a document known to fail-fast the surface on its 2nd render (plan
+                // §36) must render in a process that has not
+                // rendered it yet — so leftover animations/timers/backdrops from the previous render can't
+                // fail-fast this one. Promote the pre-warmed spare instead of re-hosting in place (which
+                // would risk a crash). The spare is already up, so the swap costs about one render, not a
+                // cold process start — no visible restart blip.
+                bool isolate = _session.IsRisky(_currentPath);
+                if (isolate && TryPromoteSpare(xaml))
+                {
+                    PerfBegin("edit.riskyspare");
+                    Log.Write("Risky doc edit: recycled onto the warm spare (skipped in-place re-render).");
+                    return;
+                }
+
+                // No spare ready yet, but one is on its way: hold the edit for it rather than re-rendering in
+                // the already-used process (the exact crash risk isolation exists to avoid). The spare renders
+                // whatever the document says when it arrives, so a burst of edits costs one render.
+                if (isolate && AwaitSpareForEdit())
+                {
+                    return;
+                }
+
+                if (_client != null)
+                {
+                    PerfBegin("edit.inplace");
+                }
+
+                _client?.UpdateXaml(xaml);
+            });
+        }
+
+        // ---- process recycling (warm spare) --------------------------------
+        //
+        // Some content fail-fasts the WinUI surface on its SECOND render in a warm process (plan §36: the
+        // arming is process-global and survives unrelated renders in between). To keep editing such a page
+        // seamless, we keep a pre-warmed idle "spare" surface — started, Ready, but never rendered, so it
+        // is still "unarmed" — and, before a risky 2nd render (or immediately after a crash), promote it:
+        // render on the fresh spare (its 1st render always succeeds), swap the view, retire the old
+        // process, and warm a new spare. The expensive process start is paid in the background, so the
+        // recycle is invisible.
+
+        /// <summary>Start (in the background) an idle spare surface matching the active launch config.</summary>
+        private void WarmSpare()
+        {
+            var warm = _session.TryBeginSpareWarm(_spareClient != null, !string.IsNullOrEmpty(_activeSurfaceExe), _disposed);
+            if (warm == null)
+            {
+                return;
+            }
+
+            var gen = warm.Value;
+            var exe = _activeSurfaceExe!;
+            var dll = _activeUserDll;
+            var appx = _activeUserAppXaml;
+            var theme = _activeTheme; // spare must match the active theme (baked at launch, per-process)
+            var userPri = _activeUserPri; // …and the matched-host merged pri, if a matched host is active
+
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                SurfaceClient? spare = null;
+                try
+                {
+                    spare = new SurfaceClient(exe, dll, Log.Write, appx, theme, userPri: userPri) { SampleData = PreviewOptions.DesignTimeData, DocumentPathSource = () => _currentPath ?? _pinnedPath };
+                    await spare.StartAsync(TimeSpan.FromSeconds(25));
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("Warm spare failed to start: " + ex.Message);
+                    var dead = spare;
+                    _ = Dispatcher.InvokeAsync(() =>
+                    {
+                        var action = _session.OnSpareStartFailed(gen);
+                        try { dead?.Dispose(); } catch { }
+                        if (action == SpareFailedAction.RestartForTheme)
+                        {
+                            RestartForTheme(PreviewOptions.Theme);
+                        }
+                        else if (action == SpareFailedAction.RenderHeldEditInPlace)
+                        {
+                            RenderAwaitedEditInPlace("the spare failed to start");
+                        }
+                    });
+                    return;
+                }
+
+                var ready = spare;
+                _ = Dispatcher.InvokeAsync(() =>
+                {
+                    // A doc switch (or dispose) happened while warming — this spare is for a stale config.
+                    var action = _session.OnSpareReady(gen, _disposed);
+                    if (action == SpareReadyAction.Discard)
+                    {
+                        try { ready!.Dispose(); } catch { }
+                        return;
+                    }
+
+                    _spareClient = ready;
+                    _spareReady = true;
+                    var spareSub = new Action<string>(r => OnSpareClosed(ready!, r));
+                    _spareClosedSub = spareSub;
+                    ready!.Closed += spareSub;
+                    Log.Write("Warm spare ready.");
+                    if (action == SpareReadyAction.CompleteThemeSwap)
+                    {
+                        CompleteThemeSwap(); // also satisfies any held edit (renders the latest text)
+                    }
+                    else if (action == SpareReadyAction.DrainHeldEdit)
+                    {
+                        DrainAwaitedEdit();
+                    }
+                });
+            });
+        }
+
+        // ---- held edit (waiting for a spare) --------------------------------
+        //
+        // An isolated edit (risky doc) that finds no ready spare waits for the next one instead
+        // of re-rendering in a used process. Only a flag is held: the drain re-reads the document, so the
+        // spare always renders the newest text. Bounded by SpareWaitLimit, then the old in-place render.
+
+        private static readonly TimeSpan SpareWaitLimit = TimeSpan.FromSeconds(15);
+
+        private bool AwaitSpareForEdit()
+        {
+            // A spare is on its way if one is warming, or a promoted render is in flight (the next spare is
+            // warmed when it paints). A process that has not rendered yet is still fresh, so the edit can
+            // render in it directly, as before.
+            var decision = _session.TryHoldEdit(() => { WarmSpare(); return _session.SpareWarming; }, out var seq);
+            if (decision == HoldDecision.RenderNow)
+            {
+                return false;
+            }
+
+            if (decision == HoldDecision.AlreadyHeld)
+            {
+                Log.Write("Isolated edit: still waiting for the spare; it will render the latest text.");
+                return true;
+            }
+
+            _editAwaitSw = System.Diagnostics.Stopwatch.StartNew();
+            Log.Write("Isolated edit: no spare ready yet; holding the edit until the next spare is up.");
+
+            _ = System.Threading.Tasks.Task.Delay(SpareWaitLimit).ContinueWith(_ =>
+                Dispatcher.InvokeAsync(() =>
+                {
+                    if (_session.HoldTimedOut(seq, _disposed))
+                    {
+                        RenderAwaitedEditInPlace($"the spare took longer than {SpareWaitLimit.TotalSeconds:0} s");
+                    }
+                }), System.Threading.Tasks.TaskScheduler.Default);
+            return true;
+        }
+
+        private void EndHold(string result)
+        {
+            _session.EndHold();
+            if (_editAwaitSw != null)
+            {
+                Log.Write($"PERF edit.hold ms={_editAwaitSw.ElapsedMilliseconds} result={result}");
+                _editAwaitSw = null;
+            }
+            PerfBegin("edit.riskywait");
+        }
+
+        private void DrainAwaitedEdit()
+        {
+            if (_disposed || _currentPath == null)
+            {
+                _session.EndHold();
+                return;
+            }
+
+            string xaml;
+            try { xaml = ReadDocumentText(_currentPath); }
+            catch (Exception ex) { _session.EndHold(); Log.Write("Re-read for held edit failed: " + ex.Message); return; }
+
+            EndHold("spare");
+            if (TryPromoteSpare(xaml))
+            {
+                Log.Write("Held edit rendered on the newly ready spare (latest text).");
+            }
+        }
+
+        private void RenderAwaitedEditInPlace(string why)
+        {
+            if (_disposed || _client == null || _currentPath == null)
+            {
+                _session.EndHold();
+                return;
+            }
+
+            EndHold("inplace");
+            Log.Write($"Held edit: {why}; rendering in place instead.");
+            try { _client.UpdateXaml(ReadDocumentText(_currentPath)); }
+            catch (Exception ex) { Log.Write("Held edit in-place render failed: " + ex.Message); }
+        }
+
+        private void OnSpareClosed(SurfaceClient dead, string reason)
+        {
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                // The spare died after an OnClosed recovery had already promoted it to active (both processes
+                // died together, so its single Closed event was routed here rather than to OnClosed). Without
+                // this, the active death is never reported and the pane spins on "Recycling surface…".
+                if (ReferenceEquals(dead, _client))
+                {
+                    Log.Write("Promoted spare had already died; handling as an active-surface death.");
+                    OnClosed(dead, reason);
+                    return;
+                }
+
+                if (!ReferenceEquals(dead, _spareClient))
+                {
+                    return; // stale notice for a spare that was already discarded
+                }
+
+                dead.Closed -= _spareClosedSub;
+                _spareClient = null;
+                _spareReady = false;
+                Log.Write("Warm spare died while idle: " + reason);
+                WarmSpare();
+            });
+        }
+
+        /// <summary>
+        /// Promote the pre-warmed spare to active and render <paramref name="xaml"/> on it (the spare's
+        /// first render — always safe). The old active is silenced and queued for retirement once the new
+        /// render lands. Returns false if no spare is ready (caller falls back to a cold restart). Must be
+        /// called on the UI thread.
+        /// </summary>
+        private bool TryPromoteSpare(string xaml)
+        {
+            if (_disposed || _spareClient == null || !_spareReady)
+            {
+                return false;
+            }
+
+            var spare = _spareClient;
+            if (spare.IsFaulted)
+            {
+                // Already dead (its OnSpareClosed notice may still be queued) — never promote a dead spare;
+                // the caller falls back to a cold restart.
+                Log.Write("Warm spare is already dead; not promoting.");
+                spare.Closed -= _spareClosedSub;
+                _spareClient = null;
+                _spareReady = false;
+                try { spare.Dispose(); } catch { }
+                return false;
+            }
+
+            _spareClient = null;
+            _spareReady = false;
+            spare.Closed -= _spareClosedSub;
+            spare.SampleData = PreviewOptions.DesignTimeData; // the toggle may have flipped while it warmed
+
+            // Silence the old active so its imminent (intentional) death can't drive the UI or trigger an
+            // auto-restart. Keep its native window on screen until the new render swaps it in; pre-mark the
+            // host dead so the swap's teardown won't reparent the old child to the desktop (no flash).
+            var old = _client;
+            if (old != null)
+            {
+                DetachClient(old);
+            }
+
+            _nativeHost?.MarkSurfaceDead();
+            _retiringClient = old;
+
+            // Wire the spare as the new active.
+            AttachClient(spare);
+            _client = spare;
+            _session.OnNewActiveClient(); // the promoted spare hasn't rendered yet
+
+            try
+            {
+                // Match the design/interact mode before the spare's first (and only) render.
+                spare.SetMode(PreviewOptions.DesignMode);
+                // Same document in a new process (theme swap): keep the user's zoom/scroll. Otherwise (file
+                // switch) the new page starts zoom-to-fit.
+                var carryView = _carryViewOnPromote ? _lastView : null;
+                _carryViewOnPromote = false;
+                _lastView = carryView;
+                if (PreferNative && _nativeSupported)
+                {
+                    SendStickyCanvasSize(spare);
+                    var (paneW, paneH) = GetPanePixelSize(0, 0);
+                    spare.EnterNative(xaml, 0, 0, 1.0, paneW, paneH, carryView);
+                }
+                else
+                {
+                    var (w, h, sc) = GetViewportSync();
+                    spare.LoadXaml(xaml, w, h, sc);
+                }
+            }
+            catch (Exception ex)
+            {
+                // The spare is already the active client; let its Closed/Error path handle the failure.
+                Log.Write("TryPromoteSpare render send failed: " + ex.Message);
+            }
+
+            // Any held edit is satisfied: this render used the document text read just before promotion.
+            // The replacement spare is warmed by OnRenderSucceeded, after this render paints. Starting it now
+            // was measured to be slower: startup and the render compete (spare ready 9.7-11.2 s vs 5.5 s).
+            _session.OnSparePromoted();
+            return true;
+        }
+
+        /// <summary>After a successful render: retire any client we swapped away from and ensure a spare.</summary>
+        private void OnRenderSucceeded()
+        {
+            _session.OnRenderSucceeded(); // refunds the restart budget; a later crash is a 2nd-render case
+            _heldError = null;
+
+            var retiring = _retiringClient;
+            if (retiring != null)
+            {
+                _retiringClient = null;
+                try { retiring.Dispose(); } catch { }
+                Log.Write("Recycle complete: retired the previous surface process.");
+            }
+
+            WarmSpare();
+        }
+
+        // ---- version-matched fidelity upgrade (nov-vsix-wire) --------------
+        //
+        // The instant preview always launches the bundled 2.2.0 host. When the target project references a
+        // different WASDK version, this produces a version-matched self-contained host in the background —
+        // either by run-copying a verified cached host (fast) or by kicking the provisioner --build (slow,
+        // once per version) — then hot-swaps it in for full fidelity (version-new controls upgrade from
+        // placeholder to real). Cancellation is generation-guarded at BOTH the build-wait and the promote, so
+        // a document that moves on (switch/close/dispose) never gets a stale host swapped into it. Build
+        // failures degrade gracefully: stay on the already-rendered bundled preview, no crash, no retry loop.
+
+        private void KickFidelityUpgrade(HostSelection? plan)
+        {
+            if (_disposed || plan == null)
+            {
+                return;
+            }
+
+            // No upgrade needed (bundled version, or undiscoverable): surface only the gentle no-toolchain note.
+            if (!plan.NeedsUpgrade)
+            {
+                if (!string.IsNullOrEmpty(plan.Note))
+                {
+                    ShowFidelityNote(plan.Note!);
+                }
+                return;
+            }
+
+            if (!PreviewOptions.FullFidelityAutoBuild)
+            {
+                Log.Write("Fidelity upgrade: auto-build disabled by setting; staying on bundled 2.2.0.");
+                return;
+            }
+
+            if (!_session.CanStartUpgrade)
+            {
+                return;
+            }
+
+            var version = plan.TargetVersion;
+            if (string.IsNullOrEmpty(version))
+            {
+                return;
+            }
+
+            if (FailedVersions.Contains(version!))
+            {
+                Log.Write($"Fidelity upgrade for {version}: a build already failed this session — not retrying.");
+                ShowFidelityNote(BuildFailedNote(version!), sticky: true);
+                return;
+            }
+
+            var kind = plan.Upgrade;
+            var project = plan.TargetProject;
+            if (kind == HostUpgradeKind.Build && string.IsNullOrEmpty(project))
+            {
+                Log.Write("Fidelity upgrade: no owning project to build from; staying on bundled 2.2.0.");
+                return;
+            }
+
+            var gen = _session.BeginUpgrade();
+            var userDll = _activeUserDll;
+            var userAppXaml = _activeUserAppXaml;
+            var theme = _activeTheme;
+
+            // Acquire (start or join) the shared per-version build on the UI thread so _upgradeBuild is owned
+            // here (de-dupe: two docs of the same version share ONE build).
+            MatchedHostBuild? build = null;
+            if (kind == HostUpgradeKind.Build)
+            {
+                build = HostProvisionerRunner.Acquire(version!, project!, Log.Write);
+                if (build == null)
+                {
+                    _session.AbortUpgradeStart();
+                    ShowFidelityNote($"Install the .NET SDK for a full-fidelity WinAppSDK {version} preview.");
+                    return;
+                }
+
+                _upgradeBuild = build;
+                ShowFidelityBuilding(version!, building: true);
+                void OnCompiling() => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (ReferenceEquals(_upgradeBuild, build))
+                    {
+                        ShowFidelityBuilding(version!, building: true, compiling: true);
+                    }
+                }));
+                build.Compiling += OnCompiling;
+                if (build.IsCompiling)
+                {
+                    OnCompiling();
+                }
+            }
+            else
+            {
+                ShowFidelityBuilding(version!, building: false); // verified cache present — quick validate + launch
+            }
+
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                var upSw = System.Diagnostics.Stopwatch.StartNew();
+                string? completedHost = null;
+                // 1. Wait for the shared build (if any).
+                if (build != null)
+                {
+                    HostBuildOutcome outcome;
+                    try { outcome = await build.Completion; }
+                    catch (Exception ex) { outcome = new HostBuildOutcome { Success = false, Error = ex.Message }; }
+                    if (!outcome.Success)
+                    {
+                        await MarshalAsync(() =>
+                        {
+                            if (!_session.IsUpgradeCurrent(gen))
+                            {
+                                return;
+                            }
+
+                            FailedVersions.Add(version!);
+                            Log.Write($"Fidelity upgrade for {version}: build did not yield a matched host ({outcome.Error}); staying on bundled 2.2.0.");
+                            EndUpgrade(gen, note: null);
+                            ShowFidelityNote(BuildFailedNote(version!), sticky: true);
+                        });
+                        return;
+                    }
+                    completedHost = outcome.HostDir;
+                }
+                Log.Write($"PERF upgrade.build ms={upSw.ElapsedMilliseconds} kind={kind}");
+
+                // 2. Launch straight from the verified, read-only cache entry. SurfaceClient makes the one
+                //    validated per-process run-copy that gets the mutable merged PRI (the cache is never mutated).
+                if (completedHost == null)
+                {
+                    await MarshalAsync(() => EndUpgrade(gen, note: null));
+                    return;
+                }
+
+                var matchedExe = Path.Combine(completedHost, "Surface.exe");
+                var matchedPri = Path.Combine(completedHost, "Surface.designtime.pri");
+
+                // Cancellation/supersession guard BEFORE we spawn the matched host (the WarmSpare-on-matched
+                // checkpoint): if the user cancelled or switched documents during the build, don't spend
+                // a Surface.exe on it. The promote guard below is the second, authoritative checkpoint.
+                bool superseded = false;
+                await MarshalAsync(() => superseded = _session.UpgradeSuperseded(gen, _disposed));
+                if (superseded)
+                {
+                    return;
+                }
+
+                // 3. Start the matched client and await Ready — off the UI thread.
+                SurfaceClient? matched = null;
+                ReadyMsg matchedReady;
+                try
+                {
+                    matched = new SurfaceClient(matchedExe, userDll, Log.Write, userAppXaml, theme, userPri: matchedPri) { SampleData = PreviewOptions.DesignTimeData, DocumentPathSource = () => _currentPath ?? _pinnedPath };
+                    matchedReady = await matched.StartAsync(TimeSpan.FromSeconds(25));
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("Fidelity upgrade: matched host failed to start: " + ex.Message);
+                    try { matched?.Dispose(); } catch { }
+                    await MarshalAsync(() => EndUpgrade(gen, note: null));
+                    return;
+                }
+
+                // R3: the host reports the WASDK it was really built against; flag a cache/build mix-up.
+                if (!string.Equals(matchedReady.Wasdk, version, StringComparison.OrdinalIgnoreCase))
+                {
+                    Log.Write($"Fidelity upgrade: WARNING matched host reports WASDK '{matchedReady.Wasdk ?? "(none)"}' but the project needs '{version}'.");
+                }
+
+                // 4. Promote on the UI thread (generation-checked: never swap into a document that moved on).
+                var readyMatched = matched;
+                Log.Write($"PERF upgrade.ready ms={upSw.ElapsedMilliseconds}");
+                await MarshalAsync(() =>
+                {
+                    if (_disposed || !_session.IsUpgradeCurrent(gen))
+                    {
+                        try { readyMatched!.Dispose(); } catch { }
+                        return;
+                    }
+
+                    PromoteMatched(readyMatched!, matchedExe, matchedPri, version!, gen);
+                });
+            });
+        }
+
+        /// <summary>
+        /// Swap the ready version-matched client in as the active surface (mirrors <see cref="TryPromoteSpare"/>
+        /// but for the matched host + its merged pri). The old bundled client is silenced and retired once the
+        /// matched render lands; future crash-recycle spares now match the matched host. UI thread only.
+        /// </summary>
+        private void PromoteMatched(SurfaceClient matched, string matchedExe, string matchedPri, string version, int gen)
+        {
+            string xaml;
+            try
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                xaml = ReadDocumentText(_currentPath ?? _pinnedPath ?? string.Empty);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("PromoteMatched: could not read current document (" + ex.Message + "); staying on bundled.");
+                try { matched.Dispose(); } catch { }
+                EndUpgrade(gen, note: null);
+                return;
+            }
+
+            // Silence the old (bundled) active so its imminent retirement can't drive the UI or auto-restart.
+            var old = _client;
+            if (old != null)
+            {
+                DetachClient(old);
+            }
+
+            _nativeHost?.MarkSurfaceDead();
+            _retiringClient = old;
+
+            // Any in-flight/ready BUNDLED crash-spare is now stale — invalidate + drop it; a matched spare is
+            // warmed after the matched render succeeds (OnRenderSucceeded).
+            _session.InvalidateSpare();
+            if (_spareClient != null)
+            {
+                _spareClient.Closed -= _spareClosedSub;
+                try { _spareClient.Dispose(); } catch { }
+                _spareClient = null;
+                _spareReady = false;
+            }
+
+            // Wire the matched client as the new active + retarget the active launch config so crash recycling
+            // reproduces the matched host (exe + merged pri).
+            AttachClient(matched);
+            _client = matched;
+            _session.OnNewActiveClient();
+            _activeSurfaceExe = matchedExe;
+            _activeUserPri = matchedPri;
+
+            try
+            {
+                matched.SetMode(PreviewOptions.DesignMode);
+                PerfBegin("upgrade.swap");
+                if (PreferNative && _nativeSupported)
+                {
+                    SendStickyCanvasSize(matched);
+                    var (paneW, paneH) = GetPanePixelSize(0, 0);
+                    matched.EnterNative(xaml, 0, 0, 1.0, paneW, paneH, _lastView);
+                }
+                else
+                {
+                    var (w, h, sc) = GetViewportSync();
+                    matched.LoadXaml(xaml, w, h, sc);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("PromoteMatched render send failed: " + ex.Message);
+            }
+
+            Log.Write($"Fidelity upgrade: hot-swapped to the version-matched WinAppSDK {version} host.");
+            _heldError = null; // the matched host's own render (or error) decides now
+            EndUpgrade(gen, note: null);
+            ShowFidelityReady(version);
+        }
+
+        /// <summary>Finish an upgrade attempt for generation <paramref name="gen"/>: release build interest, clear the in-progress flag, and show the note (or hide the banner). UI thread.</summary>
+        private void EndUpgrade(int gen, string? note)
+        {
+            if (!_session.EndUpgrade(gen))
+            {
+                return;
+            }
+
+            if (_upgradeBuild != null)
+            {
+                try { _upgradeBuild.Release(cancelIfLast: false); } catch { }
+                _upgradeBuild = null;
+            }
+
+            if (!string.IsNullOrEmpty(note))
+            {
+                ShowFidelityNote(note!);
+            }
+            else
+            {
+                HideFidelityBanner();
+            }
+
+            ReleaseHeldError();
+        }
+
+        private System.Threading.Tasks.Task MarshalAsync(Action action) => Dispatcher.InvokeAsync(action).Task;
+
+        // ---- fidelity banner (top info bar, non-blocking) -------------------
+
+        private void ShowFidelityBuilding(string version, bool building, bool compiling = false)
+        {
+            _fidelityBar.Show(
+                BannerSeverity.Progress,
+                compiling ? "Building full-fidelity preview" : "Preparing full-fidelity preview",
+                compiling
+                    ? $"Matching WinAppSDK {version}. This takes longer on first run."
+                    : building
+                        ? $"Matching WinAppSDK {version} — checking shared inputs and cache…"
+                        : $"Matching WinAppSDK {version}…",
+                actionText: "Cancel",
+                onAction: OnFidelityCancel,
+                dismissible: false);
+        }
+
+        private void ShowFidelityReady(string version)
+        {
+            _fidelityBar.Show(
+                BannerSeverity.Success,
+                "Full-fidelity preview ready",
+                $"Now rendering with WinAppSDK {version}.",
+                autoHide: TimeSpan.FromSeconds(4));
+        }
+
+        private void ShowFidelityNote(string note, bool sticky = false)
+        {
+            _fidelityBar.Show(BannerSeverity.Info, "Full-fidelity preview unavailable", note,
+                autoHide: sticky ? (TimeSpan?)null : TimeSpan.FromSeconds(10));
+        }
+
+        private static string BuildFailedNote(string version) =>
+            $"Couldn't build a WinAppSDK {version} preview host, so the bundled {MatchedHostResolver.BundledVersion ?? "host"} is used and some controls may not render. Details are in preview.log.";
+
+        private void HideFidelityBanner()
+        {
+            _fidelityBar.Hide();
+        }
+
+        /// <summary>
+        /// Warn when an unbuilt project's page rendered with parts missing (custom controls placeholdered, app
+        /// resources unresolved) — a build restores them, and the output watcher relaunches the preview on its own.
+        /// </summary>
+        private void UpdateBuildHint(System.Collections.Generic.List<string>? missingKeys, System.Collections.Generic.List<string>? unmappedTypes)
+        {
+            var doc = SelectionDocument;
+            var unbuilt = _activeProject != null && _activeUserDll == null;
+            var text = BuildHint.Describe(unbuilt, missingKeys, unmappedTypes);
+            if (text == null || (doc != null && _buildHintDismissed.Contains(doc)))
+            {
+                if (_buildHintBar.IsShown)
+                {
+                    _buildHintBar.Hide();
+                }
+                return;
+            }
+
+            if (!_buildHintBar.IsShown)
+            {
+                Log.Write($"Build hint: unbuilt project; {missingKeys?.Count ?? 0} unresolved key(s), unmapped type(s): {string.Join(", ", unmappedTypes ?? new System.Collections.Generic.List<string>())}.");
+            }
+            _buildHintBar.Show(BannerSeverity.Warning, BuildHint.Title, text);
+        }
+
+        // The host plan of the current document when it may upgrade (null under recovery / identity fallback),
+        // so turning full fidelity back on can start the upgrade without relaunching.
+        private HostSelection? _fidelityPlan;
+
+        /// <summary>
+        /// Toolbar "Full fidelity" toggle. Persists the preference and applies it to this preview right away;
+        /// other previews catch up through the shared settings sync. UI thread only.
+        /// </summary>
+        public void SetFullFidelity(bool on)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            PreviewOptions.FullFidelityAutoBuild = on;
+            ApplyFullFidelity(on);
+        }
+
+        private void ApplyFullFidelity(bool on)
+        {
+            _appliedFullFidelity = on;
+            Log.Write($"Full fidelity toggled {(on ? "ON" : "off")}.");
+            var path = _pinnedPath ?? _currentPath;
+            var action = _session.OnFullFidelityToggled(on, live: _client != null,
+                onMatchedHost: !string.IsNullOrEmpty(_activeUserPri), upgradable: _fidelityPlan != null);
+            if (action == FullFidelityToggleAction.StopUpgrade || action == FullFidelityToggleAction.RelaunchBundled)
+            {
+                if (_upgradeBuild != null)
+                {
+                    try { _upgradeBuild.Release(cancelIfLast: true); } catch { }
+                    _upgradeBuild = null;
+                }
+                HideFidelityBanner();
+                if (action == FullFidelityToggleAction.StopUpgrade)
+                {
+                    ReleaseHeldError();
+                }
+            }
+
+            if (action == FullFidelityToggleAction.RelaunchBundled && !string.IsNullOrEmpty(path))
+            {
+                Log.Write("Full fidelity off: relaunching on the bundled host.");
+                _recoverMatchedHost = null;
+                _currentPath = null;
+                _carryViewOnPromote = true;
+                _perfNextOpenLabel = "fidelity";
+                ShowDocument(path);
+            }
+            else if (action == FullFidelityToggleAction.StartUpgrade)
+            {
+                KickFidelityUpgrade(_fidelityPlan);
+            }
+        }
+
+        private void OnFidelityCancel()
+        {
+            // Supersede any in-flight upgrade (the background task's generation check will make it abandon the
+            // promote) and release our build interest — cancelling the shared build if no other preview wants it.
+            _session.CancelUpgrade(byUser: true);
+            if (_upgradeBuild != null)
+            {
+                try { _upgradeBuild.Release(cancelIfLast: true); } catch { }
+                _upgradeBuild = null;
+            }
+
+            Log.Write("Fidelity upgrade cancelled by user.");
+            HideFidelityBanner();
+            ReleaseHeldError();
+        }
+
+        // A bundled-host render error held back while a full-fidelity upgrade was in flight (see OnError).
+        private string? _heldError;
+
+        /// <summary>The upgrade ended without a matched host: show the held error after all. UI thread.</summary>
+        private void ReleaseHeldError()
+        {
+            var held = _heldError;
+            _heldError = null;
+            if (held != null && !_disposed && !_hasFrame && !_hasNative)
+            {
+                Log.Write("Full-fidelity host unavailable; showing the held error.");
+                SetStatus("XAML error", spinner: false, detail: held, severity: BannerSeverity.Error);
+            }
+        }
+
+        private (int w, int h, double scale) GetViewportSync()
+        {
+            int w = (int)Math.Max(1, Math.Round(ActualWidth > 0 ? ActualWidth : 800));
+            int h = (int)Math.Max(1, Math.Round(ActualHeight > 0 ? ActualHeight : 600));
+            double scale = Math.Max(1.0, Math.Min(2.0, _lastScale));
+            return (w, h, scale);
+        }
+
+        // ---- surface events (socket thread -> dispatcher) ------------------
+
+        private void OnFrame(SurfaceClient source, FrameMsg frame)
+        {
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                if (_disposed || string.IsNullOrEmpty(frame.Data) || IsStale(source, "Frame"))
+                {
+                    return;
+                }
+
+                try
+                {
+                    var bytes = Convert.FromBase64String(frame.Data);
+                    using var ms = new MemoryStream(bytes);
+                    var bmp = new BitmapImage();
+                    bmp.BeginInit();
+                    bmp.CacheOption = BitmapCacheOption.OnLoad;
+                    bmp.StreamSource = ms;
+                    bmp.EndInit();
+                    bmp.Freeze();
+
+                    FrameImage.Source = bmp;
+
+                    // Ensure the image path is visible (native mode collapses it).
+                    if (NativeHostHolder.Visibility == Visibility.Visible)
+                    {
+                        TeardownNativeHost(surfaceDead: true);
+                    }
+                    FrameImage.Visibility = Visibility.Visible;
+
+                    // Display at logical (DIP) size so the supersampled pixels map ~1:1 to device
+                    // pixels — mirrors the VS Code webview's logical sizing.
+                    if (frame.DipWidth > 0 && frame.DipHeight > 0)
+                    {
+                        FrameImage.Width = frame.DipWidth;
+                        FrameImage.Height = frame.DipHeight;
+                    }
+
+                    _hasFrame = true;
+                    PerfEnd("frame");
+                    OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
+                    HideStatus();
+                    UpdateBuildHint(frame.MissingKeys, frame.UnmappedTypes);
+                    Log.Write($"Frame rendered: {frame.Width}x{frame.Height}px ({frame.DipWidth}x{frame.DipHeight} dip).");
+                }
+                catch (Exception ex)
+                {
+                    SetStatus("Failed to decode frame.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
+                }
+            });
+        }
+
+        private void OnHwnd(SurfaceClient source, HwndMsg msg)
+        {
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                if (_disposed || msg.Hwnd == 0 || IsStale(source, "Hwnd"))
+                {
+                    return;
+                }
+
+                var hwnd = new IntPtr(msg.Hwnd);
+                int pxW = Math.Max(1, msg.PixelWidth);
+                int pxH = Math.Max(1, msg.PixelHeight);
+                double dipW = msg.DipWidth > 0 ? msg.DipWidth : pxW;
+                double dipH = msg.DipHeight > 0 ? msg.DipHeight : pxH;
+
+                try
+                {
+                    // The holder fills the tool window (see PreviewControl.xaml); HwndHost sizes the
+                    // reparented child to the holder's arranged rect — i.e. to the pane, never to the
+                    // (possibly larger) preview canvas — so it can't overflow into neighboring VS panes.
+                    // The surface zooms/fits the canvas inside that viewport, so the canvas pixel size in
+                    // msg is informational only: the child is never sized to it.
+                    if (_nativeHost == null || _nativeHost.SurfaceHwnd != hwnd)
+                    {
+                        // First/new HWND (first entry, theme swap, spare promotion): swap the new host in
+                        // directly in place of the old one — no collapse/teardown gap in between — and start
+                        // the child at the pane's size so there's no canvas-size frame before WPF's layout.
+                        var (paneW, paneH) = GetPanePixelSize(pxW, pxH);
+                        var old = _nativeHost;
+                        var host = new SurfaceHwndHost(hwnd, paneW, paneH);
+                        FrameImage.Visibility = Visibility.Collapsed;
+                        FrameImage.Source = null;
+                        NativeHostHolder.Width = double.NaN;
+                        NativeHostHolder.Height = double.NaN;
+                        NativeHostHolder.Visibility = Visibility.Visible;
+                        NativeHostHolder.Child = host;
+                        _nativeHost = host;
+                        ArmHangWatchdog(source, hwnd);
+                        if (old != null)
+                        {
+                            try { old.Dispose(); } catch { }
+                        }
+                        // The sticky canvas size was already sent ahead of EnterNative (SendStickyCanvasSize),
+                        // so this first host is already at the right size — no follow-up re-host needed.
+                    }
+                    // else: same warm window re-hosted after an edit — nothing to do client-side.
+
+                    // Swap to the native view (hide the image path).
+                    FrameImage.Visibility = Visibility.Collapsed;
+                    FrameImage.Source = null;
+                    NativeHostHolder.Visibility = Visibility.Visible;
+
+                    _hasNative = true;
+                    PerfEnd("hwnd");
+                    OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
+                    HideStatus();
+                    UpdateBuildHint(msg.MissingKeys, msg.UnmappedTypes);
+                    Log.Write($"Native surface hosted: hwnd=0x{msg.Hwnd:X} px={pxW}x{pxH} dip={dipW:0}x{dipH:0} scale={msg.Scale}.");
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("OnHwnd failed: " + ex);
+                    SetStatus("Failed to host native surface.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
+                }
+            });
+        }
+
+        private void OnNativeExited()
+        {
+            Log.Write("Surface acknowledged ExitNative (window re-cloaked off-screen).");
+        }
+
+        // B8: a hung Surface freezes VS input through the shared input queue of the reparented window. Kill it from
+        // the watchdog's thread (not via the Dispatcher: VS input is what's frozen); the client's Closed path then
+        // runs the usual crash recovery.
+        private void ArmHangWatchdog(SurfaceClient source, IntPtr hwnd)
+        {
+            _hangWatchdog?.Dispose();
+            var pid = source.ProcessId;
+            _hangWatchdog = SurfaceHangWatchdog.Start(hwnd, hungFor =>
+            {
+                var reason = $"Surface window stopped responding for {hungFor.TotalSeconds:0} s (pid={pid}); " +
+                             "restarting the preview so Visual Studio stays responsive.";
+                Log.Write(reason);
+                source.TerminateUnresponsive(reason);
+            });
+        }
+
+        private void OnView(SurfaceClient source, ViewMsg view)
+        {
+            if (!ReferenceEquals(source, _client))
+            {
+                return; // a superseded surface's zoom/scroll must not be carried to the new one
+            }
+
+            _lastView = view;
+            Log.Write($"View: fit={view.Fit} zoom={view.Zoom:0.###} offset={view.OffsetX:0},{view.OffsetY:0}");
+        }
+
+        private void PerfBegin(string label)
+        {
+            if (_perfSw != null)
+            {
+                Log.Write($"PERF {_perfLabel}.paint ms={_perfSw.ElapsedMilliseconds} outcome=superseded");
+            }
+
+            _perfLabel = label;
+            _perfSw = System.Diagnostics.Stopwatch.StartNew();
+        }
+
+        private void PerfEnd(string outcome)
+        {
+            if (_perfSw == null)
+            {
+                return;
+            }
+
+            Log.Write($"PERF {_perfLabel}.paint ms={_perfSw.ElapsedMilliseconds} outcome={outcome}");
+            _perfSw = null;
+            _perfLabel = null;
+        }
+
+        private void OnError(SurfaceClient source, ErrorMsg err)
+        {
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                if (_disposed || IsStale(source, "Error"))
+                {
+                    return;
+                }
+
+                PerfEnd(err.NotDesignable ? "notdesignable" : "error");
+                UpdateBuildHint(err.MissingKeys, err.UnmappedTypes);
+
+                // A promoted spare that answered with an error never rendered, so it is still fresh: a held
+                // edit (often the fix for a half-typed tag) can safely render in it now instead of waiting.
+                if (_session.OnRenderError())
+                {
+                    RenderAwaitedEditInPlace("the previous render failed, so this process is still fresh");
+                }
+
+                // P1 (VE1): a structurally non-designable root — a ResourceDictionary (styles/themes/
+                // control-template dictionary), a Window/WindowEx, or a $safeprojectname$ project-template
+                // placeholder — is not a broken preview. The surface classifies it distinctly (NotDesignable
+                // + a human reason) instead of a parse failure. Present it as a calm, informational state
+                // rather than a scary red error or a blank surface, so the user understands the preview is
+                // intentionally empty for this file.
+                var kind = PreviewErrorText.Classify(err.NotDesignable, _hasFrame || _hasNative);
+                if (kind == ErrorDisplay.NotDesignable)
+                {
+                    var reason = PreviewErrorText.NotDesignableReason(err.Message);
+                    Log.Write("Surface reported a non-designable root — " + reason);
+                    SetNotDesignable(reason);
+                    return;
+                }
+
+                var where = err.Line.HasValue ? $" (line {err.Line}, col {err.Column})" : "";
+                var text = $"{err.Phase}: {err.Message}{where}";
+                Log.Write("Surface error — " + text);
+                var display = PreviewErrorText.FormatXamlError(err.Message, err.Line, err.Column);
+
+                if (_session.ShouldHoldError(err.NotDesignable, _hasFrame || _hasNative, !string.IsNullOrEmpty(_activeUserPri)))
+                {
+                    Log.Write("Holding the error until the full-fidelity host has tried this page.");
+                    _heldError = display;
+                    SetStatus("Preparing full-fidelity preview…", spinner: true, detail: Path.GetFileName(_currentPath ?? _pinnedPath ?? ""));
+                    return;
+                }
+
+                _heldError = null;
+
+                if (kind == ErrorDisplay.BannerOverLastRender)
+                {
+                    // Keep the last good frame / native view; surface a compact banner.
+                    SetDetailBanner(display);
+                }
+                else
+                {
+                    SetStatus("XAML error", spinner: false, detail: display, severity: BannerSeverity.Error);
+                }
+            });
+        }
+
+        private void OnClosed(SurfaceClient source, string reason)
+        {
+            Log.Write("Surface closed: " + reason);
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                // A superseded surface's death must not tear down the active surface's native host.
+                if (IsStale(source, "Closed"))
+                {
+                    return;
+                }
+
+                // The surface process died: its child window is gone. Drop the native host without
+                // reparenting the dead handle.
+                if (_nativeHost != null)
+                {
+                    TeardownNativeHost(surfaceDead: true);
+                }
+
+                // Don't self-heal a death we caused (dispose / document switch), or after control teardown.
+                // R2: a protocol mismatch can't be fixed by restarting the same exe — say so instead of burning
+                // the restart budget. Otherwise the death is nearly always the §36 2nd-render fail-fast: the
+                // document is learned as risky (future edits recycle proactively) and we self-heal, bounded.
+                var path = _currentPath;
+                var action = _session.OnActiveDied(path, _disposed, source.IsProtocolMismatch);
+                if (action == ActiveDeathAction.Ignore)
+                {
+                    return;
+                }
+
+                if (action == ActiveDeathAction.ProtocolMismatch)
+                {
+                    ShowProtocolMismatch(reason);
+                    return;
+                }
+
+                var restarts = _session.Restarts;
+                if (action == ActiveDeathAction.Recover)
+                {
+                    _hasFrame = false;
+                    _hasNative = false;
+
+                    // Fast path: promote the pre-warmed spare and render there (its 1st render always
+                    // succeeds) — turns the crash into a sub-second swap instead of a cold process start.
+                    string? xaml = null;
+                    try { xaml = ReadDocumentText(path!); }
+                    catch (Exception ex) { Log.Write("Re-read for recycle failed: " + ex.Message); }
+
+                    if (xaml != null && TryPromoteSpare(xaml))
+                    {
+                        PerfBegin("recover.spare");
+                        Log.Write($"Surface died; recovered via warm spare (attempt {restarts.Attempts}/{restarts.MaxAttempts}).");
+                        SetStatus("Recycling surface…", spinner: true, detail: Path.GetFileName(path!));
+                        return;
+                    }
+
+                    // No spare available — fall back to a full cold restart.
+                    Log.Write($"Surface died; cold-restarting preview (attempt {restarts.Attempts}/{restarts.MaxAttempts}).");
+                    SetStatus("Surface restarted; reloading…", spinner: true, detail: Path.GetFileName(path!));
+                    _currentPath = null; // force ShowDocument to fully re-init rather than short-circuit
+                    _perfNextOpenLabel = "recover.cold";
+                    RememberMatchedHostForRecovery(path!);
+                    ShowDocument(path);
+                    return;
+                }
+
+                ShowReconnectBanner(PreviewErrorText.DisconnectedDetail(reason, restarts.Exhausted, restarts.MaxAttempts));
+            });
+        }
+
+        // ---- viewport / sizing ---------------------------------------------
+
+        /// <summary>P7: if the dying surface was a version-matched host, have the cold relaunch reuse it.</summary>
+        private void RememberMatchedHostForRecovery(string path)
+        {
+            _recoverMatchedHost = !string.IsNullOrEmpty(_activeUserPri) && !string.IsNullOrEmpty(_activeSurfaceExe)
+                ? (path, _activeSurfaceExe!, _activeUserPri!)
+                : ((string, string, string)?)null;
+        }
+
+        private async System.Threading.Tasks.Task<(int w, int h, double scale)> GetViewportAsync()
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            double scale = 1.5;
+            try
+            {
+                var dpi = VisualTreeHelper.GetDpi(this);
+                if (dpi.DpiScaleX > 0)
+                {
+                    scale = dpi.DpiScaleX;
+                }
+            }
+            catch
+            {
+                // fall back to a sensible default density
+            }
+
+            scale = Math.Max(1.0, Math.Min(2.0, scale));
+            _lastScale = scale;
+
+            int w = (int)Math.Max(1, Math.Round(ActualWidth > 0 ? ActualWidth : 800));
+            int h = (int)Math.Max(1, Math.Round(ActualHeight > 0 ? ActualHeight : 600));
+            return (w, h, scale);
+        }
+
+        private void OnResizeDebounceTick(object? sender, EventArgs e)
+        {
+            _resizeDebounce.Stop();
+            if (_disposed || _client == null)
+            {
+                return;
+            }
+
+            // Native mode: the child is a fixed-size preview canvas; a pane resize is handled locally by
+            // the ScrollViewer, so no surface round-trip is needed.
+            if (_nativeHost != null)
+            {
+                return;
+            }
+
+            if (!_hasFrame)
+            {
+                return;
+            }
+
+            int w = (int)Math.Max(1, Math.Round(ActualWidth));
+            int h = (int)Math.Max(1, Math.Round(ActualHeight));
+            _client.Resize(w, h, _lastScale);
+        }
+
+        // ---- helpers --------------------------------------------------------
+
+        private bool IsCurrent(string? path) =>
+            !string.IsNullOrEmpty(path) &&
+            string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase);
+
+        private static string ReadDocumentText(string path)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            // Prefer the in-memory buffer so unsaved edits are previewed.
+            try
+            {
+                if (Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(SDTE)) is DTE dte)
+                {
+                    foreach (Document doc in dte.Documents)
+                    {
+                        if (string.Equals(doc.FullName, path, StringComparison.OrdinalIgnoreCase) &&
+                            doc.Object("TextDocument") is TextDocument td)
+                        {
+                            var start = td.StartPoint.CreateEditPoint();
+                            return start.GetText(td.EndPoint);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // fall back to disk
+            }
+
+            return File.ReadAllText(path);
+        }
+
+        /// <summary>
+        /// U2: show the single blocking status card (nothing useful to preview yet / any more). A spinner means
+        /// work in progress; otherwise the severity moniker says whether this is information or a failure.
+        /// Clears the top message bar and any terminal reconnect state — the card supersedes them.
+        /// </summary>
+        private void SetStatus(string text, bool spinner, string? detail = null, BannerSeverity severity = BannerSeverity.Info, bool offerReload = false)
+        {
+            HideReconnectBanner();
+            HideMessageBar();
+            Button? action = null;
+            if (offerReload && !spinner)
+            {
+                action = PreviewChrome.MakeButton("Reload preview", OnReloadClick);
+                System.Windows.Automation.AutomationProperties.SetAutomationId(action, "PreviewStatusReload");
+            }
+
+            ShowStatusCard(text, detail, spinner ? (BannerSeverity?)null : severity, action);
+        }
+
+        private void ShowStatusCard(string title, string? detail, BannerSeverity? icon, Button? action)
+        {
+            StatusOverlay.Visibility = Visibility.Visible;
+
+            if (icon.HasValue)
+            {
+                StatusIcon.Moniker = PreviewChrome.MonikerFor(icon.Value);
+                StatusIcon.Visibility = Visibility.Visible;
+                Spinner.Visibility = Visibility.Collapsed;
+                Spinner.IsIndeterminate = false;
+            }
+            else
+            {
+                StatusIcon.Visibility = Visibility.Collapsed;
+                Spinner.Visibility = Visibility.Visible;
+                Spinner.IsIndeterminate = true;
+            }
+
+            StatusText.Text = title;
+            if (string.IsNullOrEmpty(detail))
+            {
+                StatusDetail.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                StatusDetail.Text = detail;
+                StatusDetail.Visibility = Visibility.Visible;
+            }
+
+            StatusActionHost.Content = action;
+            StatusActionHost.Visibility = action != null ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void HideStatusCard()
+        {
+            StatusOverlay.Visibility = Visibility.Collapsed;
+            Spinner.IsIndeterminate = false;
+            StatusActionHost.Content = null;
+            StatusActionHost.Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>A XAML error while a previous render is still on screen: keep it, flag the error up top.</summary>
+        private void SetDetailBanner(string text)
+        {
+            HideStatusCard();
+            _messageBar.Show(BannerSeverity.Error, "XAML error", text + "  (showing the last successful render)");
+        }
+
+        private void HideMessageBar()
+        {
+            _messageBar.Hide();
+        }
+
+        /// <summary>
+        /// P1 (VE1): render the friendly "not a designable page" state for a structurally non-designable
+        /// root (ResourceDictionary / Window / project-template placeholder). Calm and informational — an
+        /// info icon, a plain title, and the surface's human-readable reason — instead of a red parse error
+        /// or a blank pane. Clears any stale frame/native view so the message is the only thing shown.
+        /// </summary>
+        private void SetNotDesignable(string reason)
+        {
+            // Drop any leftover surface view from a previously previewed page so it can't sit behind the
+            // message (a non-page never produces a frame or native window of its own).
+            if (_nativeHost != null)
+            {
+                TeardownNativeHost(surfaceDead: true);
+            }
+            FrameImage.Visibility = Visibility.Collapsed;
+            FrameImage.Source = null;
+            _hasFrame = false;
+            _hasNative = false;
+
+            HideReconnectBanner();
+            HideMessageBar();
+            ShowStatusCard("Not a designable page", reason, BannerSeverity.Info, action: null);
+        }
+
+        private void HideStatus()
+        {
+            HideReconnectBanner();
+            HideStatusCard();
+            HideMessageBar();
+        }
+
+        /// <summary>
+        /// T11/T12 terminal recovery state: the surface has died and auto-restart is exhausted (or there is
+        /// nothing to relaunch). Dim any stale frame with a full-pane scrim and present the single, persistent,
+        /// explicit "Reload preview" affordance in the status card. This is the one give-up sink for all fault
+        /// paths; a working state (SetStatus) or a successful render (HideStatus) clears it again.
+        /// </summary>
+        private void ShowReconnectBanner(string? reason)
+        {
+            HideMessageBar();
+            var reload = PreviewChrome.MakeButton("Reload preview", OnReloadClick);
+            System.Windows.Automation.AutomationProperties.SetAutomationId(reload, "PreviewReconnectReload");
+            ShowStatusCard("Preview disconnected", reason, BannerSeverity.Warning, reload);
+            ReconnectScrim.Visibility = Visibility.Visible;
+            _reconnectShown = true;
+        }
+
+        private void HideReconnectBanner()
+        {
+            ReconnectScrim.Visibility = Visibility.Collapsed;
+            if (_reconnectShown)
+            {
+                _reconnectShown = false;
+                HideStatusCard();
+            }
+        }
+        private void OnReloadClick(object sender, System.Windows.RoutedEventArgs e)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            // User-initiated recovery: clear the terminal banner, hand back a fresh auto-restart budget, and
+            // force a full cold re-init of the current document (the dead surface can't be reused).
+            HideReconnectBanner();
+            _session.OnUserReload();
+
+            var path = _pinnedPath ?? _currentPath;
+            if (string.IsNullOrEmpty(path))
+            {
+                path = PreviewPackageState.GetActiveXamlPath();
+            }
+
+            if (string.IsNullOrEmpty(path))
+            {
+                Reload();
+                return;
+            }
+
+            _currentPath = null; // force ShowDocument to fully re-init rather than short-circuit
+            ShowDocument(path!);
+        }
+
+        /// <summary>
+        /// The native host's target size in device pixels: the content row (control minus the banner row).
+        /// Falls back to the given canvas size before the control has been laid out.
+        /// </summary>
+        private (int w, int h) GetPanePixelSize(int fallbackW, int fallbackH)
+        {
+            double dipW = ActualWidth;
+            double dipH = ActualHeight - BannerHost.ActualHeight;
+            if (dipW < 1 || dipH < 1)
+            {
+                return (fallbackW, fallbackH);
+            }
+            var dpi = VisualTreeHelper.GetDpi(this);
+            return (Math.Max(1, (int)Math.Round(dipW * dpi.DpiScaleX)), Math.Max(1, (int)Math.Round(dipH * dpi.DpiScaleY)));
+        }
+
+        private void TeardownNativeHost(bool surfaceDead = false)
+        {
+            _hangWatchdog?.Dispose();
+            _hangWatchdog = null;
+            var host = _nativeHost;
+            _nativeHost = null;
+            _hasNative = false;
+            if (host != null)
+            {
+                // When the surface process is (about to be) killed, mark the handle dead so the host's
+                // DestroyWindowCore does NOT reparent it back to the desktop (which would flash on screen).
+                if (surfaceDead)
+                {
+                    host.MarkSurfaceDead();
+                }
+
+                try { NativeHostHolder.Child = null; } catch { }
+                try { host.Dispose(); } catch { }
+            }
+
+            NativeHostHolder.Visibility = Visibility.Collapsed;
+            NativeHostHolder.Width = double.NaN;
+            NativeHostHolder.Height = double.NaN;
+        }
+
+        private void DisposeClient()
+        {
+            // We're intentionally tearing this client down; a Closed event it raises during teardown
+            // must not trigger an auto-restart. Cancel any in-flight version-matched upgrade so it can't
+            // promote into a document that has moved on (generation bump), release our interest in the shared
+            // build (it keeps running to fill the cache; only an explicit Cancel stops it), and hide the banner. Invalidate any
+            // in-flight spare warm (its launch config is about to be stale).
+            _session.OnTeardown();
+            _hangWatchdog?.Dispose();
+            _hangWatchdog = null;
+            _outputWatcher?.Dispose();
+            _outputWatcher = null;
+            if (_upgradeBuild != null)
+            {
+                // Don't cancel: switching documents (or closing the preview) shouldn't throw away a minutes-long
+                // matched-host build — it finishes in the background and the next open of that project is a
+                // cache hit. Only the banner's Cancel stops it; VS exit kills it via the child-process job.
+                try { _upgradeBuild.Release(cancelIfLast: false); } catch { }
+                _upgradeBuild = null;
+            }
+            HideFidelityBanner();
+            _buildHintBar.Hide();
+
+            // Tear down the spare + any surface we were mid-swap retiring.
+            if (_spareClient != null)
+            {
+                _spareClient.Closed -= _spareClosedSub;
+                try { _spareClient.Dispose(); } catch { }
+                _spareClient = null;
+                _spareReady = false;
+            }
+
+            if (_retiringClient != null)
+            {
+                try { _retiringClient.Dispose(); } catch { }
+                _retiringClient = null;
+            }
+
+            // Native host is bound to this surface process; tear it down first (marking the handle dead
+            // so we don't flash the window to the desktop) before killing the process.
+            TeardownNativeHost(surfaceDead: true);
+
+            var client = _client;
+            _client = null;
+            if (client != null)
+            {
+                DetachClient(client);
+                client.Dispose();
+            }
+
+            // Every client is gone; each removed its own private run-copy on Dispose.
+            _activeUserPri = null;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            PreviewerSelection.Forget(SelectionDocument);
+            SurfaceIdentity.FallbackRequested -= OnIdentityFallbackRequested;
+            SurfaceClient.IdentityRequired -= OnSurfaceIdentityRequired;
+            PreviewOptions.PreviewSettingsChanged -= OnPreviewSettingsChanged;
+            PreviewPackageState.UnregisterSession(this);
+            _resizeDebounce.Stop();
+            _emptyDebounce.Stop();
+            DisposeClient();
+        }
+    }
+}

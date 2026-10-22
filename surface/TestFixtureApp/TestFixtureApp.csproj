@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Q-suite fixture "user project": custom controls of each kind, a project reference, Community Toolkit
+       controls, and resources at every scope. Built by Test-Migration.ps1 -IncludeRenderer and loaded
+       as the user DLL by SurfaceClient.UITest's fixtures mode. Fixtures\*.xaml are the pages under test; they compile
+       like a real app's pages (so their types land in the app's XAML type info), except the stand-in App.xaml. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>TestFixtureApp</RootNamespace>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <!-- Mirror an app's output folder: package DLLs (the Toolkit) sit next to the user DLL. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <!-- Test-VersionMatrix.ps1 overrides this to build the test app against each WinAppSDK in the matrix. -->
+    <TestWasdkVersion Condition="'$(TestWasdkVersion)' == ''">2.2.0</TestWasdkVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(TestWasdkVersion)" />
+    <!-- Same version as the toolkit templates harvested into the bundled surface (PreviewHost.csproj). -->
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.250402" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.Segmented" Version="8.2.250402" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TestFixtureLib\TestFixtureLib.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Page Remove="Fixtures\App.xaml" />
+    <None Include="Fixtures\App.xaml" />
+  </ItemGroup>
+</Project>

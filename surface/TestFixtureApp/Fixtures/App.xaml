@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Stand-in for a real app's App.xaml (app-scope resources). The fixture run passes it to the surface; it is not compiled. -->
+<Application
+    x:Class="TestFixtureApp.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="AppThemeBrush" Color="#FFF3E0" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="AppThemeBrush" Color="#3E2723" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+            <SolidColorBrush x:Key="AppAccentBrush" Color="#D84315" />
+            <Style TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                <Setter Property="Background" Value="#00897B" />
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

@@ -1,0 +1,634 @@
+using System.Diagnostics;
+using System.Text.Json;
+using SurfaceProvisioner;
+using WinUISurface.Shared;
+
+if (args.Length == 2 && args[0] == "--lock")
+{
+    using var held = BuildStorage.AcquireLock(args[1], CancellationToken.None);
+    Console.WriteLine("locked");
+    Console.ReadLine();
+    return;
+}
+var count = 0;
+void Check(bool condition, string label) { if (!condition) throw new Exception(label); count++; Console.WriteLine("PASS " + label); }
+void Reject(Action action, string label)
+{
+    try { action(); } catch { Check(true, label); return; }
+    throw new Exception("Expected rejection: " + label);
+}
+var root = Path.Combine(Path.GetTempPath(), "wsp-test-" + Guid.NewGuid().ToString("N").Substring(0, 12));
+Directory.CreateDirectory(root);
+try
+{
+    var source = Path.Combine(root, "source");
+    Directory.CreateDirectory(source);
+    foreach (var file in new[] { "Surface.exe", "Surface.dll", "Surface.pri", "Surface.designtime.pri",
+        "Surface.deps.json", "Surface.runtimeconfig.json", "Microsoft.WinUI.dll", "Microsoft.ui.xaml.dll" })
+        File.WriteAllText(Path.Combine(source, file), file);
+    var key = new string('a', 64);
+    HostPayload.Seal(source, key, "2.2.0", "engine");
+    Check(HostPayload.Validate(source, key).Files.Count == 8, "complete manifest");
+    Reject(() => HostPayload.Validate(source, new string('b', 64)), "wrong identity fails");
+    var cache = Path.Combine(root, "cache");
+    var first = BuildStorage.Publish(cache, key, source);
+    Check(BuildStorage.FindCompleted(cache, key) == first, "published cache resolves");
+    Check(!File.Exists(Path.Combine(first, HostPayload.RunMarker)), "completed entry is not a mutable run");
+    var second = BuildStorage.Publish(cache, key, source);
+    Check(first != second && Directory.Exists(first), "replacement generation preserves immutable predecessor");
+    Check(BuildStorage.FindCompleted(cache, key) == second, "atomic pointer selects newest completed entry");
+    var run = Path.Combine(root, "run");
+    var run2 = Path.Combine(root, "run2");
+    HostPayload.CreateRunCopy(second, run);
+    HostPayload.CreateRunCopy(second, run2);
+    File.Copy(Path.Combine(run, "Surface.designtime.pri"), Path.Combine(run, "Surface.pri"), true);
+    Check(File.ReadAllText(Path.Combine(second, "Surface.pri")) == "Surface.pri", "user PRI cannot mutate cache");
+    Check(File.ReadAllText(Path.Combine(run2, "Surface.pri")) == "Surface.pri", "run sessions isolated");
+    Reject(() => HostPayload.Validate(run), "mutated run cannot masquerade as pristine input");
+    Reject(() => HostPayload.CreateRunCopy(second, run2), "existing run destination never overwritten");
+    var pristine = Directory.GetFiles(second, "*", SearchOption.AllDirectories)
+        .ToDictionary(path => path, path => HostPayload.Hash(path));
+    foreach (var destination in new[] { second, second + "\\", Path.Combine(second, "run"),
+        Path.Combine(second.ToUpperInvariant(), "new-parent", "run") + "\\",
+        Path.Combine(second, "ignored", "..", "run") })
+    {
+        var directories = Directory.GetDirectories(second, "*", SearchOption.AllDirectories);
+        using var output = new StringWriter();
+        var exit = ProvisionerCommand.Run(new[] { "--prepare-run", "--host", second + "\\", "--run-root", destination },
+            CancellationToken.None, output, _ => { });
+        using var json = JsonDocument.Parse(output.ToString());
+        Check(exit == 1 && !json.RootElement.GetProperty("success").GetBoolean() &&
+            json.RootElement.GetProperty("hostDir").ValueKind == JsonValueKind.Null,
+            "contained/equal --prepare-run destination rejected: " + destination);
+        Check(Directory.GetDirectories(second, "*", SearchOption.AllDirectories).SequenceEqual(directories) &&
+            Directory.GetFiles(second, "*", SearchOption.AllDirectories).Length == pristine.Count &&
+            pristine.All(pair => HostPayload.Hash(pair.Key) == pair.Value) && HostPayload.Validate(second, key).Key == key,
+            "rejected destination creates no directories and preserves manifest/all hashes");
+    }
+    using (var output = new StringWriter())
+    {
+        var sibling = second + "2";
+        Check(ProvisionerCommand.Run(new[] { "--prepare-run", "--host", second.ToUpperInvariant() + "\\",
+            "--run-root", sibling + "\\" }, CancellationToken.None, output, _ => { }) == 0 &&
+            HostPayload.Validate(sibling, key).Key == key, "similarly-prefixed sibling allowed with case/trailing separators");
+    }
+    foreach (var phase in new[] { "before-copy", "after-copy", "before-validation" })
+    {
+        using var cancelRun = new CancellationTokenSource();
+        if (phase == "before-copy") cancelRun.Cancel();
+        var cancelledRun = Path.Combine(root, "cancelled-" + phase);
+        using var output = new StringWriter();
+        var copied = 0;
+        // Exercise the real --prepare-run dispatch, synchronously cancelling at an exact I/O boundary,
+        // not with a timer or an oversized file whose outcome depends on machine speed.
+        var exit = ProvisionerCommand.Run(new[] { "--prepare-run", "--host", second, "--run-root", cancelledRun },
+            cancelRun.Token, output, message =>
+            {
+                if (message.StartsWith("Copied run payload: ", StringComparison.Ordinal)) copied++;
+                if ((phase == "after-copy" && copied == 1) ||
+                    (phase == "before-validation" && message == "Validating prepared run payload."))
+                    cancelRun.Cancel();
+            });
+        using var cancelledJson = JsonDocument.Parse(output.ToString());
+        var result = cancelledJson.RootElement;
+        Check(exit == 130 && result.GetProperty("cancelled").GetBoolean() &&
+            !result.GetProperty("success").GetBoolean() && result.GetProperty("status").GetString() == "failed",
+            "--prepare-run " + phase + " returns cancelled JSON and exit 130");
+        Check(result.GetProperty("hostDir").ValueKind == JsonValueKind.Null &&
+            result.GetProperty("hostExePath").ValueKind == JsonValueKind.Null,
+            "--prepare-run " + phase + " exposes no usable output paths");
+        Check(!Directory.Exists(cancelledRun) &&
+            !Directory.EnumerateDirectories(root, "cancelled-" + phase + ".preparing-*").Any(),
+            "--prepare-run " + phase + " removes only owned partial staging");
+        Check(pristine.All(pair => HostPayload.Hash(pair.Key) == pair.Value) &&
+            Directory.GetFiles(second, "*", SearchOption.AllDirectories).Length == pristine.Count,
+            "--prepare-run " + phase + " leaves pristine published host unchanged");
+        if (phase == "after-copy") Check(copied == 1, "--prepare-run stops between payload copies");
+    }
+    using (var cancelledRun = new CancellationTokenSource())
+    {
+        cancelledRun.Cancel();
+        using var output = new StringWriter();
+        Check(ProvisionerCommand.Run(new[] { "--prepare-run", "--host", second, "--run-root", second },
+            cancelledRun.Token, output, _ => { }) == 130 && HostPayload.Validate(second, key).Key == key,
+            "cancelled --prepare-run never deletes a supplied published generation");
+        foreach (var operation in new Action[] {
+            () => HostPayload.Hash(Path.Combine(second, "Surface.dll"), cancelledRun.Token),
+            () => HostPayload.Validate(second, cancellation: cancelledRun.Token) })
+        {
+            var observed = false;
+            try { operation(); }
+            catch (OperationCanceledException) { observed = true; }
+            Check(observed, "payload hash/validation observes cancellation");
+        }
+    }
+    var occupiedRun = Path.Combine(root, "occupied-run");
+    using (var output = new StringWriter())
+    {
+        var exit = ProvisionerCommand.Run(new[] { "--prepare-run", "--host", second, "--run-root", occupiedRun },
+            CancellationToken.None, output, _ =>
+            {
+                if (!Directory.Exists(occupiedRun))
+                {
+                    Directory.CreateDirectory(occupiedRun);
+                    File.WriteAllText(Path.Combine(occupiedRun, "owner.txt"), "another caller");
+                }
+            });
+        Check(exit == 1 && File.ReadAllText(Path.Combine(occupiedRun, "owner.txt")) == "another caller" &&
+            Directory.GetFiles(occupiedRun).Length == 1,
+            "run publication collision preserves another caller's destination");
+        Check(!Directory.EnumerateDirectories(root, "occupied-run.preparing-*").Any(),
+            "failed run publication removes only owned partial staging");
+    }
+    File.WriteAllText(Path.Combine(second, "Surface.dll"), "tampered!");
+    Reject(() => BuildStorage.FindCompleted(cache, key), "cache serve hashes managed payload");
+    var tamperedRun = Path.Combine(root, "tampered-run");
+    Reject(() => HostPayload.CreateRunCopy(second, tamperedRun), "run-copy hashes each member while copying");
+    Check(!Directory.Exists(tamperedRun) && !Directory.EnumerateDirectories(root, "tampered-run.preparing-*").Any(),
+        "tampered run-copy publishes nothing and removes its staging");
+    File.WriteAllText(Path.Combine(first, "rogue.dll"), "extra");
+    Reject(() => HostPayload.Validate(first), "unknown assembly contamination fails");
+    File.Delete(Path.Combine(first, "rogue.dll"));
+    File.Delete(Path.Combine(first, "Surface.designtime.pri"));
+    Reject(() => HostPayload.Validate(first), "missing PRI fails");
+
+    // Manifest hardening: every structural rejection path in ReadManifest/Validate.
+    var hard = Path.Combine(root, "hard");
+    void FreshHost()
+    {
+        if (Directory.Exists(hard)) Directory.Delete(hard, true);
+        Directory.CreateDirectory(Path.Combine(hard, "runtimes", "win-arm64", "native"));
+        foreach (var file in Directory.GetFiles(source)) if (Path.GetFileName(file) != HostPayload.ManifestName)
+            File.Copy(file, Path.Combine(hard, Path.GetFileName(file)));
+        File.WriteAllText(Path.Combine(hard, "runtimes", "win-arm64", "native", "WebView2Loader.dll"), "native");
+        HostPayload.Seal(hard, key, "2.2.0", "engine");
+    }
+    void RewriteManifest(Action<PayloadManifest> edit)
+    {
+        var path = Path.Combine(hard, HostPayload.ManifestName);
+        var m = JsonSerializer.Deserialize<PayloadManifest>(File.ReadAllText(path))!;
+        edit(m);
+        File.WriteAllText(path, JsonSerializer.Serialize(m));
+    }
+    FreshHost();
+    Check(HostPayload.Validate(hard, key).Files.ContainsKey(Path.Combine("runtimes", "win-arm64", "native", "WebView2Loader.dll")),
+        "nested native member sealed and validated");
+    File.WriteAllText(Path.Combine(hard, "runtimes", "win-arm64", "native", "WebView2Loader.dll"), "swapped");
+    Reject(() => HostPayload.Validate(hard, key), "nested native member tamper fails");
+    FreshHost();
+    File.WriteAllText(Path.Combine(hard, "Microsoft.ui.xaml.dll"), "swapped");
+    Reject(() => HostPayload.Validate(hard, key), "native WinUI binary tamper fails");
+    FreshHost();
+    File.Delete(Path.Combine(hard, HostPayload.ManifestName));
+    Reject(() => HostPayload.Validate(hard), "missing manifest fails");
+    FreshHost();
+    File.WriteAllText(Path.Combine(hard, HostPayload.ManifestName), "null");
+    Reject(() => HostPayload.Validate(hard), "null manifest fails");
+    FreshHost();
+    File.WriteAllText(Path.Combine(hard, HostPayload.ManifestName), "{ not json");
+    Reject(() => HostPayload.Validate(hard), "corrupt manifest fails");
+    FreshHost();
+    RewriteManifest(m => m.Format = 1);
+    Reject(() => HostPayload.Validate(hard), "old manifest format fails");
+    FreshHost();
+    RewriteManifest(m => m.Key = "");
+    Reject(() => HostPayload.Validate(hard), "empty identity key fails");
+    FreshHost();
+    RewriteManifest(m => m.Files.Remove("Microsoft.WinUI.dll"));
+    Reject(() => HostPayload.Validate(hard), "manifest omitting a required member fails (even though the file exists)");
+    FreshHost();
+    RewriteManifest(m => m.Files["..\\outside.dll"] = new string('0', 64));
+    Reject(() => HostPayload.Validate(hard), "parent-traversal member fails");
+    FreshHost();
+    RewriteManifest(m => m.Files["C:\\Windows\\evil.dll"] = new string('0', 64));
+    Reject(() => HostPayload.Validate(hard), "rooted member fails");
+    FreshHost();
+    File.WriteAllText(Path.Combine(hard, HostPayload.RunMarker), "");
+    Check(HostPayload.Validate(hard, key).Key == key, "run marker is the only tolerated extra file");
+    FreshHost();
+    Directory.CreateDirectory(Path.Combine(hard, "sub"));
+    File.WriteAllText(Path.Combine(hard, "sub", "Surface.dll"), "shadow");
+    Reject(() => HostPayload.Validate(hard), "unlisted nested file (shadow assembly) fails");
+    Directory.Delete(hard, true);
+    Reject(() => new BuildStage(Path.Combine(root, new string('x', 90))), "deep staging fails clearly");
+    string owned;
+    using (var stage = new BuildStage(root)) { owned = stage.Root; Check(Directory.Exists(owned), "owned short staging created"); }
+    Check(!Directory.Exists(owned) && Directory.Exists(root), "only owned stage cleaned");
+    var sourceTree = Path.Combine(root, "tree");
+    Directory.CreateDirectory(Path.Combine(sourceTree, "obj"));
+    File.WriteAllText(Path.Combine(sourceTree, "asset.png"), "pixels");
+    File.WriteAllText(Path.Combine(sourceTree, "obj", "stale"), "output");
+    var destTree = Path.Combine(root, "copy");
+    BuildStorage.CopySource(sourceTree, destTree);
+    Check(File.Exists(Path.Combine(destTree, "asset.png")) && !Directory.Exists(Path.Combine(destTree, "obj")), "source copy includes resources excludes output");
+
+    // Identity fixtures use actual resolved-assets documents + actual package files, without tool execution.
+    var packageRoot = Path.Combine(root, "packages");
+    var pkg = Path.Combine(packageRoot, "resources", "1.0.0");
+    Directory.CreateDirectory(pkg);
+    File.WriteAllText(Path.Combine(pkg, "Themes.pri"), "resources1");
+    var libraries = new Dictionary<string, object> { ["Resources/1.0.0"] = new {
+        type = "package", path = "resources/1.0.0", files = new[] { "Themes.pri" } } };
+    var graph = JsonSerializer.Serialize(new { targets = new Dictionary<string, object> { ["net10.0/win-x64"] = new { } },
+        libraries, packageFolders = new Dictionary<string, object> { [packageRoot + Path.DirectorySeparatorChar] = new { } } });
+    var engine = Path.Combine(root, "engine"); var template = Path.Combine(root, "template");
+    foreach (var dir in new[] { engine, template })
+    {
+        Directory.CreateDirectory(Path.Combine(dir, "obj"));
+        File.WriteAllText(Path.Combine(dir, "obj", "project.assets.json"), graph);
+        File.WriteAllText(Path.Combine(dir, "input.csproj"), "<Project/>");
+    }
+    string Identity(string ver = "2.2.0", string rid = "win-x64", string stamp = "engine") =>
+        BuildStorage.Identity(engine, template, sourceTree, ver, "2.2.1", "x64", rid, stamp, "sdk10");
+    var before = Identity();
+    Check(before == Identity(), "identity stable");
+    Check(before != Identity(ver: "2.3.0"), "resolved version identity");
+    Check(before != Identity(rid: "win-arm64"), "RID identity");
+    Check(before != Identity(stamp: "new-engine"), "engine stamp identity");
+    File.WriteAllText(Path.Combine(template, "logo.png"), "logo");
+    Check(before != Identity(), "template asset identity");
+    before = Identity();
+    File.WriteAllText(Path.Combine(pkg, "Themes.pri"), "resources2");
+    Check(before != Identity(), "actual resource package closure identity");
+    before = Identity();
+    File.WriteAllText(Path.Combine(engine, "obj", "project.assets.json"), graph.Replace("net10.0/win-x64", "net11.0/win-x64"));
+    Check(before != Identity(), "resolved TFM identity");
+    before = Identity();
+    var otherProject = Path.Combine(root, "other-project");
+    Directory.CreateDirectory(Path.Combine(otherProject, "obj"));
+    File.WriteAllText(Path.Combine(otherProject, "Other.csproj"), "<Project><!-- a different app --></Project>");
+    File.WriteAllText(Path.Combine(otherProject, "obj", "project.assets.json"), graph.Replace("net10.0/win-x64", "net9.0/win-x64"));
+    var otherWitnesses = new List<BuildStorage.Witness>();
+    Check(before == BuildStorage.Identity(engine, template, Path.Combine(otherProject, "Other.csproj"), "2.2.0", "2.2.1", "x64",
+        "win-x64", "engine", "sdk10", default, otherWitnesses), "different target project shares the cached host");
+    Check(otherWitnesses.Any(w => w.Path.EndsWith("Other.csproj")) && otherWitnesses.Any(w => w.Path.EndsWith("project.assets.json") && w.Path.StartsWith(otherProject)),
+        "target project still witnessed for memo invalidation");
+
+    // F3: the template merges the target's PRI-bearing packages (not WASDK, not PRI-less ones).
+    var target = Path.Combine(root, "target");
+    Directory.CreateDirectory(Path.Combine(target, "obj"));
+    Check(TemplatePackages.Discover(target, _ => { }) == null, "template packages: no target graph keeps baseline");
+    File.WriteAllText(Path.Combine(target, "obj", "project.assets.json"), JsonSerializer.Serialize(new {
+        libraries = new Dictionary<string, object> {
+            ["Toolkit.Controls/8.2.1"] = new { type = "package", files = new[] { "lib/net8.0/Toolkit.Controls.pri" } },
+            ["Microsoft.WindowsAppSDK.WinUI/2.0.0"] = new { type = "package", files = new[] { "lib/Microsoft.UI.Xaml.Controls.pri" } },
+            ["Plain.Library/1.0.0"] = new { type = "package", files = new[] { "lib/net8.0/Plain.Library.dll" } },
+            ["SiblingProject/1.0.0"] = new { type = "project", path = "../Sibling/Sibling.csproj" } } }));
+    var discovered = TemplatePackages.Discover(target, _ => { })!;
+    Check(discovered.Count == 1 && discovered[0] == ("Toolkit.Controls", "8.2.1"), "template packages: only PRI-bearing non-WASDK packages");
+    var stagedTemplate = Path.Combine(root, "staged-template");
+    Directory.CreateDirectory(stagedTemplate);
+    TemplatePackages.Write(stagedTemplate, discovered);
+    var props = File.ReadAllText(Path.Combine(stagedTemplate, TemplatePackages.FileName));
+    Check(props.Contains("<WinUISurfaceUserPackages>true</WinUISurfaceUserPackages>") &&
+        props.Contains("<PackageReference Include=\"Toolkit.Controls\" Version=\"8.2.1\" />"), "template packages: props replace baseline");
+    TemplatePackages.Write(stagedTemplate, null);
+    Check(!File.Exists(Path.Combine(stagedTemplate, TemplatePackages.FileName)), "template packages: fallback removes props");
+
+    // WinUI Gallery layout: per-project obj\<Name>\ assets, and a $(Property) version in the csproj.
+    var gallery = Path.Combine(root, "gallery");
+    Directory.CreateDirectory(Path.Combine(gallery, "obj", "Gallery"));
+    File.WriteAllText(Path.Combine(gallery, "Directory.Build.props"),
+        "<Project><Import Project=\"standalone.props\" /></Project>");
+    File.WriteAllText(Path.Combine(gallery, "standalone.props"),
+        "<Project><PropertyGroup><WindowsAppSdkPackageVersion>2.5.4-experimental</WindowsAppSdkPackageVersion></PropertyGroup></Project>");
+    var galleryProj = Path.Combine(gallery, "Gallery.csproj");
+    File.WriteAllText(galleryProj,
+        "<Project><ItemGroup><PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"$(WindowsAppSdkPackageVersion)\" /></ItemGroup></Project>");
+    var (gv, gsrc, _) = Provisioner.DiscoverVersion(galleryProj);
+    Check(gv == "2.5.4-experimental" && gsrc == VersionSourceKind.CsprojPackageReference, "discovery: $(Property) expanded via props chain");
+    File.WriteAllText(Path.Combine(gallery, "obj", "Gallery", "project.assets.json"), JsonSerializer.Serialize(new {
+        libraries = new Dictionary<string, object> {
+            ["Microsoft.WindowsAppSDK/2.5.5"] = new { type = "package", files = new[] { "x.nuspec" } },
+            ["Toolkit.Controls/8.2.1"] = new { type = "package", files = new[] { "lib/net8.0/Toolkit.Controls.pri" } } } }));
+    (gv, gsrc, _) = Provisioner.DiscoverVersion(galleryProj);
+    Check(gv == "2.5.5" && gsrc == VersionSourceKind.ProjectAssetsJson, "discovery: assets under obj\\<ProjectName>\\");
+    Check(TemplatePackages.Discover(galleryProj, _ => { })?.Count == 1, "template packages: assets under obj\\<ProjectName>\\");
+    File.WriteAllText(galleryProj,
+        "<Project><ItemGroup><PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"$(Unset)\" /></ItemGroup></Project>");
+    File.Delete(Path.Combine(gallery, "obj", "Gallery", "project.assets.json"));
+    Check(Provisioner.DiscoverVersion(galleryProj).version == null, "discovery: unexpandable $(Property) is not a version");
+
+    // Only external dotnet execution is substituted. The actual --build dispatcher, HostBuilder,
+    // identity, package matching, cache validation/publication and JSON/exit paths run unchanged.
+    var buildFixture = Path.Combine(root, "build-fixture");
+    var fixtureSurface = Path.Combine(buildFixture, "surface", "Surface.csproj");
+    var fixtureTemplate = Path.Combine(buildFixture, "template", "PreviewHost.csproj");
+    var fixtureTarget = Path.Combine(buildFixture, "target", "Target.csproj");
+    foreach (var project in new[] { fixtureSurface, fixtureTemplate, fixtureTarget })
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        File.WriteAllText(project, "<Project><ItemGroup><PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"2.2.0\" /></ItemGroup></Project>");
+    }
+    var meta = Path.Combine(packageRoot, "microsoft.windowsappsdk", "2.2.0");
+    Directory.CreateDirectory(meta);
+    File.WriteAllText(Path.Combine(meta, "microsoft.windowsappsdk.nuspec"),
+        "<package><metadata><dependencies><dependency id=\"Microsoft.WindowsAppSDK.WinUI\" version=\"2.2.1\" /></dependencies></metadata></package>");
+    var componentRoot = Path.Combine(packageRoot, "microsoft.windowsappsdk.winui", "2.2.1");
+    var nativeRoot = Path.Combine(componentRoot, "runtimes-framework", "win-x64", "native");
+    Directory.CreateDirectory(nativeRoot);
+    File.Copy(Path.Combine(source, "Microsoft.WinUI.dll"), Path.Combine(componentRoot, "Microsoft.WinUI.dll"));
+    File.Copy(Path.Combine(source, "Microsoft.ui.xaml.dll"), Path.Combine(nativeRoot, "Microsoft.ui.xaml.dll"));
+    var restoreCalls = 0;
+    string FakeTool(string exe, IEnumerable<string> arguments)
+    {
+        var toolArgs = arguments.ToArray();
+        if (toolArgs[0] == "--version") return "fixture-sdk";
+        var project = toolArgs[1];
+        var projectDir = Path.GetDirectoryName(project)!;
+        if (toolArgs[0] == "restore")
+        {
+            restoreCalls++;
+            Directory.CreateDirectory(Path.Combine(projectDir, "obj"));
+            File.WriteAllText(Path.Combine(projectDir, "obj", "project.assets.json"), graph);
+        }
+        else if (toolArgs[0] == "build")
+        {
+            var bin = Path.Combine(projectDir, "bin", "x64", "Debug", "net10.0-windows10.0.26100.0", "win-x64");
+            Directory.CreateDirectory(bin);
+            if (Path.GetFileName(project) == "Surface.csproj")
+            {
+                foreach (var file in Directory.GetFiles(source).Where(f =>
+                    Path.GetFileName(f) != HostPayload.ManifestName && Path.GetFileName(f) != "Surface.designtime.pri"))
+                    File.Copy(file, Path.Combine(bin, Path.GetFileName(file)));
+            }
+            else File.Copy(Path.Combine(source, "Surface.designtime.pri"), Path.Combine(bin, "resources.pri"));
+        }
+        else throw new Exception("Unexpected tool command: " + exe);
+        return "";
+    }
+    var fixtureCache = Path.Combine(buildFixture, "cache");
+    var buildArgs = new[] { "--build", "--project", fixtureTarget, "--surface-project", fixtureSurface,
+        "--previewhostpri-project", fixtureTemplate, "--cache", fixtureCache, "--nuget-cache", packageRoot,
+        "--staging-root", root, "--bundled-host", source };
+    string fixtureHost;
+    using (var output = new StringWriter())
+    {
+        var exit = ProvisionerCommand.Run(buildArgs, CancellationToken.None, output, _ => { }, FakeTool);
+        using var json = JsonDocument.Parse(output.ToString());
+        Check(exit == 0 && json.RootElement.GetProperty("status").GetString() == "built", "fixture builds via actual command/cache pipeline");
+        fixtureHost = json.RootElement.GetProperty("hostDir").GetString()!;
+    }
+    var fixturePristine = Directory.GetFiles(fixtureHost, "*", SearchOption.AllDirectories)
+        .ToDictionary(path => path, path => HostPayload.Hash(path));
+    var fixtureV2 = Path.Combine(fixtureCache, "v2");
+    foreach (var phase in new[] { "cache-validation", "cache-success", "publication-copy", "publication-validation",
+        "before-commit", "after-commit", "after-pointer" })
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var output = new StringWriter();
+        var isCache = phase.StartsWith("cache-", StringComparison.Ordinal);
+        var phaseArgs = isCache ? buildArgs : buildArgs.Concat(new[] { "--force-rebuild" }).ToArray();
+        var entriesBefore = Directory.GetDirectories(Path.Combine(fixtureV2, "entries"));
+        var pointer = Directory.GetFiles(Path.Combine(fixtureV2, "keys")).Single();
+        var previousPointer = File.ReadAllText(pointer);
+        var validatingCache = false;
+        var triggered = false;
+        var exit = ProvisionerCommand.Run(phaseArgs, cancellation.Token, output, message =>
+        {
+            if (message == "Validating cached payload.") validatingCache = true;
+            var cancelNow = phase switch
+            {
+                "cache-validation" => validatingCache && message.StartsWith("Validated payload member: ", StringComparison.Ordinal),
+                "cache-success" => message.StartsWith("CACHE HIT ", StringComparison.Ordinal),
+                "publication-copy" => message.StartsWith("Copied run payload: ", StringComparison.Ordinal),
+                "publication-validation" => message == "Validating prepared run payload.",
+                "before-commit" => message == "Committing completed cache generation.",
+                "after-commit" => message == "Committed completed cache generation.",
+                "after-pointer" => message == "Published cache pointer.",
+                _ => false
+            };
+            if (cancelNow) { triggered = true; cancellation.Cancel(); }
+        }, FakeTool);
+        using var json = JsonDocument.Parse(output.ToString());
+        var result = json.RootElement;
+        Check(triggered && exit == 130 && result.GetProperty("cancelled").GetBoolean() &&
+            result.GetProperty("status").GetString() == "failed" && !result.GetProperty("success").GetBoolean() &&
+            !result.GetProperty("usedFallback").GetBoolean(), "--build " + phase + " cancelled JSON/exit130 without fallback");
+        Check(new[] { "hostDir", "hostExePath", "mergedPriPath" }.All(p => result.GetProperty(p).ValueKind == JsonValueKind.Null),
+            "--build " + phase + " exposes no runnable paths");
+        Check(fixturePristine.All(pair => HostPayload.Hash(pair.Key) == pair.Value) &&
+            Directory.GetFiles(fixtureHost, "*", SearchOption.AllDirectories).Length == fixturePristine.Count,
+            "--build " + phase + " preserves cached host and manifest hashes");
+        var entriesAfter = Directory.GetDirectories(Path.Combine(fixtureV2, "entries"));
+        var committed = phase is "after-commit" or "after-pointer";
+        Check(entriesAfter.Length == entriesBefore.Length + (committed ? 1 : 0) &&
+            entriesAfter.All(p => !Path.GetFileName(p).StartsWith(".")) &&
+            !Directory.GetFiles(Path.Combine(fixtureV2, "keys")).Any(p => Path.GetFileName(p).StartsWith(".")) &&
+            !Directory.GetFiles(root, "*.lease").Any(),
+            "--build " + phase + " leaves no pending entry/index or owned build stage");
+        Check((File.ReadAllText(pointer) != previousPointer) == (phase == "after-pointer"),
+            "--build " + phase + " respects atomic pointer boundary");
+        foreach (var entry in entriesAfter)
+            Check(HostPayload.Validate(Path.Combine(entry, "host")).Files.Count == 8,
+                "--build " + phase + " retains only complete immutable generations");
+    }
+
+    // Identity memo: a verified cache hit skips staging/restore/deep package hashing; any witnessed
+    // input change (or an unusable memo) falls back to the full identity path.
+    (string status, int restores, string key) BuildOnce()
+    {
+        restoreCalls = 0;
+        using var output = new StringWriter();
+        var exit = ProvisionerCommand.Run(buildArgs, CancellationToken.None, output, _ => { }, FakeTool);
+        using var json = JsonDocument.Parse(output.ToString());
+        Check(exit == 0, "memo scenario exits 0");
+        return (json.RootElement.GetProperty("status").GetString()!, restoreCalls,
+            json.RootElement.GetProperty("cacheKey").GetString()!);
+    }
+    var memoBaseline = BuildOnce();
+    Check(memoBaseline.status == "cached" && memoBaseline.restores == 0, "memo cache hit skips restore");
+    var memoFile = Directory.GetFiles(Path.Combine(fixtureV2, "memo"), "*.json").Single();
+    File.WriteAllText(Path.Combine(pkg, "Themes.pri"), "resources-changed-in-place");
+    var afterPackage = BuildOnce();
+    Check(afterPackage.restores == 2 && afterPackage.status == "built" && afterPackage.key != memoBaseline.key,
+        "memo invalidated by restored package file change");
+    var rehit = BuildOnce();
+    Check(rehit.status == "cached" && rehit.restores == 0 && rehit.key == afterPackage.key, "memo refreshed after rebuild");
+    File.WriteAllText(Path.Combine(Path.GetDirectoryName(fixtureSurface)!, "NewSource.cs"), "// added");
+    var afterSource = BuildOnce();
+    Check(afterSource.restores == 2 && afterSource.key != rehit.key, "memo invalidated by engine source addition");
+    File.WriteAllText(memoFile, "{ not json");
+    var afterCorrupt = BuildOnce();
+    Check(afterCorrupt.status == "cached" && afterCorrupt.restores == 2 && afterCorrupt.key == afterSource.key,
+        "unreadable memo falls back to full identity");
+    Check(BuildOnce().restores == 0, "memo rewritten after full-identity cache hit");
+
+    // Offline / no NuGet feed: restore is the only network step. A warm cache must not need it; a cold cache
+    // fails (or degrades to an explicit bundled host) with the restore error preserved and nothing published.
+    const string offlineError = "error NU1301: Unable to load the service index for source https://api.nuget.org/v3/index.json.";
+    var offlineRestores = 0;
+    string OfflineTool(string exe, IEnumerable<string> arguments)
+    {
+        var toolArgs = arguments.ToArray();
+        if (toolArgs[0] == "restore") { offlineRestores++; throw new InvalidOperationException("dotnet exit 1:\n" + offlineError); }
+        return FakeTool(exe, toolArgs);
+    }
+    (int exit, JsonElement result) RunBuild(string[] args, Func<string, IEnumerable<string>, string> tool)
+    {
+        using var output = new StringWriter();
+        var exit = ProvisionerCommand.Run(args, CancellationToken.None, output, _ => { }, tool);
+        using var json = JsonDocument.Parse(output.ToString());
+        return (exit, json.RootElement.Clone());
+    }
+    string[] WithCache(string cacheDir, bool bundled) => buildArgs
+        .Select(a => a == fixtureCache ? cacheDir : a)
+        .Where((a, i) => bundled || (a != "--bundled-host" && (i == 0 || buildArgs[i - 1] != "--bundled-host")))
+        .ToArray();
+
+    var (warmExit, warm) = RunBuild(buildArgs, OfflineTool);
+    Check(warmExit == 0 && warm.GetProperty("status").GetString() == "cached" && offlineRestores == 0,
+        "offline: a previously built host is served from the memo without restore");
+
+    var coldCache = Path.Combine(buildFixture, "cold-cache");
+    var (coldExit, cold) = RunBuild(WithCache(coldCache, bundled: false), OfflineTool);
+    Check(coldExit == 1 && cold.GetProperty("status").GetString() == "failed" && !cold.GetProperty("success").GetBoolean() &&
+        cold.GetProperty("hostDir").ValueKind == JsonValueKind.Null && cold.GetProperty("error").GetString()!.Contains("NU1301"),
+        "offline cold cache: failed, restore error (NU1301) preserved, no host");
+    var coldV2 = Path.Combine(coldCache, "v2");
+    Check(!Directory.Exists(Path.Combine(coldV2, "entries")) || Directory.GetDirectories(Path.Combine(coldV2, "entries")).Length == 0,
+        "offline cold cache: nothing published");
+    Check(!Directory.Exists(Path.Combine(coldV2, "memo")) || Directory.GetFiles(Path.Combine(coldV2, "memo")).Length == 0,
+        "offline cold cache: no memo remembered");
+
+    var (degExit, deg) = RunBuild(WithCache(coldCache, bundled: true), OfflineTool);
+    Check(degExit == 3 && deg.GetProperty("status").GetString() == "degraded" && !deg.GetProperty("success").GetBoolean() &&
+        deg.GetProperty("usedFallback").GetBoolean() && deg.GetProperty("hostDir").GetString() == source &&
+        deg.GetProperty("error").GetString()!.Contains("NU1301"),
+        "offline cold cache + bundled host: degraded to bundled, restore error preserved");
+
+    // dotnet missing from PATH: Process.Start fails before any restore.
+    var (noSdkExit, noSdk) = RunBuild(WithCache(Path.Combine(buildFixture, "nosdk-cache"), bundled: false),
+        (exe, args) => throw new System.ComponentModel.Win32Exception(2, "The system cannot find the file specified"));
+    Check(noSdkExit == 1 && noSdk.GetProperty("status").GetString() == "failed" &&
+        noSdk.GetProperty("error").GetString()!.Contains("cannot find the file"),
+        "no dotnet on PATH: failed with the launch error");
+
+    // A target package the template can't restore (e.g. a private feed that's offline) retries with the
+    // template baseline and still builds the matched host.
+    var privateTarget = Path.Combine(buildFixture, "private-target", "Private.csproj");
+    Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(privateTarget)!, "obj"));
+    File.WriteAllText(privateTarget, "<Project><ItemGroup><PackageReference Include=\"Microsoft.WindowsAppSDK\" Version=\"2.2.0\" /></ItemGroup></Project>");
+    File.WriteAllText(Path.Combine(Path.GetDirectoryName(privateTarget)!, "obj", "project.assets.json"), JsonSerializer.Serialize(new {
+        libraries = new Dictionary<string, object> {
+            ["Microsoft.WindowsAppSDK/2.2.0"] = new { type = "package", files = new[] { "x.nuspec" } },
+            ["Private.Controls/1.0.0"] = new { type = "package", files = new[] { "lib/net8.0/Private.Controls.pri" } } } }));
+    var templateRestores = new List<bool>();
+    string PrivateFeedTool(string exe, IEnumerable<string> arguments)
+    {
+        var toolArgs = arguments.ToArray();
+        if (toolArgs[0] == "restore" && Path.GetFileName(toolArgs[1]) == "PreviewHost.csproj")
+        {
+            var withTargetPackages = File.Exists(Path.Combine(Path.GetDirectoryName(toolArgs[1])!, TemplatePackages.FileName));
+            templateRestores.Add(withTargetPackages);
+            if (withTargetPackages) throw new InvalidOperationException("dotnet exit 1:\nerror NU1101: Unable to find package Private.Controls.");
+        }
+        return FakeTool(exe, toolArgs);
+    }
+    var privateArgs = WithCache(Path.Combine(buildFixture, "private-cache"), bundled: false)
+        .Select(a => a == fixtureTarget ? privateTarget : a).ToArray();
+    var (privExit, priv) = RunBuild(privateArgs, PrivateFeedTool);
+    Check(privExit == 0 && priv.GetProperty("status").GetString() == "built" &&
+        templateRestores.SequenceEqual(new[] { true, false }),
+        "unrestorable target package: template retries with baseline and the matched host still builds");
+
+    // P3 bounded cache GC + in-use-safe directory retirement.
+    var gc = Path.Combine(root, "gc");
+    var payloadFiles = new[] { "Surface.exe", "Surface.dll", "Surface.pri", "Surface.designtime.pri",
+        "Surface.deps.json", "Surface.runtimeconfig.json", "Microsoft.WinUI.dll", "Microsoft.ui.xaml.dll" };
+    string Gen(string k)
+    {
+        var s = Path.Combine(root, "gcsrc-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(s);
+        foreach (var f in payloadFiles) File.WriteAllText(Path.Combine(s, f), f);
+        HostPayload.Seal(s, k, "2.2.0", "engine");
+        return Path.GetDirectoryName(BuildStorage.Publish(gc, k, s))!;
+    }
+    string K(char c) => new string(c, 64);
+    var old = DateTime.UtcNow.AddDays(-2);
+    var gens = new Dictionary<string, string>();
+    foreach (var c in "123456") gens[K(c)] = Gen(K(c));
+    var supersededOld = gens[K('4')]; gens[K('4')] = Gen(K('4'));
+    var supersededFresh = gens[K('5')]; gens[K('5')] = Gen(K('5'));
+    void Age(string pointerKey, DateTime when) => File.SetLastWriteTimeUtc(Path.Combine(gc, "keys", pointerKey), when);
+    Age(K('1'), old); Age(K('2'), old); Age(K('3'), DateTime.UtcNow.AddHours(-2)); Age(K('6'), DateTime.UtcNow.AddHours(-3));
+    foreach (var c in "12") Directory.SetLastWriteTimeUtc(gens[K(c)], old);
+    Directory.SetLastWriteTimeUtc(supersededOld, DateTime.UtcNow.AddHours(-2));
+    var gcMemo = Path.Combine(gc, "memo");
+    Directory.CreateDirectory(gcMemo);
+    File.WriteAllText(Path.Combine(gcMemo, "m1.json"), "{\"Format\":1,\"Key\":\"" + K('1') + "\"}");
+    File.WriteAllText(Path.Combine(gcMemo, "m4.json"), "{\"Format\":1,\"Key\":\"" + K('4') + "\"}");
+    int collected;
+    using (BuildStorage.AcquireLock(Path.Combine(gc, "locks", K('2')), CancellationToken.None))
+        collected = BuildStorage.Collect(gc, K('5'), _ => { });
+    bool Pointer(char c) => File.Exists(Path.Combine(gc, "keys", K(c)));
+    Check(!Pointer('1') && !Directory.Exists(gens[K('1')]), "GC retires a stale key beyond the recent set and its generation");
+    Check(Pointer('2') && Directory.Exists(gens[K('2')]), "GC skips a key whose build lock is held");
+    Check(Pointer('3') && Pointer('4') && Pointer('5') && Pointer('6') &&
+        new[] { '3', '4', '5', '6' }.All(c => Directory.Exists(gens[K(c)])),
+        "GC keeps recent keys and keys used within the lifetime");
+    Check(!Directory.Exists(supersededOld) && Directory.Exists(supersededFresh), "GC removes old orphans, keeps fresh ones");
+    Check(collected == 2, "GC reports removed generations");
+    Check(!File.Exists(Path.Combine(gcMemo, "m1.json")) && File.Exists(Path.Combine(gcMemo, "m4.json")), "GC drops memos of retired keys");
+    Age(K('3'), old);
+    BuildStorage.FindCompleted(gc, K('3'));
+    Check(File.GetLastWriteTimeUtc(Path.Combine(gc, "keys", K('3'))) > DateTime.UtcNow.AddMinutes(-1), "cache hit stamps last use");
+
+    var runRoot = Path.Combine(root, "runroot");
+    var busy = Path.Combine(runRoot, "busy");
+    var stale = Path.Combine(runRoot, "stale");
+    var fresh = Path.Combine(runRoot, "fresh");
+    var trash = Path.Combine(runRoot, HostPayload.TrashPrefix + "x");
+    foreach (var d in new[] { busy, stale, fresh, trash }) { Directory.CreateDirectory(d); File.WriteAllText(Path.Combine(d, "f"), "x"); }
+    foreach (var d in new[] { busy, stale })
+    {
+        Directory.SetCreationTimeUtc(d, old); Directory.SetLastWriteTimeUtc(d, old);
+    }
+    var holder = Process.Start(new ProcessStartInfo("cmd.exe", "/c ping -n 30 127.0.0.1 >nul")
+        { WorkingDirectory = busy, UseShellExecute = false, CreateNoWindow = true })!;
+    try
+    {
+        Thread.Sleep(500);
+        var swept = HostPayload.SweepRunRoot(runRoot, TimeSpan.FromMinutes(10));
+        Check(Directory.Exists(busy) && File.Exists(Path.Combine(busy, "f")), "sweep never touches a run dir in use");
+        Check(!Directory.Exists(stale) && !Directory.Exists(trash) && Directory.Exists(fresh) && swept == 2,
+            "sweep removes stale and trash dirs, keeps fresh ones");
+    }
+    finally { holder.Kill(true); holder.WaitForExit(); }
+    var retired = false;
+    for (var i = 0; i < 20 && !retired; i++) { retired = HostPayload.TryRetire(busy, deleteAttempts: 10); if (!retired) Thread.Sleep(250); }
+    Check(retired && !Directory.Exists(busy), "run dir retired once its process exits");
+
+    var lockPath = Path.Combine(root, "locks", "shared");
+    var psi = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardInput = true, UseShellExecute = false };
+    psi.ArgumentList.Add(typeof(HostBuilder).Assembly.Location); psi.ArgumentList.Add("--lock"); psi.ArgumentList.Add(lockPath);
+    using (var child = Process.Start(psi)!)
+    {
+        try
+        {
+            Check(child.StandardOutput.ReadLine() == "locked", "independent process owns cache lock");
+            using var cancel = new CancellationTokenSource(300);
+            Reject(() => BuildStorage.AcquireLock(lockPath, cancel.Token).Dispose(), "lock wait cooperatively cancelled");
+            child.StandardInput.WriteLine();
+            Check(child.WaitForExit(5000) && child.ExitCode == 0, "lock owner exits cleanly");
+        }
+        finally { if (!child.HasExited) { child.Kill(true); child.WaitForExit(); } }
+    }
+    using (BuildStorage.AcquireLock(lockPath, CancellationToken.None)) Check(true, "cross-process lock released");
+    HostBuilder.BuildOptions Options(string? bundled = null) => new() {
+        ProjectPath = sourceTree, SurfaceProjectPath = Path.Combine(root, "missing.csproj"),
+        PreviewHostPriProjectPath = Path.Combine(root, "missing-template.csproj"), CacheRoot = cache, BundledHostDir = bundled };
+    var failed = HostBuilder.Build(Options());
+    Check(failed.Status == "failed" && !failed.Success && failed.Error!.Contains("Required source"), "missing inputs fail without tool invocation");
+    var degraded = HostBuilder.Build(Options(source));
+    Check(degraded.Status == "degraded" && !degraded.Success && degraded.UsedFallback && degraded.Error!.Contains("Required source"), "explicit fallback degraded retains cause");
+    using var alreadyCancelled = new CancellationTokenSource();
+    alreadyCancelled.Cancel();
+    var cancelled = HostBuilder.Build(Options(source), cancellation: alreadyCancelled.Token);
+    Check(cancelled.Cancelled && cancelled.Status == "failed" && !cancelled.UsedFallback, "cancellation never falls back");
+    var overlayCancelled = Provisioner.Provision(new() { ProjectPath = sourceTree, BaseHostDir = source, OutDir = run },
+        cancellation: alreadyCancelled.Token);
+    Check(overlayCancelled.Cancelled && !overlayCancelled.Success, "native overlay honours cancellation");
+    Console.WriteLine($"Provisioner fixtures: {count} passed.");
+}
+finally { Directory.Delete(root, true); }

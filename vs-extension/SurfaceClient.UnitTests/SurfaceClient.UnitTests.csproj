@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Pure-logic unit tests for the VS extension's host/project discovery: WASDK version discovery,
+       matched-host selection, user-assembly location, WinUI project detection, PE architecture and surface
+       resolution. Compiles the production sources in place and drives them against temp-dir fixtures —
+       no VS, no Surface.exe, no Windows App SDK. net472 to match the runtime that hosts the extension. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>SurfaceClient.UnitTests</AssemblyName>
+    <RootNamespace>WinUIXamlPreview.UnitTests</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\surface\Shared\HostPayload.cs" Link="Shared\HostPayload.cs" />
+    <Compile Include="..\..\surface\Shared\ProjectFiles.cs" Link="Shared\ProjectFiles.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\IsExternalInit.cs" Link="Protocol\IsExternalInit.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\HostArch.cs" Link="Protocol\HostArch.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\WasdkVersionDiscovery.cs" Link="Protocol\WasdkVersionDiscovery.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceResolver.cs" Link="Protocol\SurfaceResolver.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\ProjectDllLocator.cs" Link="Protocol\ProjectDllLocator.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\MatchedHostResolver.cs" Link="Protocol\MatchedHostResolver.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\ProjectOutputWatcher.cs" Link="Protocol\ProjectOutputWatcher.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceHangWatchdog.cs" Link="Protocol\SurfaceHangWatchdog.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\HostProvisionerRunner.cs" Link="Protocol\HostProvisionerRunner.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\ChildProcessJob.cs" Link="Protocol\ChildProcessJob.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\CommandLine.cs" Link="Protocol\CommandLine.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Protocol\LineDecoder.cs" />
+    <Compile Include="..\WinUIXamlPreview\Editor\XamlSourceMap.cs" Link="Editor\XamlSourceMap.cs" />
+    <Compile Include="..\WinUIXamlPreview\UI\PreviewerSelection.cs" Link="UI\PreviewerSelection.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceIdentity.cs" Link="Protocol\SurfaceIdentity.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\IdentityPrewarm.cs" Link="Protocol\IdentityPrewarm.cs" />
+    <Compile Include="..\WinUIXamlPreview\Editor\PreviewSettingsParser.cs" Link="Editor\PreviewSettingsParser.cs" />
+    <Compile Include="..\WinUIXamlPreview\Editor\LiveEditGate.cs" Link="Editor\LiveEditGate.cs" />
+    <Compile Include="..\WinUIXamlPreview\Editor\CaretSyncGuard.cs" Link="Editor\CaretSyncGuard.cs" />
+    <Compile Include="..\WinUIXamlPreview\UI\RestartPolicy.cs" Link="UI\RestartPolicy.cs" />
+    <Compile Include="..\WinUIXamlPreview\UI\PreviewSessionState.cs" Link="UI\PreviewSessionState.cs" />
+    <Compile Include="..\WinUIXamlPreview\UI\PreviewErrorText.cs" Link="UI\PreviewErrorText.cs" />
+    <Compile Include="..\WinUIXamlPreview\UI\BuildHint.cs" Link="UI\BuildHint.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="10.0.9" />
+  </ItemGroup>
+
+</Project>
