@@ -676,17 +676,13 @@ namespace WinUIXamlPreview.UITest
                 string.Join(" | ", s.Logs.Where(l => l.Contains("type model"))));
             Check("BEH-G no surface errors", s.TakeErrors().Length == 0);
 
-            // A document outside any project gets the same grouped rows, as plain lists. (An absent documentPath keeps
-            // the previous one, so point at a folder with no .csproj.)
+            // A document with no file (unsaved) drops the project: the same grouped rows, as plain lists.
             while (s.Logs.TryDequeue(out _)) { }
-            var loose = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "wxp-beh-noproj-" + Guid.NewGuid().ToString("N"))).FullName;
-            s.Client.DocumentPathSource = () => Path.Combine(loose, "Loose.xaml");
+            s.Client.DocumentPathSource = null;
             await s.Rehost(page);
-            Check("BEH-G no project: plain groups",
+            Check("BEH-G no document path: plain groups",
                 await s.WaitLog(l => l.Contains("SAMPLE: filled grouped ListView with 2 group(s) for People."), TimeSpan.FromSeconds(8)),
                 string.Join(" | ", s.Logs.Where(l => l.Contains("SAMPLE:"))));
-            s.Client.DocumentPathSource = null;
-            try { Directory.Delete(loose, true); } catch { }
         }
 
         // ---------------------------------------------------------------- the WinAppSDK Chart control (2.5.4+)

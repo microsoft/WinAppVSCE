@@ -895,9 +895,17 @@ internal sealed class FrameServer
         {
             _host.SampleData = v.GetBoolean();
         }
-        if (root.TryGetProperty("documentPath", out var d) && d.ValueKind == JsonValueKind.String)
+        if (root.TryGetProperty("documentPath", out var d))
         {
-            _host.DocumentPath = d.GetString();
+            // "" or null: no file (an unsaved document), so no project types; absent keeps the current path.
+            if (d.ValueKind == JsonValueKind.String)
+            {
+                _host.DocumentPath = string.IsNullOrEmpty(d.GetString()) ? null : d.GetString();
+            }
+            else if (d.ValueKind == JsonValueKind.Null)
+            {
+                _host.DocumentPath = null;
+            }
         }
     }
 
