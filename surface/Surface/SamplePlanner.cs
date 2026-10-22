@@ -834,21 +834,19 @@ internal static partial class SamplePlanner
                     continue;
                 }
 
+                // Add-only: code-behind may give an element content (text, list rows) but never change its state.
+                // Visibility/bool/number writes are usually conditional (`else Card.Visibility = Collapsed` when data
+                // is missing), and applying them hides or disables exactly what sample data is meant to show.
                 var kind = TargetKindOf(ctx, el, prop);
+                if (kind is not (TargetKind.Text or TargetKind.Items))
+                {
+                    continue;
+                }
                 if (kind == TargetKind.Text && IsInputBox(el) && value is not LiteralExpressionSyntax { Token.ValueText.Length: > 0 })
                 {
                     continue; // SetQuery(query) => Box.Text = query: the box starts empty, not with "Query"
                 }
-                var constant = kind is TargetKind.Number or TargetKind.Bool or TargetKind.Visibility ? ConstantOf(value, model) : null;
-                string? literal = kind switch
-                {
-                    TargetKind.Text => EscapeLiteral(TextOf(value, model, target)),
-                    _ when constant is { } c => InitialLiteral(c, kind, el, prop),
-                    TargetKind.Number => ScalarValue(kind, prop, model.GetTypeInfo(value).Type, LastName(value) ?? prop, el),
-                    TargetKind.Bool => ScalarValue(kind, prop, null, prop),
-                    TargetKind.Visibility => ScalarValue(kind, prop, null, prop),
-                    _ => null,
-                };
+                string? literal = kind == TargetKind.Text ? EscapeLiteral(TextOf(value, model, target)) : null;
 
                 if (kind == TargetKind.Items && el.Attribute("Tag") is null)
                 {

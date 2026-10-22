@@ -140,6 +140,7 @@ namespace Surface.Tests
             Run("R2 x:Bind", Rule2);
             Run("R2 sample data", Rule2SampleData);
             Run("R2 sample data (source-typed)", SampleDataTyped);
+            Run("R2 sample data (code-behind is add-only)", SampleDataCodeBehindAddOnly);
             Run("R2 sample data (typed objects)", SampleDataObjects);
             Run("R2 sample data (charts)", SampleDataCharts);
             Run("R2 sample data (initial state, functions, list forms)", SampleDataStates);
@@ -486,6 +487,47 @@ namespace Surface.Tests
             Check("filler rows are dictionaries capped to max", rows.Count == 2 && rows[0] is Dictionary<string, object> d && d.ContainsKey("Customer"));
             var plain = SampleListFiller.BuildRows("Items", 3, out label);
             Check("bare label -> repeated strings", plain.Count == 3 && (string)plain[0] == "Items" && label == "Items");
+        }
+
+        private static void SampleDataCodeBehindAddOnly()
+        {
+            // The AI Dev Gallery APIPage shape: cards hidden in the "data is missing" branch of the load code.
+            var types = SampleTypeModel.FromSources(
+                "using System; using System.Collections.Generic; using Microsoft.UI.Xaml;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class ApiPage {\n" +
+                "  public string Snippet { get; set; }\n" +
+                "  public List<Item> Samples { get; } = new();\n" +
+                "  public ApiPage() {\n" +
+                "    if (Snippet != null) { CodeText.Text = Snippet; } else { CodeCard.Visibility = Visibility.Collapsed; }\n" +
+                "    if (Samples.Count == 0) { EmptyState.Visibility = Visibility.Visible; }\n" +
+                "    SaveButton.IsEnabled = false;\n" +
+                "    Progress.Value = 100;\n" +
+                "    Header.Text = \"Overview\";\n" +
+                "    SampleList.ItemsSource = Samples;\n" +
+                "  }\n" +
+                "}\n" +
+                "public class Item { public string Name { get; set; } }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<TextBlock x:Name=\"Header\" />" +
+                "<Border x:Name=\"CodeCard\"><TextBlock x:Name=\"CodeText\" /></Border>" +
+                "<TextBlock x:Name=\"EmptyState\" Text=\"Nothing here\" Visibility=\"Collapsed\" />" +
+                "<Button x:Name=\"SaveButton\" Content=\"Save\" />" +
+                "<ProgressBar x:Name=\"Progress\" />" +
+                "<ListView x:Name=\"SampleList\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Item\"><TextBlock Text=\"{x:Bind Name}\" /></DataTemplate>" +
+                "</ListView.ItemTemplate></ListView>" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.ApiPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+            Check("collapsed in code-behind -> stays visible", Attr(Named(r, "CodeCard"), "Visibility") is null, Attr(Named(r, "CodeCard"), "Visibility"));
+            Eq("visible in code-behind -> markup value kept", "Collapsed", Attr(Named(r, "EmptyState"), "Visibility"));
+            Check("IsEnabled from code-behind not applied", Attr(Named(r, "SaveButton"), "IsEnabled") is null, Attr(Named(r, "SaveButton"), "IsEnabled"));
+            Check("Value from code-behind not applied", Attr(Named(r, "Progress"), "Value") is null, Attr(Named(r, "Progress"), "Value"));
+            Eq("text from code-behind still added", "Overview", Attr(Named(r, "Header"), "Text"));
+            Check("text from a conditional branch still added", !string.IsNullOrEmpty(Attr(Named(r, "CodeText"), "Text")), Attr(Named(r, "CodeText"), "Text"));
+            Check("ItemsSource from code-behind still filled", (Attr(Named(r, "SampleList"), "Tag") ?? "").StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal), Attr(Named(r, "SampleList"), "Tag"));
         }
 
         private static void SampleDataStates()
