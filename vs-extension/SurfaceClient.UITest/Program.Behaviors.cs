@@ -176,6 +176,7 @@ namespace WinUIXamlPreview.UITest
                     ("design-time data", DesignTimeDataNegatives),
                     ("design-time data grammar", DesignTimeDataGrammar),
                     ("sample lists", SampleLists),
+                    ("sample charts and selectors", SampleChartsAndSelectors),
                     ("root types", RootTypes),
                     ("resources", Resources),
                     ("app.xaml failures", AppXamlFailures),
@@ -618,11 +619,11 @@ namespace WinUIXamlPreview.UITest
             foreach (var (kind, n, label) in new[] { ("ItemsControl", 3, "Tags"), ("GridView", 3, "Photos"), ("ComboBox", 3, "Modes"), ("ListView", 3, "Groups") })
             {
                 Check($"BEH-L {kind} bound by x:Bind gets {n} sample rows",
-                    await s.WaitLog(l => l.Contains($"SAMPLE: filled {kind} with {n} placeholder row(s) for {{{label}}}"), TimeSpan.FromSeconds(6)), label);
+                    await s.WaitLog(l => l.Contains($"SAMPLE: filled {kind} with {n} placeholder row(s) for {label}."), TimeSpan.FromSeconds(6)), label);
             }
 
             Check("BEH-L nested list inside an item template gets 2 rows",
-                await s.WaitLog(l => l.Contains("SAMPLE: filled ItemsControl with 2 placeholder row(s) for {Children}"), TimeSpan.FromSeconds(6)));
+                await s.WaitLog(l => l.Contains("SAMPLE: filled ItemsControl with 2 placeholder row(s) for Children."), TimeSpan.FromSeconds(6)));
             Check("BEH-L no surface errors with sample lists", s.TakeErrors().Length == 0);
 
             // Sample data off: nothing is filled.
@@ -631,6 +632,56 @@ namespace WinUIXamlPreview.UITest
             await s.Rehost(page);
             await Task.Delay(1500);
             Check("BEH-L sample data off: no lists filled", !s.Logs.Any(l => l.Contains("SAMPLE: filled")));
+            s.Client.SampleData = true;
+        }
+
+        // ---------------------------------------------------------------- empty charts, grouped lists, template selectors
+
+        private static async Task SampleChartsAndSelectors(Session s)
+        {
+            var page = PageXaml(
+                "<StackPanel>\n" +
+                "  <StackPanel.Resources>\n" +
+                "    <CollectionViewSource x:Key=\"Cvs\" Source=\"{x:Bind ViewModel.Departments}\" IsSourceGrouped=\"True\"/>\n" +
+                "    <fx:ThrowingSelector x:Key=\"Throwing\"/>\n" +
+                "    <fx:FixedSelector x:Key=\"Fixed\"><fx:FixedSelector.Template><DataTemplate><TextBlock Text=\"{Binding}\"/></DataTemplate></fx:FixedSelector.Template></fx:FixedSelector>\n" +
+                "  </StackPanel.Resources>\n" +
+                "  <fx:FixturePieChart x:Name=\"Share\" Width=\"160\" Height=\"160\"/>\n" +
+                "  <fx:FixtureLineChart x:Name=\"Trend\" Width=\"240\" Height=\"120\"/>\n" +
+                "  <fx:FixtureSeriesChart x:Name=\"Filled\" Width=\"240\" Height=\"120\"/>\n" +
+                "  <ListView x:Name=\"Grouped\" ItemsSource=\"{Binding Source={StaticResource Cvs}}\" Height=\"200\"/>\n" +
+                "  <ListView x:Name=\"Risky\" ItemsSource=\"{x:Bind ViewModel.Orders}\" ItemTemplateSelector=\"{StaticResource Throwing}\" Height=\"120\"/>\n" +
+                "  <ListView x:Name=\"Safe\" ItemsSource=\"{x:Bind ViewModel.Notes}\" ItemTemplateSelector=\"{StaticResource Fixed}\" Height=\"120\"/>\n" +
+                "</StackPanel>", "Width=\"500\" Height=\"1000\"");
+            await s.Host(page);
+            var t = TimeSpan.FromSeconds(8);
+
+            Check("BEH-C empty pie chart gets a placeholder donut",
+                await s.WaitLog(l => l.Contains("SAMPLE: drew a placeholder donut on empty FixturePieChart Share."), t));
+            Check("BEH-C empty line chart gets a placeholder series",
+                await s.WaitLog(l => l.Contains("SAMPLE: drew a placeholder series on empty FixtureLineChart Trend."), t));
+            Check("BEH-L grouped list over a CollectionViewSource gets 2 groups",
+                await s.WaitLog(l => l.Contains("SAMPLE: filled grouped ListView with 2 group(s) for Departments"), t));
+            Check("BEH-L throwing template selector falls back to a text row",
+                await s.WaitLog(l => l.Contains("SAMPLE: template selector ThrowingSelector threw InvalidCastException; using a text template."), t));
+            Check("BEH-L list with a throwing selector is still filled",
+                s.Logs.Any(l => l.Contains("SAMPLE: filled ListView with 3 placeholder row(s) for Orders.")));
+            Check("BEH-L list with a working selector is filled",
+                await s.WaitLog(l => l.Contains("SAMPLE: filled ListView with 3 placeholder row(s) for Notes."), t));
+
+            await Task.Delay(1500); // let the chart scan finish its layout passes
+            Check("BEH-C chart with Series filled in its constructor gets no placeholder",
+                !s.Logs.Any(l => l.Contains("FixtureSeriesChart")), string.Join(" | ", s.Logs.Where(l => l.Contains("FixtureSeriesChart"))));
+            Check("BEH-C working selector never reported as throwing", !s.Logs.Any(l => l.Contains("template selector FixedSelector")));
+            Check("BEH-C no surface errors", s.TakeErrors().Length == 0);
+
+            // Sample data off: no placeholders, no fills.
+            while (s.Logs.TryDequeue(out _)) { }
+            s.Client.SampleData = false;
+            await s.Rehost(page);
+            await Task.Delay(2000);
+            Check("BEH-C sample data off: no placeholders or fills",
+                !s.Logs.Any(l => l.Contains("SAMPLE: drew") || l.Contains("SAMPLE: filled")), string.Join(" | ", s.Logs.Where(l => l.Contains("SAMPLE:"))));
             s.Client.SampleData = true;
         }
     }
