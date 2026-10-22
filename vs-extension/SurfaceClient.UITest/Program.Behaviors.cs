@@ -158,6 +158,7 @@ namespace WinUIXamlPreview.UITest
 
             s_behSurface = surfaceExe;
             s_behUserDll = userDll;
+            s_behFixturesDir = fixturesDir;
             s_behMatchedHost = FullPathOrNull(GetArg(args, "--matched-host"));
             string? only = GetArg(args, "--group");
             bool ok = CheckInput("BEH-0 Surface.exe exists", surfaceExe) & CheckInput("BEH-0 user DLL exists", userDll) &
@@ -177,6 +178,8 @@ namespace WinUIXamlPreview.UITest
                     ("design-time data grammar", DesignTimeDataGrammar),
                     ("sample lists", SampleLists),
                     ("sample charts and selectors", SampleChartsAndSelectors),
+                    ("sample typed groups", SampleTypedGroups),
+                    ("sample WinAppSDK charts", SampleWinAppSdkCharts),
                     ("root types", RootTypes),
                     ("resources", Resources),
                     ("app.xaml failures", AppXamlFailures),
@@ -635,7 +638,123 @@ namespace WinUIXamlPreview.UITest
             s.Client.SampleData = true;
         }
 
-        // ---------------------------------------------------------------- empty charts, grouped lists, template selectors
+        private static string? s_behFixturesDir;
+
+        // ---------------------------------------------------------------- grouped lists typed from the project's source
+
+        // The client sends a document path inside TestFixtureApp, so the surface builds a type model from its .cs files
+        // (Controls\SampleGroups.cs) and generates the app's own group types, which the user DLL supplies at runtime.
+        private static async Task SampleTypedGroups(Session s)
+        {
+            if (s_behFixturesDir == null)
+            {
+                Console.WriteLine("  SKIP: pass --fixtures-dir to run");
+                return;
+            }
+
+            s.Client.DocumentPathSource = () => Path.Combine(s_behFixturesDir, "GroupsHost.xaml");
+            const string template =
+                "<ListView.ItemTemplate><DataTemplate x:DataType=\"local:Person\"><TextBlock Text=\"{x:Bind Name}\"/></DataTemplate></ListView.ItemTemplate>";
+            var page = PageXaml(
+                "<StackPanel>\n" +
+                "  <StackPanel.Resources>\n" +
+                "    <CollectionViewSource x:Key=\"PeopleCvs\" Source=\"{x:Bind People}\" IsSourceGrouped=\"True\"/>\n" +
+                "    <CollectionViewSource x:Key=\"TeamsCvs\" Source=\"{x:Bind Teams}\" IsSourceGrouped=\"True\" ItemsPath=\"Members\"/>\n" +
+                "  </StackPanel.Resources>\n" +
+                "  <ListView x:Name=\"ByPeople\" ItemsSource=\"{Binding Source={StaticResource PeopleCvs}}\" Height=\"240\">" + template + "</ListView>\n" +
+                "  <ListView x:Name=\"ByTeams\" ItemsSource=\"{Binding Source={StaticResource TeamsCvs}}\" Height=\"240\">" + template + "</ListView>\n" +
+                "</StackPanel>", "x:Class=\"TestFixtureApp.Samples.GroupsHost\" xmlns:local=\"using:TestFixtureApp.Samples\" Width=\"500\" Height=\"600\"");
+            await s.Host(page, 500, 600);
+            var t = TimeSpan.FromSeconds(20); // the first type-model build of the project waits up to 10 s
+
+            Check("BEH-G List-subclass groups built as the app's PersonGroup",
+                await s.WaitLog(l => l.Contains("SAMPLE: filled grouped ListView with 2 group(s) for People (typed)."), t),
+                string.Join(" | ", s.Logs.Where(l => l.Contains("SAMPLE:"))));
+            Check("BEH-G ItemsPath groups built as the app's Team",
+                await s.WaitLog(l => l.Contains("SAMPLE: filled grouped ListView with 2 group(s) for Teams (typed)."), t));
+            Check("BEH-G type model was ready", !s.Logs.Any(l => l.Contains("not ready") || l.Contains("SAMPLE: type model failed")),
+                string.Join(" | ", s.Logs.Where(l => l.Contains("type model"))));
+            Check("BEH-G no surface errors", s.TakeErrors().Length == 0);
+
+            // A document outside any project gets the same grouped rows, as plain lists. (An absent documentPath keeps
+            // the previous one, so point at a folder with no .csproj.)
+            while (s.Logs.TryDequeue(out _)) { }
+            var loose = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "wxp-beh-noproj-" + Guid.NewGuid().ToString("N"))).FullName;
+            s.Client.DocumentPathSource = () => Path.Combine(loose, "Loose.xaml");
+            await s.Rehost(page);
+            Check("BEH-G no project: plain groups",
+                await s.WaitLog(l => l.Contains("SAMPLE: filled grouped ListView with 2 group(s) for People."), TimeSpan.FromSeconds(8)),
+                string.Join(" | ", s.Logs.Where(l => l.Contains("SAMPLE:"))));
+            s.Client.DocumentPathSource = null;
+            try { Directory.Delete(loose, true); } catch { }
+        }
+
+        // ---------------------------------------------------------------- the WinAppSDK Chart control (2.5.4+)
+
+        private static async Task SampleWinAppSdkCharts(Session s)
+        {
+            var ready = s.Logs.FirstOrDefault(l => l.Contains("Surface Ready:")) ?? "";
+            var m = System.Text.RegularExpressions.Regex.Match(ready, @"wasdk=(\d+)\.(\d+)\.(\d+)");
+            if (!m.Success || new Version(int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value)) < new Version(2, 5, 4))
+            {
+                Console.WriteLine("  SKIP: needs a surface and user DLL built for WinAppSDK 2.5.4+ (Microsoft.UI.Xaml.Controls.Charts); " + ready.Trim());
+                return;
+            }
+
+            // Charts need their styles merged at app scope, like a real app's App.xaml.
+            var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "wxp-beh-charts-" + Guid.NewGuid().ToString("N"))).FullName;
+            var appXaml = Path.Combine(dir, "App.xaml");
+            File.WriteAllText(appXaml,
+                "<Application xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">" +
+                "<Application.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries>" +
+                "<XamlChartsResources xmlns=\"using:Microsoft.UI.Xaml.Controls.Charts\"/>" +
+                "</ResourceDictionary.MergedDictionaries></ResourceDictionary></Application.Resources></Application>");
+            try
+            {
+                using var c = await Open(s_behSurface, s_behUserDll, appXaml);
+                var page = PageXaml(
+                    "<StackPanel>\n" +
+                    "  <charts:Chart x:Name=\"BoundChart\" Width=\"420\" Height=\"220\">\n" +
+                    "    <charts:Chart.Data>\n" +
+                    "      <charts:Samples x:Name=\"Month\" ItemsSource=\"{x:Bind Months, Mode=OneTime}\"/>\n" +
+                    "      <charts:Samples x:Name=\"Profit\" ItemsSource=\"{x:Bind Profits, Mode=OneTime}\"/>\n" +
+                    "    </charts:Chart.Data>\n" +
+                    "    <charts:Chart.Axes>\n" +
+                    "      <charts:CategoryAxis x:Name=\"MonthX\"/>\n" +
+                    "      <charts:LinearAxis x:Name=\"ProfitY\" Minimum=\"0\"/>\n" +
+                    "    </charts:Chart.Axes>\n" +
+                    "    <charts:LineSeries XAxis=\"{x:Bind MonthX}\" XValues=\"{x:Bind Month}\" YAxis=\"{x:Bind ProfitY}\" YValues=\"{x:Bind Profit}\"/>\n" +
+                    "  </charts:Chart>\n" +
+                    "  <charts:Chart x:Name=\"EmptyChart\" Width=\"420\" Height=\"200\"/>\n" +
+                    "</StackPanel>", "xmlns:charts=\"using:Microsoft.UI.Xaml.Controls.Charts\" Width=\"500\" Height=\"600\"");
+                await c.Host(page, 500, 600);
+                var t = TimeSpan.FromSeconds(10);
+
+                Check("BEH-W x:Bind chart wiring restored (2 Samples + 4 element references)",
+                    await c.WaitLog(l => l.Contains("SAMPLE: applied 6 chart binding fixup(s)."), t),
+                    string.Join(" | ", c.Logs.Where(l => l.Contains("chart"))));
+                Check("BEH-W empty Chart filled with a sample series",
+                    await c.WaitLog(l => l.Contains("SAMPLE: filled empty Chart EmptyChart with a sample series."), t));
+                await Task.Delay(1500);
+                Check("BEH-W wired chart is not treated as empty",
+                    !c.Logs.Any(l => l.Contains("BoundChart")), string.Join(" | ", c.Logs.Where(l => l.Contains("BoundChart"))));
+                Check("BEH-W no fixup failures",
+                    !c.Logs.Any(l => l.Contains("SAMPLE: chart fixup")), string.Join(" | ", c.Logs.Where(l => l.Contains("SAMPLE: chart fixup"))));
+                Check("BEH-W no placeholders over real Charts", !c.Logs.Any(l => l.Contains("SAMPLE: drew a placeholder")));
+                Check("BEH-W no surface errors", c.TakeErrors().Length == 0);
+
+                while (c.Logs.TryDequeue(out _)) { }
+                c.Client.SampleData = false;
+                await c.Rehost(page);
+                await Task.Delay(2000);
+                Check("BEH-W sample data off: empty Chart left empty", !c.Logs.Any(l => l.Contains("SAMPLE: filled")));
+                Check("BEH-W chart session still alive", !c.Client.IsFaulted && await Alive(c));
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        }
 
         private static async Task SampleChartsAndSelectors(Session s)
         {
