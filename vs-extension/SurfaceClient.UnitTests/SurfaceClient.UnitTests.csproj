@@ -27,6 +27,7 @@
     <Compile Include="..\WinUIXamlPreview\Protocol\ProjectOutputWatcher.cs" Link="Protocol\ProjectOutputWatcher.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\SurfaceHangWatchdog.cs" Link="Protocol\SurfaceHangWatchdog.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\HostProvisionerRunner.cs" Link="Protocol\HostProvisionerRunner.cs" />
+    <Compile Include="..\WinUIXamlPreview\Protocol\MatchedHostPrebuild.cs" Link="Protocol\MatchedHostPrebuild.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\ChildProcessJob.cs" Link="Protocol\ChildProcessJob.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\CommandLine.cs" Link="Protocol\CommandLine.cs" />
     <Compile Include="..\WinUIXamlPreview\Protocol\LineDecoder.cs" Link="Protocol\LineDecoder.cs" />

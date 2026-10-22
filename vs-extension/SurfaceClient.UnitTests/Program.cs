@@ -39,6 +39,7 @@ internal static partial class Program
             Run("XamlSourceMap", XamlSourceMapTests);
             Run("PreviewerSelection", PreviewerSelectionTests);
             Run("MatchedHostBuild", MatchedHostBuildTests);
+            Run("MatchedHostPrebuild", MatchedHostPrebuildTests);
             Run("SurfaceIdentity", SurfaceIdentityTests);
             Run("PreviewSettings", PreviewSettingsTests);
             Run("CommandLine", CommandLineTests);

@@ -1,4 +1,4 @@
-﻿#nullable enable
+#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -111,9 +111,6 @@ namespace WinUIXamlPreview.UI
         private readonly PreviewInfoBar _fidelityBar = new PreviewInfoBar("PreviewFidelityBar");
         private readonly PreviewInfoBar _buildHintBar = new PreviewInfoBar("PreviewBuildHintBar");
         private bool _reconnectShown;
-        // Versions whose background build already FAILED this VS session — don't auto-retry (no retry loop).
-        private static readonly System.Collections.Generic.HashSet<string> FailedVersions =
-            new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public PreviewControl()
         {
@@ -1555,7 +1552,7 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
-            if (FailedVersions.Contains(version!))
+            if (FailedHostVersions.Contains(version))
             {
                 Log.Write($"Fidelity upgrade for {version}: a build already failed this session — not retrying.");
                 ShowFidelityNote(BuildFailedNote(version!), sticky: true);
@@ -1627,7 +1624,7 @@ namespace WinUIXamlPreview.UI
                                 return;
                             }
 
-                            FailedVersions.Add(version!);
+                            FailedHostVersions.Add(version!);
                             Log.Write($"Fidelity upgrade for {version}: build did not yield a matched host ({outcome.Error}); staying on bundled 2.2.0.");
                             EndUpgrade(gen, note: null);
                             ShowFidelityNote(BuildFailedNote(version!), sticky: true);
@@ -1868,7 +1865,7 @@ namespace WinUIXamlPreview.UI
 
             var target = _fidelityPlan?.TargetVersion;
             var upgradable = _fidelityPlan?.NeedsUpgrade == true;
-            var failed = !string.IsNullOrEmpty(target) && FailedVersions.Contains(target!);
+            var failed = FailedHostVersions.Contains(target);
             var noSuggestion = PreviewOptions.FullFidelityAutoBuild || !upgradable;
             var text = NewerTypesHint.Describe(newerTypes, MatchedHostResolver.BundledVersion, target, noSuggestion, failed);
             if (text == null)
