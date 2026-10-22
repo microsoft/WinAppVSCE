@@ -71,6 +71,41 @@ namespace Surface.Tests.Fixtures
     {
         public List<string> Lines { get; set; } = new();
     }
+
+    public class Member
+    {
+        public string Name { get; set; } = "";
+    }
+
+    /// <summary>A group that is its own item list, like <c>class Grouping : List&lt;Person&gt;</c>.</summary>
+    public class MemberGroup : List<Member>
+    {
+        public string Key { get; set; } = "";
+    }
+
+    /// <summary>A group whose items sit under an ItemsPath property.</summary>
+    public class Team
+    {
+        public string Key { get; set; } = "";
+        public List<Member> Members { get; set; } = new();
+    }
+
+    public class SeriesFilledChart
+    {
+        public List<double> Series { get; } = new() { 1, 2, 3 };
+        public List<double> ItemsSource { get; set; } = new();
+    }
+
+    public class EmptyChart
+    {
+        public List<double>? Series { get; set; }
+        public double[] Values { get; set; } = Array.Empty<double>();
+    }
+
+    public class NotAChart
+    {
+        public string Title { get; set; } = "";
+    }
 }
 
 namespace Surface.Tests
@@ -108,6 +143,7 @@ namespace Surface.Tests
             Run("R2 sample data (typed objects)", SampleDataObjects);
             Run("R2 sample data (charts)", SampleDataCharts);
             Run("R2 sample data (initial state, functions, list forms)", SampleDataStates);
+            Run("R2 sample data (grouped lists, type model, chart helpers)", SampleDataGroupsAndModel);
             Run("R2 TryParseBind/BindPathLabel", BindParsing);
             Run("R3 x: directives", Rule3);
             Run("R4 events", Rule4);
@@ -581,6 +617,139 @@ namespace Surface.Tests
             finally
             {
                 Directory.Delete(dir, true);
+            }
+        }
+
+        private static void SampleDataGroupsAndModel()
+        {
+            // Grouped lists: a ListView over {Binding Source={StaticResource Cvs}} gets a grouped marker.
+            var types = SampleTypeModel.FromSources(
+                "using System.Collections.Generic;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class GroupsPage {\n" +
+                "  public List<PersonGroup> Groups { get; } = new();\n" +
+                "  public List<Team> Teams { get; } = new();\n" +
+                "  public GroupsPage() { CodeCvs.Source = Groups; }\n" +
+                "}\n" +
+                "public class Person { public string Name { get; set; } }\n" +
+                "public class PersonGroup : List<Person> { public string Key { get; set; } }\n" +
+                "public class Team { public string Key { get; set; } public List<Person> Members { get; set; } }\n" +
+                "}");
+            const string template = "<ListView.ItemTemplate><DataTemplate x:DataType=\"local:Person\"><TextBlock Text=\"{x:Bind Name}\" /></DataTemplate></ListView.ItemTemplate>";
+            string List(string name, string cvs) =>
+                $"<ListView x:Name=\"{name}\" ItemsSource=\"{{Binding Source={{StaticResource {cvs}}}}}\">{template}</ListView>";
+            var r = CleanRoot(Doc(
+                "<Grid><Grid.Resources>" +
+                "<CollectionViewSource x:Key=\"BindCvs\" Source=\"{x:Bind Groups}\" IsSourceGrouped=\"True\" />" +
+                "<CollectionViewSource x:Key=\"PathCvs\" Source=\"{x:Bind Teams}\" IsSourceGrouped=\"True\" ItemsPath=\"Members\" />" +
+                "<CollectionViewSource x:Key=\"CodeCvs\" x:Name=\"CodeCvs\" IsSourceGrouped=\"True\" />" +
+                "<CollectionViewSource x:Key=\"DesignCvs\" d:Source=\"{d:DesignInstance local:Person}\" IsSourceGrouped=\"True\" />" +
+                "<CollectionViewSource x:Key=\"LiteralCvs\" IsSourceGrouped=\"True\"><CollectionViewSource.Source><x:Array Type=\"x:String\" /></CollectionViewSource.Source></CollectionViewSource>" +
+                "</Grid.Resources><StackPanel>" +
+                List("ByBind", "BindCvs") + List("ByPath", "PathCvs") + List("ByCode", "CodeCvs") +
+                List("ByDesign", "DesignCvs") + List("ByLiteral", "LiteralCvs") +
+                "</StackPanel></Grid>",
+                rootAttrs: "x:Class=\"App1.GroupsPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+
+            var bind = Attr(Named(r, "ByBind"), "Tag") ?? "";
+            Check("CVS x:Bind Source -> grouped marker", bind.StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal) && bind.Contains("\"grouped\":true"), bind);
+            Check("grouped: group type from List<PersonGroup>", bind.Contains("\"groupType\":\"App1.PersonGroup\""), bind);
+            Check("grouped: item type from the group's element type", bind.Contains("\"type\":\"App1.Person\""), bind);
+            Check("grouped: two keyed groups", bind.Contains("\"Key\":\"Group 1\"") && bind.Contains("\"Key\":\"Group 2\"") && !bind.Contains("\"Group 3\""), bind);
+            Check("grouped: rows carry template fields", bind.Contains("\"Name\":"), bind);
+
+            var byPath = Attr(Named(r, "ByPath"), "Tag") ?? "";
+            Check("ItemsPath: group type Team", byPath.Contains("\"groupType\":\"App1.Team\""), byPath);
+            Check("ItemsPath: item type via Team.Members", byPath.Contains("\"type\":\"App1.Person\""), byPath);
+            Check("ItemsPath carried in payload", byPath.Contains("\"itemsPath\":\"Members\""), byPath);
+            Check("ItemsPath: keys from the Teams label", byPath.Contains("\"Key\":\"Team 1\""), byPath);
+
+            var byCode = Attr(Named(r, "ByCode"), "Tag") ?? "";
+            Check("Source assigned in code-behind -> typed groups", byCode.Contains("\"grouped\":true") && byCode.Contains("\"groupType\":\"App1.PersonGroup\""), byCode);
+            Check("d:Source -> no marker", Attr(Named(r, "ByDesign"), "Tag") is null, Attr(Named(r, "ByDesign"), "Tag"));
+            Check("literal Source -> no marker", Attr(Named(r, "ByLiteral"), "Tag") is null, Attr(Named(r, "ByLiteral"), "Tag"));
+
+            // Without a type model the marker is still grouped, with plain groups.
+            var untyped = CleanRoot(Doc(
+                "<Grid><Grid.Resources><CollectionViewSource x:Key=\"Cvs\" Source=\"{x:Bind Groups}\" IsSourceGrouped=\"True\" /></Grid.Resources>" +
+                "<ListView x:Name=\"L\" ItemsSource=\"{Binding Source={StaticResource Cvs}}\" /></Grid>"), sample: true);
+            var untypedTag = Attr(Named(untyped, "L"), "Tag") ?? "";
+            Check("no type model -> plain grouped marker", untypedTag.Contains("\"grouped\":true") && !untypedTag.Contains("groupType"), untypedTag);
+
+            // BuildGroups turns the payload into the app's own group objects when it can.
+            const string rows = "\"rows\":[{\"Key\":\"Member 1\",\"Items\":[{\"Name\":\"A\"},{\"Name\":\"B\"}]},{\"Key\":\"Member 2\",\"Items\":[{\"Name\":\"C\"}]}]";
+            var listGroups = SampleListFiller.BuildGroups(
+                "Members|{\"grouped\":true,\"groupType\":\"Surface.Tests.Fixtures.MemberGroup\",\"type\":\"Surface.Tests.Fixtures.Member\"," + rows + "}",
+                out var label, out var typed, out var path);
+            Eq("BuildGroups label", "Members", label);
+            Check("List-subclass group -> typed", typed && listGroups.Count == 2 && listGroups[0] is Fixtures.MemberGroup, $"{typed} {listGroups.FirstOrDefault()?.GetType().Name}");
+            var mg = listGroups.FirstOrDefault() as Fixtures.MemberGroup;
+            Eq("typed group keeps its Key", "Member 1", mg?.Key);
+            Check("typed group holds typed rows", mg is { Count: 2 } && mg[0] is { Name: "A" }, mg?.Count.ToString());
+            Check("no ItemsPath for a List-subclass group", path is null, path);
+
+            var teamGroups = SampleListFiller.BuildGroups(
+                "Teams|{\"grouped\":true,\"groupType\":\"Surface.Tests.Fixtures.Team\",\"type\":\"Surface.Tests.Fixtures.Member\",\"itemsPath\":\"Members\"," + rows + "}",
+                out _, out var teamTyped, out var teamPath);
+            Check("ItemsPath group -> typed Team", teamTyped && teamGroups.FirstOrDefault() is Fixtures.Team { Key: "Member 1" }, teamGroups.FirstOrDefault()?.GetType().Name);
+            Check("ItemsPath group's collection filled", teamGroups.FirstOrDefault() is Fixtures.Team { Members.Count: > 0 }, null);
+            Eq("ItemsPath returned", "Members", teamPath);
+
+            var plain = SampleListFiller.BuildGroups(
+                "X|{\"grouped\":true,\"groupType\":\"Nope.Missing\"," + rows + "}", out _, out var plainTyped, out _);
+            Check("unknown group type -> plain item lists", !plainTyped && plain.Count == 2 && plain[0] is List<object> { Count: 2 } && plain[1] is List<object> { Count: 1 },
+                plain.FirstOrDefault()?.GetType().Name);
+
+            // Project watcher: only the project's own sources, never build output.
+            var proj = Directory.CreateTempSubdirectory("wxp-proj-").FullName;
+            Check("IsBuildOutput: bin\\", SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, "bin", "Debug", "x.cs")), null);
+            Check("IsBuildOutput: obj\\", SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, "obj", "x.g.cs")), null);
+            Check("IsBuildOutput: nested Sub\\obj\\", SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, "Sub", "OBJ", "x.cs")), null);
+            Check("IsBuildOutput: .vs\\", SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, ".vs", "x.cs")), null);
+            Check("IsBuildOutput: Objects\\ is source", !SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, "Objects", "x.cs")), null);
+            Check("IsBuildOutput: root file is source", !SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, "Binary.cs")), null);
+            try
+            {
+                File.WriteAllText(Path.Combine(proj, "Watch.csproj"), "<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup></Project>");
+                File.WriteAllText(Path.Combine(proj, "Alpha.cs"), "namespace W { public class Alpha { public string Name { get; set; } } }");
+                Directory.CreateDirectory(Path.Combine(proj, "obj"));
+                File.WriteAllText(Path.Combine(proj, "obj", "Gen.g.cs"), "namespace W { public class Generated { } }");
+                var page = Path.Combine(proj, "MainPage.xaml");
+                var first = SampleTypeModel.ForDocument(page, TimeSpan.FromMilliseconds(1));
+                Check("first build waited for (FirstBuildWait)", first?.FindType("W.Alpha") is not null, first is null ? "null model" : "no Alpha");
+                Check("obj\\ sources excluded", first?.FindType("W.Generated") is null, null);
+
+                File.WriteAllText(Path.Combine(proj, "Beta.cs"), "namespace W { public class Beta { } }");
+                SampleTypeModel? next = null;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (sw.Elapsed < TimeSpan.FromSeconds(5) && next?.FindType("W.Beta") is null)
+                {
+                    Thread.Sleep(100);
+                    next = SampleTypeModel.ForDocument(page, TimeSpan.FromSeconds(2));
+                }
+                Check("watcher picks up a new .cs file", next?.FindType("W.Beta") is not null, $"after {sw.ElapsedMilliseconds} ms");
+
+                File.WriteAllText(Path.Combine(proj, "obj", "Later.g.cs"), "namespace W { public class Later { } }");
+                Thread.Sleep(500);
+                var after = SampleTypeModel.ForDocument(page, TimeSpan.FromSeconds(2));
+                Check("watcher ignores later obj\\ writes", after?.FindType("W.Later") is null && after?.FindType("W.Beta") is not null, null);
+            }
+            finally
+            {
+                try { Directory.Delete(proj, true); } catch (IOException) { }
+            }
+
+            // Chart helpers.
+            Check("HasEmptyData: Series filled, ItemsSource empty -> has data", !SampleChartFiller.HasEmptyData(new Fixtures.SeriesFilledChart()), null);
+            Check("HasEmptyData: all data properties empty -> empty", SampleChartFiller.HasEmptyData(new Fixtures.EmptyChart()), null);
+            Check("HasEmptyData: no data properties -> not a chart", !SampleChartFiller.HasEmptyData(new Fixtures.NotAChart()), null);
+            foreach (var round in new[] { "PieChart", "DonutChart", "DoughnutSeries", "RadialGauge", "SunburstChart", "piechart" })
+            {
+                Check($"IsRoundChart({round})", SampleChartFiller.IsRoundChart(round), null);
+            }
+            foreach (var flat in new[] { "LineChart", "BarChart", "Sparkline", "CartesianChart", "Chart" })
+            {
+                Check($"!IsRoundChart({flat})", !SampleChartFiller.IsRoundChart(flat), null);
             }
         }
 

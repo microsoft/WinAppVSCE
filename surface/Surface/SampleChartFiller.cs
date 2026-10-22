@@ -304,7 +304,7 @@ internal static class SampleChartFiller
             if (p.Update(root))
             {
                 _placeholders.Add(p);
-                App.Log($"SAMPLE: drew a placeholder series on empty {target.GetType().Name}{Label(target)}.");
+                App.Log($"SAMPLE: drew a placeholder {(IsRoundChart(target.GetType().Name) ? "donut" : "series")} on empty {target.GetType().Name}{Label(target)}.");
             }
         }
     }
@@ -317,11 +317,16 @@ internal static class SampleChartFiller
 
     private static string Label(FrameworkElement fe) => string.IsNullOrEmpty(fe.Name) ? "" : " " + fe.Name;
 
+    private static readonly Regex RoundChartName = new("Pie|Donut|Doughnut|Radial|Sunburst", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>True for a control type that draws a circle (pie, donut, radial), whose placeholder is a ring, not a line.</summary>
+    internal static bool IsRoundChart(string typeName) => RoundChartName.IsMatch(typeName);
+
     /// <summary>
     /// True when every data collection the control has is null or empty (a filled <c>Series</c> next to an unused
     /// <c>ItemsSource</c> is not empty); false when it has none or can't tell.
     /// </summary>
-    private static bool HasEmptyData(FrameworkElement chart)
+    internal static bool HasEmptyData(object chart)
     {
         bool any = false;
         foreach (var name in DataProperties)
@@ -874,7 +879,7 @@ internal static class SampleChartFiller
                 return;
             }
             double padX = Math.Min(16, w * 0.04), padY = Math.Max(2, h * 0.12);
-            if (_target.TryGetTarget(out var shape) && Regex.IsMatch(shape.GetType().Name, "Pie|Donut|Doughnut|Radial|Sunburst", RegexOptions.IgnoreCase))
+            if (_target.TryGetTarget(out var shape) && IsRoundChart(shape.GetType().Name))
             {
                 DrawPie(w, h);
                 return;

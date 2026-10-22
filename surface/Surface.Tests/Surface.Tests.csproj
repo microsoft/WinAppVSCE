@@ -37,6 +37,7 @@
     <Compile Include="..\Surface\SamplePlanner.Lists.cs" Link="Production\SamplePlanner.Lists.cs" />
     <Compile Include="..\Surface\SampleConverters.cs" Link="Production\SampleConverters.cs" />
     <Compile Include="..\Surface\SampleObjects.cs" Link="Production\SampleObjects.cs" />
+    <Compile Include="..\Surface\SampleChartFiller.cs" Link="Production\SampleChartFiller.cs" />
   </ItemGroup>
 
   <ItemGroup>

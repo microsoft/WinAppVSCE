@@ -400,7 +400,7 @@ internal sealed class SampleTypeModel
 
                 var sw = Stopwatch.StartNew();
                 var files = Directory.EnumerateFiles(_dir, "*.cs", SearchOption.AllDirectories)
-                    .Where(f => !IsBuildOutput(f))
+                    .Where(f => !IsBuildOutput(_dir, f))
                     .Take(MaxSourceFiles + 1)
                     .ToList();
                 if (files.Count > MaxSourceFiles)
@@ -466,13 +466,15 @@ internal sealed class SampleTypeModel
             }
         }
 
-        private bool IsBuildOutput(string file)
-        {
-            // Any folder on the way: a nested project's bin\ and obj\ hold generated copies too.
-            var folders = Path.GetRelativePath(_dir, file).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[..^1];
-            return folders.Any(f => f.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-                                    f.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
-                                    f.StartsWith(".", StringComparison.Ordinal));
-        }
+    }
+
+    /// <summary>True when <paramref name="file"/> sits under a <c>bin</c>, <c>obj</c> or dot folder anywhere below
+    /// <paramref name="projectDir"/> (a nested project's build output holds generated copies too).</summary>
+    internal static bool IsBuildOutput(string projectDir, string file)
+    {
+        var folders = Path.GetRelativePath(projectDir, file).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[..^1];
+        return folders.Any(f => f.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                                f.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+                                f.StartsWith(".", StringComparison.Ordinal));
     }
 }
