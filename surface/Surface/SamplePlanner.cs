@@ -208,7 +208,7 @@ internal static partial class SamplePlanner
                 }
             }
 
-            if (template is null && el.Name.LocalName is "TextBox" or "AutoSuggestBox" or "PasswordBox" or "RichEditBox" or "NumberBox")
+            if (template is null && IsInputBox(el))
             {
                 // An input box starts with what the page puts in it, usually nothing (its PlaceholderText shows):
                 // a generated "Query" or "Draft" reads as typed-in text.
@@ -248,6 +248,9 @@ internal static partial class SamplePlanner
         var literalValue = ScalarValue(kind, propName, r.Type, r.Name, el);
         return new BindSample(literalValue, null);
     }
+
+    private static bool IsInputBox(XElement el) =>
+        el.Name.LocalName is "TextBox" or "AutoSuggestBox" or "PasswordBox" or "RichEditBox" or "NumberBox";
 
     private static bool IsBoolLike(ITypeSymbol t)
     {
@@ -694,11 +697,28 @@ internal static partial class SamplePlanner
     /// <summary><c>__wxp-sample:{label}|{rows JSON}</c> for a list of <paramref name="itemType"/>.</summary>
     private static string ListMarker(Context ctx, XElement list, ITypeSymbol? itemType, string label)
     {
+        // The template's x:DataType is what the rows are rendered as; when it is unrelated to the source's element
+        // type (a same-named class in another namespace), build rows the template can actually bind.
+        if (itemType is not null && TemplateItemType(ctx, list) is { } templateType &&
+            !Derives(itemType, templateType) && !Derives(templateType, itemType))
+        {
+            itemType = templateType;
+        }
         var rows = ListRows(ctx, list, itemType, label, out var typeName);
         var json = typeName is null
             ? JsonSerializer.Serialize(rows)
             : JsonSerializer.Serialize(new Dictionary<string, object> { ["type"] = typeName, ["rows"] = rows });
         return SampleListFiller.TagPrefix + label + "|" + json;
+    }
+
+    /// <summary>True when <paramref name="type"/> is, derives from, or implements <paramref name="baseType"/>.</summary>
+    private static bool Derives(ITypeSymbol type, ITypeSymbol baseType)
+    {
+        for (var cur = type; cur is not null; cur = cur.BaseType)
+        {
+            if (SymbolEqualityComparer.Default.Equals(cur, baseType)) return true;
+        }
+        return type.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, baseType));
     }
 
     /// <summary>
@@ -815,6 +835,10 @@ internal static partial class SamplePlanner
                 }
 
                 var kind = TargetKindOf(ctx, el, prop);
+                if (kind == TargetKind.Text && IsInputBox(el) && value is not LiteralExpressionSyntax { Token.ValueText.Length: > 0 })
+                {
+                    continue; // SetQuery(query) => Box.Text = query: the box starts empty, not with "Query"
+                }
                 var constant = kind is TargetKind.Number or TargetKind.Bool or TargetKind.Visibility ? ConstantOf(value, model) : null;
                 string? literal = kind switch
                 {
@@ -873,9 +897,10 @@ internal static partial class SamplePlanner
         }
 
         if (method is MethodDeclarationSyntax m &&
-            m.ParameterList.Parameters.Any(p => p.Type?.ToString().EndsWith("EventArgs", StringComparison.Ordinal) == true))
+            (m.ParameterList.Parameters.Any(p => p.Type?.ToString().EndsWith("EventArgs", StringComparison.Ordinal) == true) ||
+             m.ParameterList.Parameters is [{ Type: var first, Identifier.Text: "sender" }, ..] && first?.ToString().TrimEnd('?') == "object"))
         {
-            return !InitialState(m.Identifier.Text);
+            return !InitialState(m.Identifier.Text); // (object sender, …): an event handler, typed args or not
         }
         return false;
     }

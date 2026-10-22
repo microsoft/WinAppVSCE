@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -316,9 +317,13 @@ internal static class SampleChartFiller
 
     private static string Label(FrameworkElement fe) => string.IsNullOrEmpty(fe.Name) ? "" : " " + fe.Name;
 
-    /// <summary>True when the control's first data collection is null or has no items; false when it can't tell.</summary>
+    /// <summary>
+    /// True when every data collection the control has is null or empty (a filled <c>Series</c> next to an unused
+    /// <c>ItemsSource</c> is not empty); false when it has none or can't tell.
+    /// </summary>
     private static bool HasEmptyData(FrameworkElement chart)
     {
+        bool any = false;
         foreach (var name in DataProperties)
         {
             var p = chart.GetType().GetProperty(name);
@@ -326,14 +331,19 @@ internal static class SampleChartFiller
             {
                 continue;
             }
-            return p.GetValue(chart) switch
+            switch (p.GetValue(chart))
             {
-                null => true,
-                IEnumerable e => !e.GetEnumerator().MoveNext(),
-                _ => false,
-            };
+                case null:
+                    any = true;
+                    break;
+                case IEnumerable e when !e.GetEnumerator().MoveNext():
+                    any = true;
+                    break;
+                default:
+                    return false; // has data, or a value it can't enumerate
+            }
         }
-        return false;
+        return any;
     }
 
     /// <summary>True when the subtree has at least one shape with non-empty geometry (the control drew something).</summary>
@@ -864,6 +874,11 @@ internal static class SampleChartFiller
                 return;
             }
             double padX = Math.Min(16, w * 0.04), padY = Math.Max(2, h * 0.12);
+            if (_target.TryGetTarget(out var shape) && Regex.IsMatch(shape.GetType().Name, "Pie|Donut|Doughnut|Radial|Sunburst", RegexOptions.IgnoreCase))
+            {
+                DrawPie(w, h);
+                return;
+            }
             double left = padX, right = w - padX, top = padY, bottom = h - padY;
             bool roomy = h >= 80;
             if (roomy)
@@ -890,6 +905,44 @@ internal static class SampleChartFiller
                 line.Points.Add(new Point(x, y));
             }
             _piece.Children.Add(line);
+        }
+
+        /// <summary>A pie/donut chart's placeholder: a ring of slices, not a line.</summary>
+        private void DrawPie(double w, double h)
+        {
+            double size = Math.Min(w, h) * 0.8;
+            double r = size / 2, cx = w / 2, cy = h / 2, thickness = Math.Max(4, r * 0.38);
+            double[] shares = { 0.42, 0.27, 0.19, 0.12 };
+            var accent = Accent();
+            double angle = -90;
+            for (int i = 0; i < shares.Length; i++)
+            {
+                double sweep = shares[i] * 360 - (shares.Length > 1 ? 1.5 : 0);
+                var figure = new PathFigure { StartPoint = PointOn(cx, cy, r - thickness / 2, angle), IsClosed = false };
+                figure.Segments.Add(new ArcSegment
+                {
+                    Point = PointOn(cx, cy, r - thickness / 2, angle + sweep),
+                    Size = new Size(r - thickness / 2, r - thickness / 2),
+                    IsLargeArc = sweep > 180,
+                    SweepDirection = SweepDirection.Clockwise,
+                });
+                var geometry = new PathGeometry();
+                geometry.Figures.Add(figure);
+                byte alpha = (byte)(0xFF - i * 0x38); // one accent, fading per slice
+                _piece.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+                {
+                    Data = geometry,
+                    Stroke = new SolidColorBrush(Color.FromArgb(alpha, accent.R, accent.G, accent.B)),
+                    StrokeThickness = thickness,
+                });
+                angle += shares[i] * 360;
+            }
+        }
+
+        private static Point PointOn(double cx, double cy, double radius, double degrees)
+        {
+            double rad = degrees * Math.PI / 180;
+            return new Point(cx + radius * Math.Cos(rad), cy + radius * Math.Sin(rad));
         }
 
     }

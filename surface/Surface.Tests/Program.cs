@@ -477,6 +477,8 @@ namespace Surface.Tests
                 "  public StatesPage() { Summary.Text = string.Join(\", \", Tags); }\n" +
                 "  private void OnLoaded(object sender, RoutedEventArgs e) { IsLoading = false; HasOrders = true; }\n" +
                 "  private void Refresh_Click(object sender, RoutedEventArgs e) { IsBusy = true; Status.Text = \"Refreshed!\"; }\n" +
+                "  private void OnStageChanged(object? sender, bool on) { Toggle.IsChecked = on; }\n" +
+                "  private void SetQuery(string query) { Search2.Text = query; }\n" +
                 "}\n" +
                 "public class Person { public string Name { get; set; } public string City { get; set; } }\n" +
                 "public class Order { public string Name { get; set; } public string Customer { get; set; } public decimal Price { get; set; } public bool IsRush { get; set; } public bool IsDone { get; set; } }\n" +
@@ -498,6 +500,7 @@ namespace Surface.Tests
                 "<TextBlock x:Name=\"Title\" Text=\"{x:Bind GetTitle()}\" />" +
                 "<TextBlock x:Name=\"Summary\" />" +
                 "<TextBlock x:Name=\"Status\" />" +
+                "<ToggleButton x:Name=\"Toggle\" /><TextBox x:Name=\"Search2\" />" +
                 "<ListView x:Name=\"List\" ItemsSource=\"{x:Bind Orders}\"><ListView.ItemTemplate>" +
                 "<DataTemplate x:DataType=\"local:Order\"><StackPanel>" +
                 "<TextBlock x:Name=\"Price\" Text=\"{x:Bind local:StatesPage.FormatPrice(Price)}\" />" +
@@ -538,6 +541,8 @@ namespace Surface.Tests
                 System.Text.RegularExpressions.Regex.IsMatch(price, @"\d"), Attr(Named(r, "Price"), "Text"));
             Eq("string.Join(\", \", Tags) -> joined sample tags", "Tag, Tag 2, Tag 3", Attr(Named(r, "Summary"), "Text"));
             Check("text set in Refresh_Click is interaction, not initial", Attr(Named(r, "Status"), "Text") is null, Attr(Named(r, "Status"), "Text"));
+            Check("(object? sender, bool) handler is interaction", Attr(Named(r, "Toggle"), "IsChecked") is null, Attr(Named(r, "Toggle"), "IsChecked"));
+            Check("input box set from a parameter stays empty", Attr(Named(r, "Search2"), "Text") is null, Attr(Named(r, "Search2"), "Text"));
 
             // Row templates bind each row's own values.
             Eq("row Visibility -> converter binding", "{Binding IsRush, Converter={StaticResource __wxpSampleVisibility}}", Attr(Named(r, "Rush"), "Visibility"));
@@ -552,6 +557,18 @@ namespace Surface.Tests
             // Typed objects: an empty "= new()" collection is filled like a null one.
             var withLines = SampleObjects.Create(typeof(Fixtures.Card), null, 0) as Fixtures.Card;
             Check("empty initialized list filled", withLines?.Lines.Count > 0, withLines?.Lines.Count.ToString());
+
+            // S20: a template's x:DataType wins over an unrelated same-named source element type.
+            var dupTypes = SampleTypeModel.FromSources(
+                "using System.Collections.Generic;\n" +
+                "namespace App1 { public sealed partial class DupPage { public List<App1.Models.Item> Items { get; } = new(); } public class Item { public string Title { get; set; } } }\n" +
+                "namespace App1.Models { public class Item { public string Name { get; set; } } }");
+            var dup = CleanRoot(Doc(
+                "<ListView x:Name=\"Dup\" ItemsSource=\"{x:Bind Items}\"><ListView.ItemTemplate><DataTemplate x:DataType=\"local:Item\">" +
+                "<TextBlock Text=\"{x:Bind Title}\" /></DataTemplate></ListView.ItemTemplate></ListView>",
+                rootAttrs: "x:Class=\"App1.DupPage\" xmlns:local=\"using:App1\""), sample: true, types: dupTypes);
+            var dupTag = Attr(Named(dup, "Dup"), "Tag") ?? "";
+            Check("S20: rows typed by the template's x:DataType", dupTag.Contains("\"type\":\"App1.Item\"") && dupTag.Contains("\"Title\":\"Title 2\""), dupTag);
 
             // Project discovery: a folder with several projects picks the WinUI app.
             var dir = Directory.CreateTempSubdirectory("wxp-proj-").FullName;
