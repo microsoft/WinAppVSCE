@@ -126,13 +126,14 @@ internal sealed class RenderHost
     /// resource-scope key resolver (Layer 2) is passed through so the cleaner can distinguish a resolvable
     /// <c>{StaticResource}</c> from a genuinely-undefined one.
     /// </summary>
-    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false, SampleTypeModel? sampleTypes = null, IList<ChartFixup>? chartFixups = null)
+    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false, SampleTypeModel? sampleTypes = null, IList<ChartFixup>? chartFixups = null, ISet<string>? missingFrameworkTypes = null)
     {
         var missing = new SortedSet<string>(StringComparer.Ordinal);
         var unmapped = new SortedSet<string>(StringComparer.Ordinal);
-        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes, chartFixups);
+        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes, chartFixups, missingFrameworkTypes);
         LastMissingKeys = missing.ToArray();
         LastUnmappedTypes = unmapped.ToArray();
+        LastNewerTypes = missingFrameworkTypes is { Count: > 0 } ? missingFrameworkTypes.OrderBy(t => t, StringComparer.Ordinal).ToArray() : Array.Empty<string>();
         // WS2-F5: name keys the preview can't resolve (e.g. added in App.xaml.cs), once per distinct set.
         var summary = string.Join(", ", missing);
         if (missing.Count > 0 && summary != _lastMissingKeys)
@@ -150,6 +151,34 @@ internal sealed class RenderHost
 
     /// <summary>Custom types the most recent clean had to placeholder/drop because nothing could map them.</summary>
     internal static string[] LastUnmappedTypes { get; private set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// WinUI types the page uses that this host's WinUI doesn't have (a newer WinAppSDK added them), which the
+    /// most recent clean left out. Lets the client say a version-matched host would render them.
+    /// </summary>
+    internal static string[] LastNewerTypes { get; private set; } = Array.Empty<string>();
+
+    private static HashSet<string>? _winUiTypeNames;
+
+    /// <summary>
+    /// True when this host's WinUI has a public <c>Microsoft.UI.Xaml.*</c> type named <paramref name="simpleName"/>.
+    /// Errs on true when the projection can't be enumerated, so a type is never wrongly treated as missing.
+    /// </summary>
+    private static bool HostWinUiHas(string simpleName)
+    {
+        try
+        {
+            _winUiTypeNames ??= typeof(UIElement).Assembly.GetExportedTypes()
+                .Where(t => t.Namespace?.StartsWith("Microsoft.UI.Xaml", StringComparison.Ordinal) == true)
+                .Select(t => t.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            return _winUiTypeNames.Count == 0 || _winUiTypeNames.Contains(simpleName);
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
 
     /// <summary>
     /// WS2-F6: when true, <c>{x:Bind}</c> text properties render a placeholder and bound lists get dummy
@@ -247,6 +276,7 @@ internal sealed class RenderHost
     {
         LastMissingKeys = Array.Empty<string>();
         LastUnmappedTypes = Array.Empty<string>();
+        LastNewerTypes = Array.Empty<string>();
         try
         {
             // P1 (non-page classification): a structurally non-designable root — a ResourceDictionary
@@ -273,13 +303,15 @@ internal sealed class RenderHost
             // pathological page cannot loop; hanging constructors are avoided earlier by the cleaner's
             // pre-swap list (a hang can never reach a catch).
             HashSet<string>? forced = null;
+            // WinUI types this host lacks (newer WinAppSDK), found one Load failure at a time.
+            HashSet<string>? missingFramework = null;
             // Bounded wait: a cold project parse that runs long finishes in the background for the next render.
             var sampleTypes = SampleData ? SampleTypeModel.ForDocument(DocumentPath, TimeSpan.FromSeconds(3)) : null;
             const int maxSafetyNetRetries = 5;
             for (int attempt = 0; ; attempt++)
             {
                 var chartFixups = new List<ChartFixup>();
-                var xaml = CleanXaml(rawXaml, forced, SampleData, sampleTypes, chartFixups);
+                var xaml = CleanXaml(rawXaml, forced, SampleData, sampleTypes, chartFixups, missingFramework);
                 if (attempt == 0 && timings is not null) timings.CleanMs = ElapsedMs(tClean);
 
                 object? parsed;
@@ -296,7 +328,23 @@ internal sealed class RenderHost
                     // recoverable offender we have not already retired triggers a retry. WinUI usually
                     // drops the managed exception at the native boundary (an opaque "text associated with
                     // this error code could not be found"), so the first-chance watch is the main source.
-                    var offender = ExtractRecoverableOffender(ex) ?? ctorWatch.Offender;
+                    // A WinUI (default-xmlns) type this host's WinUI doesn't have: the page targets a newer
+                    // WinAppSDK. Leave it out and retry; Rule 7 never touches default-xmlns elements otherwise.
+                    // Its own budget, so a page using several newer types still gets the custom-type retries.
+                    // WinUI can repeat an earlier failure's text with the new failure's position, so a "not
+                    // found" for a type already left out is stale: neither an offender nor a usable message.
+                    var missingType = ExtractMissingTypeName(ex);
+                    var staleText = missingType is not null && missingFramework?.Contains(missingType) == true;
+                    if (!staleText && missingType is not null && !HostWinUiHas(missingType) &&
+                        Regex.IsMatch(rawXaml, "<" + Regex.Escape(missingType) + @"[\s/>]") &&
+                        (missingFramework?.Count ?? 0) < maxSafetyNetRetries &&
+                        (missingFramework ??= new(StringComparer.Ordinal)).Add(missingType))
+                    {
+                        App.Log($"SAFETY-NET: '{missingType}' isn't in this host's WinUI (newer WinAppSDK?) — leaving it out and retrying.");
+                        continue;
+                    }
+
+                    var offender = staleText ? ctorWatch.Offender : ExtractRecoverableOffender(ex) ?? ctorWatch.Offender;
                     if (attempt < maxSafetyNetRetries && offender is not null &&
                         (forced ??= new(StringComparer.Ordinal)).Add(offender))
                     {
@@ -305,6 +353,11 @@ internal sealed class RenderHost
                     }
 
                     var (l, c) = ExtractLineColumn(ex);
+                    // WinUI reports positions in the cleaned document; point at the user's file instead.
+                    if (l is int cl && c is int cc && XamlErrorText.MapToSource(xaml, rawXaml, cl, cc) is var (ml, mc))
+                    {
+                        (l, c) = (ml, mc);
+                    }
 
                     // Backstop: an opaque failure (no position, no identifiable constructor) is most likely
                     // user code in some custom control, and a named offender past the per-type budget is too.
@@ -326,6 +379,10 @@ internal sealed class RenderHost
                         if (XamlErrorText.MalformedXml(rawXaml) is var (xmlMessage, xl, xc))
                         {
                             (message, l, c) = (xmlMessage, xl ?? l, xc ?? c);
+                        }
+                        else if (staleText)
+                        {
+                            (message, l, c) = XamlErrorText.Describe(rawXaml, l, c);
                         }
                         else if (XamlErrorText.ChartsHint(message, rawXaml, ChartsResourcesLoaded()) is string chartsHint)
                         {
@@ -1289,6 +1346,30 @@ internal sealed class RenderHost
             int dot = full.LastIndexOf('.');
             return dot >= 0 ? full[(dot + 1)..] : full;
         }
+    }
+
+    /// <summary>
+    /// The simple name from a "type 'X' was not found" failure when X looks like a WinUI type (bare or
+    /// <c>Microsoft.UI.Xaml.*</c>) rather than a prefixed/namespaced custom one. Null otherwise.
+    /// </summary>
+    private static string? ExtractMissingTypeName(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            var m = TypeNotFoundRegex.Match(e.Message ?? string.Empty);
+            if (!m.Success)
+            {
+                continue;
+            }
+
+            var full = m.Groups["full"].Value;
+            if (full.StartsWith("Microsoft.UI.Xaml.", StringComparison.Ordinal))
+            {
+                full = full[(full.LastIndexOf('.') + 1)..];
+            }
+            return full.Length > 0 && full.IndexOfAny(new[] { ':', '.', '{', ' ' }) < 0 ? full : null;
+        }
+        return null;
     }
 
     private static (int? line, int? column) ExtractLineColumn(Exception ex)

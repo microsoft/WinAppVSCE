@@ -151,10 +151,12 @@ namespace Surface.Tests
             Run("R5 design namespaces", Rule5);
             Run("R6 resources", Rule6);
             Run("R7 unmapped custom types", Rule7);
+            Run("R7 WinUI types newer than the host", Rule7NewerFrameworkTypes);
             Run("R7a/b/c attached, extensions, converters", Rule7abc);
             Run("DTD grammar", DtdGrammar);
             Run("DTD source paths + file prep", DtdPaths);
             Run("XAML error text", ErrorText);
+            Run("XAML error positions map to the user's file", ErrorPositionMapping);
             Run("Zoom anchoring", ZoomAnchoring);
 
             foreach (var f in s_failures)
@@ -266,6 +268,94 @@ namespace Surface.Tests
             Eq("null xaml -> generic", Fallback, XamlErrorText.Describe(null, 1, 1).Message);
         }
 
+        private static void ErrorPositionMapping()
+        {
+            const string raw =
+                "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"\n" +
+                "      xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"\n" +
+                "      xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\">\n" +
+                "  <d:DesignData>\n" +
+                "    <TextBlock />\n" +
+                "  </d:DesignData>\n" +
+                "  <StackPanel>\n" +
+                "    <Button Content=\"A\" />\n" +
+                "    <Button x:Name=\"B\" Content=\"B\" Width=\"oops\" />\n" +
+                "  </StackPanel>\n" +
+                "</Page>";
+            const string cleaned =
+                "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">\n" +
+                "  <StackPanel>\n" +
+                "    <Button Content=\"A\" />\n" +
+                "    <Button x:Name=\"B\" Content=\"B\" Width=\"oops\" />\n" +
+                "  </StackPanel>\n" +
+                "</Page>";
+
+            // Attribute "Width" on cleaned line 4 -> raw line 9, at the same attribute.
+            int col = cleaned.Split('\n')[3].IndexOf("Width", StringComparison.Ordinal) + 1;
+            var attr = XamlErrorText.MapToSource(cleaned, raw, 4, col);
+            Eq("attribute maps to the user's line", "9", attr?.Line.ToString());
+            Eq("attribute maps to the user's column", (raw.Split('\n')[8].IndexOf("Width", StringComparison.Ordinal) + 1).ToString(), attr?.Column.ToString());
+            Eq("mapped position still describes the attribute",
+                XamlErrorText.DescribeAt(cleaned, 4, col), XamlErrorText.DescribeAt(raw, attr!.Value.Line, attr.Value.Column));
+
+            // The first Button (no x:Name) is found by its attributes and order.
+            var first = XamlErrorText.MapToSource(cleaned, raw, 3, 6);
+            Eq("element maps to the user's line", "8", first?.Line.ToString());
+
+            // A column past the end of the line (WinUI does this) still lands on that line's element.
+            Eq("column past the line end clamps", "7", XamlErrorText.MapToSource(cleaned, raw, 2, 200)?.Line.ToString());
+
+            Check("unchanged document -> no mapping", XamlErrorText.MapToSource(raw, raw, 9, 5) is null);
+            Check("malformed cleaned text -> no mapping", XamlErrorText.MapToSource("<Page>", raw, 1, 1) is null);
+
+            // A placeholder Border with no counterpart falls back to its parent's position.
+            const string withPlaceholder =
+                "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\">\n" +
+                "  <Grid x:Name=\"G\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">\n" +
+                "    <Border Tag=\"__wxp_placeholder\"><TextBlock Text=\"Chart\" /></Border>\n" +
+                "  </Grid>\n" +
+                "</Page>";
+            const string rawWithCustom =
+                "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:local=\"using:App\">\n" +
+                "\n" +
+                "\n" +
+                "  <Grid x:Name=\"G\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">\n" +
+                "    <local:Chart />\n" +
+                "  </Grid>\n" +
+                "</Page>";
+            Eq("no counterpart -> nearest matching ancestor", "4", XamlErrorText.MapToSource(withPlaceholder, rawWithCustom, 3, 6)?.Line.ToString());
+        }
+
+        private static void Rule7NewerFrameworkTypes()
+        {
+            var raw = Doc(
+                "<StackPanel x:Name=\"Host\">" +
+                "<ItemsView x:Name=\"IV\"><ItemsView.Layout><FlowLayout MinItemSpacing=\"12\" /></ItemsView.Layout></ItemsView>" +
+                "<ItemsRepeater x:Name=\"IR\"><ItemsRepeater.Layout><StackLayout /></ItemsRepeater.Layout></ItemsRepeater>" +
+                "<FlowLayout x:Name=\"Direct\" Grid.Row=\"1\" />" +
+                "<ContentControl><ContentControl.Content><FlowLayout x:Name=\"InContent\" /></ContentControl.Content></ContentControl>" +
+                "<Grid><Grid.ChildrenTransitions><TransitionCollection><FlowLayout /><EntranceThemeTransition /></TransitionCollection></Grid.ChildrenTransitions></Grid>" +
+                "<StackPanel.Resources><FlowLayout x:Key=\"SharedLayout\" /></StackPanel.Resources>" +
+                "<good:FlowLayout x:Name=\"Custom\" />" +
+                "</StackPanel>");
+            var missing = new HashSet<string> { "FlowLayout" };
+            var r = CleanRoot(raw, provider: _ => true, newer: missing);
+
+            Check("typed slot: missing type removed with its empty property element",
+                First(Named(r, "IV")!, "ItemsView.Layout") is null && !Named(r, "IV")!.Descendants().Any());
+            Check("other layouts untouched", First(Named(r, "IR")!, "StackLayout") is not null);
+            Eq("visual position -> placeholder", Pres + "Border", Named(r, "Direct")?.Name.ToString());
+            Eq("placeholder keeps attached layout", "1", Attr(Named(r, "Direct"), "Grid.Row"));
+            Eq("content slot -> placeholder", Pres + "Border", Named(r, "InContent")?.Name.ToString());
+            var transitions = First(r, "TransitionCollection")!;
+            Eq("collection: only the missing entry removed", "EntranceThemeTransition", string.Join(",", transitions.Elements().Select(e => e.Name.LocalName)));
+            Check("resource entry dropped", !r.Descendants().Any(e => e.Attribute(X + "Key")?.Value == "SharedLayout"));
+            Eq("same name in a custom xmlns untouched", "{using:Good}FlowLayout", Named(r, "Custom")?.Name.ToString());
+
+            var none = CleanRoot(raw, provider: _ => true);
+            Check("no missing set: framework elements untouched", none.Descendants().Count(e => e.Name == Pres + "FlowLayout") == 5, none.Descendants().Count(e => e.Name == Pres + "FlowLayout").ToString());
+        }
+
         // ------------------------------------------------------------ harness
 
         private static void Run(string group, Action body)
@@ -312,8 +402,9 @@ namespace Surface.Tests
             ISet<string>? force = null,
             bool sample = false,
             ISet<string>? missing = null,
-            SampleTypeModel? types = null) =>
-            XDocument.Parse(XamlCleaner.Clean(xaml, known, provider, force, sample, missing, null, types)).Root!;
+            SampleTypeModel? types = null,
+            ISet<string>? newer = null) =>
+            XDocument.Parse(XamlCleaner.Clean(xaml, known, provider, force, sample, missing, null, types, null, newer)).Root!;
 
         private static XElement? First(XElement root, string localName) =>
             root.DescendantsAndSelf().FirstOrDefault(e => e.Name.LocalName == localName);

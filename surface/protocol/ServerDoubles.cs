@@ -44,6 +44,7 @@ namespace Surface
         public string? DocumentPath { get; set; }
         public static string[] LastMissingKeys { get; set; } = Array.Empty<string>();
         public static string[] LastUnmappedTypes { get; set; } = Array.Empty<string>();
+        public static string[] LastNewerTypes { get; set; } = Array.Empty<string>();
         public string? Path;
         public (double X, double Y)? Point;
         public (int Id, string Name, string Value)? Property;

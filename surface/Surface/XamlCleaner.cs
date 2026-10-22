@@ -157,6 +157,12 @@ internal static class XamlCleaner
     /// <param name="unmappedTypes">Receives the full name of every custom type Rule 7 removed because the provider chain couldn't map it (not forced swaps). May be null.</param>
     /// <param name="sampleTypes">Source type model of the page's project, so sample values follow the bound types (see <see cref="SamplePlanner"/>). May be null (name-based values).</param>
     /// <param name="chartFixups">Receives the chart properties the host must restore after load (see <see cref="ChartFixup"/>). May be null.</param>
+    /// <param name="missingFrameworkTypes">
+    /// Simple names of default-xmlns (WinUI) types this host's WinUI doesn't have, e.g. a control added in a
+    /// newer WinAppSDK than the preview runs. Such elements are dropped when they fill a property slot (the
+    /// property keeps its default, e.g. an <c>ItemsView</c> keeps its default layout) and placeholdered
+    /// otherwise. May be null.
+    /// </param>
     public static string Clean(
         string rawXaml,
         Func<string, bool>? isKnownResourceKey = null,
@@ -166,7 +172,8 @@ internal static class XamlCleaner
         ISet<string>? missingResourceKeys = null,
         ISet<string>? unmappedTypes = null,
         SampleTypeModel? sampleTypes = null,
-        IList<ChartFixup>? chartFixups = null)
+        IList<ChartFixup>? chartFixups = null,
+        ISet<string>? missingFrameworkTypes = null)
     {
         if (string.IsNullOrWhiteSpace(rawXaml))
         {
@@ -241,7 +248,7 @@ internal static class XamlCleaner
             var droppedKeys = new HashSet<string>(StringComparer.Ordinal);
             if (providerMapsFullName is not null)
             {
-                SubstituteUnresolvableElements(root, docKeys, droppedKeys, providerMapsFullName, forcePlaceholderTypes, unmappedTypes);
+                SubstituteUnresolvableElements(root, docKeys, droppedKeys, providerMapsFullName, forcePlaceholderTypes, unmappedTypes, missingFrameworkTypes);
             }
 
             // Attribute pass over every surviving element.
@@ -1009,6 +1016,10 @@ internal static class XamlCleaner
     /// name is in <see cref="PreSwapConstructorSimpleNames"/> (heavy/hanging constructor — never
     /// construct) or its name is in <paramref name="forcePlaceholderTypes"/> (the render host's
     /// instantiation-throw safety net flagged it as throwing at Load).
+    ///
+    /// Default-xmlns elements named in <paramref name="missingFrameworkTypes"/> (WinUI types newer than
+    /// the host's WinAppSDK) are retired too: removed from typed slots and collections, dropped as
+    /// resources, and replaced by a placeholder where they are visual content.
     /// </summary>
     private static void SubstituteUnresolvableElements(
         XElement root,
@@ -1016,7 +1027,8 @@ internal static class XamlCleaner
         HashSet<string> droppedKeys,
         Func<string, bool> providerMapsFullName,
         ISet<string>? forcePlaceholderTypes = null,
-        ISet<string>? unmappedTypes = null)
+        ISet<string>? unmappedTypes = null,
+        ISet<string>? missingFrameworkTypes = null)
     {
         foreach (var el in root.Descendants().ToList())
         {
@@ -1048,6 +1060,10 @@ internal static class XamlCleaner
             var fullName = CustomTypeFullName(el.Name.NamespaceName, el.Name.LocalName);
             if (fullName is null)
             {
+                if (el.Name.Namespace == Pres && missingFrameworkTypes?.Contains(el.Name.LocalName) == true)
+                {
+                    RetireMissingFrameworkElement(el, docKeys, droppedKeys);
+                }
                 continue;
             }
 
@@ -1083,6 +1099,44 @@ internal static class XamlCleaner
                 ReplaceWithPlaceholder(el);
             }
         }
+    }
+
+    // Property-element members that hold visual content, where a placeholder is a valid stand-in.
+    private static readonly HashSet<string> VisualContentMembers = new(StringComparer.Ordinal)
+    {
+        "Content", "Child", "Children", "Items", "Header", "Footer", "Pane", "PaneHeader", "PaneFooter",
+    };
+
+    /// <summary>
+    /// Takes out an element whose WinUI type this host doesn't have. A placeholder is a visual, so it only
+    /// fits where visual content goes; in a typed slot (<c>&lt;ItemsView.Layout&gt;</c>, a
+    /// <c>…Collection</c>) the element is removed instead and the property keeps its default. A property
+    /// element left empty goes too, since an empty one can fail Load.
+    /// </summary>
+    private static void RetireMissingFrameworkElement(XElement el, HashSet<string> docKeys, HashSet<string> droppedKeys)
+    {
+        if (IsResourceEntry(el))
+        {
+            RecordDroppedKey(el, docKeys, droppedKeys);
+            el.Remove();
+            return;
+        }
+
+        var parent = el.Parent;
+        var parentName = parent?.Name.LocalName ?? "";
+        int dot = parentName.IndexOf('.');
+        bool typedSlot = dot > 0 && !VisualContentMembers.Contains(parentName[(dot + 1)..]);
+        if (parent is not null && (typedSlot || parentName.EndsWith("Collection", StringComparison.Ordinal)))
+        {
+            el.Remove();
+            if (typedSlot && !parent.Elements().Any())
+            {
+                parent.Remove();
+            }
+            return;
+        }
+
+        ReplaceWithPlaceholder(el);
     }
 
     private static bool IsConnectedTo(XElement el, XElement root)
