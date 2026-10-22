@@ -172,7 +172,14 @@ internal static partial class SamplePlanner
                 return drop;
             }
             var itemType = r.Type is null ? null : SampleTypeModel.ElementType(r.Type);
-            return new BindSample(null, ListMarker(ctx, el, itemType, r.Name));
+            var marker = ListMarker(ctx, el, itemType, r.Name);
+            if (template is not null && !r.IsFunction && RowBindingPath(path, r) is { } listPath)
+            {
+                // A list inside a row: the row is a real object (SampleObjects fills its collections), so bind its
+                // own list and keep the marker for rows that aren't (the filler skips a list the binding filled).
+                return new BindSample($"{{Binding {listPath}}}", marker);
+            }
+            return new BindSample(null, marker);
         }
 
         if (kind == TargetKind.Object)

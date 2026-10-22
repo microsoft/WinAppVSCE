@@ -99,6 +99,10 @@ internal static class SampleListFiller
             {
                 return false;
             }
+            if (prop.GetValue(list) is System.Collections.IEnumerable bound and not string && bound.GetEnumerator().MoveNext())
+            {
+                return false; // its {Binding} already reached real rows (a list inside a typed row)
+            }
 
             var items = BuildRows(label, rows, out label, out var typeName);
             int typed = 0;
