@@ -108,6 +108,14 @@ namespace WinUIXamlPreview.UITest
                 return 1;
             }
 
+            _hostHasToolkitTemplates = HostHasToolkitTemplates(surfaceExe);
+            if (!_hostHasToolkitTemplates)
+            {
+                Console.WriteLine("WARN  Surface.pri has no baked Toolkit templates (a plain dev build, not a Build-Payload.ps1 host);");
+                Console.WriteLine("      skipping the Toolkit template-height checks. Run against the payload host to cover them.");
+                Console.WriteLine();
+            }
+
             var lightValues = new Dictionary<string, string?>(StringComparer.Ordinal);
             foreach (var theme in new[] { "Light", "Dark" })
             {
@@ -160,6 +168,26 @@ namespace WinUIXamlPreview.UITest
             return failed == 0 ? 0 : 1;
         }
 
+        private static bool _hostHasToolkitTemplates = true;
+
+        /// <summary>
+        /// Build-Payload.ps1 bakes PreviewHost's merged pri (with the Toolkit's Themes\Generic.xbf) in as
+        /// Surface.pri; a plain <c>dotnet build</c> of Surface leaves the host's own tiny pri, so Toolkit controls
+        /// render untemplated. The merged pri names its component maps in ASCII, so a byte scan detects it.
+        /// </summary>
+        private static bool HostHasToolkitTemplates(string surfaceExe)
+        {
+            string pri = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(surfaceExe))!, "Surface.pri");
+            if (!File.Exists(pri))
+            {
+                return false;
+            }
+
+            string text = System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(pri));
+            return text.Contains("CommunityToolkit.WinUI.Controls.SettingsControls")
+                && text.Contains("CommunityToolkit.WinUI.Controls.Segmented");
+        }
+
         private static async Task CheckExpect(SurfaceClient client, FrameBox box, string page, string theme, Expect e, Dictionary<string, string?> lightValues)
         {
             var selTask = box.NextSelected(TimeSpan.FromSeconds(5));
@@ -190,7 +218,14 @@ namespace WinUIXamlPreview.UITest
 
             if (e.MinHeight > 0)
             {
-                Check(label + $" has its template (height >= {e.MinHeight})", sel.H >= e.MinHeight, $"{sel.W}x{sel.H}");
+                if (_hostHasToolkitTemplates)
+                {
+                    Check(label + $" has its template (height >= {e.MinHeight})", sel.H >= e.MinHeight, $"{sel.W}x{sel.H}");
+                }
+                else
+                {
+                    Console.WriteLine($"  SKIP  {label} has its template (height >= {e.MinHeight}) — host has no baked Toolkit templates");
+                }
             }
 
             if (e.Prop == null)
