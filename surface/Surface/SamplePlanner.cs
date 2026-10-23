@@ -217,7 +217,7 @@ internal static partial class SamplePlanner
                     : drop;
             }
 
-            var text = TextValue(r.Type, r.Name, 0, r.Owner?.Name);
+            var text = GlyphSample(el, propName) ?? TextValue(r.Type, r.Name, 0, r.Owner?.Name);
             if (template is not null && RowBindingPath(path, r) is { } rowPath)
             {
                 return new BindSample($"{{Binding {rowPath}, FallbackValue='{QuoteSafe(text)}'}}", null);
@@ -251,6 +251,42 @@ internal static partial class SamplePlanner
 
     private static bool IsInputBox(XElement el) =>
         el.Name.LocalName is "TextBox" or "AutoSuggestBox" or "PasswordBox" or "RichEditBox" or "NumberBox";
+
+    /// <summary>A neutral Segoe Fluent Icons glyph (Page) for icon slots: generated words render as tofu boxes in an icon font.</summary>
+    internal const string SampleGlyph = "\uE7C3";
+
+    /// <summary>
+    /// The sample for an icon slot — <see cref="SampleGlyph"/>, or "" when the icon font is the app's own (its code
+    /// points are unknown) — or null when <paramref name="property"/> of <paramref name="el"/> isn't an icon slot.
+    /// </summary>
+    internal static string? GlyphSample(XElement el, string property)
+    {
+        var font = el.Attribute("FontFamily")?.Value;
+        bool appFont = font is not null && (font.Contains("ms-appx", StringComparison.OrdinalIgnoreCase) ||
+                                            font.Contains(".ttf", StringComparison.OrdinalIgnoreCase) ||
+                                            font.Contains(".otf", StringComparison.OrdinalIgnoreCase));
+        if (property == "Glyph" && IsGlyphElement(el))
+        {
+            return appFont ? "" : SampleGlyph;
+        }
+        if (property is "Text" or "Content" && font is not null &&
+            Regex.IsMatch(font, @"SymbolThemeFontFamily|Segoe Fluent Icons|Segoe MDL2 Assets", RegexOptions.IgnoreCase))
+        {
+            return SampleGlyph;
+        }
+        return null;
+    }
+
+    private static bool IsGlyphElement(XElement el)
+    {
+        if (el.Name.LocalName is "FontIcon" or "FontIconSource")
+        {
+            return true;
+        }
+        var t = XamlCleaner.ResolveElementType(el);
+        return t is not null && (typeof(Microsoft.UI.Xaml.Controls.FontIcon).IsAssignableFrom(t) ||
+                                 typeof(Microsoft.UI.Xaml.Controls.FontIconSource).IsAssignableFrom(t));
+    }
 
     private static bool IsBoolLike(ITypeSymbol t)
     {
@@ -607,7 +643,7 @@ internal static partial class SamplePlanner
     /// <summary>Generated rows for a list of <paramref name="itemType"/>, and the type the filler should build them as.</summary>
     private static List<object> ListRows(Context ctx, XElement list, ITypeSymbol? itemType, string label, out string? typeName)
     {
-        var paths = new Dictionary<string, (ITypeSymbol? type, string name, TargetKind kind, string? owner)>(StringComparer.Ordinal);
+        var paths = new Dictionary<string, (ITypeSymbol? type, string name, TargetKind kind, string? owner, string? glyph)>(StringComparer.Ordinal);
         foreach (var template in TemplatesFor(ctx, list, itemType))
         {
             var scope = TemplateType(ctx, template) ?? itemType;
@@ -644,7 +680,12 @@ internal static partial class SamplePlanner
                     var r = Resolve(ctx, el, scope, false, path);
                     if (RowBindingPath(path, r) is { } rowPath && (kind == TargetKind.Text || r.Type is null || IsBoolLike(r.Type)))
                     {
-                        paths.TryAdd(rowPath, (r.Type, r.Name, kind, r.Owner?.Name));
+                        var glyph = kind == TargetKind.Text ? GlyphSample(el, a.Name.LocalName) : null;
+                        if (glyph is not null && paths.TryGetValue(rowPath, out var seen) && seen.glyph is null)
+                        {
+                            paths[rowPath] = seen with { glyph = glyph }; // an icon slot wins: text in an icon font is tofu
+                        }
+                        paths.TryAdd(rowPath, (r.Type, r.Name, kind, r.Owner?.Name, glyph));
                     }
                 }
             }
@@ -663,7 +704,7 @@ internal static partial class SamplePlanner
             }
 
             var row = new Dictionary<string, object>(StringComparer.Ordinal);
-            foreach (var (path, (type, name, kind, owner)) in paths)
+            foreach (var (path, (type, name, kind, owner, glyph)) in paths)
             {
                 var segs = path.Split('.');
                 var node = row;
@@ -679,7 +720,7 @@ internal static partial class SamplePlanner
                 }
                 if (ok && !node.ContainsKey(segs[^1]))
                 {
-                    node[segs[^1]] = kind == TargetKind.Text ? TextValue(type, name, i, owner) : i % 2 == 0;
+                    node[segs[^1]] = kind == TargetKind.Text ? glyph ?? TextValue(type, name, i, owner) : i % 2 == 0;
                 }
             }
             rows.Add(row);
@@ -705,10 +746,47 @@ internal static partial class SamplePlanner
             itemType = templateType;
         }
         var rows = ListRows(ctx, list, itemType, label, out var typeName);
+        var glyphs = typeName is null ? null : GlyphMembers(list);
         var json = typeName is null
             ? JsonSerializer.Serialize(rows)
-            : JsonSerializer.Serialize(new Dictionary<string, object> { ["type"] = typeName, ["rows"] = rows });
+            : JsonSerializer.Serialize(glyphs is { Count: > 0 }
+                ? new Dictionary<string, object> { ["type"] = typeName, ["rows"] = rows, ["glyphs"] = glyphs }
+                : new Dictionary<string, object> { ["type"] = typeName, ["rows"] = rows });
         return SampleListFiller.TagPrefix + label + "|" + json;
+    }
+
+    /// <summary>
+    /// Members bound to an icon slot anywhere in <paramref name="list"/>'s templates, nested lists included: typed
+    /// rows (<see cref="SampleObjects"/>) fill them with a glyph, since a generated word in an icon font is tofu.
+    /// </summary>
+    private static List<string> GlyphMembers(XElement list)
+    {
+        var names = new List<string>();
+        foreach (var el in list.Descendants())
+        {
+            foreach (var a in el.Attributes())
+            {
+                if (a.IsNamespaceDeclaration || a.Name.Namespace != XNamespace.None || GlyphSample(el, a.Name.LocalName) is null)
+                {
+                    continue;
+                }
+                string? path = null;
+                if (IsXBind(el, a.Value))
+                {
+                    XamlCleaner.TryParseBind(a.Value, out path, out _);
+                }
+                else if (Regex.Match(a.Value, @"^\{\s*Binding\s+(?:Path\s*=\s*)?([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*[,}]") is { Success: true } m)
+                {
+                    path = m.Groups[1].Value;
+                }
+                if (path is not null && Regex.Match(path.Trim(), @"([A-Za-z_]\w*)$") is { Success: true } last &&
+                    !names.Contains(last.Groups[1].Value))
+                {
+                    names.Add(last.Groups[1].Value);
+                }
+            }
+        }
+        return names;
     }
 
     /// <summary>True when <paramref name="type"/> is, derives from, or implements <paramref name="baseType"/>.</summary>
@@ -846,7 +924,9 @@ internal static partial class SamplePlanner
                 {
                     continue; // SetQuery(query) => Box.Text = query: the box starts empty, not with "Query"
                 }
-                string? literal = kind == TargetKind.Text ? EscapeLiteral(TextOf(value, model, target)) : null;
+                string? literal = kind == TargetKind.Text
+                    ? EscapeLiteral(value is not LiteralExpressionSyntax && GlyphSample(el, prop) is { } glyph ? glyph : TextOf(value, model, target))
+                    : null;
 
                 if (kind == TargetKind.Items && el.Attribute("Tag") is null)
                 {

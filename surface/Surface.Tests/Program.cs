@@ -141,6 +141,7 @@ namespace Surface.Tests
             Run("R2 sample data", Rule2SampleData);
             Run("R2 sample data (source-typed)", SampleDataTyped);
             Run("R2 sample data (code-behind is add-only)", SampleDataCodeBehindAddOnly);
+            Run("R2 sample data (icon glyphs)", SampleDataGlyphs);
             Run("R2 sample data (typed objects)", SampleDataObjects);
             Run("R2 sample data (charts)", SampleDataCharts);
             Run("R2 sample data (initial state, functions, list forms)", SampleDataStates);
@@ -619,6 +620,72 @@ namespace Surface.Tests
             Eq("text from code-behind still added", "Overview", Attr(Named(r, "Header"), "Text"));
             Check("text from a conditional branch still added", !string.IsNullOrEmpty(Attr(Named(r, "CodeText"), "Text")), Attr(Named(r, "CodeText"), "Text"));
             Check("ItemsSource from code-behind still filled", (Attr(Named(r, "SampleList"), "Tag") ?? "").StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal), Attr(Named(r, "SampleList"), "Tag"));
+        }
+
+        private static void SampleDataGlyphs()
+        {
+            // AI Dev Gallery shape: icon codes bound to FontIcon.Glyph get a real icon, not a word drawn as tofu boxes.
+            var types = SampleTypeModel.FromSources(
+                "using System.Collections.Generic;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class IconPage {\n" +
+                "  public string Icon { get; set; }\n" +
+                "  public string Label { get; set; }\n" +
+                "  public List<Api> Apis { get; } = new();\n" +
+                "  public IconPage() { CodeIcon.Glyph = Icon; Custom.Glyph = Icon; Literal.Glyph = \"\\uE8A5\"; }\n" +
+                "}\n" +
+                "public class Api { public string IconGlyph { get; set; } public string Name { get; set; } }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<FontIcon x:Name=\"Bound\" Glyph=\"{x:Bind Icon}\" />" +
+                "<FontIcon x:Name=\"CodeIcon\" /><FontIcon x:Name=\"Literal\" />" +
+                "<FontIcon x:Name=\"Custom\" FontFamily=\"ms-appx:///Assets/MyIcons.ttf#MyIcons\" />" +
+                "<TextBlock x:Name=\"SymbolText\" FontFamily=\"{ThemeResource SymbolThemeFontFamily}\" Text=\"{x:Bind Icon}\" />" +
+                "<TextBlock x:Name=\"PlainText\" Text=\"{x:Bind Label}\" />" +
+                "<ListView x:Name=\"ApiList\" ItemsSource=\"{x:Bind Apis}\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Api\"><StackPanel>" +
+                "<FontIcon x:Name=\"RowIcon\" Glyph=\"{x:Bind IconGlyph}\" /><TextBlock Text=\"{x:Bind Name}\" />" +
+                "</StackPanel></DataTemplate></ListView.ItemTemplate></ListView>" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.IconPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+            Eq("bound FontIcon.Glyph -> sample glyph", SamplePlanner.SampleGlyph, Attr(Named(r, "Bound"), "Glyph"));
+            Eq("code-behind Glyph -> sample glyph", SamplePlanner.SampleGlyph, Attr(Named(r, "CodeIcon"), "Glyph"));
+            Eq("code-behind literal glyph kept", "\uE8A5", Attr(Named(r, "Literal"), "Glyph"));
+            Check("app icon font -> left empty", Attr(Named(r, "Custom"), "Glyph") is null or "", Attr(Named(r, "Custom"), "Glyph"));
+            Eq("Text in the symbol font -> sample glyph", SamplePlanner.SampleGlyph, Attr(Named(r, "SymbolText"), "Text"));
+            Check("plain text unaffected", Attr(Named(r, "PlainText"), "Text") is { Length: > 0 } t && t != SamplePlanner.SampleGlyph, Attr(Named(r, "PlainText"), "Text"));
+            Check("row glyph binding falls back to the sample glyph", (Attr(Named(r, "RowIcon"), "Glyph") ?? "").Contains(SamplePlanner.SampleGlyph), Attr(Named(r, "RowIcon"), "Glyph"));
+            var tag = Attr(Named(r, "ApiList"), "Tag") ?? "";
+            Check("row glyphs are the sample glyph", tag.Contains("\"IconGlyph\":\"\\uE7C3\"", StringComparison.OrdinalIgnoreCase) || tag.Contains("\"IconGlyph\":\"" + SamplePlanner.SampleGlyph + "\""), tag);
+            Check("row text still generated", tag.Contains("\"Name\":\"Api 2\"") || tag.Contains("\"Name\":"), tag);
+            Check("GlyphSample: plain TextBlock.Text -> null", SamplePlanner.GlyphSample(new XElement("TextBlock"), "Text") is null);
+
+            // ScenarioOverviewPage shape: the icon is in a list nested in each typed row, which SampleObjects fills.
+            var nestedTypes = SampleTypeModel.FromSources(
+                "using System.Collections.Generic;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class CatPage { public List<Category> Categories { get; } = new(); }\n" +
+                "public class Category { public string Name { get; set; } public List<Scenario> Scenarios { get; set; } }\n" +
+                "public class Scenario { public string Icon { get; set; } public string Name { get; set; } }\n" +
+                "}");
+            var nested = CleanRoot(Doc(
+                "<ItemsControl x:Name=\"Cats\" ItemsSource=\"{x:Bind Categories}\"><ItemsControl.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Category\"><StackPanel><TextBlock Text=\"{x:Bind Name}\" />" +
+                "<ItemsControl ItemsSource=\"{x:Bind Scenarios}\"><ItemsControl.ItemTemplate><DataTemplate x:DataType=\"local:Scenario\">" +
+                "<FontIcon Glyph=\"{x:Bind Icon}\" /></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>" +
+                "</StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>",
+                rootAttrs: "x:Class=\"App1.CatPage\" xmlns:local=\"using:App1\""), sample: true, types: nestedTypes);
+            var catTag = Attr(Named(nested, "Cats"), "Tag") ?? "";
+            Eq("nested icon member travels with the typed marker", "Icon",
+                string.Join(",", SampleListFiller.GlyphMembersOf(catTag[SampleListFiller.TagPrefix.Length..])));
+            using (SampleObjects.GlyphMembers(new[] { "Icon" }))
+            {
+                Eq("typed rows: icon member -> sample glyph", SamplePlanner.SampleGlyph, SampleObjects.ValueFor(typeof(string), "Icon", 1, 1) as string);
+                Check("typed rows: other text unaffected", SampleObjects.ValueFor(typeof(string), "Name", 1, 1) is string s && s != SamplePlanner.SampleGlyph);
+            }
+            Check("glyph scope ends", SampleObjects.ValueFor(typeof(string), "Icon", 1, 1) is string after && after != SamplePlanner.SampleGlyph);
+            Eq("untyped marker: no glyph list", "", string.Join(",", SampleListFiller.GlyphMembersOf("Rows|[\"a\"]")));
         }
 
         private static void SampleDataStates()

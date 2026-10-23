@@ -20,6 +20,25 @@ internal static class SampleObjects
     private const int MaxDepth = 2;
     private const int ListItems = 3;
 
+    [ThreadStatic] private static HashSet<string>? _glyphMembers;
+
+    /// <summary>
+    /// While the returned scope is open, string members named in <paramref name="names"/> (bound to an icon slot
+    /// in the list's templates) get <see cref="SamplePlanner.SampleGlyph"/> instead of a generated word.
+    /// </summary>
+    public static IDisposable GlyphMembers(IEnumerable<string> names)
+    {
+        var previous = _glyphMembers;
+        var set = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+        _glyphMembers = set.Count == 0 ? previous : set;
+        return new Scope(() => _glyphMembers = previous);
+    }
+
+    private sealed class Scope(Action exit) : IDisposable
+    {
+        public void Dispose() => exit();
+    }
+
     /// <summary>Resolves <paramref name="fullName"/> (<c>Ns.Outer+Inner</c>) across the loaded assemblies.</summary>
     public static Type? ResolveType(string fullName)
     {
@@ -198,7 +217,10 @@ internal static class SampleObjects
     internal static object? ValueFor(Type type, string name, int index, int depth, string? owner = null)
     {
         var t = Nullable.GetUnderlyingType(type) ?? type;
-        if (t == typeof(string) || t == typeof(object)) return SamplePlanner.TextByName(name, index, owner);
+        if (t == typeof(string) || t == typeof(object))
+        {
+            return _glyphMembers?.Contains(name) == true ? SamplePlanner.SampleGlyph : SamplePlanner.TextByName(name, index, owner);
+        }
         if (t == typeof(bool)) return index % 2 == 0;
         if (t == typeof(char)) return (char)('A' + index % 26);
         if (t.IsEnum)

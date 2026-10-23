@@ -104,10 +104,12 @@ internal static class SampleListFiller
                 return false; // its {Binding} already reached real rows (a list inside a typed row)
             }
 
+            var payload = label;
             var items = BuildRows(label, rows, out label, out var typeName);
             int typed = 0;
             if (typeName is not null && SampleObjects.ResolveType(typeName) is { } itemType)
             {
+                using var glyphs = SampleObjects.GlyphMembers(GlyphMembersOf(payload));
                 for (int i = 0; i < items.Count; i++)
                 {
                     if (SampleObjects.Create(itemType, items[i] as IReadOnlyDictionary<string, object>, i) is { } obj)
@@ -247,6 +249,29 @@ internal static class SampleListFiller
     /// <see cref="SamplePlanner"/> (objects become dictionaries, so the template's <c>{Binding Name}</c>s read them),
     /// or a bare label repeated. <paramref name="typeName"/> is the item type to build real instances of, if any.
     /// </summary>
+    /// <summary>The <c>"glyphs"</c> member names of a typed marker payload (see <see cref="SamplePlanner"/>), or none.</summary>
+    internal static IReadOnlyList<string> GlyphMembersOf(string payload)
+    {
+        int bar = payload.IndexOf('|');
+        if (bar < 0 || !payload.Contains("\"glyphs\"", StringComparison.Ordinal))
+        {
+            return Array.Empty<string>();
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(payload[(bar + 1)..]);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                doc.RootElement.TryGetProperty("glyphs", out var g) && g.ValueKind == JsonValueKind.Array)
+            {
+                return g.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList();
+            }
+        }
+        catch (JsonException)
+        {
+        }
+        return Array.Empty<string>();
+    }
+
     internal static List<object> BuildRows(string payload, int max, out string label) =>
         BuildRows(payload, max, out label, out _);
 
