@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Win2D ships a native WinRT DLL in the app's output folder that the preview host doesn't bundle. -->
+<Page
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:win2d="using:Microsoft.Graphics.Canvas.UI.Xaml">
+    <StackPanel Padding="16" Spacing="12">
+        <win2d:CanvasControl Width="200" Height="80" ClearColor="SteelBlue" />
+        <TextBlock Text="Rendered with Win2D" />
+    </StackPanel>
+</Page>

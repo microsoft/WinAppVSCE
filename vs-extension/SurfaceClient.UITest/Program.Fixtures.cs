@@ -61,6 +61,13 @@ namespace WinUIXamlPreview.UITest
                 new Expect("0.0.1", "Segmented", "SelectedIndex", "0", sized: true),
                 new Expect("0.0.1.1", "SegmentedItem", "Content", "Week", sized: true, minHeight: 25),
             }),
+            // Win2D's native Microsoft.Graphics.Canvas.dll lives only in the app's output (runtimes\<rid>\native
+            // for this RID-less build); without the host's native resolver, activation fails and the host fail-fasts.
+            ("NativeDependencyPage.xaml", new[]
+            {
+                new Expect("0.0.0", "CanvasControl", sized: true),
+                new Expect("0.0.1", "TextBlock", "Text", "Rendered with Win2D", sized: true),
+            }),
             ("StylingPage.xaml", new[]
             {
                 new Expect("0.0.0", "TextBlock", "Foreground", "#FF7B1FA2", "#FF7B1FA2"),

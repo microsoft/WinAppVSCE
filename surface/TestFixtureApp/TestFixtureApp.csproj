@@ -22,6 +22,8 @@
     <!-- Same version as the toolkit templates harvested into the bundled surface (PreviewHost.csproj). -->
     <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.250402" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Segmented" Version="8.2.250402" />
+    <!-- Native WinRT component (Microsoft.Graphics.Canvas.dll): exercises the host's app-folder native DLL resolver. -->
+    <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.3.2" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\TestFixtureLib\TestFixtureLib.csproj" />

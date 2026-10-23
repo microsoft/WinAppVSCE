@@ -69,6 +69,7 @@ public static class Program
     {
         Boot("Main: enter");
         RegisterVersionAgnosticAssemblyResolver();
+        RegisterAppNativeLibraryResolver();
         UserDllPath = ParseUserDll(args);
         Boot("Main: user-dll = " + (UserDllPath ?? "<default>"));
         UserPriPath = ParseFlag(args, "--user-pri");
@@ -171,6 +172,81 @@ public static class Program
             }
 
             return null;
+        };
+    }
+
+    /// <summary>
+    /// Registers a fallback resolver for <b>native</b> libraries that lets the user app's output folder
+    /// supply DLLs the host does not ship.
+    /// <para>
+    /// Packages such as Win2D (<c>Microsoft.Graphics.Canvas.dll</c>, used by Community Toolkit's
+    /// <c>AttachedCardShadow</c>) are native WinRT components. In an unpackaged process C#/WinRT activates
+    /// them by loading the DLL by name. The host's folder doesn't contain the user app's native
+    /// dependencies, so activation failed with REGDB_E_CLASSNOTREG, and inside a XAML style setter
+    /// WinUI fail-fasts the whole process. The same applies to P/Invokes from user assemblies.
+    /// </para>
+    /// <para>
+    /// <see cref="AssemblyLoadContext.ResolvingUnmanagedDll"/> only fires <i>after</i> normal native
+    /// resolution has failed, so this is purely additive: it never changes a load that already works.
+    /// It only probes the user app's own folder, and only for a bare file name.
+    /// </para>
+    /// </summary>
+    private static void RegisterAppNativeLibraryResolver()
+    {
+        AssemblyLoadContext.Default.ResolvingUnmanagedDll += static (requestingAssembly, libraryName) =>
+        {
+            var userDll = UserDllPath;
+            if (string.IsNullOrEmpty(libraryName) || string.IsNullOrEmpty(userDll))
+            {
+                return IntPtr.Zero;
+            }
+
+            // Only bare names: never let a rooted or relative path escape the app folder.
+            if (!string.Equals(Path.GetFileName(libraryName), libraryName, StringComparison.Ordinal))
+            {
+                return IntPtr.Zero;
+            }
+
+            var appDir = Path.GetDirectoryName(userDll);
+            if (string.IsNullOrEmpty(appDir))
+            {
+                return IntPtr.Zero;
+            }
+
+            var fileName = libraryName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? libraryName : libraryName + ".dll";
+
+            // RID-specific builds copy native assets next to the app DLL; RID-less (portable) builds leave
+            // them under runtimes\<rid>\native.
+            var rid = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
+            {
+                System.Runtime.InteropServices.Architecture.Arm64 => "win-arm64",
+                System.Runtime.InteropServices.Architecture.X86 => "win-x86",
+                _ => "win-x64",
+            };
+            string[] candidates =
+            {
+                Path.Combine(appDir!, fileName),
+                Path.Combine(appDir!, "runtimes", rid, "native", fileName),
+                Path.Combine(appDir!, "runtimes", "win", "native", fileName),
+            };
+
+            foreach (var candidate in candidates)
+            {
+                if (!File.Exists(candidate))
+                {
+                    continue;
+                }
+
+                if (System.Runtime.InteropServices.NativeLibrary.TryLoad(candidate, out var handle))
+                {
+                    Boot($"NativeResolver: app-closure load '{libraryName}' -> '{candidate}' (requested by {requestingAssembly.GetName().Name})");
+                    return handle;
+                }
+
+                Boot($"NativeResolver: app-closure load FAILED '{libraryName}' from '{candidate}'");
+            }
+
+            return IntPtr.Zero;
         };
     }
 
