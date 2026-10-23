@@ -94,3 +94,33 @@ public sealed class TickerControl : Control
 
     public int Ticks { get; private set; }
 }
+
+/// <summary>Like WinUI Gallery's ControlExample: an <c>async void</c> Loaded handler reads a content file shipped
+/// next to the app (CopyToOutputDirectory). The host must stage that file, or the read throws on the UI thread.</summary>
+public sealed class ContentFileReader : ContentControl
+{
+    public ContentFileReader()
+    {
+        Content = "(not loaded)";
+        Loaded += OnLoaded;
+    }
+
+    private async void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        Content = (await System.IO.File.ReadAllTextAsync(
+            System.IO.Path.Combine(AppContext.BaseDirectory, "FixtureContent", "greeting.txt"))).Trim();
+    }
+}
+
+/// <summary>An <c>async void</c> Loaded handler that faults after the page has rendered; nothing in the host's call
+/// stack can catch it, so only the host's Application.UnhandledException net keeps the preview alive.</summary>
+public sealed class AsyncThrowingControl : Control
+{
+    public AsyncThrowingControl() => Loaded += OnLoaded;
+
+    private async void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        await System.Threading.Tasks.Task.Yield();
+        throw new InvalidOperationException("AsyncThrowingControl: background work failed after load.");
+    }
+}

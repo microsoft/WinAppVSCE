@@ -400,6 +400,84 @@ public partial class App : Application, IXamlMetadataProvider
         // provider (this is what a compiler-generated app provider chains to anyway).
         _providers.Add(new Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider());
         Program.Boot("App.ctor: XamlControls provider added");
+
+        UnhandledException += OnUnhandledException;
+    }
+
+    // Directory of the loaded user assembly; frames from assemblies loaded from there (or from memory, see
+    // UserAssemblyLoader) count as app code for OnUnhandledException.
+    private static string? s_userDllDir;
+
+    /// <summary>
+    /// Keeps the preview alive when the previewed app's own code throws on the UI thread outside any render call,
+    /// typically an <c>async void</c> handler or a dispatcher callback (e.g. WinUI Gallery's sample-file loader).
+    /// A compiled app would crash too, but in a designer the page has already rendered and one faulting
+    /// background continuation must not take the host down. Exceptions with no app-code frame are host bugs
+    /// and stay fatal.
+    /// </summary>
+    private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
+    {
+        var ex = e.Exception;
+        var userFrame = ex != null ? FindUserCodeFrame(ex) : null;
+        if (userFrame != null)
+        {
+            e.Handled = true;
+            Log($"WARNING: unhandled exception in app code was contained by the preview host (at {userFrame}): " +
+                DescribeExceptionChain(ex!));
+            return;
+        }
+        Log("FATAL: unhandled exception in the preview host: " +
+            (ex != null ? DescribeExceptionChain(ex) + Environment.NewLine + ex.StackTrace : e.Message));
+    }
+
+    /// <summary>The first stack frame (across inner exceptions) whose method belongs to the user app, or null.</summary>
+    internal static string? FindUserCodeFrame(Exception ex)
+    {
+        var pending = new Stack<Exception>();
+        pending.Push(ex);
+        for (int visited = 0; pending.Count > 0 && visited < 16; visited++)
+        {
+            var current = pending.Pop();
+            foreach (var frame in new System.Diagnostics.StackTrace(current, false).GetFrames())
+            {
+                var method = frame.GetMethod();
+                var type = method?.DeclaringType;
+                if (type != null && IsUserAssembly(type.Assembly))
+                {
+                    return $"{type.FullName}.{method!.Name}";
+                }
+            }
+            if (current is AggregateException agg)
+            {
+                foreach (var inner in agg.InnerExceptions)
+                {
+                    pending.Push(inner);
+                }
+            }
+            else if (current.InnerException != null)
+            {
+                pending.Push(current.InnerException);
+            }
+        }
+        return null;
+    }
+
+    private static bool IsUserAssembly(Assembly asm)
+    {
+        if (asm == typeof(App).Assembly || asm.IsDynamic)
+        {
+            return false;
+        }
+        var location = asm.Location;
+        if (string.IsNullOrEmpty(location))
+        {
+            // UserAssemblyLoader loads user + closure assemblies from memory; the host's own never are.
+            return true;
+        }
+        var dir = s_userDllDir;
+        return dir != null &&
+            location.StartsWith(dir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -615,6 +693,7 @@ public partial class App : Application, IXamlMetadataProvider
         Log($"Loading user assembly: {userAssemblyPath}");
         var assembly = PackagedAppShim.LoadUserAssembly(userAssemblyPath, Log);
         _userAssembly = assembly;
+        s_userDllDir = Path.GetDirectoryName(Path.GetFullPath(userAssemblyPath));
 
         // Enumerate types defensively: a real app references many packages (Win2D, toolkit, …) and
         // GetExportedTypes() throws ReflectionTypeLoadException if any referenced type can't load.
@@ -911,6 +990,129 @@ public partial class App : Application, IXamlMetadataProvider
         if (libCount == 0 && appCount == 0)
         {
             Log($"No loose XAML resource tree at '{srcTree}' and no loose .xbf under '{dllDir}' — nothing to stage.");
+        }
+
+        StageAppContentFiles(dllDir, libCount > 0 ? asmName : null);
+    }
+
+    // Loose content an app reads at runtime relative to its base directory or via ms-appx:/// (sample text,
+    // JSON data, images, fonts). Binaries, satellite resources and media are deliberately excluded.
+    private static readonly HashSet<string> ContentExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".txt", ".json", ".xml", ".md", ".csv", ".html", ".htm", ".css", ".js", ".svg",
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tif", ".tiff",
+        ".ttf", ".otf",
+    };
+
+    private const long MaxContentFileBytes = 16L * 1024 * 1024;
+    private const long MaxContentTotalBytes = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// Stages the app's loose content files (see <see cref="ContentExtensions"/>) into the host base directory,
+    /// preserving relative paths. An unpackaged app resolves both <c>AppContext.BaseDirectory</c>-relative reads
+    /// and <c>ms-appx:///</c> URIs against its own exe folder, which in the preview is the host's run folder; without
+    /// these files, code such as WinUI Gallery's <c>ControlExample</c> (which reads <c>Samples\*.txt</c>) throws.
+    /// Host payload members are never overwritten.
+    /// </summary>
+    private static void StageAppContentFiles(string dllDir, string? stagedLibSubtree)
+    {
+        var baseDir = AppContext.BaseDirectory;
+        var hostOwned = ReadHostPayloadMembers(baseDir);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int skipped = 0;
+        long total = 0;
+        var work = new List<(string Src, string Dest, string Rel)>();
+        foreach (var src in Directory.EnumerateFiles(dllDir, "*", SearchOption.AllDirectories))
+        {
+            if (!ContentExtensions.Contains(Path.GetExtension(src)))
+            {
+                continue;
+            }
+            var rel = Path.GetRelativePath(dllDir, src);
+            var name = Path.GetFileName(rel);
+            if (name.EndsWith(".deps.json", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains(".runtimeconfig.", StringComparison.OrdinalIgnoreCase) ||
+                rel.StartsWith("runtimes" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                (stagedLibSubtree != null &&
+                 rel.StartsWith(stagedLibSubtree + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+            var dest = Path.Combine(baseDir, rel);
+            // Never shadow the host's own files: payload members when a manifest exists, otherwise any
+            // pre-existing file at the base root (a dev host running straight from its build output).
+            if (hostOwned != null
+                    ? hostOwned.Contains(rel)
+                    : (!rel.Contains(Path.DirectorySeparatorChar) && File.Exists(dest)))
+            {
+                continue;
+            }
+            var length = new FileInfo(src).Length;
+            if (length > MaxContentFileBytes || total + length > MaxContentTotalBytes)
+            {
+                skipped++;
+                continue;
+            }
+            total += length;
+            work.Add((src, dest, rel));
+        }
+
+        // Per-file cost is dominated by file creation (AV scanning), not bytes, so copy in parallel:
+        // ~800 WinUI Gallery files take ~0.5 s this way versus ~1.7 s sequentially.
+        foreach (var dir in work.Select(w => Path.GetDirectoryName(w.Dest)!).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            Directory.CreateDirectory(dir);
+        }
+        int count = 0;
+        System.Threading.Tasks.Parallel.ForEach(work,
+            new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 1, 8) },
+            w =>
+            {
+                try
+                {
+                    StageFile(w.Src, w.Dest);
+                    Interlocked.Increment(ref count);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref skipped);
+                    Log($"Content staging skipped '{w.Rel}': {ex.Message}");
+                }
+            });
+        if (count > 0 || skipped > 0)
+        {
+            Log($"Staged {count} app content file(s) ({total / 1024:N0} KB) in {sw.ElapsedMilliseconds} ms" +
+                (skipped > 0 ? $"; skipped {skipped} (size cap {MaxContentFileBytes / (1024 * 1024)} MB/file, " +
+                    $"{MaxContentTotalBytes / (1024 * 1024)} MB total, or copy failure)." : "."));
+        }
+    }
+
+    /// <summary>Relative paths listed in the host's run-copy manifest (<c>.payload.json</c>), or null when absent.</summary>
+    private static HashSet<string>? ReadHostPayloadMembers(string baseDir)
+    {
+        try
+        {
+            var manifest = Path.Combine(baseDir, ".payload.json");
+            if (!File.Exists(manifest))
+            {
+                return null;
+            }
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest));
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".payload.json", ".surface-run" };
+            if (doc.RootElement.TryGetProperty("Files", out var files) &&
+                files.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                foreach (var p in files.EnumerateObject())
+                {
+                    set.Add(p.Name.Replace('/', Path.DirectorySeparatorChar));
+                }
+            }
+            return set;
+        }
+        catch (Exception ex)
+        {
+            Log($"Could not read host payload manifest ({ex.Message}); treating base-root files as host-owned.");
+            return null;
         }
     }
 

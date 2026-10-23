@@ -68,6 +68,14 @@ namespace WinUIXamlPreview.UITest
                 new Expect("0.0.0", "CanvasControl", sized: true),
                 new Expect("0.0.1", "TextBlock", "Text", "Rendered with Win2D", sized: true),
             }),
+            // An async-void Loaded handler reads FixtureContent\greeting.txt from AppContext.BaseDirectory (needs the
+            // host to stage app content files), and another faults after load (the host's UnhandledException net
+            // must contain it; see FixtureLogExpectations).
+            ("ContentAndAsyncFaultPage.xaml", new[]
+            {
+                new Expect("0.0.0", "ContentFileReader", "Content", "Hello from a content file", sized: true),
+                new Expect("0.0.2", "TextBlock", "Text", "Still alive", sized: true),
+            }),
             ("StylingPage.xaml", new[]
             {
                 new Expect("0.0.0", "TextBlock", "Foreground", "#FF7B1FA2", "#FF7B1FA2"),
@@ -122,7 +130,8 @@ namespace WinUIXamlPreview.UITest
                 Console.WriteLine("== " + theme);
                 try
                 {
-                    using var client = new SurfaceClient(surfaceExe, userDll, s => Console.Error.WriteLine("  " + s), appXaml, theme)
+                    var surfaceLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
+                    using var client = new SurfaceClient(surfaceExe, userDll, s => { surfaceLog.Enqueue(s); Console.Error.WriteLine("  " + s); }, appXaml, theme)
                     {
                         SampleData = true, // the VS default
                     };
@@ -153,6 +162,11 @@ namespace WinUIXamlPreview.UITest
                         {
                             await CheckExpect(client, box, name, theme, e, lightValues);
                         }
+
+                        if (FixtureLogExpectations.TryGetValue(file, out var logLine))
+                        {
+                            Check(name + ": host logs '" + logLine + "'", await WaitForLog(surfaceLog, logLine, TimeSpan.FromSeconds(5)));
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -169,6 +183,30 @@ namespace WinUIXamlPreview.UITest
         }
 
         private static bool _hostHasToolkitTemplates = true;
+
+        // Host behaviour that leaves no trace in the visual tree. An unhandled async-void fault does not always kill
+        // the host (WinUI Gallery's ChartPage did; a plain control does not), so assert the safety net saw it.
+        private static readonly Dictionary<string, string> FixtureLogExpectations = new(StringComparer.Ordinal)
+        {
+            ["ContentAndAsyncFaultPage.xaml"] = "contained by the preview host (at TestFixtureApp.Controls.AsyncThrowingControl",
+        };
+
+        private static async Task<bool> WaitForLog(System.Collections.Concurrent.ConcurrentQueue<string> log, string text, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (true)
+            {
+                if (log.Any(l => l.Contains(text)))
+                {
+                    return true;
+                }
+                if (DateTime.UtcNow >= deadline)
+                {
+                    return false;
+                }
+                await Task.Delay(100);
+            }
+        }
 
         /// <summary>
         /// Build-Payload.ps1 bakes PreviewHost's merged pri (with the Toolkit's Themes\Generic.xbf) in as

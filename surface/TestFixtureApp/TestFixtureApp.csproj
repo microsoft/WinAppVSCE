@@ -32,4 +32,8 @@
     <Page Remove="Fixtures\App.xaml" />
     <None Include="Fixtures\App.xaml" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Loose app content read at runtime from the app folder (ContentAndAsyncFaultPage). -->
+    <Content Include="FixtureContent\greeting.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
