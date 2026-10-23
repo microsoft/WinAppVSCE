@@ -165,6 +165,7 @@ namespace WinUIXamlPreview.UITest
                 CheckInput("BEH-0 App.xaml exists", appXaml);
             if (ok)
             {
+                ResetDevHostStaging(surfaceExe, userDll);
                 foreach (var (name, body) in new (string, Func<Session, Task>)[]
                 {
                     ("frame sizing", FrameSizing),

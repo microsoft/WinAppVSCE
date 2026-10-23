@@ -116,6 +116,7 @@ namespace WinUIXamlPreview.UITest
                 return 1;
             }
 
+            ResetDevHostStaging(surfaceExe, userDll);
             _hostHasToolkitTemplates = HostHasToolkitTemplates(surfaceExe);
             if (!_hostHasToolkitTemplates)
             {
@@ -183,6 +184,89 @@ namespace WinUIXamlPreview.UITest
         }
 
         private static bool _hostHasToolkitTemplates = true;
+
+        // Mirrors the host's staged extensions (App.cs StageLooseXamlResources / ContentExtensions).
+        private static readonly HashSet<string> StagedExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".xbf", ".xaml",
+            ".txt", ".json", ".xml", ".md", ".csv", ".html", ".htm", ".css", ".js", ".svg",
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tif", ".tiff",
+            ".ttf", ".otf",
+        };
+
+        /// <summary>
+        /// A dev host (run straight from its build output, no <c>.payload.json</c>) keeps the user files it staged
+        /// into its own folder across runs, so a broken staging step would still pass on the previous run's copies.
+        /// Delete them first. Only files identical to the user's (same size + write time, which the host's copy
+        /// preserves) with a staged extension are removed, so the host's own files are left alone. Payload run
+        /// copies are fresh per launch and are skipped.
+        /// </summary>
+        internal static void ResetDevHostStaging(string surfaceExe, string? userDll)
+        {
+            string hostDir = Path.GetDirectoryName(Path.GetFullPath(surfaceExe))!;
+            if (userDll == null || File.Exists(Path.Combine(hostDir, ".payload.json")))
+            {
+                return;
+            }
+
+            string userDir = Path.GetDirectoryName(userDll)!;
+            if (string.Equals(Path.GetFullPath(userDir).TrimEnd('\\'), hostDir.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            int removed = 0;
+            var touchedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string src in Directory.EnumerateFiles(userDir, "*", SearchOption.AllDirectories))
+            {
+                if (!StagedExtensions.Contains(Path.GetExtension(src)))
+                {
+                    continue;
+                }
+
+                string rel = src.Substring(userDir.TrimEnd('\\').Length + 1);
+                string dest = Path.Combine(hostDir, rel);
+                var s = new FileInfo(src);
+                var d = new FileInfo(dest);
+                if (!d.Exists || d.Length != s.Length || d.LastWriteTimeUtc != s.LastWriteTimeUtc)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    d.Delete();
+                    removed++;
+                    touchedDirs.Add(d.DirectoryName!);
+                }
+                catch (IOException ex)
+                {
+                    Console.WriteLine("WARN  could not remove stale staged file " + dest + ": " + ex.Message);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    Console.WriteLine("WARN  could not remove stale staged file " + dest + ": " + ex.Message);
+                }
+            }
+
+            // Prune directories the cleanup emptied, deepest first, never the host folder itself.
+            foreach (string dir in touchedDirs.OrderByDescending(p => p.Length))
+            {
+                for (string? cur = dir;
+                     cur != null && cur.Length > hostDir.TrimEnd('\\').Length &&
+                     Directory.Exists(cur) && !Directory.EnumerateFileSystemEntries(cur).Any();
+                     cur = Path.GetDirectoryName(cur))
+                {
+                    try { Directory.Delete(cur); } catch (IOException) { break; }
+                }
+            }
+
+            if (removed > 0)
+            {
+                Console.WriteLine($"Dev host: removed {removed} file(s) staged by an earlier run so this run re-stages them.");
+                Console.WriteLine();
+            }
+        }
 
         // Host behaviour that leaves no trace in the visual tree. An unhandled async-void fault does not always kill
         // the host (WinUI Gallery's ChartPage did; a plain control does not), so assert the safety net saw it.
