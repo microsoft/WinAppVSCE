@@ -1150,7 +1150,7 @@ public partial class App : Application, IXamlMetadataProvider
             {
                 // Fail-safe (Layer 1): a chained closure provider that throws on lookup must not PREVENT a
                 // later provider in the chain from resolving the type — so capture the throw and keep going.
-                Log($"LAYER 1: provider {provider.GetType().FullName} threw on GetXamlType(Type '{type?.FullName}'): {ex.GetType().Name}; skipping.");
+                LogProviderThrowOnce(provider, $"GetXamlType(Type '{type?.FullName}')", ex);
                 firstThrow ??= ExceptionDispatchInfo.Capture(ex);
             }
             if (xamlType != null)
@@ -1181,7 +1181,7 @@ public partial class App : Application, IXamlMetadataProvider
             {
                 // Fail-safe (Layer 1): see GetXamlType(Type) — an additive closure provider must never be
                 // able to throw a *resolvable-by-a-later-provider* type off the rails, so keep chaining.
-                Log($"LAYER 1: provider {provider.GetType().FullName} threw on GetXamlType('{fullName}'): {ex.GetType().Name}; skipping.");
+                LogProviderThrowOnce(provider, $"GetXamlType('{fullName}')", ex);
                 firstThrow ??= ExceptionDispatchInfo.Capture(ex);
             }
             if (xamlType != null)
@@ -1209,10 +1209,30 @@ public partial class App : Application, IXamlMetadataProvider
             }
             catch (Exception ex)
             {
-                Log($"LAYER 1: provider {provider.GetType().FullName} threw on GetXmlnsDefinitions: {ex.GetType().Name}; skipping.");
+                LogProviderThrowOnce(provider, "GetXmlnsDefinitions", ex);
             }
         }
         return defs.ToArray();
+    }
+
+    private static readonly HashSet<string> LoggedProviderThrows = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// WinUI repeats the same lookups many times per render, so each failing (provider, lookup) is logged once,
+    /// with the full exception chain (e.g. the newer-SDK type a provider's generated code could not load).
+    /// Only the log is deduplicated; the lookup itself is still attempted every time.
+    /// </summary>
+    private static void LogProviderThrowOnce(object provider, string lookup, Exception ex)
+    {
+        var name = provider.GetType().FullName;
+        lock (LoggedProviderThrows)
+        {
+            if (!LoggedProviderThrows.Add($"{name}|{lookup}"))
+            {
+                return;
+            }
+        }
+        Log($"LAYER 1: provider {name} threw on {lookup}: {DescribeExceptionChain(ex)}; skipping (logged once per lookup).");
     }
 
     internal static void Log(string message)

@@ -145,7 +145,54 @@ internal static class SampleChartFiller
         {
             if (_root.TryGetTarget(out var root))
             {
+                root.Loaded += OnRootLoaded;
+                root.Unloaded += OnRootUnloaded;
+                Subscribe(root);
+            }
+        }
+
+        private bool _subscribed;
+        private bool _unloaded;
+
+        private void Subscribe(FrameworkElement root)
+        {
+            if (!_subscribed)
+            {
+                _subscribed = true;
                 root.LayoutUpdated += OnLayoutUpdated;
+            }
+        }
+
+        private void Unsubscribe(FrameworkElement root)
+        {
+            if (_subscribed)
+            {
+                _subscribed = false;
+                root.LayoutUpdated -= OnLayoutUpdated;
+            }
+        }
+
+        // A replaced page (rehost) unloads but would otherwise keep reacting to every layout pass of the window,
+        // positioning placeholders against a tree that is no longer live. Pause until it is loaded again.
+        private void OnRootUnloaded(object sender, RoutedEventArgs e)
+        {
+            if (_root.TryGetTarget(out var root) && !root.IsLoaded)
+            {
+                _unloaded = true;
+                Unsubscribe(root);
+                foreach (var p in _placeholders)
+                {
+                    p.Hide();
+                }
+            }
+        }
+
+        private void OnRootLoaded(object sender, RoutedEventArgs e)
+        {
+            _unloaded = false;
+            if (_root.TryGetTarget(out var root) && (_passes < MaxLayoutPasses || _placeholders.Count > 0 || _fills.Count > 0))
+            {
+                Subscribe(root);
             }
         }
 
@@ -154,6 +201,10 @@ internal static class SampleChartFiller
             if (!_root.TryGetTarget(out var root))
             {
                 return;
+            }
+            if (_unloaded)
+            {
+                return; // Unloaded normally unsubscribes first; this covers a pass already in flight.
             }
             if (_passes < MaxLayoutPasses)
             {
@@ -171,7 +222,7 @@ internal static class SampleChartFiller
             Maintain(root);
             if (_passes >= MaxLayoutPasses && _placeholders.Count == 0 && _fills.Count == 0)
             {
-                root.LayoutUpdated -= OnLayoutUpdated;
+                Unsubscribe(root);
             }
         }
 
@@ -797,6 +848,8 @@ internal static class SampleChartFiller
             }
             return true;
         }
+
+        public void Hide() => _piece.Visibility = Visibility.Collapsed;
 
         private void Remove()
         {
