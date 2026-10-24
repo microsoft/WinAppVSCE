@@ -784,6 +784,14 @@ namespace Surface.Tests
             Eq("event handler adds are ignored", "", Nodes("Dropped"));
             Eq("data-mode trees are left alone", "", Nodes("Bound"));
             Check("root nodes go in TreeView.RootNodes", Named(r, "TreeA").Elements().Single().Name.LocalName == "TreeView.RootNodes");
+
+            // Nested lists fill the row's own empty collection rather than replacing a realized container's source.
+            var own = new System.Collections.ObjectModel.ObservableCollection<string>();
+            Check("fills an empty compatible collection in place", SampleListFiller.FillInPlace(own, new object[] { "a", "b" }) && own.Count == 2);
+            Check("non-empty collection is left alone", !SampleListFiller.FillInPlace(own, new object[] { "c" }) && own.Count == 2);
+            Check("incompatible items are not added", !SampleListFiller.FillInPlace(new List<int>(), new object[] { "x" }));
+            Check("arrays and null are not filled", !SampleListFiller.FillInPlace(new string[0], new object[] { "x" }) &&
+                !SampleListFiller.FillInPlace(null, new object[] { "x" }));
         }
 
         private static void SampleDataGlyphs()

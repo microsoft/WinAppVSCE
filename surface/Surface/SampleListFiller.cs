@@ -118,6 +118,34 @@ internal static class SampleListFiller
         _ => null,
     };
 
+    /// <summary>Adds <paramref name="items"/> to <paramref name="current"/> when it's an empty, writable list whose
+    /// element type takes every item; false (and untouched) otherwise.</summary>
+    internal static bool FillInPlace(object? current, IReadOnlyList<object> items)
+    {
+        if (current is not System.Collections.IList { IsReadOnly: false, IsFixedSize: false, Count: 0 } target || items.Count == 0)
+        {
+            return false;
+        }
+        var element = current.GetType().GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IList<>))?.GetGenericArguments()[0];
+        if (element is null || items.Any(i => i is null || !element.IsInstanceOfType(i)))
+        {
+            return false;
+        }
+        try
+        {
+            foreach (var item in items)
+            {
+                target.Add(item);
+            }
+        }
+        catch (Exception)
+        {
+            return false; // e.g. a collection view that rejects writes; the caller replaces the source instead
+        }
+        return true;
+    }
+
     private static bool TryFill(FrameworkElement list, string label, int depth)
     {
         try
@@ -164,6 +192,14 @@ internal static class SampleListFiller
             if (list is ItemsControl ic && ic.ItemTemplateSelector is { } selector and not SafeTemplateSelector)
             {
                 ic.ItemTemplateSelector = new SafeTemplateSelector(selector, items.Count > 0 ? items[0] : null);
+            }
+            if (FillInPlace(prop.GetValue(list), items))
+            {
+                // The row's own (bound) collection: replacing a realized container's ItemsSource races controls that
+                // mirror it (TreeView syncs TreeViewItem.ItemsSource into its nodes) and crashed on warm reloads.
+                App.Log($"SAMPLE: filled {list.GetType().Name}'s own collection with {items.Count} placeholder row(s) for {label}" +
+                    (typed > 0 ? $" ({typed} typed {typeName})." : "."));
+                return true;
             }
             prop.SetValue(list, items);
             App.Log($"SAMPLE: filled {list.GetType().Name} with {items.Count} placeholder row(s) for {label}" +
