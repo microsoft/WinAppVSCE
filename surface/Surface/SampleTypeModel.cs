@@ -261,6 +261,50 @@ internal sealed class SampleTypeModel
         }
     }
 
+    /// <summary>
+    /// Every <c>Name.Member.Add(argument)</c> call in the partial class <paramref name="className"/> — e.g.
+    /// <c>tree.RootNodes.Add(folder)</c> — with the enclosing method (null outside one).
+    /// </summary>
+    internal IEnumerable<(string target, string member, ExpressionSyntax argument, BaseMethodDeclarationSyntax? method)>
+        CollectionAdds(string className)
+    {
+        var type = FindType(className);
+        if (type is null)
+        {
+            yield break;
+        }
+
+        foreach (var tree in type.DeclaringSyntaxReferences.Select(r => r.SyntaxTree).Distinct())
+        {
+            foreach (var call in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (call is not
+                    {
+                        Expression: MemberAccessExpressionSyntax
+                        {
+                            Name.Identifier.Text: "Add",
+                            Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: var member } collection,
+                        },
+                        ArgumentList.Arguments: [var arg],
+                    })
+                {
+                    continue;
+                }
+
+                var target = collection.Expression switch
+                {
+                    IdentifierNameSyntax id => id.Identifier.Text,
+                    MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax, Name: var n } => n.Identifier.Text,
+                    _ => null,
+                };
+                if (target is not null)
+                {
+                    yield return (target, member, arg.Expression, call.FirstAncestorOrSelf<BaseMethodDeclarationSyntax>());
+                }
+            }
+        }
+    }
+
     // ---- compilation --------------------------------------------------------------------------------------
 
     private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.Preview);

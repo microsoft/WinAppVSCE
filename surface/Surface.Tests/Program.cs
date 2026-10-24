@@ -143,6 +143,7 @@ namespace Surface.Tests
             Run("R2 sample data (code-behind is add-only)", SampleDataCodeBehindAddOnly);
             Run("R2 sample data (list rows from source initializers)", SampleDataSourceInitializers);
             Run("R2 sample data (image slots)", SampleDataImages);
+            Run("R2 sample data (TreeView nodes from code)", SampleDataTreeNodes);
             Run("R2 sample data (icon glyphs)", SampleDataGlyphs);
             Run("R2 sample data (typed objects)", SampleDataObjects);
             Run("R2 sample data (charts)", SampleDataCharts);
@@ -746,6 +747,43 @@ namespace Surface.Tests
                 (string)d["ImageLocation"] == SampleImage.Uri && (string)d["Source"] == SampleImage.Uri && (string)d["Title"] != SampleImage.Uri, tag);
             Eq("BitmapImage.UriSource is an image slot", SamplePlanner.TargetKind.Image.ToString(),
                 SamplePlanner.TargetKindOf(XElement.Parse("<BitmapImage xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" />"), "UriSource").ToString());
+        }
+
+        private static void SampleDataTreeNodes()
+        {
+            // WinUI Gallery TreeViewPage shape: nodes built in a helper that takes the tree as a parameter.
+            var types = SampleTypeModel.FromSources(
+                "using Microsoft.UI.Xaml.Controls;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class TreePage {\n" +
+                "  public TreePage() { Init(TreeA); Init(TreeB); Direct.RootNodes.Add(new TreeViewNode { Content = Name }); }\n" +
+                "  void Init(TreeView t) {\n" +
+                "    TreeViewNode work = new TreeViewNode() { Content = \"Work\" };\n" +
+                "    work.IsExpanded = true;\n" +
+                "    work.Children.Add(new TreeViewNode() { Content = \"Spec\" });\n" +
+                "    var home = new TreeViewNode { Content = \"Home\", Children = { new TreeViewNode { Content = \"Paint\" } } };\n" +
+                "    t.RootNodes.Add(work); t.RootNodes.Add(home);\n" +
+                "  }\n" +
+                "  void Tree_Drop(object sender, DragEventArgs e) { Dropped.RootNodes.Add(new TreeViewNode { Content = \"x\" }); }\n" +
+                "  void Fill() { Bound.RootNodes.Add(new TreeViewNode { Content = \"y\" }); }\n" +
+                "}\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<TreeView x:Name=\"TreeA\" /><TreeView x:Name=\"TreeB\" /><TreeView x:Name=\"Direct\" />" +
+                "<TreeView x:Name=\"Dropped\" /><TreeView x:Name=\"Bound\" ItemsSource=\"{x:Bind Items}\" />" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.TreePage\""), sample: true, types: types);
+
+            string Nodes(string name) => string.Join("|", Named(r, name).Descendants()
+                .Where(e => e.Name.LocalName == "TreeViewNode")
+                .Select(e => (string?)e.Attribute("Content") + ((string?)e.Attribute("IsExpanded") == "True" ? "+" : "")));
+            Eq("helper parameter -> first caller's tree", "Work+|Spec|Home|Paint", Nodes("TreeA"));
+            Eq("helper parameter -> second caller's tree", "Work+|Spec|Home|Paint", Nodes("TreeB"));
+            Eq("unreadable content -> Item N", "Item 1", Nodes("Direct"));
+            Eq("event handler adds are ignored", "", Nodes("Dropped"));
+            Eq("data-mode trees are left alone", "", Nodes("Bound"));
+            Check("root nodes go in TreeView.RootNodes", Named(r, "TreeA").Elements().Single().Name.LocalName == "TreeView.RootNodes");
         }
 
         private static void SampleDataGlyphs()

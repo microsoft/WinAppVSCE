@@ -26,6 +26,9 @@ internal sealed class SamplePlan
     /// <summary>Attributes to add for values the code-behind assigns to named elements.</summary>
     public List<(XElement element, XName name, string value)> Adds { get; } = new();
 
+    /// <summary>Property elements to append for content the code-behind builds (e.g. <c>&lt;TreeView.RootNodes&gt;</c>).</summary>
+    public List<(XElement parent, XElement child)> Elements { get; } = new();
+
     /// <summary>Chart properties the host restores after load (see <see cref="ChartFixup"/>).</summary>
     public List<ChartFixup> ChartFixups { get; } = new();
 }
@@ -124,6 +127,7 @@ internal static partial class SamplePlanner
             if (model is not null && rootClass is not null)
             {
                 PlanCodeBehind(ctx, rootClass, plan);
+                PlanTreeNodes(ctx, rootClass, plan);
             }
 
             if (model is not null)

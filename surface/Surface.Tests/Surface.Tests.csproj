@@ -35,6 +35,7 @@
     <Compile Include="..\Surface\SamplePlanner.Charts.cs" Link="Production\SamplePlanner.Charts.cs" />
     <Compile Include="..\Surface\SamplePlanner.Initial.cs" Link="Production\SamplePlanner.Initial.cs" />
     <Compile Include="..\Surface\SamplePlanner.Lists.cs" Link="Production\SamplePlanner.Lists.cs" />
+    <Compile Include="..\Surface\SamplePlanner.Trees.cs" Link="Production\SamplePlanner.Trees.cs" />
     <Compile Include="..\Surface\SampleConverters.cs" Link="Production\SampleConverters.cs" />
     <Compile Include="..\Surface\SampleObjects.cs" Link="Production\SampleObjects.cs" />
     <Compile Include="..\Surface\SampleImage.cs" Link="Production\SampleImage.cs" />

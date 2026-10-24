@@ -272,6 +272,13 @@ internal static class XamlCleaner
                         el.SetAttributeValue(name, value);
                     }
                 }
+                foreach (var (parent, child) in samples.Elements)
+                {
+                    if (parent.Document == doc && parent.Element(child.Name) is null)
+                    {
+                        parent.Add(child);
+                    }
+                }
             }
 
             // Rule 8: a Setter whose Value was dropped above (Rule 6/2) is invalid and fails the whole
