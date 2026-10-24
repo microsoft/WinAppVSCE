@@ -462,34 +462,54 @@ internal sealed class SampleTypeModel
 
                 int changed = 0;
                 var present = new HashSet<string>(files, StringComparer.OrdinalIgnoreCase);
+                var removed = new List<SyntaxTree>();
                 foreach (var gone in _files.Keys.Where(k => !present.Contains(k)).ToList())
                 {
-                    compilation = compilation.RemoveSyntaxTrees(_files[gone].tree);
+                    removed.Add(_files[gone].tree);
                     _files.Remove(gone);
                     changed++;
                 }
 
-                foreach (var file in files)
+                // Parse changed files in parallel and update the compilation in one batch: adding trees one at a time
+                // re-derives compilation state per call (AI Dev Gallery: 6 s one by one, ~0.1 s batched).
+                var stale = files
+                    .Select(f => (file: f, stamp: File.GetLastWriteTimeUtc(f)))
+                    .Where(x => !_files.TryGetValue(x.file, out var known) || known.stamp != x.stamp)
+                    .ToList();
+                var parsed = stale.AsParallel().AsOrdered().Select(x =>
                 {
-                    var stamp = File.GetLastWriteTimeUtc(file);
-                    if (_files.TryGetValue(file, out var known) && known.stamp == stamp)
-                    {
-                        continue;
-                    }
-
-                    SyntaxTree tree;
                     try
                     {
-                        tree = CSharpSyntaxTree.ParseText(File.ReadAllText(file), ParseOptions, path: file);
+                        return (x.file, x.stamp, tree: (SyntaxTree?)CSharpSyntaxTree.ParseText(File.ReadAllText(x.file), ParseOptions, path: x.file));
                     }
                     catch (IOException)
                     {
-                        continue; // being written; picked up next time
+                        return (x.file, x.stamp, tree: (SyntaxTree?)null); // being written; picked up next time
                     }
+                }).ToList();
 
-                    compilation = known.tree is null ? compilation.AddSyntaxTrees(tree) : compilation.ReplaceSyntaxTree(known.tree, tree);
+                var added = new List<SyntaxTree>();
+                foreach (var (file, stamp, tree) in parsed)
+                {
+                    if (tree is null)
+                    {
+                        continue;
+                    }
+                    if (_files.TryGetValue(file, out var known))
+                    {
+                        removed.Add(known.tree);
+                    }
+                    added.Add(tree);
                     _files[file] = (stamp, tree);
                     changed++;
+                }
+                if (removed.Count > 0)
+                {
+                    compilation = compilation.RemoveSyntaxTrees(removed);
+                }
+                if (added.Count > 0)
+                {
+                    compilation = compilation.AddSyntaxTrees(added);
                 }
 
                 if (changed == 0 && Last is not null)
