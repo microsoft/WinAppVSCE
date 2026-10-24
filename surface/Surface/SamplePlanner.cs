@@ -66,7 +66,7 @@ internal static partial class SamplePlanner
     };
 
     /// <summary><c>Object</c>: a property typed as one of the app's own classes (a control's <c>Aircraft</c>, <c>Order</c>).</summary>
-    internal enum TargetKind { None, Text, Bool, Number, Visibility, Items, Object }
+    internal enum TargetKind { None, Text, Bool, Number, Visibility, Items, Object, Image }
 
     /// <summary>A resolved binding path: its type (null when unknown) and the member name that labels it.</summary>
     private readonly record struct Resolved(ITypeSymbol? Type, string Name, bool IsFunction, bool IsSimple, bool IsElementRef, ITypeSymbol? Owner = null);
@@ -181,6 +181,17 @@ internal static partial class SamplePlanner
                 return new BindSample($"{{Binding {listPath}}}", marker);
             }
             return new BindSample(null, marker);
+        }
+
+        if (kind == TargetKind.Image)
+        {
+            // Image slots get a local placeholder picture: the app's assets aren't reachable and a word renders nothing.
+            // Inside a template the row's own member is set to it (ListRows), so bind the row.
+            if (template is not null && !r.IsFunction && RowBindingPath(path, r) is { } imagePath)
+            {
+                return new BindSample($"{{Binding {imagePath}}}", null);
+            }
+            return new BindSample(SampleImage.Uri, null);
         }
 
         if (kind == TargetKind.Object)
@@ -606,11 +617,16 @@ internal static partial class SamplePlanner
     private static TargetKind KindOf(Type t, string property)
     {
         t = Nullable.GetUnderlyingType(t) ?? t;
+        if (t == typeof(Uri) && property == "UriSource") return TargetKind.Image; // <BitmapImage UriSource="{x:Bind Photo}" />
         if (t == typeof(string)) return TargetKind.Text;
         if (t == typeof(object)) return TextObjectProperties.Contains(property) ? TargetKind.Text : TargetKind.None;
         if (t == typeof(bool)) return TargetKind.Bool;
         if (t == typeof(double) || t == typeof(float) || t == typeof(int) || t == typeof(long)) return TargetKind.Number;
         if (t.FullName == "Microsoft.UI.Xaml.Visibility") return TargetKind.Visibility;
+        for (var b = t; b is not null; b = b.BaseType)
+        {
+            if (b.FullName == "Microsoft.UI.Xaml.Media.ImageSource") return TargetKind.Image;
+        }
         if ((t.IsClass || t.IsInterface) && !IsPlatformNamespace(t.Namespace)) return TargetKind.Object;
         return TargetKind.None;
     }
@@ -634,6 +650,10 @@ internal static partial class SamplePlanner
                 return TargetKind.Number;
         }
         if (t.Name == "Visibility") return TargetKind.Visibility;
+        for (var b = t; b is not null; b = b.BaseType)
+        {
+            if (b.Name == "ImageSource" && b.ContainingNamespace?.ToDisplayString() == "Microsoft.UI.Xaml.Media") return TargetKind.Image;
+        }
         return t.TypeKind is TypeKind.Class or TypeKind.Interface && t.Locations.Any(l => l.IsInSource)
             ? TargetKind.Object
             : TargetKind.None;
@@ -674,12 +694,12 @@ internal static partial class SamplePlanner
                         continue;
                     }
                     var kind = TargetKindOf(ctx, el, a.Name.LocalName);
-                    if (kind is not (TargetKind.Text or TargetKind.Bool or TargetKind.Visibility))
+                    if (kind is not (TargetKind.Text or TargetKind.Bool or TargetKind.Visibility or TargetKind.Image))
                     {
                         continue;
                     }
                     var r = Resolve(ctx, el, scope, false, path);
-                    if (RowBindingPath(path, r) is { } rowPath && (kind == TargetKind.Text || r.Type is null || IsBoolLike(r.Type)))
+                    if (RowBindingPath(path, r) is { } rowPath && (kind is TargetKind.Text or TargetKind.Image || r.Type is null || IsBoolLike(r.Type)))
                     {
                         var glyph = kind == TargetKind.Text ? GlyphSample(el, a.Name.LocalName) : null;
                         if (glyph is not null && paths.TryGetValue(rowPath, out var seen) && seen.glyph is null)
@@ -722,7 +742,12 @@ internal static partial class SamplePlanner
                 }
                 if (ok && !node.ContainsKey(segs[^1]))
                 {
-                    node[segs[^1]] = kind == TargetKind.Text ? glyph ?? TextValue(type, name, i, owner) : i % 2 == 0;
+                    node[segs[^1]] = kind switch
+                    {
+                        TargetKind.Text => glyph ?? TextValue(type, name, i, owner),
+                        TargetKind.Image => SampleImage.Uri,
+                        _ => i % 2 == 0,
+                    };
                 }
             }
             rows.Add(row);
@@ -920,7 +945,7 @@ internal static partial class SamplePlanner
                 // Visibility/bool/number writes are usually conditional (`else Card.Visibility = Collapsed` when data
                 // is missing), and applying them hides or disables exactly what sample data is meant to show.
                 var kind = TargetKindOf(ctx, el, prop);
-                if (kind is not (TargetKind.Text or TargetKind.Items))
+                if (kind is not (TargetKind.Text or TargetKind.Items or TargetKind.Image))
                 {
                     continue;
                 }
@@ -928,9 +953,12 @@ internal static partial class SamplePlanner
                 {
                     continue; // SetQuery(query) => Box.Text = query: the box starts empty, not with "Query"
                 }
-                string? literal = kind == TargetKind.Text
-                    ? EscapeLiteral(value is not LiteralExpressionSyntax && GlyphSample(el, prop) is { } glyph ? glyph : TextOf(value, model, target))
-                    : null;
+                string? literal = kind switch
+                {
+                    TargetKind.Text => EscapeLiteral(value is not LiteralExpressionSyntax && GlyphSample(el, prop) is { } glyph ? glyph : TextOf(value, model, target)),
+                    TargetKind.Image => SampleImage.Uri, // Img.Source = new BitmapImage(...): the app's picture isn't reachable
+                    _ => null,
+                };
 
                 if (kind == TargetKind.Items && el.Attribute("Tag") is null)
                 {
@@ -1233,7 +1261,7 @@ internal static partial class SamplePlanner
             case "Guid":
                 return $"00000000-0000-0000-0000-{1001 + index:000000000000}";
             case "Uri":
-                return "https://example.com";
+                return SampleImage.IsImageName(name) ? SampleImage.Uri : "https://example.com";
         }
 
         if (type.TypeKind == TypeKind.Enum)
@@ -1281,6 +1309,7 @@ internal static partial class SamplePlanner
         var n = name.ToLowerInvariant();
         string Pick(string[] values) => values[index % values.Length];
         if (name == "__initials") return string.Concat(Pick(People).Split(' ').Select(w => w[0]));
+        if (SampleImage.IsImageName(name)) return SampleImage.Uri;
         if (Regex.IsMatch(n, "(url|uri|link|website|href)$")) return "https://example.com";
         if (n.Contains("email")) return index == 0 ? "name@example.com" : $"name{index + 1}@example.com";
         if (n.Contains("phone")) return $"(555) 010-{100 + index:0000}";

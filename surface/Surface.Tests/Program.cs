@@ -142,6 +142,7 @@ namespace Surface.Tests
             Run("R2 sample data (source-typed)", SampleDataTyped);
             Run("R2 sample data (code-behind is add-only)", SampleDataCodeBehindAddOnly);
             Run("R2 sample data (list rows from source initializers)", SampleDataSourceInitializers);
+            Run("R2 sample data (image slots)", SampleDataImages);
             Run("R2 sample data (icon glyphs)", SampleDataGlyphs);
             Run("R2 sample data (typed objects)", SampleDataObjects);
             Run("R2 sample data (charts)", SampleDataCharts);
@@ -702,6 +703,49 @@ namespace Surface.Tests
             Eq("empty element still gets code-behind Content", "Code label", Attr(Named(r2, "Empty"), "Content"));
             Check("SetsAsElement ignores unrelated property elements",
                 !SamplePlanner.MarkupSetsAsElement(XElement.Parse("<Button><Button.Flyout><Flyout /></Button.Flyout></Button>"), "Content"));
+        }
+
+        private static void SampleDataImages()
+        {
+            Check("image names", SampleImage.IsImageName("ImageLocation") && SampleImage.IsImageName("Thumbnail") &&
+                SampleImage.IsImageName("AvatarUrl") && SampleImage.IsImageName("Photo") && SampleImage.IsImageName("IconPath"));
+            Check("non-image names", !SampleImage.IsImageName("ImageCount") && !SampleImage.IsImageName("ImageName") &&
+                !SampleImage.IsImageName("Icon") && !SampleImage.IsImageName("Website") && !SampleImage.IsImageName("Title"));
+            Check("placeholder is a local file URI", SampleImage.Uri.StartsWith("file:///", StringComparison.Ordinal) &&
+                System.IO.File.Exists(new Uri(SampleImage.Uri).LocalPath), SampleImage.Uri);
+            var png = SampleImage.Png();
+            Check("placeholder is a PNG", png.Length > 100 && png[1] == (byte)'P' && png[2] == (byte)'N' && png[3] == (byte)'G');
+
+            var types = SampleTypeModel.FromSources(
+                "using System.Collections.Generic; using Microsoft.UI.Xaml.Media.Imaging;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class PicPage {\n" +
+                "  public string Hero { get; set; }\n" +
+                "  public List<Item> Items { get; } = new();\n" +
+                "  public PicPage() { CodeImg.Source = new BitmapImage(new System.Uri(\"ms-appx:///Assets/x.png\")); }\n" +
+                "}\n" +
+                "public class Item { public string ImageLocation { get; set; } public string Source { get; set; } public string Title { get; set; } }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<Image x:Name=\"HeroImg\" Source=\"{x:Bind Hero}\" />" +
+                "<Image x:Name=\"CodeImg\" />" +
+                "<ListView x:Name=\"L\" ItemsSource=\"{x:Bind Items}\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Item\"><StackPanel>" +
+                "<Image x:Name=\"RowImg\" Source=\"{x:Bind ImageLocation}\" /><Image x:Name=\"RowSrc\" Source=\"{x:Bind Source}\" />" +
+                "<TextBlock Text=\"{x:Bind Title}\" /></StackPanel></DataTemplate>" +
+                "</ListView.ItemTemplate></ListView>" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.PicPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+            Eq("page Image.Source -> placeholder", SampleImage.Uri, Attr(Named(r, "HeroImg"), "Source"));
+            Eq("code-behind Image.Source -> placeholder", SampleImage.Uri, Attr(Named(r, "CodeImg"), "Source"));
+            Eq("row Image.Source -> row binding", "{Binding ImageLocation}", Attr(Named(r, "RowImg"), "Source"));
+            var tag = Attr(Named(r, "L"), "Tag") ?? "";
+            var rows = SampleListFiller.BuildRows(tag[SampleListFiller.TagPrefix.Length..], 3, out _);
+            Check("row image members hold the placeholder", rows[0] is Dictionary<string, object> d &&
+                (string)d["ImageLocation"] == SampleImage.Uri && (string)d["Source"] == SampleImage.Uri && (string)d["Title"] != SampleImage.Uri, tag);
+            Eq("BitmapImage.UriSource is an image slot", SamplePlanner.TargetKind.Image.ToString(),
+                SamplePlanner.TargetKindOf(XElement.Parse("<BitmapImage xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" />"), "UriSource").ToString());
         }
 
         private static void SampleDataGlyphs()

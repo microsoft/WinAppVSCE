@@ -194,9 +194,22 @@ internal static class SampleObjects
         return row[key] switch
         {
             string s when type == typeof(string) || type == typeof(object) => s,
+            string s when type == typeof(Uri) && System.Uri.TryCreate(s, UriKind.Absolute, out var uri) => uri,
+            string s when IsImageSource(type) && s == SampleImage.Uri => NewBitmap(s),
             IReadOnlyDictionary<string, object> d when !IsPlatform(type) => Create(type, d, index, depth + 1),
             _ => null,
         };
+    }
+
+    /// <summary>True for <c>ImageSource</c> or <c>BitmapSource</c>/<c>BitmapImage</c> — types a <c>BitmapImage</c> can be assigned to.</summary>
+    private static bool IsImageSource(Type t) => t.IsAssignableFrom(typeof(Microsoft.UI.Xaml.Media.Imaging.BitmapImage)) && t != typeof(object) &&
+        !t.IsInterface && t.FullName?.StartsWith("Microsoft.UI.Xaml.Media.", StringComparison.Ordinal) == true;
+
+    private static object? NewBitmap(string uri)
+    {
+        var bitmap = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+        bitmap.UriSource = new Uri(uri);
+        return bitmap;
     }
 
     private static bool IsUnset(object? current, Type type)
@@ -243,7 +256,8 @@ internal static class SampleObjects
         if (t == typeof(TimeSpan)) return new TimeSpan(2 + index, 15 * index % 60, 0);
         if (t == typeof(TimeOnly)) return new TimeOnly(2 + index, 15 * index % 60);
         if (t == typeof(Guid)) return new Guid($"00000000-0000-0000-0000-{1001 + index:000000000000}");
-        if (t == typeof(Uri)) return new Uri("https://example.com");
+        if (t == typeof(Uri)) return new Uri(SampleImage.IsImageName(name) ? SampleImage.Uri : "https://example.com");
+        if (IsImageSource(t)) return NewBitmap(SampleImage.Uri);
 
         if (depth >= MaxDepth)
         {
