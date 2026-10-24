@@ -841,7 +841,8 @@ internal static partial class SamplePlanner
             {
                 var key = m.Groups[1].Value;
                 found.AddRange(ctx.Root.DescendantsAndSelf().Where(e =>
-                    e.Name.LocalName == "DataTemplate" && (string?)e.Attribute(Xaml + "Key") == key));
+                    e.Name.LocalName == "DataTemplate" &&
+                    ((string?)e.Attribute(Xaml + "Key") ?? (string?)e.Attribute(Xaml + "Name")) == key));
             }
         }
 

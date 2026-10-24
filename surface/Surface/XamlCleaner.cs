@@ -222,11 +222,16 @@ internal static class XamlCleaner
             // documented VS design-time behavior. Concrete FRAMEWORK roots (the common case) are untouched.
             TryRebaseNonConstructibleRoot(root);
 
-            // Collect every x:Key defined anywhere in the document (Rule 6 treats these as resolvable).
+            // Collect every x:Key defined anywhere in the document (Rule 6 treats these as resolvable). A
+            // resource entry with only an x:Name is keyed by that name, so it counts too.
             var docKeys = new HashSet<string>(StringComparer.Ordinal);
             foreach (var el in root.DescendantsAndSelf())
             {
                 var key = el.Attribute(Xaml + "Key")?.Value;
+                if (string.IsNullOrEmpty(key) && IsResourceEntry(el))
+                {
+                    key = el.Attribute(Xaml + "Name")?.Value;
+                }
                 if (!string.IsNullOrEmpty(key))
                 {
                     docKeys.Add(key.Trim());

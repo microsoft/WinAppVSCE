@@ -1276,6 +1276,16 @@ namespace Surface.Tests
             Eq("sample on: missing text resource -> {Key} placeholder", "{}{Greeting}", Attr(Named(r2, "T"), "Text"));
             Check("null missing-set tolerated", Attr(Named(CleanRoot(Doc("<Border x:Name=\"B\" Background=\"{StaticResource Z}\" />")), "B"), "Background") is null);
 
+            // A resource entry with only x:Name is keyed by its name (ItemsRepeater pages: <StackLayout x:Name=…>).
+            var missing3 = new HashSet<string>();
+            var rn = CleanRoot(Doc(
+                "<Page.Resources><StackLayout x:Name=\"VStack\" /></Page.Resources>" +
+                "<StackPanel><ItemsRepeater x:Name=\"Rep\" Layout=\"{StaticResource VStack}\" />" +
+                "<Border x:Name=\"NotRes\" /><Border x:Name=\"Ref\" Tag=\"{StaticResource NotRes}\" /></StackPanel>"),
+                missing: missing3);
+            Eq("x:Name-only resource kept", "{StaticResource VStack}", Attr(Named(rn, "Rep"), "Layout"));
+            Check("x:Name of a non-resource element is not a key", Attr(Named(rn, "Ref"), "Tag") is null && missing3.SetEquals(new[] { "NotRes" }), string.Join(",", missing3));
+
             // Rule 8: a Setter left without a value by Rule 6 is dropped (it would fail the whole document).
             var r3 = CleanRoot(Doc(
                 "<Page.Resources><Style x:Key=\"S\" TargetType=\"Button\">" +
