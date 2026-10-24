@@ -36,6 +36,22 @@ internal static class SampleListFiller
     /// <summary>Fill marked lists under <paramref name="root"/> as layout realizes them.</summary>
     public static void Attach(FrameworkElement root)
     {
+        // Fill what's reachable now, before the first measure: a custom layout (an ItemsRepeater's VirtualizingLayout)
+        // often assumes the app's data is there and throws on an empty source — and a throw inside MeasureOverride
+        // terminates the process. Lists inside templates are only realized by layout, so the pass below catches those.
+        try
+        {
+            int pre = FillMarked(root, 0, logical: true);
+            if (pre > 0)
+            {
+                App.Log($"SAMPLE: {pre} list(s) filled before first layout.");
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"SAMPLE: pre-layout list fill failed: {ex.GetType().Name}: {ex.Message}");
+        }
+
         int passes = 0, idle = 0;
         bool anyFilled = false;
         EventHandler<object>? handler = null;
@@ -62,7 +78,7 @@ internal static class SampleListFiller
         root.LayoutUpdated += handler;
     }
 
-    private static int FillMarked(DependencyObject node, int depth)
+    private static int FillMarked(DependencyObject node, int depth, bool logical = false)
     {
         int count = 0;
         if (node is FrameworkElement fe && fe.Tag is string tag && tag.StartsWith(TagPrefix, StringComparison.Ordinal))
@@ -79,11 +95,28 @@ internal static class SampleListFiller
         int n = VisualTreeHelper.GetChildrenCount(node);
         for (int i = 0; i < n; i++)
         {
-            count += FillMarked(VisualTreeHelper.GetChild(node, i), childDepth);
+            count += FillMarked(VisualTreeHelper.GetChild(node, i), childDepth, logical);
+        }
+
+        // Before layout a templated control (ScrollViewer, ContentControl, Expander…) has no visual children yet;
+        // its content is still reachable as a property.
+        if (logical && n == 0 && LogicalContent(node) is { } content)
+        {
+            count += FillMarked(content, childDepth, logical);
         }
 
         return count;
     }
+
+    private static DependencyObject? LogicalContent(DependencyObject node) => node switch
+    {
+        ContentControl cc => cc.Content as DependencyObject,
+        UserControl uc => uc.Content,
+        Border b => b.Child,
+        Viewbox v => v.Child,
+        ContentPresenter cp => cp.Content as DependencyObject,
+        _ => null,
+    };
 
     private static bool TryFill(FrameworkElement list, string label, int depth)
     {
