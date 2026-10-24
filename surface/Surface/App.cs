@@ -422,12 +422,38 @@ public partial class App : Application, IXamlMetadataProvider
         if (userFrame != null)
         {
             e.Handled = true;
+            if (IsLayoutCallback(ex!))
+            {
+                // WinUI fail-fasts on exceptions escaping MeasureOverride/ArrangeOverride even when Handled is set,
+                // so don't claim the preview survived.
+                Log($"ERROR: app layout code threw during measure/arrange (at {userFrame}); WinUI terminates the " +
+                    "process for layout exceptions, so the preview host will close: " + DescribeExceptionChain(ex!));
+                return;
+            }
             Log($"WARNING: unhandled exception in app code was contained by the preview host (at {userFrame}): " +
                 DescribeExceptionChain(ex!));
             return;
         }
         Log("FATAL: unhandled exception in the preview host: " +
             (ex != null ? DescribeExceptionChain(ex) + Environment.NewLine + ex.StackTrace : e.Message));
+    }
+
+    /// <summary>True when any frame (across inner exceptions) is a layout override — MeasureOverride/ArrangeOverride
+    /// on a FrameworkElement or a Layout.</summary>
+    internal static bool IsLayoutCallback(Exception ex)
+    {
+        for (Exception? current = ex; current != null; current = current.InnerException)
+        {
+            foreach (var frame in new System.Diagnostics.StackTrace(current, false).GetFrames())
+            {
+                var name = frame.GetMethod()?.Name;
+                if (name is "MeasureOverride" or "ArrangeOverride")
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /// <summary>The first stack frame (across inner exceptions) whose method belongs to the user app, or null.</summary>
