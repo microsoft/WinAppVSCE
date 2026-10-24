@@ -141,6 +141,7 @@ namespace Surface.Tests
             Run("R2 sample data", Rule2SampleData);
             Run("R2 sample data (source-typed)", SampleDataTyped);
             Run("R2 sample data (code-behind is add-only)", SampleDataCodeBehindAddOnly);
+            Run("R2 sample data (list rows from source initializers)", SampleDataSourceInitializers);
             Run("R2 sample data (icon glyphs)", SampleDataGlyphs);
             Run("R2 sample data (typed objects)", SampleDataObjects);
             Run("R2 sample data (charts)", SampleDataCharts);
@@ -579,6 +580,59 @@ namespace Surface.Tests
             Check("filler rows are dictionaries capped to max", rows.Count == 2 && rows[0] is Dictionary<string, object> d && d.ContainsKey("Customer"));
             var plain = SampleListFiller.BuildRows("Items", 3, out label);
             Check("bare label -> repeated strings", plain.Count == 3 && (string)plain[0] == "Items" && label == "Items");
+            Check("top level: planner row count kept, no padding", SampleListFiller.BuildRows("L|[1,2]", 50, out _, out _, padOnlyWhenEmpty: 3).Count == 2);
+            Check("top level: bare label still padded", SampleListFiller.BuildRows("L", 50, out _, out _, padOnlyWhenEmpty: 3).Count == 3);
+        }
+
+        private static void SampleDataSourceInitializers()
+        {
+            var types = SampleTypeModel.FromSources(
+                "using System.Linq; using System.Collections.Generic; using System.Collections.ObjectModel;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class RepPage {\n" +
+                "  public ObservableCollection<int> RangeInts { get; } = new ObservableCollection<int>(Enumerable.Range(0, 500));\n" +
+                "  public List<string> Words { get; } = new() { \"alpha\", \"beta\", \"gamma\", \"delta\", \"epsilon\" };\n" +
+                "  public IReadOnlyList<int> Few { get; } = Enumerable.Range(1, 2).ToList();\n" +
+                "  public int[] Arr { get; } = { 7, 8, 9, 10 };\n" +
+                "  public List<Person> People { get; } = new() { new Person(), new Person() };\n" +
+                "  public ObservableCollection<Person> Empty { get; } = new();\n" +
+                "  private readonly List<string> _coded = new() { \"x\", \"y\" };\n" +
+                "  public RepPage() { CodeList.ItemsSource = _coded; }\n" +
+                "}\n" +
+                "public class Person { public string Name { get; set; } }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<ItemsRepeater x:Name=\"Range\" ItemsSource=\"{x:Bind RangeInts}\" />" +
+                "<ListView x:Name=\"Words\" ItemsSource=\"{x:Bind Words}\" />" +
+                "<ListView x:Name=\"Few\" ItemsSource=\"{x:Bind Few}\" />" +
+                "<ListView x:Name=\"Arr\" ItemsSource=\"{x:Bind Arr}\" />" +
+                "<ListView x:Name=\"People\" ItemsSource=\"{x:Bind People}\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Person\"><TextBlock Text=\"{x:Bind Name}\" /></DataTemplate>" +
+                "</ListView.ItemTemplate></ListView>" +
+                "<ListView x:Name=\"Empty\" ItemsSource=\"{x:Bind Empty}\" />" +
+                "<ListView x:Name=\"CodeList\" />" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.RepPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+            int RowCount(string name, out List<object> rows)
+            {
+                var tag = Attr(Named(r, name), "Tag") ?? "";
+                rows = tag.StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal)
+                    ? SampleListFiller.BuildRows(tag[SampleListFiller.TagPrefix.Length..], SamplePlanner.MaxListRows, out _, out _, padOnlyWhenEmpty: 3)
+                    : new List<object>();
+                return rows.Count;
+            }
+            Eq("Enumerable.Range(0, 500) -> capped rows", SamplePlanner.MaxListRows.ToString(), RowCount("Range", out var range).ToString());
+            Check("range rows are the range values", range.Count > 1 && Equals(range[0], 0d) && Equals(range[1], 1d), string.Join(",", range));
+            Eq("5 literal strings -> 5 rows", "5", RowCount("Words", out var words).ToString());
+            Check("literal strings kept", words.Count == 5 && (string)words[0] == "alpha" && (string)words[4] == "epsilon", string.Join(",", words));
+            Eq("Range(1, 2).ToList() -> 2 rows", "2", RowCount("Few", out _).ToString());
+            Eq("array initializer -> 4 rows", "4", RowCount("Arr", out var arr).ToString());
+            Check("array values kept", Equals(arr[0], 7d), string.Join(",", arr));
+            Eq("object initializer -> its count", "2", RowCount("People", out _).ToString());
+            Eq("empty new() -> generated rows", SamplePlanner.Rows.ToString(), RowCount("Empty", out _).ToString());
+            Eq("code-behind field initializer -> its rows", "2", RowCount("CodeList", out var coded).ToString());
+            Check("code-behind field values kept", coded.Count == 2 && (string)coded[0] == "x", string.Join(",", coded));
         }
 
         private static void SampleDataCodeBehindAddOnly()

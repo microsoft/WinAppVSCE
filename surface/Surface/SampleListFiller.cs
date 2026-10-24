@@ -68,7 +68,7 @@ internal static class SampleListFiller
         if (node is FrameworkElement fe && fe.Tag is string tag && tag.StartsWith(TagPrefix, StringComparison.Ordinal))
         {
             fe.ClearValue(FrameworkElement.TagProperty);
-            if (depth < RowsByDepth.Length && TryFill(fe, tag.Substring(TagPrefix.Length), RowsByDepth[depth]))
+            if (depth < RowsByDepth.Length && TryFill(fe, tag.Substring(TagPrefix.Length), depth))
             {
                 Filled.AddOrUpdate(fe, null!);
                 count++;
@@ -85,7 +85,7 @@ internal static class SampleListFiller
         return count;
     }
 
-    private static bool TryFill(FrameworkElement list, string label, int rows)
+    private static bool TryFill(FrameworkElement list, string label, int depth)
     {
         try
         {
@@ -105,13 +105,21 @@ internal static class SampleListFiller
             }
 
             var payload = label;
-            var items = BuildRows(label, rows, out label, out var typeName);
+            // Top-level lists take as many rows as the planner built (a source initializer's count); nested lists
+            // shrink with depth so a tree of lists stays small.
+            var items = depth == 0
+                ? BuildRows(label, SamplePlanner.MaxListRows, out label, out var typeName, padOnlyWhenEmpty: RowsByDepth[0])
+                : BuildRows(label, RowsByDepth[depth], out label, out typeName);
             int typed = 0;
             if (typeName is not null && SampleObjects.ResolveType(typeName) is { } itemType)
             {
                 using var glyphs = SampleObjects.GlyphMembers(GlyphMembersOf(payload));
                 for (int i = 0; i < items.Count; i++)
                 {
+                    if (items[i] is double or bool)
+                    {
+                        continue; // a literal value from the source initializer
+                    }
                     if (SampleObjects.Create(itemType, items[i] as IReadOnlyDictionary<string, object>, i) is { } obj)
                     {
                         items[i] = obj;
@@ -125,7 +133,7 @@ internal static class SampleListFiller
                 ic.ItemTemplateSelector = new SafeTemplateSelector(selector, items.Count > 0 ? items[0] : null);
             }
             prop.SetValue(list, items);
-            App.Log($"SAMPLE: filled {list.GetType().Name} with {rows} placeholder row(s) for {label}" +
+            App.Log($"SAMPLE: filled {list.GetType().Name} with {items.Count} placeholder row(s) for {label}" +
                 (typed > 0 ? $" ({typed} typed {typeName})." : "."));
             return true;
         }
@@ -275,7 +283,7 @@ internal static class SampleListFiller
     internal static List<object> BuildRows(string payload, int max, out string label) =>
         BuildRows(payload, max, out label, out _);
 
-    internal static List<object> BuildRows(string payload, int max, out string label, out string? typeName)
+    internal static List<object> BuildRows(string payload, int max, out string label, out string? typeName, int? padOnlyWhenEmpty = null)
     {
         int bar = payload.IndexOf('|');
         label = bar < 0 ? payload : payload[..bar];
@@ -316,7 +324,8 @@ internal static class SampleListFiller
             }
         }
 
-        while (items.Count < max)
+        int pad = padOnlyWhenEmpty is { } p ? (items.Count == 0 ? Math.Min(p, max) : 0) : max;
+        while (items.Count < pad)
         {
             items.Add(label);
         }

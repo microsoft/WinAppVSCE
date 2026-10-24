@@ -380,6 +380,7 @@ internal static partial class SamplePlanner
                 c.Elements.Cast<ExpressionElementSyntax>().Select(e => e.Expression),
             ArrayCreationExpressionSyntax ac => ac.Initializer?.Expressions,
             ImplicitArrayCreationExpressionSyntax ia => ia.Initializer.Expressions,
+            InitializerExpressionSyntax ai when ai.IsKind(SyntaxKind.ArrayInitializerExpression) => ai.Expressions, // int[] X = { 1, 2 }
             BaseObjectCreationExpressionSyntax oc when oc.Initializer is { } init &&
                 init.IsKind(SyntaxKind.CollectionInitializerExpression) => init.Expressions,
             _ => null,

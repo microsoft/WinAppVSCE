@@ -172,7 +172,8 @@ internal static partial class SamplePlanner
                 return drop;
             }
             var itemType = r.Type is null ? null : SampleTypeModel.ElementType(r.Type);
-            var marker = ListMarker(ctx, el, itemType, r.Name);
+            var marker = ListMarker(ctx, el, itemType, r.Name,
+                r.IsSimple && !r.IsFunction ? SourceRowsOf(SourceInitializer(r.Owner, r.Name)) : null);
             if (template is not null && !r.IsFunction && RowBindingPath(path, r) is { } listPath)
             {
                 // A list inside a row: the row is a real object (SampleObjects fills its collections), so bind its
@@ -641,7 +642,7 @@ internal static partial class SamplePlanner
     // ---- lists --------------------------------------------------------------------------------------------
 
     /// <summary>Generated rows for a list of <paramref name="itemType"/>, and the type the filler should build them as.</summary>
-    private static List<object> ListRows(Context ctx, XElement list, ITypeSymbol? itemType, string label, out string? typeName)
+    private static List<object> ListRows(Context ctx, XElement list, ITypeSymbol? itemType, string label, out string? typeName, SourceRows? source = null)
     {
         var paths = new Dictionary<string, (ITypeSymbol? type, string name, TargetKind kind, string? owner, string? glyph)>(StringComparer.Ordinal);
         foreach (var template in TemplatesFor(ctx, list, itemType))
@@ -691,15 +692,16 @@ internal static partial class SamplePlanner
             }
         }
 
-        var rows = new List<object>(Rows);
+        int count = source?.Count ?? Rows;
+        var rows = new List<object>(count);
         var rowName = itemType is null || itemType.SpecialType != SpecialType.None || !itemType.Locations.Any(l => l.IsInSource)
             ? Singular(label) // a list of strings or numbers: name its rows after the list ("Tag", "Tag 2")
             : itemType.Name;
-        for (int i = 0; i < Rows; i++)
+        for (int i = 0; i < count; i++)
         {
             if (paths.Count == 0)
             {
-                rows.Add(TextValue(itemType, rowName, i));
+                rows.Add(source?.Values is { } values && i < values.Count ? values[i] : TextValue(itemType, rowName, i));
                 continue;
             }
 
@@ -736,7 +738,7 @@ internal static partial class SamplePlanner
     }
 
     /// <summary><c>__wxp-sample:{label}|{rows JSON}</c> for a list of <paramref name="itemType"/>.</summary>
-    private static string ListMarker(Context ctx, XElement list, ITypeSymbol? itemType, string label)
+    private static string ListMarker(Context ctx, XElement list, ITypeSymbol? itemType, string label, SourceRows? source = null)
     {
         // The template's x:DataType is what the rows are rendered as; when it is unrelated to the source's element
         // type (a same-named class in another namespace), build rows the template can actually bind.
@@ -745,7 +747,7 @@ internal static partial class SamplePlanner
         {
             itemType = templateType;
         }
-        var rows = ListRows(ctx, list, itemType, label, out var typeName);
+        var rows = ListRows(ctx, list, itemType, label, out var typeName, source);
         var glyphs = typeName is null ? null : GlyphMembers(list);
         var json = typeName is null
             ? JsonSerializer.Serialize(rows)
@@ -937,7 +939,12 @@ internal static partial class SamplePlanner
                         ?? TemplateItemType(ctx, el);
                     if (itemType is not null)
                     {
-                        plan.Adds.Add((el, "Tag", ListMarker(ctx, el, itemType, LastName(value) ?? target)));
+                        var init = value is IdentifierNameSyntax or MemberAccessExpressionSyntax
+                            ? model.GetSymbolInfo(value).Symbol is (IPropertySymbol or IFieldSymbol) and { ContainingType: { } owner } member
+                                ? SourceInitializer(owner, member.Name)
+                                : null
+                            : value;
+                        plan.Adds.Add((el, "Tag", ListMarker(ctx, el, itemType, LastName(value) ?? target, SourceRowsOf(init))));
                     }
                     continue;
                 }
