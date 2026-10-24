@@ -620,6 +620,34 @@ namespace Surface.Tests
             Eq("text from code-behind still added", "Overview", Attr(Named(r, "Header"), "Text"));
             Check("text from a conditional branch still added", !string.IsNullOrEmpty(Attr(Named(r, "CodeText"), "Text")), Attr(Named(r, "CodeText"), "Text"));
             Check("ItemsSource from code-behind still filled", (Attr(Named(r, "SampleList"), "Tag") ?? "").StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal), Attr(Named(r, "SampleList"), "Tag"));
+
+            // WinUI Gallery SampleCodePresenter shape: code-behind sets Content on elements whose markup already
+            // supplies it as a child, a property element, or text. Adding Content="…" too fails Load.
+            var types2 = SampleTypeModel.FromSources(
+                "namespace App1 {\n" +
+                "public sealed partial class ContentPage {\n" +
+                "  public ContentPage() {\n" +
+                "    Sv.Content = \"from code\"; Pe.Content = \"from code\"; Tx.Content = \"from code\";\n" +
+                "    Bd.Child = null; Run1.Text = \"from code\"; Empty.Content = \"Code label\";\n" +
+                "  }\n" +
+                "}\n" +
+                "}");
+            var r2 = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<ScrollViewer x:Name=\"Sv\"><ContentPresenter /></ScrollViewer>" +
+                "<Button x:Name=\"Pe\"><Button.Content><TextBlock Text=\"a\" /></Button.Content></Button>" +
+                "<Button x:Name=\"Tx\">literal</Button>" +
+                "<TextBlock><Run x:Name=\"Run1\">authored</Run></TextBlock>" +
+                "<Button x:Name=\"Empty\" />" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.ContentPage\""), sample: true, types: types2);
+            Check("child content -> no Content attr", Attr(Named(r2, "Sv"), "Content") is null, Attr(Named(r2, "Sv"), "Content"));
+            Check("property element -> no Content attr", Attr(Named(r2, "Pe"), "Content") is null, Attr(Named(r2, "Pe"), "Content"));
+            Check("text content -> no Content attr", Attr(Named(r2, "Tx"), "Content") is null, Attr(Named(r2, "Tx"), "Content"));
+            Check("Run text content -> no Text attr", Attr(Named(r2, "Run1"), "Text") is null, Attr(Named(r2, "Run1"), "Text"));
+            Eq("empty element still gets code-behind Content", "Code label", Attr(Named(r2, "Empty"), "Content"));
+            Check("SetsAsElement ignores unrelated property elements",
+                !SamplePlanner.MarkupSetsAsElement(XElement.Parse("<Button><Button.Flyout><Flyout /></Button.Flyout></Button>"), "Content"));
         }
 
         private static void SampleDataGlyphs()

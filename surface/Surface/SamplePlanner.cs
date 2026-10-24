@@ -907,7 +907,8 @@ internal static partial class SamplePlanner
             try
             {
                 if (!ctx.Named.TryGetValue(target, out var el) || IsEventHandlerCode(value, method) ||
-                    el.Attribute(prop) is not null || el.Attribute(Design + prop) is not null || !done.Add((el, prop)))
+                    el.Attribute(prop) is not null || el.Attribute(Design + prop) is not null ||
+                    MarkupSetsAsElement(el, prop) || !done.Add((el, prop)))
                 {
                     continue;
                 }
@@ -950,6 +951,40 @@ internal static partial class SamplePlanner
                 App.Log($"SAMPLE: code-behind {target}.{prop}: {ex.GetType().Name}: {ex.Message}");
             }
         }
+    }
+
+    // Members a XAML element's implicit (child) content commonly lands in.
+    private static readonly HashSet<string> ImplicitContentMembers = new(StringComparer.Ordinal) { "Content", "Child", "Text" };
+
+    /// <summary>
+    /// True when markup already sets <paramref name="prop"/> without an attribute: a <c>&lt;Type.Prop&gt;</c> property
+    /// element, or — for a content-like member — child elements or text. Adding the attribute too fails Load with
+    /// "property is set more than once".
+    /// </summary>
+    internal static bool MarkupSetsAsElement(XElement el, string prop)
+    {
+        string suffix = "." + prop;
+        bool hasImplicit = false;
+        foreach (var child in el.Elements())
+        {
+            if (child.Name.LocalName.Contains('.'))
+            {
+                if (child.Name.LocalName.EndsWith(suffix, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                hasImplicit = true;
+            }
+        }
+
+        if (!ImplicitContentMembers.Contains(prop))
+        {
+            return false;
+        }
+        return hasImplicit || el.Nodes().OfType<XText>().Any(t => !string.IsNullOrWhiteSpace(t.Value));
     }
 
     /// <summary>
