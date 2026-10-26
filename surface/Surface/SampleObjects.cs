@@ -10,7 +10,7 @@ namespace Surface;
 
 /// <summary>
 /// Real instances of the app's own types for sample-data rows, when the app is built and its assembly is loaded.
-/// A control that takes a whole object (<c>&lt;local:FleetTile Aircraft="{x:Bind}"/&gt;</c>) and fills itself in
+/// A control that takes a whole object (<c>&lt;local:OrderTile Order="{x:Bind}"/&gt;</c>) and fills itself in
 /// code needs an instance of that type; a dictionary row can't bind to it. Every value is generated (from the
 /// member's type and name, the same rules <see cref="SamplePlanner"/> uses for text); the app's data is never read.
 /// Constructing runs the type's constructor and setters, as <c>d:DesignInstance</c> does. Never throws.

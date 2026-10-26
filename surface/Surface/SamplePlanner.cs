@@ -68,7 +68,7 @@ internal static partial class SamplePlanner
         "Format", "ToString", "Convert", "Display", "Show", "Hide", "Text", "Str", "ToText", "Visible", "Collapsed",
     };
 
-    /// <summary><c>Object</c>: a property typed as one of the app's own classes (a control's <c>Aircraft</c>, <c>Order</c>).</summary>
+    /// <summary><c>Object</c>: a property typed as one of the app's own classes (a control's <c>Customer</c>, <c>Order</c>).</summary>
     internal enum TargetKind { None, Text, Bool, Number, Visibility, Items, Object, Image }
 
     /// <summary>A resolved binding path: its type (null when unknown) and the member name that labels it.</summary>
@@ -1298,10 +1298,10 @@ internal static partial class SamplePlanner
     private static readonly string[] Companies = { "Contoso", "Fabrikam", "Northwind Traders", "Adventure Works" };
     private static readonly string[] Statuses = { "Active", "Pending", "Done", "On hold" };
     private static readonly string[] Sentences =
-        { "Needs a quick review before Friday.", "Waiting on parts from the supplier.", "Ready for sign-off.", "Follow up next week." };
+        { "Needs a quick review before Friday.", "Waiting on feedback from the team.", "Ready for sign-off.", "Follow up next week." };
 
     private const string PersonWords =
-        "person|people|customer|client|employee|user|contact|member|author|technician|pilot|owner|assignee|staff|student|" +
+        "person|people|customer|client|employee|user|contact|member|author|technician|owner|assignee|staff|student|" +
         "teacher|patient|driver|mechanic|engineer|agent|manager|reviewer|requester|requestor|creator|inspector|lead|signer";
 
     /// <summary>
@@ -1333,9 +1333,9 @@ internal static partial class SamplePlanner
         if (Regex.IsMatch(n, "(company|organization|organisation|vendor|supplier|publisher|manufacturer)(name)?$")) return Pick(Companies);
         if (Regex.IsMatch(n, "(status|state)(text|label)?$")) return Pick(Statuses);
         if (Regex.IsMatch(n, "(description|notes?|summary|comments?|details|remarks|body|message)$")) return Pick(Sentences);
-        if (Regex.IsMatch(name, "(Number|No|Code|Sku|SKU|Serial|Ref|Reference|Tail|Registration)$"))
+        if (Regex.IsMatch(name, "(Number|No|Code|Sku|SKU|        Serial|Ref|Reference)$"))
         {
-            // An identifier: initials and a number ("TailNumber" -> "TN-1042").
+                    // An identifier: initials and a number ("OrderNumber" -> "ON-1042").
             var initials = string.Concat(Regex.Matches(Humanize(name), @"\b\w").Select(m => char.ToUpperInvariant(m.Value[0])));
             return $"{initials}-{1001 + 41 * index}";
         }
@@ -1433,7 +1433,7 @@ internal static partial class SamplePlanner
             SpecialType.System_Single or SpecialType.System_Decimal or SpecialType.System_Int16;
     }
 
-    /// <summary><c>TailNumber</c> → <c>Tail number</c>; <c>_count</c> → <c>Count</c>.</summary>
+    /// <summary><c>OrderNumber</c> → <c>Order number</c>; <c>_count</c> → <c>Count</c>.</summary>
     internal static string Humanize(string name)
     {
         var n = name.TrimStart('_');

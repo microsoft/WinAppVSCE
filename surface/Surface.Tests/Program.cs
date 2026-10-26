@@ -40,24 +40,24 @@ namespace Surface.Tests.Fixtures
     }
 
     // SampleObjects fixtures: app-style models built by reflection.
-    public enum FlightState { Healthy, Attention, Maintenance }
+    public enum AssetState { Healthy, Attention, Blocked }
 
-    public class Plane
+    public class Asset
     {
-        public string Tail { get; init; } = string.Empty;
-        public int Cycles { get; init; }
-        public string NextCheck { get; init; } = "A-check";
-        public FlightState State { get; set; }
+        public string Code { get; init; } = string.Empty;
+        public int Uses { get; init; }
+        public string Tier { get; init; } = "Standard";
+        public AssetState State { get; set; }
         public DateTime LastSeen { get; set; }
-        public Engine? Engine { get; set; }
+        public Part? Part { get; set; }
         public List<string> Notes { get; set; } = null!;
-        public System.Collections.ObjectModel.ObservableCollection<Engine> Spares { get; } = new();
-        public bool IsHero => Tail == "X";
+        public System.Collections.ObjectModel.ObservableCollection<Part> Spares { get; } = new();
+        public bool IsHero => Code == "X";
     }
 
-    public class Engine
+    public class Part
     {
-        public Engine(string serial, double hours) { Serial = serial; Hours = hours; }
+        public Part(string serial, double hours) { Serial = serial; Hours = hours; }
         public string Serial { get; }
         public double Hours { get; }
     }
@@ -1246,17 +1246,17 @@ namespace Surface.Tests
             Check("typed payload parses", label == "Orders" && typeName == "App1.Order" && rows.Count == 3, $"{label} {typeName} {rows.Count}");
             Eq("nested type reflection name", "App1.Outer+Inner", SamplePlanner.ReflectionName(types.FindType("App1.Outer.Inner")!));
 
-            Check("resolve type across loaded assemblies", SampleObjects.ResolveType(typeof(Fixtures.Plane).FullName!) == typeof(Fixtures.Plane));
-            var row = new Dictionary<string, object> { ["Tail"] = "N123AB" };
-            var planes = Enumerable.Range(0, 3).Select(i => SampleObjects.Create(typeof(Fixtures.Plane), i == 0 ? row : null, i) as Fixtures.Plane).ToList();
-            var p0 = planes[0]!;
-            Eq("row string wins", "N123AB", p0.Tail);
-            Eq("generated identifier by name", "T-1042", planes[1]!.Tail);
-            Check("init int generated", p0.Cycles > 0, p0.Cycles.ToString());
-            Eq("type's own default kept", "A-check", p0.NextCheck);
-            Check("enum varies by row", p0.State == Fixtures.FlightState.Healthy && planes[1]!.State == Fixtures.FlightState.Attention, $"{p0.State} {planes[1]!.State}");
+            Check("resolve type across loaded assemblies", SampleObjects.ResolveType(typeof(Fixtures.Asset).FullName!) == typeof(Fixtures.Asset));
+            var row = new Dictionary<string, object> { ["Code"] = "AB-123" };
+            var assets = Enumerable.Range(0, 3).Select(i => SampleObjects.Create(typeof(Fixtures.Asset), i == 0 ? row : null, i) as Fixtures.Asset).ToList();
+            var p0 = assets[0]!;
+            Eq("row string wins", "AB-123", p0.Code);
+            Eq("generated identifier by name", "C-1042", assets[1]!.Code);
+            Check("init int generated", p0.Uses > 0, p0.Uses.ToString());
+            Eq("type's own default kept", "Standard", p0.Tier);
+            Check("enum varies by row", p0.State == Fixtures.AssetState.Healthy && assets[1]!.State == Fixtures.AssetState.Attention, $"{p0.State} {assets[1]!.State}");
             Check("DateTime generated", p0.LastSeen != default, p0.LastSeen.ToString("o"));
-            Check("nested object via parameterized ctor", p0.Engine is { Serial: "Serial", Hours: > 0 }, p0.Engine?.Serial);
+            Check("nested object via parameterized ctor", p0.Part is { Serial: "Serial", Hours: > 0 }, p0.Part?.Serial);
             Check("list property generated", p0.Notes is { Count: 3 } && p0.Notes[0].Length > 0 && p0.Notes[0] != p0.Notes[1], string.Join(",", p0.Notes ?? new()));
             Check("get-only collection filled", p0.Spares.Count == 3);
             Check("throwing ctor -> null, no throw", SampleObjects.Create(typeof(Fixtures.Exploding), null, 0) is null);

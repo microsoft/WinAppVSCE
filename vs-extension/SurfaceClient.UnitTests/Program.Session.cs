@@ -330,7 +330,7 @@ internal static partial class Program
 
         // ---- unbuilt-project build hint ----
         var someKeys = new[] { "PillCornerRadius", "AccentBrush" };
-        var someTypes = new[] { "Hangar.Controls.StatusPill", "Hangar.Controls.StatusPill", "Hangar.Controls.Gauge" };
+        var someTypes = new[] { "Contoso.Controls.StatusPill", "Contoso.Controls.StatusPill", "Contoso.Controls.Gauge" };
         Check("build hint: built project → none", BuildHint.Describe(false, someKeys, someTypes) == null);
         Check("build hint: unbuilt but nothing lost → none", BuildHint.Describe(true, new string[0], null) == null);
         Eq("build hint: types + keys",
