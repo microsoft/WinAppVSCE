@@ -105,7 +105,7 @@ namespace WinUIXamlPreview.Testing
             PreviewOptions.Location = PreviewLocation.Right;
             PreviewOptions.RightWidth = PreviewOptions.DefaultWidth;
             PreviewOptions.BottomHeight = PreviewOptions.DefaultHeight;
-            PreviewOptions.DesignTimeData = true;
+            PreviewOptions.DesignTimeData = false;
             PreviewOptions.DesignMode = true;
             PreviewOptions.Collapsed = false;
             PreviewOptions.Theme = "Light";

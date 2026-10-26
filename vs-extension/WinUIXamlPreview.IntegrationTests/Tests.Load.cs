@@ -12,7 +12,7 @@ namespace WinUIXamlPreview.IntegrationTests
                 var s = Snap();
                 var o = s["options"]!;
                 Eq("Right", (string?)o["location"], "location");
-                Eq(true, o["designTimeData"]!.GetValue<bool>(), "designTimeData");
+                Eq(false, o["designTimeData"]!.GetValue<bool>(), "designTimeData");
                 Eq(false, o["collapsed"]!.GetValue<bool>(), "collapsed");
                 Eq(false, o["fullFidelityAutoBuild"]!.GetValue<bool>(), "fullFidelityAutoBuild");
                 Assert(((string?)s["logFile"])?.EndsWith("preview.log") == true, "log file path: " + s["logFile"]);

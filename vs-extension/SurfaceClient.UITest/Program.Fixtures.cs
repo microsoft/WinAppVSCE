@@ -134,7 +134,7 @@ namespace WinUIXamlPreview.UITest
                     var surfaceLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
                     using var client = new SurfaceClient(surfaceExe, userDll, s => { surfaceLog.Enqueue(s); Console.Error.WriteLine("  " + s); }, appXaml, theme)
                     {
-                        SampleData = true, // the VS default
+                        SampleData = true, // fixtures exercise sample data (the VS toggle defaults to off)
                     };
                     var box = new FrameBox(client);
                     await client.StartAsync(TimeSpan.FromSeconds(30));
