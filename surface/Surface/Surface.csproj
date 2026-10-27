@@ -72,6 +72,12 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
   </ItemGroup>
 
+  <!-- Real WinUI type names from the newest WinAppSDK, so a type this host lacks is left out only when it's
+       genuinely newer, not a typo. Regenerate with ..\Update-KnownWinUiTypes.ps1. -->
+  <ItemGroup>
+    <EmbeddedResource Include="KnownWinUiTypes.txt" LogicalName="Surface.KnownWinUiTypes.txt" />
+  </ItemGroup>
+
   <!-- ===== T4: WASDK version-shadow de-collision =====
        The transitive Microsoft.WindowsAppSDK.AI / .ML component packages copy their MANAGED WinRT
        projection assemblies (Microsoft.Windows.AI.*.Projection.dll, incl. .MachineLearning, plus

@@ -156,6 +156,7 @@ namespace Surface.Tests
             Run("R6 resources", Rule6);
             Run("R7 unmapped custom types", Rule7);
             Run("R7 WinUI types newer than the host", Rule7NewerFrameworkTypes);
+            Run("R7 known WinUI type list (typos stay errors)", KnownWinUiTypeList);
             Run("R7a/b/c attached, extensions, converters", Rule7abc);
             Run("DTD grammar", DtdGrammar);
             Run("DTD source paths + file prep", DtdPaths);
@@ -328,6 +329,16 @@ namespace Surface.Tests
                 "  </Grid>\n" +
                 "</Page>";
             Eq("no counterpart -> nearest matching ancestor", "4", XamlErrorText.MapToSource(withPlaceholder, rawWithCustom, 3, 6)?.Line.ToString());
+        }
+
+        private static void KnownWinUiTypeList()
+        {
+            Check("list loaded from the embedded resource", KnownWinUiTypes.Count > 1000, KnownWinUiTypes.Count.ToString());
+            Check("newer type (FlowLayout, 2.2.2+) is known", KnownWinUiTypes.Contains("FlowLayout"));
+            Check("long-standing type is known", KnownWinUiTypes.Contains("TextBlock"));
+            Check("made-up name is not a WinUI type", !KnownWinUiTypes.Contains("NoSuchControl"));
+            Check("typo is not a WinUI type", !KnownWinUiTypes.Contains("TextBlok"));
+            Check("case-sensitive like XAML", !KnownWinUiTypes.Contains("textblock"));
         }
 
         private static void Rule7NewerFrameworkTypes()

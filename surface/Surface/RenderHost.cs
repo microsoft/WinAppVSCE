@@ -181,6 +181,14 @@ internal sealed class RenderHost
     }
 
     /// <summary>
+    /// True when <paramref name="simpleName"/> is a real WinUI type that this host's WinUI lacks, i.e. one a newer
+    /// WinAppSDK added. An unknown name such as a typo is false, so it stays a XAML error instead of being
+    /// quietly left out.
+    /// </summary>
+    internal static bool IsNewerWinUiType(string simpleName) =>
+        !HostWinUiHas(simpleName) && KnownWinUiTypes.Contains(simpleName);
+
+    /// <summary>
     /// WS2-F6: when true, <c>{x:Bind}</c> text properties render a placeholder and bound lists get dummy
     /// rows (see <see cref="SampleListFiller"/>). Set by the client's <c>sampleData</c> message field.
     /// </summary>
@@ -330,12 +338,13 @@ internal sealed class RenderHost
                     // this error code could not be found"), so the first-chance watch is the main source.
                     // A WinUI (default-xmlns) type this host's WinUI doesn't have: the page targets a newer
                     // WinAppSDK. Leave it out and retry; Rule 7 never touches default-xmlns elements otherwise.
+                    // Only names on the known WinUI list qualify, so a typo still falls through to a XAML error.
                     // Its own budget, so a page using several newer types still gets the custom-type retries.
                     // WinUI can repeat an earlier failure's text with the new failure's position, so a "not
                     // found" for a type already left out is stale: neither an offender nor a usable message.
                     var missingType = ExtractMissingTypeName(ex);
                     var staleText = missingType is not null && missingFramework?.Contains(missingType) == true;
-                    if (!staleText && missingType is not null && !HostWinUiHas(missingType) &&
+                    if (!staleText && missingType is not null && IsNewerWinUiType(missingType) &&
                         Regex.IsMatch(rawXaml, "<" + Regex.Escape(missingType) + @"[\s/>]") &&
                         (missingFramework?.Count ?? 0) < maxSafetyNetRetries &&
                         (missingFramework ??= new(StringComparer.Ordinal)).Add(missingType))

@@ -40,6 +40,8 @@
     <Compile Include="..\Surface\SampleObjects.cs" Link="Production\SampleObjects.cs" />
     <Compile Include="..\Surface\SampleImage.cs" Link="Production\SampleImage.cs" />
     <Compile Include="..\Surface\SampleChartFiller.cs" Link="Production\SampleChartFiller.cs" />
+    <Compile Include="..\Surface\KnownWinUiTypes.cs" Link="Production\KnownWinUiTypes.cs" />
+    <EmbeddedResource Include="..\Surface\KnownWinUiTypes.txt" LogicalName="Surface.KnownWinUiTypes.txt" />
   </ItemGroup>
 
   <ItemGroup>
