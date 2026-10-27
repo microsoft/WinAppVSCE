@@ -88,13 +88,13 @@ function assertWire(value: unknown): asserts value is WireMessage {
         case 'LoadXaml': case 'EnterNative':
             string('xaml');
             for (const key of ['width', 'height', 'scale']) number(key, true);
-            boolean('sampleData', true);
+            boolean('sampleData', true); string('documentPath', true, true);
             if (object.type === 'EnterNative') {
                 number('paneWidthPx', true, true); number('paneHeightPx', true, true);
                 if ('view' in object) assertView(object.view, true);
             }
             break;
-        case 'UpdateXaml': string('xaml'); boolean('sampleData', true); break;
+        case 'UpdateXaml': string('xaml'); boolean('sampleData', true); string('documentPath', true, true); break;
         case 'Resize':
             for (const key of ['width', 'height', 'scale']) number(key, true);
             break;

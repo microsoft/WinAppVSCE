@@ -48,13 +48,15 @@ export interface Hello {
     /** Per-launch secret from `SURFACE_AUTH_TOKEN`; required when the surface was launched with one. */
     token?: string;
 }
-export interface LoadXaml extends Size { type: 'LoadXaml'; xaml: string; sampleData?: boolean }
-export interface UpdateXaml { type: 'UpdateXaml'; xaml: string; sampleData?: boolean }
+export interface LoadXaml extends Size { type: 'LoadXaml'; xaml: string; sampleData?: boolean; documentPath?: string | null }
+export interface UpdateXaml { type: 'UpdateXaml'; xaml: string; sampleData?: boolean; documentPath?: string | null }
 export interface Resize extends Size { type: 'Resize' }
 export interface EnterNative extends Size {
     type: 'EnterNative';
     xaml: string;
     sampleData?: boolean;
+    /** XAML file being previewed (sticky); "" or null clears it, absent keeps it. */
+    documentPath?: string | null;
     /** Final pane size in device pixels, so the canvas fits before reparenting. */
     paneWidthPx?: number;
     paneHeightPx?: number;

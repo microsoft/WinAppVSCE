@@ -40,24 +40,24 @@ namespace Surface.Tests.Fixtures
     }
 
     // SampleObjects fixtures: app-style models built by reflection.
-    public enum FlightState { Healthy, Attention, Maintenance }
+    public enum AssetState { Healthy, Attention, Blocked }
 
-    public class Plane
+    public class Asset
     {
-        public string Tail { get; init; } = string.Empty;
-        public int Cycles { get; init; }
-        public string NextCheck { get; init; } = "A-check";
-        public FlightState State { get; set; }
+        public string Code { get; init; } = string.Empty;
+        public int Uses { get; init; }
+        public string Tier { get; init; } = "Standard";
+        public AssetState State { get; set; }
         public DateTime LastSeen { get; set; }
-        public Engine? Engine { get; set; }
+        public Part? Part { get; set; }
         public List<string> Notes { get; set; } = null!;
-        public System.Collections.ObjectModel.ObservableCollection<Engine> Spares { get; } = new();
-        public bool IsHero => Tail == "X";
+        public System.Collections.ObjectModel.ObservableCollection<Part> Spares { get; } = new();
+        public bool IsHero => Code == "X";
     }
 
-    public class Engine
+    public class Part
     {
-        public Engine(string serial, double hours) { Serial = serial; Hours = hours; }
+        public Part(string serial, double hours) { Serial = serial; Hours = hours; }
         public string Serial { get; }
         public double Hours { get; }
     }
@@ -65,6 +65,46 @@ namespace Surface.Tests.Fixtures
     public class Exploding
     {
         public Exploding() => throw new InvalidOperationException("boom");
+    }
+
+    public class Card
+    {
+        public List<string> Lines { get; set; } = new();
+    }
+
+    public class Member
+    {
+        public string Name { get; set; } = "";
+    }
+
+    /// <summary>A group that is its own item list, like <c>class Grouping : List&lt;Person&gt;</c>.</summary>
+    public class MemberGroup : List<Member>
+    {
+        public string Key { get; set; } = "";
+    }
+
+    /// <summary>A group whose items sit under an ItemsPath property.</summary>
+    public class Team
+    {
+        public string Key { get; set; } = "";
+        public List<Member> Members { get; set; } = new();
+    }
+
+    public class SeriesFilledChart
+    {
+        public List<double> Series { get; } = new() { 1, 2, 3 };
+        public List<double> ItemsSource { get; set; } = new();
+    }
+
+    public class EmptyChart
+    {
+        public List<double>? Series { get; set; }
+        public double[] Values { get; set; } = Array.Empty<double>();
+    }
+
+    public class NotAChart
+    {
+        public string Title { get; set; } = "";
     }
 }
 
@@ -100,17 +140,27 @@ namespace Surface.Tests
             Run("R2 x:Bind", Rule2);
             Run("R2 sample data", Rule2SampleData);
             Run("R2 sample data (source-typed)", SampleDataTyped);
+            Run("R2 sample data (code-behind is add-only)", SampleDataCodeBehindAddOnly);
+            Run("R2 sample data (list rows from source initializers)", SampleDataSourceInitializers);
+            Run("R2 sample data (image slots)", SampleDataImages);
+            Run("R2 sample data (TreeView nodes from code)", SampleDataTreeNodes);
+            Run("R2 sample data (icon glyphs)", SampleDataGlyphs);
             Run("R2 sample data (typed objects)", SampleDataObjects);
+            Run("R2 sample data (charts)", SampleDataCharts);
+            Run("R2 sample data (initial state, functions, list forms)", SampleDataStates);
+            Run("R2 sample data (grouped lists, type model, chart helpers)", SampleDataGroupsAndModel);
             Run("R2 TryParseBind/BindPathLabel", BindParsing);
             Run("R3 x: directives", Rule3);
             Run("R4 events", Rule4);
             Run("R5 design namespaces", Rule5);
             Run("R6 resources", Rule6);
             Run("R7 unmapped custom types", Rule7);
+            Run("R7 WinUI types newer than the host", Rule7NewerFrameworkTypes);
             Run("R7a/b/c attached, extensions, converters", Rule7abc);
             Run("DTD grammar", DtdGrammar);
             Run("DTD source paths + file prep", DtdPaths);
             Run("XAML error text", ErrorText);
+            Run("XAML error positions map to the user's file", ErrorPositionMapping);
             Run("Zoom anchoring", ZoomAnchoring);
 
             foreach (var f in s_failures)
@@ -156,6 +206,14 @@ namespace Surface.Tests
             Check("opaque: placeholder + type name", XamlErrorText.IsOpaque(Opaque));
             Check("opaque: with position suffix and chain", XamlErrorText.IsOpaque(Opaque + " [Line: 3 Position: 13] -> COMException: " + XamlErrorText.OpaqueWinUiText));
             Check("opaque: empty", XamlErrorText.IsOpaque(""));
+            const string ChartsPage = "<Page xmlns:charts=\"using:Microsoft.UI.Xaml.Controls.Charts\"><charts:Chart /></Page>";
+            const string MissingChartsKey = "XamlParseException: Cannot find a Resource with the Name/Key ChartsControlBackgroundBrush [Line: 1 Position: 70]";
+            var hint = XamlErrorText.ChartsHint(MissingChartsKey, ChartsPage, chartsResourcesLoaded: false);
+            Check("charts hint: names the missing key and the fix", hint is not null && hint.Contains("ChartsControlBackgroundBrush") && hint.Contains("XamlChartsResources"), hint);
+            Check("charts hint: opaque failure on a charts page", XamlErrorText.ChartsHint(Opaque, ChartsPage, false)?.Contains("XamlChartsResources") == true);
+            Check("charts hint: none when styles loaded", XamlErrorText.ChartsHint(MissingChartsKey, ChartsPage, true) is null);
+            Check("charts hint: none without charts", XamlErrorText.ChartsHint(MissingChartsKey, "<Page><Grid /></Page>", false) is null);
+            Check("charts hint: none for an unrelated real error", XamlErrorText.ChartsHint("XamlParseException: The property 'Foo' was not found in type 'Chart'.", ChartsPage, false) is null);
             Check("not opaque: real WinUI text kept", !XamlErrorText.IsOpaque("XamlParseException: Cannot find a Resource with the Name/Key Foo [Line: 2 Position: 4]"));
             Check("opaque: bare wfc code (as WinUI really reports)", XamlErrorText.IsOpaque(Opaque + "\r\n\r\nwfc: element type match [Line: 5 Position: 5]"));
             Eq("informative: real text extracted from the WinUI shape", "The property 'NotAProperty' was not found in type 'Button'.",
@@ -214,6 +272,94 @@ namespace Surface.Tests
             Eq("null xaml -> generic", Fallback, XamlErrorText.Describe(null, 1, 1).Message);
         }
 
+        private static void ErrorPositionMapping()
+        {
+            const string raw =
+                "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"\n" +
+                "      xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"\n" +
+                "      xmlns:d=\"http://schemas.microsoft.com/expression/blend/2008\">\n" +
+                "  <d:DesignData>\n" +
+                "    <TextBlock />\n" +
+                "  </d:DesignData>\n" +
+                "  <StackPanel>\n" +
+                "    <Button Content=\"A\" />\n" +
+                "    <Button x:Name=\"B\" Content=\"B\" Width=\"oops\" />\n" +
+                "  </StackPanel>\n" +
+                "</Page>";
+            const string cleaned =
+                "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">\n" +
+                "  <StackPanel>\n" +
+                "    <Button Content=\"A\" />\n" +
+                "    <Button x:Name=\"B\" Content=\"B\" Width=\"oops\" />\n" +
+                "  </StackPanel>\n" +
+                "</Page>";
+
+            // Attribute "Width" on cleaned line 4 -> raw line 9, at the same attribute.
+            int col = cleaned.Split('\n')[3].IndexOf("Width", StringComparison.Ordinal) + 1;
+            var attr = XamlErrorText.MapToSource(cleaned, raw, 4, col);
+            Eq("attribute maps to the user's line", "9", attr?.Line.ToString());
+            Eq("attribute maps to the user's column", (raw.Split('\n')[8].IndexOf("Width", StringComparison.Ordinal) + 1).ToString(), attr?.Column.ToString());
+            Eq("mapped position still describes the attribute",
+                XamlErrorText.DescribeAt(cleaned, 4, col), XamlErrorText.DescribeAt(raw, attr!.Value.Line, attr.Value.Column));
+
+            // The first Button (no x:Name) is found by its attributes and order.
+            var first = XamlErrorText.MapToSource(cleaned, raw, 3, 6);
+            Eq("element maps to the user's line", "8", first?.Line.ToString());
+
+            // A column past the end of the line (WinUI does this) still lands on that line's element.
+            Eq("column past the line end clamps", "7", XamlErrorText.MapToSource(cleaned, raw, 2, 200)?.Line.ToString());
+
+            Check("unchanged document -> no mapping", XamlErrorText.MapToSource(raw, raw, 9, 5) is null);
+            Check("malformed cleaned text -> no mapping", XamlErrorText.MapToSource("<Page>", raw, 1, 1) is null);
+
+            // A placeholder Border with no counterpart falls back to its parent's position.
+            const string withPlaceholder =
+                "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\">\n" +
+                "  <Grid x:Name=\"G\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">\n" +
+                "    <Border Tag=\"__wxp_placeholder\"><TextBlock Text=\"Chart\" /></Border>\n" +
+                "  </Grid>\n" +
+                "</Page>";
+            const string rawWithCustom =
+                "<Page xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:local=\"using:App\">\n" +
+                "\n" +
+                "\n" +
+                "  <Grid x:Name=\"G\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">\n" +
+                "    <local:Chart />\n" +
+                "  </Grid>\n" +
+                "</Page>";
+            Eq("no counterpart -> nearest matching ancestor", "4", XamlErrorText.MapToSource(withPlaceholder, rawWithCustom, 3, 6)?.Line.ToString());
+        }
+
+        private static void Rule7NewerFrameworkTypes()
+        {
+            var raw = Doc(
+                "<StackPanel x:Name=\"Host\">" +
+                "<ItemsView x:Name=\"IV\"><ItemsView.Layout><FlowLayout MinItemSpacing=\"12\" /></ItemsView.Layout></ItemsView>" +
+                "<ItemsRepeater x:Name=\"IR\"><ItemsRepeater.Layout><StackLayout /></ItemsRepeater.Layout></ItemsRepeater>" +
+                "<FlowLayout x:Name=\"Direct\" Grid.Row=\"1\" />" +
+                "<ContentControl><ContentControl.Content><FlowLayout x:Name=\"InContent\" /></ContentControl.Content></ContentControl>" +
+                "<Grid><Grid.ChildrenTransitions><TransitionCollection><FlowLayout /><EntranceThemeTransition /></TransitionCollection></Grid.ChildrenTransitions></Grid>" +
+                "<StackPanel.Resources><FlowLayout x:Key=\"SharedLayout\" /></StackPanel.Resources>" +
+                "<good:FlowLayout x:Name=\"Custom\" />" +
+                "</StackPanel>");
+            var missing = new HashSet<string> { "FlowLayout" };
+            var r = CleanRoot(raw, provider: _ => true, newer: missing);
+
+            Check("typed slot: missing type removed with its empty property element",
+                First(Named(r, "IV")!, "ItemsView.Layout") is null && !Named(r, "IV")!.Descendants().Any());
+            Check("other layouts untouched", First(Named(r, "IR")!, "StackLayout") is not null);
+            Eq("visual position -> placeholder", Pres + "Border", Named(r, "Direct")?.Name.ToString());
+            Eq("placeholder keeps attached layout", "1", Attr(Named(r, "Direct"), "Grid.Row"));
+            Eq("content slot -> placeholder", Pres + "Border", Named(r, "InContent")?.Name.ToString());
+            var transitions = First(r, "TransitionCollection")!;
+            Eq("collection: only the missing entry removed", "EntranceThemeTransition", string.Join(",", transitions.Elements().Select(e => e.Name.LocalName)));
+            Check("resource entry dropped", !r.Descendants().Any(e => e.Attribute(X + "Key")?.Value == "SharedLayout"));
+            Eq("same name in a custom xmlns untouched", "{using:Good}FlowLayout", Named(r, "Custom")?.Name.ToString());
+
+            var none = CleanRoot(raw, provider: _ => true);
+            Check("no missing set: framework elements untouched", none.Descendants().Count(e => e.Name == Pres + "FlowLayout") == 5, none.Descendants().Count(e => e.Name == Pres + "FlowLayout").ToString());
+        }
+
         // ------------------------------------------------------------ harness
 
         private static void Run(string group, Action body)
@@ -260,8 +406,9 @@ namespace Surface.Tests
             ISet<string>? force = null,
             bool sample = false,
             ISet<string>? missing = null,
-            SampleTypeModel? types = null) =>
-            XDocument.Parse(XamlCleaner.Clean(xaml, known, provider, force, sample, missing, null, types)).Root!;
+            SampleTypeModel? types = null,
+            ISet<string>? newer = null) =>
+            XDocument.Parse(XamlCleaner.Clean(xaml, known, provider, force, sample, missing, null, types, null, newer)).Root!;
 
         private static XElement? First(XElement root, string localName) =>
             root.DescendantsAndSelf().FirstOrDefault(e => e.Name.LocalName == localName);
@@ -419,15 +566,15 @@ namespace Surface.Tests
                 "</StackPanel></DataTemplate></ListView.ItemTemplate></ListView>" +
                 "</StackPanel>",
                 rootAttrs: "x:Class=\"App1.MainPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
-            Eq("code-behind interpolation typed", "Hello, 12 orders", Attr(Named(r, "Greeting"), "Text"));
+            Eq("code-behind interpolation typed", $"Hello, {SamplePlanner.IntByName("Count", 0):N0} orders", Attr(Named(r, "Greeting"), "Text"));
             Check("event-handler assignment skipped", Attr(Named(r, "Status"), "Text") is null, Attr(Named(r, "Status"), "Text"));
             Eq("markup value never overwritten", "Markup wins", Attr(Named(r, "Kept"), "Text"));
-            Eq("int member -> number", "12", Attr(Named(r, "Num"), "Text"));
-            Eq("DateTime member -> date", "18 Nov 2026", Attr(Named(r, "When"), "Text"));
+            Eq("int member -> number", SamplePlanner.IntByName("Count", 0).ToString("N0"), Attr(Named(r, "Num"), "Text"));
+            Eq("DateTime member -> as the app shows it", SamplePlanner.SampleDate(0).ToString(System.Globalization.CultureInfo.CurrentCulture), Attr(Named(r, "When"), "Text"));
             Check("binding to a named element dropped", Attr(Named(r, "Ref"), "Text") is null, Attr(Named(r, "Ref"), "Text"));
             var tag = Attr(Named(r, "List"), "Tag") ?? "";
             Check("typed list rows carry template fields", tag.StartsWith(SampleListFiller.TagPrefix + "Orders|", StringComparison.Ordinal)
-                && tag.Contains("\"Customer\"") && tag.Contains("\"State\":\"In progress\""), tag);
+                && tag.Contains("\"Customer\":\"Avery Chen\"") && tag.Contains("\"State\":\"InProgress\""), tag);
             Check("template x:Bind -> {Binding} into the row", (Attr(Named(r, "Cust"), "Text") ?? "").StartsWith("{Binding Customer", StringComparison.Ordinal), Attr(Named(r, "Cust"), "Text"));
 
             var rows = SampleListFiller.BuildRows(tag[SampleListFiller.TagPrefix.Length..], 2, out var label);
@@ -435,6 +582,637 @@ namespace Surface.Tests
             Check("filler rows are dictionaries capped to max", rows.Count == 2 && rows[0] is Dictionary<string, object> d && d.ContainsKey("Customer"));
             var plain = SampleListFiller.BuildRows("Items", 3, out label);
             Check("bare label -> repeated strings", plain.Count == 3 && (string)plain[0] == "Items" && label == "Items");
+            Check("top level: planner row count kept, no padding", SampleListFiller.BuildRows("L|[1,2]", 50, out _, out _, padOnlyWhenEmpty: 3).Count == 2);
+            Check("top level: bare label still padded", SampleListFiller.BuildRows("L", 50, out _, out _, padOnlyWhenEmpty: 3).Count == 3);
+        }
+
+        private static void SampleDataSourceInitializers()
+        {
+            var types = SampleTypeModel.FromSources(
+                "using System.Linq; using System.Collections.Generic; using System.Collections.ObjectModel;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class RepPage {\n" +
+                "  public ObservableCollection<int> RangeInts { get; } = new ObservableCollection<int>(Enumerable.Range(0, 500));\n" +
+                "  public List<string> Words { get; } = new() { \"alpha\", \"beta\", \"gamma\", \"delta\", \"epsilon\" };\n" +
+                "  public IReadOnlyList<int> Few { get; } = Enumerable.Range(1, 2).ToList();\n" +
+                "  public int[] Arr { get; } = { 7, 8, 9, 10 };\n" +
+                "  public List<Person> People { get; } = new() { new Person(), new Person() };\n" +
+                "  public ObservableCollection<Person> Empty { get; } = new();\n" +
+                "  private readonly List<string> _coded = new() { \"x\", \"y\" };\n" +
+                "  public RepPage() { CodeList.ItemsSource = _coded; }\n" +
+                "}\n" +
+                "public class Person { public string Name { get; set; } }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<ItemsRepeater x:Name=\"Range\" ItemsSource=\"{x:Bind RangeInts}\" />" +
+                "<ListView x:Name=\"Words\" ItemsSource=\"{x:Bind Words}\" />" +
+                "<ListView x:Name=\"Few\" ItemsSource=\"{x:Bind Few}\" />" +
+                "<ListView x:Name=\"Arr\" ItemsSource=\"{x:Bind Arr}\" />" +
+                "<ListView x:Name=\"People\" ItemsSource=\"{x:Bind People}\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Person\"><TextBlock Text=\"{x:Bind Name}\" /></DataTemplate>" +
+                "</ListView.ItemTemplate></ListView>" +
+                "<ListView x:Name=\"Empty\" ItemsSource=\"{x:Bind Empty}\" />" +
+                "<ListView x:Name=\"CodeList\" />" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.RepPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+            int RowCount(string name, out List<object> rows)
+            {
+                var tag = Attr(Named(r, name), "Tag") ?? "";
+                rows = tag.StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal)
+                    ? SampleListFiller.BuildRows(tag[SampleListFiller.TagPrefix.Length..], SamplePlanner.MaxListRows, out _, out _, padOnlyWhenEmpty: 3)
+                    : new List<object>();
+                return rows.Count;
+            }
+            Eq("Enumerable.Range(0, 500) -> capped rows", SamplePlanner.MaxListRows.ToString(), RowCount("Range", out var range).ToString());
+            Check("range rows are the range values", range.Count > 1 && Equals(range[0], 0d) && Equals(range[1], 1d), string.Join(",", range));
+            Eq("5 literal strings -> 5 rows", "5", RowCount("Words", out var words).ToString());
+            Check("literal strings kept", words.Count == 5 && (string)words[0] == "alpha" && (string)words[4] == "epsilon", string.Join(",", words));
+            Eq("Range(1, 2).ToList() -> 2 rows", "2", RowCount("Few", out _).ToString());
+            Eq("array initializer -> 4 rows", "4", RowCount("Arr", out var arr).ToString());
+            Check("array values kept", Equals(arr[0], 7d), string.Join(",", arr));
+            Eq("object initializer -> its count", "2", RowCount("People", out _).ToString());
+            Eq("empty new() -> generated rows", SamplePlanner.Rows.ToString(), RowCount("Empty", out _).ToString());
+            Eq("code-behind field initializer -> its rows", "2", RowCount("CodeList", out var coded).ToString());
+            Check("code-behind field values kept", coded.Count == 2 && (string)coded[0] == "x", string.Join(",", coded));
+        }
+
+        private static void SampleDataCodeBehindAddOnly()
+        {
+            // The AI Dev Gallery APIPage shape: cards hidden in the "data is missing" branch of the load code.
+            var types = SampleTypeModel.FromSources(
+                "using System; using System.Collections.Generic; using Microsoft.UI.Xaml;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class ApiPage {\n" +
+                "  public string Snippet { get; set; }\n" +
+                "  public List<Item> Samples { get; } = new();\n" +
+                "  public ApiPage() {\n" +
+                "    if (Snippet != null) { CodeText.Text = Snippet; } else { CodeCard.Visibility = Visibility.Collapsed; }\n" +
+                "    if (Samples.Count == 0) { EmptyState.Visibility = Visibility.Visible; }\n" +
+                "    SaveButton.IsEnabled = false;\n" +
+                "    Progress.Value = 100;\n" +
+                "    Header.Text = \"Overview\";\n" +
+                "    SampleList.ItemsSource = Samples;\n" +
+                "  }\n" +
+                "}\n" +
+                "public class Item { public string Name { get; set; } }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<TextBlock x:Name=\"Header\" />" +
+                "<Border x:Name=\"CodeCard\"><TextBlock x:Name=\"CodeText\" /></Border>" +
+                "<TextBlock x:Name=\"EmptyState\" Text=\"Nothing here\" Visibility=\"Collapsed\" />" +
+                "<Button x:Name=\"SaveButton\" Content=\"Save\" />" +
+                "<ProgressBar x:Name=\"Progress\" />" +
+                "<ListView x:Name=\"SampleList\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Item\"><TextBlock Text=\"{x:Bind Name}\" /></DataTemplate>" +
+                "</ListView.ItemTemplate></ListView>" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.ApiPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+            Check("collapsed in code-behind -> stays visible", Attr(Named(r, "CodeCard"), "Visibility") is null, Attr(Named(r, "CodeCard"), "Visibility"));
+            Eq("visible in code-behind -> markup value kept", "Collapsed", Attr(Named(r, "EmptyState"), "Visibility"));
+            Check("IsEnabled from code-behind not applied", Attr(Named(r, "SaveButton"), "IsEnabled") is null, Attr(Named(r, "SaveButton"), "IsEnabled"));
+            Check("Value from code-behind not applied", Attr(Named(r, "Progress"), "Value") is null, Attr(Named(r, "Progress"), "Value"));
+            Eq("text from code-behind still added", "Overview", Attr(Named(r, "Header"), "Text"));
+            Check("text from a conditional branch still added", !string.IsNullOrEmpty(Attr(Named(r, "CodeText"), "Text")), Attr(Named(r, "CodeText"), "Text"));
+            Check("ItemsSource from code-behind still filled", (Attr(Named(r, "SampleList"), "Tag") ?? "").StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal), Attr(Named(r, "SampleList"), "Tag"));
+
+            // WinUI Gallery SampleCodePresenter shape: code-behind sets Content on elements whose markup already
+            // supplies it as a child, a property element, or text. Adding Content="…" too fails Load.
+            var types2 = SampleTypeModel.FromSources(
+                "namespace App1 {\n" +
+                "public sealed partial class ContentPage {\n" +
+                "  public ContentPage() {\n" +
+                "    Sv.Content = \"from code\"; Pe.Content = \"from code\"; Tx.Content = \"from code\";\n" +
+                "    Bd.Child = null; Run1.Text = \"from code\"; Empty.Content = \"Code label\";\n" +
+                "  }\n" +
+                "}\n" +
+                "}");
+            var r2 = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<ScrollViewer x:Name=\"Sv\"><ContentPresenter /></ScrollViewer>" +
+                "<Button x:Name=\"Pe\"><Button.Content><TextBlock Text=\"a\" /></Button.Content></Button>" +
+                "<Button x:Name=\"Tx\">literal</Button>" +
+                "<TextBlock><Run x:Name=\"Run1\">authored</Run></TextBlock>" +
+                "<Button x:Name=\"Empty\" />" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.ContentPage\""), sample: true, types: types2);
+            Check("child content -> no Content attr", Attr(Named(r2, "Sv"), "Content") is null, Attr(Named(r2, "Sv"), "Content"));
+            Check("property element -> no Content attr", Attr(Named(r2, "Pe"), "Content") is null, Attr(Named(r2, "Pe"), "Content"));
+            Check("text content -> no Content attr", Attr(Named(r2, "Tx"), "Content") is null, Attr(Named(r2, "Tx"), "Content"));
+            Check("Run text content -> no Text attr", Attr(Named(r2, "Run1"), "Text") is null, Attr(Named(r2, "Run1"), "Text"));
+            Eq("empty element still gets code-behind Content", "Code label", Attr(Named(r2, "Empty"), "Content"));
+            Check("SetsAsElement ignores unrelated property elements",
+                !SamplePlanner.MarkupSetsAsElement(XElement.Parse("<Button><Button.Flyout><Flyout /></Button.Flyout></Button>"), "Content"));
+        }
+
+        private static void SampleDataImages()
+        {
+            Check("image names", SampleImage.IsImageName("ImageLocation") && SampleImage.IsImageName("Thumbnail") &&
+                SampleImage.IsImageName("AvatarUrl") && SampleImage.IsImageName("Photo") && SampleImage.IsImageName("IconPath"));
+            Check("non-image names", !SampleImage.IsImageName("ImageCount") && !SampleImage.IsImageName("ImageName") &&
+                !SampleImage.IsImageName("Icon") && !SampleImage.IsImageName("Website") && !SampleImage.IsImageName("Title"));
+            Check("placeholder is a local file URI", SampleImage.Uri.StartsWith("file:///", StringComparison.Ordinal) &&
+                System.IO.File.Exists(new Uri(SampleImage.Uri).LocalPath), SampleImage.Uri);
+            var png = SampleImage.Png();
+            Check("placeholder is a PNG", png.Length > 100 && png[1] == (byte)'P' && png[2] == (byte)'N' && png[3] == (byte)'G');
+
+            var types = SampleTypeModel.FromSources(
+                "using System.Collections.Generic; using Microsoft.UI.Xaml.Media.Imaging;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class PicPage {\n" +
+                "  public string Hero { get; set; }\n" +
+                "  public List<Item> Items { get; } = new();\n" +
+                "  public PicPage() { CodeImg.Source = new BitmapImage(new System.Uri(\"ms-appx:///Assets/x.png\")); }\n" +
+                "}\n" +
+                "public class Item { public string ImageLocation { get; set; } public string Source { get; set; } public string Title { get; set; } }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<Image x:Name=\"HeroImg\" Source=\"{x:Bind Hero}\" />" +
+                "<Image x:Name=\"CodeImg\" />" +
+                "<ListView x:Name=\"L\" ItemsSource=\"{x:Bind Items}\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Item\"><StackPanel>" +
+                "<Image x:Name=\"RowImg\" Source=\"{x:Bind ImageLocation}\" /><Image x:Name=\"RowSrc\" Source=\"{x:Bind Source}\" />" +
+                "<TextBlock Text=\"{x:Bind Title}\" /></StackPanel></DataTemplate>" +
+                "</ListView.ItemTemplate></ListView>" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.PicPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+            Eq("page Image.Source -> placeholder", SampleImage.Uri, Attr(Named(r, "HeroImg"), "Source"));
+            Eq("code-behind Image.Source -> placeholder", SampleImage.Uri, Attr(Named(r, "CodeImg"), "Source"));
+            Eq("row Image.Source -> row binding", "{Binding ImageLocation}", Attr(Named(r, "RowImg"), "Source"));
+            var tag = Attr(Named(r, "L"), "Tag") ?? "";
+            var rows = SampleListFiller.BuildRows(tag[SampleListFiller.TagPrefix.Length..], 3, out _);
+            Check("row image members hold the placeholder", rows[0] is Dictionary<string, object> d &&
+                (string)d["ImageLocation"] == SampleImage.Uri && (string)d["Source"] == SampleImage.Uri && (string)d["Title"] != SampleImage.Uri, tag);
+            Eq("BitmapImage.UriSource is an image slot", SamplePlanner.TargetKind.Image.ToString(),
+                SamplePlanner.TargetKindOf(XElement.Parse("<BitmapImage xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" />"), "UriSource").ToString());
+        }
+
+        private static void SampleDataTreeNodes()
+        {
+            // WinUI Gallery TreeViewPage shape: nodes built in a helper that takes the tree as a parameter.
+            var types = SampleTypeModel.FromSources(
+                "using Microsoft.UI.Xaml.Controls;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class TreePage {\n" +
+                "  public TreePage() { Init(TreeA); Init(TreeB); Direct.RootNodes.Add(new TreeViewNode { Content = Name }); }\n" +
+                "  void Init(TreeView t) {\n" +
+                "    TreeViewNode work = new TreeViewNode() { Content = \"Work\" };\n" +
+                "    work.IsExpanded = true;\n" +
+                "    work.Children.Add(new TreeViewNode() { Content = \"Spec\" });\n" +
+                "    var home = new TreeViewNode { Content = \"Home\", Children = { new TreeViewNode { Content = \"Paint\" } } };\n" +
+                "    t.RootNodes.Add(work); t.RootNodes.Add(home);\n" +
+                "  }\n" +
+                "  void Tree_Drop(object sender, DragEventArgs e) { Dropped.RootNodes.Add(new TreeViewNode { Content = \"x\" }); }\n" +
+                "  void Fill() { Bound.RootNodes.Add(new TreeViewNode { Content = \"y\" }); }\n" +
+                "}\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<TreeView x:Name=\"TreeA\" /><TreeView x:Name=\"TreeB\" /><TreeView x:Name=\"Direct\" />" +
+                "<TreeView x:Name=\"Dropped\" /><TreeView x:Name=\"Bound\" ItemsSource=\"{x:Bind Items}\" />" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.TreePage\""), sample: true, types: types);
+
+            string Nodes(string name) => string.Join("|", Named(r, name).Descendants()
+                .Where(e => e.Name.LocalName == "TreeViewNode")
+                .Select(e => (string?)e.Attribute("Content") + ((string?)e.Attribute("IsExpanded") == "True" ? "+" : "")));
+            Eq("helper parameter -> first caller's tree", "Work+|Spec|Home|Paint", Nodes("TreeA"));
+            Eq("helper parameter -> second caller's tree", "Work+|Spec|Home|Paint", Nodes("TreeB"));
+            Eq("unreadable content -> Item N", "Item 1", Nodes("Direct"));
+            Eq("event handler adds are ignored", "", Nodes("Dropped"));
+            Eq("data-mode trees are left alone", "", Nodes("Bound"));
+            Check("root nodes go in TreeView.RootNodes", Named(r, "TreeA").Elements().Single().Name.LocalName == "TreeView.RootNodes");
+
+            // Nested lists fill the row's own empty collection rather than replacing a realized container's source.
+            var own = new System.Collections.ObjectModel.ObservableCollection<string>();
+            Check("fills an empty compatible collection in place", SampleListFiller.FillInPlace(own, new object[] { "a", "b" }) && own.Count == 2);
+            Check("non-empty collection is left alone", !SampleListFiller.FillInPlace(own, new object[] { "c" }) && own.Count == 2);
+            Check("incompatible items are not added", !SampleListFiller.FillInPlace(new List<int>(), new object[] { "x" }));
+            Check("arrays and null are not filled", !SampleListFiller.FillInPlace(new string[0], new object[] { "x" }) &&
+                !SampleListFiller.FillInPlace(null, new object[] { "x" }));
+        }
+
+        private static void SampleDataGlyphs()
+        {
+            // AI Dev Gallery shape: icon codes bound to FontIcon.Glyph get a real icon, not a word drawn as tofu boxes.
+            var types = SampleTypeModel.FromSources(
+                "using System.Collections.Generic;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class IconPage {\n" +
+                "  public string Icon { get; set; }\n" +
+                "  public string Label { get; set; }\n" +
+                "  public List<Api> Apis { get; } = new();\n" +
+                "  public IconPage() { CodeIcon.Glyph = Icon; Custom.Glyph = Icon; Literal.Glyph = \"\\uE8A5\"; }\n" +
+                "}\n" +
+                "public class Api { public string IconGlyph { get; set; } public string Name { get; set; } }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<FontIcon x:Name=\"Bound\" Glyph=\"{x:Bind Icon}\" />" +
+                "<FontIcon x:Name=\"CodeIcon\" /><FontIcon x:Name=\"Literal\" />" +
+                "<FontIcon x:Name=\"Custom\" FontFamily=\"ms-appx:///Assets/MyIcons.ttf#MyIcons\" />" +
+                "<TextBlock x:Name=\"SymbolText\" FontFamily=\"{ThemeResource SymbolThemeFontFamily}\" Text=\"{x:Bind Icon}\" />" +
+                "<TextBlock x:Name=\"PlainText\" Text=\"{x:Bind Label}\" />" +
+                "<ListView x:Name=\"ApiList\" ItemsSource=\"{x:Bind Apis}\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Api\"><StackPanel>" +
+                "<FontIcon x:Name=\"RowIcon\" Glyph=\"{x:Bind IconGlyph}\" /><TextBlock Text=\"{x:Bind Name}\" />" +
+                "</StackPanel></DataTemplate></ListView.ItemTemplate></ListView>" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.IconPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+            Eq("bound FontIcon.Glyph -> sample glyph", SamplePlanner.SampleGlyph, Attr(Named(r, "Bound"), "Glyph"));
+            Eq("code-behind Glyph -> sample glyph", SamplePlanner.SampleGlyph, Attr(Named(r, "CodeIcon"), "Glyph"));
+            Eq("code-behind literal glyph kept", "\uE8A5", Attr(Named(r, "Literal"), "Glyph"));
+            Check("app icon font -> left empty", Attr(Named(r, "Custom"), "Glyph") is null or "", Attr(Named(r, "Custom"), "Glyph"));
+            Eq("Text in the symbol font -> sample glyph", SamplePlanner.SampleGlyph, Attr(Named(r, "SymbolText"), "Text"));
+            Check("plain text unaffected", Attr(Named(r, "PlainText"), "Text") is { Length: > 0 } t && t != SamplePlanner.SampleGlyph, Attr(Named(r, "PlainText"), "Text"));
+            Check("row glyph binding falls back to the sample glyph", (Attr(Named(r, "RowIcon"), "Glyph") ?? "").Contains(SamplePlanner.SampleGlyph), Attr(Named(r, "RowIcon"), "Glyph"));
+            var tag = Attr(Named(r, "ApiList"), "Tag") ?? "";
+            Check("row glyphs are the sample glyph", tag.Contains("\"IconGlyph\":\"\\uE7C3\"", StringComparison.OrdinalIgnoreCase) || tag.Contains("\"IconGlyph\":\"" + SamplePlanner.SampleGlyph + "\""), tag);
+            Check("row text still generated", tag.Contains("\"Name\":\"Api 2\"") || tag.Contains("\"Name\":"), tag);
+            Check("GlyphSample: plain TextBlock.Text -> null", SamplePlanner.GlyphSample(new XElement("TextBlock"), "Text") is null);
+
+            // ScenarioOverviewPage shape: the icon is in a list nested in each typed row, which SampleObjects fills.
+            var nestedTypes = SampleTypeModel.FromSources(
+                "using System.Collections.Generic;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class CatPage { public List<Category> Categories { get; } = new(); }\n" +
+                "public class Category { public string Name { get; set; } public List<Scenario> Scenarios { get; set; } }\n" +
+                "public class Scenario { public string Icon { get; set; } public string Name { get; set; } }\n" +
+                "}");
+            var nested = CleanRoot(Doc(
+                "<ItemsControl x:Name=\"Cats\" ItemsSource=\"{x:Bind Categories}\"><ItemsControl.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Category\"><StackPanel><TextBlock Text=\"{x:Bind Name}\" />" +
+                "<ItemsControl ItemsSource=\"{x:Bind Scenarios}\"><ItemsControl.ItemTemplate><DataTemplate x:DataType=\"local:Scenario\">" +
+                "<FontIcon Glyph=\"{x:Bind Icon}\" /></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>" +
+                "</StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>",
+                rootAttrs: "x:Class=\"App1.CatPage\" xmlns:local=\"using:App1\""), sample: true, types: nestedTypes);
+            var catTag = Attr(Named(nested, "Cats"), "Tag") ?? "";
+            Eq("nested icon member travels with the typed marker", "Icon",
+                string.Join(",", SampleListFiller.GlyphMembersOf(catTag[SampleListFiller.TagPrefix.Length..])));
+            using (SampleObjects.GlyphMembers(new[] { "Icon" }))
+            {
+                Eq("typed rows: icon member -> sample glyph", SamplePlanner.SampleGlyph, SampleObjects.ValueFor(typeof(string), "Icon", 1, 1) as string);
+                Check("typed rows: other text unaffected", SampleObjects.ValueFor(typeof(string), "Name", 1, 1) is string s && s != SamplePlanner.SampleGlyph);
+            }
+            Check("glyph scope ends", SampleObjects.ValueFor(typeof(string), "Icon", 1, 1) is string after && after != SamplePlanner.SampleGlyph);
+            Eq("untyped marker: no glyph list", "", string.Join(",", SampleListFiller.GlyphMembersOf("Rows|[\"a\"]")));
+        }
+
+        private static void SampleDataStates()
+        {
+            var types = SampleTypeModel.FromSources(
+                "using System; using System.Collections.Generic; using System.Collections.ObjectModel; using Microsoft.UI.Xaml;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class StatesPage {\n" +
+                "  public double Quantity { get; set; } = 3;\n" +
+                "  public double Volume { get; set; } = 40;\n" +
+                "  public bool? Agreed { get; set; }\n" +
+                "  public bool IsLoading { get; set; } = true;\n" +
+                "  public bool IsBusy { get; set; }\n" +
+                "  public bool HasOrders { get; set; }\n" +
+                "  public Visibility EmptyVisibility { get; set; } = Visibility.Collapsed;\n" +
+                "  public string Draft { get; set; } = \"\";\n" +
+                "  public string Query { get; set; } = \"rivets\";\n" +
+                "  public Person Owner { get; } = new();\n" +
+                "  public List<string> Tags { get; } = new();\n" +
+                "  public ObservableCollection<Order> Orders { get; } = new();\n" +
+                "  public ObservableCollection<string> Tabs { get; } = new();\n" +
+                "  public static string Initials(string name) => name;\n" +
+                "  public static string FormatPrice(decimal price) => price.ToString();\n" +
+                "  public string GetTitle() => \"\";\n" +
+                "  public StatesPage() { Summary.Text = string.Join(\", \", Tags); }\n" +
+                "  private void OnLoaded(object sender, RoutedEventArgs e) { IsLoading = false; HasOrders = true; }\n" +
+                "  private void Refresh_Click(object sender, RoutedEventArgs e) { IsBusy = true; Status.Text = \"Refreshed!\"; }\n" +
+                "  private void OnStageChanged(object? sender, bool on) { Toggle.IsChecked = on; }\n" +
+                "  private void SetQuery(string query) { Search2.Text = query; }\n" +
+                "}\n" +
+                "public class Person { public string Name { get; set; } public string City { get; set; } }\n" +
+                "public class Order { public string Name { get; set; } public string Customer { get; set; } public decimal Price { get; set; } public bool IsRush { get; set; } public bool IsDone { get; set; } }\n" +
+                "}");
+            var r = CleanRoot(Doc(
+                "<StackPanel>" +
+                "<NumberBox x:Name=\"Qty\" Value=\"{x:Bind Quantity}\" />" +
+                "<Slider x:Name=\"Vol\" Value=\"{x:Bind Volume}\" />" +
+                "<CheckBox x:Name=\"Agree\" IsChecked=\"{x:Bind Agreed}\" />" +
+                "<ProgressRing x:Name=\"Spin\" IsActive=\"{x:Bind IsLoading}\" />" +
+                "<ProgressBar x:Name=\"Busy\" IsIndeterminate=\"{x:Bind IsBusy}\" />" +
+                "<StackPanel x:Name=\"Empty\" Visibility=\"{x:Bind EmptyVisibility}\" />" +
+                "<ListView x:Name=\"Filled\" Visibility=\"{x:Bind HasOrders}\" />" +
+                "<TextBox x:Name=\"DraftBox\" Text=\"{x:Bind Draft}\" />" +
+                "<AutoSuggestBox x:Name=\"Search\" Text=\"{x:Bind Query}\" />" +
+                "<TextBlock x:Name=\"OwnerName\" Text=\"{x:Bind Owner.Name}\" />" +
+                "<TextBlock x:Name=\"OwnerCity\" Text=\"{x:Bind Owner.City}\" />" +
+                "<TextBlock x:Name=\"Init\" Text=\"{x:Bind local:StatesPage.Initials(Owner.Name)}\" />" +
+                "<TextBlock x:Name=\"Title\" Text=\"{x:Bind GetTitle()}\" />" +
+                "<TextBlock x:Name=\"Summary\" />" +
+                "<TextBlock x:Name=\"Status\" />" +
+                "<ToggleButton x:Name=\"Toggle\" /><TextBox x:Name=\"Search2\" />" +
+                "<ListView x:Name=\"List\" ItemsSource=\"{x:Bind Orders}\"><ListView.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"local:Order\"><StackPanel>" +
+                "<TextBlock x:Name=\"Price\" Text=\"{x:Bind local:StatesPage.FormatPrice(Price)}\" />" +
+                "<Border x:Name=\"Rush\" Visibility=\"{x:Bind IsRush}\" />" +
+                "<CheckBox x:Name=\"Done\" IsChecked=\"{x:Bind IsDone}\" />" +
+                "</StackPanel></DataTemplate></ListView.ItemTemplate></ListView>" +
+                "<ItemsControl x:Name=\"TagList\" ItemsSource=\"{x:Bind Tags}\"><ItemsControl.ItemTemplate>" +
+                "<DataTemplate x:DataType=\"x:String\"><TextBlock x:Name=\"TagText\" Text=\"{x:Bind}\" /></DataTemplate>" +
+                "</ItemsControl.ItemTemplate></ItemsControl>" +
+                "<TabView x:Name=\"Tabs\" TabItemsSource=\"{x:Bind Tabs}\" />" +
+                "<ListView x:Name=\"Classic\" ItemsSource=\"{Binding Orders}\" />" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.StatesPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+
+            // Initial state comes from the page's own initializers and load code, not from interaction handlers.
+            Eq("number initializer (NumberBox)", "3", Attr(Named(r, "Qty"), "Value"));
+            Eq("number initializer (Slider)", "40", Attr(Named(r, "Vol"), "Value"));
+            Check("unset bool? -> not checked", Attr(Named(r, "Agree"), "IsChecked") is null or "False", Attr(Named(r, "Agree"), "IsChecked"));
+            Eq("bool cleared in Loaded handler", "False", Attr(Named(r, "Spin"), "IsActive"));
+            Eq("bool set only in a click handler stays false", "False", Attr(Named(r, "Busy"), "IsIndeterminate"));
+            Eq("Visibility.Collapsed initializer", "Collapsed", Attr(Named(r, "Empty"), "Visibility"));
+            Eq("bool set in Loaded -> Visible", "Visible", Attr(Named(r, "Filled"), "Visibility"));
+            Check("empty-string TextBox -> no prefill", Attr(Named(r, "DraftBox"), "Text") is null or "", Attr(Named(r, "DraftBox"), "Text"));
+            Eq("input box shows its known initial text", "rivets", Attr(Named(r, "Search"), "Text"));
+
+            // Vocabulary: names read as what they are.
+            Eq("Person.Name -> a person's name", "Avery Chen", Attr(Named(r, "OwnerName"), "Text"));
+            Eq("City -> a city", "Seattle", Attr(Named(r, "OwnerCity"), "Text"));
+            Eq("TextByName: Customer", "Avery Chen", SamplePlanner.TextByName("Customer", 0));
+            Eq("TextByName: Name on Order", "Order 2", SamplePlanner.TextByName("Name", 1, "Order"));
+            Eq("TextByName: Name on a page stays generic", "Name", SamplePlanner.TextByName("Name", 0, "MainPage"));
+            Check("TextByName: Description -> a sentence", SamplePlanner.TextByName("Description", 0).EndsWith('.'), SamplePlanner.TextByName("Description", 0));
+
+            // Functions show what they compute, not their own name.
+            Eq("Initials(Name) -> initials", "AC", Attr(Named(r, "Init"), "Text"));
+            Eq("GetTitle() -> Title", "Title", Attr(Named(r, "Title"), "Text"));
+            Check("FormatPrice(Price) -> the price", Attr(Named(r, "Price"), "Text") is { } price && !price.Contains("Format", StringComparison.OrdinalIgnoreCase) &&
+                System.Text.RegularExpressions.Regex.IsMatch(price, @"\d"), Attr(Named(r, "Price"), "Text"));
+            Eq("string.Join(\", \", Tags) -> joined sample tags", "Tag, Tag 2, Tag 3", Attr(Named(r, "Summary"), "Text"));
+            Check("text set in Refresh_Click is interaction, not initial", Attr(Named(r, "Status"), "Text") is null, Attr(Named(r, "Status"), "Text"));
+            Check("(object? sender, bool) handler is interaction", Attr(Named(r, "Toggle"), "IsChecked") is null, Attr(Named(r, "Toggle"), "IsChecked"));
+            Check("input box set from a parameter stays empty", Attr(Named(r, "Search2"), "Text") is null, Attr(Named(r, "Search2"), "Text"));
+
+            // Row templates bind each row's own values.
+            Eq("row Visibility -> converter binding", "{Binding IsRush, Converter={StaticResource __wxpSampleVisibility}}", Attr(Named(r, "Rush"), "Visibility"));
+            Eq("row bool -> binding", "{Binding IsDone}", Attr(Named(r, "Done"), "IsChecked"));
+            Eq("{x:Bind} of a string row -> {Binding}", "{Binding}", Attr(Named(r, "TagText"), "Text"));
+            var tag = Attr(Named(r, "List"), "Tag") ?? "";
+            Check("row bools vary", tag.Contains("\"IsRush\":true") && tag.Contains("\"IsRush\":false"), tag);
+            Check("TabItemsSource filled", (Attr(Named(r, "Tabs"), "Tag") ?? "").StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal), Attr(Named(r, "Tabs"), "Tag"));
+            Check("classic {Binding} ItemsSource filled", (Attr(Named(r, "Classic"), "Tag") ?? "").StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal), Attr(Named(r, "Classic"), "Tag"));
+            Check("string list rows are readable", (Attr(Named(r, "TagList"), "Tag") ?? "").Contains("\"Tag 2\""), Attr(Named(r, "TagList"), "Tag"));
+
+            // Typed objects: an empty "= new()" collection is filled like a null one.
+            var withLines = SampleObjects.Create(typeof(Fixtures.Card), null, 0) as Fixtures.Card;
+            Check("empty initialized list filled", withLines?.Lines.Count > 0, withLines?.Lines.Count.ToString());
+
+            // S20: a template's x:DataType wins over an unrelated same-named source element type.
+            var dupTypes = SampleTypeModel.FromSources(
+                "using System.Collections.Generic;\n" +
+                "namespace App1 { public sealed partial class DupPage { public List<App1.Models.Item> Items { get; } = new(); } public class Item { public string Title { get; set; } } }\n" +
+                "namespace App1.Models { public class Item { public string Name { get; set; } } }");
+            var dup = CleanRoot(Doc(
+                "<ListView x:Name=\"Dup\" ItemsSource=\"{x:Bind Items}\"><ListView.ItemTemplate><DataTemplate x:DataType=\"local:Item\">" +
+                "<TextBlock Text=\"{x:Bind Title}\" /></DataTemplate></ListView.ItemTemplate></ListView>",
+                rootAttrs: "x:Class=\"App1.DupPage\" xmlns:local=\"using:App1\""), sample: true, types: dupTypes);
+            var dupTag = Attr(Named(dup, "Dup"), "Tag") ?? "";
+            Check("S20: rows typed by the template's x:DataType", dupTag.Contains("\"type\":\"App1.Item\"") && dupTag.Contains("\"Title\":\"Title 2\""), dupTag);
+
+            // Project discovery: a folder with several projects picks the WinUI app.
+            var dir = Directory.CreateTempSubdirectory("wxp-proj-").FullName;
+            try
+            {
+                File.WriteAllText(Path.Combine(dir, "A.Tests.csproj"), "<Project><PropertyGroup /></Project>");
+                File.WriteAllText(Path.Combine(dir, "Zeta.csproj"), "<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup></Project>");
+                Eq("FindProject prefers <UseWinUI>", Path.Combine(dir, "Zeta.csproj"), SampleTypeModel.FindProject(Path.Combine(dir, "MainPage.xaml")));
+            }
+            finally
+            {
+                Directory.Delete(dir, true);
+            }
+        }
+
+        private static void SampleDataGroupsAndModel()
+        {
+            // Grouped lists: a ListView over {Binding Source={StaticResource Cvs}} gets a grouped marker.
+            var types = SampleTypeModel.FromSources(
+                "using System.Collections.Generic;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class GroupsPage {\n" +
+                "  public List<PersonGroup> Groups { get; } = new();\n" +
+                "  public List<Team> Teams { get; } = new();\n" +
+                "  public GroupsPage() { CodeCvs.Source = Groups; }\n" +
+                "}\n" +
+                "public class Person { public string Name { get; set; } }\n" +
+                "public class PersonGroup : List<Person> { public string Key { get; set; } }\n" +
+                "public class Team { public string Key { get; set; } public List<Person> Members { get; set; } }\n" +
+                "}");
+            const string template = "<ListView.ItemTemplate><DataTemplate x:DataType=\"local:Person\"><TextBlock Text=\"{x:Bind Name}\" /></DataTemplate></ListView.ItemTemplate>";
+            string List(string name, string cvs) =>
+                $"<ListView x:Name=\"{name}\" ItemsSource=\"{{Binding Source={{StaticResource {cvs}}}}}\">{template}</ListView>";
+            var r = CleanRoot(Doc(
+                "<Grid><Grid.Resources>" +
+                "<CollectionViewSource x:Key=\"BindCvs\" Source=\"{x:Bind Groups}\" IsSourceGrouped=\"True\" />" +
+                "<CollectionViewSource x:Key=\"PathCvs\" Source=\"{x:Bind Teams}\" IsSourceGrouped=\"True\" ItemsPath=\"Members\" />" +
+                "<CollectionViewSource x:Key=\"CodeCvs\" x:Name=\"CodeCvs\" IsSourceGrouped=\"True\" />" +
+                "<CollectionViewSource x:Key=\"DesignCvs\" d:Source=\"{d:DesignInstance local:Person}\" IsSourceGrouped=\"True\" />" +
+                "<CollectionViewSource x:Key=\"LiteralCvs\" IsSourceGrouped=\"True\"><CollectionViewSource.Source><x:Array Type=\"x:String\" /></CollectionViewSource.Source></CollectionViewSource>" +
+                "</Grid.Resources><StackPanel>" +
+                List("ByBind", "BindCvs") + List("ByPath", "PathCvs") + List("ByCode", "CodeCvs") +
+                List("ByDesign", "DesignCvs") + List("ByLiteral", "LiteralCvs") +
+                "</StackPanel></Grid>",
+                rootAttrs: "x:Class=\"App1.GroupsPage\" xmlns:local=\"using:App1\""), sample: true, types: types);
+
+            var bind = Attr(Named(r, "ByBind"), "Tag") ?? "";
+            Check("CVS x:Bind Source -> grouped marker", bind.StartsWith(SampleListFiller.TagPrefix, StringComparison.Ordinal) && bind.Contains("\"grouped\":true"), bind);
+            Check("grouped: group type from List<PersonGroup>", bind.Contains("\"groupType\":\"App1.PersonGroup\""), bind);
+            Check("grouped: item type from the group's element type", bind.Contains("\"type\":\"App1.Person\""), bind);
+            Check("grouped: two keyed groups", bind.Contains("\"Key\":\"Group 1\"") && bind.Contains("\"Key\":\"Group 2\"") && !bind.Contains("\"Group 3\""), bind);
+            Check("grouped: rows carry template fields", bind.Contains("\"Name\":"), bind);
+
+            var byPath = Attr(Named(r, "ByPath"), "Tag") ?? "";
+            Check("ItemsPath: group type Team", byPath.Contains("\"groupType\":\"App1.Team\""), byPath);
+            Check("ItemsPath: item type via Team.Members", byPath.Contains("\"type\":\"App1.Person\""), byPath);
+            Check("ItemsPath carried in payload", byPath.Contains("\"itemsPath\":\"Members\""), byPath);
+            Check("ItemsPath: keys from the Teams label", byPath.Contains("\"Key\":\"Team 1\""), byPath);
+
+            var byCode = Attr(Named(r, "ByCode"), "Tag") ?? "";
+            Check("Source assigned in code-behind -> typed groups", byCode.Contains("\"grouped\":true") && byCode.Contains("\"groupType\":\"App1.PersonGroup\""), byCode);
+            Check("d:Source -> no marker", Attr(Named(r, "ByDesign"), "Tag") is null, Attr(Named(r, "ByDesign"), "Tag"));
+            Check("literal Source -> no marker", Attr(Named(r, "ByLiteral"), "Tag") is null, Attr(Named(r, "ByLiteral"), "Tag"));
+
+            // Without a type model the marker is still grouped, with plain groups.
+            var untyped = CleanRoot(Doc(
+                "<Grid><Grid.Resources><CollectionViewSource x:Key=\"Cvs\" Source=\"{x:Bind Groups}\" IsSourceGrouped=\"True\" /></Grid.Resources>" +
+                "<ListView x:Name=\"L\" ItemsSource=\"{Binding Source={StaticResource Cvs}}\" /></Grid>"), sample: true);
+            var untypedTag = Attr(Named(untyped, "L"), "Tag") ?? "";
+            Check("no type model -> plain grouped marker", untypedTag.Contains("\"grouped\":true") && !untypedTag.Contains("groupType"), untypedTag);
+
+            // BuildGroups turns the payload into the app's own group objects when it can.
+            const string rows = "\"rows\":[{\"Key\":\"Member 1\",\"Items\":[{\"Name\":\"A\"},{\"Name\":\"B\"}]},{\"Key\":\"Member 2\",\"Items\":[{\"Name\":\"C\"}]}]";
+            var listGroups = SampleListFiller.BuildGroups(
+                "Members|{\"grouped\":true,\"groupType\":\"Surface.Tests.Fixtures.MemberGroup\",\"type\":\"Surface.Tests.Fixtures.Member\"," + rows + "}",
+                out var label, out var typed, out var path);
+            Eq("BuildGroups label", "Members", label);
+            Check("List-subclass group -> typed", typed && listGroups.Count == 2 && listGroups[0] is Fixtures.MemberGroup, $"{typed} {listGroups.FirstOrDefault()?.GetType().Name}");
+            var mg = listGroups.FirstOrDefault() as Fixtures.MemberGroup;
+            Eq("typed group keeps its Key", "Member 1", mg?.Key);
+            Check("typed group holds typed rows", mg is { Count: 2 } && mg[0] is { Name: "A" }, mg?.Count.ToString());
+            Check("no ItemsPath for a List-subclass group", path is null, path);
+
+            var teamGroups = SampleListFiller.BuildGroups(
+                "Teams|{\"grouped\":true,\"groupType\":\"Surface.Tests.Fixtures.Team\",\"type\":\"Surface.Tests.Fixtures.Member\",\"itemsPath\":\"Members\"," + rows + "}",
+                out _, out var teamTyped, out var teamPath);
+            Check("ItemsPath group -> typed Team", teamTyped && teamGroups.FirstOrDefault() is Fixtures.Team { Key: "Member 1" }, teamGroups.FirstOrDefault()?.GetType().Name);
+            Check("ItemsPath group's collection filled", teamGroups.FirstOrDefault() is Fixtures.Team { Members.Count: > 0 }, null);
+            Eq("ItemsPath returned", "Members", teamPath);
+
+            var plain = SampleListFiller.BuildGroups(
+                "X|{\"grouped\":true,\"groupType\":\"Nope.Missing\"," + rows + "}", out _, out var plainTyped, out _);
+            Check("unknown group type -> plain item lists", !plainTyped && plain.Count == 2 && plain[0] is List<object> { Count: 2 } && plain[1] is List<object> { Count: 1 },
+                plain.FirstOrDefault()?.GetType().Name);
+
+            // Project watcher: only the project's own sources, never build output.
+            var proj = Directory.CreateTempSubdirectory("wxp-proj-").FullName;
+            Check("IsBuildOutput: bin\\", SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, "bin", "Debug", "x.cs")), null);
+            Check("IsBuildOutput: obj\\", SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, "obj", "x.g.cs")), null);
+            Check("IsBuildOutput: nested Sub\\obj\\", SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, "Sub", "OBJ", "x.cs")), null);
+            Check("IsBuildOutput: .vs\\", SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, ".vs", "x.cs")), null);
+            Check("IsBuildOutput: Objects\\ is source", !SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, "Objects", "x.cs")), null);
+            Check("IsBuildOutput: root file is source", !SampleTypeModel.IsBuildOutput(proj, Path.Combine(proj, "Binary.cs")), null);
+            try
+            {
+                File.WriteAllText(Path.Combine(proj, "Watch.csproj"), "<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup></Project>");
+                File.WriteAllText(Path.Combine(proj, "Alpha.cs"), "namespace W { public class Alpha { public string Name { get; set; } } }");
+                Directory.CreateDirectory(Path.Combine(proj, "obj"));
+                File.WriteAllText(Path.Combine(proj, "obj", "Gen.g.cs"), "namespace W { public class Generated { } }");
+                var page = Path.Combine(proj, "MainPage.xaml");
+                var first = SampleTypeModel.ForDocument(page, TimeSpan.FromMilliseconds(1));
+                Check("first build waited for (FirstBuildWait)", first?.FindType("W.Alpha") is not null, first is null ? "null model" : "no Alpha");
+                Check("obj\\ sources excluded", first?.FindType("W.Generated") is null, null);
+
+                File.WriteAllText(Path.Combine(proj, "Beta.cs"), "namespace W { public class Beta { } }");
+                SampleTypeModel? next = null;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (sw.Elapsed < TimeSpan.FromSeconds(5) && next?.FindType("W.Beta") is null)
+                {
+                    Thread.Sleep(100);
+                    next = SampleTypeModel.ForDocument(page, TimeSpan.FromSeconds(2));
+                }
+                Check("watcher picks up a new .cs file", next?.FindType("W.Beta") is not null, $"after {sw.ElapsedMilliseconds} ms");
+
+                File.WriteAllText(Path.Combine(proj, "obj", "Later.g.cs"), "namespace W { public class Later { } }");
+                Thread.Sleep(500);
+                var after = SampleTypeModel.ForDocument(page, TimeSpan.FromSeconds(2));
+                Check("watcher ignores later obj\\ writes", after?.FindType("W.Later") is null && after?.FindType("W.Beta") is not null, null);
+            }
+            finally
+            {
+                try { Directory.Delete(proj, true); } catch (IOException) { }
+            }
+
+            // Chart helpers.
+            Check("HasEmptyData: Series filled, ItemsSource empty -> has data", !SampleChartFiller.HasEmptyData(new Fixtures.SeriesFilledChart()), null);
+            Check("HasEmptyData: all data properties empty -> empty", SampleChartFiller.HasEmptyData(new Fixtures.EmptyChart()), null);
+            Check("HasEmptyData: no data properties -> not a chart", !SampleChartFiller.HasEmptyData(new Fixtures.NotAChart()), null);
+            foreach (var round in new[] { "PieChart", "DonutChart", "DoughnutSeries", "RadialGauge", "SunburstChart", "piechart" })
+            {
+                Check($"IsRoundChart({round})", SampleChartFiller.IsRoundChart(round), null);
+            }
+            foreach (var flat in new[] { "LineChart", "BarChart", "Sparkline", "CartesianChart", "Chart" })
+            {
+                Check($"!IsRoundChart({flat})", !SampleChartFiller.IsRoundChart(flat), null);
+            }
+        }
+
+        private static void SampleDataCharts()
+        {
+            var types = SampleTypeModel.FromSources(
+                "using System.Collections.Generic; using Microsoft.UI.Xaml;\n" +
+                "namespace App1 {\n" +
+                "public sealed partial class ChartsPage {\n" +
+                "  public string[] Months { get; } = [\"Jan\", \"Feb\", \"Mar\"];\n" +
+                "  public double[] Profits { get; } = new[] { 1.5, 2, 3.25 };\n" +
+                "  public List<double> Coded { get; } = new();\n" +
+                "  public List<string> Regions { get; } = new();\n" +
+                "  public bool ShowTrend { get; set; }\n" +
+                "  public bool ShowLive { get; set; }\n" +
+                "  public bool ShowInit { get; set; } = true;\n" +
+                "  public Visibility HiddenVis { get; } = Visibility.Collapsed;\n" +
+                "  public bool ShowLabel { get; set; }\n" +
+                "  public ChartsPage() { ShowLive = Compute(); Coded.Add(1); }\n" +
+                "}\n" +
+                "}");
+            var fixups = new List<ChartFixup>();
+            var xaml = Doc(
+                "<StackPanel>" +
+                "<charts:Chart x:Name=\"R1\" Visibility=\"{x:Bind ShowInit}\">" +
+                "<charts:Chart.Data>" +
+                "<charts:Samples x:Name=\"Month\" ItemsSource=\"{x:Bind Months}\" />" +
+                "<charts:Samples x:Name=\"Profit\" ItemsSource=\"{x:Bind Profits}\" />" +
+                "<charts:Samples ItemsSource=\"{x:Bind Coded}\" />" +
+                "<charts:Samples x:Name=\"Region\" ItemsSource=\"{x:Bind Regions}\" />" +
+                "</charts:Chart.Data>" +
+                "<charts:Chart.Axes><charts:CategoryAxis x:Name=\"MonthX\" /><charts:LinearAxis x:Name=\"ProfitY\" /></charts:Chart.Axes>" +
+                "<charts:Chart.Series><charts:LineSeries x:Name=\"Line\" XAxis=\"{x:Bind MonthX}\" YAxis=\"{x:Bind ProfitY}\" " +
+                "XValues=\"{x:Bind Month}\" YValues=\"{x:Bind Profit}\" Title=\"{x:Bind Missing}\" />" +
+                "<charts:LineSeries XValues=\"{x:Bind Month}\" />" +
+                "</charts:Chart.Series></charts:Chart>" +
+                "<charts:Chart x:Name=\"Trend\" Visibility=\"{x:Bind ShowTrend}\" />" +
+                "<charts:Chart x:Name=\"Live\" Visibility=\"{x:Bind ShowLive}\" />" +
+                "<charts:Chart x:Name=\"Hidden\" Visibility=\"{x:Bind HiddenVis}\" />" +
+                "<charts:Chart x:Name=\"Conv\" Visibility=\"{x:Bind ShowTrend, Converter={StaticResource C}}\" />" +
+                "<TextBlock x:Name=\"Label\" Visibility=\"{x:Bind ShowLabel}\" />" +
+                "</StackPanel>",
+                rootAttrs: "x:Class=\"App1.ChartsPage\" xmlns:charts=\"using:Microsoft.UI.Xaml.Controls.Charts\"");
+            var r = XDocument.Parse(XamlCleaner.Clean(xaml, sampleData: true, sampleTypes: types, chartFixups: fixups)).Root!;
+            ChartFixup? Fix(string element, string prop) => fixups.FirstOrDefault(f => f.Element == element && f.Property == prop);
+
+            Eq("axis reference -> fixup", "MonthX", Fix("Line", "XAxis")?.RefName);
+            Eq("samples reference -> fixup", "Profit", Fix("Line", "YValues")?.RefName);
+            Check("reference attributes dropped", Attr(Named(r, "Line"), "XAxis") is null && Attr(Named(r, "Line"), "YValues") is null);
+            Check("non-reference scalar falls through (dropped/placeholdered, not a fixup)", Fix("Line", "Title") is null);
+            var month = Fix("Month", "ItemsSource");
+            Check("string[] literal kept", month is { Numeric: false } && string.Join(",", month.Values!) == "Jan,Feb,Mar", string.Join(",", month?.Values ?? []));
+            var profit = Fix("Profit", "ItemsSource");
+            Check("double[] literal kept", profit is { Numeric: true } && string.Join(",", profit.Values!) == "1.5,2,3.25", string.Join(",", profit?.Values ?? []));
+            Check("samples ItemsSource attribute dropped", Attr(Named(r, "Month"), "ItemsSource") is null);
+            var coded = fixups.FirstOrDefault(f => f.Element.StartsWith("__wxpChart", StringComparison.Ordinal) && f.Property == "ItemsSource");
+            Check("unnamed samples gets a generated name", coded is not null && Named(r, coded.Element) is { Name.LocalName: "Samples" }, coded?.Element);
+            Check("code-filled List<double> -> typed wave", coded is { Numeric: true } && coded.Values!.Count == SamplePlanner.ChartPoints);
+            var region = Fix("Region", "ItemsSource");
+            Check("List<string> -> month categories", region is { Numeric: false } && region.Values!.Count == SamplePlanner.ChartPoints && region.Values[0] == "Jan", string.Join(",", region?.Values ?? []));
+            var unnamedSeries = fixups.Where(f => f.Element.StartsWith("__wxpChart", StringComparison.Ordinal) && f.Property == "XValues").ToList();
+            Check("unnamed series reference gets its own generated name", unnamedSeries.Count == 1 && unnamedSeries[0].Element != coded?.Element);
+
+            Eq("bool with true initializer -> Visible", "Visible", Attr(Named(r, "R1"), "Visibility"));
+            Eq("never-assigned bool -> Collapsed (default false)", "Collapsed", Attr(Named(r, "Trend"), "Visibility"));
+            Eq("bool assigned in code -> shown", "Visible", Attr(Named(r, "Live"), "Visibility") ?? "Visible");
+            Eq("Visibility.Collapsed initializer", "Collapsed", Attr(Named(r, "Hidden"), "Visibility"));
+            Check("converter -> not planned as hidden", Attr(Named(r, "Conv"), "Visibility") != "Collapsed", Attr(Named(r, "Conv"), "Visibility"));
+            Eq("non-chart Visibility follows its never-assigned bool", "Collapsed", Attr(Named(r, "Label"), "Visibility"));
+
+            var noSample = new List<ChartFixup>();
+            XamlCleaner.Clean(xaml, sampleData: false, sampleTypes: types, chartFixups: noSample);
+            Check("sample data off -> no fixups", noSample.Count == 0, noSample.Count.ToString());
+
+            var noTypes = new List<ChartFixup>();
+            XamlCleaner.Clean(Doc(
+                "<charts:Chart><charts:Chart.Data><charts:Samples x:Name=\"X\" ItemsSource=\"{x:Bind Xs}\" /><charts:Samples x:Name=\"Y\" ItemsSource=\"{x:Bind Ys}\" /></charts:Chart.Data>" +
+                "<charts:Chart.Axes><charts:CategoryAxis x:Name=\"Cat\" /></charts:Chart.Axes>" +
+                "<charts:Chart.Series><charts:BarSeries XAxis=\"{x:Bind Cat}\" XValues=\"{x:Bind X}\" YValues=\"{x:Bind Y}\" /></charts:Chart.Series></charts:Chart>",
+                rootAttrs: "xmlns:charts=\"using:Microsoft.UI.Xaml.Controls.Charts\""), sampleData: true, chartFixups: noTypes);
+            Check("untyped samples on a category axis -> month labels", noTypes.FirstOrDefault(f => f.Element == "X") is { Numeric: false } x && x.Values![0] == "Jan");
+            Check("untyped Y samples -> numbers", noTypes.FirstOrDefault(f => f.Element == "Y") is { Numeric: true });
+
+            Check("series values deterministic", SamplePlanner.ChartSeriesValues("A").SequenceEqual(SamplePlanner.ChartSeriesValues("A")));
+            Check("series values in 20..80", SamplePlanner.ChartSeriesValues("B").All(v => v is >= 20 and <= 80));
+            var pinned = SamplePlanner.ChartSeriesValues("C", 30, 94, 100);
+            Check("series values scale into a pinned range", pinned.Length == 30 && pinned.All(v => v is >= 94 and <= 100), string.Join(",", pinned));
+            var twelve = SamplePlanner.ChartSeriesValues("D", 12);
+            var line = SamplePlanner.ChartSeriesValues("D", SamplePlanner.ChartLinePoints);
+            Check("12 and 24 points trace the same wave", twelve[0] == line[0] && twelve[^1] == line[^1]);
+            Check("twelve month categories", string.Join(",", SamplePlanner.ChartCategories()) == "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec");
         }
 
         private static void SampleDataObjects()
@@ -468,18 +1246,18 @@ namespace Surface.Tests
             Check("typed payload parses", label == "Orders" && typeName == "App1.Order" && rows.Count == 3, $"{label} {typeName} {rows.Count}");
             Eq("nested type reflection name", "App1.Outer+Inner", SamplePlanner.ReflectionName(types.FindType("App1.Outer.Inner")!));
 
-            Check("resolve type across loaded assemblies", SampleObjects.ResolveType(typeof(Fixtures.Plane).FullName!) == typeof(Fixtures.Plane));
-            var row = new Dictionary<string, object> { ["Tail"] = "N123AB" };
-            var planes = Enumerable.Range(0, 3).Select(i => SampleObjects.Create(typeof(Fixtures.Plane), i == 0 ? row : null, i) as Fixtures.Plane).ToList();
-            var p0 = planes[0]!;
-            Eq("row string wins", "N123AB", p0.Tail);
-            Eq("generated string by name", "Tail 2", planes[1]!.Tail);
-            Check("init int generated", p0.Cycles > 0, p0.Cycles.ToString());
-            Eq("type's own default kept", "A-check", p0.NextCheck);
-            Check("enum varies by row", p0.State == Fixtures.FlightState.Healthy && planes[1]!.State == Fixtures.FlightState.Attention, $"{p0.State} {planes[1]!.State}");
+            Check("resolve type across loaded assemblies", SampleObjects.ResolveType(typeof(Fixtures.Asset).FullName!) == typeof(Fixtures.Asset));
+            var row = new Dictionary<string, object> { ["Code"] = "AB-123" };
+            var assets = Enumerable.Range(0, 3).Select(i => SampleObjects.Create(typeof(Fixtures.Asset), i == 0 ? row : null, i) as Fixtures.Asset).ToList();
+            var p0 = assets[0]!;
+            Eq("row string wins", "AB-123", p0.Code);
+            Eq("generated identifier by name", "C-1042", assets[1]!.Code);
+            Check("init int generated", p0.Uses > 0, p0.Uses.ToString());
+            Eq("type's own default kept", "Standard", p0.Tier);
+            Check("enum varies by row", p0.State == Fixtures.AssetState.Healthy && assets[1]!.State == Fixtures.AssetState.Attention, $"{p0.State} {assets[1]!.State}");
             Check("DateTime generated", p0.LastSeen != default, p0.LastSeen.ToString("o"));
-            Check("nested object via parameterized ctor", p0.Engine is { Serial: "Serial", Hours: > 0 }, p0.Engine?.Serial);
-            Check("list property generated", p0.Notes is { Count: 3 } && p0.Notes[0] == "Note", string.Join(",", p0.Notes ?? new()));
+            Check("nested object via parameterized ctor", p0.Part is { Serial: "Serial", Hours: > 0 }, p0.Part?.Serial);
+            Check("list property generated", p0.Notes is { Count: 3 } && p0.Notes[0].Length > 0 && p0.Notes[0] != p0.Notes[1], string.Join(",", p0.Notes ?? new()));
             Check("get-only collection filled", p0.Spares.Count == 3);
             Check("throwing ctor -> null, no throw", SampleObjects.Create(typeof(Fixtures.Exploding), null, 0) is null);
 
@@ -641,6 +1419,16 @@ namespace Surface.Tests
             var r2 = CleanRoot(Doc("<TextBlock x:Name=\"T\" Text=\"{StaticResource Greeting}\" />"), sample: true);
             Eq("sample on: missing text resource -> {Key} placeholder", "{}{Greeting}", Attr(Named(r2, "T"), "Text"));
             Check("null missing-set tolerated", Attr(Named(CleanRoot(Doc("<Border x:Name=\"B\" Background=\"{StaticResource Z}\" />")), "B"), "Background") is null);
+
+            // A resource entry with only x:Name is keyed by its name (ItemsRepeater pages: <StackLayout x:Name=…>).
+            var missing3 = new HashSet<string>();
+            var rn = CleanRoot(Doc(
+                "<Page.Resources><StackLayout x:Name=\"VStack\" /></Page.Resources>" +
+                "<StackPanel><ItemsRepeater x:Name=\"Rep\" Layout=\"{StaticResource VStack}\" />" +
+                "<Border x:Name=\"NotRes\" /><Border x:Name=\"Ref\" Tag=\"{StaticResource NotRes}\" /></StackPanel>"),
+                missing: missing3);
+            Eq("x:Name-only resource kept", "{StaticResource VStack}", Attr(Named(rn, "Rep"), "Layout"));
+            Check("x:Name of a non-resource element is not a key", Attr(Named(rn, "Ref"), "Tag") is null && missing3.SetEquals(new[] { "NotRes" }), string.Join(",", missing3));
 
             // Rule 8: a Setter left without a value by Rule 6 is dropped (it would fail the whole document).
             var r3 = CleanRoot(Doc(

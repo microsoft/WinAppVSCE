@@ -10,6 +10,7 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
+using WinUIXamlPreview.Editor;
 using WinUIXamlPreview.Logging;
 using WinUIXamlPreview.Protocol;
 using WinUIXamlPreview.UI;
@@ -108,9 +109,12 @@ namespace WinUIXamlPreview
             // P8: register the packaged-preview identity in the background as soon as a solution with a
             // packaged-only WinUI build is open, so the first preview doesn't pay the 3–18 s PowerShell cost.
             Microsoft.VisualStudio.Shell.Events.SolutionEvents.OnAfterOpenSolution += (_, __) => ScheduleIdentityPrewarm(dte);
+            Microsoft.VisualStudio.Shell.Events.SolutionEvents.OnAfterOpenSolution += (_, __) => ScheduleHostPrebuild(dte);
+            Microsoft.VisualStudio.Shell.Events.SolutionEvents.OnBeforeCloseSolution += (_, __) => CancelHostPrebuild();
             if (dte?.Solution?.IsOpen == true)
             {
                 ScheduleIdentityPrewarm(dte);
+                ScheduleHostPrebuild(dte);
             }
 
             Log.Write("WinUI XAML Preview package ready.");
@@ -142,6 +146,58 @@ namespace WinUIXamlPreview
                 catch (OperationCanceledException) { }
                 catch (Exception ex) { Log.Write("Identity prewarm failed: " + ex.Message); }
             }).FileAndForget("winuixamlpreview/identity-prewarm");
+        }
+
+        // Full fidelity: build the version-matched preview host for the solution's WinUI projects in the
+        // background, so the first preview of such a page finds it cached. Cancelled (stops waiting and queuing;
+        // a build already running finishes and caches) when the solution closes or another one opens.
+        private CancellationTokenSource? _prebuildCts;
+
+        private void ScheduleHostPrebuild(DTE? dte)
+        {
+            if (dte == null)
+            {
+                return;
+            }
+
+            CancelHostPrebuild();
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(DisposalToken);
+            _prebuildCts = cts;
+            JoinableTaskFactory.RunAsync(async () =>
+            {
+                try
+                {
+                    // Let the solution load, restores start, and the first preview (if any) claim its own build.
+                    await System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(15), cts.Token);
+                    await JoinableTaskFactory.SwitchToMainThreadAsync(cts.Token);
+                    // Read on the UI thread first: the settings store loads lazily and is cached afterwards.
+                    if (!PreviewOptions.FullFidelityAutoBuild)
+                    {
+                        return;
+                    }
+
+                    var projects = new System.Collections.Generic.List<string>();
+                    foreach (Project p in dte.Solution.Projects)
+                    {
+                        CollectCsprojPaths(p, projects, 0);
+                    }
+
+                    await TaskScheduler.Default;
+                    await MatchedHostPrebuild.RunAsync(projects, () => PreviewOptions.FullFidelityAutoBuild, Log.Write, cts.Token);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { Log.Write("Matched-host prebuild failed: " + ex.Message); }
+            }).FileAndForget("winuixamlpreview/host-prebuild");
+        }
+
+        private void CancelHostPrebuild()
+        {
+            var cts = _prebuildCts;
+            _prebuildCts = null;
+            if (cts != null)
+            {
+                try { cts.Cancel(); } catch (ObjectDisposedException) { }
+            }
         }
 
         private static void CollectCsprojPaths(Project? project, System.Collections.Generic.List<string> into, int depth)

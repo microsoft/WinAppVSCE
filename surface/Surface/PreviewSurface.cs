@@ -915,7 +915,8 @@ internal sealed class PreviewSurface
         {
             foreach (var item in seq)
             {
-                if (item is FrameworkElement fe)
+                // The sample-data chart layer sits beside the page in the content host; it isn't authored.
+                if (item is FrameworkElement fe && !(fe.Tag is string t && t == SampleChartFiller.OverlayTag))
                 {
                     yield return fe;
                 }

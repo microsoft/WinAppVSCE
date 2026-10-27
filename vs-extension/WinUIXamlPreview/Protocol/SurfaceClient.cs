@@ -571,14 +571,17 @@ namespace WinUIXamlPreview.Protocol
         /// </summary>
         public bool? SampleData { get; set; }
 
-        /// <summary>Path of the XAML file being previewed, sent with every document message so the surface can type sample values from the project's source. Null omits the field.</summary>
+        /// <summary>Path of the XAML file being previewed, sent with every document message so the surface can type sample values from the project's source.</summary>
         public Func<string?>? DocumentPathSource { get; set; }
 
+        // Always present: "" tells the surface there is no file, so it drops the previous document's project.
+        private string CurrentDocumentPath() => DocumentPathSource?.Invoke() ?? "";
+
         public bool LoadXaml(string xaml, int width, int height, double scale)
-            => Send(new LoadXamlMsg { Xaml = xaml, Width = width, Height = height, Scale = scale,             SampleData = SampleData, DocumentPath = DocumentPathSource?.Invoke() });
+            => Send(new LoadXamlMsg { Xaml = xaml, Width = width, Height = height, Scale = scale,             SampleData = SampleData, DocumentPath = CurrentDocumentPath() });
 
         public bool UpdateXaml(string xaml)
-            => Send(new UpdateXamlMsg { Xaml = xaml, SampleData = SampleData, DocumentPath = DocumentPathSource?.Invoke() });
+            => Send(new UpdateXamlMsg { Xaml = xaml, SampleData = SampleData, DocumentPath = CurrentDocumentPath() });
 
         public bool Resize(int width, int height, double scale)
             => Send(new ResizeMsg { Width = width, Height = height, Scale = scale });
@@ -587,7 +590,7 @@ namespace WinUIXamlPreview.Protocol
         public bool EnterNative(string xaml, double width, double height, double scale, int paneWidthPx = 0, int paneHeightPx = 0, ViewMsg? view = null)
             => Send(new EnterNativeMsg
             {
-                Xaml = xaml, Width = width, Height = height, Scale = scale, SampleData = SampleData, DocumentPath = DocumentPathSource?.Invoke(),
+                Xaml = xaml, Width = width, Height = height, Scale = scale, SampleData = SampleData, DocumentPath = CurrentDocumentPath(),
                 PaneWidthPx = paneWidthPx > 0 ? paneWidthPx : (int?)null,
                 PaneHeightPx = paneHeightPx > 0 ? paneHeightPx : (int?)null,
                 View = view,

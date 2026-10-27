@@ -207,6 +207,7 @@ namespace WinUIXamlPreview.Protocol
 
         [JsonPropertyName("missingKeys"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? MissingKeys { get; set; }
         [JsonPropertyName("unmappedTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? UnmappedTypes { get; set; }
+        [JsonPropertyName("newerTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? NewerTypes { get; set; }
     }
 
     internal sealed class ErrorMsg
@@ -223,6 +224,7 @@ namespace WinUIXamlPreview.Protocol
 
         [JsonPropertyName("missingKeys"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? MissingKeys { get; set; }
         [JsonPropertyName("unmappedTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? UnmappedTypes { get; set; }
+        [JsonPropertyName("newerTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? NewerTypes { get; set; }
     }
 
     /// <summary>
@@ -244,6 +246,7 @@ namespace WinUIXamlPreview.Protocol
 
         /// <summary>Custom types the surface replaced with placeholders because nothing could map them.</summary>
         [JsonPropertyName("unmappedTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? UnmappedTypes { get; set; }
+        [JsonPropertyName("newerTypes"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? NewerTypes { get; set; }
     }
 
     /// <summary>Acknowledgement that the surface left native mode (window re-cloaked off-screen).</summary>

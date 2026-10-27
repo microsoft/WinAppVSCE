@@ -330,7 +330,7 @@ internal static partial class Program
 
         // ---- unbuilt-project build hint ----
         var someKeys = new[] { "PillCornerRadius", "AccentBrush" };
-        var someTypes = new[] { "Hangar.Controls.StatusPill", "Hangar.Controls.StatusPill", "Hangar.Controls.Gauge" };
+        var someTypes = new[] { "Contoso.Controls.StatusPill", "Contoso.Controls.StatusPill", "Contoso.Controls.Gauge" };
         Check("build hint: built project → none", BuildHint.Describe(false, someKeys, someTypes) == null);
         Check("build hint: unbuilt but nothing lost → none", BuildHint.Describe(true, new string[0], null) == null);
         Eq("build hint: types + keys",
@@ -343,6 +343,22 @@ internal static partial class Program
         Check("build hint: caps named types",
             BuildHint.Describe(true, null, new[] { "A.T1", "A.T2", "A.T3", "A.T4", "A.T5" })!
                 .Contains("5 custom controls shown as placeholders (T1, T2, T3, +2 more)"));
+
+        // ---- WinUI types newer than the bundled host ----
+        Check("newer types: none → no hint", NewerTypesHint.Describe(new string[0], "2.2.0", "2.2.2", false, false) == null);
+        Check("newer types: null → no hint", NewerTypesHint.Describe(null, "2.2.0", "2.2.2", false, false) == null);
+        Eq("newer types: off → suggests Full fidelity",
+            "FlowLayout isn't in the preview's bundled WinAppSDK 2.2.0, so it's left out. Turn on Full fidelity to preview with WinAppSDK 2.2.2-experimental9.",
+            NewerTypesHint.Describe(new[] { "FlowLayout" }, "2.2.0", "2.2.2-experimental9", false, false));
+        Eq("newer types: on → explanation only",
+            "FlowLayout, TitleBar aren't in the preview's bundled WinAppSDK 2.2.0, so they're left out.",
+            NewerTypesHint.Describe(new[] { "FlowLayout", "TitleBar", "FlowLayout" }, "2.2.0", "2.3.0", true, false));
+        Eq("newer types: build failed → points at the log",
+            "FlowLayout isn't in the preview's bundled WinAppSDK 2.2.0, so it's left out. A WinAppSDK 2.3.0 preview host couldn't be built; details are in preview.log.",
+            NewerTypesHint.Describe(new[] { "FlowLayout" }, "2.2.0", "2.3.0", true, true));
+        Eq("newer types: unknown versions",
+            "A, B, C, +1 more aren't in the preview's bundled WinAppSDK, so they're left out. Turn on Full fidelity to preview with your project's WinAppSDK.",
+            NewerTypesHint.Describe(new[] { "A", "B", " ", "C", "D" }, null, null, false, false));
     }
 
     /// <summary>Puts <paramref name="s"/> in "rendered once, spare warming, edit held". Returns the warm's gen.</summary>

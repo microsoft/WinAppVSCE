@@ -49,12 +49,12 @@ namespace WinUIXamlPreview.IntegrationTests
                 OpenRendered(_fx.MainPage);
                 var mark = LogMark();
                 Call("click", new { path = _fx.MainPage, automationId = "PreviewDtdToggle" });
-                var s = WaitFor("off", x => Label(x, _fx.MainPage, "dtdLabel") == "Sample data: Off");
-                Eq(false, Opt(s)["designTimeData"]!.GetValue<bool>(), "designTimeData");
-                WaitForLog(mark, "Sample data toggled off");
+                var s = WaitFor("on", x => Label(x, _fx.MainPage, "dtdLabel") == "Sample data: On");
+                Eq(true, Opt(s)["designTimeData"]!.GetValue<bool>(), "designTimeData");
+                WaitForLog(mark, "Sample data toggled ON");
                 WaitFor("rendered", x => Rendered(Preview(x, _fx.MainPage)), 60_000);
                 Call("click", new { path = _fx.MainPage, automationId = "PreviewDtdToggle" });
-                WaitFor("on", x => Label(x, _fx.MainPage, "dtdLabel") == "Sample data: On" && Opt(x)["designTimeData"]!.GetValue<bool>());
+                WaitFor("off", x => Label(x, _fx.MainPage, "dtdLabel") == "Sample data: Off" && !Opt(x)["designTimeData"]!.GetValue<bool>());
             });
 
             Run("Toolbar: full-fidelity toggle flips the option", () =>
@@ -107,7 +107,7 @@ namespace WinUIXamlPreview.IntegrationTests
                 var s = OpenRendered(_fx.SecondPage);
                 Eq("Dark", Label(s, _fx.SecondPage, "themeLabel"), "theme label");
                 Eq("Tablet", Label(s, _fx.SecondPage, "sizeLabel"), "size label");
-                Eq("Sample data: Off", Label(s, _fx.SecondPage, "dtdLabel"), "sample-data label");
+                Eq("Sample data: On", Label(s, _fx.SecondPage, "dtdLabel"), "sample-data label");
                 Eq("Dark", (string?)Preview(s, _fx.SecondPage)!["activeTheme"], "surface theme");
             });
 
@@ -122,7 +122,7 @@ namespace WinUIXamlPreview.IntegrationTests
                 Call("click", new { path = _fx.SecondPage, automationId = "PreviewSelectToggle" });
                 WaitFor("MainPage labels follow", x => Label(x, _fx.MainPage, "themeLabel") == "Dark"
                                                      && Label(x, _fx.MainPage, "sizeLabel") == "Phone"
-                                                     && Label(x, _fx.MainPage, "dtdLabel") == "Sample data: Off"
+                                                     && Label(x, _fx.MainPage, "dtdLabel") == "Sample data: On"
                                                      && Label(x, _fx.MainPage, "selectLabel") == "Interact", 15_000);
                 Call("activate", new { path = _fx.MainPage });
                 WaitFor("MainPage surface re-themed", x => (string?)Preview(x, _fx.MainPage)!["activeTheme"] == "Dark"

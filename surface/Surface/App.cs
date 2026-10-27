@@ -69,6 +69,7 @@ public static class Program
     {
         Boot("Main: enter");
         RegisterVersionAgnosticAssemblyResolver();
+        RegisterAppNativeLibraryResolver();
         UserDllPath = ParseUserDll(args);
         Boot("Main: user-dll = " + (UserDllPath ?? "<default>"));
         UserPriPath = ParseFlag(args, "--user-pri");
@@ -171,6 +172,81 @@ public static class Program
             }
 
             return null;
+        };
+    }
+
+    /// <summary>
+    /// Registers a fallback resolver for <b>native</b> libraries that lets the user app's output folder
+    /// supply DLLs the host does not ship.
+    /// <para>
+    /// Packages such as Win2D (<c>Microsoft.Graphics.Canvas.dll</c>, used by Community Toolkit's
+    /// <c>AttachedCardShadow</c>) are native WinRT components. In an unpackaged process C#/WinRT activates
+    /// them by loading the DLL by name. The host's folder doesn't contain the user app's native
+    /// dependencies, so activation failed with REGDB_E_CLASSNOTREG, and inside a XAML style setter
+    /// WinUI fail-fasts the whole process. The same applies to P/Invokes from user assemblies.
+    /// </para>
+    /// <para>
+    /// <see cref="AssemblyLoadContext.ResolvingUnmanagedDll"/> only fires <i>after</i> normal native
+    /// resolution has failed, so this is purely additive: it never changes a load that already works.
+    /// It only probes the user app's own folder, and only for a bare file name.
+    /// </para>
+    /// </summary>
+    private static void RegisterAppNativeLibraryResolver()
+    {
+        AssemblyLoadContext.Default.ResolvingUnmanagedDll += static (requestingAssembly, libraryName) =>
+        {
+            var userDll = UserDllPath;
+            if (string.IsNullOrEmpty(libraryName) || string.IsNullOrEmpty(userDll))
+            {
+                return IntPtr.Zero;
+            }
+
+            // Only bare names: never let a rooted or relative path escape the app folder.
+            if (!string.Equals(Path.GetFileName(libraryName), libraryName, StringComparison.Ordinal))
+            {
+                return IntPtr.Zero;
+            }
+
+            var appDir = Path.GetDirectoryName(userDll);
+            if (string.IsNullOrEmpty(appDir))
+            {
+                return IntPtr.Zero;
+            }
+
+            var fileName = libraryName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? libraryName : libraryName + ".dll";
+
+            // RID-specific builds copy native assets next to the app DLL; RID-less (portable) builds leave
+            // them under runtimes\<rid>\native.
+            var rid = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
+            {
+                System.Runtime.InteropServices.Architecture.Arm64 => "win-arm64",
+                System.Runtime.InteropServices.Architecture.X86 => "win-x86",
+                _ => "win-x64",
+            };
+            string[] candidates =
+            {
+                Path.Combine(appDir!, fileName),
+                Path.Combine(appDir!, "runtimes", rid, "native", fileName),
+                Path.Combine(appDir!, "runtimes", "win", "native", fileName),
+            };
+
+            foreach (var candidate in candidates)
+            {
+                if (!File.Exists(candidate))
+                {
+                    continue;
+                }
+
+                if (System.Runtime.InteropServices.NativeLibrary.TryLoad(candidate, out var handle))
+                {
+                    Boot($"NativeResolver: app-closure load '{libraryName}' -> '{candidate}' (requested by {requestingAssembly.GetName().Name})");
+                    return handle;
+                }
+
+                Boot($"NativeResolver: app-closure load FAILED '{libraryName}' from '{candidate}'");
+            }
+
+            return IntPtr.Zero;
         };
     }
 
@@ -324,6 +400,110 @@ public partial class App : Application, IXamlMetadataProvider
         // provider (this is what a compiler-generated app provider chains to anyway).
         _providers.Add(new Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider());
         Program.Boot("App.ctor: XamlControls provider added");
+
+        UnhandledException += OnUnhandledException;
+    }
+
+    // Directory of the loaded user assembly; frames from assemblies loaded from there (or from memory, see
+    // UserAssemblyLoader) count as app code for OnUnhandledException.
+    private static string? s_userDllDir;
+
+    /// <summary>
+    /// Keeps the preview alive when the previewed app's own code throws on the UI thread outside any render call,
+    /// typically an <c>async void</c> handler or a dispatcher callback (e.g. WinUI Gallery's sample-file loader).
+    /// A compiled app would crash too, but in a designer the page has already rendered and one faulting
+    /// background continuation must not take the host down. Exceptions with no app-code frame are host bugs
+    /// and stay fatal.
+    /// </summary>
+    private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
+    {
+        var ex = e.Exception;
+        var userFrame = ex != null ? FindUserCodeFrame(ex) : null;
+        if (userFrame != null)
+        {
+            e.Handled = true;
+            if (IsLayoutCallback(ex!))
+            {
+                // WinUI fail-fasts on exceptions escaping MeasureOverride/ArrangeOverride even when Handled is set,
+                // so don't claim the preview survived.
+                Log($"ERROR: app layout code threw during measure/arrange (at {userFrame}); WinUI terminates the " +
+                    "process for layout exceptions, so the preview host will close: " + DescribeExceptionChain(ex!));
+                return;
+            }
+            Log($"WARNING: unhandled exception in app code was contained by the preview host (at {userFrame}): " +
+                DescribeExceptionChain(ex!));
+            return;
+        }
+        Log("FATAL: unhandled exception in the preview host: " +
+            (ex != null ? DescribeExceptionChain(ex) + Environment.NewLine + ex.StackTrace : e.Message));
+    }
+
+    /// <summary>True when any frame (across inner exceptions) is a layout override — MeasureOverride/ArrangeOverride
+    /// on a FrameworkElement or a Layout.</summary>
+    internal static bool IsLayoutCallback(Exception ex)
+    {
+        for (Exception? current = ex; current != null; current = current.InnerException)
+        {
+            foreach (var frame in new System.Diagnostics.StackTrace(current, false).GetFrames())
+            {
+                var name = frame.GetMethod()?.Name;
+                if (name is "MeasureOverride" or "ArrangeOverride")
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>The first stack frame (across inner exceptions) whose method belongs to the user app, or null.</summary>
+    internal static string? FindUserCodeFrame(Exception ex)
+    {
+        var pending = new Stack<Exception>();
+        pending.Push(ex);
+        for (int visited = 0; pending.Count > 0 && visited < 16; visited++)
+        {
+            var current = pending.Pop();
+            foreach (var frame in new System.Diagnostics.StackTrace(current, false).GetFrames())
+            {
+                var method = frame.GetMethod();
+                var type = method?.DeclaringType;
+                if (type != null && IsUserAssembly(type.Assembly))
+                {
+                    return $"{type.FullName}.{method!.Name}";
+                }
+            }
+            if (current is AggregateException agg)
+            {
+                foreach (var inner in agg.InnerExceptions)
+                {
+                    pending.Push(inner);
+                }
+            }
+            else if (current.InnerException != null)
+            {
+                pending.Push(current.InnerException);
+            }
+        }
+        return null;
+    }
+
+    private static bool IsUserAssembly(Assembly asm)
+    {
+        if (asm == typeof(App).Assembly || asm.IsDynamic)
+        {
+            return false;
+        }
+        var location = asm.Location;
+        if (string.IsNullOrEmpty(location))
+        {
+            // UserAssemblyLoader loads user + closure assemblies from memory; the host's own never are.
+            return true;
+        }
+        var dir = s_userDllDir;
+        return dir != null &&
+            location.StartsWith(dir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -341,6 +521,7 @@ public partial class App : Application, IXamlMetadataProvider
         {
             Program.Boot("OnLaunched: XamlControlsResources FAILED (continuing) " + ex.Message);
         }
+        SampleConverters.Register(Resources);
 
         // Start the warm frame server; the app stays alive serving renders until the client
         // disconnects (or stdin closes / it is killed) — it does NOT exit after one render.
@@ -538,6 +719,7 @@ public partial class App : Application, IXamlMetadataProvider
         Log($"Loading user assembly: {userAssemblyPath}");
         var assembly = PackagedAppShim.LoadUserAssembly(userAssemblyPath, Log);
         _userAssembly = assembly;
+        s_userDllDir = Path.GetDirectoryName(Path.GetFullPath(userAssemblyPath));
 
         // Enumerate types defensively: a real app references many packages (Win2D, toolkit, …) and
         // GetExportedTypes() throws ReflectionTypeLoadException if any referenced type can't load.
@@ -834,6 +1016,129 @@ public partial class App : Application, IXamlMetadataProvider
         if (libCount == 0 && appCount == 0)
         {
             Log($"No loose XAML resource tree at '{srcTree}' and no loose .xbf under '{dllDir}' — nothing to stage.");
+        }
+
+        StageAppContentFiles(dllDir, libCount > 0 ? asmName : null);
+    }
+
+    // Loose content an app reads at runtime relative to its base directory or via ms-appx:/// (sample text,
+    // JSON data, images, fonts). Binaries, satellite resources and media are deliberately excluded.
+    private static readonly HashSet<string> ContentExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".txt", ".json", ".xml", ".md", ".csv", ".html", ".htm", ".css", ".js", ".svg",
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tif", ".tiff",
+        ".ttf", ".otf",
+    };
+
+    private const long MaxContentFileBytes = 16L * 1024 * 1024;
+    private const long MaxContentTotalBytes = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// Stages the app's loose content files (see <see cref="ContentExtensions"/>) into the host base directory,
+    /// preserving relative paths. An unpackaged app resolves both <c>AppContext.BaseDirectory</c>-relative reads
+    /// and <c>ms-appx:///</c> URIs against its own exe folder, which in the preview is the host's run folder; without
+    /// these files, code such as WinUI Gallery's <c>ControlExample</c> (which reads <c>Samples\*.txt</c>) throws.
+    /// Host payload members are never overwritten.
+    /// </summary>
+    private static void StageAppContentFiles(string dllDir, string? stagedLibSubtree)
+    {
+        var baseDir = AppContext.BaseDirectory;
+        var hostOwned = ReadHostPayloadMembers(baseDir);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int skipped = 0;
+        long total = 0;
+        var work = new List<(string Src, string Dest, string Rel)>();
+        foreach (var src in Directory.EnumerateFiles(dllDir, "*", SearchOption.AllDirectories))
+        {
+            if (!ContentExtensions.Contains(Path.GetExtension(src)))
+            {
+                continue;
+            }
+            var rel = Path.GetRelativePath(dllDir, src);
+            var name = Path.GetFileName(rel);
+            if (name.EndsWith(".deps.json", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains(".runtimeconfig.", StringComparison.OrdinalIgnoreCase) ||
+                rel.StartsWith("runtimes" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                (stagedLibSubtree != null &&
+                 rel.StartsWith(stagedLibSubtree + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+            var dest = Path.Combine(baseDir, rel);
+            // Never shadow the host's own files: payload members when a manifest exists, otherwise any
+            // pre-existing file at the base root (a dev host running straight from its build output).
+            if (hostOwned != null
+                    ? hostOwned.Contains(rel)
+                    : (!rel.Contains(Path.DirectorySeparatorChar) && File.Exists(dest)))
+            {
+                continue;
+            }
+            var length = new FileInfo(src).Length;
+            if (length > MaxContentFileBytes || total + length > MaxContentTotalBytes)
+            {
+                skipped++;
+                continue;
+            }
+            total += length;
+            work.Add((src, dest, rel));
+        }
+
+        // Per-file cost is dominated by file creation (AV scanning), not bytes, so copy in parallel:
+        // ~800 WinUI Gallery files take ~0.5 s this way versus ~1.7 s sequentially.
+        foreach (var dir in work.Select(w => Path.GetDirectoryName(w.Dest)!).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            Directory.CreateDirectory(dir);
+        }
+        int count = 0;
+        System.Threading.Tasks.Parallel.ForEach(work,
+            new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 1, 8) },
+            w =>
+            {
+                try
+                {
+                    StageFile(w.Src, w.Dest);
+                    Interlocked.Increment(ref count);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref skipped);
+                    Log($"Content staging skipped '{w.Rel}': {ex.Message}");
+                }
+            });
+        if (count > 0 || skipped > 0)
+        {
+            Log($"Staged {count} app content file(s) ({total / 1024:N0} KB) in {sw.ElapsedMilliseconds} ms" +
+                (skipped > 0 ? $"; skipped {skipped} (size cap {MaxContentFileBytes / (1024 * 1024)} MB/file, " +
+                    $"{MaxContentTotalBytes / (1024 * 1024)} MB total, or copy failure)." : "."));
+        }
+    }
+
+    /// <summary>Relative paths listed in the host's run-copy manifest (<c>.payload.json</c>), or null when absent.</summary>
+    private static HashSet<string>? ReadHostPayloadMembers(string baseDir)
+    {
+        try
+        {
+            var manifest = Path.Combine(baseDir, ".payload.json");
+            if (!File.Exists(manifest))
+            {
+                return null;
+            }
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest));
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".payload.json", ".surface-run" };
+            if (doc.RootElement.TryGetProperty("Files", out var files) &&
+                files.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                foreach (var p in files.EnumerateObject())
+                {
+                    set.Add(p.Name.Replace('/', Path.DirectorySeparatorChar));
+                }
+            }
+            return set;
+        }
+        catch (Exception ex)
+        {
+            Log($"Could not read host payload manifest ({ex.Message}); treating base-root files as host-owned.");
+            return null;
         }
     }
 
@@ -1149,7 +1454,7 @@ public partial class App : Application, IXamlMetadataProvider
             {
                 // Fail-safe (Layer 1): a chained closure provider that throws on lookup must not PREVENT a
                 // later provider in the chain from resolving the type — so capture the throw and keep going.
-                Log($"LAYER 1: provider {provider.GetType().FullName} threw on GetXamlType(Type '{type?.FullName}'): {ex.GetType().Name}; skipping.");
+                LogProviderThrowOnce(provider, $"GetXamlType(Type '{type?.FullName}')", ex);
                 firstThrow ??= ExceptionDispatchInfo.Capture(ex);
             }
             if (xamlType != null)
@@ -1180,7 +1485,7 @@ public partial class App : Application, IXamlMetadataProvider
             {
                 // Fail-safe (Layer 1): see GetXamlType(Type) — an additive closure provider must never be
                 // able to throw a *resolvable-by-a-later-provider* type off the rails, so keep chaining.
-                Log($"LAYER 1: provider {provider.GetType().FullName} threw on GetXamlType('{fullName}'): {ex.GetType().Name}; skipping.");
+                LogProviderThrowOnce(provider, $"GetXamlType('{fullName}')", ex);
                 firstThrow ??= ExceptionDispatchInfo.Capture(ex);
             }
             if (xamlType != null)
@@ -1208,10 +1513,30 @@ public partial class App : Application, IXamlMetadataProvider
             }
             catch (Exception ex)
             {
-                Log($"LAYER 1: provider {provider.GetType().FullName} threw on GetXmlnsDefinitions: {ex.GetType().Name}; skipping.");
+                LogProviderThrowOnce(provider, "GetXmlnsDefinitions", ex);
             }
         }
         return defs.ToArray();
+    }
+
+    private static readonly HashSet<string> LoggedProviderThrows = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// WinUI repeats the same lookups many times per render, so each failing (provider, lookup) is logged once,
+    /// with the full exception chain (e.g. the newer-SDK type a provider's generated code could not load).
+    /// Only the log is deduplicated; the lookup itself is still attempted every time.
+    /// </summary>
+    private static void LogProviderThrowOnce(object provider, string lookup, Exception ex)
+    {
+        var name = provider.GetType().FullName;
+        lock (LoggedProviderThrows)
+        {
+            if (!LoggedProviderThrows.Add($"{name}|{lookup}"))
+            {
+                return;
+            }
+        }
+        Log($"LAYER 1: provider {name} threw on {lookup}: {DescribeExceptionChain(ex)}; skipping (logged once per lookup).");
     }
 
     internal static void Log(string message)

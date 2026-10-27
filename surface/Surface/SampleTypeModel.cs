@@ -59,6 +59,12 @@ internal sealed class SampleTypeModel
 
             var state = Projects.GetOrAdd(csproj, p => new ProjectState(p));
             var task = state.Refresh();
+            if (state.Last is null && wait < FirstBuildWait)
+            {
+                // The first parse of a large project takes seconds; a name-based first render that changes on the
+                // next edit is worse than a slower first render.
+                wait = FirstBuildWait;
+            }
             if (!task.Wait(wait))
             {
                 App.Log($"SAMPLE: type model for {Path.GetFileName(csproj)} not ready after {wait.TotalMilliseconds:0} ms; using name-based values.");
@@ -73,6 +79,8 @@ internal sealed class SampleTypeModel
         }
     }
 
+    private static readonly TimeSpan FirstBuildWait = TimeSpan.FromSeconds(10);
+
     internal static string? FindProject(string? xamlPath)
     {
         if (string.IsNullOrEmpty(xamlPath))
@@ -82,13 +90,30 @@ internal sealed class SampleTypeModel
 
         for (var dir = Path.GetDirectoryName(Path.GetFullPath(xamlPath)); dir is not null; dir = Path.GetDirectoryName(dir))
         {
-            var proj = Directory.EnumerateFiles(dir, "*.csproj").FirstOrDefault();
-            if (proj is not null)
+            var projects = Directory.EnumerateFiles(dir, "*.csproj").ToList();
+            if (projects.Count > 0)
             {
-                return proj;
+                // Several projects in one folder: the WinUI app, else the one named after the folder.
+                return projects.FirstOrDefault(IsWinUIProject)
+                    ?? projects.FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals(Path.GetFileName(dir), StringComparison.OrdinalIgnoreCase))
+                    ?? projects.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).First();
             }
         }
         return null;
+    }
+
+    private static readonly Regex UseWinUI = new(@"<UseWinUI>\s*true\s*</UseWinUI>", RegexOptions.IgnoreCase);
+
+    private static bool IsWinUIProject(string csproj)
+    {
+        try
+        {
+            return UseWinUI.IsMatch(File.ReadAllText(csproj));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     // ---- type queries ---------------------------------------------------------------------------------
@@ -236,6 +261,50 @@ internal sealed class SampleTypeModel
         }
     }
 
+    /// <summary>
+    /// Every <c>Name.Member.Add(argument)</c> call in the partial class <paramref name="className"/> — e.g.
+    /// <c>tree.RootNodes.Add(folder)</c> — with the enclosing method (null outside one).
+    /// </summary>
+    internal IEnumerable<(string target, string member, ExpressionSyntax argument, BaseMethodDeclarationSyntax? method)>
+        CollectionAdds(string className)
+    {
+        var type = FindType(className);
+        if (type is null)
+        {
+            yield break;
+        }
+
+        foreach (var tree in type.DeclaringSyntaxReferences.Select(r => r.SyntaxTree).Distinct())
+        {
+            foreach (var call in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (call is not
+                    {
+                        Expression: MemberAccessExpressionSyntax
+                        {
+                            Name.Identifier.Text: "Add",
+                            Expression: MemberAccessExpressionSyntax { Name.Identifier.Text: var member } collection,
+                        },
+                        ArgumentList.Arguments: [var arg],
+                    })
+                {
+                    continue;
+                }
+
+                var target = collection.Expression switch
+                {
+                    IdentifierNameSyntax id => id.Identifier.Text,
+                    MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax, Name: var n } => n.Identifier.Text,
+                    _ => null,
+                };
+                if (target is not null)
+                {
+                    yield return (target, member, arg.Expression, call.FirstAncestorOrSelf<BaseMethodDeclarationSyntax>());
+                }
+            }
+        }
+    }
+
     // ---- compilation --------------------------------------------------------------------------------------
 
     private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.Preview);
@@ -312,11 +381,41 @@ internal sealed class SampleTypeModel
         private SyntaxTree? _usingsTree;
         private CSharpCompilation? _compilation;
         private Task<SampleTypeModel?>? _pending;
+        private readonly FileSystemWatcher? _watcher;
+        private volatile bool _dirty = true;
 
         public ProjectState(string csproj)
         {
             _csproj = csproj;
             _dir = Path.GetDirectoryName(csproj)!;
+            try
+            {
+                // Re-enumerating a large tree on every render is the expensive part; only rescan after a change.
+                _watcher = new FileSystemWatcher(_dir)
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
+                };
+                _watcher.Changed += OnChange;
+                _watcher.Created += OnChange;
+                _watcher.Deleted += OnChange;
+                _watcher.Renamed += (_, _) => _dirty = true;
+                _watcher.Error += (_, _) => _dirty = true;
+                _watcher.EnableRaisingEvents = true;
+            }
+            catch (Exception ex)
+            {
+                _watcher = null; // scan on every refresh instead
+                App.Log($"SAMPLE: no file watcher for {Path.GetFileName(csproj)}: {ex.Message}");
+            }
+        }
+
+        private void OnChange(object sender, FileSystemEventArgs e)
+        {
+            if (e.FullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || !Path.HasExtension(e.FullPath))
+            {
+                _dirty = true; // a .cs file, or a folder (its files come and go with it)
+            }
         }
 
         public SampleTypeModel? Last { get; private set; }
@@ -337,9 +436,15 @@ internal sealed class SampleTypeModel
         {
             try
             {
+                if (!_dirty && _watcher is not null && Last is not null)
+                {
+                    return Last;
+                }
+                _dirty = false; // cleared before scanning: a change during the scan marks it dirty again
+
                 var sw = Stopwatch.StartNew();
                 var files = Directory.EnumerateFiles(_dir, "*.cs", SearchOption.AllDirectories)
-                    .Where(f => !IsBuildOutput(f))
+                    .Where(f => !IsBuildOutput(_dir, f))
                     .Take(MaxSourceFiles + 1)
                     .ToList();
                 if (files.Count > MaxSourceFiles)
@@ -357,34 +462,54 @@ internal sealed class SampleTypeModel
 
                 int changed = 0;
                 var present = new HashSet<string>(files, StringComparer.OrdinalIgnoreCase);
+                var removed = new List<SyntaxTree>();
                 foreach (var gone in _files.Keys.Where(k => !present.Contains(k)).ToList())
                 {
-                    compilation = compilation.RemoveSyntaxTrees(_files[gone].tree);
+                    removed.Add(_files[gone].tree);
                     _files.Remove(gone);
                     changed++;
                 }
 
-                foreach (var file in files)
+                // Parse changed files in parallel and update the compilation in one batch: adding trees one at a time
+                // re-derives compilation state per call (AI Dev Gallery: 6 s one by one, ~0.1 s batched).
+                var stale = files
+                    .Select(f => (file: f, stamp: File.GetLastWriteTimeUtc(f)))
+                    .Where(x => !_files.TryGetValue(x.file, out var known) || known.stamp != x.stamp)
+                    .ToList();
+                var parsed = stale.AsParallel().AsOrdered().Select(x =>
                 {
-                    var stamp = File.GetLastWriteTimeUtc(file);
-                    if (_files.TryGetValue(file, out var known) && known.stamp == stamp)
-                    {
-                        continue;
-                    }
-
-                    SyntaxTree tree;
                     try
                     {
-                        tree = CSharpSyntaxTree.ParseText(File.ReadAllText(file), ParseOptions, path: file);
+                        return (x.file, x.stamp, tree: (SyntaxTree?)CSharpSyntaxTree.ParseText(File.ReadAllText(x.file), ParseOptions, path: x.file));
                     }
                     catch (IOException)
                     {
-                        continue; // being written; picked up next time
+                        return (x.file, x.stamp, tree: (SyntaxTree?)null); // being written; picked up next time
                     }
+                }).ToList();
 
-                    compilation = known.tree is null ? compilation.AddSyntaxTrees(tree) : compilation.ReplaceSyntaxTree(known.tree, tree);
+                var added = new List<SyntaxTree>();
+                foreach (var (file, stamp, tree) in parsed)
+                {
+                    if (tree is null)
+                    {
+                        continue;
+                    }
+                    if (_files.TryGetValue(file, out var known))
+                    {
+                        removed.Add(known.tree);
+                    }
+                    added.Add(tree);
                     _files[file] = (stamp, tree);
                     changed++;
+                }
+                if (removed.Count > 0)
+                {
+                    compilation = compilation.RemoveSyntaxTrees(removed);
+                }
+                if (added.Count > 0)
+                {
+                    compilation = compilation.AddSyntaxTrees(added);
                 }
 
                 if (changed == 0 && Last is not null)
@@ -399,18 +524,21 @@ internal sealed class SampleTypeModel
             }
             catch (Exception ex)
             {
+                _dirty = true;
                 App.Log($"SAMPLE: type model update failed: {ex.GetType().Name}: {ex.Message}");
                 return Last;
             }
         }
 
-        private bool IsBuildOutput(string file)
-        {
-            var rel = Path.GetRelativePath(_dir, file);
-            var first = rel.Split(Path.DirectorySeparatorChar, 2)[0];
-            return first.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-                   first.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
-                   first.StartsWith(".", StringComparison.Ordinal);
-        }
+    }
+
+    /// <summary>True when <paramref name="file"/> sits under a <c>bin</c>, <c>obj</c> or dot folder anywhere below
+    /// <paramref name="projectDir"/> (a nested project's build output holds generated copies too).</summary>
+    internal static bool IsBuildOutput(string projectDir, string file)
+    {
+        var folders = Path.GetRelativePath(projectDir, file).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[..^1];
+        return folders.Any(f => f.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                                f.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+                                f.StartsWith(".", StringComparison.Ordinal));
     }
 }

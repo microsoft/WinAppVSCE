@@ -10,7 +10,7 @@ namespace Surface;
 
 /// <summary>
 /// Real instances of the app's own types for sample-data rows, when the app is built and its assembly is loaded.
-/// A control that takes a whole object (<c>&lt;local:FleetTile Aircraft="{x:Bind}"/&gt;</c>) and fills itself in
+/// A control that takes a whole object (<c>&lt;local:OrderTile Order="{x:Bind}"/&gt;</c>) and fills itself in
 /// code needs an instance of that type; a dictionary row can't bind to it. Every value is generated (from the
 /// member's type and name, the same rules <see cref="SamplePlanner"/> uses for text); the app's data is never read.
 /// Constructing runs the type's constructor and setters, as <c>d:DesignInstance</c> does. Never throws.
@@ -19,6 +19,25 @@ internal static class SampleObjects
 {
     private const int MaxDepth = 2;
     private const int ListItems = 3;
+
+    [ThreadStatic] private static HashSet<string>? _glyphMembers;
+
+    /// <summary>
+    /// While the returned scope is open, string members named in <paramref name="names"/> (bound to an icon slot
+    /// in the list's templates) get <see cref="SamplePlanner.SampleGlyph"/> instead of a generated word.
+    /// </summary>
+    public static IDisposable GlyphMembers(IEnumerable<string> names)
+    {
+        var previous = _glyphMembers;
+        var set = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+        _glyphMembers = set.Count == 0 ? previous : set;
+        return new Scope(() => _glyphMembers = previous);
+    }
+
+    private sealed class Scope(Action exit) : IDisposable
+    {
+        public void Dispose() => exit();
+    }
 
     /// <summary>Resolves <paramref name="fullName"/> (<c>Ns.Outer+Inner</c>) across the loaded assemblies.</summary>
     public static Type? ResolveType(string fullName)
@@ -152,7 +171,7 @@ internal static class SampleObjects
             {
                 return; // the type's own default ("A-check") reads better than a generated one
             }
-            value = ValueFor(p.PropertyType, p.Name, index, depth);
+            value = ValueFor(p.PropertyType, p.Name, index, depth, obj.GetType().Name);
         }
         if (value is not null)
         {
@@ -175,16 +194,29 @@ internal static class SampleObjects
         return row[key] switch
         {
             string s when type == typeof(string) || type == typeof(object) => s,
+            string s when type == typeof(Uri) && System.Uri.TryCreate(s, UriKind.Absolute, out var uri) => uri,
+            string s when IsImageSource(type) && s == SampleImage.Uri => NewBitmap(s),
             IReadOnlyDictionary<string, object> d when !IsPlatform(type) => Create(type, d, index, depth + 1),
             _ => null,
         };
     }
 
+    /// <summary>True for <c>ImageSource</c> or <c>BitmapSource</c>/<c>BitmapImage</c> — types a <c>BitmapImage</c> can be assigned to.</summary>
+    private static bool IsImageSource(Type t) => t.IsAssignableFrom(typeof(Microsoft.UI.Xaml.Media.Imaging.BitmapImage)) && t != typeof(object) &&
+        !t.IsInterface && t.FullName?.StartsWith("Microsoft.UI.Xaml.Media.", StringComparison.Ordinal) == true;
+
+    private static object? NewBitmap(string uri)
+    {
+        var bitmap = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+        bitmap.UriSource = new Uri(uri);
+        return bitmap;
+    }
+
     private static bool IsUnset(object? current, Type type)
     {
-        if (current is null || current is string { Length: 0 })
+        if (current is null || current is string { Length: 0 } || current is ICollection { Count: 0 })
         {
-            return true;
+            return true; // an empty "= new()" list reads as "0 lines" next to rows that look filled
         }
         var t = Nullable.GetUnderlyingType(type) ?? type;
         if (t.IsEnum)
@@ -195,10 +227,13 @@ internal static class SampleObjects
     }
 
     /// <summary>A generated value of <paramref name="type"/> for a member named <paramref name="name"/>.</summary>
-    internal static object? ValueFor(Type type, string name, int index, int depth)
+    internal static object? ValueFor(Type type, string name, int index, int depth, string? owner = null)
     {
         var t = Nullable.GetUnderlyingType(type) ?? type;
-        if (t == typeof(string) || t == typeof(object)) return SamplePlanner.TextByName(name, index);
+        if (t == typeof(string) || t == typeof(object))
+        {
+            return _glyphMembers?.Contains(name) == true ? SamplePlanner.SampleGlyph : SamplePlanner.TextByName(name, index, owner);
+        }
         if (t == typeof(bool)) return index % 2 == 0;
         if (t == typeof(char)) return (char)('A' + index % 26);
         if (t.IsEnum)
@@ -221,7 +256,8 @@ internal static class SampleObjects
         if (t == typeof(TimeSpan)) return new TimeSpan(2 + index, 15 * index % 60, 0);
         if (t == typeof(TimeOnly)) return new TimeOnly(2 + index, 15 * index % 60);
         if (t == typeof(Guid)) return new Guid($"00000000-0000-0000-0000-{1001 + index:000000000000}");
-        if (t == typeof(Uri)) return new Uri("https://example.com");
+        if (t == typeof(Uri)) return new Uri(SampleImage.IsImageName(name) ? SampleImage.Uri : "https://example.com");
+        if (IsImageSource(t)) return NewBitmap(SampleImage.Uri);
 
         if (depth >= MaxDepth)
         {

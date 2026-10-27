@@ -156,6 +156,15 @@ internal static class Compatibility
         try { Dispatch("{\"type\":\"Frame\",\"width\":\"wrong\"}"); }
         catch (TargetInvocationException ex) when (ex.InnerException is JsonException) { threw = true; }
         Check(threw, "typed payload errors escape Dispatch (not silently accepted)");
+
+        var current = typeof(SurfaceClient).GetMethod("CurrentDocumentPath", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Check((string)current.Invoke(client, null)! == "", "no document path source: sends \"\" so the surface drops the last project");
+        client.DocumentPathSource = () => null;
+        Check((string)current.Invoke(client, null)! == "", "unsaved document: sends \"\"");
+        client.DocumentPathSource = () => @"C:\App\MainPage.xaml";
+        Check((string)current.Invoke(client, null)! == @"C:\App\MainPage.xaml", "saved document: sends its path");
+        Check(JsonSerializer.SerializeToNode(new UpdateXamlMsg { Xaml = "x", DocumentPath = "" })!["documentPath"]!.GetValue<string>() == "",
+            "empty documentPath is serialized, not omitted");
     }
 
     // R2: one shared negotiation table drives Wire.IsCompatible, FrameServer.IsCompatible, the real client's
@@ -295,6 +304,19 @@ internal static class Compatibility
         Check(host.LastRender == ("", 100.5, 200.25, 1.5), "null/boolean/missing dimensions preserve state");
         One("{\"type\":\"UpdateXaml\",\"xaml\":\"updated\",\"width\":999}");
         Check(host.LastRender == ("updated", 100.5, 200.25, 1.5), "UpdateXaml ignores size fields");
+
+        // documentPath is sticky: a path sets it, absent or non-string keeps it, "" or null clears it.
+        One("{\"type\":\"UpdateXaml\",\"xaml\":\"p\",\"documentPath\":\"C:\\\\App\\\\MainPage.xaml\"}");
+        Check(host.DocumentPath == @"C:\App\MainPage.xaml", "documentPath sets the document");
+        One("{\"type\":\"UpdateXaml\",\"xaml\":\"p\"}");
+        One("{\"type\":\"UpdateXaml\",\"xaml\":\"p\",\"documentPath\":42}");
+        Check(host.DocumentPath == @"C:\App\MainPage.xaml", "absent or non-string documentPath keeps it");
+        One("{\"type\":\"UpdateXaml\",\"xaml\":\"p\",\"documentPath\":\"\"}");
+        Check(host.DocumentPath is null, "empty documentPath clears it (unsaved document)");
+        One("{\"type\":\"LoadXaml\",\"xaml\":\"p\",\"documentPath\":\"C:\\\\B.xaml\"}");
+        One("{\"type\":\"LoadXaml\",\"xaml\":\"p\",\"documentPath\":null}");
+        Check(host.DocumentPath is null, "null documentPath clears it");
+        One("{\"type\":\"UpdateXaml\",\"xaml\":\"updated\",\"width\":999}");
 
         var native = Request(WireFixture("enter").ToJsonString());
         Check(native.Length == 2, "native success sends Hwnd followed by ContentProps");

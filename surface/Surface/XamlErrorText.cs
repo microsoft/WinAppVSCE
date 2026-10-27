@@ -81,6 +81,32 @@ internal static class XamlErrorText
     /// <summary>True when <see cref="Informative"/> finds nothing useful in the message.</summary>
     public static bool IsOpaque(string? flattened) => Informative(flattened) is null;
 
+    private static readonly Regex ChartsResourceKey = new(
+        @"Name/Key (?<key>Charts\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A message for a page using the WinAppSDK charts whose app never merged the chart styles: WinUI reports a
+    /// missing <c>Charts…</c> resource key (which <see cref="Informative(string?, string?)"/> rejects, since the page
+    /// never names it) or nothing at all. Null when the page doesn't use charts, the styles are loaded, or the failure
+    /// cites some other resource.
+    /// </summary>
+    public static string? ChartsHint(string? flattened, string? xaml, bool chartsResourcesLoaded)
+    {
+        if (chartsResourcesLoaded || string.IsNullOrEmpty(xaml) ||
+            !xaml.Contains("Microsoft.UI.Xaml.Controls.Charts", StringComparison.Ordinal))
+        {
+            return null;
+        }
+        var key = flattened is null ? null : ChartsResourceKey.Match(flattened);
+        if (key is { Success: false } && !IsOpaque(flattened))
+        {
+            return null;
+        }
+        var missing = key is { Success: true } ? $" (missing resource '{key.Groups["key"].Value}')" : "";
+        return $"Chart styles aren't loaded{missing}. Add <charts:XamlChartsResources /> to the MergedDictionaries " +
+               "of Application.Resources in App.xaml (xmlns:charts=\"using:Microsoft.UI.Xaml.Controls.Charts\").";
+    }
+
     /// <summary>
     /// A replacement message (and possibly a more precise position) for an opaque failure loading
     /// <paramref name="xaml"/>. <paramref name="line"/>/<paramref name="column"/> are 1-based, as WinUI reports them.
@@ -211,6 +237,161 @@ internal static class XamlErrorText
         }
 
         return text.Substring(start, i - start);
+    }
+
+    /// <summary>
+    /// Maps a 1-based position WinUI reported in <paramref name="cleaned"/> (the document the preview really
+    /// loaded) to the same element, and attribute when there is one, in <paramref name="raw"/> (the user's
+    /// file). The cleaner drops elements and attributes and adds placeholders, so line numbers drift. Null when
+    /// nothing changed or nothing matches, in which case the caller keeps the reported position.
+    /// </summary>
+    public static (int Line, int Column)? MapToSource(string? cleaned, string? raw, int line, int column)
+    {
+        if (string.IsNullOrEmpty(cleaned) || string.IsNullOrEmpty(raw) || string.Equals(cleaned, raw, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            var cleanedDoc = System.Xml.Linq.XDocument.Parse(cleaned, System.Xml.Linq.LoadOptions.SetLineInfo);
+            var rawDoc = System.Xml.Linq.XDocument.Parse(raw, System.Xml.Linq.LoadOptions.SetLineInfo);
+            if (cleanedDoc.Root is null || rawDoc.Root is null)
+            {
+                return null;
+            }
+
+            int target = ClampedOffset(cleaned, line, column);
+            var cleanedEls = cleanedDoc.Root.DescendantsAndSelf().ToList();
+            System.Xml.Linq.XElement? at = null;
+            foreach (var el in cleanedEls)
+            {
+                if (StartOffset(cleaned, el) is int start && start <= target + 1)
+                {
+                    at = el;
+                }
+            }
+
+            var rawEls = rawDoc.Root.DescendantsAndSelf().ToList();
+            for (var probe = at; probe is not null; probe = probe.Parent)
+            {
+                if (BestMatch(probe, cleanedEls, rawEls) is not { } match)
+                {
+                    continue;
+                }
+
+                // Only an attribute of the element WinUI pointed at is meaningful; an ancestor fallback points at the tag.
+                string token = ReferenceEquals(probe, at) ? ReadName(cleaned, SkipTagStart(cleaned, target)) : "";
+                int rawOffset = AttributeOffset(raw, match, token) ?? StartOffset(raw, match) ?? -1;
+                return rawOffset < 0 ? null : PositionOf(raw, rawOffset);
+            }
+
+            return null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static System.Xml.Linq.XElement? BestMatch(
+        System.Xml.Linq.XElement el, List<System.Xml.Linq.XElement> cleanedEls, List<System.Xml.Linq.XElement> rawEls)
+    {
+        var sameName = rawEls.Where(r => r.Name == el.Name).ToList();
+        if (sameName.Count == 0)
+        {
+            return null;
+        }
+
+        int index = cleanedEls.Where(c => c.Name == el.Name).ToList().IndexOf(el);
+        var xName = el.Attribute(System.Xml.Linq.XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml"))?.Value;
+        var attrs = el.Attributes().Where(a => !a.IsNamespaceDeclaration).Select(a => (a.Name, a.Value)).ToHashSet();
+
+        System.Xml.Linq.XElement? best = null;
+        double bestScore = double.MinValue;
+        for (int i = 0; i < sameName.Count; i++)
+        {
+            var r = sameName[i];
+            double score = -Math.Abs(i - index) * 0.01;
+            if (xName is not null && r.Attribute(System.Xml.Linq.XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml"))?.Value == xName)
+            {
+                score += 1000;
+            }
+            score += r.Attributes().Count(a => attrs.Contains((a.Name, a.Value)));
+            if (score > bestScore)
+            {
+                (best, bestScore) = (r, score);
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>Offset of the element's name (just after its '&lt;'), from the parser's line info.</summary>
+    private static int? StartOffset(string text, System.Xml.Linq.XElement el)
+    {
+        var info = (IXmlLineInfo)el;
+        if (!info.HasLineInfo())
+        {
+            return null;
+        }
+
+        int offset = OffsetOf(text, info.LineNumber, info.LinePosition);
+        return offset < 0 ? null : offset;
+    }
+
+    /// <summary>Offset of attribute <paramref name="name"/> in <paramref name="el"/>'s start tag, or null.</summary>
+    private static int? AttributeOffset(string text, System.Xml.Linq.XElement el, string name)
+    {
+        if (name.Length == 0 || name == el.Name.LocalName || StartOffset(text, el) is not int start)
+        {
+            return null;
+        }
+
+        int end = text.IndexOf('>', start);
+        if (end < 0)
+        {
+            return null;
+        }
+
+        var m = Regex.Match(text[start..end], @"\s(?<n>" + Regex.Escape(name) + @")\s*=");
+        return m.Success ? start + m.Groups["n"].Index : null;
+    }
+
+    private static int SkipTagStart(string text, int offset)
+    {
+        if (offset < text.Length && text[offset] == '<') offset++;
+        if (offset < text.Length && text[offset] == '/') offset++;
+        return offset;
+    }
+
+    /// <summary>Like <see cref="OffsetOf"/>, but a column past the end of the line clamps to the line's end.</summary>
+    private static int ClampedOffset(string text, int line, int column)
+    {
+        int lineStart = OffsetOf(text, line, 1);
+        if (lineStart < 0)
+        {
+            return text.Length - 1;
+        }
+
+        int nl = text.IndexOf('\n', lineStart);
+        int lineEnd = nl < 0 ? text.Length - 1 : nl;
+        return Math.Min(lineStart + Math.Max(column, 1) - 1, lineEnd);
+    }
+
+    private static (int Line, int Column) PositionOf(string text, int offset)
+    {
+        int line = 1, lineStart = 0;
+        for (int i = 0; i < offset && i < text.Length; i++)
+        {
+            if (text[i] == '\n')
+            {
+                line++;
+                lineStart = i + 1;
+            }
+        }
+
+        return (line, offset - lineStart + 1);
     }
 
     private static int OffsetOf(string text, int line, int column)

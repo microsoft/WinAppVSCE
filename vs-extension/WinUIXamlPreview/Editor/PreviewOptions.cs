@@ -22,7 +22,9 @@ namespace WinUIXamlPreview.Editor
         private const string LocationKey = "PreviewLocation";
         private const string RightWidthKey = "RightWidth";
         private const string BottomHeightKey = "BottomHeight";
-        private const string DesignTimeDataKey = "DesignTimeData";
+        // "DesignTimeData" held the old default-on value, and Save() wrote it whenever any option changed, so it
+        // can't tell a user's choice from the old default. The new key restarts everyone on the default-off setting.
+        private const string DesignTimeDataKey = "SampleData";
         private const string DesignModeKey = "DesignMode";
         private const string CollapsedKey = "Collapsed";
         private const string ThemeKey = "PreviewTheme";
@@ -43,7 +45,7 @@ namespace WinUIXamlPreview.Editor
         private static PreviewLocation _location = PreviewLocation.Right;
         private static double _rightWidth = DefaultWidth;
         private static double _bottomHeight = DefaultHeight;
-        private static bool _designTimeData = true; // default ON — placeholder sample data for {x:Bind} pages (WS2-F6)
+        private static bool _designTimeData; // default OFF — placeholder sample data for {x:Bind} pages (WS2-F6) is opt-in
         private static bool _designMode = true; // default ON — the previewer selects, it doesn't interact (plan §41)
         private static bool _collapsed; // default expanded — the preview shows when a WinUI xaml opens
         private static string _theme = "Light"; // preview theme: Light (default, historical) | Dark | Default
@@ -103,7 +105,7 @@ namespace WinUIXamlPreview.Editor
         }
 
         /// <summary>
-        /// The "Sample data" toggle (default on). When on, <c>{x:Bind}</c> text properties render a placeholder
+        /// The "Sample data" toggle (default off; it adds a one-time project type-model build and memory). When on, <c>{x:Bind}</c> text properties render a placeholder
         /// (the binding's FallbackValue/TargetNullValue, else <c>{PathName}</c>) and bound lists show a few
         /// dummy rows (WS2-F6). When off, <c>{x:Bind}</c> attributes are simply dropped. The M1
         /// (<c>d:DesignData</c>) and M2 (DesignMode signal) sample-data paths are automatic and need no flag.

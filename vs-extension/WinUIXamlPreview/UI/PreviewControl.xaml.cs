@@ -1,4 +1,4 @@
-﻿#nullable enable
+#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -115,9 +115,6 @@ namespace WinUIXamlPreview.UI
         private readonly PreviewInfoBar _fidelityBar = new PreviewInfoBar("PreviewFidelityBar");
         private readonly PreviewInfoBar _buildHintBar = new PreviewInfoBar("PreviewBuildHintBar");
         private bool _reconnectShown;
-        // Versions whose background build already FAILED this VS session — don't auto-retry (no retry loop).
-        private static readonly System.Collections.Generic.HashSet<string> FailedVersions =
-            new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public PreviewControl()
         {
@@ -1575,7 +1572,7 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
-            if (FailedVersions.Contains(version!))
+            if (FailedHostVersions.Contains(version))
             {
                 Log.Write($"Fidelity upgrade for {version}: a build already failed this session — not retrying.");
                 ShowFidelityNote(BuildFailedNote(version!), sticky: true);
@@ -1647,10 +1644,11 @@ namespace WinUIXamlPreview.UI
                                 return;
                             }
 
-                            FailedVersions.Add(version!);
+                            FailedHostVersions.Add(version!);
                             Log.Write($"Fidelity upgrade for {version}: build did not yield a matched host ({outcome.Error}); staying on bundled 2.2.0.");
                             EndUpgrade(gen, note: null);
                             ShowFidelityNote(BuildFailedNote(version!), sticky: true);
+                            UpdateNewerTypesNote(_lastNewerTypes);
                         });
                         return;
                     }
@@ -1826,6 +1824,7 @@ namespace WinUIXamlPreview.UI
 
         private void ShowFidelityBuilding(string version, bool building, bool compiling = false)
         {
+            _newerTypesNoteShown = false;
             _fidelityBar.Show(
                 BannerSeverity.Progress,
                 compiling ? "Building full-fidelity preview" : "Preparing full-fidelity preview",
@@ -1841,6 +1840,7 @@ namespace WinUIXamlPreview.UI
 
         private void ShowFidelityReady(string version)
         {
+            _newerTypesNoteShown = false;
             _fidelityBar.Show(
                 BannerSeverity.Success,
                 "Full-fidelity preview ready",
@@ -1850,8 +1850,71 @@ namespace WinUIXamlPreview.UI
 
         private void ShowFidelityNote(string note, bool sticky = false)
         {
+            _newerTypesNoteShown = false;
             _fidelityBar.Show(BannerSeverity.Info, "Full-fidelity preview unavailable", note,
                 autoHide: sticky ? (TimeSpan?)null : TimeSpan.FromSeconds(10));
+        }
+
+        // WinUI types the bundled host lacked on the last render (the surface left them out), and whether the
+        // fidelity bar is currently showing the note about them.
+        private System.Collections.Generic.List<string>? _lastNewerTypes;
+        private bool _newerTypesNoteShown;
+
+        /// <summary>
+        /// Explain controls left out because they're newer than the bundled host's WinAppSDK, and offer Full
+        /// fidelity when it would bring them back. Skipped while an upgrade is running (its own banner covers
+        /// it) and on a matched host (which has every type). UI thread.
+        /// </summary>
+        private void UpdateNewerTypesNote(System.Collections.Generic.List<string>? newerTypes)
+        {
+            _lastNewerTypes = newerTypes;
+            if (newerTypes == null || newerTypes.Count == 0)
+            {
+                if (_newerTypesNoteShown)
+                {
+                    _newerTypesNoteShown = false;
+                    HideFidelityBanner();
+                }
+                return;
+            }
+
+            if (_session.UpgradeInProgress || !string.IsNullOrEmpty(_activeUserPri))
+            {
+                return;
+            }
+
+            var target = _fidelityPlan?.TargetVersion;
+            var upgradable = _fidelityPlan?.NeedsUpgrade == true;
+            var failed = FailedHostVersions.Contains(target);
+            var noSuggestion = PreviewOptions.FullFidelityAutoBuild || !upgradable;
+            var text = NewerTypesHint.Describe(newerTypes, MatchedHostResolver.BundledVersion, target, noSuggestion, failed);
+            if (text == null)
+            {
+                return;
+            }
+
+            if (!_newerTypesNoteShown)
+            {
+                Log.Write($"Newer WinUI types left out on the bundled host: {string.Join(", ", newerTypes)} (target {target ?? "unknown"}).");
+            }
+            _newerTypesNoteShown = true;
+            var offer = !noSuggestion && !failed;
+            _fidelityBar.Show(BannerSeverity.Info, NewerTypesHint.Title, text,
+                actionText: offer ? NewerTypesHint.TurnOnAction : null,
+                onAction: offer ? OnTurnOnFullFidelity : (Action?)null);
+        }
+
+        private void OnTurnOnFullFidelity()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _newerTypesNoteShown = false;
+            HideFidelityBanner();
+            SetFullFidelity(true);
+            SettingsSynced?.Invoke(); // the toolbar re-reads its Full fidelity label
         }
 
         private static string BuildFailedNote(string version) =>
@@ -2025,6 +2088,7 @@ namespace WinUIXamlPreview.UI
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
                     UpdateBuildHint(frame.MissingKeys, frame.UnmappedTypes);
+                    UpdateNewerTypesNote(frame.NewerTypes);
                     Log.Write($"Frame rendered: {frame.Width}x{frame.Height}px ({frame.DipWidth}x{frame.DipHeight} dip).");
                 }
                 catch (Exception ex)
@@ -2091,6 +2155,7 @@ namespace WinUIXamlPreview.UI
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
                     UpdateBuildHint(msg.MissingKeys, msg.UnmappedTypes);
+                    UpdateNewerTypesNote(msg.NewerTypes);
                     Log.Write($"Native surface hosted: hwnd=0x{msg.Hwnd:X} px={pxW}x{pxH} dip={dipW:0}x{dipH:0} scale={msg.Scale}.");
                 }
                 catch (Exception ex)
@@ -2167,6 +2232,7 @@ namespace WinUIXamlPreview.UI
 
                 PerfEnd(err.NotDesignable ? "notdesignable" : "error");
                 UpdateBuildHint(err.MissingKeys, err.UnmappedTypes);
+                UpdateNewerTypesNote(err.NewerTypes);
 
                 // A promoted spare that answered with an error never rendered, so it is still fresh: a held
                 // edit (often the fix for a half-typed tag) can safely render in it now instead of waiting.

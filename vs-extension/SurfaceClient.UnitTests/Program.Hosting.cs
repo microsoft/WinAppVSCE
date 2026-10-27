@@ -50,6 +50,108 @@ internal static partial class Program
             fresh.Completion.IsCompleted && !fresh.Completion.Result.Success && fresh.Version == "2.2.0");
     }
 
+    private static void MatchedHostPrebuildTests()
+    {
+        HostSelection Plan(string? version, string? project, bool upgrade = true) => new HostSelection
+        {
+            NeedsUpgrade = upgrade,
+            Upgrade = upgrade ? HostUpgradeKind.Build : HostUpgradeKind.None,
+            TargetVersion = version,
+            TargetProject = project,
+        };
+        Func<string, bool> none = _ => false;
+
+        Check("prebuild: matched plan → yes", MatchedHostPrebuild.ShouldPrebuild(Plan("2.3.0", "A.csproj"), true, none));
+        Check("prebuild: Full fidelity off → no", !MatchedHostPrebuild.ShouldPrebuild(Plan("2.3.0", "A.csproj"), false, none));
+        Check("prebuild: bundled version → no", !MatchedHostPrebuild.ShouldPrebuild(Plan("2.2.0", "A.csproj", upgrade: false), true, none));
+        Check("prebuild: no project → no", !MatchedHostPrebuild.ShouldPrebuild(Plan("2.3.0", null), true, none));
+        Check("prebuild: no plan → no", !MatchedHostPrebuild.ShouldPrebuild(null, true, none));
+        Check("prebuild: version already failed → no", !MatchedHostPrebuild.ShouldPrebuild(Plan("2.3.0", "A.csproj"), true, v => v == "2.3.0"));
+
+        MatchedHostBuild Build(string version, Task<HostBuildOutcome> completion, out Func<CancellationToken> token)
+        {
+            var b = new MatchedHostBuild(version);
+            CancellationToken seen = default;
+            b.Start(ct => { seen = ct; return completion; });
+            token = () => seen;
+            return b;
+        }
+
+        var plans = new System.Collections.Generic.Dictionary<string, HostSelection>
+        {
+            ["a"] = Plan("2.3.0", "A.csproj"),
+            ["b"] = Plan("2.2.0", "B.csproj", upgrade: false),
+            ["c"] = Plan("2.4.0", "C.csproj"),
+            ["a2"] = Plan("2.3.0", "A.csproj"),
+        };
+        var log = new ConcurrentQueue<string>();
+
+        // Builds run one at a time, duplicates are skipped, and a failure is remembered for previews.
+        FailedHostVersions.ResetForTests();
+        var acquired = new ConcurrentQueue<string>();
+        var first = new TaskCompletionSource<HostBuildOutcome>();
+        Func<CancellationToken>? firstToken = null;
+        var run = MatchedHostPrebuild.RunAsync(new[] { "a", "b", "c", "a2" }, () => true, log.Enqueue, CancellationToken.None,
+            p => plans[p],
+            (v, p) =>
+            {
+                acquired.Enqueue(v + "|" + p);
+                return v == "2.3.0"
+                    ? Build(v, first.Task, out firstToken)
+                    : Build(v, Task.FromResult(new HostBuildOutcome { Success = false, Error = "restore failed" }), out _);
+            });
+        Check("prebuild: waits for one build before the next", acquired.Count == 1 && !run.IsCompleted);
+        first.SetResult(new HostBuildOutcome { Success = true, Status = "built" });
+        run.Wait(TimeSpan.FromSeconds(5));
+        Eq("prebuild: matched projects only, once each", "2.3.0|A.csproj,2.4.0|C.csproj", string.Join(",", acquired));
+        Check("prebuild: a failed build is remembered", FailedHostVersions.Contains("2.4.0") && !FailedHostVersions.Contains("2.3.0"));
+
+        // A failed version isn't retried on the next solution open.
+        acquired = new ConcurrentQueue<string>();
+        MatchedHostPrebuild.RunAsync(new[] { "c", "a" }, () => true, log.Enqueue, CancellationToken.None, p => plans[p],
+            (v, p) => { acquired.Enqueue(v); return Build(v, Task.FromResult(new HostBuildOutcome { Success = true }), out _); }).Wait(5000);
+        Eq("prebuild: failed version skipped", "2.3.0", string.Join(",", acquired));
+
+        // The prebuild holds no interest: a preview that joins and then cancels stops the build.
+        FailedHostVersions.ResetForTests();
+        MatchedHostBuild? held = null;
+        Func<CancellationToken>? heldToken = null;
+        var pending = new TaskCompletionSource<HostBuildOutcome>();
+        var observe = MatchedHostPrebuild.RunAsync(new[] { "a" }, () => true, log.Enqueue, CancellationToken.None, p => plans[p],
+            (v, p) => held = Build(v, pending.Task, out heldToken));
+        held!.AddInterest();
+        held.Release(cancelIfLast: true);
+        Check("prebuild: a joined preview's Cancel cancels the build", heldToken!().IsCancellationRequested);
+        pending.SetResult(new HostBuildOutcome { Success = false, Error = "cancelled" });
+        observe.Wait(5000);
+        Check("prebuild: a cancelled build isn't a failure", !FailedHostVersions.Contains("2.3.0"));
+
+        // No toolchain stops the run; Full fidelity off does nothing.
+        int calls = 0;
+        MatchedHostPrebuild.RunAsync(new[] { "a", "c" }, () => true, log.Enqueue, CancellationToken.None, p => plans[p],
+            (v, p) => { calls++; return null; }).Wait(5000);
+        Check("prebuild: no .NET SDK → stop after the first try", calls == 1);
+        calls = 0;
+        MatchedHostPrebuild.RunAsync(new[] { "a", "c" }, () => false, log.Enqueue, CancellationToken.None, p => plans[p],
+            (v, p) => { calls++; return null; }).Wait(5000);
+        Check("prebuild: Full fidelity off → nothing", calls == 0);
+
+        // Large solutions are capped.
+        calls = 0;
+        var many = Enumerable.Range(0, 20).Select(i => "p" + i).ToArray();
+        MatchedHostPrebuild.RunAsync(many, () => true, log.Enqueue, CancellationToken.None, p => Plan("2.3." + p, p + ".csproj"),
+            (v, p) => { calls++; return Build(v, Task.FromResult(new HostBuildOutcome { Success = true }), out _); }).Wait(5000);
+        Eq("prebuild: capped", MatchedHostPrebuild.MaxProjects.ToString(), calls.ToString());
+
+        // A resolver that throws on one project doesn't stop the others.
+        calls = 0;
+        MatchedHostPrebuild.RunAsync(new[] { "boom", "a" }, () => true, log.Enqueue, CancellationToken.None,
+            p => p == "boom" ? throw new IOException("locked") : plans[p],
+            (v, p) => { calls++; return Build(v, Task.FromResult(new HostBuildOutcome { Success = true }), out _); }).Wait(5000);
+        Check("prebuild: one unreadable project is skipped", calls == 1);
+        FailedHostVersions.ResetForTests();
+    }
+
     private static void SurfaceIdentityTests()
     {
         var root = NewDir("ident");

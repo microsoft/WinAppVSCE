@@ -61,6 +61,21 @@ namespace WinUIXamlPreview.UITest
                 new Expect("0.0.1", "Segmented", "SelectedIndex", "0", sized: true),
                 new Expect("0.0.1.1", "SegmentedItem", "Content", "Week", sized: true, minHeight: 25),
             }),
+            // Win2D's native Microsoft.Graphics.Canvas.dll lives only in the app's output (runtimes\<rid>\native
+            // for this RID-less build); without the host's native resolver, activation fails and the host fail-fasts.
+            ("NativeDependencyPage.xaml", new[]
+            {
+                new Expect("0.0.0", "CanvasControl", sized: true),
+                new Expect("0.0.1", "TextBlock", "Text", "Rendered with Win2D", sized: true),
+            }),
+            // An async-void Loaded handler reads FixtureContent\greeting.txt from AppContext.BaseDirectory (needs the
+            // host to stage app content files), and another faults after load (the host's UnhandledException net
+            // must contain it; see FixtureLogExpectations).
+            ("ContentAndAsyncFaultPage.xaml", new[]
+            {
+                new Expect("0.0.0", "ContentFileReader", "Content", "Hello from a content file", sized: true),
+                new Expect("0.0.2", "TextBlock", "Text", "Still alive", sized: true),
+            }),
             ("StylingPage.xaml", new[]
             {
                 new Expect("0.0.0", "TextBlock", "Foreground", "#FF7B1FA2", "#FF7B1FA2"),
@@ -101,15 +116,25 @@ namespace WinUIXamlPreview.UITest
                 return 1;
             }
 
+            ResetDevHostStaging(surfaceExe, userDll);
+            _hostHasToolkitTemplates = HostHasToolkitTemplates(surfaceExe);
+            if (!_hostHasToolkitTemplates)
+            {
+                Console.WriteLine("WARN  Surface.pri has no baked Toolkit templates (a plain dev build, not a Build-Payload.ps1 host);");
+                Console.WriteLine("      skipping the Toolkit template-height checks. Run against the payload host to cover them.");
+                Console.WriteLine();
+            }
+
             var lightValues = new Dictionary<string, string?>(StringComparer.Ordinal);
             foreach (var theme in new[] { "Light", "Dark" })
             {
                 Console.WriteLine("== " + theme);
                 try
                 {
-                    using var client = new SurfaceClient(surfaceExe, userDll, s => Console.Error.WriteLine("  " + s), appXaml, theme)
+                    var surfaceLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
+                    using var client = new SurfaceClient(surfaceExe, userDll, s => { surfaceLog.Enqueue(s); Console.Error.WriteLine("  " + s); }, appXaml, theme)
                     {
-                        SampleData = true, // the VS default
+                        SampleData = true, // fixtures exercise sample data (the VS toggle defaults to off)
                     };
                     var box = new FrameBox(client);
                     await client.StartAsync(TimeSpan.FromSeconds(30));
@@ -138,6 +163,11 @@ namespace WinUIXamlPreview.UITest
                         {
                             await CheckExpect(client, box, name, theme, e, lightValues);
                         }
+
+                        if (FixtureLogExpectations.TryGetValue(file, out var logLine))
+                        {
+                            Check(name + ": host logs '" + logLine + "'", await WaitForLog(surfaceLog, logLine, TimeSpan.FromSeconds(5)));
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -151,6 +181,133 @@ namespace WinUIXamlPreview.UITest
             Console.WriteLine();
             Console.WriteLine($"===== FIXTURES: {Results.Count - failed} passed, {failed} failed =====");
             return failed == 0 ? 0 : 1;
+        }
+
+        private static bool _hostHasToolkitTemplates = true;
+
+        // Mirrors the host's staged extensions (App.cs StageLooseXamlResources / ContentExtensions).
+        private static readonly HashSet<string> StagedExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".xbf", ".xaml",
+            ".txt", ".json", ".xml", ".md", ".csv", ".html", ".htm", ".css", ".js", ".svg",
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tif", ".tiff",
+            ".ttf", ".otf",
+        };
+
+        /// <summary>
+        /// A dev host (run straight from its build output, no <c>.payload.json</c>) keeps the user files it staged
+        /// into its own folder across runs, so a broken staging step would still pass on the previous run's copies.
+        /// Delete them first. Only files identical to the user's (same size + write time, which the host's copy
+        /// preserves) with a staged extension are removed, so the host's own files are left alone. Payload run
+        /// copies are fresh per launch and are skipped.
+        /// </summary>
+        internal static void ResetDevHostStaging(string surfaceExe, string? userDll)
+        {
+            string hostDir = Path.GetDirectoryName(Path.GetFullPath(surfaceExe))!;
+            if (userDll == null || File.Exists(Path.Combine(hostDir, ".payload.json")))
+            {
+                return;
+            }
+
+            string userDir = Path.GetDirectoryName(userDll)!;
+            if (string.Equals(Path.GetFullPath(userDir).TrimEnd('\\'), hostDir.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            int removed = 0;
+            var touchedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string src in Directory.EnumerateFiles(userDir, "*", SearchOption.AllDirectories))
+            {
+                if (!StagedExtensions.Contains(Path.GetExtension(src)))
+                {
+                    continue;
+                }
+
+                string rel = src.Substring(userDir.TrimEnd('\\').Length + 1);
+                string dest = Path.Combine(hostDir, rel);
+                var s = new FileInfo(src);
+                var d = new FileInfo(dest);
+                if (!d.Exists || d.Length != s.Length || d.LastWriteTimeUtc != s.LastWriteTimeUtc)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    d.Delete();
+                    removed++;
+                    touchedDirs.Add(d.DirectoryName!);
+                }
+                catch (IOException ex)
+                {
+                    Console.WriteLine("WARN  could not remove stale staged file " + dest + ": " + ex.Message);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    Console.WriteLine("WARN  could not remove stale staged file " + dest + ": " + ex.Message);
+                }
+            }
+
+            // Prune directories the cleanup emptied, deepest first, never the host folder itself.
+            foreach (string dir in touchedDirs.OrderByDescending(p => p.Length))
+            {
+                for (string? cur = dir;
+                     cur != null && cur.Length > hostDir.TrimEnd('\\').Length &&
+                     Directory.Exists(cur) && !Directory.EnumerateFileSystemEntries(cur).Any();
+                     cur = Path.GetDirectoryName(cur))
+                {
+                    try { Directory.Delete(cur); } catch (IOException) { break; }
+                }
+            }
+
+            if (removed > 0)
+            {
+                Console.WriteLine($"Dev host: removed {removed} file(s) staged by an earlier run so this run re-stages them.");
+                Console.WriteLine();
+            }
+        }
+
+        // Host behaviour that leaves no trace in the visual tree. An unhandled async-void fault does not always kill
+        // the host (WinUI Gallery's ChartPage did; a plain control does not), so assert the safety net saw it.
+        private static readonly Dictionary<string, string> FixtureLogExpectations = new(StringComparer.Ordinal)
+        {
+            ["ContentAndAsyncFaultPage.xaml"] = "contained by the preview host (at TestFixtureApp.Controls.AsyncThrowingControl",
+        };
+
+        private static async Task<bool> WaitForLog(System.Collections.Concurrent.ConcurrentQueue<string> log, string text, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (true)
+            {
+                if (log.Any(l => l.Contains(text)))
+                {
+                    return true;
+                }
+                if (DateTime.UtcNow >= deadline)
+                {
+                    return false;
+                }
+                await Task.Delay(100);
+            }
+        }
+
+        /// <summary>
+        /// Build-Payload.ps1 bakes PreviewHost's merged pri (with the Toolkit's Themes\Generic.xbf) in as
+        /// Surface.pri; a plain <c>dotnet build</c> of Surface leaves the host's own tiny pri, so Toolkit controls
+        /// render untemplated. The merged pri names its component maps in ASCII, so a byte scan detects it.
+        /// </summary>
+        private static bool HostHasToolkitTemplates(string surfaceExe)
+        {
+            string pri = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(surfaceExe))!, "Surface.pri");
+            if (!File.Exists(pri))
+            {
+                return false;
+            }
+
+            string text = System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(pri));
+            return text.Contains("CommunityToolkit.WinUI.Controls.SettingsControls")
+                && text.Contains("CommunityToolkit.WinUI.Controls.Segmented");
         }
 
         private static async Task CheckExpect(SurfaceClient client, FrameBox box, string page, string theme, Expect e, Dictionary<string, string?> lightValues)
@@ -183,7 +340,14 @@ namespace WinUIXamlPreview.UITest
 
             if (e.MinHeight > 0)
             {
-                Check(label + $" has its template (height >= {e.MinHeight})", sel.H >= e.MinHeight, $"{sel.W}x{sel.H}");
+                if (_hostHasToolkitTemplates)
+                {
+                    Check(label + $" has its template (height >= {e.MinHeight})", sel.H >= e.MinHeight, $"{sel.W}x{sel.H}");
+                }
+                else
+                {
+                    Console.WriteLine($"  SKIP  {label} has its template (height >= {e.MinHeight}) — host has no baked Toolkit templates");
+                }
             }
 
             if (e.Prop == null)

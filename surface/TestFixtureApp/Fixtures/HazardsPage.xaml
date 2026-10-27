@@ -14,5 +14,18 @@
         <controls:ThrowingControlE />
         <controls:ThrowingControlF />
         <controls:TickerControl />
+        <controls:FixturePieChart />
+        <controls:FixtureLineChart />
+        <controls:FixtureSeriesChart />
+        <ListView>
+            <ListView.ItemTemplateSelector>
+                <controls:ThrowingSelector />
+            </ListView.ItemTemplateSelector>
+        </ListView>
+        <ListView>
+            <ListView.ItemTemplateSelector>
+                <controls:FixedSelector />
+            </ListView.ItemTemplateSelector>
+        </ListView>
     </StackPanel>
 </Page>
