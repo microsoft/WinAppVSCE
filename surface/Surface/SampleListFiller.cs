@@ -39,9 +39,10 @@ internal static class SampleListFiller
         // Fill what's reachable now, before the first measure: a custom layout (an ItemsRepeater's VirtualizingLayout)
         // often assumes the app's data is there and throws on an empty source — and a throw inside MeasureOverride
         // terminates the process. Lists inside templates are only realized by layout, so the pass below catches those.
+        int pre = 0;
         try
         {
-            int pre = FillMarked(root, 0, logical: true);
+            pre = FillMarked(root, 0, logical: true);
             if (pre > 0)
             {
                 App.Log($"SAMPLE: {pre} list(s) filled before first layout.");
@@ -53,7 +54,9 @@ internal static class SampleListFiller
         }
 
         int passes = 0, idle = 0;
-        bool anyFilled = false;
+        // Lists filled before layout count too; otherwise the handler sees nothing left to fill and re-walks
+        // the whole tree for all MaxLayoutPasses instead of stopping after MaxIdlePassesAfterFill.
+        bool anyFilled = pre > 0;
         EventHandler<object>? handler = null;
         handler = (_, _) =>
         {
