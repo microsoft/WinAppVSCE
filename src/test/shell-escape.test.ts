@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	escapePowerShellArg,
+	formatPowerShellArgs,
 	buildElevatedTerminalCommand,
 	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
@@ -10,6 +11,39 @@ import {
 } from '../winapp-cli-utils';
 
 const launcherPath = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+
+describe('formatPowerShellArgs', () => {
+	it('leaves subcommands and option names unquoted', () => {
+		assert.equal(
+			formatPowerShellArgs(['init', '--sparse', '--use-defaults']),
+			'init --sparse --use-defaults'
+		);
+	});
+
+	it('quotes paths, including those containing spaces', () => {
+		assert.equal(
+			formatPowerShellArgs(['init', '--exe', 'C:\\My Apps\\App.exe']),
+			"init --exe 'C:\\My Apps\\App.exe'"
+		);
+	});
+
+	it('escapes embedded single quotes in values', () => {
+		assert.equal(
+			formatPowerShellArgs(['--exe', "C:\\Bob's App\\App.exe"]),
+			"--exe 'C:\\Bob''s App\\App.exe'"
+		);
+	});
+
+	it('quotes a value that would otherwise look like an option', () => {
+		// A bare relative path is indistinguishable from a flag by shape alone,
+		// so anything containing a separator is quoted.
+		assert.equal(formatPowerShellArgs(['pack', 'sparse\\appxmanifest.xml']), "pack 'sparse\\appxmanifest.xml'");
+	});
+
+	it('returns an empty string for no arguments', () => {
+		assert.equal(formatPowerShellArgs([]), '');
+	});
+});
 
 describe('escapePowerShellArg', () => {
 	it('wraps an ordinary path in single quotes', () => {
@@ -30,6 +64,21 @@ describe('escapePowerShellArg', () => {
 
 	it('escapes an embedded single quote by doubling it', () => {
 		assert.equal(escapePowerShellArg("O'Brien.pfx"), "'O''Brien.pfx'");
+	});
+
+	it('escapes PowerShell typographic single-quote delimiters', () => {
+		assert.equal(
+			escapePowerShellArg('a\u2018b\u2019c\u201Ad\u201Be.exe'),
+			"'a\u2018\u2018b\u2019\u2019c\u201A\u201Ad\u201B\u201Be.exe'"
+		);
+	});
+
+	it('keeps a curly-quote command injection attempt inside the literal', () => {
+		const attack = '\u2019; Write-Output INJECTED; \u2018.exe';
+		assert.equal(
+			escapePowerShellArg(attack),
+			"'\u2019\u2019; Write-Output INJECTED; \u2018\u2018.exe'"
+		);
 	});
 
 	it('escapes a single quote used to break out of the literal', () => {

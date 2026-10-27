@@ -31,9 +31,9 @@ export function getWinappCliPath(extensionPath: string): string {
  * parsed by PowerShell. Inside a double-quoted string PowerShell still expands
  * `$(...)`, `$var` and backtick escapes, which lets a crafted file path inject
  * arbitrary commands (e.g. a path containing `$(Remove-Item ...)`). A
- * single-quoted PowerShell literal performs no such expansion; the only
- * metacharacters are the quote characters themselves, which are escaped by
- * doubling them.
+ * single-quoted PowerShell literal performs no such expansion. Windows
+ * PowerShell treats both ASCII and typographic single quotes as delimiters, so
+ * every variant must be escaped by doubling it.
  *
  * PowerShell accepts the Unicode quotation marks U+2018-U+201B as single
  * quotes too, so a path containing one would otherwise close the literal and
@@ -153,6 +153,22 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Join CLI tokens into a PowerShell command line, quoting only the tokens that
+ * need it.
+ *
+ * Subcommands and option names (`init`, `--sparse`) are emitted bare so the
+ * result matches the hand-built command strings used elsewhere in the
+ * extension; anything else — notably paths, which routinely contain spaces —
+ * is single-quoted. Quoting every token would also work, but produces command
+ * lines that read poorly in the terminal the user is watching.
+ */
+export function formatPowerShellArgs(args: readonly string[]): string {
+	return args
+		.map(arg => (/^-{0,2}[A-Za-z0-9][A-Za-z0-9-]*$/.test(arg) ? arg : escapePowerShellArg(arg)))
+		.join(' ');
 }
 
 export function resolveWindowsPowerShellPath(systemRoot: string | undefined): string {

@@ -142,11 +142,13 @@ modal is up. `Confirm-VSCodeEditor` handles that; if you act manually, call `Cle
 ## Driver command IDs & answer schemas
 
 Real command IDs: `winapp.getWinappPath`, `winapp.init`, `winapp.restore`, `winapp.manifestGenerate`,
-`winapp.certGenerate`, `winapp.pack`, `winapp.run`, `winapp.createDebugIdentity`, `winapp.sign`,
+`winapp.initSparse`, `winapp.certGenerate`, `winapp.pack`, `winapp.packSparse`, `winapp.embedIdentity`,
+`winapp.run`, `winapp.createDebugIdentity`, `winapp.sign`,
 `winapp.certInstall`, `winapp.unregister`, `winapp.manifestAddAlias`, …
 
 Answers (ordered, one per prompt the command raises):
 - `@{accept=$true}` — accept the selected QuickPick item (e.g. certGenerate's Install Yes/No).
+- `@{selectNext=<count>}` — move the QuickPick highlight down before a following `accept`.
 - `@{nativeDialogPath='<path>'}` — a `showOpenDialog` folder picker (pack/run).
   Only typed when a `#32770` native dialog is foreground; a Chromium dialog is `SKIPPED`.
 - `@{nativeFileDialogPath='<path>'}` — a `showOpenDialog` file picker (createDebugIdentity,
@@ -189,6 +191,12 @@ run-target picker, which needs a QuickPick answer rather than a dialog.
   input folder."* Pack then raises **two** QuickPicks: "Generate and install a development
   certificate?" and "Bundle Windows App SDK runtime (self-contained)?" → answer order for the driver
   is `@(@{nativeDialogPath=$buildOutput}, @{accept=$true}, @{accept=$true})`.
+- **`winapp.packSparse` takes a sparse identity manifest**, then raises only the development
+  certificate QuickPick. It produces an identity-only `.msix` and deliberately skips the
+  self-contained prompt and normal Install completion action. Live probes should select **No**
+  for certificate generation unless certificate creation is the behavior under test; generated
+  certificates are trusted separately through `winapp.certInstall`, which handles UAC. This keeps
+  package validation independent of certificate-store state.
 - **Pack is slow + fire-and-forget.** The driver returns `done` in ~11s but `winapp pack` keeps
   building in the terminal; **poll for the MSIX** (up to ~2 min). Output lands at
   `<proj>\.winapp\self-contained\<arch>\extracted\MSIX\Main.msix` (hidden, generically named).

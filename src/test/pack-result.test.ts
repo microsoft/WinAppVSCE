@@ -11,6 +11,28 @@ import {
 } from '../pack-result';
 
 describe('parsePackagedArtifactPath', () => {
+	it('extracts an identity package path wrapped onto the following line', () => {
+		// Sparse packs emit a distinct marker and wrap exactly like the others.
+		const output = [
+			'Creating identity package...\r',
+			'  📦 Identity package: \r',
+			'C:\\Users\\me\\My Project\\sparse\\My App.identity.msix\r',
+			''
+		].join('\n');
+
+		assert.equal(
+			parsePackagedArtifactPath(output),
+			'C:\\Users\\me\\My Project\\sparse\\My App.identity.msix'
+		);
+	});
+
+	it('extracts an inline identity package path', () => {
+		assert.equal(
+			parsePackagedArtifactPath('  📦 Identity package: C:\\out\\Notepad.identity.msix\n'),
+			'C:\\out\\Notepad.identity.msix'
+		);
+	});
+
 	it('extracts a following-line path that contains spaces', () => {
 		const output = [
 			'Creating MSIX package...\r',
@@ -281,8 +303,47 @@ describe('planPackCompletion', () => {
 				kind: 'success',
 				artifactPath: 'C:\\out\\CounterApp_1.0.0.0_x64.msix',
 				appName: 'CounterApp',
-				message: 'CounterApp packaged → CounterApp_1.0.0.0_x64.msix'
+				message: 'CounterApp packaged → CounterApp_1.0.0.0_x64.msix',
+				actions: [PACK_ACTIONS.reveal, PACK_ACTIONS.sign, PACK_ACTIONS.install]
 			}
+		);
+	});
+
+	it('offers Install for a normal package', () => {
+		const plan = planPackCompletion({
+			code: 0,
+			output: '  📦 Package: C:\\out\\CounterApp_1.0.0.0_x64.msix\n'
+		});
+		assert.equal(plan.kind, 'success');
+		assert.ok((plan as { actions: string[] }).actions.includes(PACK_ACTIONS.install));
+	});
+
+	it('suppresses Install for an identity-only package', () => {
+		// A sparse identity package contains no payload, so installing it would
+		// register an app whose executable lives outside the package.
+		const plan = planPackCompletion({
+			code: 0,
+			output: '  📦 Identity package: C:\\out\\sparse\\Notepad.identity.msix\n',
+			identityOnly: true
+		});
+		assert.equal(plan.kind, 'success');
+		assert.deepEqual(
+			(plan as { actions: string[] }).actions,
+			[PACK_ACTIONS.reveal, PACK_ACTIONS.sign]
+		);
+	});
+
+	it('parses the identity package marker as success, not failure', () => {
+		// Regression: the parser originally knew only '📦 Package:', so a
+		// successful sparse pack fell through to the failure branch.
+		const plan = planPackCompletion({
+			code: 0,
+			output: '  📦 Identity package: C:\\out\\sparse\\Notepad.identity.msix\n'
+		});
+		assert.equal(plan.kind, 'success');
+		assert.equal(
+			(plan as { artifactPath: string }).artifactPath,
+			'C:\\out\\sparse\\Notepad.identity.msix'
 		);
 	});
 });
