@@ -47,6 +47,7 @@ internal static partial class Program
             Run("EditorSync", EditorSyncTests);
             Run("ProjectOutputWatcher", ProjectOutputWatcherTests);
             Run("SurfaceHangWatchdog", SurfaceHangWatchdogTests);
+            Run("Telemetry", TelemetryTests);
         }
         finally
         {

@@ -43,6 +43,10 @@
     <Compile Include="..\WinUIXamlPreview\UI\PreviewErrorText.cs" Link="UI\PreviewErrorText.cs" />
     <Compile Include="..\WinUIXamlPreview\UI\BuildHint.cs" Link="UI\BuildHint.cs" />
     <Compile Include="..\WinUIXamlPreview\UI\NewerTypesHint.cs" Link="UI\NewerTypesHint.cs" />
+    <Compile Include="..\WinUIXamlPreview\Telemetry\TelemetryEventSource.cs" Link="Telemetry\TelemetryEventSource.cs" />
+    <Compile Include="..\WinUIXamlPreview\Telemetry\PreviewTelemetry.cs" Link="Telemetry\PreviewTelemetry.cs" />
+    <Compile Include="..\WinUIXamlPreview\Telemetry\Events.cs" Link="Telemetry\Events.cs" />
+    <Compile Include="..\WinUIXamlPreview\Telemetry\TelemetryClassifier.cs" Link="Telemetry\TelemetryClassifier.cs" />
   </ItemGroup>
 
   <ItemGroup>

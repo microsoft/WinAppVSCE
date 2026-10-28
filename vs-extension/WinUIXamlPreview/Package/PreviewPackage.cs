@@ -30,11 +30,35 @@ namespace WinUIXamlPreview
     [ProvideToolWindow(typeof(PropertiesToolWindow), Style = VsDockStyle.Tabbed, Orientation = ToolWindowOrientation.Right)]
     public sealed class PreviewPackage : AsyncPackage
     {
+        /// <summary>
+        /// Telemetry honors the VS Customer Experience Improvement Program setting (and WINAPP_CLI_TELEMETRY_OPTOUT).
+        /// Identity registration lives in Protocol (no telemetry dependency), so it's bridged here.
+        /// </summary>
+        private static void InitializeTelemetry()
+        {
+            Telemetry.PreviewTelemetry.Trace = Log.Write;
+            Telemetry.PreviewTelemetry.HostOptedOut = IsVsTelemetryOptedOut;
+            SurfaceIdentity.RegistrationAttempted += (outcome, failure, ms) =>
+                Telemetry.PreviewTelemetry.Log("SurfaceRegistration", new Telemetry.Events.SurfaceRegistrationEvent
+                {
+                    Outcome = outcome,
+                    DurationMs = ms,
+                    ErrorCode = Telemetry.TelemetryClassifier.HResult(failure),
+                    Experimental = SurfaceIdentity.IsExperimental,
+                });
+        }
+
+        // Separate method so a missing Microsoft.VisualStudio.Telemetry assembly fails here (caught by the caller,
+        // treated as opted out) rather than when InitializeTelemetry is JIT-compiled.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static bool IsVsTelemetryOptedOut() => !Microsoft.VisualStudio.Telemetry.TelemetryService.DefaultSession.IsOptedIn;
+
         protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
             await base.InitializeAsync(cancellationToken, progress);
             await Log.InitializeAsync(this);
             Log.Write("WinUI XAML Preview package initializing…");
+            InitializeTelemetry();
 
             // P3: reclaim private Surface run-copies left by earlier sessions (crash, VS kill, or a file
             // still locked at cleanup time). Delayed and off the UI thread so it never competes with startup;
@@ -246,6 +270,7 @@ namespace WinUIXamlPreview
                 catch (Exception ex)
                 {
                     Log.Write("Show-preview command failed: " + ex);
+                    Telemetry.PreviewTelemetry.LogException("ShowPreviewCommand", ex);
                 }
             }).FileAndForget("winuixamlpreview/show-command");
         }
@@ -263,6 +288,7 @@ namespace WinUIXamlPreview
             catch (Exception ex)
             {
                 Log.Write("Close preview tool window failed: " + ex);
+                Telemetry.PreviewTelemetry.LogException("ClosePreviewToolWindow", ex);
             }
 
             // Belt and braces: the margins come back even if the frame never reported its close.
@@ -285,6 +311,7 @@ namespace WinUIXamlPreview
                 catch (Exception ex)
                 {
                     Log.Write("Auto-show tool window failed: " + ex);
+                    Telemetry.PreviewTelemetry.LogException("AutoShowToolWindow", ex);
                 }
             }).FileAndForget("winuixamlpreview/auto-show");
         }
@@ -301,6 +328,7 @@ namespace WinUIXamlPreview
                 catch (Exception ex)
                 {
                     Log.Write("Show-properties failed: " + ex);
+                    Telemetry.PreviewTelemetry.LogException("ShowProperties", ex);
                 }
             }).FileAndForget("winuixamlpreview/show-properties");
         }

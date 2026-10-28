@@ -167,11 +167,13 @@ namespace WinUIXamlPreview.Protocol
                 }
             }
 
+            var sw = Stopwatch.StartNew();
             var manifest = Path.Combine(surfaceDir, ManifestFileName);
             if (!File.Exists(manifest))
             {
                 log($"Identity: no {ManifestFileName} beside Surface.exe ({surfaceDir}); this surface build " +
                     "can't host packaged (MSIX) projects, so their custom types may not resolve.");
+                ReportAttempt("no-payload", null, sw);
                 return false;
             }
 
@@ -184,10 +186,23 @@ namespace WinUIXamlPreview.Protocol
                     _registeredForDir = surfaceDir;
                 }
                 log($"Identity: sparse package already registered for {surfaceDir} (fast check).");
+                ReportAttempt("already-fast", null, sw);
                 return true;
             }
 
-            var ok = RegisterOverride != null ? RegisterOverride(surfaceDir, manifest, log) : RunRegister(surfaceDir, manifest, log);
+            string outcome;
+            string? failure = null;
+            bool ok;
+            if (RegisterOverride != null)
+            {
+                ok = RegisterOverride(surfaceDir, manifest, log);
+                outcome = ok ? "registered" : "failed";
+            }
+            else
+            {
+                ok = RunRegister(surfaceDir, manifest, log, out outcome, out failure);
+            }
+
             if (ok)
             {
                 lock (Gate)
@@ -196,7 +211,21 @@ namespace WinUIXamlPreview.Protocol
                 }
             }
 
+            ReportAttempt(outcome, failure, sw);
             return ok;
+        }
+
+        /// <summary>
+        /// Raised after every real registration attempt (not for an in-process cache hit) with an outcome token
+        /// (no-payload, already-fast, already, registered, failed, timeout, no-powershell, error), the raw failure
+        /// text when there is one, and the elapsed milliseconds. Any thread; handlers must not throw.
+        /// </summary>
+        public static event Action<string, string?, long>? RegistrationAttempted;
+
+        private static void ReportAttempt(string outcome, string? failure, Stopwatch sw)
+        {
+            try { RegistrationAttempted?.Invoke(outcome, failure, sw.ElapsedMilliseconds); }
+            catch { /* observers must never break registration */ }
         }
 
         private const int ErrorInsufficientBuffer = 122;
@@ -271,8 +300,10 @@ namespace WinUIXamlPreview.Protocol
             }
         }
 
-        private static bool RunRegister(string surfaceDir, string manifest, Action<string> log)
+        private static bool RunRegister(string surfaceDir, string manifest, Action<string> log, out string outcome, out string? failure)
         {
+            outcome = "error";
+            failure = null;
 #if MIGRATION_IDENTITY
             // The experimental binary does not contain or execute the shipping replacement script.
             // Revalidate registration on every call: AppX state is user-scoped, not hive-scoped.
@@ -320,6 +351,7 @@ namespace WinUIXamlPreview.Protocol
                     if (proc == null)
                     {
                         log("Identity: could not start powershell.exe for registration.");
+                        outcome = "no-powershell";
                         return false;
                     }
 
@@ -335,6 +367,7 @@ namespace WinUIXamlPreview.Protocol
                     {
                         try { proc.Kill(); } catch { /* best effort */ }
                         log("Identity: registration timed out.");
+                        outcome = "timeout";
                         return false;
                     }
 
@@ -350,12 +383,14 @@ namespace WinUIXamlPreview.Protocol
                     if (proc.ExitCode == 0 && outText == "WXP:ALREADY")
                     {
                         log($"Identity: sparse package already registered for {surfaceDir}.");
+                        outcome = "already";
                         return true;
                     }
 
                     if (proc.ExitCode == 0 && outText == "WXP:REGISTERED")
                     {
                         log($"Identity: registered sparse package '{PackageName}' (external location {surfaceDir}).");
+                        outcome = "registered";
                         return true;
                     }
 
@@ -365,6 +400,8 @@ namespace WinUIXamlPreview.Protocol
                         reason = (stderr ?? string.Empty).Trim();
                     }
 
+                    outcome = "failed";
+                    failure = reason;
                     log("Identity: registration failed — " + (string.IsNullOrEmpty(reason) ? "unknown error" : reason) +
                         ". Packaged (MSIX) custom types may not resolve. Ensure Windows Developer Mode is on " +
                         "(Settings ▸ System ▸ For developers).");
@@ -374,6 +411,7 @@ namespace WinUIXamlPreview.Protocol
             catch (Exception ex)
             {
                 log("Identity: registration invocation failed — " + ex.Message);
+                failure = ex.Message;
                 return false;
             }
         }

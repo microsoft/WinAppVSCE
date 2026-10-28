@@ -67,6 +67,10 @@ namespace WinUIXamlPreview.UI
         private string? _perfLabel;
         private string _perfNextOpenLabel = "open";
 
+        // Telemetry: per-document de-dup so keystroke-level render errors and repeated app faults send once.
+        private readonly HashSet<string> _telemetrySent = new HashSet<string>(StringComparer.Ordinal);
+        private string _telemetryOpenTrigger = "open";
+
         private SurfaceClient? _spareClient;
         private Action<string>? _spareClosedSub; // the spare's Closed subscription (carries which client died)
         private bool _spareReady;
@@ -225,7 +229,7 @@ namespace WinUIXamlPreview.UI
                     }
                 }
             }
-            catch (Exception ex) { Log.Write("Settings sync failed: " + ex); }
+            catch (Exception ex) { Log.Write("Settings sync failed: " + ex); Telemetry.PreviewTelemetry.LogException("SettingsSync", ex); }
 
             SettingsSynced?.Invoke();
         }
@@ -482,10 +486,15 @@ namespace WinUIXamlPreview.UI
             FrameImage.Source = null;
             SetStatus("Starting preview…", spinner: true, detail: Path.GetFileName(path));
             PerfBegin(_perfNextOpenLabel);
+            _telemetryOpenTrigger = _perfNextOpenLabel;
             _perfNextOpenLabel = "open";
 
             _ = StartPreviewAsync(path).ContinueWith(
-                t => Log.Write("StartPreviewAsync faulted: " + t.Exception),
+                t =>
+                {
+                    Log.Write("StartPreviewAsync faulted: " + t.Exception);
+                    Telemetry.PreviewTelemetry.LogException("StartPreviewAsync", t.Exception?.GetBaseException());
+                },
                 System.Threading.CancellationToken.None,
                 System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,
                 System.Threading.Tasks.TaskScheduler.Default);
@@ -578,6 +587,8 @@ namespace WinUIXamlPreview.UI
                     : "Packaged preview: surface identity NOT active; custom controls from this packaged build may not resolve.");
             }
 
+            TelemetryPreviewOpened(plan, userDll, identityFallback);
+
             Log.Write($"Constructing surface client (surfaceExe='{surfaceExe}', userDll='{userDll ?? "(none)"}', appXaml='{userAppXaml ?? "(none)"}', xaml={xaml.Length} chars)…");
             var client = new SurfaceClient(surfaceExe, userDll, Log.Write, userAppXaml, PreviewOptions.Theme, userPri: recoverPri) { SampleData = PreviewOptions.DesignTimeData, DocumentPathSource = () => _currentPath ?? _pinnedPath };
             AttachClient(client);
@@ -652,6 +663,7 @@ namespace WinUIXamlPreview.UI
                     }
                     else
                     {
+                        Telemetry.PreviewTelemetry.LogException("StartPreviewAsync.StartSurface", ex);
                         SetStatus("Could not start the surface.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
                     }
                 }
@@ -765,6 +777,7 @@ namespace WinUIXamlPreview.UI
             }
 
             PreviewOptions.DesignTimeData = on;
+            Telemetry.PreviewTelemetry.Log("SampleDataToggled", new Telemetry.Events.SampleDataToggledEvent { On = on });
             ApplyDesignTimeData(on);
         }
 
@@ -1045,6 +1058,8 @@ namespace WinUIXamlPreview.UI
             Action<ContentPropsMsg> contentProps = m => OnContentProps(c, m);
             Action<ViewMsg> view = m => OnView(c, m);
             Action<string> closed = r => OnClosed(c, r);
+            Action<bool> appFault = layoutFatal => OnAppCodeFault(c, layoutFatal);
+            c.AppCodeFault += appFault;
             c.Frame += frame;
             c.Error += error;
             c.Hwnd += hwnd;
@@ -1056,6 +1071,7 @@ namespace WinUIXamlPreview.UI
             c.Closed += closed;
             _clientWiring[c] = () =>
             {
+                c.AppCodeFault -= appFault;
                 c.Frame -= frame;
                 c.Error -= error;
                 c.Hwnd -= hwnd;
@@ -1575,6 +1591,7 @@ namespace WinUIXamlPreview.UI
             if (FailedHostVersions.Contains(version))
             {
                 Log.Write($"Fidelity upgrade for {version}: a build already failed this session — not retrying.");
+                TelemetryFullFidelityBuild("build", "previously-failed", version, null);
                 ShowFidelityNote(BuildFailedNote(version!), sticky: true);
                 return;
             }
@@ -1601,6 +1618,7 @@ namespace WinUIXamlPreview.UI
                 if (build == null)
                 {
                     _session.AbortUpgradeStart();
+                    TelemetryFullFidelityBuild("build", "no-sdk", version, null);
                     ShowFidelityNote($"Install the .NET SDK for a full-fidelity WinAppSDK {version} preview.");
                     return;
                 }
@@ -1625,6 +1643,7 @@ namespace WinUIXamlPreview.UI
                 ShowFidelityBuilding(version!, building: false); // verified cache present — quick validate + launch
             }
 
+            var telemetryKind = kind == HostUpgradeKind.Build ? "build" : "cached";
             _ = System.Threading.Tasks.Task.Run(async () =>
             {
                 var upSw = System.Diagnostics.Stopwatch.StartNew();
@@ -1645,6 +1664,7 @@ namespace WinUIXamlPreview.UI
                             }
 
                             FailedHostVersions.Add(version!);
+                            TelemetryFullFidelityBuild(telemetryKind, "build-failed", version, upSw);
                             Log.Write($"Fidelity upgrade for {version}: build did not yield a matched host ({outcome.Error}); staying on bundled 2.2.0.");
                             EndUpgrade(gen, note: null);
                             ShowFidelityNote(BuildFailedNote(version!), sticky: true);
@@ -1688,13 +1708,15 @@ namespace WinUIXamlPreview.UI
                 catch (Exception ex)
                 {
                     Log.Write("Fidelity upgrade: matched host failed to start: " + ex.Message);
+                    TelemetryFullFidelityBuild(telemetryKind, "start-failed", version, upSw);
                     try { matched?.Dispose(); } catch { }
                     await MarshalAsync(() => EndUpgrade(gen, note: null));
                     return;
                 }
 
                 // R3: the host reports the WASDK it was really built against; flag a cache/build mix-up.
-                if (!string.Equals(matchedReady.Wasdk, version, StringComparison.OrdinalIgnoreCase))
+                var wasdkMismatch = !string.Equals(matchedReady.Wasdk, version, StringComparison.OrdinalIgnoreCase);
+                if (wasdkMismatch)
                 {
                     Log.Write($"Fidelity upgrade: WARNING matched host reports WASDK '{matchedReady.Wasdk ?? "(none)"}' but the project needs '{version}'.");
                 }
@@ -1707,9 +1729,11 @@ namespace WinUIXamlPreview.UI
                     if (_disposed || !_session.IsUpgradeCurrent(gen))
                     {
                         try { readyMatched!.Dispose(); } catch { }
+                        TelemetryFullFidelityBuild(telemetryKind, "superseded", version, upSw, wasdkMismatch);
                         return;
                     }
 
+                    TelemetryFullFidelityBuild(telemetryKind, "swapped", version, upSw, wasdkMismatch);
                     PromoteMatched(readyMatched!, matchedExe, matchedPri, version!, gen);
                 });
             });
@@ -1897,8 +1921,13 @@ namespace WinUIXamlPreview.UI
             {
                 Log.Write($"Newer WinUI types left out on the bundled host: {string.Join(", ", newerTypes)} (target {target ?? "unknown"}).");
             }
-            _newerTypesNoteShown = true;
             var offer = !noSuggestion && !failed;
+            if (!_newerTypesNoteShown)
+            {
+                TelemetryNewerTypes("shown", newerTypes, target, offer);
+            }
+
+            _newerTypesNoteShown = true;
             _fidelityBar.Show(BannerSeverity.Info, NewerTypesHint.Title, text,
                 actionText: offer ? NewerTypesHint.TurnOnAction : null,
                 onAction: offer ? OnTurnOnFullFidelity : (Action?)null);
@@ -1911,6 +1940,7 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
+            TelemetryNewerTypes("turn-on", _lastNewerTypes, _fidelityPlan?.TargetVersion, offeredFullFidelity: true);
             _newerTypesNoteShown = false;
             HideFidelityBanner();
             SetFullFidelity(true);
@@ -2161,6 +2191,7 @@ namespace WinUIXamlPreview.UI
                 catch (Exception ex)
                 {
                     Log.Write("OnHwnd failed: " + ex);
+                    Telemetry.PreviewTelemetry.LogException("OnHwnd", ex);
                     SetStatus("Failed to host native surface.", spinner: false, detail: ex.Message, severity: BannerSeverity.Error, offerReload: true);
                 }
             });
@@ -2203,6 +2234,7 @@ namespace WinUIXamlPreview.UI
             if (_perfSw != null)
             {
                 Log.Write($"PERF {_perfLabel}.paint ms={_perfSw.ElapsedMilliseconds} outcome=superseded");
+                TelemetryPaintSpan(_perfLabel, _perfSw.ElapsedMilliseconds, "superseded");
             }
 
             _perfLabel = label;
@@ -2217,6 +2249,7 @@ namespace WinUIXamlPreview.UI
             }
 
             Log.Write($"PERF {_perfLabel}.paint ms={_perfSw.ElapsedMilliseconds} outcome={outcome}");
+            TelemetryPaintSpan(_perfLabel, _perfSw.ElapsedMilliseconds, outcome);
             _perfSw = null;
             _perfLabel = null;
         }
@@ -2250,6 +2283,7 @@ namespace WinUIXamlPreview.UI
                 var kind = PreviewErrorText.Classify(err.NotDesignable, _hasFrame || _hasNative);
                 if (kind == ErrorDisplay.NotDesignable)
                 {
+                    TelemetryRenderFailed(err, kind, held: false);
                     var reason = PreviewErrorText.NotDesignableReason(err.Message);
                     Log.Write("Surface reported a non-designable root — " + reason);
                     SetNotDesignable(reason);
@@ -2261,7 +2295,9 @@ namespace WinUIXamlPreview.UI
                 Log.Write("Surface error — " + text);
                 var display = PreviewErrorText.FormatXamlError(err.Message, err.Line, err.Column);
 
-                if (_session.ShouldHoldError(err.NotDesignable, _hasFrame || _hasNative, !string.IsNullOrEmpty(_activeUserPri)))
+                var hold = _session.ShouldHoldError(err.NotDesignable, _hasFrame || _hasNative, !string.IsNullOrEmpty(_activeUserPri));
+                TelemetryRenderFailed(err, kind, hold);
+                if (hold)
                 {
                     Log.Write("Holding the error until the full-fidelity host has tried this page.");
                     _heldError = display;
@@ -2312,8 +2348,10 @@ namespace WinUIXamlPreview.UI
                     return;
                 }
 
+                var hadRender = _hasFrame || _hasNative;
                 if (action == ActiveDeathAction.ProtocolMismatch)
                 {
+                    TelemetrySurfaceCrashed(reason, action, usedSpare: false, hadRender);
                     ShowProtocolMismatch(reason);
                     return;
                 }
@@ -2332,6 +2370,7 @@ namespace WinUIXamlPreview.UI
 
                     if (xaml != null && TryPromoteSpare(xaml))
                     {
+                        TelemetrySurfaceCrashed(reason, action, usedSpare: true, hadRender);
                         PerfBegin("recover.spare");
                         Log.Write($"Surface died; recovered via warm spare (attempt {restarts.Attempts}/{restarts.MaxAttempts}).");
                         SetStatus("Recycling surface…", spinner: true, detail: Path.GetFileName(path!));
@@ -2339,6 +2378,7 @@ namespace WinUIXamlPreview.UI
                     }
 
                     // No spare available — fall back to a full cold restart.
+                    TelemetrySurfaceCrashed(reason, action, usedSpare: false, hadRender);
                     Log.Write($"Surface died; cold-restarting preview (attempt {restarts.Attempts}/{restarts.MaxAttempts}).");
                     SetStatus("Surface restarted; reloading…", spinner: true, detail: Path.GetFileName(path!));
                     _currentPath = null; // force ShowDocument to fully re-init rather than short-circuit
@@ -2348,6 +2388,7 @@ namespace WinUIXamlPreview.UI
                     return;
                 }
 
+                TelemetrySurfaceCrashed(reason, action, usedSpare: false, hadRender);
                 ShowReconnectBanner(PreviewErrorText.DisconnectedDetail(reason, restarts.Exhausted, restarts.MaxAttempts));
             });
         }

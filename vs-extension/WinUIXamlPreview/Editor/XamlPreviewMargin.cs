@@ -161,6 +161,7 @@ namespace WinUIXamlPreview.Editor
             {
                 // A margin failure must never take down the editor — log and render no margin.
                 Log.Write("XamlPreviewMargin creation failed: " + ex);
+                Telemetry.PreviewTelemetry.LogException("CreateMargin", ex);
                 return null;
             }
         }
@@ -646,6 +647,7 @@ namespace WinUIXamlPreview.Editor
                 catch (Exception ex)
                 {
                     Log.Write("ReopenDocument failed: " + ex);
+                    Telemetry.PreviewTelemetry.LogException("ReopenDocument", ex);
                 }
             });
         }

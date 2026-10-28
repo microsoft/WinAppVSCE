@@ -120,6 +120,16 @@ namespace WinUIXamlPreview.Protocol
         /// <summary>Raised (on a background thread) when any surface reports <see cref="IdentityRequiredMarker"/>.</summary>
         public static event Action? IdentityRequired;
 
+        /// <summary>Stderr text the surface logs when it contained an exception thrown by the previewed app's code
+        /// (surface\Surface\App.cs OnUnhandledException; keep in sync).</summary>
+        public const string AppCodeFaultContainedMarker = "unhandled exception in app code was contained by the preview host";
+
+        /// <summary>Stderr text the surface logs when app layout code threw; WinUI terminates the host for these.</summary>
+        public const string AppLayoutFaultMarker = "app layout code threw during measure/arrange";
+
+        /// <summary>Raised (on a background thread) when this surface reports an app-code fault; the argument is true for a fatal layout fault.</summary>
+        public event Action<bool>? AppCodeFault;
+
         /// <summary>True once the connection has faulted (process died / socket failed); Closed is raised at most once.</summary>
         public bool IsFaulted => Volatile.Read(ref _faulted) != 0;
 
@@ -298,6 +308,14 @@ namespace WinUIXamlPreview.Protocol
                 if (e.Data.IndexOf(IdentityRequiredMarker, StringComparison.Ordinal) >= 0)
                 {
                     IdentityRequired?.Invoke();
+                }
+                else if (e.Data.IndexOf(AppCodeFaultContainedMarker, StringComparison.Ordinal) >= 0)
+                {
+                    AppCodeFault?.Invoke(false);
+                }
+                else if (e.Data.IndexOf(AppLayoutFaultMarker, StringComparison.Ordinal) >= 0)
+                {
+                    AppCodeFault?.Invoke(true);
                 }
             }
         }
