@@ -152,12 +152,15 @@ public static class HostBuilder
                 r.CacheHit = true; r.Success = true; r.Status = "cached";
                 return r;
             }
+            var manifestTool = ResolveManifestTool(surface);
+            log(manifestTool != null ? "Manifest tool: " + manifestTool
+                : "Manifest tool: not found in restored packages; deferring to WindowsAppSDK's lookup.");
             var part = Stopwatch.StartNew();
             log(HostPayload.CompilingMarker);
-            RunTool(BuildArgs("build", sp, version, opt));
+            RunTool(BuildArgs("build", sp, version, opt, manifestTool));
             r.SurfaceBuildSeconds = part.Elapsed.TotalSeconds;
             part.Restart();
-            RunTool(BuildArgs("build", dp, version, opt));
+            RunTool(BuildArgs("build", dp, version, opt, ResolveManifestTool(template) ?? manifestTool));
             r.PriBuildSeconds = part.Elapsed.TotalSeconds;
             var host = OutputDir(surface, opt);
             var priDir = OutputDir(template, opt);
@@ -223,13 +226,83 @@ public static class HostBuilder
     private static string OutputDir(string projectDir, BuildOptions opt)
         => Path.Combine(projectDir, "bin", opt.Platform, "Debug", "net10.0-windows10.0.26100.0", opt.Rid);
 
-    private static string[] BuildArgs(string verb, string project, string version, BuildOptions opt)
+    internal static string[] BuildArgs(string verb, string project, string version, BuildOptions opt,
+        string? manifestTool = null)
     {
         var args = new List<string> { verb, project, "-p:Configuration=Debug", "-p:Platform=" + opt.Platform,
             "-p:RuntimeIdentifier=" + opt.Rid, "-p:WinUISurfaceWasdkVersion=" + version,
-            "-p:WindowsAppSDKSelfContained=true", "-nologo", "-v:minimal", "-nodeReuse:false" };
+            "-p:WindowsAppSDKSelfContained=true",
+            // The staged build lives under %TEMP%; stray Directory.*.props/targets above it (user profile,
+            // drive root) must not leak in and re-route toolchain properties such as ManifestTool.
+            "-p:ImportDirectoryBuildProps=false", "-p:ImportDirectoryBuildTargets=false",
+            "-p:ImportDirectoryPackagesProps=false",
+            "-nologo", "-v:minimal", "-nodeReuse:false" };
+        // A global property also overrides a same-named environment variable, which MSBuild would
+        // otherwise surface as $(ManifestTool) and use ahead of WindowsAppSDK's own lookup.
+        if (manifestTool != null) args.Add("-p:ManifestTool=" + EscapeMsBuild(manifestTool));
         if (verb == "build") args.Add("--no-restore");
         return args.ToArray();
+    }
+
+    private static string EscapeMsBuild(string value)
+        => value.Replace("%", "%25").Replace(";", "%3B").Replace("$", "%24").Replace("@", "%40").Replace("'", "%27");
+
+    /// <summary>
+    /// Resolve mt.exe from the packages the staged Surface project actually restored (project.assets.json),
+    /// mirroring WindowsAppSDK's preference order: a WindowsAppSDK package's own tools\mt.exe, then the
+    /// Windows SDK BuildTools package for the host OS architecture (falling back to the other arches).
+    /// Returns null when nothing is found so the build can defer to WindowsAppSDK's lookup.
+    /// </summary>
+    internal static string? ResolveManifestTool(string projectDir, System.Runtime.InteropServices.Architecture? osArch = null)
+    {
+        try
+        {
+            var assets = Path.Combine(projectDir, "obj", "project.assets.json");
+            if (!File.Exists(assets)) return null;
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(assets));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("libraries", out var libraries) || !root.TryGetProperty("packageFolders", out var folders))
+                return null;
+            var packageFolders = folders.EnumerateObject().Select(f => f.Name).ToList();
+            var wasdk = new List<string>();
+            var buildTools = new List<string>();
+            foreach (var lib in libraries.EnumerateObject())
+            {
+                if (!lib.Value.TryGetProperty("path", out var p) || p.GetString() is not { Length: > 0 } rel) continue;
+                var name = lib.Name.Split('/')[0];
+                if (name.StartsWith("Microsoft.WindowsAppSDK", StringComparison.OrdinalIgnoreCase)) wasdk.Add(rel);
+                else if (name.Equals("Microsoft.Windows.SDK.BuildTools", StringComparison.OrdinalIgnoreCase)) buildTools.Add(rel);
+            }
+            IEnumerable<string> Roots(string rel) => packageFolders.Select(f => Path.Combine(f, rel.Replace('/', Path.DirectorySeparatorChar)));
+            foreach (var pkg in wasdk.SelectMany(Roots))
+            {
+                var candidate = Path.Combine(pkg, "tools", "mt.exe");
+                if (File.Exists(candidate)) return candidate;
+            }
+            var arch = (osArch ?? System.Runtime.InteropServices.RuntimeInformation.OSArchitecture) switch
+            {
+                System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+                System.Runtime.InteropServices.Architecture.X64 => "x64",
+                _ => "x86",
+            };
+            var arches = new[] { arch, "x64", "x86", "arm64" }.Distinct().ToArray();
+            foreach (var pkg in buildTools.SelectMany(Roots))
+            {
+                var bin = Path.Combine(pkg, "bin");
+                if (!Directory.Exists(bin)) continue;
+                var versioned = Directory.GetDirectories(bin)
+                    .Select(d => (dir: d, ok: Version.TryParse(Path.GetFileName(d), out var v), v))
+                    .Where(x => x.ok).OrderByDescending(x => x.v).Select(x => x.dir);
+                foreach (var dir in versioned)
+                    foreach (var a in arches)
+                    {
+                        var candidate = Path.Combine(dir, a, "mt.exe");
+                        if (File.Exists(candidate)) return candidate;
+                    }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { }
+        return null;
     }
 
     private static void VerifyMatched(string host, string component, BuildOptions opt, BuildResult r,

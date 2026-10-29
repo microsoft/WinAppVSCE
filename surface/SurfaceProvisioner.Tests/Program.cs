@@ -629,6 +629,41 @@ try
     var overlayCancelled = Provisioner.Provision(new() { ProjectPath = sourceTree, BaseHostDir = source, OutDir = run },
         cancellation: alreadyCancelled.Token);
     Check(overlayCancelled.Cancelled && !overlayCancelled.Success, "native overlay honours cancellation");
+
+    var stagedArgs = HostBuilder.BuildArgs("build", "s.csproj", "2.6.4", Options(), @"C:\a b;c\mt.exe");
+    Check(stagedArgs.Contains("-p:ImportDirectoryBuildProps=false") && stagedArgs.Contains("-p:ImportDirectoryBuildTargets=false")
+        && stagedArgs.Contains("-p:ImportDirectoryPackagesProps=false"), "staged build ignores stray Directory.* files");
+    Check(stagedArgs.Contains(@"-p:ManifestTool=C:\a b%3Bc\mt.exe"), "explicit ManifestTool passed MSBuild-escaped");
+    Check(!HostBuilder.BuildArgs("restore", "s.csproj", "2.6.4", Options()).Any(a => a.StartsWith("-p:ManifestTool")),
+        "no ManifestTool when unresolved");
+    var mtProj = Path.Combine(root, "mtproj");
+    var pkgs = Path.Combine(root, "mtpkgs");
+    Directory.CreateDirectory(Path.Combine(mtProj, "obj"));
+    void Assets() => File.WriteAllText(Path.Combine(mtProj, "obj", "project.assets.json"), JsonSerializer.Serialize(new {
+        libraries = new Dictionary<string, object> {
+            ["Microsoft.WindowsAppSDK.Base/2.6.4"] = new { path = "microsoft.windowsappsdk.base/2.6.4" },
+            ["Microsoft.Windows.SDK.BuildTools/10.0.28000.2270"] = new { path = "microsoft.windows.sdk.buildtools/10.0.28000.2270" } },
+        packageFolders = new Dictionary<string, object> { [pkgs + "\\"] = new { } } }));
+    Check(HostBuilder.ResolveManifestTool(mtProj) == null, "no assets -> defer to WindowsAppSDK lookup");
+    Assets();
+    Check(HostBuilder.ResolveManifestTool(mtProj) == null, "no mt.exe on disk -> defer");
+    var btBin = Path.Combine(pkgs, "microsoft.windows.sdk.buildtools", "10.0.28000.2270", "bin");
+    foreach (var a in new[] { "x64", "arm64" })
+    {
+        Directory.CreateDirectory(Path.Combine(btBin, "10.0.28000.0", a));
+        File.WriteAllText(Path.Combine(btBin, "10.0.28000.0", a, "mt.exe"), "");
+    }
+    Directory.CreateDirectory(Path.Combine(btBin, "not-a-version", "arm64"));
+    Check(HostBuilder.ResolveManifestTool(mtProj, System.Runtime.InteropServices.Architecture.Arm64)
+        == Path.Combine(btBin, "10.0.28000.0", "arm64", "mt.exe"), "BuildTools mt.exe for host OS arch");
+    Check(HostBuilder.ResolveManifestTool(mtProj, System.Runtime.InteropServices.Architecture.X86)
+        == Path.Combine(btBin, "10.0.28000.0", "x64", "mt.exe"), "missing arch falls back to x64");
+    var wasdkTools = Path.Combine(pkgs, "microsoft.windowsappsdk.base", "2.6.4", "tools");
+    Directory.CreateDirectory(wasdkTools);
+    File.WriteAllText(Path.Combine(wasdkTools, "mt.exe"), "");
+    Check(HostBuilder.ResolveManifestTool(mtProj) == Path.Combine(wasdkTools, "mt.exe"), "WindowsAppSDK's own tools\\mt.exe preferred");
+    File.WriteAllText(Path.Combine(mtProj, "obj", "project.assets.json"), "{ not json");
+    Check(HostBuilder.ResolveManifestTool(mtProj) == null, "corrupt assets -> defer");
     Console.WriteLine($"Provisioner fixtures: {count} passed.");
 }
 finally { Directory.Delete(root, true); }
