@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Application manifest embedded (post-build, via mt.exe) into the SHIPPED Surface.exe to give it a
+  sparse-package identity association. This is the surface's normal app.manifest (PerMonitorV2 DPI +
+  Windows 10 supportedOS) PLUS the <msix> element that names the sparse package.
+
+  The <msix> element is INERT when no matching package is registered — the exe launches unpackaged as
+  usual (proven). When the extension registers WinUIXamlPreviewSurface with an external location, a
+  direct launch of the exe runs WITH that identity, enabling packaged (MSIX) user-assembly hosting.
+
+  The build toolchain strips this unknown <msix> element from the compiler-embedded manifest, so it MUST
+  be re-embedded post-build (Build-Vsix.ps1 stages the surface and runs mt.exe -outputresource). Only the
+  VSIX copy is patched; the raw surface build output stays pristine so dev harnesses are unaffected.
+
+  Keep identity in sync with AppxManifest.xml and SurfaceIdentity.cs.
+-->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="Surface.app" />
+  <msix xmlns="urn:schemas-microsoft-com:msix.v1"
+        publisher="CN=WinUIXamlPreview"
+        packageName="WinUIXamlPreviewSurface"
+        applicationId="Surface" />
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>

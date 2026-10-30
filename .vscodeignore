@@ -25,3 +25,6 @@ playwright.config.ts
 PR_REVIEW.md
 EDITOR_SUPPORT.md
 winapp.yaml
+surface/**
+vs-extension/**
+docs/previewer-migration.md

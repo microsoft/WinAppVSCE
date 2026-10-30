@@ -1,0 +1,1579 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Runtime.ExceptionServices;
+using System.Runtime.Loader;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Xml.Linq;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Markup;
+
+namespace Surface;
+
+/// <summary>
+/// Custom entry point. There is no App.xaml in this project — the host is a pure
+/// code Application so that <see cref="App"/> can own the
+/// <see cref="IXamlMetadataProvider"/> implementation itself (the XAML compiler
+/// would otherwise generate that implementation on the App partial and we could
+/// not chain to the user assembly's provider).
+/// </summary>
+public static class Program
+{
+    internal static void Boot(string message)
+    {
+        try
+        {
+            File.AppendAllText(
+                Path.Combine(Paths.SurfaceRoot, "boot.log"),
+                DateTime.Now.ToString("HH:mm:ss.fff") + " " + message + Environment.NewLine);
+        }
+        catch { }
+    }
+
+    /// <summary>Path to the user assembly from <c>--user-dll &lt;path&gt;</c>, or null to use the default.</summary>
+    internal static string? UserDllPath { get; private set; }
+
+    /// <summary>
+    /// Path to the user app's already-built merged <c>resources.pri</c> from <c>--user-pri &lt;path&gt;</c>,
+    /// or null. When supplied it is staged as this host's primary resource map (see
+    /// <see cref="StageUserPri"/>) so <c>ms-appx:///</c> lookups for third-party component templates
+    /// and the user's own compiled XAML resolve with no build-time makepri bake.
+    /// </summary>
+    internal static string? UserPriPath { get; private set; }
+
+    /// <summary>
+    /// Path to the user app's <c>App.xaml</c> source from <c>--user-appxaml &lt;path&gt;</c>, or null. When
+    /// supplied, the app's <c>&lt;Application.Resources&gt;</c> (merged dictionaries + theme dictionaries +
+    /// inline resources) is reconstructed and merged into the host's <see cref="Application.Resources"/> so a
+    /// real app page resolves app-defined <c>{StaticResource}</c> keys (e.g. <c>GalleryTileGridStyle</c>) and
+    /// implicit styles — the app resource scope a page normally inherits from its running <c>App</c>.
+    /// </summary>
+    internal static string? UserAppXamlPath { get; private set; }
+
+#if SURFACE_BENCHMARKS
+    /// <summary>True when launched with <c>--benchmark</c>: run the offline latency benchmark (S5 Part 1) instead of the TCP server.</summary>
+    internal static bool BenchmarkMode { get; private set; }
+
+    /// <summary>True when launched with <c>--wgc</c>: run the WGC-vs-RTB capture probe (S5 Part 2) instead of the TCP server.</summary>
+    internal static bool WgcMode { get; private set; }
+#endif
+
+    [STAThread]
+    private static void Main(string[] args)
+    {
+        Boot("Main: enter");
+        RegisterVersionAgnosticAssemblyResolver();
+        RegisterAppNativeLibraryResolver();
+        UserDllPath = ParseUserDll(args);
+        Boot("Main: user-dll = " + (UserDllPath ?? "<default>"));
+        UserPriPath = ParseFlag(args, "--user-pri");
+        Boot("Main: user-pri = " + (UserPriPath ?? "<none>"));
+        UserAppXamlPath = ParseFlag(args, "--user-appxaml");
+        Boot("Main: user-appxaml = " + (UserAppXamlPath ?? "<none>"));
+        StageUserPri();
+#if SURFACE_BENCHMARKS
+        BenchmarkMode = args.Any(a => string.Equals(a, "--benchmark", StringComparison.OrdinalIgnoreCase));
+        Boot("Main: benchmark = " + BenchmarkMode);
+        WgcMode = args.Any(a => string.Equals(a, "--wgc", StringComparison.OrdinalIgnoreCase));
+        Boot("Main: wgc = " + WgcMode);
+#endif
+        try
+        {
+            WinRT.ComWrappersSupport.InitializeComWrappers();
+            Boot("Main: InitializeComWrappers done");
+            DesignModeSignal.Establish();
+            Application.Start(p =>
+            {
+                Boot("Application.Start callback: enter");
+                var context = new ContainingSynchronizationContext(
+                    new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread()));
+                SynchronizationContext.SetSynchronizationContext(context);
+                Boot("Application.Start callback: creating App");
+                new App();
+                Boot("Application.Start callback: App created");
+            });
+            Boot("Main: Application.Start returned");
+        }
+        catch (Exception ex)
+        {
+            Boot("Main: EXCEPTION " + ex);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Registers a version-agnostic fallback assembly resolver on the default load context.
+    /// <para>
+    /// This host is a single prebuilt base built against one Windows App SDK (the "latest we
+    /// ship"). A user's <b>prebuilt</b> control DLL, however, was compiled against whatever
+    /// WASDK/C#-WinRT their app used, so it may hard-reference a projection assembly
+    /// (<c>WinRT.Runtime</c>, <c>Microsoft.WinUI</c>, <c>Microsoft.*.Projection</c>) at a
+    /// <i>different</i> version than the one this base loaded.
+    /// </para>
+    /// <para>
+    /// The .NET default context already unifies <b>downward</b> (a reference to an older version
+    /// binds to the newer loaded copy automatically), so the common case — user built against an
+    /// older WASDK than this base — needs nothing. This handler covers the <b>upward</b> edge
+    /// (user built against a <i>newer</i> WASDK than this base): normal resolution fails, this
+    /// event fires, and we redirect to the already-loaded assembly of the same simple name,
+    /// ignoring version. Managed WinRT/WinUI projection ABI is stable for released types, so the
+    /// redirect is safe within a major line. Because <see cref="AssemblyLoadContext.Resolving"/>
+    /// only fires <i>after</i> normal resolution fails, this is purely additive: it can turn a
+    /// previously-failing load into a success and never changes an already-working one.
+    /// </para>
+    /// </summary>
+    private static void RegisterVersionAgnosticAssemblyResolver()
+    {
+        AssemblyLoadContext.Default.Resolving += static (context, requested) =>
+        {
+            var loaded = context.Assemblies.FirstOrDefault(a =>
+                string.Equals(a.GetName().Name, requested.Name, StringComparison.OrdinalIgnoreCase));
+            if (loaded != null)
+            {
+                Boot($"AssemblyResolver: redirect '{requested}' -> already-loaded '{loaded.GetName()}'");
+                return loaded;
+            }
+
+            // SPIKE (app-closure-preferring loader): nothing of this simple name is loaded yet. If the user
+            // app ships its OWN copy of the requested assembly in its bin directory, prefer THAT file. This
+            // covers app-level SDKs the surface ALSO bundles at an OLDER version (e.g. the Windows AI
+            // projections: gallery needs 2.2.5 but the surface bin's 2.2.2 file is probed first). Normal
+            // resolution only reaches this Resolving event once the surface's colliding file is absent (or
+            // for a name the surface never bundled), so the app's closure becomes authoritative for its own
+            // non-core assemblies. Core runtime/WinUI/WinRT assemblies are already loaded by the surface, so
+            // they are caught by the already-loaded redirect above and never reach here — preserving
+            // Microsoft.WinUI / WinRT.Runtime type identity and the metadata-provider chain.
+            var userDll = UserDllPath;
+            if (!string.IsNullOrEmpty(requested.Name) && !string.IsNullOrEmpty(userDll))
+            {
+                var appDir = Path.GetDirectoryName(userDll);
+                if (!string.IsNullOrEmpty(appDir))
+                {
+                    var candidate = Path.Combine(appDir!, requested.Name + ".dll");
+                    if (File.Exists(candidate))
+                    {
+                        try
+                        {
+                            var fromApp = UserAssemblyLoader.Load(candidate);
+                            Boot($"AssemblyResolver: app-closure load '{requested}' -> '{candidate}' ({fromApp.GetName()})");
+                            return fromApp;
+                        }
+                        catch (Exception ex)
+                        {
+                            Boot($"AssemblyResolver: app-closure load FAILED '{requested}' from '{candidate}': {ex.Message}");
+                        }
+                    }
+                }
+            }
+
+            return null;
+        };
+    }
+
+    /// <summary>
+    /// Registers a fallback resolver for <b>native</b> libraries that lets the user app's output folder
+    /// supply DLLs the host does not ship.
+    /// <para>
+    /// Packages such as Win2D (<c>Microsoft.Graphics.Canvas.dll</c>, used by Community Toolkit's
+    /// <c>AttachedCardShadow</c>) are native WinRT components. In an unpackaged process C#/WinRT activates
+    /// them by loading the DLL by name. The host's folder doesn't contain the user app's native
+    /// dependencies, so activation failed with REGDB_E_CLASSNOTREG, and inside a XAML style setter
+    /// WinUI fail-fasts the whole process. The same applies to P/Invokes from user assemblies.
+    /// </para>
+    /// <para>
+    /// <see cref="AssemblyLoadContext.ResolvingUnmanagedDll"/> only fires <i>after</i> normal native
+    /// resolution has failed, so this is purely additive: it never changes a load that already works.
+    /// It only probes the user app's own folder, and only for a bare file name.
+    /// </para>
+    /// </summary>
+    private static void RegisterAppNativeLibraryResolver()
+    {
+        AssemblyLoadContext.Default.ResolvingUnmanagedDll += static (requestingAssembly, libraryName) =>
+        {
+            var userDll = UserDllPath;
+            if (string.IsNullOrEmpty(libraryName) || string.IsNullOrEmpty(userDll))
+            {
+                return IntPtr.Zero;
+            }
+
+            // Only bare names: never let a rooted or relative path escape the app folder.
+            if (!string.Equals(Path.GetFileName(libraryName), libraryName, StringComparison.Ordinal))
+            {
+                return IntPtr.Zero;
+            }
+
+            var appDir = Path.GetDirectoryName(userDll);
+            if (string.IsNullOrEmpty(appDir))
+            {
+                return IntPtr.Zero;
+            }
+
+            var fileName = libraryName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? libraryName : libraryName + ".dll";
+
+            // RID-specific builds copy native assets next to the app DLL; RID-less (portable) builds leave
+            // them under runtimes\<rid>\native.
+            var rid = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
+            {
+                System.Runtime.InteropServices.Architecture.Arm64 => "win-arm64",
+                System.Runtime.InteropServices.Architecture.X86 => "win-x86",
+                _ => "win-x64",
+            };
+            string[] candidates =
+            {
+                Path.Combine(appDir!, fileName),
+                Path.Combine(appDir!, "runtimes", rid, "native", fileName),
+                Path.Combine(appDir!, "runtimes", "win", "native", fileName),
+            };
+
+            foreach (var candidate in candidates)
+            {
+                if (!File.Exists(candidate))
+                {
+                    continue;
+                }
+
+                if (System.Runtime.InteropServices.NativeLibrary.TryLoad(candidate, out var handle))
+                {
+                    Boot($"NativeResolver: app-closure load '{libraryName}' -> '{candidate}' (requested by {requestingAssembly.GetName().Name})");
+                    return handle;
+                }
+
+                Boot($"NativeResolver: app-closure load FAILED '{libraryName}' from '{candidate}'");
+            }
+
+            return IntPtr.Zero;
+        };
+    }
+
+    private static string? ParseUserDll(string[] args) => ParseFlag(args, "--user-dll");
+
+    /// <summary>Parses <c>&lt;flag&gt; &lt;value&gt;</c> or <c>&lt;flag&gt;=&lt;value&gt;</c> from the command line.</summary>
+    private static string? ParseFlag(string[] args, string flag)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], flag, StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                return args[i + 1];
+            }
+            if (args[i].StartsWith(flag + "=", StringComparison.OrdinalIgnoreCase))
+            {
+                return args[i][(flag.Length + 1)..];
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Stages the user app's already-built merged <c>resources.pri</c> (<see cref="UserPriPath"/>) as this
+    /// host's primary resource map.
+    /// <para>
+    /// An unpackaged WinUI host loads <c>&lt;ExeName&gt;.pri</c> and resolves <c>ms-appx:///</c> lookups from
+    /// its <b>primary</b> resource map. A user's app build already produces a MERGED pri that embeds their
+    /// entire resource closure as <c>EmbeddedData</c> — third-party component templates (e.g. a NuGet
+    /// toolkit's <c>Themes/Generic.xbf</c>, which ships only inside a component <c>.pri</c> with no loose
+    /// <c>.xbf</c>) AND the user's own compiled XAML. Staging that pri here lets those <c>ms-appx</c> lookups
+    /// resolve with full fidelity and <b>no build-time makepri bake</b>. WinUI keys off the pri's primary map
+    /// regardless of its internal (user-app) name, so no rename is required. This must run before the first
+    /// <c>ms-appx</c> resolution (before <see cref="Application.Start"/>), which <c>Main</c> guarantees.
+    /// </para>
+    /// <para>
+    /// This overwrites the host's own <c>.pri</c>, which is correct for the per-session <b>provisioned-host</b>
+    /// model (the host is a throwaway copy). The host's own pri carries no render-critical resources.
+    /// </para>
+    /// </summary>
+    private static void StageUserPri()
+    {
+        if (string.IsNullOrEmpty(UserPriPath))
+        {
+            return;
+        }
+        if (!File.Exists(UserPriPath))
+        {
+            Boot($"StageUserPri: user pri not found '{UserPriPath}' — skipping.");
+            return;
+        }
+        try
+        {
+            var hostName = Assembly.GetEntryAssembly()?.GetName().Name ?? "Surface";
+            var hostPri = Path.Combine(AppContext.BaseDirectory, hostName + ".pri");
+            File.Copy(UserPriPath, hostPri, overwrite: true);
+            Boot($"StageUserPri: staged '{UserPriPath}' -> '{hostPri}'");
+        }
+        catch (Exception ex)
+        {
+            Boot("StageUserPri: EXCEPTION " + ex);
+        }
+    }
+}
+
+/// <summary>
+/// The unpackaged headless render host. Implements <see cref="IXamlMetadataProvider"/>
+/// so that <c>XamlReader.Load</c> (which consults <c>Application.Current</c>) can
+/// resolve custom xmlns types declared with <c>using:</c> — the crux of scenario S2.
+/// </summary>
+public partial class App : Application, IXamlMetadataProvider
+{
+    // Ordered metadata provider chain.
+    //   [0] Surface's own baseline metadata (the WinUI controls provider).
+    //   [1] (added at runtime) the user app's compiler-generated provider.
+    private readonly List<IXamlMetadataProvider> _providers = new();
+    private IXamlMetadataProvider? _userProvider;
+    private Assembly? _userAssembly;
+    private RenderHost? _renderHost;
+    private FrameServer? _server;
+
+    // Layer 2 (resource scope). The user app's resource dictionaries we merged into
+    // Application.Current.Resources, tracked so a re-establish can remove them without leaking.
+    private readonly List<ResourceDictionary> _userDictionaries = new();
+
+    // Rule 6 asks per key whether the application resource scope (framework + user) resolves it.
+    // Answers come from a direct ResourceDictionary.ContainsKey lookup (which searches merged and
+    // theme dictionaries) and are memoized until the scope changes. Enumerating every key up front
+    // instead cost seconds of startup, because WinRT enumeration marshals each resource VALUE.
+    private bool _resourceScopeEstablished;
+    private readonly Dictionary<string, bool> _resourceKeyCache = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Predicate telling whether a string resource key resolves in the application scope (Layer 2),
+    /// or null before the scope is established. Must be called on the UI thread. Consumed by
+    /// <see cref="XamlCleaner"/> Rule 6 via <see cref="RenderHost.CleanXaml"/>.
+    /// </summary>
+    internal static Func<string, bool>? ResourceKeyResolver =>
+        Current is App { _resourceScopeEstablished: true } app ? app.IsResourceKeyResolvable : null;
+
+    private void ResetResourceKeyScope()
+    {
+        _resourceKeyCache.Clear();
+        _resourceScopeEstablished = true;
+    }
+
+    private bool IsResourceKeyResolvable(string key)
+    {
+        if (_resourceKeyCache.TryGetValue(key, out var known))
+        {
+            return known;
+        }
+        try
+        {
+            known = Resources.ContainsKey(key);
+        }
+        catch
+        {
+            known = false;
+        }
+        _resourceKeyCache[key] = known;
+        return known;
+    }
+
+    public App()
+    {
+        Program.Boot("App.ctor: enter");
+        // Per-process preview theme (user-requested theme preview). Because our host is a code-only
+        // Application (no App.xaml — required so we can own the IXamlMetadataProvider chain), a runtime
+        // RequestedTheme flip on the content root does NOT re-resolve {ThemeResource} brushes (WinUI only
+        // propagates theme-change notifications for XamlControlsResources when merged via App.xaml markup).
+        // The reliable path in a code-only host is the app-global Application.RequestedTheme, set ONCE here
+        // before any window content exists. Theme switching is therefore a per-process concern: the client
+        // relaunches the surface with a new SURFACE_THEME to change themes.
+        var startupTheme = Environment.GetEnvironmentVariable("SURFACE_THEME");
+        if (string.Equals(startupTheme, "Dark", StringComparison.OrdinalIgnoreCase))
+        {
+            RequestedTheme = ApplicationTheme.Dark;
+            Program.Boot("App.ctor: RequestedTheme = Dark");
+        }
+        else if (string.Equals(startupTheme, "Light", StringComparison.OrdinalIgnoreCase))
+        {
+            RequestedTheme = ApplicationTheme.Light;
+            Program.Boot("App.ctor: RequestedTheme = Light");
+        }
+        // Only pure-managed work here — the native Application.Resources dictionary is
+        // not yet available in a code-only App's constructor.
+        //
+        // Step 1 of the chain: the surface's own metadata. This host defines no XAML
+        // types of its own, so its baseline metadata is simply the WinUI controls
+        // provider (this is what a compiler-generated app provider chains to anyway).
+        _providers.Add(new Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider());
+        Program.Boot("App.ctor: XamlControls provider added");
+
+        UnhandledException += OnUnhandledException;
+    }
+
+    // Directory of the loaded user assembly; frames from assemblies loaded from there (or from memory, see
+    // UserAssemblyLoader) count as app code for OnUnhandledException.
+    private static string? s_userDllDir;
+
+    /// <summary>
+    /// Keeps the preview alive when the previewed app's own code throws on the UI thread outside any render call,
+    /// typically an <c>async void</c> handler or a dispatcher callback (e.g. WinUI Gallery's sample-file loader).
+    /// A compiled app would crash too, but in a designer the page has already rendered and one faulting
+    /// background continuation must not take the host down. Exceptions with no app-code frame are host bugs
+    /// and stay fatal.
+    /// </summary>
+    private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
+    {
+        var ex = e.Exception;
+        var userFrame = ex != null ? FindUserCodeFrame(ex) : null;
+        if (userFrame != null)
+        {
+            e.Handled = true;
+            if (IsLayoutCallback(ex!))
+            {
+                // WinUI fail-fasts on exceptions escaping MeasureOverride/ArrangeOverride even when Handled is set,
+                // so don't claim the preview survived.
+                Log($"ERROR: app layout code threw during measure/arrange (at {userFrame}); WinUI terminates the " +
+                    "process for layout exceptions, so the preview host will close: " + DescribeExceptionChain(ex!));
+                return;
+            }
+            LogContained(userFrame, ex!);
+            return;
+        }
+        Log("FATAL: unhandled exception in the preview host: " +
+            (ex != null ? DescribeExceptionChain(ex) + Environment.NewLine + ex.StackTrace : e.Message));
+    }
+
+    private static void LogContained(string userFrame, Exception ex) =>
+        Log($"WARNING: unhandled exception in app code was contained by the preview host (at {userFrame}): " +
+            DescribeExceptionChain(ex));
+
+    /// <summary>
+    /// Contains an app-code exception escaping a UI-thread SynchronizationContext callback (an <c>async void</c>
+    /// continuation or rethrow). Since Windows App SDK 2.6 such exceptions fail-fast inside DispatcherQueue instead
+    /// of reaching <see cref="Application.UnhandledException"/>, so they must be caught before returning to it.
+    /// </summary>
+    internal static bool TryContainCallbackException(Exception ex)
+    {
+        var userFrame = FindUserCodeFrame(ex);
+        if (userFrame == null)
+        {
+            return false;
+        }
+        LogContained(userFrame, ex);
+        return true;
+    }
+
+    /// <summary>True when any frame (across inner exceptions) is a layout override — MeasureOverride/ArrangeOverride
+    /// on a FrameworkElement or a Layout.</summary>
+    internal static bool IsLayoutCallback(Exception ex)
+    {
+        for (Exception? current = ex; current != null; current = current.InnerException)
+        {
+            foreach (var frame in new System.Diagnostics.StackTrace(current, false).GetFrames())
+            {
+                var name = frame.GetMethod()?.Name;
+                if (name is "MeasureOverride" or "ArrangeOverride")
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>The first stack frame (across inner exceptions) whose method belongs to the user app, or null.</summary>
+    internal static string? FindUserCodeFrame(Exception ex)
+    {
+        var pending = new Stack<Exception>();
+        pending.Push(ex);
+        for (int visited = 0; pending.Count > 0 && visited < 16; visited++)
+        {
+            var current = pending.Pop();
+            foreach (var frame in new System.Diagnostics.StackTrace(current, false).GetFrames())
+            {
+                var method = frame.GetMethod();
+                var type = method?.DeclaringType;
+                if (type != null && IsUserAssembly(type.Assembly))
+                {
+                    return $"{type.FullName}.{method!.Name}";
+                }
+            }
+            if (current is AggregateException agg)
+            {
+                foreach (var inner in agg.InnerExceptions)
+                {
+                    pending.Push(inner);
+                }
+            }
+            else if (current.InnerException != null)
+            {
+                pending.Push(current.InnerException);
+            }
+        }
+        return null;
+    }
+
+    private static bool IsUserAssembly(Assembly asm)
+    {
+        if (asm == typeof(App).Assembly || asm.IsDynamic)
+        {
+            return false;
+        }
+        var location = asm.Location;
+        if (string.IsNullOrEmpty(location))
+        {
+            // UserAssemblyLoader loads user + closure assemblies from memory; the host's own never are.
+            return true;
+        }
+        var dir = s_userDllDir;
+        return dir != null &&
+            location.StartsWith(dir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    {
+        Program.Boot("OnLaunched: enter");
+        try
+        {
+            // Supply WinUI control theme resources so framework controls parsed from
+            // runtime markup (e.g. a TextBlock's default foreground brush) resolve.
+            // Must run after activation, when Application.Resources is initialized.
+            Resources.MergedDictionaries.Add(new XamlControlsResources());
+            Program.Boot("OnLaunched: XamlControlsResources added");
+        }
+        catch (Exception ex)
+        {
+            Program.Boot("OnLaunched: XamlControlsResources FAILED (continuing) " + ex.Message);
+        }
+        SampleConverters.Register(Resources);
+
+        // Start the warm frame server; the app stays alive serving renders until the client
+        // disconnects (or stdin closes / it is killed) — it does NOT exit after one render.
+        StartServer();
+    }
+
+    /// <summary>
+    /// Stands up the warm render host, chains the user assembly's metadata provider (preserving
+    /// the S2 provider-chain + loose-<c>.xbf</c> staging so custom controls resolve), and starts
+    /// the TCP frame server which prints <c>SURFACE_PORT=&lt;port&gt;</c> to stdout.
+    /// </summary>
+    private void StartServer()
+    {
+        try
+        {
+            // 1) Warm, reusable off-screen render host on the UI thread.
+            _renderHost = new RenderHost();
+            _renderHost.Initialize();
+
+            // 2) Resolve the user assembly (if any) and chain its provider BEFORE any custom-control
+            //    markup is parsed, so <local:FancyBadge> (using:TestUserApp) resolves and the loose
+            //    compiled XAML (.xbf) is staged next to Surface.exe.
+            //
+            //    Semantics: an ABSENT --user-dll means "no user assembly" — load NO user types and NO
+            //    user resource dictionaries (framework defaults only). This stops a user previewing
+            //    their own plain page from inheriting a bundled test app's implicit styles/types (e.g.
+            //    the teal Button style). Only an EXPLICIT --user-dll loads that assembly's provider AND
+            //    resources. The offline self-test paths (--benchmark / --wgc, SurfaceBenchmarks builds
+            //    only) exercise TestUserApp's custom control + resources, so they opt in EXPLICITLY here
+            //    instead of relying on a silent default.
+            var userDll = Program.UserDllPath;
+#if SURFACE_BENCHMARKS
+            if (string.IsNullOrWhiteSpace(userDll) && (Program.BenchmarkMode || Program.WgcMode))
+            {
+                userDll = Paths.TestUserAppDll;
+                Log($"No --user-dll supplied; benchmark/self-test path explicitly loads TestUserApp: {userDll}");
+            }
+#endif
+
+            if (!string.IsNullOrWhiteSpace(userDll))
+            {
+                // LAYER 1: chain the user metadata provider (type resolution for using: xmlns).
+                try
+                {
+                    var providerType = EnsureUserProviderLoaded(userDll);
+                    Log($"User provider chained: {providerType}");
+                }
+                catch (Exception ex)
+                {
+                    Log($"WARNING: failed to load user provider from '{userDll}': {DescribeExceptionChain(ex)}. " +
+                        "Custom controls will not resolve; built-in XAML still renders.");
+                    if (!PackagedAppShim.HasPackageIdentity() && PackagedAppShim.IsMissingIdentityFailure(ex))
+                    {
+                        Log(PackagedAppShim.IdentityRequiredMarker);
+                    }
+                }
+
+                // LAYER 2: establish the user app's resource scope (implicit styles + {StaticResource}
+                //          targets) in Application.Current.Resources BEFORE any page is parsed, so real
+                //          pages resolve their resources. Framework defaults (XamlControlsResources) were
+                //          merged in OnLaunched; the user dictionaries are merged AFTER them so user
+                //          implicit styles win.
+                try
+                {
+                    EstablishUserResourceScope(userDll);
+                }
+                catch (Exception ex)
+                {
+                    Log($"WARNING: failed to establish user resource scope: {ex.Message}. " +
+                        "{StaticResource}/implicit styles from the user app may not resolve.");
+                }
+            }
+            else
+            {
+                // No user assembly: framework defaults ONLY (no user types, no user resource
+                // dictionaries). Still snapshot the framework resource keys (XamlControlsResources)
+                // so the cleaner's Rule 6 can resolve framework {StaticResource} references.
+                Log("No --user-dll supplied; loading framework defaults only (no user types or resource dictionaries).");
+                EstablishFrameworkOnlyResourceScope();
+            }
+
+#if SURFACE_BENCHMARKS
+            // 3) Either run an offline benchmark (S5 Part 1 latency, or Part 2 WGC probe), or serve frames.
+            if (Program.WgcMode)
+            {
+                Log("WGC mode: running the S5 Part 2 WGC-vs-RTB capture probe (no TCP server).");
+                _ = RunWgcAsync();
+                Program.Boot("StartServer: wgc started");
+                return;
+            }
+
+            if (Program.BenchmarkMode)
+            {
+                Log("Benchmark mode: running the S5 render-latency benchmark (no TCP server).");
+                _ = RunBenchmarkAsync();
+                Program.Boot("StartServer: benchmark started");
+                return;
+            }
+#endif
+
+            _server = new FrameServer(_renderHost);
+            _server.Start();
+            Program.Boot("StartServer: server started");
+        }
+        catch (Exception ex)
+        {
+            Program.Boot("StartServer: FATAL " + ex);
+            Log("FATAL during startup: " + ex);
+            Environment.Exit(1);
+        }
+    }
+
+#if SURFACE_BENCHMARKS
+    /// <summary>
+    /// Runs the offline S5 latency benchmark on the UI thread, then exits. Fire-and-forget from
+    /// <see cref="StartServer"/>: <see cref="OnLaunched"/> returns, the WinUI message loop keeps
+    /// pumping, and the awaited dispatcher/compositor work inside <see cref="Benchmark.RunAsync"/>
+    /// progresses to completion.
+    /// </summary>
+    private async Task RunBenchmarkAsync()
+    {
+        try
+        {
+            await Benchmark.RunAsync(_renderHost!);
+        }
+        catch (Exception ex)
+        {
+            Log("Benchmark FATAL: " + ex);
+        }
+        finally
+        {
+            Environment.Exit(0);
+        }
+    }
+
+    /// <summary>
+    /// Runs the S5 Part 2 WGC-vs-RTB capture probe on the UI thread, then exits. Same fire-and-forget
+    /// pattern as <see cref="RunBenchmarkAsync"/> — the WinUI message loop keeps pumping so the awaited
+    /// dispatcher/compositor work inside <see cref="WgcBenchmark.RunAsync"/> progresses to completion.
+    /// </summary>
+    private async Task RunWgcAsync()
+    {
+        try
+        {
+            await WgcBenchmark.RunAsync(_renderHost!);
+        }
+        catch (Exception ex)
+        {
+            Log("WGC benchmark FATAL: " + ex);
+        }
+        finally
+        {
+            Environment.Exit(0);
+        }
+    }
+#endif
+
+    /// <summary>
+    /// Flattens an exception and its <see cref="Exception.InnerException"/> chain into
+    /// "TypeA: msgA -&gt; TypeB: msgB" so a <see cref="TargetInvocationException"/> /
+    /// <see cref="TypeInitializationException"/> never hides the real root cause (a failed module
+    /// initializer, a missing dependency, a version-bind failure) behind a generic outer message.
+    /// </summary>
+    internal static string DescribeExceptionChain(Exception ex)
+    {
+        var parts = new List<string>();
+        for (Exception? e = ex; e != null && parts.Count < 8; e = e.InnerException)
+        {
+            var msg = e.Message;
+            if (e is ReflectionTypeLoadException rtle && rtle.LoaderExceptions is { Length: > 0 } loaders)
+            {
+                var detail = string.Join("; ", loaders.Where(x => x != null).Select(x => x!.Message).Distinct().Take(3));
+                msg += $" [loader: {detail}]";
+            }
+
+            parts.Add($"{e.GetType().Name}: {msg}");
+        }
+
+        return string.Join(" -> ", parts);
+    }
+
+    /// <summary>
+    /// Loads the user app assembly at runtime, reflects to find the exported type
+    /// implementing <see cref="IXamlMetadataProvider"/> (the compiler-generated
+    /// <c>*_XamlTypeInfo.XamlMetaDataProvider</c>), instantiates it, and appends it
+    /// to the provider chain. Returns the resolved provider type's full name.
+    /// </summary>
+    public string EnsureUserProviderLoaded(string userAssemblyPath)
+    {
+        if (_userProvider != null)
+        {
+            return _userProvider.GetType().FullName!;
+        }
+
+        Log($"Loading user assembly: {userAssemblyPath}");
+        var assembly = PackagedAppShim.LoadUserAssembly(userAssemblyPath, Log);
+        _userAssembly = assembly;
+        s_userDllDir = Path.GetDirectoryName(Path.GetFullPath(userAssemblyPath));
+
+        // Enumerate types defensively: a real app references many packages (Win2D, toolkit, …) and
+        // GetExportedTypes() throws ReflectionTypeLoadException if any referenced type can't load.
+        // Fall back to the successfully-loaded subset so one bad reference doesn't blind us.
+        Type[] candidates;
+        try
+        {
+            candidates = assembly.GetExportedTypes();
+        }
+        catch (ReflectionTypeLoadException rtle)
+        {
+            candidates = rtle.Types.Where(t => t != null).Cast<Type>().ToArray();
+            Log($"GetExportedTypes partial ({candidates.Length} loaded; {rtle.LoaderExceptions?.Length ?? 0} loader errors, first: {rtle.LoaderExceptions?.FirstOrDefault()?.Message}).");
+        }
+
+        // A code-behind app exports BOTH its generated `<Root>_XamlTypeInfo.XamlMetaDataProvider`
+        // (what we want) AND its own `App : Application, IXamlMetadataProvider` (uncreatable at design
+        // time — its ctor runs InitializeComponent/app startup and throws). Never instantiate the app
+        // type: exclude Application subclasses and prefer the generated provider by name convention.
+        bool IsProvider(Type t) =>
+            typeof(IXamlMetadataProvider).IsAssignableFrom(t) &&
+            t is { IsInterface: false, IsAbstract: false } &&
+            !typeof(Microsoft.UI.Xaml.Application).IsAssignableFrom(t);
+
+        var providerType =
+            candidates.FirstOrDefault(t => IsProvider(t) &&
+                (t.Name == "XamlMetaDataProvider" || t.FullName!.EndsWith("_XamlTypeInfo.XamlMetaDataProvider", StringComparison.Ordinal)))
+            ?? candidates.FirstOrDefault(IsProvider);
+
+        if (providerType == null)
+        {
+            throw new InvalidOperationException(
+                $"No usable IXamlMetadataProvider (non-Application) found in '{userAssemblyPath}'.");
+        }
+
+        try
+        {
+            _userProvider = (IXamlMetadataProvider)Activator.CreateInstance(providerType)!;
+        }
+        catch (Exception ex)
+        {
+            // Surface the real cause: TargetInvocationException / TypeInitializationException bury the
+            // actual failure (e.g. a failed module initializer or a missing dependency) in InnerException.
+            throw new InvalidOperationException(
+                $"Instantiating provider '{providerType.FullName}' failed: {DescribeExceptionChain(ex)}", ex);
+        }
+        _providers.Add(_userProvider);
+
+        // LAYER 1 (T2): the main provider only resolves types the XAML compiler baked into the user
+        // assembly's OWN generated XamlTypeInfo. Controls from REFERENCED libraries
+        // (CommunityToolkit.WinUI.Controls.* etc.) ship their own provider in SEPARATE assemblies that the
+        // main provider does not chain, so <tkcontrols:SettingsCard> in runtime markup is otherwise
+        // type-not-found and the whole page fails to parse. Discover + chain the provider-bearing
+        // assemblies in the user's bin closure so those controls resolve and REAL-render (what a compiled
+        // app and a preview surface such as VS both do for referenced assemblies).
+        try
+        {
+            ChainClosureMetadataProviders(Path.GetDirectoryName(userAssemblyPath)!);
+        }
+        catch (Exception ex)
+        {
+            Log($"WARNING: closure provider chaining failed: {DescribeExceptionChain(ex)}. " +
+                "Referenced-assembly controls may fall back to placeholders.");
+        }
+
+        // The custom control's generated InitializeComponent() loads its compiled XAML
+        // via ms-appx:///TestUserApp/FancyBadge.xaml. For an unpackaged host that URI is
+        // resolved from loose .xbf files under the process base directory. The user
+        // assembly was loaded from a different folder, so stage its loose XAML tree next
+        // to Surface.exe before any custom type is activated from runtime markup.
+        StageLooseXamlResources(userAssemblyPath);
+
+        return providerType.FullName!;
+    }
+
+    /// <summary>
+    /// LAYER 1 (T2): chains the <see cref="IXamlMetadataProvider"/> of every provider-bearing assembly in
+    /// the user's bin closure (the directory next to the main user DLL). The user's main provider only
+    /// resolves types the XAML compiler baked into ITS generated <c>*_XamlTypeInfo</c>; referenced control
+    /// libraries (e.g. the <c>CommunityToolkit.WinUI.Controls.*</c> packages) each ship their OWN generated
+    /// <c>XamlMetaDataProvider</c> in a separate assembly. Chaining them lets a runtime-parsed page resolve
+    /// and construct those controls for real instead of failing type-resolution.
+    ///
+    /// TARGETED, not a blanket load: each candidate DLL is first metadata-scanned (no code runs, no
+    /// dependency resolution) for a defined <c>XamlMetaDataProvider</c> type; only the few that have one are
+    /// fully loaded + instantiated. Provider-less libraries (converters / behaviors / animations) are
+    /// skipped — their types remain unresolved and are handled by the cleaner's element-substitution pass.
+    /// </summary>
+    private void ChainClosureMetadataProviders(string dllDir)
+    {
+        if (!Directory.Exists(dllDir))
+        {
+            return;
+        }
+
+        var mainName = _userAssembly?.GetName().Name;
+        int chained = 0;
+        foreach (var dll in Directory.EnumerateFiles(dllDir, "*.dll", SearchOption.TopDirectoryOnly))
+        {
+            // The main user assembly's provider is already chained; skip it.
+            if (mainName != null &&
+                string.Equals(Path.GetFileNameWithoutExtension(dll), mainName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Cheap metadata-only pre-filter so we do not Assembly.LoadFrom the hundreds of provider-less
+            // DLLs in a real app's closure (native deps, load failures, cost).
+            if (!DefinesXamlMetadataProvider(dll))
+            {
+                continue;
+            }
+
+            try
+            {
+                var asm = UserAssemblyLoader.Load(dll);
+                Type[] types;
+                try
+                {
+                    types = asm.GetExportedTypes();
+                }
+                catch (ReflectionTypeLoadException rtle)
+                {
+                    types = rtle.Types.Where(t => t != null).Cast<Type>().ToArray();
+                }
+
+                var providerType = types.FirstOrDefault(t =>
+                    typeof(IXamlMetadataProvider).IsAssignableFrom(t) &&
+                    t is { IsInterface: false, IsAbstract: false } &&
+                    !typeof(Microsoft.UI.Xaml.Application).IsAssignableFrom(t) &&
+                    (t.Name == "XamlMetaDataProvider" ||
+                     t.FullName!.EndsWith("_XamlTypeInfo.XamlMetaDataProvider", StringComparison.Ordinal)));
+
+                if (providerType == null)
+                {
+                    continue;
+                }
+
+                var provider = (IXamlMetadataProvider)Activator.CreateInstance(providerType)!;
+                _providers.Add(provider);
+                chained++;
+                Log($"LAYER 1: chained closure provider {providerType.FullName} ({Path.GetFileName(dll)}).");
+            }
+            catch (Exception ex)
+            {
+                Log($"LAYER 1: skipped provider in {Path.GetFileName(dll)}: {DescribeExceptionChain(ex)}");
+            }
+        }
+
+        Log($"LAYER 1: chained {chained} referenced-assembly metadata provider(s) from {dllDir}.");
+    }
+
+    /// <summary>
+    /// Metadata-only test (no assembly load, no code execution) for whether the assembly at
+    /// <paramref name="dllPath"/> defines a type named <c>XamlMetaDataProvider</c> — the compiler-generated
+    /// provider a XAML-bearing library ships. Lets <see cref="ChainClosureMetadataProviders"/> skip the
+    /// hundreds of provider-less DLLs in a real bin closure without loading them.
+    /// </summary>
+    private static bool DefinesXamlMetadataProvider(string dllPath)
+    {
+        try
+        {
+            using var fs = File.OpenRead(dllPath);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(fs);
+            if (!pe.HasMetadata)
+            {
+                return false;
+            }
+
+            var md = pe.GetMetadataReader();
+            foreach (var handle in md.TypeDefinitions)
+            {
+                var td = md.GetTypeDefinition(handle);
+                if (md.GetString(td.Name) == "XamlMetaDataProvider")
+                {
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+            // Unreadable / native / locked DLL — treat as "no provider" and move on.
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Copies the user assembly's loose compiled-XAML tree next to this host's executable so that
+    /// <c>ms-appx:///…/*.xaml</c> resolves (via the unpackaged file-system fallback) when a custom control
+    /// calls <c>InitializeComponent()</c> AND when Layer 2 merges the user's resource dictionaries.
+    ///
+    /// Two project layouts are handled:
+    /// <list type="bullet">
+    /// <item><b>Class library</b> (e.g. TestUserApp): loose XAML lives under <c>&lt;dllDir&gt;\&lt;AssemblyName&gt;\</c>
+    /// and resolves as <c>ms-appx:///&lt;AssemblyName&gt;/…</c>. Staged to <c>&lt;base&gt;\&lt;AssemblyName&gt;\</c>.</item>
+    /// <item><b>Application</b> (e.g. WinUIGallery): loose <c>.xbf</c> live at the <b>bin root</b>
+    /// (<c>&lt;dllDir&gt;\Controls\ControlExample.xbf</c>, <c>&lt;dllDir&gt;\App.xbf</c>, …) because an app's
+    /// <c>ms-appx:///</c> paths are app-relative with no assembly prefix. Every <c>.xbf</c> under the bin
+    /// root is staged into <c>&lt;base&gt;\</c> preserving its relative path, so
+    /// <c>ms-appx:///Controls/ControlExample.xaml</c> → <c>&lt;base&gt;\Controls\ControlExample.xbf</c>.</item>
+    /// </list>
+    /// The app layout uses loose <c>.xbf</c> only (the app's own compiled XAML). Third-party NuGet component
+    /// resources (e.g. a toolkit's <c>Themes\Generic.xbf</c>) ship only inside a component <c>.pri</c> and are
+    /// NOT present as loose files — those degrade gracefully (unstyled control) unless a <c>--user-pri</c> is
+    /// supplied. This avoids staging the full app <c>.pri</c>, which crashes WinUI's MRT at startup on large
+    /// real-app PRIs.
+    /// </summary>
+    /// <summary>
+    /// Copies a user resource into the host's base directory. The bundled host's base directory is shared by
+    /// every surface process launched from it (active + warm spare, other VS instances), so two processes can
+    /// stage the same file concurrently: an identical copy (CopyFile preserves size + last-write time) is
+    /// skipped, and a transient sharing violation is retried briefly before giving up.
+    /// </summary>
+    private static void StageFile(string src, string dest)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                var s = new FileInfo(src);
+                var d = new FileInfo(dest);
+                if (d.Exists && d.Length == s.Length && d.LastWriteTimeUtc == s.LastWriteTimeUtc)
+                {
+                    return;
+                }
+
+                File.Copy(src, dest, overwrite: true);
+                return;
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                Thread.Sleep(50);
+            }
+        }
+    }
+
+    private static void StageLooseXamlResources(string userAssemblyPath)
+    {
+        var dllDir = Path.GetDirectoryName(userAssemblyPath)!;
+        var asmName = Path.GetFileNameWithoutExtension(userAssemblyPath);
+
+        // --- Layout 1: class-library loose tree under <dllDir>\<AssemblyName>\ (verbatim, incl. .xaml) ---
+        var srcTree = Path.Combine(dllDir, asmName);
+        int libCount = 0;
+        if (Directory.Exists(srcTree))
+        {
+            var destTree = Path.Combine(AppContext.BaseDirectory, asmName);
+            Directory.CreateDirectory(destTree);
+            foreach (var src in Directory.EnumerateFiles(srcTree, "*", SearchOption.AllDirectories))
+            {
+                var rel = Path.GetRelativePath(srcTree, src);
+                var dest = Path.Combine(destTree, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                StageFile(src, dest);
+                libCount++;
+            }
+            Log($"Staged {libCount} loose class-lib resource file(s): {srcTree} -> {destTree}");
+        }
+
+        // --- Layout 2: application loose .xbf at the bin root (app-relative ms-appx paths) ---
+        // Stage every *.xbf under the dll dir into <base>, preserving the relative path, EXCEPT the
+        // <AssemblyName>\ subtree already handled above. This makes an app's own compiled XAML resolvable.
+        int appCount = 0;
+        foreach (var src in Directory.EnumerateFiles(dllDir, "*.xbf", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(dllDir, src);
+            // Skip the class-lib subtree (already staged verbatim above under its own folder).
+            if (libCount > 0 && rel.StartsWith(asmName + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            // CRITICAL: never stage the app's own App.xbf at the base root. Unpackaged WinUI auto-probes
+            // ms-appx:///App.xaml during Application.Start and would try to instantiate the USER's Application
+            // subclass (with its full merged-dictionary/toolkit closure) inside our code-only host, which
+            // fails-fast (0xC000027B) before OnLaunched. Our host supplies its own code-only App; we want the
+            // user app's pages/controls/dictionaries, never its App definition.
+            if (string.Equals(rel, "App.xbf", StringComparison.OrdinalIgnoreCase))
+            {
+                Log("Skipped staging user App.xbf (would fail-fast Application.Start in the host).");
+                continue;
+            }
+            var dest = Path.Combine(AppContext.BaseDirectory, rel);
+            // Do not overwrite the host's own resources (defensive; the surface ships no .xbf of its own).
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            StageFile(src, dest);
+            appCount++;
+        }
+        if (appCount > 0)
+        {
+            Log($"Staged {appCount} loose app .xbf file(s) at bin root -> {AppContext.BaseDirectory}");
+        }
+
+        if (libCount == 0 && appCount == 0)
+        {
+            Log($"No loose XAML resource tree at '{srcTree}' and no loose .xbf under '{dllDir}' — nothing to stage.");
+        }
+
+        StageAppContentFiles(dllDir, libCount > 0 ? asmName : null);
+    }
+
+    // Loose content an app reads at runtime relative to its base directory or via ms-appx:/// (sample text,
+    // JSON data, images, fonts). Binaries, satellite resources and media are deliberately excluded.
+    private static readonly HashSet<string> ContentExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".txt", ".json", ".xml", ".md", ".csv", ".html", ".htm", ".css", ".js", ".svg",
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tif", ".tiff",
+        ".ttf", ".otf",
+    };
+
+    private const long MaxContentFileBytes = 16L * 1024 * 1024;
+    private const long MaxContentTotalBytes = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// Stages the app's loose content files (see <see cref="ContentExtensions"/>) into the host base directory,
+    /// preserving relative paths. An unpackaged app resolves both <c>AppContext.BaseDirectory</c>-relative reads
+    /// and <c>ms-appx:///</c> URIs against its own exe folder, which in the preview is the host's run folder; without
+    /// these files, code such as WinUI Gallery's <c>ControlExample</c> (which reads <c>Samples\*.txt</c>) throws.
+    /// Host payload members are never overwritten.
+    /// </summary>
+    private static void StageAppContentFiles(string dllDir, string? stagedLibSubtree)
+    {
+        var baseDir = AppContext.BaseDirectory;
+        var hostOwned = ReadHostPayloadMembers(baseDir);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int skipped = 0;
+        long total = 0;
+        var work = new List<(string Src, string Dest, string Rel)>();
+        foreach (var src in Directory.EnumerateFiles(dllDir, "*", SearchOption.AllDirectories))
+        {
+            if (!ContentExtensions.Contains(Path.GetExtension(src)))
+            {
+                continue;
+            }
+            var rel = Path.GetRelativePath(dllDir, src);
+            var name = Path.GetFileName(rel);
+            if (name.EndsWith(".deps.json", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains(".runtimeconfig.", StringComparison.OrdinalIgnoreCase) ||
+                rel.StartsWith("runtimes" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                (stagedLibSubtree != null &&
+                 rel.StartsWith(stagedLibSubtree + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+            var dest = Path.Combine(baseDir, rel);
+            // Never shadow the host's own files: payload members when a manifest exists, otherwise any
+            // pre-existing file at the base root (a dev host running straight from its build output).
+            if (hostOwned != null
+                    ? hostOwned.Contains(rel)
+                    : (!rel.Contains(Path.DirectorySeparatorChar) && File.Exists(dest)))
+            {
+                continue;
+            }
+            var length = new FileInfo(src).Length;
+            if (length > MaxContentFileBytes || total + length > MaxContentTotalBytes)
+            {
+                skipped++;
+                continue;
+            }
+            total += length;
+            work.Add((src, dest, rel));
+        }
+
+        // Per-file cost is dominated by file creation (AV scanning), not bytes, so copy in parallel:
+        // ~800 WinUI Gallery files take ~0.5 s this way versus ~1.7 s sequentially.
+        foreach (var dir in work.Select(w => Path.GetDirectoryName(w.Dest)!).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            Directory.CreateDirectory(dir);
+        }
+        int count = 0;
+        System.Threading.Tasks.Parallel.ForEach(work,
+            new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 1, 8) },
+            w =>
+            {
+                try
+                {
+                    StageFile(w.Src, w.Dest);
+                    Interlocked.Increment(ref count);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref skipped);
+                    Log($"Content staging skipped '{w.Rel}': {ex.Message}");
+                }
+            });
+        if (count > 0 || skipped > 0)
+        {
+            Log($"Staged {count} app content file(s) ({total / 1024:N0} KB) in {sw.ElapsedMilliseconds} ms" +
+                (skipped > 0 ? $"; skipped {skipped} (size cap {MaxContentFileBytes / (1024 * 1024)} MB/file, " +
+                    $"{MaxContentTotalBytes / (1024 * 1024)} MB total, or copy failure)." : "."));
+        }
+    }
+
+    /// <summary>Relative paths listed in the host's run-copy manifest (<c>.payload.json</c>), or null when absent.</summary>
+    private static HashSet<string>? ReadHostPayloadMembers(string baseDir)
+    {
+        try
+        {
+            var manifest = Path.Combine(baseDir, ".payload.json");
+            if (!File.Exists(manifest))
+            {
+                return null;
+            }
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest));
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".payload.json", ".surface-run" };
+            if (doc.RootElement.TryGetProperty("Files", out var files) &&
+                files.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                foreach (var p in files.EnumerateObject())
+                {
+                    set.Add(p.Name.Replace('/', Path.DirectorySeparatorChar));
+                }
+            }
+            return set;
+        }
+        catch (Exception ex)
+        {
+            Log($"Could not read host payload manifest ({ex.Message}); treating base-root files as host-owned.");
+            return null;
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // LAYER 2 — application resource scope.
+    // ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// Establishes (or re-establishes) the user app's resource scope inside
+    /// <see cref="Application.Resources"/> so that runtime-parsed pages resolve their
+    /// <c>{StaticResource}</c> keys and implicit/default styles.
+    ///
+    /// Discovery for this spike walks the staged loose XAML tree and merges every file whose root is
+    /// a <c>ResourceDictionary</c> (which finds <c>Themes\Styles.xaml</c> and skips UserControls like
+    /// <c>FancyBadge.xaml</c>). The framework defaults (<c>XamlControlsResources</c>) were merged in
+    /// <see cref="OnLaunched"/> FIRST; these user dictionaries are appended AFTER, so a user implicit
+    /// style overrides the framework default. Previously-added user dictionaries are removed first so
+    /// repeated calls never leak dictionaries across renders.
+    ///
+    /// Production note: instead of scanning the whole tree, a shipping previewer should walk the
+    /// user <c>App.xaml</c> merged-dictionary graph — parse <c>&lt;Application.Resources&gt;</c>, follow
+    /// each <c>&lt;ResourceDictionary Source="..."/&gt;</c> (and nested <c>MergedDictionaries</c>/
+    /// <c>ThemeDictionaries</c>) in declared order, resolving ms-appx and relative URIs and de-duping —
+    /// so ordering and theme selection exactly match how the real app composes its resources.
+    /// </summary>
+    public void EstablishUserResourceScope(string userAssemblyPath)
+    {
+        var asmName = Path.GetFileNameWithoutExtension(userAssemblyPath);
+        var stagedRoot = Path.Combine(AppContext.BaseDirectory, asmName);
+
+        // Remove any user dictionaries added by a previous call (idempotent; no cross-render leak).
+        foreach (var d in _userDictionaries)
+        {
+            Resources.MergedDictionaries.Remove(d);
+        }
+        _userDictionaries.Clear();
+
+        // App case: merge the app's App.xaml resource graph (merged dictionaries + theme dictionaries +
+        // inline resources), reconstructed from the App.xaml source, so a real app page resolves app-defined
+        // {StaticResource} keys and implicit styles. This is the "walk the App.xaml graph" production path.
+        bool appXamlMerged = false;
+        if (!string.IsNullOrWhiteSpace(Program.UserAppXamlPath) && File.Exists(Program.UserAppXamlPath))
+        {
+            appXamlMerged = MergeUserAppXamlResources(Program.UserAppXamlPath!);
+        }
+
+        // Class-library case: discover ResourceDictionary-rooted .xaml under the staged <asmName> tree
+        // (finds Themes\Styles.xaml, skips UserControls). App projects stage at the bin root instead, so
+        // this tree is absent for them — the App.xaml merge above supplies their scope.
+        if (Directory.Exists(stagedRoot))
+        {
+            foreach (var uri in DiscoverUserResourceDictionaries(stagedRoot, asmName))
+            {
+                try
+                {
+                    var dict = new ResourceDictionary { Source = uri };
+                    Resources.MergedDictionaries.Add(dict);
+                    _userDictionaries.Add(dict);
+                    Log($"Merged user resource dictionary: {uri}");
+                }
+                catch (Exception ex)
+                {
+                    Log($"WARNING: could not merge user resource dictionary '{uri}': {ex.Message}");
+                }
+            }
+        }
+        else if (!appXamlMerged)
+        {
+            Log($"No staged resource tree at '{stagedRoot}' and no App.xaml merged — no user resource scope to establish.");
+        }
+
+        ResetResourceKeyScope();
+        Log($"Resource scope established: {_userDictionaries.Count} user dictionary(ies).");
+    }
+
+    private static readonly XNamespace PresentationNs = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+
+    /// <summary>
+    /// Normalizes a ResourceDictionary <c>Source</c> to an absolute <c>ms-appx:///</c> URI when it is the
+    /// XAML compiler's app-relative shorthand. The design-time <see cref="XamlReader.Load(string)"/> never
+    /// normalizes the leading-slash form (<c>Source="/Styles/Button.xaml"</c>) or a bare relative path
+    /// (<c>Foo/Bar.xaml</c>) the way the compiled app loader does, so <see cref="ResourceDictionary.Source"/>
+    /// rejects it ("not a valid absolute URI" / "The parameter is incorrect"). Mapping it to
+    /// <c>ms-appx:///Styles/Button.xaml</c> resolves it against the user app's staged loose <c>.xbf</c>
+    /// (see <see cref="StageLooseXamlResources"/>). Values already absolute (<c>ms-appx:///…</c>,
+    /// <c>pack://…</c>, http, …) are returned unchanged.
+    /// </summary>
+    private static string NormalizeAppResourceSource(string src)
+    {
+        if (string.IsNullOrWhiteSpace(src) || Uri.TryCreate(src, UriKind.Absolute, out _))
+        {
+            return src;
+        }
+        return "ms-appx:///" + src.TrimStart('/');
+    }
+
+    /// <summary>
+    /// Rewrites — in place — every <c>&lt;ResourceDictionary Source="/Foo.xaml"&gt;</c> app-relative
+    /// shorthand under <paramref name="dictElem"/> (itself and all descendants) to a resolvable
+    /// <c>ms-appx:///</c> URI via <see cref="NormalizeAppResourceSource"/>. Returns how many were rewritten.
+    /// </summary>
+    private static int RewriteAppRelativeDictionarySources(XElement dictElem)
+    {
+        int rewritten = 0;
+        foreach (var rd in dictElem.DescendantsAndSelf(PresentationNs + "ResourceDictionary"))
+        {
+            var attr = rd.Attribute("Source");
+            if (attr is null)
+            {
+                continue;
+            }
+            var normalized = NormalizeAppResourceSource(attr.Value);
+            if (!string.Equals(normalized, attr.Value, StringComparison.Ordinal))
+            {
+                attr.Value = normalized;
+                rewritten++;
+            }
+        }
+        return rewritten;
+    }
+
+    /// <summary>
+    /// Reconstructs the user app's <c>&lt;Application.Resources&gt;</c> from its <c>App.xaml</c> source and
+    /// merges it into the host's <see cref="Application.Resources"/>. The app's resource dictionary — its
+    /// <c>MergedDictionaries</c> (<c>Source="ms-appx:///…"</c>, resolved from the staged loose <c>.xbf</c>),
+    /// <c>ThemeDictionaries</c>, and inline keyed resources — is serialized to a standalone
+    /// <c>&lt;ResourceDictionary&gt;</c> (carrying the app root's xmlns declarations so <c>local:</c>/custom
+    /// prefixes resolve via the chained provider) and loaded with <see cref="XamlReader.Load(string)"/>.
+    /// On failure falls back to merging just the <c>Source</c> URIs. Returns true if anything was merged.
+    /// </summary>
+    private bool MergeUserAppXamlResources(string appXamlPath)
+    {
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Load(appXamlPath);
+        }
+        catch (Exception ex)
+        {
+            Log($"WARNING: could not read App.xaml '{appXamlPath}': {ex.Message}");
+            return false;
+        }
+
+        var root = doc.Root;
+        var resProp = root?.Element(PresentationNs + "Application.Resources");
+        if (root == null || resProp == null)
+        {
+            Log("App.xaml has no <Application.Resources> — nothing to merge.");
+            return false;
+        }
+
+        // The resources are either a single <ResourceDictionary> child or inline resource elements.
+        var rdSource = resProp.Element(PresentationNs + "ResourceDictionary");
+        var dictElem = rdSource != null
+            ? new XElement(rdSource)
+            : new XElement(PresentationNs + "ResourceDictionary", resProp.Elements().Select(e => new XElement(e)));
+
+        // Copy the app root's namespace declarations so local:/toolkit:/x: prefixes resolve when re-parsed.
+        foreach (var nsAttr in root.Attributes().Where(a => a.IsNamespaceDeclaration))
+        {
+            if (dictElem.Attribute(nsAttr.Name) == null)
+            {
+                dictElem.Add(new XAttribute(nsAttr.Name, nsAttr.Value));
+            }
+        }
+
+        // The XAML compiler's app-relative dictionary Source shorthand ("/Styles/Button.xaml") is not
+        // normalized by the design-time XamlReader.Load the way the compiled app loader is, so rewrite every
+        // <ResourceDictionary Source="/…"> to an ms-appx:/// URI that resolves against the staged loose .xbf
+        // BEFORE the full load. Without this the whole load throws on the first relative Source and the app's
+        // implicit styles + shared templates never merge (the dominant gallery render blocker).
+        int rewritten = RewriteAppRelativeDictionarySources(dictElem);
+        if (rewritten > 0)
+        {
+            Log($"Normalized {rewritten} app-relative dictionary Source URI(s) to ms-appx:///.");
+        }
+
+        var xaml = dictElem.ToString();
+        try
+        {
+            if (XamlReader.Load(xaml) is ResourceDictionary dict)
+            {
+                Resources.MergedDictionaries.Add(dict);
+                _userDictionaries.Add(dict);
+                Log($"Merged app resource scope from App.xaml: {dict.MergedDictionaries.Count} merged dict(s), " +
+                    $"{dict.ThemeDictionaries.Count} theme dict(s).");
+                return true;
+            }
+            Log("WARNING: App.xaml resources did not load as a ResourceDictionary.");
+        }
+        catch (Exception ex)
+        {
+            Log($"WARNING: full App.xaml resource load failed: {ex.Message}. Falling back to per-Source merge.");
+            return MergeAppMergedDictionarySources(resProp);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Fallback for <see cref="MergeUserAppXamlResources"/>: merges every <c>&lt;ResourceDictionary
+    /// Source="ms-appx:///…"/&gt;</c> URI found under <c>&lt;Application.Resources&gt;</c> independently, so
+    /// one unloadable dictionary doesn't sink the rest. Loses inline/theme resources but recovers most
+    /// keyed styles.
+    /// </summary>
+    private bool MergeAppMergedDictionarySources(XElement resProp)
+    {
+        int merged = 0;
+        foreach (var rd in resProp.Descendants(PresentationNs + "ResourceDictionary"))
+        {
+            var src = rd.Attribute("Source")?.Value;
+            if (string.IsNullOrWhiteSpace(src))
+            {
+                continue;
+            }
+            // Same app-relative → ms-appx:/// normalization as the primary path, so the per-source fallback
+            // recovers keyed styles even when the full-blob load failed for an unrelated reason.
+            var normalized = NormalizeAppResourceSource(src!);
+            try
+            {
+                var dict = new ResourceDictionary { Source = new Uri(normalized, UriKind.RelativeOrAbsolute) };
+                Resources.MergedDictionaries.Add(dict);
+                _userDictionaries.Add(dict);
+                merged++;
+                Log($"Merged app dictionary (fallback): {normalized}");
+            }
+            catch (Exception ex)
+            {
+                Log($"WARNING: could not merge app dictionary '{normalized}': {ex.Message}");
+            }
+        }
+        return merged > 0;
+    }
+
+    /// <summary>
+    /// Snapshots ONLY the framework resource scope (the <c>XamlControlsResources</c> merged in
+    /// <see cref="OnLaunched"/>) for the cleaner's Rule 6 — WITHOUT loading any user assembly's
+    /// dictionaries. Used when no <c>--user-dll</c> is supplied so a user previewing a plain page
+    /// sees framework defaults only (no bundled test-app implicit styles/types leaking in). Any user
+    /// dictionaries from a previous scope are removed first so the scope is genuinely framework-only.
+    /// </summary>
+    public void EstablishFrameworkOnlyResourceScope()
+    {
+        foreach (var d in _userDictionaries)
+        {
+            Resources.MergedDictionaries.Remove(d);
+        }
+        _userDictionaries.Clear();
+
+        ResetResourceKeyScope();
+        Log("Framework-only resource scope established.");
+    }
+
+    /// <summary>
+    /// Enumerates the staged loose XAML tree and returns an <c>ms-appx:///</c> URI for every file whose
+    /// root element is a <c>ResourceDictionary</c>. The <c>.xaml</c> URI is used (the resource loader
+    /// maps it to the sibling compiled <c>.xbf</c>).
+    /// </summary>
+    private static IEnumerable<Uri> DiscoverUserResourceDictionaries(string stagedRoot, string asmName)
+    {
+        var uris = new List<Uri>();
+        foreach (var xamlFile in Directory.EnumerateFiles(stagedRoot, "*.xaml", SearchOption.AllDirectories))
+        {
+            if (!IsResourceDictionaryRoot(xamlFile))
+            {
+                continue;
+            }
+            var rel = Path.GetRelativePath(stagedRoot, xamlFile).Replace('\\', '/');
+            uris.Add(new Uri($"ms-appx:///{asmName}/{rel}"));
+        }
+        // Deterministic order so 'Themes/…' etc. merge the same way every run.
+        uris.Sort((a, b) => string.CompareOrdinal(a.AbsoluteUri, b.AbsoluteUri));
+        return uris;
+    }
+
+    /// <summary>Cheaply checks whether a XAML file's root element is <c>ResourceDictionary</c>.</summary>
+    private static bool IsResourceDictionaryRoot(string xamlPath)
+    {
+        try
+        {
+            using var reader = System.Xml.XmlReader.Create(xamlPath,
+                new System.Xml.XmlReaderSettings { IgnoreComments = true, IgnoreWhitespace = true });
+            while (reader.Read())
+            {
+                if (reader.NodeType == System.Xml.XmlNodeType.Element)
+                {
+                    return string.Equals(reader.LocalName, "ResourceDictionary", StringComparison.Ordinal);
+                }
+            }
+        }
+        catch
+        {
+            // Unreadable/odd file — treat as "not a resource dictionary".
+        }
+        return false;
+    }
+
+    // ---------------------------------------------------------------------------
+    // IXamlMetadataProvider — consulted by XamlReader.Load through Application.Current.
+    // Each call first consults the surface's own metadata, then the user provider.
+    // ---------------------------------------------------------------------------
+
+    public IXamlType GetXamlType(Type type)
+    {
+        ExceptionDispatchInfo? firstThrow = null;
+        foreach (var provider in _providers)
+        {
+            IXamlType? xamlType = null;
+            try
+            {
+                xamlType = provider.GetXamlType(type);
+            }
+            catch (Exception ex)
+            {
+                // Fail-safe (Layer 1): a chained closure provider that throws on lookup must not PREVENT a
+                // later provider in the chain from resolving the type — so capture the throw and keep going.
+                LogProviderThrowOnce(provider, $"GetXamlType(Type '{type?.FullName}')", ex);
+                firstThrow ??= ExceptionDispatchInfo.Capture(ex);
+            }
+            if (xamlType != null)
+            {
+                return xamlType;
+            }
+        }
+        // If a provider threw AND no provider could resolve the type, re-throw the original (managed,
+        // catchable) exception rather than returning null. Swallowing it is unsafe: when the caller is
+        // WinRT resource enumeration (IMap.First marshaling a KeyValuePair), a
+        // null-typed value drives native code into an UNCATCHABLE access violation (0xC0000005) that
+        // fast-fails the whole process before it can emit SURFACE_PORT. Callers already guard the throw.
+        firstThrow?.Throw();
+        return null!;
+    }
+
+    public IXamlType GetXamlType(string fullName)
+    {
+        ExceptionDispatchInfo? firstThrow = null;
+        foreach (var provider in _providers)
+        {
+            IXamlType? xamlType = null;
+            try
+            {
+                xamlType = provider.GetXamlType(fullName);
+            }
+            catch (Exception ex)
+            {
+                // Fail-safe (Layer 1): see GetXamlType(Type) — an additive closure provider must never be
+                // able to throw a *resolvable-by-a-later-provider* type off the rails, so keep chaining.
+                LogProviderThrowOnce(provider, $"GetXamlType('{fullName}')", ex);
+                firstThrow ??= ExceptionDispatchInfo.Capture(ex);
+            }
+            if (xamlType != null)
+            {
+                return xamlType;
+            }
+        }
+        // No provider resolved it but one threw: re-throw (managed/catchable) instead of returning null.
+        // A swallowed resolution-throw becomes an uncatchable native AV in WinRT resource-key enumeration
+        // (callers' managed catch relies on GetXamlType surfacing the throw). See GetXamlType(Type).
+        firstThrow?.Throw();
+        return null!;
+    }
+
+    public XmlnsDefinition[] GetXmlnsDefinitions()
+    {
+        // Fail-safe (Layer 1): aggregate defensively so one throwing closure provider cannot break the
+        // xmlns table the whole document relies on; a failed provider simply contributes nothing.
+        var defs = new List<XmlnsDefinition>();
+        foreach (var provider in _providers)
+        {
+            try
+            {
+                defs.AddRange(provider.GetXmlnsDefinitions());
+            }
+            catch (Exception ex)
+            {
+                LogProviderThrowOnce(provider, "GetXmlnsDefinitions", ex);
+            }
+        }
+        return defs.ToArray();
+    }
+
+    private static readonly HashSet<string> LoggedProviderThrows = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// WinUI repeats the same lookups many times per render, so each failing (provider, lookup) is logged once,
+    /// with the full exception chain (e.g. the newer-SDK type a provider's generated code could not load).
+    /// Only the log is deduplicated; the lookup itself is still attempted every time.
+    /// </summary>
+    private static void LogProviderThrowOnce(object provider, string lookup, Exception ex)
+    {
+        var name = provider.GetType().FullName;
+        lock (LoggedProviderThrows)
+        {
+            if (!LoggedProviderThrows.Add($"{name}|{lookup}"))
+            {
+                return;
+            }
+        }
+        Log($"LAYER 1: provider {name} threw on {lookup}: {DescribeExceptionChain(ex)}; skipping (logged once per lookup).");
+    }
+
+    internal static void Log(string message)
+    {
+        var line = $"[Surface] {message}";
+        // Diagnostics go to STDERR so STDOUT stays reserved for the single clean
+        // SURFACE_PORT=<port> handshake line the extension parses.
+        try { Console.Error.WriteLine(line); } catch { }
+        try
+        {
+            File.AppendAllText(
+                Path.Combine(Paths.SurfaceRoot, "surface-run.log"),
+                DateTime.Now.ToString("HH:mm:ss.fff") + " " + line + Environment.NewLine);
+        }
+        catch
+        {
+            // best-effort logging only
+        }
+    }
+}

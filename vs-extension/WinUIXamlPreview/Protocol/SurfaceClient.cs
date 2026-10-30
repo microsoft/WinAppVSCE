@@ -1,0 +1,801 @@
+#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using WinUISurface.Shared;
+
+namespace WinUIXamlPreview.Protocol
+{
+    /// <summary>
+    /// Owns the surface process + loopback socket. Launches <c>Surface.exe</c>, parses the
+    /// <c>SURFACE_PORT=&lt;n&gt;</c> handshake line from stdout, connects, performs the Hello/Ready
+    /// exchange, and raises Frame/Error/Closed events. No Visual Studio dependencies so it can be
+    /// smoke-tested from a plain console harness; the wire contract is <c>surface/protocol</c>.
+    /// </summary>
+    internal sealed class SurfaceClient : IDisposable
+    {
+        private static readonly JsonSerializerOptions ReadOptions = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+        };
+
+        private static readonly JsonSerializerOptions WriteOptions = new JsonSerializerOptions
+        {
+            // Message shapes carry explicit [JsonPropertyName] lowercase names.
+        };
+
+        private readonly string _surfaceExe;
+        private readonly string? _userDll;
+        private readonly string? _userAppXaml;
+        private readonly string? _userPri;
+        private readonly string? _theme;
+        private readonly Action<string> _log;
+
+        private Process? _proc;
+        private TcpClient? _tcp;
+        private NetworkStream? _stream;
+        private readonly LineDecoder _decoder = new LineDecoder();
+        private readonly StringBuilder _stdout = new StringBuilder();
+        private TaskCompletionSource<ReadyMsg>? _ready;
+        private Stopwatch? _startSw;
+        private long _spawnMs;
+        private bool _started;
+        private bool _disposed;
+        private bool _connecting;
+        private string? _privateRun;
+        private readonly string _authToken = NewAuthToken();
+
+        private static string NewAuthToken()
+        {
+            var bytes = new byte[32];
+            using (var rng = System.Security.Cryptography.RandomNumberGenerator.Create())
+            {
+                rng.GetBytes(bytes);
+            }
+
+            return BitConverter.ToString(bytes).Replace("-", string.Empty);
+        }
+
+        // Failure funnel: every failure (startup, connect, read-loop close, timeout, process exit) routes
+        // through Fault(). _lifetimeCts cancels the connect + read loop on fault/dispose; _timeoutCts (linked
+        // to it) is cancelled on its own the moment Ready arrives, so the startup timeout can never fire
+        // against a healthy surface. _faulted guards Fault() so exactly one Closed is raised however many
+        // failures race in; _intentionalStop suppresses Closed when we stop the surface on purpose.
+        private readonly CancellationTokenSource _lifetimeCts = new CancellationTokenSource();
+        private CancellationTokenSource? _timeoutCts;
+        private int _faulted;
+        private volatile bool _intentionalStop;
+
+        /// <summary>Parent of the per-process matched-host run copies.</summary>
+        internal static string RunRoot => Path.Combine(Path.GetTempPath(), "wsr-v2");
+
+        // Background reap/cleanup tasks started by Dispose. VS outlives them; short-lived hosts (test
+        // runners) must wait on them before exiting or the run copies (~140 MB each) are orphaned.
+        private static readonly List<Task> s_cleanups = new List<Task>();
+
+        /// <summary>Waits for every disposed client's process reap and run-copy cleanup. Returns false on timeout.</summary>
+        internal static bool WaitForPendingCleanup(TimeSpan timeout)
+        {
+            Task[] pending;
+            lock (s_cleanups) pending = s_cleanups.ToArray();
+            try { return Task.WaitAll(pending, timeout); }
+            catch (AggregateException) { return true; }
+        }
+
+        /// <summary>Reclaims run copies older than <paramref name="minAge"/> that no running Surface holds.</summary>
+        internal static int SweepStaleRunCopies(TimeSpan minAge, Action<string>? log = null) =>
+            HostPayload.SweepRunRoot(RunRoot, minAge, log);
+
+        public SurfaceClient(string surfaceExe, string? userDll, Action<string> log, string? userAppXaml = null, string? theme = null, string? userPri = null)
+        {
+            _surfaceExe = surfaceExe;
+            _userDll = userDll;
+            _userAppXaml = userAppXaml;
+            _userPri = userPri;
+            _theme = theme;
+            _log = log ?? (_ => { });
+        }
+
+        public event Action<ReadyMsg>? Ready;
+        public event Action<FrameMsg>? Frame;
+        public event Action<ErrorMsg>? Error;
+        public event Action<HwndMsg>? Hwnd;
+        public event Action? NativeExited;
+        public event Action<SelectedMsg>? Selected;
+        public event Action<ElementPropsMsg>? ElementProps;
+        public event Action<ContentPropsMsg>? ContentProps;
+        public event Action<ViewMsg>? View;
+        public event Action<string>? Closed;
+
+        /// <summary>Stderr marker the surface writes when a packaged user assembly can't load without identity.</summary>
+        public const string IdentityRequiredMarker = "WXP:IDENTITY-REQUIRED";
+
+        /// <summary>Raised (on a background thread) when any surface reports <see cref="IdentityRequiredMarker"/>.</summary>
+        public static event Action? IdentityRequired;
+
+        /// <summary>Stderr text the surface logs when it contained an exception thrown by the previewed app's code
+        /// (surface\Surface\App.cs OnUnhandledException; keep in sync).</summary>
+        public const string AppCodeFaultContainedMarker = "unhandled exception in app code was contained by the preview host";
+
+        /// <summary>Stderr text the surface logs when app layout code threw; WinUI terminates the host for these.</summary>
+        public const string AppLayoutFaultMarker = "app layout code threw during measure/arrange";
+
+        /// <summary>Raised (on a background thread) when this surface reports an app-code fault; the argument is true for a fatal layout fault.</summary>
+        public event Action<bool>? AppCodeFault;
+
+        /// <summary>True once the connection has faulted (process died / socket failed); Closed is raised at most once.</summary>
+        public bool IsFaulted => Volatile.Read(ref _faulted) != 0;
+
+        /// <summary>
+        /// True when the surface and this client share no protocol version (R2). The fault is permanent for
+        /// this surface exe, so callers must not auto-restart it.
+        /// </summary>
+        public bool IsProtocolMismatch { get; private set; }
+
+        /// <summary>OS process id of the launched surface, or null before launch / if unavailable.</summary>
+        internal int? ProcessId
+        {
+            get
+            {
+                try { return _proc?.Id; }
+                catch { return null; }
+            }
+        }
+
+        /// <summary>Launches the surface, connects, and completes once Ready is received.</summary>
+        public Task<ReadyMsg> StartAsync(TimeSpan timeout)
+        {
+            if (_started)
+            {
+                return Task.FromException<ReadyMsg>(new InvalidOperationException("SurfaceClient already started"));
+            }
+
+            _started = true;
+            _ready = new TaskCompletionSource<ReadyMsg>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _startSw = Stopwatch.StartNew();
+
+            var args = new StringBuilder();
+            if (!string.IsNullOrEmpty(_userDll))
+            {
+                args.Append("--user-dll ").Append(Quote(_userDll!));
+            }
+
+            if (!string.IsNullOrEmpty(_userAppXaml))
+            {
+                if (args.Length > 0)
+                {
+                    args.Append(' ');
+                }
+
+                args.Append("--user-appxaml ").Append(Quote(_userAppXaml!));
+            }
+
+            // Matched-host (version-matched) launch stages a pre-built MERGED core+toolkit design-time
+            // resources.pri (host-side StageUserPri copies it over <host>\Surface.pri) so third-party
+            // component templates resolve at the target WASDK version. Only the version-matched leg passes
+            // this; the bundled 2.2.0 leg leaves it null so its launch is byte-for-byte unchanged. The supplied
+            // exe/pri belong to the pristine, read-only cache entry; StageUserPri overwrites in place, so it
+            // only ever runs against the per-process run-copy made below.
+            if (!string.IsNullOrEmpty(_userPri))
+            {
+                // Every PROCESS gets its own mutable PRI, including warmed spares for the same document.
+                // The input is a validated, pristine payload; never launch --user-pri against it.
+                try
+                {
+                    var source = Path.GetDirectoryName(Path.GetFullPath(_surfaceExe))!;
+                    if (!string.Equals(Path.GetFullPath(_userPri!), Path.Combine(source, "Surface.designtime.pri"), StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException("Matched PRI must belong to the supplied payload.");
+                    _privateRun = Path.Combine(RunRoot, Guid.NewGuid().ToString("N"));
+                    var rcSw = Stopwatch.StartNew();
+                    HostPayload.CreateRunCopy(source, _privateRun);
+                    _log($"PERF client.runcopy ms={rcSw.ElapsedMilliseconds}");
+                }
+                catch (Exception ex) { Fault("Failed to stage the matched-host PRI run-copy.", ex); return _ready.Task; }
+                if (args.Length > 0)
+                {
+                    args.Append(' ');
+                }
+
+                args.Append("--user-pri ").Append(Quote(Path.Combine(_privateRun!, "Surface.designtime.pri")));
+            }
+
+            var launchExe = _privateRun == null ? _surfaceExe : Path.Combine(_privateRun, "Surface.exe");
+            _log($"Launching surface: \"{launchExe}\" {args}");
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = launchExe,
+                Arguments = args.ToString(),
+                WorkingDirectory = _privateRun ?? Path.GetDirectoryName(_surfaceExe) ?? string.Empty,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+            };
+
+            // Theme preview is likewise a launch-time decision: the surface reads SURFACE_THEME once at
+            // startup and sets the app-global Application.RequestedTheme (the only mechanism that re-resolves
+            // {ThemeResource} in a code-only host — a runtime flip does not; plan §47). "Light"/"Dark" force
+            // that theme; anything else (incl. "Default"/empty) follows the system theme. Set explicitly so an
+            // inherited value can never leak in.
+            psi.EnvironmentVariables["SURFACE_THEME"] =
+                string.Equals(_theme, "Dark", StringComparison.OrdinalIgnoreCase) ? "Dark" :
+                string.Equals(_theme, "Light", StringComparison.OrdinalIgnoreCase) ? "Light" : "Default";
+            // Only the process holding this secret can drive the surface; it's in the environment, not the
+            // command line, so other users can't read it from the process list.
+            psi.EnvironmentVariables["SURFACE_AUTH_TOKEN"] = _authToken;
+
+            try
+            {
+                _proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+                _proc.OutputDataReceived += OnStdout;
+                _proc.ErrorDataReceived += OnStderr;
+                _proc.Exited += OnExited;
+                _proc.Start();
+                ChildProcessJob.TryAdd(_proc, _log);
+                _spawnMs = _startSw.ElapsedMilliseconds;
+                _proc.BeginOutputReadLine();
+                _proc.BeginErrorReadLine();
+            }
+            catch (Exception ex)
+            {
+                Fault("Failed to start the surface process.", ex);
+                return _ready.Task;
+            }
+
+            _timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+            var timeoutToken = _timeoutCts.Token;
+            _ = Task.Delay(timeout, timeoutToken).ContinueWith(t =>
+            {
+                if (t.IsCanceled)
+                {
+                    return; // Ready arrived (or we're tearing down) — nothing to time out.
+                }
+
+                if (_ready != null && !_ready.Task.IsCompleted)
+                {
+                    Fault("Timed out waiting for SURFACE_PORT / Ready from the surface process.",
+                        new TimeoutException("Timed out waiting for SURFACE_PORT / Ready from the surface process."));
+                }
+            }, TaskScheduler.Default);
+
+            return _ready.Task;
+        }
+
+        private void OnStdout(object sender, DataReceivedEventArgs e)
+        {
+            if (e.Data == null)
+            {
+                return;
+            }
+
+            var line = e.Data.TrimEnd();
+            if (line.Length == 0)
+            {
+                return;
+            }
+
+            if (line.StartsWith("SURFACE_PORT=", StringComparison.Ordinal))
+            {
+                var rest = line.Substring("SURFACE_PORT=".Length).Trim();
+                var digits = new string(rest.TakeWhileDigit());
+                if (int.TryParse(digits, out var port))
+                {
+                    _log($"Surface listening on 127.0.0.1:{port}");
+                    Connect(port);
+                }
+            }
+            else
+            {
+                _log($"[surface] {line}");
+            }
+        }
+
+        private void OnStderr(object sender, DataReceivedEventArgs e)
+        {
+            if (!string.IsNullOrWhiteSpace(e.Data))
+            {
+                _log($"[surface:err] {e.Data}");
+                if (e.Data.IndexOf(IdentityRequiredMarker, StringComparison.Ordinal) >= 0)
+                {
+                    IdentityRequired?.Invoke();
+                }
+                else if (e.Data.IndexOf(AppCodeFaultContainedMarker, StringComparison.Ordinal) >= 0)
+                {
+                    AppCodeFault?.Invoke(false);
+                }
+                else if (e.Data.IndexOf(AppLayoutFaultMarker, StringComparison.Ordinal) >= 0)
+                {
+                    AppCodeFault?.Invoke(true);
+                }
+            }
+        }
+
+        private void OnExited(object? sender, EventArgs e)
+        {
+            var code = TryGetExitCode(sender as Process);
+            Fault($"Surface process exited (code={FormatExitCode(code)}).");
+        }
+
+        internal static string FormatExitCode(int? code)
+        {
+            if (code == null)
+            {
+                return "unknown";
+            }
+
+            // NTSTATUS-style crash codes (e.g. 0xC0000409) read better in hex.
+            return code.Value < 0 || code.Value > 0xFFFF
+                ? $"0x{(uint)code.Value:X8}"
+                : code.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// Ends a surface whose window stopped responding (see <see cref="SurfaceHangWatchdog"/>): kills the process and
+        /// raises <see cref="Closed"/> like any other death, so the normal recovery restarts the preview. Thread-safe.
+        /// </summary>
+        internal void TerminateUnresponsive(string reason) => Fault(reason);
+
+        private int? TryGetExitCode(Process? exited = null)
+        {
+            // Exited can be raised before the exit code is observable; WaitForExit (already exited, so it
+            // returns at once) makes ExitCode readable. The sender is used because Dispose may have cleared _proc.
+            var proc = exited ?? _proc;
+            try
+            {
+                if (proc == null)
+                {
+                    return null;
+                }
+
+                proc.WaitForExit(1000);
+                return proc.ExitCode;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void Connect(int port)
+        {
+            if (_connecting || _disposed)
+            {
+                return;
+            }
+
+            _connecting = true;
+            var token = _lifetimeCts.Token;
+            _ = Task.Run(async () =>
+            {
+                var tcp = new TcpClient();
+                // net472 TcpClient.ConnectAsync has no CancellationToken overload; closing the socket
+                // from the token callback aborts a hung connect the instant we fault or dispose (T2).
+                using var reg = token.Register(() => { try { tcp.Close(); } catch { } });
+                try
+                {
+                    await tcp.ConnectAsync("127.0.0.1", port).ConfigureAwait(false);
+                    _tcp = tcp;
+                    _stream = tcp.GetStream();
+                    _log("Connected to surface. Sending Hello.");
+                    Send(new HelloMsg { Token = _authToken });
+                    await ReadLoop(_stream, token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    if (token.IsCancellationRequested)
+                    {
+                        return; // Intentional teardown aborted the connect; Fault already ran (or Dispose owns it).
+                    }
+
+                    Fault($"Surface connection failed: {ex.Message}", ex);
+                }
+            });
+        }
+
+        private async Task ReadLoop(NetworkStream stream, CancellationToken token)
+        {
+            var buffer = new byte[64 * 1024];
+            var closeReason = "Surface socket closed.";
+            while (!_disposed && !token.IsCancellationRequested)
+            {
+                int n;
+                try
+                {
+                    n = await stream.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // Cancellation/disposal is an intentional teardown — the fault (if any) is already
+                    // funnelled, so stay quiet. Anything else is a genuine transport error worth logging (T3).
+                    if (token.IsCancellationRequested || _disposed)
+                    {
+                        return;
+                    }
+
+                    closeReason = $"Surface socket read failed: {ex.Message}";
+                    break;
+                }
+
+                if (n <= 0)
+                {
+                    closeReason = "Surface closed the connection (end of stream).";
+                    break;
+                }
+
+                foreach (var line in _decoder.Push(buffer, n))
+                {
+                    try
+                    {
+                        Dispatch(line);
+                    }
+                    catch (JsonException ex) when (_ready?.Task.Status == TaskStatus.RanToCompletion)
+                    {
+                        // After a successful handshake, one mis-shaped message (wrong field types) must not tear
+                        // down a healthy connection. Before Ready it still faults fast instead of waiting out the timeout.
+                        _log($"Ignoring malformed message from surface ({ex.Message}): {(line.Length > 200 ? line.Substring(0, 200) + "…" : line)}");
+                    }
+                }
+            }
+
+            Fault(closeReason);
+        }
+
+        private void Dispatch(string json)
+        {
+            string? type;
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                type = doc.RootElement.TryGetProperty("type", out var t) ? t.GetString() : null;
+            }
+            catch
+            {
+                return; // ignore malformed/interleaved diagnostics
+            }
+
+            switch (type)
+            {
+                case "Ready":
+                    _timeoutCts?.Cancel();
+                    if (_startSw != null)
+                    {
+                        _log($"PERF client.ready ms={_startSw.ElapsedMilliseconds} spawnAt={_spawnMs} privateRun={(_privateRun != null ? "yes" : "no")}");
+                    }
+                    var ready = JsonSerializer.Deserialize<ReadyMsg>(json, ReadOptions);
+                    if (ready != null)
+                    {
+                        if (!Wire.IsCompatible(ready.Protocol, ready.MinProtocol))
+                        {
+                            ProtocolMismatch(
+                                $"Surface speaks protocol {DescribeRange(ready.Protocol, ready.MinProtocol)}; this extension needs " +
+                                $"{DescribeRange(Wire.ProtocolVersion, Wire.MinProtocolVersion)}. The surface build is incompatible with this extension version.");
+                            break;
+                        }
+
+                        _log($"Surface Ready: protocol={ready.Protocol} minProtocol={ready.MinProtocol?.ToString() ?? "(none)"} wasdk={ready.Wasdk ?? "(none)"}");
+                        _ready?.TrySetResult(ready);
+                        Ready?.Invoke(ready);
+                    }
+                    break;
+                case "Frame":
+                    var frame = JsonSerializer.Deserialize<FrameMsg>(json, ReadOptions);
+                    if (frame != null)
+                    {
+                        Frame?.Invoke(frame);
+                    }
+                    break;
+                case "Error":
+                    var err = JsonSerializer.Deserialize<ErrorMsg>(json, ReadOptions);
+                    if (err != null)
+                    {
+                        // The surface rejected our Hello: no shared protocol version. Fatal, not a render error.
+                        if (err.Phase == "protocol")
+                        {
+                            ProtocolMismatch("Surface rejected the handshake: " + err.Message);
+                            break;
+                        }
+
+                        Error?.Invoke(err);
+                    }
+                    break;
+                case "Hwnd":
+                    var hwnd = JsonSerializer.Deserialize<HwndMsg>(json, ReadOptions);
+                    if (hwnd != null)
+                    {
+                        Hwnd?.Invoke(hwnd);
+                    }
+                    break;
+                case "NativeExited":
+                    NativeExited?.Invoke();
+                    break;
+                case "Selected":
+                    var sel = JsonSerializer.Deserialize<SelectedMsg>(json, ReadOptions);
+                    if (sel != null)
+                    {
+                        Selected?.Invoke(sel);
+                    }
+                    break;
+                case "ElementProps":
+                    var props = JsonSerializer.Deserialize<ElementPropsMsg>(json, ReadOptions);
+                    if (props != null)
+                    {
+                        ElementProps?.Invoke(props);
+                    }
+                    break;
+                case "ContentProps":
+                    var contentProps = JsonSerializer.Deserialize<ContentPropsMsg>(json, ReadOptions);
+                    if (contentProps != null)
+                    {
+                        ContentProps?.Invoke(contentProps);
+                    }
+                    break;
+                case "View":
+                    var view = JsonSerializer.Deserialize<ViewMsg>(json, ReadOptions);
+                    if (view != null)
+                    {
+                        View?.Invoke(view);
+                    }
+                    break;
+                case "Pong":
+                    break;
+                default:
+                    _log($"Unknown message from surface: {json}");
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Writes a message to the surface. Returns <c>true</c> when the bytes were handed to the socket,
+        /// <c>false</c> when the client is already torn down or the write failed. A write failure means the
+        /// pipe is broken, so it is funnelled through <see cref="Fault"/> — the UI then sees a single
+        /// disconnected/recovery signal instead of a silently dropped command (T4).
+        /// </summary>
+        private bool Send(object msg)
+        {
+            var stream = _stream;
+            if (stream == null || _disposed)
+            {
+                return false;
+            }
+
+            try
+            {
+                var json = JsonSerializer.Serialize(msg, msg.GetType(), WriteOptions) + "\n";
+                var bytes = Encoding.UTF8.GetBytes(json);
+                stream.Write(bytes, 0, bytes.Length);
+                stream.Flush();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Fault($"Surface send failed: {ex.Message}", ex);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// WS2-F6: placeholder sample data for <c>{x:Bind}</c> pages. Sent with every document message; null
+        /// omits the field so the surface keeps its default (on).
+        /// </summary>
+        public bool? SampleData { get; set; }
+
+        /// <summary>Path of the XAML file being previewed, sent with every document message so the surface can type sample values from the project's source.</summary>
+        public Func<string?>? DocumentPathSource { get; set; }
+
+        // Always present: "" tells the surface there is no file, so it drops the previous document's project.
+        private string CurrentDocumentPath() => DocumentPathSource?.Invoke() ?? "";
+
+        public bool LoadXaml(string xaml, int width, int height, double scale)
+            => Send(new LoadXamlMsg { Xaml = xaml, Width = width, Height = height, Scale = scale,             SampleData = SampleData, DocumentPath = CurrentDocumentPath() });
+
+        public bool UpdateXaml(string xaml)
+            => Send(new UpdateXamlMsg { Xaml = xaml, SampleData = SampleData, DocumentPath = CurrentDocumentPath() });
+
+        public bool Resize(int width, int height, double scale)
+            => Send(new ResizeMsg { Width = width, Height = height, Scale = scale });
+
+        /// <summary>Enter native-HWND mode; the surface replies with an <see cref="HwndMsg"/> to reparent.</summary>
+        public bool EnterNative(string xaml, double width, double height, double scale, int paneWidthPx = 0, int paneHeightPx = 0, ViewMsg? view = null)
+            => Send(new EnterNativeMsg
+            {
+                Xaml = xaml, Width = width, Height = height, Scale = scale, SampleData = SampleData, DocumentPath = CurrentDocumentPath(),
+                PaneWidthPx = paneWidthPx > 0 ? paneWidthPx : (int?)null,
+                PaneHeightPx = paneHeightPx > 0 ? paneHeightPx : (int?)null,
+                View = view,
+            });
+
+        /// <summary>Leave native mode; the surface re-cloaks its window and replies <c>NativeExited</c>.</summary>
+        public bool ExitNative()
+            => Send(new ExitNativeMsg());
+
+        /// <summary>
+        /// Set the preview surface mode: <c>true</c> = design (clicks select an element), <c>false</c> =
+        /// interact (clicks reach the live content). Applied live by the surface with no re-render (plan §41).
+        /// </summary>
+        public bool SetMode(bool design)
+            => Send(new SetModeMsg { Design = design });
+
+        /// <summary>
+        /// Select the element at an authored-tree index path (editor caret -> previewer, plan §41 #2). The
+        /// surface resolves the path to a live element and replies with the usual <c>Selected</c>/props.
+        /// </summary>
+        public bool SelectByPath(string path)
+            => Send(new SelectByPathMsg { Path = path });
+
+        /// <summary>
+        /// TEST-ONLY (bug D3 regression): headless equivalent of a design-mode pointer click at (<paramref
+        /// name="x"/>, <paramref name="y"/>) in artboard/host DIP coordinates. The surface runs its real
+        /// pick/hit-test path and replies with the usual <c>Selected</c>. Not used by the production margin;
+        /// the D3 UI test uses it to assert point -> element selection deterministically.
+        /// </summary>
+        public bool PickAt(double x, double y)
+            => Send(new PickAtMsg { X = x, Y = y });
+
+        /// <summary>
+        /// Apply a live property edit from the panel to the element with the given id (plan §41 Phase C). The
+        /// surface converts the value to the property's type, sets it on the live element, and replies with a
+        /// fresh <c>ElementProps</c> (applied value, or reverted if the string didn't convert).
+        /// </summary>
+        public bool SetProperty(int id, string name, string value)
+            => Send(new SetPropertyMsg { Id = id, Name = name, Value = value });
+
+        /// <summary>
+        /// Pin the preview canvas to a device-size preset so the page lays out at a fixed artboard size;
+        /// <paramref name="width"/>/<paramref name="height"/> &lt;= 0 restores auto (the page's own size). The
+        /// surface re-hosts and replies with a fresh <c>Hwnd</c>; the preview surface re-fits the new board.
+        /// </summary>
+        public bool SetCanvasSize(double width, double height)
+            => Send(new SetCanvasSizeMsg { Width = width, Height = height });
+
+        // No shared protocol version: fault permanently (the flag tells callers not to auto-restart).
+        private void ProtocolMismatch(string reason)
+        {
+            if (IsFaulted)
+            {
+                return;
+            }
+
+            _timeoutCts?.Cancel();
+            IsProtocolMismatch = true;
+            Fault(reason, new SurfaceProtocolException(reason));
+        }
+
+        private static string DescribeRange(int protocol, int? min)
+        {
+            int newest = protocol > 0 ? protocol : 1;
+            int oldest = min.HasValue && min.Value > 0 ? Math.Min(min.Value, newest) : newest;
+            return oldest == newest ? $"v{newest}" : $"v{oldest}–v{newest}";
+        }
+
+        // Single funnel for every failure — startup, connect, read-loop close, timeout, process exit.
+        // Idempotent (first fault wins), so _ready is completed once and exactly one Closed is raised.
+        // Cancels the lifetime token to stop the read loop; suppresses Closed during intentional stop/dispose.
+        private void Fault(string reason, Exception? ex = null)
+        {
+            if (Interlocked.Exchange(ref _faulted, 1) != 0)
+            {
+                return;
+            }
+
+            _log(reason);
+            _ready?.TrySetException(ex ?? new Exception(reason));
+            try { _lifetimeCts.Cancel(); } catch (ObjectDisposedException) { }
+
+            // T1: terminate a wedged/faulted surface right away (e.g. one that never sent Ready) so it can't
+            // linger as an orphan. Non-blocking Kill() only — full reaping/disposal stays with Dispose. On an
+            // intentional stop, Dispose already owns the kill, so skip it here to avoid racing _proc disposal.
+            if (!_intentionalStop)
+            {
+                RequestKill();
+            }
+
+            if (!_disposed && !_intentionalStop)
+            {
+                Closed?.Invoke(reason);
+            }
+        }
+
+        // Fire-and-forget terminate; never waits, so it is safe to call from the UI thread via Send/Fault.
+        private void RequestKill()
+        {
+            try
+            {
+                var proc = _proc;
+                if (proc != null && !proc.HasExited)
+                {
+                    proc.Kill();
+                }
+            }
+            catch { }
+        }
+
+        private static string Quote(string s) => CommandLine.Quote(s);
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _intentionalStop = true;
+            _disposed = true;
+            try { _lifetimeCts.Cancel(); } catch { }
+            try { _stream?.Dispose(); } catch { }
+            try { _tcp?.Close(); } catch { }
+
+            // T5: request termination synchronously (Kill() does not block), but move the WaitForExit and the
+            // run-copy cleanup — which blocks until the process releases its file locks — onto a background
+            // thread so Dispose never stalls the caller (typically the VS UI thread). Hand ownership of _proc
+            // and the run directory to that task so nothing else touches them while it reaps.
+            var proc = _proc;
+            _proc = null;
+            var runDir = _privateRun;
+            _privateRun = null;
+            try { if (proc != null && !proc.HasExited) proc.Kill(); } catch { }
+
+            if (proc != null || runDir != null)
+            {
+                var cleanup = Task.Run(() =>
+                {
+                    try { proc?.WaitForExit(5000); } catch { }
+                    try { proc?.Dispose(); } catch { }
+                    if (runDir != null)
+                    {
+                        // The image and its DLLs can stay locked for several seconds after exit (notably under
+                        // x64 emulation / AV scans of the fresh copy). Retry for up to 30 s on this background
+                        // thread; whatever remains is reclaimed by the next session's SweepRunRoot.
+                        var cleanupSw = Stopwatch.StartNew();
+                        for (var attempt = 0; Directory.Exists(runDir) && (attempt == 0 || cleanupSw.Elapsed < TimeSpan.FromSeconds(30)); attempt++)
+                        {
+                            if (attempt > 0) Thread.Sleep(500);
+                            try { if (HostPayload.TryRetire(runDir, _log, deleteAttempts: 10)) break; }
+                            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
+                        }
+                        if (Directory.Exists(runDir)) _log($"Private Surface run cleanup deferred for '{runDir}'.");
+                        else _log($"PERF client.runcopy.cleanup ms={cleanupSw.ElapsedMilliseconds}");
+                    }
+                });
+                lock (s_cleanups)
+                {
+                    s_cleanups.RemoveAll(t => t.IsCompleted);
+                    s_cleanups.Add(cleanup);
+                }
+            }
+
+            try { _lifetimeCts.Dispose(); } catch { }
+            try { _timeoutCts?.Dispose(); } catch { }
+        }
+    }
+
+    internal static class CharExtensions
+    {
+        /// <summary>Returns the leading run of ASCII digits from a string as a char array.</summary>
+        public static char[] TakeWhileDigit(this string s)
+        {
+            int i = 0;
+            while (i < s.Length && s[i] >= '0' && s[i] <= '9')
+            {
+                i++;
+            }
+
+            return s.Substring(0, i).ToCharArray();
+        }
+    }
+
+    /// <summary>The surface and client share no protocol version; restarting the same surface exe won't help.</summary>
+    internal sealed class SurfaceProtocolException : Exception
+    {
+        public SurfaceProtocolException(string message) : base(message) { }
+    }
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A d:DesignData sample-data document. The Surface host loads this via XamlReader.Load and sets the
+  resulting object as the page's design-time DataContext (§51 M1), so {Binding Text} resolves to the
+  sample string below. A framework TextBlock is used as the sample data object so the document loads
+  with no dependency on any user/provider type — the most robust form of a design-data source.
+-->
+<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+           Text="Sample from d:DesignData" />

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>TestUserApp</RootNamespace>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <!-- Test-VersionMatrix.ps1 overrides this to build the test app against each WinAppSDK in the matrix. -->
+    <TestWasdkVersion Condition="'$(TestWasdkVersion)' == ''">2.2.0</TestWasdkVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(TestWasdkVersion)" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Design-time sample-data document consumed by {d:DesignData Source=DesignData/DemoSample.xaml};
+         copied next to the assembly so the Surface host resolves it relative to the user DLL. -->
+    <Content Include="DesignData\DemoSample.xaml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>
