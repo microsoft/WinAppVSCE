@@ -17,7 +17,7 @@
 [CmdletBinding()]
 param(
     # Matched hosts support 1.8+ (the <=1.7 framework-MSIX layout is not handled by the provisioner).
-    [string[]]$Versions = @("1.8.260921001", "2.0.1", "2.1.3", "2.2.0", "2.3.1", "2.4.0", "2.5.1")
+    [string[]]$Versions = @("1.8.260921001", "2.0.1", "2.1.3", "2.2.0", "2.3.1", "2.4.0", "2.5.1", "2.6.4")
 )
 $ErrorActionPreference = "Stop"
 # `powershell -File` passes "a,b" as one string; accept both forms.

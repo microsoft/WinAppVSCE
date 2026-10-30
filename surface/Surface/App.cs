@@ -91,7 +91,8 @@ public static class Program
             Application.Start(p =>
             {
                 Boot("Application.Start callback: enter");
-                var context = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
+                var context = new ContainingSynchronizationContext(
+                    new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread()));
                 SynchronizationContext.SetSynchronizationContext(context);
                 Boot("Application.Start callback: creating App");
                 new App();
@@ -430,12 +431,31 @@ public partial class App : Application, IXamlMetadataProvider
                     "process for layout exceptions, so the preview host will close: " + DescribeExceptionChain(ex!));
                 return;
             }
-            Log($"WARNING: unhandled exception in app code was contained by the preview host (at {userFrame}): " +
-                DescribeExceptionChain(ex!));
+            LogContained(userFrame, ex!);
             return;
         }
         Log("FATAL: unhandled exception in the preview host: " +
             (ex != null ? DescribeExceptionChain(ex) + Environment.NewLine + ex.StackTrace : e.Message));
+    }
+
+    private static void LogContained(string userFrame, Exception ex) =>
+        Log($"WARNING: unhandled exception in app code was contained by the preview host (at {userFrame}): " +
+            DescribeExceptionChain(ex));
+
+    /// <summary>
+    /// Contains an app-code exception escaping a UI-thread SynchronizationContext callback (an <c>async void</c>
+    /// continuation or rethrow). Since Windows App SDK 2.6 such exceptions fail-fast inside DispatcherQueue instead
+    /// of reaching <see cref="Application.UnhandledException"/>, so they must be caught before returning to it.
+    /// </summary>
+    internal static bool TryContainCallbackException(Exception ex)
+    {
+        var userFrame = FindUserCodeFrame(ex);
+        if (userFrame == null)
+        {
+            return false;
+        }
+        LogContained(userFrame, ex);
+        return true;
     }
 
     /// <summary>True when any frame (across inner exceptions) is a layout override — MeasureOverride/ArrangeOverride
