@@ -121,6 +121,30 @@ test("release NuGet setup replaces repository and user sources with the approved
   }
 });
 
+test("release signing patterns select every first-party server binary", () => {
+  const pipeline = readFileSync(path.join(root, ".pipelines", "release-vsc.yml"), "utf8");
+  const signing = pipeline
+    .split("displayName: Code Sign ESRP - WinUI XAML language server\n")[1]
+    ?.split("            - task:")[0];
+  assert.ok(signing, "Missing server signing task");
+  assert.match(signing, /UseMinimatch: true/);
+  const patternBlock = signing.match(/^                Pattern: \|\r?\n((?:                  .+\r?\n)+)/m)?.[1];
+  assert.ok(patternBlock, "ESRP minimatch patterns must be newline-separated");
+  const patterns = patternBlock.trim().split(/\r?\n/).map((pattern) => pattern.trim());
+  const binaries = requiredRelativeFiles
+    .filter((file) => /\.(dll|exe)$/.test(file))
+    .map((file) => file.replaceAll(path.sep, "/"));
+  const bundleFiles = [
+    ...requiredRelativeFiles.map((file) => file.replaceAll(path.sep, "/")),
+    "generator-host/Microsoft.CodeAnalysis.dll",
+    "generator-host/Microsoft.CodeAnalysis.CSharp.dll",
+  ];
+  const selected = bundleFiles.filter((file) =>
+    patterns.some((pattern) => path.posix.matchesGlob(file, pattern))
+  );
+  assert.deepEqual(selected.sort(), binaries.sort());
+});
+
 test("ensure-server-bundle rejects an unknown mode", () => {
   const output = mkdtempSync(path.join(tmpdir(), "winui-ensure-"));
   try {
