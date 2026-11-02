@@ -4,7 +4,7 @@
   "description": "WinApp extension for Visual Studio Code to assist in building, debugging, and packaging Windows applications. Includes a WinUI XAML language service and schema-aware IntelliSense for AppxManifest.xml files.",
   "publisher": "Microsoft-WinAppCLI",
   "icon": "images/icon.png",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/microsoft/WinAppVSCE.git"
@@ -239,7 +239,11 @@
         },
         "winapp.xaml.diagnostics.level": {
           "type": "string",
-          "enum": ["all", "errorsOnly", "off"],
+          "enum": [
+            "all",
+            "errorsOnly",
+            "off"
+          ],
           "enumDescriptions": [
             "Show errors and warnings.",
             "Show errors only.",
@@ -250,7 +254,11 @@
         },
         "winapp.xaml.formatting.provider": {
           "type": "string",
-          "enum": ["auto", "winapp", "disabled"],
+          "enum": [
+            "auto",
+            "winapp",
+            "disabled"
+          ],
           "enumDescriptions": [
             "Use the C# extension's XAML formatter when its XAML tools are enabled; otherwise use WinApp XAML IntelliSense.",
             "Always use the WinApp XAML IntelliSense formatter.",
