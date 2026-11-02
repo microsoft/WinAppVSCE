@@ -24,6 +24,8 @@ produces artifacts without publishing.
 ## Azure Artifacts feeds
 
 Both release build jobs use `.pipelines/templates/nuget-feed.yml` before restoring packages.
+References use a repository-rooted path with `@self` so the external 1ES template resolves
+them from this repository rather than its own.
 Following the WinApp CLI Azure pipelines, it installs `.pipelines/release-nuget.config` at
 repository and agent-user scope, clears inherited sources, and authenticates with
 `NuGetAuthenticate@1`. Only the `pde-oss_Internal` Azure Artifacts feed is enabled.

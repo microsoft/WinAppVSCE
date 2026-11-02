@@ -72,7 +72,8 @@ test("release build jobs configure and authenticate NuGet before restoring packa
   for (const jobName of ["BuildServer", "Build"]) {
     const job = pipeline.split(`      - job: ${jobName}\n`)[1]?.split(/^    - stage:/m)[0];
     assert.ok(job, `Missing ${jobName} release job`);
-    const setup = job.indexOf("- template: templates/nuget-feed.yml");
+    const setup = job.indexOf("- template: /.pipelines/templates/nuget-feed.yml@self");
+    assert.ok(setup >= 0, `${jobName} must use a repository-rooted @self NuGet template reference`);
     const restore = job.indexOf("dotnet restore ");
     assert.ok(setup >= 0 && setup < restore, `${jobName} must configure NuGet before restoring`);
   }
