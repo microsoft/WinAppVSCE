@@ -16,7 +16,7 @@ public sealed class SyntaxOnlyCompletionTests
         else offset = text.Length;
         var result = CompletionProvider.ProvideSyntaxOnly(new TextDocument("untitled:Test.xaml", text), offset);
         Assert.NotNull(result);
-        Assert.Contains(result.Items, item => item.TextEdit?.NewText == expected);
+        Assert.Contains(result!.Items, item => item.TextEdit?.NewText == expected);
         Assert.False(result.IsIncomplete);
     }
 

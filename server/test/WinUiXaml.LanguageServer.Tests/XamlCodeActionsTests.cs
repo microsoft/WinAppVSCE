@@ -937,7 +937,7 @@ public class XamlCodeActionsTests
         Assert.Equal(2, actions.Count);
         Assert.Contains(actions, action => action.Title == "Import 'InfoCard' from 'Alpha.Controls'");
         Assert.Contains(actions, action => action.Title == "Import 'InfoCard' from 'Beta.Controls'");
-        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
+        Assert.All(actions, action => Assert.False(action.IsPreferred == true));
     }
 
     [Fact]
@@ -1009,7 +1009,7 @@ public class XamlCodeActionsTests
         var spelling = actions.Single(action => action.Title.StartsWith("Change ", System.StringComparison.Ordinal));
 
         Assert.True(import.IsPreferred);
-        Assert.NotEqual(true, spelling.IsPreferred);
+        Assert.False(spelling.IsPreferred == true);
     }
 
     [Theory]
@@ -1520,7 +1520,7 @@ public class XamlCodeActionsTests
             .ToArray();
 
         Assert.Equal(2, actions.Length);
-        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
+        Assert.All(actions, action => Assert.False(action.IsPreferred == true));
     }
 
     [Fact]
