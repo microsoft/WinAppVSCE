@@ -10,7 +10,7 @@ We're excited to announce the release of v0.4. This release brings project-aware
 
 ## IntelliSense for WinUI XAML
 
-Your XAML defines your app's UI: the controls on a page, the resources they share, and the bindings that connect them to your code. Editing it should come with more than syntax highlighting.
+Your XAML defines your app's UI: the controls on a page, the resources they share, and the bindings that connect them to your code. Editing XAML in VS Code should come with more than syntax highlighting.
 
 With v0.4, we're introducing a XAML language service for WinUI. It understands your app's types, referenced projects, and resources, so the suggestions you see reflect the project you're actually working on.
 
@@ -46,7 +46,7 @@ For **C++/WinRT**, this release provides formatting, folding, outline, automatic
 
 Features become available in stages: basic editing first, then SDK and package types, then your own types and semantic diagnostics. The status bar shows loading progress and calls out missing prerequisites or project-loading problems.
 
-**[IMAGE PLACEHOLDER: XAML open beside its C# code-behind, with the status bar showing project-loading progress.]**
+**[IMAGE PLACEHOLDER: XAML open with the status bar showing project-loading progress.]**
 
 You can turn off the language service with `winapp.xaml.intelliSense.enable`, or keep completions while filtering diagnostic underlines with `winapp.xaml.diagnostics.level`. For IntelliSense in `.xaml.cs` code-behind, install [C# Dev Kit](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csdevkit).
 
@@ -58,11 +58,11 @@ Until now, **WinApp: Initialize Project** assumed you already had a project. Wit
 
 Run **WinApp: Create WinUI App**, choose an official Windows App SDK template, give your app a name, and choose its parent folder. The extension creates the project and reports where it was saved. You don't need a folder or workspace open to get started.
 
-Templates come from the WinApp CLI rather than a fixed list in the extension. The template pack is installed on first use; if you already have one installed, you can choose to keep it or install the latest version.
+Templates come from the .NET CLI rather than a fixed list in the extension. The template pack is installed on first use; if you already have one installed, you can choose to keep it or install the latest version.
 
-Scaffolding requires the [.NET SDK](https://dotnet.microsoft.com/download) 8.0.100 or later.
+**WinApp: Create WinUI App** requires the [.NET SDK](https://dotnet.microsoft.com/download) 8.0.100 or later.
 
-## Build, Run, and Debug From Your Project
+## Build, Run, and Debug From Your Project File
 
 **WinApp: Run Application** previously asked you to find a folder containing your built executable. In v0.4, it can discover runnable .NET projects and solutions and let the extension restore, build, and launch the app with package identity.
 
@@ -81,9 +81,9 @@ The same project support is available when you press **F5**. In `launch.json`, t
 }
 ```
 
-For more control, **WinApp: Run Application With Options...** prompts for the build configuration, target architecture, and run options such as skipping the build, cleaning app data, detaching, or unregistering the development package on exit. Persistent build and debug settings belong in `launch.json`, which now also supports target frameworks, runtime identifiers, MSBuild properties, and Native AOT launches for projects configured for AOT.
+For more control, **WinApp: Run Application With Options...** prompts for the build configuration, target architecture, and run options such as skipping the build or unregistering the development package on exit. Persistent build and debug settings belong in `launch.json`, which now also supports target frameworks, runtime identifiers, MSBuild properties, and more.
 
-Already-built output folders still work as before, including for non-.NET apps. They launch without a build, so rebuild first or use a `preLaunchTask` when debugging. Native-only solutions use their built output rather than the .NET project-build path.
+Already-built output folders still work as before, including for non-.NET apps. They launch without a build, so rebuild first or use a `preLaunchTask` when debugging.
 
 ## More Improvements in v0.4
 
@@ -127,7 +127,7 @@ The WinApp CLI is bundled with the extension; no separate CLI installation is re
 
 ## We Want Your Feedback
 
-This is still a **public preview**, and your feedback directly shapes what we build next. Whether IntelliSense is missing a XAML scenario you rely on, a project didn't appear in the run picker, or you have an idea to make the workflow smoother, we want to hear it.
+This is still a **public preview**, and your feedback directly shapes what we build next.
 
 - [File a bug](https://github.com/microsoft/WinAppVSCE/issues)
 - [Open a feature request](https://github.com/microsoft/WinAppVSCE/issues)
