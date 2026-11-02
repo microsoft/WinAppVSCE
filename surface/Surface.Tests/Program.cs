@@ -1402,6 +1402,17 @@ namespace Surface.Tests
             Check("d:Text with design extension not promoted", Attr(Named(r, "T3"), "Text") is null);
             Check("d:NotAProperty not promoted", Attr(Named(r, "T4"), "NotAProperty") is null);
             Check("design elements removed", First(r, "DesignProperties") is null);
+
+            var sized = new HashSet<string>();
+            XamlCleaner.Clean(raw, designSizedRoot: sized);
+            Check("design size: d:DesignWidth reported as design-only", sized.Contains("Width"));
+            Check("design size: real Height not reported", !sized.Contains("Height"));
+            sized.Clear();
+            XamlCleaner.Clean(Doc("<Grid />", rootAttrs: "d:Width=\"300\" d:Height=\"500\""), designSizedRoot: sized);
+            Check("design size: d:Width/d:Height reported", sized.SetEquals(new[] { "Width", "Height" }));
+            sized.Clear();
+            XamlCleaner.Clean(Doc("<Grid />", rootAttrs: "Width=\"300\" Height=\"500\""), designSizedRoot: sized);
+            Check("design size: real Width/Height not reported", sized.Count == 0);
         }
 
         // ------------------------------------------------------------ R6

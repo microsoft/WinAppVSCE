@@ -33,8 +33,8 @@ namespace WinUIXamlPreview.IntegrationTests
                 Fresh();
                 OpenRendered(_fx.MainPage);
                 var mark = LogMark();
-                Call("menu", new { path = _fx.MainPage, button = "PreviewSizeButton", item = "PreviewSizePhone" });
-                var s = WaitFor("Phone", x => Label(x, _fx.MainPage, "sizeLabel") == "Phone");
+                Call("menu", new { path = _fx.MainPage, button = "PreviewSizeButton", item = "PreviewSizeNarrow" });
+                var s = WaitFor("Narrow", x => Label(x, _fx.MainPage, "sizeLabel") == "Narrow");
                 Eq(360.0, Num(Opt(s)["canvasWidth"]), "canvasWidth");
                 Eq(640.0, Num(Opt(s)["canvasHeight"]), "canvasHeight");
                 WaitForLog(mark, "canvas size set to 360x640");
@@ -117,11 +117,11 @@ namespace WinUIXamlPreview.IntegrationTests
                 OpenRendered(_fx.MainPage);
                 OpenRendered(_fx.SecondPage);
                 Call("menu", new { path = _fx.SecondPage, button = "PreviewThemeButton", item = "PreviewThemeDark" });
-                Call("menu", new { path = _fx.SecondPage, button = "PreviewSizeButton", item = "PreviewSizePhone" });
+                Call("menu", new { path = _fx.SecondPage, button = "PreviewSizeButton", item = "PreviewSizeNarrow" });
                 Call("click", new { path = _fx.SecondPage, automationId = "PreviewDtdToggle" });
                 Call("click", new { path = _fx.SecondPage, automationId = "PreviewSelectToggle" });
                 WaitFor("MainPage labels follow", x => Label(x, _fx.MainPage, "themeLabel") == "Dark"
-                                                     && Label(x, _fx.MainPage, "sizeLabel") == "Phone"
+                                                     && Label(x, _fx.MainPage, "sizeLabel") == "Narrow"
                                                      && Label(x, _fx.MainPage, "dtdLabel") == "Sample data: On"
                                                      && Label(x, _fx.MainPage, "selectLabel") == "Interact", 15_000);
                 Call("activate", new { path = _fx.MainPage });

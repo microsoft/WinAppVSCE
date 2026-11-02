@@ -130,9 +130,11 @@ internal sealed class RenderHost
     {
         var missing = new SortedSet<string>(StringComparer.Ordinal);
         var unmapped = new SortedSet<string>(StringComparer.Ordinal);
-        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes, chartFixups, missingFrameworkTypes);
+        var designSized = new HashSet<string>(StringComparer.Ordinal);
+        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes, chartFixups, missingFrameworkTypes, designSized);
         LastMissingKeys = missing.ToArray();
         LastUnmappedTypes = unmapped.ToArray();
+        LastDesignSizedRoot = designSized;
         LastNewerTypes = missingFrameworkTypes is { Count: > 0 } ? missingFrameworkTypes.OrderBy(t => t, StringComparer.Ordinal).ToArray() : Array.Empty<string>();
         // WS2-F5: name keys the preview can't resolve (e.g. added in App.xaml.cs), once per distinct set.
         var summary = string.Join(", ", missing);
@@ -151,6 +153,9 @@ internal sealed class RenderHost
 
     /// <summary>Custom types the most recent clean had to placeholder/drop because nothing could map them.</summary>
     internal static string[] LastUnmappedTypes { get; private set; } = Array.Empty<string>();
+
+    /// <summary>Root dimensions ("Width"/"Height") the most recent clean took from <c>d:</c> markup; a device preset overrides these.</summary>
+    internal static IReadOnlySet<string> LastDesignSizedRoot { get; private set; } = new HashSet<string>();
 
     /// <summary>
     /// WinUI types the page uses that this host's WinUI doesn't have (a newer WinAppSDK added them), which the
@@ -285,6 +290,7 @@ internal sealed class RenderHost
         LastMissingKeys = Array.Empty<string>();
         LastUnmappedTypes = Array.Empty<string>();
         LastNewerTypes = Array.Empty<string>();
+        LastDesignSizedRoot = new HashSet<string>();
         try
         {
             // P1 (non-page classification): a structurally non-designable root — a ResourceDictionary
@@ -669,10 +675,21 @@ internal sealed class RenderHost
     /// </summary>
     private (double width, double height) ResolveCanvasSize(FrameworkElement root)
     {
-        // A device-size preset (SetCanvasSize) wins over the page's own size so adaptive layouts can be
-        // previewed at a fixed artboard; null falls through to the page's Width/Height or the default canvas.
+        // A device-size preset (SetCanvasSize) sets the window size. A design-only root size (from d:) is cleared
+        // so the page stretches to the preset like it would in a resized window; a real Width/Height is how the
+        // app behaves at any window size, so it stays and the page sits centered on the preset canvas.
         if (_sizeOverride is { } o && o.w > 0 && o.h > 0)
         {
+            var design = LastDesignSizedRoot;
+            if (design.Contains("Width")) root.Width = double.NaN;
+            if (design.Contains("Height")) root.Height = double.NaN;
+            var fixedDims = new List<string>();
+            if (!double.IsNaN(root.Width) && root.Width > 0) fixedDims.Add($"Width {root.Width:0.##}");
+            if (!double.IsNaN(root.Height) && root.Height > 0) fixedDims.Add($"Height {root.Height:0.##}");
+            if (fixedDims.Count > 0)
+            {
+                App.Log($"    preset {o.w:0.##}x{o.h:0.##}: page keeps its fixed {string.Join(" and ", fixedDims)}");
+            }
             return (o.w, o.h);
         }
         double w = (!double.IsNaN(root.Width) && root.Width > 0) ? root.Width : DefaultCanvasWidthDip;

@@ -494,7 +494,7 @@ namespace WinUIXamlPreview.Editor
         private static readonly (string Name, double W, double H)[] SizePresets =
         {
             ("Auto", 0, 0),
-            ("Phone", 360, 640),
+            ("Narrow", 360, 640),
             ("Tablet", 768, 1024),
             ("Desktop", 1280, 800),
             ("Full HD", 1920, 1080),

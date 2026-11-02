@@ -362,6 +362,19 @@ namespace WinUIXamlPreview.UITest
             root = await s.Select("0");
             Check("BEH-C5 preset survives a re-host", Aspect(root, 375, 667), Bounds(root));
 
+            // A design-only size (d:) gives way to the preset so the page stretches like a resized window; a real
+            // Width/Height is how the app behaves at any window size, so it is kept.
+            await s.Rehost(PageXaml("<Grid Background=\"Orange\"/>", "d:DesignWidth=\"200\" d:DesignHeight=\"100\""));
+            root = await s.Select("0");
+            Check("BEH-C5b preset overrides a d:DesignWidth/Height root size", Aspect(root, 375, 667), Bounds(root));
+            await s.Rehost(PageXaml("<Grid Background=\"Orange\"/>", "d:Width=\"200\" d:Height=\"100\""));
+            root = await s.Select("0");
+            Check("BEH-C5c preset overrides a d:Width/Height root size", Aspect(root, 375, 667), Bounds(root));
+            await s.Rehost(PageXaml("<Grid Background=\"Orange\"/>", "Width=\"200\" Height=\"100\""));
+            root = await s.Select("0");
+            Check("BEH-C5d preset keeps a real Width/Height", Aspect(root, 200, 100), Bounds(root));
+            await s.Rehost(PageXaml("<Grid Background=\"Orange\"/>", ""));
+
             t = s.Box.NextHwnd(TimeSpan.FromSeconds(30));
             s.Client.SetCanvasSize(0, 0);
             await t;

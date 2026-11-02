@@ -163,6 +163,7 @@ internal static class XamlCleaner
     /// property keeps its default, e.g. an <c>ItemsView</c> keeps its default layout) and placeholdered
     /// otherwise. May be null.
     /// </param>
+    /// <param name="designSizedRoot">Receives "Width"/"Height" when the root's size came from <c>d:</c> markup rather than a real attribute. May be null.</param>
     public static string Clean(
         string rawXaml,
         Func<string, bool>? isKnownResourceKey = null,
@@ -173,7 +174,8 @@ internal static class XamlCleaner
         ISet<string>? unmappedTypes = null,
         SampleTypeModel? sampleTypes = null,
         IList<ChartFixup>? chartFixups = null,
-        ISet<string>? missingFrameworkTypes = null)
+        ISet<string>? missingFrameworkTypes = null,
+        ISet<string>? designSizedRoot = null)
     {
         if (string.IsNullOrWhiteSpace(rawXaml))
         {
@@ -257,9 +259,17 @@ internal static class XamlCleaner
             }
 
             // Attribute pass over every surviving element.
+            var rootWidthBefore = root.Attribute("Width")?.Value;
+            var rootHeightBefore = root.Attribute("Height")?.Value;
             foreach (var el in root.DescendantsAndSelf().ToList())
             {
                 CleanElementAttributes(el, root, isKnownResourceKey, docKeys, droppedKeys, providerMapsFullName, samples, missingResourceKeys);
+            }
+            if (designSizedRoot is not null)
+            {
+                // A root size the d: mapping supplied (or replaced) is design-only, so a device preset may override it.
+                if (root.Attribute("Width")?.Value is { } w && w != rootWidthBefore) designSizedRoot.Add("Width");
+                if (root.Attribute("Height")?.Value is { } h && h != rootHeightBefore) designSizedRoot.Add("Height");
             }
 
             // Values the code-behind assigns to named elements (never over a property the markup sets).
