@@ -44,12 +44,20 @@ jobs:
               return;
             }
 
-            const { data: diff } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              mediaType: { format: 'diff' },
-            });
+            let diff = '';
+            try {
+              const diffRes = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                mediaType: { format: 'diff' },
+              });
+              diff = diffRes.data;
+            } catch (err) {
+              // Very large PRs exceed the REST API's 20k-line diff cap (HTTP 406). Don't fail the
+              // job over it — fall back to the changed-file list below so a description still generates.
+              core.warning(`Could not fetch PR diff (${err.status || err.message}) — using changed-file list only.`);
+            }
 
             const maxDiffLen = 6000;
             const truncatedDiff = diff.length > maxDiffLen

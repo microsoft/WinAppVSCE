@@ -8,11 +8,19 @@
 .PARAMETER RepoRoot
     Path to the WinAppVSCE repo root. Default: auto-detected (4 levels up from this script).
 .PARAMETER SkipBuild
-    If set, skip building and just install the newest existing artifacts\*.vsix.
+    If set, skip building and just install an existing artifacts\*.vsix.
+.PARAMETER Vsix
+    Explicit path to the .vsix to install. Pins the build under test, which is the only way to be
+    certain which one you measured.
+.PARAMETER ExpectedVersion
+    Version the newest artifact must have (e.g. "0.3.1-prerelease.156"). If the newest does not
+    match, the script throws instead of installing a different build.
 #>
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [string]$Vsix,
+    [string]$ExpectedVersion
 )
 $ErrorActionPreference = "Stop"
 
@@ -32,11 +40,32 @@ if (-not $SkipBuild) {
     Write-Step "SkipBuild set - using existing artifacts"
 }
 
-$vsix = Get-ChildItem $artifacts -Filter *.vsix -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if (-not $vsix) { throw "No .vsix found in $artifacts. Build may have failed." }
+# Selecting "the newest .vsix" couples this harness to anything writing artifacts, including another session packaging mid-test.
+# A real near-miss installed a newly packaged VSIX mid-round, publishing one build's behaviour under another build's name.
+# A silent upgrade is indistinguishable from the intended build, so pin it or assert it.
+if ($Vsix) {
+    if (-not (Test-Path $Vsix)) { throw "Specified -Vsix not found: $Vsix" }
+    $vsixFile = Get-Item $Vsix
+} else {
+    $candidates = @(Get-ChildItem $artifacts -Filter *.vsix -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending)
+    if (-not $candidates) { throw "No .vsix found in $artifacts. Build may have failed." }
+    $vsixFile = $candidates[0]
 
-Write-Step "Installing extension: $($vsix.Name)"
+    if ($ExpectedVersion) {
+        if ($vsixFile.Name -notlike "*$ExpectedVersion*") {
+            throw ("Newest artifact is '$($vsixFile.Name)' but -ExpectedVersion '$ExpectedVersion' was " +
+                "requested. Another build was packaged into '$artifacts'. Pass -Vsix to pin the " +
+                "build under test rather than installing whatever is newest.")
+        }
+    } elseif ($candidates.Count -gt 1) {
+        Write-Warning ("$($candidates.Count) VSIX files in '$artifacts'; taking the newest " +
+            "($($vsixFile.Name)). Pass -Vsix or -ExpectedVersion to pin the build under test.")
+    }
+}
+
+# Provenance belongs in the log of every run, so a result can be attributed after the fact.
+Write-Step "Installing extension: $($vsixFile.Name) (written $($vsixFile.LastWriteTime.ToString('s')))"
 $extensionId = "microsoft-winappcli.winapp"
 $extensionsDir = Join-Path (Split-Path $PSScriptRoot -Parent) ".drive-extensions"
 New-Item -ItemType Directory -Force -Path $extensionsDir | Out-Null
@@ -50,7 +79,7 @@ if ($installedBefore) {
     }
 }
 
-& code "--extensions-dir=$extensionsDir" --install-extension $vsix.FullName --force
+& code "--extensions-dir=$extensionsDir" --install-extension $vsixFile.FullName --force
 if ($LASTEXITCODE -ne 0) { throw "code --install-extension failed with exit code $LASTEXITCODE" }
 
 Write-Step "Installed VSIX. Verifying extension is registered with VS Code:"
@@ -60,7 +89,7 @@ if (-not $installed) {
     throw "WinApp extension not found after installation."
 }
 
-$expectedVersion = [System.IO.Path]::GetFileNameWithoutExtension($vsix.Name) -replace '^winapp-', ''
+$expectedVersion = [System.IO.Path]::GetFileNameWithoutExtension($vsixFile.Name) -replace '^winapp-', ''
 $installedVersion = ($installed -split '@')[-1]
 if ($installedVersion -ne $expectedVersion) {
     throw "VS Code reports WinApp $installedVersion, but the installed VSIX is $expectedVersion. Its extension metadata cache is stale."
@@ -68,5 +97,5 @@ if ($installedVersion -ne $expectedVersion) {
 
 Write-Host $installed -ForegroundColor Green
 
-Write-Host "VSIX path: $($vsix.FullName)"
-return $vsix.FullName
+Write-Host "VSIX path: $($vsixFile.FullName)"
+return $vsixFile.FullName
