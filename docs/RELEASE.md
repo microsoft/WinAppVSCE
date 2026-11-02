@@ -32,6 +32,11 @@ repository and agent-user scope, clears inherited sources, and authenticates wit
 User scope also covers temporary test projects outside the checkout. This setup runs only
 on release agents; local builds keep using the machine's configured feeds.
 
+Server tests pin xUnit to `2.3.1`, the highest currently approved version. Keep the exact
+version constraint until a newer version is approved and available through the release feed.
+Workspace test collections run serially to avoid integration-suite hangs with this runner;
+individual tests still exercise concurrent operations where required.
+
 ## WinApp CLI bundle
 
 The release pipeline calls `scripts/download-cli.ps1` with its artifact staging directory as
