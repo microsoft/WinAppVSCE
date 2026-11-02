@@ -37,6 +37,13 @@ version constraint until a newer version is approved and available through the r
 Workspace test collections run serially to avoid integration-suite hangs with this runner;
 individual tests still exercise concurrent operations where required.
 
+## Server signing
+
+The ESRP task uses newline-separated minimatch patterns to sign the native server executables
+and managed generator host. Comma-separated patterns match neither file type. Keep the
+independent signature verification step enabled so unmatched or unsigned binaries block release;
+third-party DLLs retain their publisher signatures and are verified too.
+
 ## WinApp CLI bundle
 
 The release pipeline calls `scripts/download-cli.ps1` with its artifact staging directory as

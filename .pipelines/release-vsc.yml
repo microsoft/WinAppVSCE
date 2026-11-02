@@ -108,10 +108,11 @@ extends:
                 AuthCertName: $(SigningAuthCertName)
                 AuthSignCertName: $(SigningSignCertName)
                 FolderPath: '$(Build.ArtifactStagingDirectory)/server-bundle'
-                # The Native AOT server ships as WinUiXaml.LanguageServer.exe per RID; only the
-                # out-of-proc generator host is still a managed .dll. A .dll-only glob silently
-                # leaves the primary binaries unsigned.
-                Pattern: '**/WinUiXaml*.dll,**/WinUiXaml*.exe'
+                # ESRP minimatch patterns are newline-separated, not comma-separated.
+                # Include both native server executables and the managed generator host.
+                Pattern: |
+                  **/WinUiXaml*.dll
+                  **/WinUiXaml*.exe
                 UseMinimatch: true
                 signConfigType: inlineSignParams
                 inlineOperation: |
