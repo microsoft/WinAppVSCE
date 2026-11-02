@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO.Pipes;
 using System.Text;
@@ -19,7 +20,7 @@ public class JsonRpcConnectionTests
         {
             OnRequest = async (_, _, cancellationToken) =>
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
                 return null;
             },
         };
@@ -43,7 +44,7 @@ public class JsonRpcConnectionTests
         {
             OnRequest = async (_, _, cancellationToken) =>
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
                 return null;
             },
         };
@@ -67,7 +68,7 @@ public class JsonRpcConnectionTests
         {
             OnRequest = async (_, _, cancellationToken) =>
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
                 return null;
             },
         };
@@ -153,17 +154,43 @@ public class JsonRpcConnectionTests
         await using var input = new MemoryStream(
             Frame("""{"jsonrpc":"2.0","id":1,"method":"slow"}"""));
         await using var output = new MemoryStream();
+        CancellationToken requestCancellation = default;
         var connection = new JsonRpcConnection(input, output)
         {
             OnRequest = async (_, _, cancellationToken) =>
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                requestCancellation = cancellationToken;
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
                 return null;
             },
         };
 
-        await connection.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Contains("\"code\":-32800", Encoding.UTF8.GetString(output.ToArray()));
+        // A busy xUnit collection scheduler can defer captured continuations past the deadline.
+        // Model that deterministically: cancellation must finish without pumping this context.
+        var deferredContext = new DeferredSynchronizationContext();
+        var previousContext = SynchronizationContext.Current;
+        Task run;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(deferredContext);
+            run = connection.RunAsync();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+        }
+
+        try
+        {
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(requestCancellation.IsCancellationRequested);
+            Assert.Contains("\"code\":-32800", Encoding.UTF8.GetString(output.ToArray()));
+        }
+        finally
+        {
+            deferredContext.Drain();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [Fact]
@@ -390,6 +417,22 @@ public class JsonRpcConnectionTests
 
         var written = Encoding.UTF8.GetString(output.ToArray());
         Assert.Equal(requests, Regex.Matches(written, "\"result\":\"done\"").Count);
+    }
+
+    private sealed class DeferredSynchronizationContext : SynchronizationContext
+    {
+        private readonly ConcurrentQueue<(SendOrPostCallback Callback, object? State)> _callbacks = new();
+
+        public override void Post(SendOrPostCallback callback, object? state) =>
+            _callbacks.Enqueue((callback, state));
+
+        public void Drain()
+        {
+            while (_callbacks.TryDequeue(out var callback))
+            {
+                callback.Callback(callback.State);
+            }
+        }
     }
 
     private static byte[] Frame(string json)
