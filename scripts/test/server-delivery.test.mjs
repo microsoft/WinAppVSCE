@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -66,6 +66,59 @@ function validateVsix(vsix) {
     { cwd: root, encoding: "utf8" }
   );
 }
+
+test("release build jobs configure and authenticate NuGet before restoring packages", () => {
+  const pipeline = readFileSync(path.join(root, ".pipelines", "release-vsc.yml"), "utf8");
+  for (const jobName of ["BuildServer", "Build"]) {
+    const job = pipeline.split(`      - job: ${jobName}\n`)[1]?.split(/^    - stage:/m)[0];
+    assert.ok(job, `Missing ${jobName} release job`);
+    const setup = job.indexOf("- template: templates/nuget-feed.yml");
+    const restore = job.indexOf("dotnet restore ");
+    assert.ok(setup >= 0 && setup < restore, `${jobName} must configure NuGet before restoring`);
+  }
+  const template = readFileSync(path.join(root, ".pipelines", "templates", "nuget-feed.yml"), "utf8");
+  assert.ok(template.indexOf("Copy-Item") < template.indexOf("- task: NuGetAuthenticate@1"));
+  assert.match(template, /errorActionPreference: stop/);
+});
+
+test("release NuGet setup replaces repository and user sources with the approved feed", () => {
+  const temp = mkdtempSync(path.join(tmpdir(), "winui-nuget-"));
+  try {
+    const checkout = path.join(temp, "checkout");
+    const appData = path.join(temp, "appdata");
+    mkdirSync(path.join(checkout, ".pipelines"), { recursive: true });
+    mkdirSync(path.join(appData, "NuGet"), { recursive: true });
+    const config = readFileSync(path.join(root, ".pipelines", "release-nuget.config"), "utf8");
+    writeFileSync(path.join(checkout, ".pipelines", "release-nuget.config"), config);
+    const oldConfig = '<configuration><packageSources><add key="old" value="https://obsolete.invalid/v3/index.json" /></packageSources></configuration>';
+    writeFileSync(path.join(checkout, "nuget.config"), oldConfig);
+    writeFileSync(path.join(appData, "NuGet", "NuGet.Config"), oldConfig);
+    const template = readFileSync(path.join(root, ".pipelines", "templates", "nuget-feed.yml"), "utf8");
+    const inline = template.match(/      script: \|\r?\n((?:        .*\r?\n)+)/)?.[1];
+    assert.ok(inline, "Missing NuGet setup script");
+    const script = inline.replace(/^        /gm, "").replaceAll("$(Build.SourcesDirectory)", "$env:RELEASE_TEST_CHECKOUT");
+    const result = spawnSync("pwsh", ["-NoProfile", "-Command", `
+      $ErrorActionPreference = 'Stop'
+      ${script}
+      [xml]$config = Get-Content -LiteralPath (Join-Path $env:RELEASE_TEST_CHECKOUT 'nuget.config') -Raw
+      $sources = $config.configuration.packageSources
+      if ($sources.ChildNodes[0].Name -ne 'clear') { throw 'Inherited sources were not cleared' }
+      if (@($sources.add).Count -ne 1) { throw 'Expected exactly one package source' }
+      if ($sources.add.key -ne 'pde-oss_Internal') { throw 'Unexpected feed name' }
+      if ($sources.add.value -ne 'https://pkgs.dev.azure.com/microsoft/pde-oss/_packaging/pde-oss_Internal/nuget/v3/index.json') { throw 'Unexpected feed URL' }
+      if ($null -eq $config.configuration.disabledPackageSources.clear) { throw 'Inherited disabled sources were not cleared' }
+    `], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, APPDATA: appData, RELEASE_TEST_CHECKOUT: checkout },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(readFileSync(path.join(checkout, "nuget.config"), "utf8"), config);
+    assert.equal(readFileSync(path.join(appData, "NuGet", "NuGet.Config"), "utf8"), config);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
 
 test("ensure-server-bundle rejects an unknown mode", () => {
   const output = mkdtempSync(path.join(tmpdir(), "winui-ensure-"));
