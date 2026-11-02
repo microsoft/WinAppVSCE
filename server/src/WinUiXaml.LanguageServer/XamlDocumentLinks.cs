@@ -112,6 +112,10 @@ internal static class XamlDocumentLinks
 
             // AbsolutePath drops the package/host segment for both ms-appx:/// and ms-appx://pkg/ forms.
             string appRel = Uri.UnescapeDataString(uri.AbsolutePath).TrimStart('/');
+            if (System.IO.Path.IsPathRooted(appRel) || appRel.Contains(':'))
+            {
+                return null;
+            }
             return Combine(projectDirectory, appRel, exists);
         }
 

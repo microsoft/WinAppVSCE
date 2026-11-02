@@ -15,13 +15,18 @@ internal sealed partial class XamlLanguageServer
             return new CompletionList();
         }
 
+        int offset = doc.OffsetAt(p.Position);
+        if (CompletionProvider.ProvideSyntaxOnly(doc, offset) is { } syntaxCompletions)
+        {
+            return syntaxCompletions;
+        }
+
         if (!TryGetAcceptedContext(doc, out var context, allowStale: true))
         {
             WarmUp(doc.Uri);
-            return new CompletionList { IsIncomplete = true };
+            return new CompletionList { IsIncomplete = !_syntaxOnlyDocuments.ContainsKey(doc.Uri) };
         }
 
-        int offset = doc.OffsetAt(p.Position);
         var appKeys = GetAppResourceKeys(
             context,
             LspUri.ToPath(doc.Uri));
@@ -265,6 +270,12 @@ internal sealed partial class XamlLanguageServer
         out XamlProjectContext context,
         bool allowStale = false)
     {
+        if (_syntaxOnlyDocuments.ContainsKey(uri))
+        {
+            context = null!;
+            return false;
+        }
+
         if (TryGetReadyContext(uri, out context!))
         {
             return true;
@@ -337,7 +348,8 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        if (XamlProjectResolver.FindOwningProject(canonicalPath, allowedRoot) is { } projectPath &&
+        var projectPath = XamlProjectResolver.FindOwningProject(canonicalPath, allowedRoot);
+        if (projectPath is not null &&
             System.IO.Path.GetExtension(projectPath).Equals(
                 ".vcxproj",
                 StringComparison.OrdinalIgnoreCase))
@@ -347,6 +359,26 @@ internal sealed partial class XamlLanguageServer
                 "C++/WinRT projects use syntax-only XAML editing; project types are not loaded.")
                 .ConfigureAwait(false);
             return null;
+        }
+
+        if (projectPath is not null)
+        {
+            try
+            {
+                if (!await _resolver.IsSupportedProjectAsync(projectPath, cancellationToken).ConfigureAwait(false))
+                {
+                    _syntaxOnlyDocuments[uri] = 0;
+                    await NotifyProjectContextStatusAsync(uri, "winui-required", WinUiProjectEligibility.RequiredMessage)
+                        .ConfigureAwait(false);
+                    return null;
+                }
+            }
+            catch (MsBuildUnavailableException ex) when (ex.HostMissing)
+            {
+                await NotifyMsBuildUnavailableAsync(ex).ConfigureAwait(false);
+                await NotifyProjectContextStatusAsync(uri, "dotnet-sdk-required", ex.Message).ConfigureAwait(false);
+                return null;
+            }
         }
 
         var xamlText = _documents.TryGetValue(uri, out var document) ? document.Text : null;
@@ -995,6 +1027,11 @@ internal sealed partial class XamlLanguageServer
 
     private void WarmUp(string uri)
     {
+        if (_syntaxOnlyDocuments.ContainsKey(uri))
+        {
+            return;
+        }
+
         var path = UriToPath(uri);
         if (path == null)
         {
@@ -1014,7 +1051,7 @@ internal sealed partial class XamlLanguageServer
         {
             await NotifyProjectContextStatusAsync(uri, "loading").ConfigureAwait(false);
             await Task.Delay(500).ConfigureAwait(false);
-            if (!_documents.ContainsKey(uri))
+            if (!_documents.ContainsKey(uri) || _syntaxOnlyDocuments.ContainsKey(uri))
             {
                 return;
             }

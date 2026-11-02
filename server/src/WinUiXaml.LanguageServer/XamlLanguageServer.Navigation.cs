@@ -207,6 +207,18 @@ internal sealed partial class XamlLanguageServer
                 key)
             : null;
 
+    internal static XamlElement? FindRenameResourceDeclaration(TextDocument doc, int offset, XamlTypeSystem? typeSystem)
+    {
+        if (FindResourceDeclarationAt(doc, offset) is { } declaration)
+        {
+            return declaration;
+        }
+        return doc.Parsed.Root is { } root && FindResourceKeyReferenceAt(doc, offset) is { } reference
+            ? FindResourceDeclarationForReference(doc, reference.Span.Start, reference.Key,
+                XamlSemanticFacts.CreateResourceIndex(root, typeSystem))
+            : null;
+    }
+
     /// <summary>The trimmed value of a non-markup attribute whose name matches nameMatches and whose value literal contains the caret — used to start a reference search from the declaration.</summary>
     private static string? DeclarationValueAt(
         TextDocument doc,
@@ -304,10 +316,12 @@ internal sealed partial class XamlLanguageServer
                     // An {x:Bind} path rooted at an x:Name'd element binds through the generated field, so the leading segment is a reference to that name.
                     if (XamlSemanticFacts.IsXBind(e, element.NamespaceScope))
                     {
-                        if (BindPathRootSpan(e) is { } rootSpan &&
-                            string.Equals(doc.Text.Substring(rootSpan.Start, rootSpan.End - rootSpan.Start), name, StringComparison.Ordinal))
+                        foreach (var rootSpan in BindPathRootSpans(e))
                         {
-                            results.Add((doc.RangeOf(rootSpan), false));
+                            if (string.Equals(doc.Text.Substring(rootSpan.Start, rootSpan.End - rootSpan.Start), name, StringComparison.Ordinal))
+                            {
+                                results.Add((doc.RangeOf(rootSpan), false));
+                            }
                         }
 
                         return;
@@ -423,17 +437,52 @@ internal sealed partial class XamlLanguageServer
         }
     }
 
-    /// <summary>The document span of the leading identifier of an {x:Bind} path, or null when the path is absent, a cast/attached step, a global:: alias, or a function call — none of which root at an x:Name.</summary>
-    private static TextSpan? BindPathRootSpan(XamlMarkupExtension extension)
+    private static IEnumerable<TextSpan> BindPathRootSpans(XamlMarkupExtension extension)
     {
         var pathArg = extension.Arguments.FirstOrDefault(
             a => (!a.IsNamed && a.NestedExtension is null && a.Value is not null) ||
                  (a.IsNamed && a.Name?.LocalName == "Path" && a.Value is not null));
         if (pathArg?.Value is not { } path || pathArg.ValueSpan is not { } valueSpan)
         {
-            return null;
+            return Array.Empty<TextSpan>();
         }
 
+        var spans = new List<TextSpan>();
+        CollectBindRoots(path, valueSpan.Start, spans);
+        return spans;
+    }
+
+    private static bool CollectBindRoots(string path, int documentStart, List<TextSpan> spans, int depth = 0)
+    {
+        if (depth > 64)
+        {
+            return false;
+        }
+        if (XamlValidator.TryParseBindFunctionCall(path, out var call))
+        {
+            bool complete = true;
+            if (call.FunctionPath.Contains('.'))
+            {
+                complete = CollectBindRoots(call.FunctionPath, documentStart + call.Start, spans, depth + 1);
+            }
+            foreach (var (argumentStart, argumentEnd) in call.ArgumentRanges)
+            {
+                complete &= CollectBindRoots(path.Substring(argumentStart, argumentEnd - argumentStart),
+                    documentStart + argumentStart, spans, depth + 1);
+            }
+            return complete;
+        }
+
+        var expression = Microsoft.CodeAnalysis.CSharp.SyntaxFactory.ParseExpression(path.TrimStart('!', ' '));
+        if (!expression.ContainsDiagnostics &&
+            expression is Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax)
+        {
+            return true;
+        }
+        if (System.Text.RegularExpressions.Regex.IsMatch(path, @"^\s*'(?:\\.|[^'\\])*'\s*$"))
+        {
+            return true;
+        }
         int i = 0;
         while (i < path.Length && (char.IsWhiteSpace(path[i]) || path[i] == '!'))
         {
@@ -442,7 +491,7 @@ internal sealed partial class XamlLanguageServer
 
         if (i >= path.Length || !(char.IsLetter(path[i]) || path[i] == '_'))
         {
-            return null;
+            return false;
         }
 
         int start = i;
@@ -451,13 +500,36 @@ internal sealed partial class XamlLanguageServer
             i++;
         }
 
-        // '(' is a function call and ':' a global::/xmlns alias; neither names an element.
-        if (i < path.Length && (path[i] == '(' || path[i] == ':'))
+        if (i < path.Length && path[i] == ':')
         {
-            return null;
+            return !path.Contains('(');
         }
 
-        return new TextSpan(valueSpan.Start + start, valueSpan.Start + i);
+        spans.Add(new TextSpan(documentStart + start, documentStart + i));
+        return System.Text.RegularExpressions.Regex.IsMatch(path.Substring(i), @"^\s*(\.\s*[A-Za-z_][A-Za-z0-9_]*\s*)*$");
+    }
+
+    internal static void EnsureCompleteBindRename(TextDocument doc, int offset, string name, XamlTypeSystem typeSystem)
+    {
+        foreach (var element in XamlSemanticFacts.EnumerateElementsInNameScope(doc, doc.Parsed.FindNode(offset), typeSystem))
+        {
+            foreach (var extension in element.Attributes.SelectMany(attribute =>
+                         attribute.DescendantNodesAndSelf().OfType<XamlMarkupExtension>()))
+            {
+                if (!XamlSemanticFacts.IsXBind(extension, element.NamespaceScope))
+                {
+                    continue;
+                }
+                var path = extension.Arguments.FirstOrDefault(a => !a.IsNamed || a.Name?.LocalName == "Path");
+                if (path?.Value is { } value &&
+                    System.Text.RegularExpressions.Regex.IsMatch(value, $@"(?<![\w]){System.Text.RegularExpressions.Regex.Escape(name)}(?![\w])") &&
+                    (!extension.IsClosed || !CollectBindRoots(value, 0, new List<TextSpan>())))
+                {
+                    throw new RequestFailedException(
+                        $"Rename cannot safely update '{name}' in an incomplete or unsupported x:Bind expression.");
+                }
+            }
+        }
     }
 
     /// <summary>Invokes action on extension and each nested extension, but prunes any unterminated (malformed / still-being-typed) extension subtree</summary>
@@ -720,6 +792,23 @@ internal sealed partial class XamlLanguageServer
 
         // 1) A Binding ElementName argument.
         var extension = InnermostMarkupExtensionAt(root, offset);
+        if (extension is not null && typeSystem is not null &&
+            NearestEnclosingElement(doc, offset) is { } bindElement &&
+            XamlSemanticFacts.IsXBind(extension, bindElement.NamespaceScope))
+        {
+            foreach (var span in BindPathRootSpans(extension))
+            {
+                if (span.ContainsInclusive(offset))
+                {
+                    var name = doc.Text.Substring(span.Start, span.End - span.Start);
+                    if (XamlSemanticFacts.EnumerateElementsInNameScope(doc, bindElement, typeSystem)
+                        .Any(element => XamlSemanticFacts.GetNameAttribute(element, typeSystem)?.Value?.Text.Trim() == name))
+                    {
+                        return (name, span);
+                    }
+                }
+            }
+        }
         if (extension is not null &&
             typeSystem is not null &&
             NearestEnclosingElement(doc, offset) is { } extensionElement &&

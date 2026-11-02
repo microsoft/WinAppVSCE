@@ -42,5 +42,6 @@ namespace WinUiXaml.Xaml
         public const string MissingTagClose = "XAML0007";
         public const string UnquotedAttributeValue = "XAML0008";
         public const string MissingAttributeValue = "XAML0009";
+        public const string MarkupExtensionTooDeep = "XAML0010";
     }
 }

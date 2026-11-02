@@ -18,6 +18,18 @@ public class XamlDocumentLinksTests
     private const string DocDir = @"C:\proj\Views";
     private const string ProjDir = @"C:\proj";
 
+    [Theory]
+    [InlineData("ms-appx:///%5C%5C127.0.0.1%5Cshare%5Cprobe.png")]
+    [InlineData("ms-appx:///C:%5Coutside%5Cprobe.png")]
+    [InlineData("ms-appx:///C:probe.png")]
+    [InlineData("ms-appx:///%5C%5C?%5CC:%5Cprobe.png")]
+    public void RootedPackagePathNeverReachesExistenceProbe(string uri)
+    {
+        int calls = 0;
+        Assert.Null(XamlDocumentLinks.ResolvePath(uri, DocDir, ProjDir, _ => { calls++; return true; }));
+        Assert.Equal(0, calls);
+    }
+
     private static Func<string, bool> ExistsSet(params string[] paths)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

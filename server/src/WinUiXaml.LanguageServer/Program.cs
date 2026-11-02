@@ -11,8 +11,9 @@ using var stdout = Console.OpenStandardOutput();
 
 var connection = new JsonRpcConnection(stdin, stdout);
 using var resolver = new XamlProjectResolver();
-_ = new XamlLanguageServer(connection, resolver);
+var server = new XamlLanguageServer(connection, resolver);
 
 Console.Error.WriteLine("[winui-xaml-ls] ready");
 await connection.RunAsync().ConfigureAwait(false);
 Console.Error.WriteLine("[winui-xaml-ls] input closed; exiting");
+return server.ExitCode;

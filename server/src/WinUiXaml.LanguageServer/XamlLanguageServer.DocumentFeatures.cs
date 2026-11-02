@@ -275,7 +275,8 @@ internal sealed partial class XamlLanguageServer
         string key,
         ResourceDeclarationTarget? target,
         Action<TextDocument, List<(Lsp.Range Range, bool IsDeclaration)>> visit,
-        bool includeDeclarations)
+        bool includeDeclarations,
+        bool requireUnambiguousOwnership = false)
     {
         if (context == null)
         {
@@ -373,6 +374,11 @@ internal sealed partial class XamlLanguageServer
             }
             else if (targetIsProjectFallback || target is null)
             {
+                if (requireUnambiguousOwnership)
+                {
+                    EnsureUnambiguousResourceReferences(fileDoc, key, context.TypeSystem);
+                }
+
                 // References with no declaration in their own lexical scope fall back to the
                 // first matching declaration in App.xaml's precedence-ordered resource graph.
                 // With no project declaration, unresolved references may still bind an SDK
@@ -541,6 +547,8 @@ internal sealed partial class XamlLanguageServer
         var typeSystem = context?.TypeSystem;
         EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
         EnsureNameRenameDoesNotLeaveCodeBehindReferences(doc, offset, context);
+        EnsureResourceRenameHasNoThemeAlternatives(doc, offset, context);
+        EnsureResourceRenameHasKnownOwnership(doc, offset, context);
         return XamlRename.PrepareRename(
             doc,
             offset,
@@ -561,6 +569,8 @@ internal sealed partial class XamlLanguageServer
         var typeSystem = context?.TypeSystem;
         EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
         EnsureNameRenameDoesNotLeaveCodeBehindReferences(doc, offset, context);
+        EnsureResourceRenameHasNoThemeAlternatives(doc, offset, context);
+        EnsureResourceRenameHasKnownOwnership(doc, offset, context);
 
         // A resource key is declared in one file and used across the project, so renaming only the open document would leave every other use dangling.
         if (DetectSymbolAt(doc, offset, typeSystem) is not { Kind: XamlRenameKind.Key, Name: { Length: > 0 } key })
@@ -662,6 +672,59 @@ internal sealed partial class XamlLanguageServer
         return (edits, hasDeclaration);
     }
 
+    private void EnsureResourceRenameHasKnownOwnership(TextDocument doc, int offset, XamlProjectContext? context)
+    {
+        if (DetectSymbolAt(doc, offset, context?.TypeSystem) is not { Kind: XamlRenameKind.Key } symbol ||
+            GetCrossFileResourcePolicy(context, doc.Uri, doc, offset) == CrossFileResourcePolicy.None)
+        {
+            return;
+        }
+
+        EnsureUnambiguousResourceReferences(doc, symbol.Name, context?.TypeSystem);
+        ForEachCrossFileResourceOccurrence(context, doc.Uri, symbol.Name,
+            ResolveResourceDeclarationTarget(context, doc.Uri, doc, offset, symbol.Name),
+            (_, _) => { }, includeDeclarations: false, requireUnambiguousOwnership: true);
+    }
+
+    internal static void EnsureUnambiguousResourceReferences(TextDocument doc, string key, XamlTypeSystem? typeSystem)
+    {
+        if (doc.Parsed.Root is not { } root)
+        {
+            return;
+        }
+        var index = XamlSemanticFacts.CreateResourceIndex(root, typeSystem);
+        var references = new List<(Lsp.Range Range, bool IsDeclaration)>();
+        CollectResourceOccurrences(root, key, doc, references, onlyUnresolvedReferences: true,
+            resourceIndex: index, includeDeclarations: false);
+        foreach (var reference in references)
+        {
+            if (NearestEnclosingElement(doc, doc.OffsetAt(reference.Range.Start)) is { } element &&
+                index.GetVisibleSourceDictionaries(element).Count > 0)
+            {
+                throw new RequestFailedException(
+                    $"Rename cannot safely determine which external resource dictionary supplies '{key}' in '{doc.Uri}'. No changes were made.");
+            }
+        }
+    }
+
+    private void EnsureResourceRenameHasNoThemeAlternatives(TextDocument doc, int offset, XamlProjectContext? context)
+    {
+        if (context is null ||
+            DetectSymbolAt(doc, offset, context.TypeSystem) is not { Kind: XamlRenameKind.Key } symbol ||
+            GetCrossFileResourcePolicy(context, doc.Uri, doc, offset) == CrossFileResourcePolicy.None ||
+            FindAppXamlPath(context.Resolution) is not { } appPath)
+        {
+            return;
+        }
+        foreach (var file in ReadResourceGraph(appPath, Path.GetDirectoryName(context.Resolution.ProjectPath)!, context.TypeSystem))
+        {
+            if (file.Parsed.Root is { } root)
+            {
+                XamlRename.EnsureNoThemeAlternatives(root, symbol.Name);
+            }
+        }
+    }
+
     private static void EnsureCompleteNameRenameSemantics(
         TextDocument doc,
         Position position,
@@ -682,9 +745,23 @@ internal sealed partial class XamlLanguageServer
         int offset,
         XamlProjectContext? context)
     {
-        if (context?.Resolution.ClassSymbol is not { } classSymbol ||
-            DetectSymbolAt(doc, offset, context.TypeSystem) is not
+        if (DetectSymbolAt(doc, offset, context?.TypeSystem) is not
                 { Kind: XamlRenameKind.Name, Name: { Length: > 0 } name })
+        {
+            return;
+        }
+
+        if (context is not { Stage: XamlProjectStage.Full } ||
+            !context.Resolution.UnresolvedProjectReferences.IsDefaultOrEmpty ||
+            context.Resolution.GeneratorFailure is not null ||
+            (!string.IsNullOrEmpty(context.Resolution.ClassName) && context.Resolution.ClassSymbol is null))
+        {
+            throw new RequestFailedException(
+                "Rename requires a fully resolved project so code-behind references can be checked. " +
+                "Wait for project loading to finish and resolve any project errors before retrying.");
+        }
+
+        if (context.Resolution.ClassSymbol is not { } classSymbol)
         {
             return;
         }
@@ -977,7 +1054,6 @@ internal sealed partial class XamlLanguageServer
             return null;
         }
 
-        // Signature from the event delegate's Invoke method (RoutedEventHandler → object sender, RoutedEventArgs e). Minimally-qualified argument types rely on the code-behind's WinUI usings — the Use the standard WinUI page handler form.
         if (evt.Type is not INamedTypeSymbol { DelegateInvokeMethod: { } invoke })
         {
             return null;
@@ -1004,16 +1080,30 @@ internal sealed partial class XamlLanguageServer
         };
     }
 
-    /// <summary>Renders a delegate's parameters as a C# parameter list, minimally qualified.</summary>
-    private static string BuildParameterList(IMethodSymbol invoke)
+    internal static string BuildParameterList(IMethodSymbol invoke)
     {
         var parts = new List<string>(invoke.Parameters.Length);
         for (int i = 0; i < invoke.Parameters.Length; i++)
         {
             var parameter = invoke.Parameters[i];
-            var typeName = parameter.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+            var typeName = parameter.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat
+                .WithMiscellaneousOptions(SymbolDisplayFormat.FullyQualifiedFormat.MiscellaneousOptions |
+                    SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier));
             var name = string.IsNullOrEmpty(parameter.Name) ? $"arg{i + 1}" : parameter.Name;
-            parts.Add($"{typeName} {name}");
+            if (Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(name) !=
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.None)
+            {
+                name = "@" + name;
+            }
+            var modifier = parameter.RefKind switch
+            {
+                RefKind.Ref => "ref ",
+                RefKind.Out => "out ",
+                RefKind.In => "in ",
+                RefKind.RefReadOnlyParameter => "ref readonly ",
+                _ => "",
+            };
+            parts.Add($"{modifier}{typeName} {name}");
         }
 
         return string.Join(", ", parts);

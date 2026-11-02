@@ -13,6 +13,7 @@ export const PROJECT_CONTEXT_STATES = [
   "generators-unavailable",
   "dotnet-sdk-required",
   "syntax-only",
+  "winui-required",
   "idle",
 ] as const;
 
@@ -43,6 +44,8 @@ export const PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE =
   "XAML formatting, folding, outline, and closing-tag completion work without it.";
 export const PROJECT_CONTEXT_RESTORING_MESSAGE =
   "Restoring the project's packages. Project-aware IntelliSense resumes when it completes.";
+export const PROJECT_CONTEXT_WINUI_REQUIRED_MESSAGE =
+  "Not supported for this project. Only WinUI 3 projects are supported at this time.";
 export const SHOW_XAML_OUTPUT_HINT =
   "Click to show the WinUI XAML output.";
 
@@ -84,6 +87,7 @@ const DURABLE_STATES: readonly ProjectContextState[] = [
   "generators-unavailable",
   "dotnet-sdk-required",
   "syntax-only",
+  "winui-required",
 ];
 
 /** Decides whether incoming status replaces current; suppresses transient reload `loading` over durable states while still accepting real recovery states immediately. */
@@ -118,6 +122,7 @@ const PROJECT_CONTEXT_PRIORITY: Record<
   "framework-ready": 6,
   ready: 7,
   "syntax-only": 8,
+  "winui-required": 8,
 };
 
 export function selectProjectContextStatus(
@@ -151,6 +156,15 @@ export function getProjectContextStatusPresentation(
   context: ProjectContextStatusContext = {}
 ): ProjectContextStatusPresentation | undefined {
   switch (status.state) {
+    case "winui-required":
+      return {
+        text: "$(info) WinApp: WinUI 3 Required for XAML IntelliSense",
+        tooltip:
+          `${status.message ?? PROJECT_CONTEXT_WINUI_REQUIRED_MESSAGE} ` +
+          "Formatting, folding, outline, closing-tag completion, document links, and syntax diagnostics remain available.",
+        transient: false,
+        command: XAML_COMMANDS.showInfo,
+      };
     // Only a project the server tried to load reaches this state, so the prompt lands on C#
     // projects and never on a C++ project that needs no .NET.
     case "dotnet-sdk-required":

@@ -52,7 +52,7 @@ internal sealed partial class XamlLanguageServer
         {
             // Concurrent didChange handlers can finish sending their syntactic publication out of
             // order. A superseded handler must not cancel the current version's semantic worker.
-            if (!IsCurrentDiagnostics(doc, diagnosticsGeneration))
+            if (_shuttingDown || !IsCurrentDiagnostics(doc, diagnosticsGeneration))
             {
                 return;
             }

@@ -50,7 +50,9 @@ namespace WinUiXaml.Workspace
                 ImmutableArray<string> projectReferences,
                 string? assemblyName,
                 string? targetFrameworks = null,
-                string? customAfterCSharpTargets = null)
+                string? customAfterCSharpTargets = null,
+                ImmutableArray<ResolvedProjectReference> resolvedProjectReferences = default,
+                bool isWinUiProject = false)
             {
                 XamlFiles = xamlFiles;
                 ApplicationDefinition = applicationDefinition;
@@ -60,6 +62,8 @@ namespace WinUiXaml.Workspace
                 AssemblyName = assemblyName;
                 TargetFrameworks = targetFrameworks;
                 CustomAfterCSharpTargets = customAfterCSharpTargets;
+                ResolvedProjectReferences = resolvedProjectReferences;
+                IsWinUiProject = isWinUiProject;
             }
 
             public ImmutableArray<string> XamlFiles { get; }
@@ -67,6 +71,8 @@ namespace WinUiXaml.Workspace
             public string? ProjectAssetsFile { get; }
             public bool HasPackageReferences { get; }
             public ImmutableArray<string> ProjectReferences { get; }
+            public ImmutableArray<ResolvedProjectReference> ResolvedProjectReferences { get; }
+            public bool IsWinUiProject { get; }
             public string? AssemblyName { get; }
 
             /// <summary>The project's semicolon-separated <c>TargetFrameworks</c>, or null for a single framework; non-null means an outer build with no <c>Compile</c> target.</summary>
@@ -75,6 +81,12 @@ namespace WinUiXaml.Workspace
             /// <summary>The project's <c>CustomAfterMicrosoftCSharpTargets</c>, read during evaluation so the design-time build can claim the hook and re-import the user's targets.</summary>
             public string? CustomAfterCSharpTargets { get; }
         }
+
+        internal sealed record ResolvedProjectReference(
+            string Path,
+            ImmutableDictionary<string, string> Properties,
+            ImmutableArray<string> OutputPaths,
+            ImmutableArray<string> Aliases);
 
         /// <summary>The MSBuild host as an absolute path, or null when no dotnet host can be found.</summary>
         /// <remarks>Never a bare name: the child runs with the project directory as its working directory, and
@@ -362,7 +374,7 @@ namespace WinUiXaml.Workspace
 
             using var document = ParseJson(output, projectPath);
             return (
-                ReadEvaluation(document.RootElement, fullPath),
+                ReadEvaluation(document.RootElement, fullPath, globalProperties),
                 ReadItemIdentities(document.RootElement, "CscCommandLineArgs"),
                 ImmutableArray<string>.Empty);
         }
@@ -385,7 +397,7 @@ namespace WinUiXaml.Workspace
 
             var output = Run(arguments, Path.GetDirectoryName(fullPath), EvaluateTimeout, cancellationToken);
             using var document = ParseJson(output, projectPath);
-            return ReadEvaluation(document.RootElement, fullPath);
+            return ReadEvaluation(document.RootElement, fullPath, globalProperties);
         }
 
         /// <summary>Resolves SDK/package references after full design-time compile fails on an unbuilt <c>ProjectReference</c>; it shapes csc-style args for <see cref="CscCommandLine"/> but cannot recover markup-generated members, so callers still report that a build is required.</summary>
@@ -405,7 +417,6 @@ namespace WinUiXaml.Workspace
                 "-p:DesignTimeBuild=true",
                 "-p:DesignTimeSilentResolution=true",
                 "-p:BuildingInsideVisualStudio=true",
-                "-getItem:ReferencePath",
                 "-getItem:Compile",
             };
             AppendEvaluationRequests(arguments);
@@ -415,7 +426,7 @@ namespace WinUiXaml.Workspace
                 arguments, Path.GetDirectoryName(fullPath), DesignTimeBuildTimeout, cancellationToken, fullPath);
             using var document = ParseJson(output, projectPath);
             var root = document.RootElement;
-            var evaluation = ReadEvaluation(root, fullPath);
+            var evaluation = ReadEvaluation(root, fullPath, globalProperties);
 
             var projectDirectory = Path.GetDirectoryName(fullPath)!;
             var synthesized = ImmutableArray.CreateBuilder<string>();
@@ -521,13 +532,19 @@ namespace WinUiXaml.Workspace
             arguments.Add("-getItem:ApplicationDefinition");
             arguments.Add("-getItem:PackageReference");
             arguments.Add("-getItem:ProjectReference");
+            arguments.Add("-getItem:_MSBuildProjectReferenceExistent");
+            arguments.Add("-getItem:ReferencePath");
+            arguments.Add("-getProperty:_GlobalPropertiesToRemoveFromProjectReferences");
             arguments.Add("-getProperty:ProjectAssetsFile");
             arguments.Add("-getProperty:AssemblyName");
             arguments.Add("-getProperty:TargetFrameworks");
             arguments.Add("-getProperty:CustomAfterMicrosoftCSharpTargets");
+            arguments.Add("-getProperty:UseWinUI");
+            arguments.Add("-getProperty:TargetPlatformIdentifier");
         }
 
-        private static Evaluation ReadEvaluation(JsonElement root, string fullProjectPath)
+        private static Evaluation ReadEvaluation(
+            JsonElement root, string fullProjectPath, IReadOnlyDictionary<string, string> globalProperties)
         {
             var projectDirectory = Path.GetDirectoryName(fullProjectPath)!;
             var applicationDefinitions = ReadItemPaths(root, "ApplicationDefinition", projectDirectory)
@@ -556,9 +573,85 @@ namespace WinUiXaml.Workspace
                     .ToImmutableArray(),
                 ReadProperty(root, "AssemblyName"),
                 ReadProperty(root, "TargetFrameworks"),
-                ReadProperty(root, "CustomAfterMicrosoftCSharpTargets"));
+                ReadProperty(root, "CustomAfterMicrosoftCSharpTargets"),
+                ReadResolvedProjectReferences(root, projectDirectory, globalProperties),
+                IsWinUiEvaluation(root));
         }
 
+        internal static bool IsWinUiEvaluation(JsonElement root) =>
+            string.Equals(ReadProperty(root, "UseWinUI"), "true", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(ReadProperty(root, "TargetPlatformIdentifier"), "Windows", StringComparison.OrdinalIgnoreCase) &&
+            (((IEnumerable<JsonElement>?)ItemArray(root, "PackageReference")) ?? Enumerable.Empty<JsonElement>())
+                .Any(item => item.TryGetProperty("Identity", out var identity) &&
+                    (string.Equals(identity.GetString(), "Microsoft.WindowsAppSDK", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(identity.GetString(), "Microsoft.WindowsAppSDK.WinUI", StringComparison.OrdinalIgnoreCase)) &&
+                    (!item.TryGetProperty("IsImplicitlyDefined", out var implicitItem) ||
+                     !string.Equals(implicitItem.GetString(), "true", StringComparison.OrdinalIgnoreCase)));
+
+        internal static ImmutableArray<ResolvedProjectReference> ReadResolvedProjectReferences(
+            JsonElement root, string projectDirectory, IReadOnlyDictionary<string, string> globalProperties)
+        {
+            var result = ImmutableArray.CreateBuilder<ResolvedProjectReference>();
+            foreach (var item in (IEnumerable<JsonElement>?)ItemArray(root, "_MSBuildProjectReferenceExistent") ?? Enumerable.Empty<JsonElement>())
+            {
+                string? Metadata(string name) =>
+                    item.TryGetProperty(name, out var value) ? value.GetString() : null;
+                if (string.Equals(Metadata("ReferenceOutputAssembly"), "false", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(Metadata("BuildReference"), "false", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                var identity = Metadata("FullPath") ?? Metadata("Identity");
+                if (string.IsNullOrEmpty(identity))
+                {
+                    continue;
+                }
+                var path = Path.GetFullPath(identity, projectDirectory);
+                var properties = globalProperties.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase).ToBuilder();
+                bool supported = true;
+                var propertyMetadata = string.IsNullOrEmpty(Metadata("Properties"))
+                    ? new[] { "SetConfiguration", "SetPlatform", "SetTargetFramework", "AdditionalProperties" }
+                    : new[] { "Properties", "AdditionalProperties" };
+                foreach (var metadata in propertyMetadata)
+                {
+                    foreach (var assignment in (Metadata(metadata) ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var equals = assignment.IndexOf('=');
+                        if (equals <= 0)
+                        {
+                            supported = false;
+                            continue;
+                        }
+                        properties[assignment.Substring(0, equals).Trim()] = Uri.UnescapeDataString(assignment.Substring(equals + 1));
+                    }
+                }
+                var removed = string.Join(";", Metadata("GlobalPropertiesToRemove"), Metadata("UndefineProperties"),
+                    ReadProperty(root, "_GlobalPropertiesToRemoveFromProjectReferences"));
+                foreach (var name in removed.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    properties.Remove(name);
+                }
+                if (!supported ||
+                    (!properties.ContainsKey("TargetFramework") &&
+                     !string.Equals(Metadata("HasSingleTargetFramework"), "true", StringComparison.OrdinalIgnoreCase)))
+                {
+                    Console.Error.WriteLine($"[winui-xaml-ls] keeping metadata for '{path}': reference configuration was not resolved.");
+                    continue;
+                }
+                var outputs = ((IEnumerable<JsonElement>?)ItemArray(root, "ReferencePath") ?? Enumerable.Empty<JsonElement>())
+                    .Where(output => output.TryGetProperty("MSBuildSourceProjectFile", out var source) &&
+                        string.Equals(Path.GetFullPath(source.GetString()!, projectDirectory), path, StringComparison.OrdinalIgnoreCase))
+                    .Select(output => Path.GetFullPath(output.GetProperty("Identity").GetString()!, projectDirectory))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray();
+                result.Add(new ResolvedProjectReference(path, properties.ToImmutable(), outputs,
+                    (Metadata("Aliases") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToImmutableArray()));
+            }
+            return result.ToImmutable();
+        }
+
+        internal static string ConfigurationKey(string path, IReadOnlyDictionary<string, string> properties) =>
+            Path.GetFullPath(path).ToUpperInvariant() + string.Concat(properties.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(p => $"|{p.Key.Length}:{p.Key.ToUpperInvariant()}={p.Value.Length}:{p.Value}"));
 
         private static void AppendProperties(
             List<string> arguments,

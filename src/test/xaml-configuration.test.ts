@@ -33,6 +33,16 @@ test("pins the status message prefixes", () => {
   );
 });
 
+test("unconfirmed projects report the WinUI boundary rather than a running server", () => {
+  const message = "Not supported for this project. Only WinUI 3 projects are supported at this time.";
+  for (const suppliedMessage of [message, undefined]) {
+    assert.deepEqual(getXamlStatus(true, true, true, true, { state: "winui-required", message: suppliedMessage }), {
+      message: `WinApp XAML IntelliSense: ${message}`,
+      actions: ["Show Output"],
+    });
+  }
+});
+
 test("reports disabled, running, and degraded XAML status actions", () => {
   assert.deepEqual(getXamlStatus(false, false, true, false), {
     message:

@@ -40,6 +40,7 @@ internal sealed partial class XamlLanguageServer
     private readonly ProjectPromptLatch _restoreRequiredProjects = new();
     private readonly ProjectPromptLatch _buildRequiredProjects = new();
     private bool _shuttingDown;
+    internal int ExitCode { get; private set; } = 1;
 
     // MSBuild evaluation is restricted to trusted roots because project files can execute code. An empty list disables project evaluation.
     private string[] _allowedRoots = System.Array.Empty<string>();
@@ -52,6 +53,7 @@ internal sealed partial class XamlLanguageServer
         _resolver = resolver;
         _connection.OnRequest = HandleRequestAsync;
         _connection.OnNotification = HandleNotificationAsync;
+        _connection.OnClosed = StopAsync;
     }
 
     private async Task<object?> HandleRequestAsync(
@@ -59,6 +61,10 @@ internal sealed partial class XamlLanguageServer
         JsonElement? @params,
         CancellationToken cancellationToken)
     {
+        if (_shuttingDown && method != "shutdown")
+        {
+            throw new RequestFailedException("The language server is shutting down.");
+        }
         var previous = _requestCancellation.Value;
         _requestCancellation.Value = cancellationToken;
         try
@@ -100,6 +106,10 @@ internal sealed partial class XamlLanguageServer
 
     private async Task HandleNotificationAsync(string method, JsonElement? @params)
     {
+        if (_shuttingDown && method != "exit")
+        {
+            return;
+        }
         switch (method)
         {
             case "initialized":
@@ -120,7 +130,8 @@ internal sealed partial class XamlLanguageServer
                 await DidChangeConfigurationAsync(Deserialize<DidChangeConfigurationParams>(@params)).ConfigureAwait(false);
                 break;
             case "exit":
-                Environment.Exit(_shuttingDown ? 0 : 1);
+                ExitCode = _shuttingDown ? 0 : 1;
+                _connection.Stop();
                 break;
         }
     }
@@ -264,10 +275,12 @@ internal sealed partial class XamlLanguageServer
             if (full.Length > 0)
             {
                 normalized.Add(full);
+                normalized.Add(System.IO.Path.TrimEndingDirectorySeparator(
+                    System.IO.Path.GetFullPath(root)));
             }
         }
 
-        return normalized.ToArray();
+        return normalized.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     /// <summary>True when path lies under one of the trusted _allowedRoots.</summary>
@@ -275,7 +288,9 @@ internal sealed partial class XamlLanguageServer
         TryGetAllowedRoot(path, _allowedRoots, out canonicalPath, out allowedRoot);
 
     /// <summary>True when path lies under one of roots. The canonical spelling is the one every caller must key on, since a reparse point makes the lexical path a different file.</summary>
-    internal static bool TryGetAllowedRoot(string path, string[] roots, out string canonicalPath, out string allowedRoot)
+    internal static bool TryGetAllowedRoot(
+        string path, string[] roots, out string canonicalPath, out string allowedRoot,
+        Func<string, string>? canonicalize = null)
     {
         canonicalPath = string.Empty;
         allowedRoot = string.Empty;
@@ -286,7 +301,13 @@ internal sealed partial class XamlLanguageServer
 
         try
         {
-            canonicalPath = CanonicalizePath(path);
+            var lexicalPath = System.IO.Path.GetFullPath(path);
+            if (!roots.Any(root => PathIsWithin(lexicalPath, root)))
+            {
+                return false;
+            }
+
+            canonicalPath = (canonicalize ?? CanonicalizePath)(lexicalPath);
         }
         catch (System.Exception)
         {
@@ -447,10 +468,21 @@ internal sealed partial class XamlLanguageServer
             xamlText);
     }
 
-    private Task<object?> Shutdown()
+    private async Task<object?> Shutdown()
     {
         _shuttingDown = true;
-        return Task.FromResult<object?>(null);
+        await StopAsync().ConfigureAwait(false);
+        return null;
+    }
+
+    private async Task StopAsync()
+    {
+        _shuttingDown = true;
+        foreach (var uri in _semanticDiagnosticCancellations.Keys)
+        {
+            CancelSemanticDiagnostics(uri);
+        }
+        await _resolver.StopAsync().ConfigureAwait(false);
     }
 
     // --- Document sync ------------------------------------------------------
@@ -542,6 +574,7 @@ internal sealed partial class XamlLanguageServer
 
         var projectsToInvalidate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var invalidateAllProjects = false;
+        var eligibilityChanged = false;
         var refreshResourceConsumers = false;
         foreach (var change in p.Changes)
         {
@@ -562,17 +595,20 @@ internal sealed partial class XamlLanguageServer
             var isNuGetAssets = IsNuGetAssetsPath(path);
             var isProjectDirectoryInput =
                 isCs || isCsproj || isVcxproj || isXaml || isImportedBuildFile;
+            var isAllowed = TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot);
+            var isInRootXamlContentChange = isAllowed && isXaml && change.Type == FileChangeType.Changed;
             var trackedProjects = _projectInputs.GetProjectsToInvalidate(
                 path,
-                includeProjectDirectories: isProjectDirectoryInput);
+                includeProjectDirectories: isProjectDirectoryInput && !isInRootXamlContentChange);
             var isTrackedInput = trackedProjects.Count > 0;
             if (!isProjectDirectoryInput && !isNuGetAssets && !isTrackedInput)
             {
                 continue;
             }
 
-            if (!TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot))
+            if (!isAllowed)
             {
+                eligibilityChanged |= isTrackedInput && (isCsproj || isVcxproj || isImportedBuildFile || isNuGetAssets);
                 foreach (var trackedProject in trackedProjects)
                 {
                     projectsToInvalidate.Add(trackedProject);
@@ -611,6 +647,7 @@ internal sealed partial class XamlLanguageServer
                 continue;
             }
 
+            eligibilityChanged |= isCsproj || isVcxproj || isImportedBuildFile || isNuGetAssets;
             if (isImportedBuildFile)
             {
                 invalidateAllProjects = true;
@@ -629,7 +666,7 @@ internal sealed partial class XamlLanguageServer
         if (invalidateAllProjects)
         {
             _resolver.InvalidateAll();
-            await ResetContextsAndRefreshDocumentsAsync().ConfigureAwait(false);
+            await ResetContextsAndRefreshDocumentsAsync(eligibilityChanged).ConfigureAwait(false);
         }
         else
         {
@@ -639,7 +676,7 @@ internal sealed partial class XamlLanguageServer
             }
             if (projectsToInvalidate.Count > 0)
             {
-                await ResetContextsAndRefreshDocumentsAsync().ConfigureAwait(false);
+                await ResetContextsAndRefreshDocumentsAsync(eligibilityChanged).ConfigureAwait(false);
             }
         }
 
@@ -686,10 +723,17 @@ internal sealed partial class XamlLanguageServer
             System.IO.Path.GetFileName(directory).Equals("obj", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task ResetContextsAndRefreshDocumentsAsync()
+    private async Task ResetContextsAndRefreshDocumentsAsync(bool eligibilityChanged)
     {
         _syntaxOnlyDocuments.Clear();
-        _contexts.RestartAllPreservingLatest();
+        if (eligibilityChanged)
+        {
+            _contexts.InvalidateAll();
+        }
+        else
+        {
+            _contexts.RestartAllPreservingLatest();
+        }
 
         // Discard semantic diagnostics produced from the old compilation immediately, then rebuild
         // and republish them against the new project context for every open document.

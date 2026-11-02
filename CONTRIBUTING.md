@@ -57,7 +57,13 @@ npm run test:xaml-bundled # smoke the published Native AOT server binary end-to-
 npm test                 # VS Code integration tests (drives the real extension + server)
 ```
 
+Before running server test projects directly, restore `test\fixtures\xaml\fixture\SmokeFixture.csproj`.
+`npm run test:server` and the release pipeline perform this prerequisite automatically.
+
 `npm test` runs a `pretest` step that compiles, lints, builds the language server, and restores the test fixture — so it needs the .NET SDK. `test:xaml-bundled` runs the already-published Native AOT server executable end-to-end; the .NET 10 runtime is still required so the server can spawn the out-of-process source-generator host. On a machine without the SDK, run `npm run test:unit` instead; build-dependent suites fail fast with a clear "dotnet not found" error rather than silently skipping.
+
+See [XAML Native AOT support](docs/XAML-AOT.md) for the compiler/helper compatibility
+boundary, trim-warning dispositions, and dependency-upgrade checks.
 
 `npm run test:e2e` has two Playwright projects. The `vscode` project drives real VS Code, while
 the `webview` project renders the webview in Chromium and needs that browser downloaded once:

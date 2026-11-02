@@ -1058,8 +1058,15 @@ export async function runCompletionScenarios(ctx) {
     if (!target.toLowerCase().endsWith("smokepage.xaml.cs")) fail(`gap #3: edit should target SmokePage.xaml.cs, got ${target}`);
     if (/\.g\.i?\.cs$/i.test(target)) fail(`gap #3: must not write to a generated partial: ${target}`);
     const newText = changes[target]?.[0]?.newText || "";
-    if (!newText.includes("private void Foo_Click(object sender, RoutedEventArgs e)")) {
+    if (!newText.includes("private void Foo_Click(object sender, global::Microsoft.UI.Xaml.RoutedEventArgs e)")) {
       fail(`gap #3: stub should carry the delegate signature, got ${JSON.stringify(newText)}`);
+    }
+    {
+      const actions = await codeActionAtCaret(91004, pageCls('<Button PointerPressed="On|Pointer" />'), "qualified pointer handler");
+      const edits = Object.values(genOf(actions)?.edit?.changes ?? {}).flat();
+      if (!edits.some(edit => edit.newText.includes("global::Microsoft.UI.Xaml.Input.PointerRoutedEventArgs"))) {
+        fail(`pointer handler must not depend on destination imports: ${JSON.stringify(edits)}`);
+      }
     }
   }
   // 552) existing OnGo_Click -> NO generate action (never regenerate an existing handler).

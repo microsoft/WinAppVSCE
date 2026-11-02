@@ -7,6 +7,7 @@ namespace WinUiXaml.Xaml
     public sealed class XamlParser
     {
         private const int MaxDepth = 500;
+        private const int MaxMarkupDepth = 128;
 
         private readonly string _text;
         private readonly List<XamlDiagnostic> _diagnostics = new List<XamlDiagnostic>();
@@ -358,9 +359,40 @@ namespace WinUiXaml.Xaml
             return ParseMarkupExtension(ref p, limit);
         }
 
-        private XamlMarkupExtension ParseMarkupExtension(ref int p, int limit)
+        private XamlMarkupExtension ParseMarkupExtension(ref int p, int limit, int depth = 0)
         {
             int start = p;
+            if (depth >= MaxMarkupDepth)
+            {
+                int braces = 0;
+                char quote = '\0';
+                do
+                {
+                    char c = _text[p++];
+                    if (quote != '\0')
+                    {
+                        if (c == quote) quote = '\0';
+                    }
+                    else if (c == '\'' || c == '"')
+                    {
+                        quote = c;
+                    }
+                    else if (c == '{')
+                    {
+                        braces++;
+                    }
+                    else if (c == '}')
+                    {
+                        braces--;
+                    }
+                } while (p < limit && braces > 0);
+
+                var span = TextSpan.FromBounds(start, p);
+                AddDiagnostic(XamlDiagnosticIds.MarkupExtensionTooDeep,
+                    "Markup extension nesting exceeds the supported depth of 128.", span);
+                return new XamlMarkupExtension(null, Array.Empty<XamlMarkupExtensionArgument>(), braces == 0, span);
+            }
+
             p++; // consume '{'
             SkipWhitespace(ref p, limit);
             XamlName? name = ParseNameBounded(ref p, limit);
@@ -390,7 +422,7 @@ namespace WinUiXaml.Xaml
                     continue;
                 }
 
-                var arg = ParseMarkupArgument(ref p, limit);
+                var arg = ParseMarkupArgument(ref p, limit, depth);
                 if (arg == null)
                 {
                     p++; // safety: guarantee progress
@@ -424,14 +456,14 @@ namespace WinUiXaml.Xaml
             return new XamlMarkupExtension(name, args, closed, TextSpan.FromBounds(start, p));
         }
 
-        private XamlMarkupExtensionArgument ParseMarkupArgument(ref int p, int limit)
+        private XamlMarkupExtensionArgument ParseMarkupArgument(ref int p, int limit, int depth)
         {
             int start = p;
 
             // A nested markup extension used as a positional value.
             if (_text[p] == '{')
             {
-                var nested = ParseMarkupExtension(ref p, limit);
+                var nested = ParseMarkupExtension(ref p, limit, depth + 1);
                 return new XamlMarkupExtensionArgument(null, null, null, null, nested, TextSpan.FromBounds(start, p));
             }
 
@@ -446,7 +478,7 @@ namespace WinUiXaml.Xaml
 
                 if (p < limit && _text[p] == '{')
                 {
-                    var nested = ParseMarkupExtension(ref p, limit);
+                    var nested = ParseMarkupExtension(ref p, limit, depth + 1);
                     return new XamlMarkupExtensionArgument(name, equalsSpan, null, null, nested, TextSpan.FromBounds(start, p));
                 }
 

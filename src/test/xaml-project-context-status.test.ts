@@ -6,6 +6,7 @@ import {
   PROJECT_CONTEXT_DOTNET_SDK_REQUIRED_MESSAGE,
   PROJECT_CONTEXT_STATES,
   PROJECT_CONTEXT_STATUS_NOTIFICATION,
+  PROJECT_CONTEXT_WINUI_REQUIRED_MESSAGE,
   ProjectContextStatus,
   getRelevantProjectContextStatuses,
   getProjectContextStatusPresentation,
@@ -123,6 +124,29 @@ test("every state the server can emit is one the client knows", () => {
 
 test("uses the project-context status notification contract", () => {
   assert.equal(PROJECT_CONTEXT_STATUS_NOTIFICATION, "winui-xaml/projectContextStatus");
+});
+
+test("keeps the positive WinUI eligibility warning visible and links to its explanation", () => {
+  const status: ProjectContextStatus = {
+    uri: "file:///Other.xaml",
+    state: "winui-required",
+    message: PROJECT_CONTEXT_WINUI_REQUIRED_MESSAGE,
+  };
+  const presentation = getProjectContextStatusPresentation(status);
+  assert.equal(presentation?.text, "$(info) WinApp: WinUI 3 Required for XAML IntelliSense");
+  assert.equal(presentation?.command, "winapp.xaml.showInfo");
+  assert.equal(presentation?.transient, false);
+  assert.ok(presentation?.tooltip.startsWith(PROJECT_CONTEXT_WINUI_REQUIRED_MESSAGE));
+  assert.match(presentation?.tooltip ?? "", /Formatting, folding, outline.*remain available/);
+  assert.deepEqual(getProjectContextStatusPresentation({ ...status, message: undefined }), presentation);
+  assert.equal(shouldReplaceProjectContextStatus(status, { ...status, state: "loading" }), false);
+});
+
+test("the server and client use the same concise WinUI requirement message", () => {
+  const source = readFileSync(path.join(
+    __dirname, "..", "..", "server", "src", "WinUiXaml.Workspace", "WinUiProjectEligibility.cs"
+  ), "utf8");
+  assert.ok(source.includes(JSON.stringify(PROJECT_CONTEXT_WINUI_REQUIRED_MESSAGE)));
 });
 
 test("prioritizes actionable errors over loading and ready states", () => {

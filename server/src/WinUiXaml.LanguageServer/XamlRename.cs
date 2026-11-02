@@ -27,8 +27,8 @@ internal static class XamlRename
     // An x:Name backs a generated C# field, so it must be a legal identifier.
     private static readonly Regex NamePattern = new(@"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
-    // Characters that would break out of the quoted attribute value or start a markup extension.
-    private static readonly char[] KeyForbidden = { '"', '\'', '<', '>', '&', '{', '}' };
+    // Keys are also inserted into unquoted markup-extension arguments.
+    private static readonly char[] KeyForbidden = { '"', '\'', '<', '>', '&', '{', '}', ',', '=' };
 
     /// <summary> Validates the caret and returns the exact token range to make editable plus the current name as the placeholder, or null when the caret is not on a renameable symbol.</summary>
     internal static PrepareRenameResult? PrepareRename(
@@ -53,6 +53,7 @@ internal static class XamlRename
             return null;
         }
 
+        EnsureSafeRename(doc, root, offset, symbol.Kind, symbol.Name, typeSystem);
         var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
         if (occurrences is null ||
             (RequiresLocalDeclaration(symbol.Kind, allowExternalDeclaration) &&
@@ -98,6 +99,7 @@ internal static class XamlRename
         }
 
         // Gate on the renameable location first (this also rejects carets inside malformed/unterminated markup), so an invalid-name error is only raised when the caret is genuinely on a symbol.
+        EnsureSafeRename(doc, root, offset, symbol.Kind, symbol.Name, typeSystem);
         var occurrences = XamlLanguageServer.ResolveOccurrences(doc, root, offset, typeSystem);
         if (occurrences is null ||
             occurrences.Count == 0 ||
@@ -129,7 +131,49 @@ internal static class XamlRename
         };
     }
 
-    /// <summary>An x:Name is file-scoped, so it must be declared here. A resource key may be declared in another project file; the caller proves that via allowExternalDeclaration so an undeclared (e.g. SDK) key stays unrenameable.</summary>
+    private static void EnsureSafeRename(
+        TextDocument doc, XamlElement root, int offset, XamlRenameKind kind, string name, XamlTypeSystem? typeSystem)
+    {
+        if (kind == XamlRenameKind.Name && typeSystem is not null)
+        {
+            XamlLanguageServer.EnsureCompleteBindRename(doc, offset, name, typeSystem);
+        }
+        if (kind == XamlRenameKind.Key)
+        {
+            if (XamlLanguageServer.FindRenameResourceDeclaration(doc, offset, typeSystem) is { } declaration)
+            {
+                for (XamlNode? current = declaration; current is not null; current = current.Parent)
+                {
+                    if (current is XamlElement element &&
+                        element.Name?.FullName.EndsWith(".ThemeDictionaries", StringComparison.Ordinal) == true)
+                    {
+                        EnsureNoThemeAlternatives(element, name);
+                    }
+                }
+            }
+            else
+            {
+                EnsureNoThemeAlternatives(root, name);
+            }
+        }
+    }
+
+    internal static void EnsureNoThemeAlternatives(XamlElement root, string key)
+    {
+        foreach (var theme in root.DescendantNodesAndSelf().OfType<XamlElement>()
+                     .Where(element => element.Name?.LocalName.EndsWith(".ThemeDictionaries", StringComparison.Ordinal) == true))
+        {
+            if (theme.DescendantNodesAndSelf().OfType<XamlElement>().Any(element =>
+                    XamlSemanticFacts.GetKeyAttribute(element)?.Value?.Text.Trim() == key ||
+                    element.GetAttribute("Source") is not null))
+            {
+                throw new RequestFailedException(
+                    $"Rename cannot safely update resource '{key}' across theme dictionaries. Update its theme variants and usages together.");
+            }
+        }
+    }
+
+    /// <summary>An x:Name needs a local declaration; a cross-file key requires caller-proven ownership.</summary>
     private static bool RequiresLocalDeclaration(XamlRenameKind kind, bool allowExternalDeclaration) =>
         kind == XamlRenameKind.Name ||
         (kind == XamlRenameKind.Key && !allowExternalDeclaration);

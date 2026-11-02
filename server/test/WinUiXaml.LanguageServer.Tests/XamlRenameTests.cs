@@ -22,6 +22,38 @@ public class XamlRenameTests
     private const string Uri = "file:///C:/proj/Page.xaml";
     private static readonly XamlTypeSystem FrameworkTypeSystem = CreateFrameworkTypeSystem();
 
+    [Theory]
+    [InlineData("Local.xaml")]
+    [InlineData("Nested/Outer.xaml")]
+    [InlineData("Missing.xaml")]
+    public void ExternalResourceOwnershipMustBeKnownBeforeRenaming(string source)
+    {
+        var doc = new TextDocument(Uri, $$"""
+            <Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+              <Page.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="{{source}}"/>
+              </ResourceDictionary.MergedDictionaries></ResourceDictionary></Page.Resources>
+              <Border Background="{StaticResource Accent}"/>
+            </Page>
+            """);
+        var error = Assert.Throws<RequestFailedException>(() =>
+            XamlLanguageServer.EnsureUnambiguousResourceReferences(doc, "Accent", FrameworkTypeSystem));
+        Assert.Contains("No changes were made", error.Message);
+        XamlLanguageServer.EnsureUnambiguousResourceReferences(doc, "Unrelated", FrameworkTypeSystem);
+    }
+
+    [Fact]
+    public void UnrelatedNestedSourcesDoNotBlockAnOuterResourceReference()
+    {
+        var doc = new TextDocument(Uri, """
+            <Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+              <Border Background="{StaticResource Accent}"/>
+              <Grid><Grid.Resources><ResourceDictionary Source="Local.xaml"/></Grid.Resources></Grid>
+            </Page>
+            """);
+        XamlLanguageServer.EnsureUnambiguousResourceReferences(doc, "Accent", FrameworkTypeSystem);
+    }
+
     private static (TextDocument Doc, int Offset) Caret(string textWithCaret)
     {
         var offset = textWithCaret.IndexOf('|');
@@ -266,6 +298,82 @@ public class XamlRenameTests
         var edits = RenameEdits(buffer, "Panel", CreateFrameworkTypeSystem());
 
         Assert.Single(edits);
+    }
+
+    [Theory]
+    [InlineData("Format(Input.Text)", 3)]
+    [InlineData("Format(Input.Text, Input.Text)", 4)]
+    [InlineData("Format(Nested(Input.Text), 'Input.Text', Other.Input)", 3)]
+    [InlineData("Input.Format(Input.Text)", 4)]
+    public void RenameIncludesBindingFunctionArguments(string expression, int expected)
+    {
+        var buffer = $$"""
+            <Page xmlns="using:Microsoft.UI.Xaml" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <TextBox x:Name="In|put" />
+              <TextBlock Text="{x:Bind Input.Text}" />
+              <TextBlock Text="{x:Bind Path={{expression}}, Mode=OneWay}" />
+            </Page>
+            """;
+        var (doc, offset) = Caret(buffer);
+        var edits = RenameEdits(buffer, "Entry");
+        Assert.Equal(expected, edits.Count);
+        Assert.All(edits, edit => Assert.Equal("Input", Covered(doc, edit.Range)));
+        int argumentOffset = doc.Text.LastIndexOf("Input.Text", StringComparison.Ordinal) + 2;
+        if (!expression.Contains('\''))
+        {
+            Assert.NotNull(XamlRename.PrepareRename(doc, argumentOffset, FrameworkTypeSystem));
+        }
+    }
+
+    [Theory]
+    [InlineData("Format(Input.Text")]
+    [InlineData("Input.Items[Input.Selected]")]
+    public void UnsupportedBindingRefusesRenameWithoutPartialEdits(string expression)
+    {
+        var (doc, offset) = Caret($$"""
+            <Page xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <TextBox x:Name="In|put" />
+              <TextBlock Text="{x:Bind {{expression}}}" />
+            </Page>
+            """);
+        Assert.Throws<RequestFailedException>(() => XamlRename.PrepareRename(doc, offset, FrameworkTypeSystem));
+        Assert.Throws<RequestFailedException>(() => XamlRename.Rename(doc, offset, "Entry", FrameworkTypeSystem));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ThemeVariantRenameIsRefusedAtDeclarationAndUsage(bool declaration)
+    {
+        var (doc, offset) = Caret($$"""
+            <Page xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Page.Resources><ResourceDictionary><ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default"><SolidColorBrush x:Key="{{(declaration ? "Ac|cent" : "Accent")}}" /></ResourceDictionary>
+                <ResourceDictionary x:Key="Light"><SolidColorBrush x:Key="Accent" /></ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast"><SolidColorBrush x:Key="Accent" /></ResourceDictionary>
+              </ResourceDictionary.ThemeDictionaries></ResourceDictionary></Page.Resources>
+              <Border Background="{ThemeResource {{(declaration ? "Accent" : "Ac|cent")}}}" />
+            </Page>
+            """);
+        Assert.Throws<RequestFailedException>(() => XamlRename.PrepareRename(doc, offset, FrameworkTypeSystem));
+        Assert.Throws<RequestFailedException>(() => XamlRename.Rename(doc, offset, "Brand", FrameworkTypeSystem));
+    }
+
+    [Fact]
+    public void LocalResourceShadowingThemeKeyRemainsRenameable()
+    {
+        var (doc, offset) = Caret("""
+            <Page xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Page.Resources><ResourceDictionary><ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default"><SolidColorBrush x:Key="Accent" /></ResourceDictionary>
+              </ResourceDictionary.ThemeDictionaries></ResourceDictionary></Page.Resources>
+              <Grid><Grid.Resources><SolidColorBrush x:Key="Ac|cent"/></Grid.Resources>
+                <Border Background="{ThemeResource Accent}"/>
+              </Grid>
+            </Page>
+            """);
+        var edit = XamlRename.Rename(doc, offset, "Local", FrameworkTypeSystem);
+        Assert.Equal(2, Assert.Single(edit!.Changes).Value.Count);
     }
 
     [Fact]
@@ -744,6 +852,8 @@ public class XamlRenameTests
     [InlineData("Bad{Key")]
     [InlineData("Bad}Key")]
     [InlineData("Bad\"Key")]
+    [InlineData("Brand,Accent")]
+    [InlineData("Brand=Accent")]
     public void Rename_Key_RejectsForbiddenCharacters(string newName)
     {
         var buffer =
@@ -752,6 +862,34 @@ public class XamlRenameTests
             "</Page.Resources></Page>";
         var (doc, offset) = Caret(buffer);
         Assert.Throws<RenameValidationException>(() => XamlRename.Rename(doc, offset, newName));
+    }
+
+    [Theory]
+    [InlineData("Brand,Accent", "StaticResource", true)]
+    [InlineData("Brand,Accent", "StaticResource", false)]
+    [InlineData("Brand=Accent", "StaticResource", true)]
+    [InlineData("Brand=Accent", "StaticResource", false)]
+    [InlineData("Brand,Accent", "ThemeResource", true)]
+    [InlineData("Brand,Accent", "ThemeResource", false)]
+    [InlineData("Brand=Accent", "ThemeResource", true)]
+    [InlineData("Brand=Accent", "ThemeResource", false)]
+    public void Rename_KeyRejectsMarkupDelimitersFromDeclarationAndUsage(
+        string newName, string extension, bool fromDeclaration)
+    {
+        var text = $$"""
+            <Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Page.Resources><SolidColorBrush x:Key="Accent" Color="Red"/></Page.Resources>
+              <Border Background="{ {{extension}} Accent}"/>
+            </Page>
+            """;
+        var doc = new TextDocument(Uri, text);
+        var offset = (fromDeclaration ? text.IndexOf("Accent", StringComparison.Ordinal)
+            : text.LastIndexOf("Accent", StringComparison.Ordinal)) + 2;
+        Assert.NotNull(XamlRename.PrepareRename(doc, offset, FrameworkTypeSystem));
+        Assert.Throws<RenameValidationException>(() =>
+            XamlRename.Rename(doc, offset, newName, FrameworkTypeSystem));
+        Assert.Equal(text, doc.Text);
     }
 
     [Theory]

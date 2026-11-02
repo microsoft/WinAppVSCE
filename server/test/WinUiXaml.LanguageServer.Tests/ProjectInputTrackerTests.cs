@@ -3,6 +3,21 @@ namespace WinUiXaml.LanguageServer.Tests;
 public sealed class ProjectInputTrackerTests
 {
     [Fact]
+    public void XamlContentChangesRetainExactGeneratorAndExternalDependencyTracking()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "winui-xaml-inputs");
+        var project = Path.Combine(root, "App.csproj");
+        var ordinary = Path.Combine(root, "Page.xaml");
+        var generatorInput = Path.Combine(root, "GeneratedInput.xaml");
+        var tracker = new ProjectInputTracker();
+        tracker.Register(project, [project], [generatorInput]);
+
+        Assert.Empty(tracker.GetProjectsToInvalidate(ordinary, includeProjectDirectories: false));
+        Assert.Contains(project, tracker.GetProjectsToInvalidate(generatorInput, includeProjectDirectories: false));
+        Assert.Contains(project, tracker.GetProjectsToInvalidate(ordinary, includeProjectDirectories: true));
+    }
+
+    [Fact]
     public void KnownExternalProjectSourcesInvalidateWithoutTrustingTheirSiblingDirectories()
     {
         var root = Path.Combine(Path.GetTempPath(), "winui-xaml-inputs", Guid.NewGuid().ToString("N"));

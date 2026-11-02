@@ -17,6 +17,8 @@ import { tmpdir } from "node:os";
 import { runCoreScenarios } from "./smoke-core-scenarios.mjs";
 import { runEditorScenarios } from "./smoke-editor-scenarios.mjs";
 import { runCompletionScenarios } from "./smoke-completion-scenarios.mjs";
+import { runEligibilityScenarios } from "./smoke-eligibility-scenarios.mjs";
+import { runMergeSafetyScenarios } from "./smoke-merge-safety-scenarios.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -77,8 +79,11 @@ const unrestoredProject = join(unrestoredRoot, "Unrestored.csproj");
 writeFileSync(
   unrestoredProject,
   `<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
-  <ItemGroup><PackageReference Include="Example.Unrestored.Package" Version="1.0.0" /></ItemGroup>
+  <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><UseWinUI>true</UseWinUI></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <PackageReference Include="Example.Unrestored.Package" Version="1.0.0" />
+  </ItemGroup>
 </Project>
 `,
   "utf8"
@@ -390,6 +395,7 @@ const resCaret = offsetToPosition(xamlText, resCaretOffset);
 // The server ships as a Native AOT executable, but the debug build used by most local runs is
 // still a framework-dependent DLL. Accept either and launch it the right way.
 const isNativeExe = serverPath.toLowerCase().endsWith(".exe");
+const missingGeneratorMode = process.env.WINUI_XAML_TEST_MISSING_GENERATOR === "1";
 if (!isNativeExe && !serverPath.toLowerCase().endsWith(".dll"))
   fail(`server must be a native .exe or a framework-dependent .dll: ${serverPath}`);
 server = spawn(
@@ -398,6 +404,9 @@ server = spawn(
   {
     stdio: ["pipe", "pipe", "inherit"],
     cwd: dirname(serverPath),
+    env: missingGeneratorMode
+      ? { ...process.env, WINUI_XAML_GENERATOR_HOST: join(dirname(serverPath), "missing-generator-smoke.dll") }
+      : process.env,
   },
 );
 
@@ -406,6 +415,7 @@ let buffer = Buffer.alloc(0);
 const waiters = [];
 const publishedDiagnostics = [];
 const buildRequiredNotifications = [];
+const restoreRequiredNotifications = [];
 const projectContextStatuses = [];
 
 server.stdout.on("data", (chunk) => {
@@ -426,6 +436,9 @@ server.stdout.on("data", (chunk) => {
 });
 
 function dispatch(msg) {
+  if (msg.method === "winui-xaml/projectRestoreRequired") {
+    restoreRequiredNotifications.push(msg.params);
+  }
   if (msg.method === "textDocument/publishDiagnostics") {
     publishedDiagnostics.push(msg.params);
   }
@@ -491,6 +504,33 @@ async function main() {
   console.log("[ok] initialize: definition + hover + completion + documentSymbol + openClose advertised");
 
   send({ method: "initialized", params: {} });
+
+  if (missingGeneratorMode) {
+    const unavailable = waitFor(message =>
+      message.method === "winui-xaml/projectContextStatus" &&
+      message.params?.uri === xamlUri && message.params?.state === "generators-unavailable",
+      90000, "missing generator status");
+    const text = '<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="SmokeFixture.SmokePage"><TextBlock Text="{x:Bind Toolkit.Title}" Tag="{x:Bind GreetingText}"/></Page>';
+    send({ method: "textDocument/didOpen", params: { textDocument: { uri: xamlUri, languageId: "xaml", version: 1, text } } });
+    const status = await unavailable;
+    if (!status.params.message?.includes("helper assembly not found")) fail(`unexpected generator failure: ${JSON.stringify(status)}`);
+    let ordinaryMember;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const id = 92000 + attempt;
+      send({ id, method: "textDocument/hover", params: { textDocument: { uri: xamlUri }, position: offsetToPosition(text, text.indexOf("GreetingText") + 2) } });
+      ordinaryMember = await waitFor(responseFor(id), 10000, "non-generated member after helper failure");
+      if (ordinaryMember.result?.contents?.value?.includes("GreetingText")) break;
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 100));
+    }
+    if (!ordinaryMember?.result?.contents?.value?.includes("GreetingText")) fail("helper failure prevented ordinary source symbols from loading");
+    send({ id: 92060, method: "textDocument/hover", params: { textDocument: { uri: xamlUri }, position: offsetToPosition(text, text.indexOf("Toolkit.Title") + 10) } });
+    const generated = await waitFor(responseFor(92060), 10000, "generated member with missing helper");
+    if (generated.error || generated.result !== null) fail(`missing helper reused generated symbols: ${JSON.stringify(generated)}`);
+    await shutdownServer();
+    console.log("PASS: missing generator helper is reported; ordinary symbols work; stale generated symbols are absent.");
+    setTimeout(() => process.exit(0), 200);
+    return;
+  }
 
   // 2) didOpen -> expect diagnostics (0 for the clean fixture)
   const diagPromise = waitFor(notification("textDocument/publishDiagnostics"), 15000, "publishDiagnostics");
@@ -1388,9 +1428,34 @@ async function main() {
     rmSync,
     tmpdir,
     buildRequiredRoot,
+    projectContextStatuses,
   };
+  await runEligibilityScenarios({
+    root: buildRequiredRoot, send, waitFor, responseFor, fail,
+    fixtureProject: FIXTURE_PROJECT, fixtureUri: xamlUri,
+    statuses: projectContextStatuses,
+    restoreNotifications: restoreRequiredNotifications,
+    buildNotifications: buildRequiredNotifications,
+  });
+  const generatedPage = (inner) => `<Page ${NS} x:Class="SmokeFixture.SmokePage">${inner}</Page>`;
+  const generatedMembers = await completeWith(
+    91001, generatedPage('<TextBlock Text="{x:Bind Toolkit.|}" />'), "generated MVVM members");
+  for (const member of ["Title", "RefreshCommand"]) {
+    if (!generatedMembers.includes(member)) {
+      fail(`generator helper did not expose ${member} through LSP: ${JSON.stringify(generatedMembers)}`);
+    }
+  }
+  for (const [id, member, type] of [[91002, "Title", "string"], [91003, "RefreshCommand", "IRelayCommand"]]) {
+    const hover = await hoverAt(id, generatedPage(`<TextBlock Tag="{x:Bind Toolkit.${member}|}" />`), `generated ${member}`);
+    if (!hover.includes(member) || !hover.includes(type)) {
+      fail(`generated ${member} hover must report ${type}: ${hover}`);
+    }
+  }
+  console.log("[ok] generator helper: generated Title and RefreshCommand have LSP completion and typed hover");
+
   await runCoreScenarios(scenarioContext);
   await runEditorScenarios(scenarioContext);
+  await runMergeSafetyScenarios(scenarioContext);
   await runCompletionScenarios(scenarioContext);
 
   // Saving a generated event handler must invalidate the C# compilation and republish the open
@@ -1791,7 +1856,13 @@ async function main() {
     );
   }
 
-  // 23) shutdown
+  await shutdownServer();
+
+  console.log("\nPASS: language server spine works (initialize + diagnostics + F12 + x:Bind F12 + hover incl. element/attribute names + completion incl. enum/bool values + markup-extension names + Mode= + resource keys + x:Bind member paths + close-tag completion + using: namespace completion + document outline + semantic validation + formatting + folding + document color + selection ranges + linked editing + document links + rename + semantic tokens + code actions + completion documentation + method hover enrichment + GridLength value completion + named-color value completion + FontWeight value completion + third-party control completion + generate event handler + clean shutdown).");
+  setTimeout(() => process.exit(0), 200);
+}
+
+async function shutdownServer() {
   send({ id: 11, method: "shutdown", params: null });
   await waitFor(responseFor(11), 10000, "shutdown");
 
@@ -1810,10 +1881,6 @@ async function main() {
   if (exitCode !== 0) fail(`server exited with code ${exitCode} after shutdown; expected 0`);
   console.log("[ok] shutdown/exit: server terminated cleanly (code 0)");
 
-  console.log("\nPASS: language server spine works (initialize + diagnostics + F12 + x:Bind F12 + hover incl. element/attribute names + completion incl. enum/bool values + markup-extension names + Mode= + resource keys + x:Bind member paths + close-tag completion + using: namespace completion + document outline + semantic validation + formatting + folding + document color + selection ranges + linked editing + document links + rename + semantic tokens + code actions + completion documentation + method hover enrichment + GridLength value completion + named-color value completion + FontWeight value completion + third-party control completion + generate event handler + clean shutdown).");
-  // The 200 ms delay is retained purely to let buffered stdout flush before exiting; the server's
-  // own termination is now awaited explicitly above rather than assumed to happen within it.
-  setTimeout(() => process.exit(0), 200);
 }
 
 main().catch((err) => {

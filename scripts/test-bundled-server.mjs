@@ -27,10 +27,17 @@ if (ensure.status !== 0) {
 }
 
 const smoke = path.join(root, "server", "test", "lsp-smoke", "smoke.mjs");
-const result = spawnSync(process.execPath, [smoke], {
-  cwd: root,
-  env: { ...process.env, WINUI_XAML_SERVER_PATH: serverPath },
-  stdio: "inherit",
-});
-
-process.exit(result.status ?? 1);
+for (const missingGenerator of ["0", "1"]) {
+  const result = spawnSync(process.execPath, [smoke], {
+    cwd: root,
+    env: {
+      ...process.env,
+      WINUI_XAML_SERVER_PATH: serverPath,
+      WINUI_XAML_TEST_MISSING_GENERATOR: missingGenerator,
+    },
+    stdio: "inherit",
+  });
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
+}

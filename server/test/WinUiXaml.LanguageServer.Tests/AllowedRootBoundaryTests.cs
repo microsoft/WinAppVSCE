@@ -213,6 +213,19 @@ public class AllowedRootBoundaryTests
         Assert.False(probe(@"C:\repo\appEvil\Generic.xaml"));
     }
 
+    [Theory]
+    [InlineData(@"\\127.0.0.1\share\Page.xaml")]
+    [InlineData(@"\\?\C:\outside\Page.xaml")]
+    [InlineData(@"C:\repo\app\..\..\outside\Page.xaml")]
+    [InlineData(@"C:\repo\appOther\Page.xaml")]
+    public void RejectedPathsNeverReachFilesystemCanonicalization(string path)
+    {
+        int calls = 0;
+        Assert.False(XamlLanguageServer.TryGetAllowedRoot(path, [@"C:\repo\app"],
+            out _, out _, candidate => { calls++; return candidate; }));
+        Assert.Equal(0, calls);
+    }
+
     [Fact]
     public void ContainedFileExists_WithNoTrustedRoots_AdmitsNothing()
     {
@@ -300,6 +313,9 @@ public class AllowedRootBoundaryTests
             var roots = XamlLanguageServer.NormalizeRoots(new[] { baseDir });
             Assert.True(XamlLanguageServer.TryGetAllowedRoot(viaLink, roots, out var allowed, out _));
             Assert.Equal(canonical, allowed, ignoreCase: true);
+            var aliasRoots = XamlLanguageServer.NormalizeRoots(new[] { linkPath });
+            Assert.True(XamlLanguageServer.TryGetAllowedRoot(viaLink, aliasRoots, out var fromAlias, out _));
+            Assert.Equal(canonical, fromAlias, ignoreCase: true);
         }
         finally
         {

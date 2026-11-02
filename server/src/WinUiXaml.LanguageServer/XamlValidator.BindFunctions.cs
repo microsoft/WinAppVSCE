@@ -185,7 +185,7 @@ internal static partial class XamlValidator
         return -1;
     }
 
-    private sealed record ParsedBindFunctionCall(
+    internal sealed record ParsedBindFunctionCall(
         int Start,
         int Open,
         int Close,
@@ -193,7 +193,7 @@ internal static partial class XamlValidator
         string FunctionPath,
         IReadOnlyList<(int Start, int End)> ArgumentRanges);
 
-    private static bool TryParseBindFunctionCall(
+    internal static bool TryParseBindFunctionCall(
         string path,
         [NotNullWhen(true)] out ParsedBindFunctionCall? parsed)
     {

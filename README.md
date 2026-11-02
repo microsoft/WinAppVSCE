@@ -235,7 +235,7 @@ When you open an `AppxManifest.xml` or `.appxmanifest` file, VS Code will offer 
 | **Hover** | Type and member information for elements, properties, and resource references. |
 | **Go to Definition (F12)** | Jump to C# declarations for event handlers and `x:Bind` members, and to `x:Name` and resource-key declarations. SDK and NuGet types are compiled metadata with no source to open, so F12 does nothing there — hover to inspect them instead. |
 | **Diagnostics** | Syntactic diagnostics as you type, plus semantic validation against the resolved type system. |
-| **Find All References / Rename** | For `x:Name` declarations and resource keys. |
+| **Find All References / Rename** | For `x:Name` declarations and resource keys. Rename declines ambiguous external-dictionary references and theme variants rather than making partial edits. |
 | **Formatting** | Whole-document and range formatting. |
 | **Semantic tokens** | Type-aware colorization layered on top of the TextMate grammar. |
 | **Code actions** | Press **Ctrl+.** to import and qualify unresolved types, add namespace declarations, insert `x:DataType`, repair bindings, names, and Setter properties, or generate event handlers. |
@@ -244,9 +244,10 @@ The server starts automatically when you open a `.xaml` file. It ships as a self
 
 #### Language support
 
-Project-aware features read your project through MSBuild, so today they require a `.csproj`:
+Project-aware features require a confirmed WinUI 3 `.csproj`: a standard .NET SDK project targeting Windows, with `UseWinUI` enabled and an explicit `Microsoft.WindowsAppSDK` or `Microsoft.WindowsAppSDK.WinUI` package reference. Imported project settings and central package versions are supported. A matching type or XAML namespace alone does not qualify.
 
-- **C#** gets the full feature set, with the .NET 10 SDK installed. Without it the server still runs and the status bar reports **WinApp: .NET SDK Required for XAML IntelliSense** with an install link. WinApp never installs .NET for you; it links to the official download.
+- **Confirmed C# WinUI 3 projects** get the full feature set, with the .NET 10 SDK installed. Without it the server still runs and the status bar reports **WinApp: .NET SDK Required for XAML IntelliSense** with an install link. WinApp never installs .NET for you; it links to the official download.
+- **Other or unconfirmed projects** retain syntax-only editing and show **WinApp: WinUI 3 Required for XAML IntelliSense**. WinApp does not automatically restore or build them for XAML IntelliSense. This applies to unfamiliar XAML frameworks too, not just WPF or MAUI. Ordinary .NET libraries referenced by an eligible WinUI project remain usable.
 - **C++/WinRT** gets language-independent editing only — formatting, folding, outline, close-tag completion, document links, and syntax diagnostics. Completion, hover, and F12 are unavailable, because the server cannot yet read types from a `.vcxproj`.
 
 Full IntelliSense for C++/WinRT is planned. [Let us know](https://github.com/microsoft/WinAppVSCE/issues) if this matters to you.

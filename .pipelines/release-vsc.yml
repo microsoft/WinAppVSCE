@@ -70,6 +70,8 @@ extends:
               errorActionPreference: 'stop'
               targetType: 'inline'
               script: |
+                dotnet restore "$(System.DefaultWorkingDirectory)/test/fixtures/xaml/fixture/SmokeFixture.csproj" -p:Platform=x64
+                if ($LASTEXITCODE -ne 0) { Write-Error "WinUI XAML test fixture restore failed"; exit 1 }
                 $testProjects = @(
                   "WinUiXaml.Xaml.Tests/WinUiXaml.Xaml.Tests.csproj",
                   "WinUiXaml.Workspace.Tests/WinUiXaml.Workspace.Tests.csproj",

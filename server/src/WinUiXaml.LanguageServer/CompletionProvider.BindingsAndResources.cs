@@ -1072,12 +1072,13 @@ internal static partial class CompletionProvider
     }
 
     /// <summary>True when a bindable member should be hidden from {x:Bind} completion because it is noise rather than a real authoring target</summary>
-    private static bool IsBindCompletionNoise(ISymbol member)
+    internal static bool IsBindCompletionNoise(ISymbol member)
     {
         var declarations = member.DeclaringSyntaxReferences;
 
-        // Generated code-behind plumbing: every declaration lives in a generated file.
-        if (declarations.Length > 0 && declarations.All(r => IsGeneratedDocumentPath(r.SyntaxTree.FilePath)))
+        if (member.GetAttributes().Any(attribute =>
+                attribute.AttributeClass?.ToDisplayString() == "System.CodeDom.Compiler.GeneratedCodeAttribute" &&
+                attribute.ConstructorArguments.FirstOrDefault().Value is "Microsoft.UI.Xaml.Markup.Compiler"))
         {
             return true;
         }
@@ -1085,11 +1086,6 @@ internal static partial class CompletionProvider
         // Inherited framework methods (defined only in metadata) flood the list and are rarely bound.
         return member is IMethodSymbol && declarations.IsEmpty;
     }
-
-    private static bool IsGeneratedDocumentPath(string? path) =>
-        !string.IsNullOrEmpty(path) &&
-        (path!.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase) ||
-         path.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Determines the type a binding path binds against at the caret.</summary>
     private static ITypeSymbol? ResolveBindRoot(

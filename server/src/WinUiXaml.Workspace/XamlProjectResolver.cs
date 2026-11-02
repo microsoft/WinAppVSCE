@@ -29,15 +29,49 @@ namespace WinUiXaml.Workspace
             new Dictionary<string, CacheEntry>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, Task<MsBuildFrameworkProject?>> _frameworkProjects =
             new Dictionary<string, Task<MsBuildFrameworkProject?>>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Task<bool>> _eligibleProjects = new(StringComparer.OrdinalIgnoreCase);
         private readonly IReadOnlyDictionary<string, string> _globalProperties;
 
         /// <summary>Cancelled on dispose so resolver-owned loads stop their MSBuild and generator-host children instead of outliving the server.</summary>
         private readonly CancellationTokenSource _shutdown = new CancellationTokenSource();
         private bool _disposed;
+        private readonly HashSet<Task> _pendingLoads = new();
+        private Task _draining = Task.CompletedTask;
 
         public XamlProjectResolver(IReadOnlyDictionary<string, string>? globalProperties = null)
         {
             _globalProperties = globalProperties ?? DefaultGlobalProperties;
+        }
+
+        public async Task<bool> IsSupportedProjectAsync(string projectPath, CancellationToken cancellationToken = default)
+        {
+            var key = Path.GetFullPath(projectPath);
+            Task<bool> task;
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                if (!_eligibleProjects.TryGetValue(key, out task!))
+                {
+                    task = Task.Run(() => WinUiProjectEligibility.Evaluate(key, _globalProperties, _shutdown.Token), _shutdown.Token);
+                    _eligibleProjects[key] = task;
+                    TrackLoad(task);
+                    _ = task.ContinueWith(completed =>
+                    {
+                        if (completed.IsCompletedSuccessfully)
+                        {
+                            return;
+                        }
+                        lock (_gate)
+                        {
+                            if (_eligibleProjects.TryGetValue(key, out var current) && ReferenceEquals(current, completed))
+                            {
+                                _eligibleProjects.Remove(key);
+                            }
+                        }
+                    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                }
+            }
+            return await task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>One cached project load. Tracks invalidations that arrived while the load was still in flight, because its project graph does not exist until it completes and so cannot be tested with <c>ContainsProject</c> at invalidate time.</summary>
@@ -293,6 +327,7 @@ namespace WinUiXaml.Workspace
                 }
 
                 _frameworkProjects.Remove(key);
+                _eligibleProjects.Remove(key);
             }
 
             foreach (var entry in evicted)
@@ -315,6 +350,7 @@ namespace WinUiXaml.Workspace
                 evicted = _projects.Values.ToList();
                 _projects.Clear();
                 _frameworkProjects.Clear();
+                _eligibleProjects.Clear();
                 foreach (var entry in evicted)
                 {
                     entry.InvalidatedAllWhilePending = true;
@@ -347,6 +383,7 @@ namespace WinUiXaml.Workspace
                 // Load on the resolver's own token: no single caller's cancellation can poison the shared cache entry,
                 // but dispose still stops the work and kills its child processes.
                 var task = RoslynProjectWorkspace.LoadProjectAsync(key, _globalProperties.ToDictionary(p => p.Key, p => p.Value), _shutdown.Token);
+                TrackLoad(task);
                 var entry = new CacheEntry(task);
                 _projects[key] = entry;
 
@@ -416,6 +453,7 @@ namespace WinUiXaml.Workspace
                 var task = Task.Run(
                     () => MsBuildFrameworkProject.Load(key, _globalProperties, _shutdown.Token),
                     _shutdown.Token);
+                TrackLoad(task);
                 _frameworkProjects[key] = task;
                 _ = task.ContinueWith(
                     completed =>
@@ -485,6 +523,48 @@ namespace WinUiXaml.Workspace
                 TaskScheduler.Default);
         }
 
+        private void TrackLoad(Task task)
+        {
+            _pendingLoads.Add(task);
+            _ = task.ContinueWith(completed =>
+            {
+                lock (_gate)
+                {
+                    _pendingLoads.Remove(completed);
+                }
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+
+        public async Task StopAsync()
+        {
+            Dispose();
+            Task draining;
+            lock (_gate)
+            {
+                draining = _draining;
+            }
+            await draining.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        }
+
+        private async Task DrainAsync(Task[] pending)
+        {
+            try
+            {
+                await Task.WhenAll(pending).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[winui-xaml-ls] project load ended during shutdown: {ex}");
+            }
+            finally
+            {
+                _shutdown.Dispose();
+            }
+        }
+
         public void Dispose()
         {
             List<CacheEntry> entries;
@@ -499,18 +579,15 @@ namespace WinUiXaml.Workspace
                 entries = _projects.Values.ToList();
                 _projects.Clear();
                 _frameworkProjects.Clear();
+                _eligibleProjects.Clear();
+                _shutdown.Cancel();
+                _draining = DrainAsync(_pendingLoads.ToArray());
             }
-
-            // Cancel before awaiting: in-flight loads own dotnet/generator-host children that
-            // would otherwise keep running after the server exits, holding obj locks.
-            _shutdown.Cancel();
 
             foreach (var entry in entries)
             {
                 DisposeWhenComplete(entry.Task);
             }
-
-            _shutdown.Dispose();
         }
     }
 }

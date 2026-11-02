@@ -37,6 +37,7 @@ internal sealed class JsonRpcConnection
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _requestCancellations = new();
     private readonly ConcurrentDictionary<long, Task> _inflightRequests = new();
     private long _nextRequestSequence;
+    private bool _stopRequested;
 
     public JsonRpcConnection(Stream input, Stream output)
     {
@@ -52,27 +53,39 @@ internal sealed class JsonRpcConnection
 
     /// <summary>Handles a notification (method, no id).</summary>
     public Func<string, JsonElement?, Task>? OnNotification { get; set; }
+    public Func<Task>? OnClosed { get; set; }
+
+    public void Stop() => _stopRequested = true;
 
     /// <summary>Reads and dispatches messages until the input stream ends.</summary>
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
         using var connectionCancellation =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        while (!connectionCancellation.IsCancellationRequested)
+        try
         {
-            var body = await ReadMessageAsync(connectionCancellation.Token).ConfigureAwait(false);
-            if (body == null)
+            while (!_stopRequested && !connectionCancellation.IsCancellationRequested)
             {
-                connectionCancellation.Cancel();
-                break;
+                var body = await ReadMessageAsync(connectionCancellation.Token).ConfigureAwait(false);
+                if (body == null)
+                {
+                    break;
+                }
+
+                await DispatchAsync(body, connectionCancellation.Token).ConfigureAwait(false);
             }
-
-            await DispatchAsync(body, connectionCancellation.Token).ConfigureAwait(false);
         }
-
-        if (_inflightRequests.Count > 0)
+        finally
         {
-            await Task.WhenAll(_inflightRequests.Values).ConfigureAwait(false);
+            connectionCancellation.Cancel();
+            if (OnClosed is not null)
+            {
+                await OnClosed().ConfigureAwait(false);
+            }
+            if (_inflightRequests.Count > 0)
+            {
+                await Task.WhenAll(_inflightRequests.Values).WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+            }
         }
     }
 

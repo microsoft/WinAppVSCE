@@ -9,7 +9,7 @@ export async function runEditorScenarios(ctx) {
     selectionRangeWith, linkedEditingWith, documentLinkWith, prepareRenameWith,
     renameWith, semanticTokensWith, semanticTokensRangeWith, decodeSemanticTokens,
     codeActionWith, completeWith, completeItemsWith, hoverAt, definitionWith,
-    referencesWith, positionToOffset,
+    referencesWith, positionToOffset, offsetToPosition, send, waitFor, responseFor,
   } = ctx;
 
   const fmtMessy = "<Page>\n<Grid>\n<Button />\n</Grid>\n</Page>";
@@ -210,6 +210,28 @@ export async function runEditorScenarios(ctx) {
   if (rnNon !== null)
     fail(`prepareRename: a caret on the element name must not be renameable, got ${JSON.stringify(rnNon)}`);
   console.log(`[ok] rename: prepareRename validates x:Name; rename rewrites decl+usage; invalid name rejected; non-symbol -> null`);
+
+  const argumentRename = `<Page ${NS}><TextBox x:Name="Input"/><TextBlock Text="{x:Bind Input.Text}"/><TextBlock Text="{x:Bind Format(Input.Text)}"/></Page>`;
+  const argumentPosition = offsetToPosition(argumentRename, argumentRename.lastIndexOf("Input.Text") + 2);
+  const argumentPrepared = await prepareRenameWith(91010, argumentRename, argumentPosition, "binding argument");
+  if (argumentPrepared?.placeholder !== "Input") fail("binding argument prepareRename did not resolve Input");
+  const argumentEdits = await renameWith(91011, argumentRename, argumentPosition, "Entry", "binding argument");
+  const argumentChanges = argumentEdits.result?.changes?.[xamlUri] ?? [];
+  if (argumentEdits.error || argumentChanges.length !== 3 ||
+      argumentChanges.some(edit => argumentRename.slice(positionToOffset(argumentRename, edit.range.start),
+        positionToOffset(argumentRename, edit.range.end)) !== "Input")) {
+    fail(`binding argument rename must update all three exact tokens: ${JSON.stringify(argumentEdits)}`);
+  }
+  const themes = `<Page ${NS}><Page.Resources><ResourceDictionary><ResourceDictionary.ThemeDictionaries><ResourceDictionary x:Key="Default"><SolidColorBrush x:Key="Accent"/></ResourceDictionary><ResourceDictionary x:Key="Light"><SolidColorBrush x:Key="Accent"/></ResourceDictionary></ResourceDictionary.ThemeDictionaries></ResourceDictionary></Page.Resources><Border Background="{ThemeResource Accent}"/></Page>`;
+  const themePosition = offsetToPosition(themes, themes.lastIndexOf("Accent") + 2);
+  const themeRename = await renameWith(91012, themes, themePosition, "Brand", "theme safety");
+  if (themeRename.error?.code !== -32803 || themeRename.result) {
+    fail(`theme rename must refuse rather than return partial edits: ${JSON.stringify(themeRename)}`);
+  }
+  send({ id: 91013, method: "textDocument/prepareRename", params: { textDocument: { uri: xamlUri }, position: themePosition } });
+  const themePrepared = await waitFor(responseFor(91013), 30000, "theme prepareRename safety");
+  if (themePrepared.error?.code !== -32803) fail(`theme prepareRename must refuse: ${JSON.stringify(themePrepared)}`);
+  console.log("[ok] rename safety: binding arguments updated; theme alternatives refused at both LSP entry points");
 
   // 19b) ROUND 80: element-name reference nav + rename now recognize RelativePanel alignment attached properties (bare-name, like Storyboard.TargetName) AND VSM <Setter Target="Element.Property"> (only the pre-dot element segment). Before this, renaming an x:Name silently left these dangling. F12 on a RelativePanel.RightOf value navigates to the referenced x:Name declaration (line 1, not the usage).
   const rpBody =

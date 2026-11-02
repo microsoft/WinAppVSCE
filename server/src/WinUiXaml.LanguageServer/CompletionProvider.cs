@@ -15,6 +15,15 @@ internal static partial class CompletionProvider
     public static CompletionList Provide(TextDocument doc, int offset, XamlTypeSystem typeSystem, INamedTypeSymbol? pageClass = null, IReadOnlyCollection<string>? appResourceKeys = null)
         => ProvideCore(doc, offset, typeSystem, pageClass, appResourceKeys, null);
 
+    internal static CompletionList? ProvideSyntaxOnly(TextDocument doc, int offset)
+    {
+        var context = Classify(doc.Text, offset);
+        return context.Kind == ContextKind.CloseTag
+            ? CompleteCloseTag(doc, offset, context.ReplaceStart,
+                doc.RangeOf(new TextSpan(context.ReplaceStart, offset)))
+            : null;
+    }
+
     internal static CompletionList ProvideForTest(
         TextDocument doc,
         int offset,

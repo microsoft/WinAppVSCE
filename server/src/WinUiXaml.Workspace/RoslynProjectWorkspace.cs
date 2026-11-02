@@ -109,6 +109,9 @@ namespace WinUiXaml.Workspace
         public string? GeneratorFailure { get; }
 
         /// <summary>Loads a single project by path.</summary>
+        [System.Diagnostics.CodeAnalysis.DynamicDependency(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicParameterlessConstructor,
+            typeof(System.Collections.Concurrent.ConcurrentDictionary<,>))]
         public static Task<RoslynProjectWorkspace> LoadProjectAsync(
             string projectPath,
             IDictionary<string, string>? globalProperties = null,
@@ -143,7 +146,7 @@ namespace WinUiXaml.Workspace
             // Referenced projects compile from source so types resolve before outputs exist,
             // matching MSBuildWorkspace's LoadMetadataForReferencedProjects=false; the shared graph
             // also feeds markup-compiler repair and builds each project once.
-            var graph = new ProjectGraphContext(fullPath);
+            var graph = new ProjectGraphContext(fullPath, properties);
             var (evaluation, arguments, unresolvedProjectReferences) =
                 AcquireProjectData(fullPath, properties, cancellationToken, graph);
 
@@ -167,18 +170,12 @@ namespace WinUiXaml.Workspace
             graph.RecordGeneratorFailure(fullPath, generated.FailureReason);
             AddSourceTrees(trees, generated.Files, parseOptions, cancellationToken);
 
-            var projectCompilations = ImmutableArray.CreateBuilder<MetadataReference>();
+            var references = commandLine.CreateMetadataReferences().ToBuilder();
             AddProjectReferences(
-                projectCompilations,
+                references,
                 graph,
-                evaluation.ProjectReferences,
-                properties,
+                evaluation,
                 cancellationToken);
-
-            var references = ImmutableArray.CreateBuilder<MetadataReference>();
-            references.AddRange(WithoutSupersededProjectOutputs(
-                commandLine.CreateMetadataReferences(), projectCompilations));
-            references.AddRange(projectCompilations);
 
             var options = commandLine.CreateCompilationOptions();
             var allReferences = references.ToImmutable();
@@ -281,13 +278,13 @@ namespace WinUiXaml.Workspace
         /// </summary>
         private sealed class ProjectGraphContext
         {
-            public ProjectGraphContext(string rootPath)
+            public ProjectGraphContext(string rootPath, IReadOnlyDictionary<string, string> properties)
             {
                 KnownProjects = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
                 GeneratorInputFiles = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
                 KnownProjects.Add(rootPath);
-                InProgress = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootPath };
-                Compilations = new Dictionary<string, Compilation?>(StringComparer.OrdinalIgnoreCase);
+                InProgress = new HashSet<string>(StringComparer.Ordinal) { MsBuildCli.ConfigurationKey(rootPath, properties) };
+                Compilations = new Dictionary<string, Compilation?>(StringComparer.Ordinal);
             }
 
             public ImmutableHashSet<string>.Builder KnownProjects { get; }
@@ -339,10 +336,11 @@ namespace WinUiXaml.Workspace
         private static void AddProjectReferences(
             ImmutableArray<MetadataReference>.Builder references,
             ProjectGraphContext context,
-            ImmutableArray<string> projectReferences,
-            Dictionary<string, string> properties,
+            MsBuildCli.Evaluation evaluation,
             CancellationToken cancellationToken)
         {
+            context.KnownProjects.UnionWith(evaluation.ProjectReferences);
+            var projectReferences = evaluation.ResolvedProjectReferences;
             if (projectReferences.IsDefaultOrEmpty)
             {
                 return;
@@ -351,25 +349,26 @@ namespace WinUiXaml.Workspace
             foreach (var reference in projectReferences)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var referencePath = Path.GetFullPath(reference);
+                var referencePath = reference.Path;
+                var configuration = MsBuildCli.ConfigurationKey(referencePath, reference.Properties);
                 if (!File.Exists(referencePath))
                 {
                     continue;
                 }
 
                 // Already built somewhere else in the graph: reuse it rather than skipping it.
-                if (context.Compilations.TryGetValue(referencePath, out var cached))
+                if (context.Compilations.TryGetValue(configuration, out var cached))
                 {
                     if (cached != null)
                     {
-                        references.Add(cached.ToMetadataReference());
+                        ReplaceProjectOutput(references, reference, cached);
                     }
 
                     continue;
                 }
 
                 // Currently being loaded further up the stack, so this edge closes a cycle.
-                if (!context.InProgress.Add(referencePath))
+                if (!context.InProgress.Add(configuration))
                 {
                     continue;
                 }
@@ -382,11 +381,11 @@ namespace WinUiXaml.Workspace
                 try
                 {
                     var referenced = BuildReferencedProject(
-                        referencePath, context, properties, cancellationToken);
-                    context.Compilations[referencePath] = referenced;
+                        referencePath, context, reference.Properties.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase), cancellationToken);
+                    context.Compilations[configuration] = referenced;
                     if (referenced != null)
                     {
-                        references.Add(referenced.ToMetadataReference());
+                        ReplaceProjectOutput(references, reference, referenced);
                     }
                 }
                 catch (OperationCanceledException)
@@ -397,43 +396,38 @@ namespace WinUiXaml.Workspace
                 {
                     // A bad referenced project must not fail the primary load; log the reason so
                     // missing types from that project are not mistaken for ordinary code errors.
-                    context.Compilations[referencePath] = null;
+                    context.Compilations[configuration] = null;
                     Console.Error.WriteLine(
                         $"[winui-xaml-ls] referenced project '{referencePath}' was skipped: {ex.Message}");
                 }
                 finally
                 {
-                    context.InProgress.Remove(referencePath);
+                    context.InProgress.Remove(configuration);
                 }
             }
         }
 
-        /// <summary>
-        /// Drops on-disk project-reference assemblies when a live compilation exists, matching Roslyn swap behavior so stale <c>bin</c> outputs cannot beat edit-tracking source compilations.
-        /// </summary>
-        private static IEnumerable<MetadataReference> WithoutSupersededProjectOutputs(
-            ImmutableArray<MetadataReference> fromCommandLine,
-            ImmutableArray<MetadataReference>.Builder projectCompilations)
+        private static void ReplaceProjectOutput(
+            ImmutableArray<MetadataReference>.Builder references,
+            MsBuildCli.ResolvedProjectReference edge,
+            Compilation compilation)
         {
-            var superseded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var reference in projectCompilations)
+            bool replaced = false;
+            for (int i = 0; i < references.Count; i++)
             {
-                if (reference is CompilationReference compilation &&
-                    !string.IsNullOrEmpty(compilation.Compilation.AssemblyName))
+                if (references[i] is PortableExecutableReference portable &&
+                    portable.FilePath is { } filePath &&
+                    edge.OutputPaths.Contains(filePath, StringComparer.OrdinalIgnoreCase))
                 {
-                    superseded.Add(compilation.Compilation.AssemblyName!);
+                    references[i] = compilation.ToMetadataReference(
+                        portable.Properties.Aliases, portable.Properties.EmbedInteropTypes);
+                    replaced = true;
                 }
             }
-
-            if (superseded.Count == 0)
+            if (!replaced)
             {
-                return fromCommandLine;
+                references.Add(compilation.ToMetadataReference(edge.Aliases));
             }
-
-            return fromCommandLine.Where(reference =>
-                reference is not PortableExecutableReference portable ||
-                string.IsNullOrEmpty(portable.FilePath) ||
-                !superseded.Contains(Path.GetFileNameWithoutExtension(portable.FilePath)));
         }
 
         private static Compilation? BuildReferencedProject(
@@ -466,16 +460,9 @@ namespace WinUiXaml.Workspace
             context.RecordGeneratorFailure(projectPath, generated.FailureReason);
             AddSourceTrees(trees, generated.Files, parseOptions, cancellationToken);
 
-            var projectCompilations = ImmutableArray.CreateBuilder<MetadataReference>();
+            var references = commandLine.CreateMetadataReferences().ToBuilder();
             AddProjectReferences(
-                projectCompilations, context, evaluation.ProjectReferences, properties, cancellationToken);
-
-            // Same superseding rule as the root project: a live compilation must win over the
-            // referenced project's own stale bin output, or both bind and the symbols disagree.
-            var references = ImmutableArray.CreateBuilder<MetadataReference>();
-            references.AddRange(WithoutSupersededProjectOutputs(
-                commandLine.CreateMetadataReferences(), projectCompilations));
-            references.AddRange(projectCompilations);
+                references, context, evaluation, cancellationToken);
 
             return CSharpCompilation.Create(
                 assemblyName,

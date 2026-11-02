@@ -21,6 +21,7 @@ import {
   PROJECT_CONTEXT_PACKAGES_NOT_RESTORED_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_REFERENCE_BUILD_FAILED_FALLBACK_MESSAGE,
   PROJECT_CONTEXT_RESTORING_MESSAGE,
+  PROJECT_CONTEXT_WINUI_REQUIRED_MESSAGE,
   ProjectContextState,
 } from "./projectContextStatus";
 
@@ -148,12 +149,14 @@ export function getXamlStatus(
         actions: [XAML_STATUS_ACTIONS.showOutput],
       };
     }
-    if (projectContext?.state === "syntax-only") {
+    if (projectContext?.state === "syntax-only" || projectContext?.state === "winui-required") {
       return {
         message:
           `${XAML_STATUS_PREFIX} ${
             projectContext.message ??
-            "This document uses syntax-only XAML editing; project types are not loaded."
+            (projectContext.state === "winui-required"
+              ? PROJECT_CONTEXT_WINUI_REQUIRED_MESSAGE
+              : "This document uses syntax-only XAML editing; project types are not loaded.")
           }`,
         actions: [XAML_STATUS_ACTIONS.showOutput],
       };
