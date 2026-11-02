@@ -1,5 +1,6 @@
 using System;
 using System.Text.Json.Nodes;
+using System.Threading;
 
 namespace WinUIXamlPreview.IntegrationTests
 {
@@ -92,6 +93,23 @@ namespace WinUIXamlPreview.IntegrationTests
                 Assert(pa != null && pb != null && pa != pb, $"distinct surfaces expected, got {pa} / {pb}");
                 Eq(_fx.MainPage, (string?)a["pinnedPath"], "MainPage pinned path");
                 Eq(_fx.SecondPage, (string?)b["pinnedPath"], "SecondPage pinned path");
+            });
+
+            Run("Margin: switching tabs keeps keyboard focus in the editor", () =>
+            {
+                Fresh();
+                OpenRendered(_fx.MainPage);
+                OpenRendered(_fx.SecondPage);
+                foreach (var path in new[] { _fx.MainPage, _fx.SecondPage, _fx.MainPage })
+                {
+                    Call("activate", new { path });
+                    WaitFor("rendered after switch: " + path, x => Rendered(Preview(x, path)), 60_000);
+                    // The surface window attaches asynchronously after activation; give it time to try to take focus.
+                    Thread.Sleep(1500);
+                    var f = Call("focus", new { path })!.AsObject();
+                    Assert(f["editorFocused"]!.GetValue<bool>() && Num(f["focusPid"]) == Num(f["vsPid"]),
+                        $"editor lost focus after switching to {System.IO.Path.GetFileName(path)}: {f.ToJsonString()}");
+                }
             });
 
             Run("Margin: hide collapses to a strip and persists the choice", () =>

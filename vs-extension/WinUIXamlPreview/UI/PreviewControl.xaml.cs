@@ -150,7 +150,15 @@ namespace WinUIXamlPreview.UI
             SurfaceIdentity.FallbackRequested += OnIdentityFallbackRequested;
             SurfaceClient.IdentityRequired += OnSurfaceIdentityRequired;
             PreviewOptions.PreviewSettingsChanged += OnPreviewSettingsChanged;
-            IsVisibleChanged += (_, e) => { if ((bool)e.NewValue && _settingsSyncDeferred) { OnPreviewSettingsChanged(); } };
+            IsVisibleChanged += (_, e) =>
+            {
+                if (!(bool)e.NewValue)
+                {
+                    return;
+                }
+                if (_settingsSyncDeferred) { OnPreviewSettingsChanged(); }
+                ArmFocusGuard();
+            };
         }
 
         private static void OnSurfaceIdentityRequired() => SurfaceIdentity.RequestFallback(Log.Write);
@@ -2166,6 +2174,7 @@ namespace WinUIXamlPreview.UI
                         NativeHostHolder.Child = host;
                         _nativeHost = host;
                         ArmHangWatchdog(source, hwnd);
+                        ArmFocusGuard();
                         if (old != null)
                         {
                             try { old.Dispose(); } catch { }
@@ -2753,6 +2762,7 @@ namespace WinUIXamlPreview.UI
             PreviewPackageState.UnregisterSession(this);
             _resizeDebounce.Stop();
             _emptyDebounce.Stop();
+            StopFocusGuard();
             DisposeClient();
         }
     }

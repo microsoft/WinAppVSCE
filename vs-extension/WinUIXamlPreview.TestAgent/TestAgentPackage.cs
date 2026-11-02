@@ -147,6 +147,7 @@ namespace WinUIXamlPreview.TestAgent
                     }
                     return arr;
                 }
+                case "focus": return FocusInfo(Str(req, "path"));
                 case "caretOf": return View(Str(req, "path")).Caret.Position.BufferPosition.Position;
                 case "save": return Save(Str(req, "path"), (string?)req["newPath"]);
                 case "click": return Click((string?)req["path"], Str(req, "automationId"));
@@ -296,6 +297,32 @@ namespace WinUIXamlPreview.TestAgent
             var cm = (IComponentModel)GetGlobalService(typeof(SComponentModel));
             return cm.GetService<IVsEditorAdaptersFactoryService>().GetWpfTextView(vsView)
                 ?? throw new InvalidOperationException("no wpf view: " + path);
+        }
+
+        [DllImport("user32.dll")] private static extern IntPtr GetFocus();
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hWnd, StringBuilder name, int max);
+
+        /// <summary>Where Win32 keyboard focus is (VS's queue is shared with a reparented Surface window) and whether
+        /// <paramref name="path"/>'s editor has it.</summary>
+        private JObject FocusInfo(string path)
+        {
+            var hwnd = GetFocus();
+            uint pid = 0;
+            var cls = new StringBuilder(256);
+            if (hwnd != IntPtr.Zero)
+            {
+                GetWindowThreadProcessId(hwnd, out pid);
+                GetClassName(hwnd, cls, cls.Capacity);
+            }
+            return new JObject
+            {
+                ["editorFocused"] = View(path).HasAggregateFocus,
+                ["focusHwnd"] = hwnd.ToInt64(),
+                ["focusPid"] = (long)pid,
+                ["focusClass"] = cls.ToString(),
+                ["vsPid"] = (long)System.Diagnostics.Process.GetCurrentProcess().Id,
+            };
         }
 
         private bool Replace(string path, int start, int length, string text)

@@ -171,6 +171,7 @@ namespace WinUIXamlPreview.Editor
             _textView = textView;
             _location = location;
             _preview = new PreviewControl();
+            _preview.ReclaimFocus = () => _textView.VisualElement.Focus();
 
             _root = new Grid();
             _root.SetResourceReference(Panel.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);

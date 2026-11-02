@@ -59,7 +59,7 @@ namespace WinUIXamlPreview.UI
             // WPF's first layout pass moved it into the pane (visible on every new HWND, e.g. a theme swap).
             var (x, y) = GetInitialChildOrigin();
             NativeMethods.MoveWindow(_surfaceHwnd, x, y, _pixelW, _pixelH, true);
-            NativeMethods.ShowWindow(_surfaceHwnd, NativeMethods.SW_SHOW);
+            NativeMethods.ShowWindow(_surfaceHwnd, NativeMethods.SW_SHOWNA);
             return new HandleRef(this, _surfaceHwnd);
         }
 
@@ -111,7 +111,7 @@ namespace WinUIXamlPreview.UI
         public const long WS_MINIMIZEBOX = 0x00020000L;
         public const long WS_MAXIMIZEBOX = 0x00010000L;
         public const long WS_SYSMENU = 0x00080000L;
-        public const int SW_SHOW = 5;
+        public const int SW_SHOWNA = 8; // show without activating: the editor keeps focus
 
         public enum DPI_HOSTING_BEHAVIOR { INVALID = -1, DEFAULT = 0, MIXED = 1 }
 
