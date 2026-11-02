@@ -593,8 +593,8 @@ describe("WinUI XAML — generate event handler (#3)", function () {
       `must not write to a generated .g.cs partial; got ${JSON.stringify(gen.edits.map((e) => e.fsPath))}`
     );
     assert.ok(
-      csEdit.newText.includes("private void Foo_Click(object sender, RoutedEventArgs e)"),
-      `stub should carry the delegate signature; got ${JSON.stringify(csEdit.newText)}`
+      csEdit.newText.includes("private void Foo_Click(object sender, global::Microsoft.UI.Xaml.RoutedEventArgs e)"),
+      `stub should carry an import-independent delegate signature; got ${JSON.stringify(csEdit.newText)}`
     );
   });
 
