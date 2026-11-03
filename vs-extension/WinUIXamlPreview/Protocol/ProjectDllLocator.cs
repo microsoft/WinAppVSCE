@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
@@ -216,30 +217,46 @@ namespace WinUIXamlPreview.Protocol
         /// nothing is conclusive it errs toward showing (returns true) so a genuine WinUI file is never hidden.
         /// Every failure path returns true for the same reason. Cheap and synchronous — safe on the UI thread.
         /// </summary>
-        public static bool IsWinUiXaml(string? xamlPath, Action<string>? log = null)
+        public static bool IsWinUiXaml(string? xamlPath, Action<string>? log = null) =>
+            NonWinUiFramework(xamlPath, log) == null;
+
+        /// <summary>
+        /// "UWP" or "WPF" when <paramref name="xamlPath"/> belongs to that framework and must not be previewed;
+        /// null when it is (or may be) WinUI 3. See <see cref="IsWinUiXaml"/>.
+        /// </summary>
+        public static string? NonWinUiFramework(string? xamlPath, Action<string>? log = null)
         {
             log ??= _ => { };
 
             if (string.IsNullOrWhiteSpace(xamlPath))
             {
-                return true; // can't inspect — don't suppress
+                return null; // can't inspect — don't suppress
             }
 
             try
             {
-                var csproj = FindOwningCsproj(xamlPath!);
-                if (csproj != null)
+                var projects = FindOwningProjectFiles(xamlPath!);
+                if (projects.Count > 0)
                 {
-                    var verdict = Classify(SafeRead(csproj));
-                    if (verdict == FrameworkKind.WinUi) { log("WinUI 3 project detected — previewer enabled."); return true; }
-                    if (verdict == FrameworkKind.Wpf) { log("WPF project detected — WinUI previewer suppressed."); return false; }
-                    if (verdict == FrameworkKind.Uwp) { log("UWP project detected — WinUI previewer suppressed."); return false; }
+                    var verdict = FrameworkKind.Unknown;
+                    foreach (var project in projects)
+                    {
+                        verdict = Classify(SafeRead(project));
+                        if (verdict != FrameworkKind.Unknown)
+                        {
+                            break;
+                        }
+                    }
 
-                    // csproj was inconclusive (e.g. UseWinUI lives in a shared props file): scan up the tree.
-                    var propsVerdict = ScanParentProps(Path.GetDirectoryName(csproj));
-                    if (propsVerdict == FrameworkKind.WinUi) { log("WinUI 3 markers found in Directory.Build.props — previewer enabled."); return true; }
-                    if (propsVerdict == FrameworkKind.Wpf) { log("WPF markers found in shared props — WinUI previewer suppressed."); return false; }
-                    if (propsVerdict == FrameworkKind.Uwp) { log("UWP markers found in shared props — WinUI previewer suppressed."); return false; }
+                    if (verdict == FrameworkKind.WinUi) { log("WinUI 3 project detected — previewer enabled."); return null; }
+                    if (verdict == FrameworkKind.Wpf) { log("WPF project detected — WinUI previewer suppressed."); return "WPF"; }
+                    if (verdict == FrameworkKind.Uwp) { log("UWP project detected — WinUI previewer suppressed."); return "UWP"; }
+
+                    // Project was inconclusive (e.g. UseWinUI lives in a shared props file): scan up the tree.
+                    var propsVerdict = ScanParentProps(Path.GetDirectoryName(projects[0]));
+                    if (propsVerdict == FrameworkKind.WinUi) { log("WinUI 3 markers found in Directory.Build.props — previewer enabled."); return null; }
+                    if (propsVerdict == FrameworkKind.Wpf) { log("WPF markers found in shared props — WinUI previewer suppressed."); return "WPF"; }
+                    if (propsVerdict == FrameworkKind.Uwp) { log("UWP markers found in shared props — WinUI previewer suppressed."); return "UWP"; }
                 }
 
                 // No project verdict — fall back to a markup heuristic. WPF maps CLR namespaces with
@@ -248,16 +265,55 @@ namespace WinUIXamlPreview.Protocol
                 if (markup != null && markup.IndexOf("clr-namespace:", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     log("Markup uses clr-namespace: (WPF) — WinUI previewer suppressed.");
-                    return false;
+                    return "WPF";
                 }
 
-                return true; // ambiguous — err toward showing so real WinUI is never hidden
+                return null; // ambiguous — err toward showing so real WinUI is never hidden
             }
             catch (Exception ex)
             {
                 log("WinUI detection failed (showing anyway): " + ex.Message);
-                return true;
+                return null;
             }
+        }
+
+        /// <summary>The project files (.csproj, .vcxproj, .vbproj) in the nearest folder at or above the page that has any.</summary>
+        private static List<string> FindOwningProjectFiles(string startPath)
+        {
+            var found = new List<string>();
+            DirectoryInfo? dir;
+            try
+            {
+                dir = File.Exists(startPath) ? new FileInfo(startPath).Directory : new DirectoryInfo(startPath);
+            }
+            catch
+            {
+                return found;
+            }
+
+            for (int i = 0; dir != null && i < 30; i++)
+            {
+                try
+                {
+                    foreach (var pattern in new[] { "*.csproj", "*.vcxproj", "*.vbproj" })
+                    {
+                        found.AddRange(Directory.EnumerateFiles(dir.FullName, pattern, SearchOption.TopDirectoryOnly));
+                    }
+
+                    if (found.Count > 0)
+                    {
+                        return found;
+                    }
+                }
+                catch
+                {
+                    // ignore access errors, keep walking up
+                }
+
+                dir = dir.Parent;
+            }
+
+            return found;
         }
 
         /// <summary>True when the project file (or a parent Directory.Build.props) carries WinUI 3 markers.</summary>
@@ -286,7 +342,13 @@ namespace WinUIXamlPreview.Protocol
             // Squash whitespace so "<UseWinUI> true </UseWinUI>" and attribute spacing match reliably.
             var t = projectText!;
 
-            // WinUI 3 is checked first — its markers are unambiguous and a WinUI project never carries the others.
+            // .NET UWP (UseUwp) is explicit about using system XAML, even if the project also pulls in other packages.
+            if (HasBoolProp(t, "UseUwp"))
+            {
+                return FrameworkKind.Uwp;
+            }
+
+            // WinUI 3 is checked next — its markers are unambiguous and a WinUI project never carries the others.
             if (Has(t, "Microsoft.WindowsAppSDK") || HasBoolProp(t, "UseWinUI") || Has(t, "Microsoft.WinUI"))
             {
                 return FrameworkKind.WinUi;
@@ -298,7 +360,8 @@ namespace WinUIXamlPreview.Protocol
             }
 
             if (Has(t, "uap10.0") || Has(t, "UniversalWindowsPlatform") ||
-                Has(t, "<TargetPlatformIdentifier>UAP") || Has(t, "Windows.Foundation.UniversalApiContract"))
+                Has(t, "<TargetPlatformIdentifier>UAP") || Has(t, "Windows.Foundation.UniversalApiContract") ||
+                HasBoolProp(t, "AppContainerApplication")) // C++/CX and C++/WinRT UWP (.vcxproj)
             {
                 return FrameworkKind.Uwp;
             }

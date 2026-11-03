@@ -484,6 +484,22 @@ namespace WinUIXamlPreview.UI
                 return;
             }
 
+            var otherFramework = Protocol.ProjectDllLocator.NonWinUiFramework(path, m => Log.Write("WinUI gate: " + m));
+            if (otherFramework != null)
+            {
+                if (_pinnedPath == null && _currentPath != null)
+                {
+                    PreviewerSelection.Forget(_currentPath);
+                }
+
+                DisposeClient();
+                _currentPath = null;
+                _hasFrame = false;
+                FrameImage.Source = null;
+                SetStatus($"This is a {otherFramework} XAML file. The WinUI XAML Previewer only supports WinUI 3 projects.", spinner: false);
+                return;
+            }
+
             if (_pinnedPath == null && _currentPath != null && !IsCurrent(path))
             {
                 PreviewerSelection.Forget(_currentPath); // the surface (and its selection) moves to another file

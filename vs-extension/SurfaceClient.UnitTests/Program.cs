@@ -614,6 +614,8 @@ internal static partial class Program
             ("UWP uap10.0 TFM", "<PropertyGroup><TargetFramework>uap10.0.19041</TargetFramework></PropertyGroup>", false),
             ("UWP UniversalWindowsPlatform", "<ItemGroup><PackageReference Include=\"Microsoft.NETCore.UniversalWindowsPlatform\" /></ItemGroup>", false),
             ("UWP TargetPlatformIdentifier", "<PropertyGroup><TargetPlatformIdentifier>UAP</TargetPlatformIdentifier></PropertyGroup>", false),
+            (".NET UWP UseUwp", "<PropertyGroup><TargetFramework>net9.0-windows10.0.26100.0</TargetFramework><UseUwp>true</UseUwp></PropertyGroup>", false),
+            (".NET UWP UseUwp wins over WindowsAppSDK reference", "<PropertyGroup><UseUwp>true</UseUwp></PropertyGroup>" + PkgRef("2.2.0"), false),
             ("UseWinUI false is not WinUI (and falls to markup -> true)", "<PropertyGroup><UseWinUI>false</UseWinUI></PropertyGroup>", true),
             ("WinUI wins over WPF markers", PkgRef("2.2.0") + "<PropertyGroup><UseWPF>true</UseWPF></PropertyGroup>", true),
         };
@@ -645,6 +647,16 @@ internal static partial class Program
             "<Project><ItemGroup><PackageVersion Include=\"Microsoft.WindowsAppSDK\" Version=\"2.2.0\" /></ItemGroup></Project>");
         Csproj(Path.Combine(cpm, "App"), "App");
         Check("Directory.Packages.props WindowsAppSDK -> WinUI", ProjectDllLocator.IsWinUiXaml(Page(Path.Combine(cpm, "App"), markup: "<Page xmlns:l=\"clr-namespace:X\"/>")));
+
+        // C++ projects (.vcxproj): UWP is suppressed, WinUI 3 (which also sets AppContainerApplication) is not.
+        var cxUwp = NewDir("vcx-uwp");
+        Write(Path.Combine(cxUwp, "App.vcxproj"), "<Project><PropertyGroup><AppContainerApplication>true</AppContainerApplication><ApplicationType>Windows Store</ApplicationType></PropertyGroup></Project>");
+        Check("C++ UWP vcxproj -> false", !ProjectDllLocator.IsWinUiXaml(Page(cxUwp)));
+        Eq("NonWinUiFramework: C++ UWP -> UWP", "UWP", ProjectDllLocator.NonWinUiFramework(Page(cxUwp)));
+        var cxWinUi = NewDir("vcx-winui");
+        Write(Path.Combine(cxWinUi, "App.vcxproj"), "<Project><PropertyGroup><AppContainerApplication>true</AppContainerApplication></PropertyGroup><Import Project=\"packages\\Microsoft.WindowsAppSDK.2.2.0\\build\\native\\Microsoft.WindowsAppSDK.props\" /></Project>");
+        Check("C++ WinUI 3 vcxproj -> true", ProjectDllLocator.IsWinUiXaml(Page(cxWinUi)));
+        Eq("NonWinUiFramework: WinUI -> null", null, ProjectDllLocator.NonWinUiFramework(Page(cxWinUi)));
 
         // No project verdict -> markup heuristic.
         var none = NewDir("markup-only");
