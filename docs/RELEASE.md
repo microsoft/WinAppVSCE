@@ -54,6 +54,10 @@ An explicit `-Tag` takes precedence over `WINAPP_CLI_RELEASE_TAG`; when neither 
 downloads the release in `cli-version.json`. Use `-Tag latest` only for deliberate compatibility
 testing, then update the pinned tag in a reviewed change before shipping it.
 
+Schema sync reports success only after every required XSD is copied. If `winapp restore`
+returns nonzero, its diagnostics are logged as warnings; sync can still succeed when all
+required schemas are available. Missing packages or XSDs remain fatal.
+
 ## Release checks
 
 - [ ] Run `npm run test:unit` and `npm test`.
