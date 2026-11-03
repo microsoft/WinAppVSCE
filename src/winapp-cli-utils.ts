@@ -5,6 +5,15 @@ import * as os from 'os';
 export const WINAPP_CLI_CALLER_VALUE = 'vscode-extension';
 
 /**
+ * Return the first candidate path that exists on disk, or `undefined` when none do.
+ * Empty/blank candidates are skipped. Shared by the CLI and the XAML language-server
+ * resolvers so bundled-asset lookup logic lives in one place.
+ */
+export function firstExistingPath(candidates: readonly string[]): string | undefined {
+	return candidates.find((p) => !!p && fs.existsSync(p));
+}
+
+/**
  * Get the path to the bundled winapp CLI executable.
  * Looks in the extension's bin/ directory first (by architecture),
  * then falls back to development paths and the system PATH.
@@ -20,7 +29,7 @@ export function getWinappCliPath(extensionPath: string): string {
 	];
 
 	// Return the first on-disk path that exists, otherwise fall back to 'winapp' on the system PATH
-	return onDiskPaths.find((p) => fs.existsSync(p)) || 'winapp';
+	return firstExistingPath(onDiskPaths) || 'winapp';
 }
 
 /**
@@ -32,13 +41,127 @@ export function getWinappCliPath(extensionPath: string): string {
  * `$(...)`, `$var` and backtick escapes, which lets a crafted file path inject
  * arbitrary commands (e.g. a path containing `$(Remove-Item ...)`). A
  * single-quoted PowerShell literal performs no such expansion; the only
- * metacharacter is the single quote itself, which is escaped by doubling it.
+ * metacharacters are the quote characters themselves, which are escaped by
+ * doubling them.
  *
- * @param value The raw argument (typically a user-selected file path).
+ * PowerShell accepts the Unicode quotation marks U+2018-U+201B as single
+ * quotes too, so a path containing one would otherwise close the literal and
+ * run the rest as commands. Values no longer come only from a file dialog —
+ * project and solution paths are discovered in the workspace and read out of
+ * `.sln`/`.slnx` files — so cloning a repository must never be enough to run
+ * attacker-chosen commands.
+ *
+ * @param value The raw argument (typically a file path).
  * @returns The value wrapped in a single-quoted PowerShell literal.
  */
 export function escapePowerShellArg(value: string): string {
-	return `'${value.replace(/'/g, "''")}'`;
+	return `'${value.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&')}'`;
+}
+
+/**
+ * Extract a human-readable error message from winapp CLI output.
+ *
+ * Returns the first non-empty line, which is where every `winapp` command puts
+ * its failure reason. Callers use it to replace the generic "see the output
+ * channel" message with what actually went wrong.
+ *
+ * Stripping the CLI's leading status glyph is normalization, not a match
+ * condition: plain-text errors without a glyph must still be reported.
+ *
+ * @param output Combined stdout/stderr from a command that exited non-zero.
+ * @returns The message, or `undefined` when the command printed nothing usable.
+ */
+export function parseWinappErrorMessage(output: string): string | undefined {
+	for (const rawLine of output.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) {
+			continue;
+		}
+		const cleaned = line.replace(/^(?:\[ERROR\]\s*-\s*|[❌✖✗⚠]\s*)/u, '').trim();
+		if (cleaned) {
+			return cleaned;
+		}
+	}
+
+	return undefined;
+}
+
+/**
+ * Extract the JSON object from `winapp ... --json` output. Progress or warning
+ * text can surround the payload, so scan for the first brace-balanced object
+ * rather than requiring the output to be JSON and nothing else.
+ *
+ * Brace counting ignores braces inside JSON strings, and only runs once the
+ * scan is inside a candidate: quotes in surrounding prose must not swallow the
+ * payload. A single pass keeps this linear on the growing `winapp run` buffer.
+ *
+ * @returns The parsed object, or `undefined` when the output holds no complete one.
+ */
+export function extractJsonObject(output: string): Record<string, unknown> | undefined {
+	if (!output) {
+		return undefined;
+	}
+
+	let depth = 0;
+	let start = -1;
+	let inString = false;
+	let escaped = false;
+
+	for (let i = 0; i < output.length; i++) {
+		const char = output[i];
+
+		// Outside a candidate only '{' matters, so prose cannot affect the scan.
+		if (depth === 0) {
+			if (char === '{') {
+				start = i;
+				depth = 1;
+				inString = false;
+				escaped = false;
+			}
+			continue;
+		}
+
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+			} else if (char === '\\') {
+				escaped = true;
+			} else if (char === '"') {
+				inString = false;
+			}
+			continue;
+		}
+
+		if (char === '"') {
+			inString = true;
+		} else if (char === '{') {
+			depth++;
+		} else if (char === '}') {
+			depth--;
+			if (depth === 0) {
+				const parsed = parseJsonObject(output.slice(start, i + 1));
+				if (parsed) {
+					return parsed;
+				}
+				// Balanced but not valid JSON (e.g. '{x}' in a warning): keep scanning.
+				start = -1;
+			}
+		}
+	}
+
+	return undefined;
+}
+
+/** Parse `text` as a JSON object, rejecting arrays, primitives and malformed input. */
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+	try {
+		const parsed = JSON.parse(text);
+		return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+			? parsed as Record<string, unknown>
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 export function resolveWindowsPowerShellPath(systemRoot: string | undefined): string {

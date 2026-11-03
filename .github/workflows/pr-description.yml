@@ -17,7 +17,7 @@ jobs:
     # No checkout step — all data is read via the GitHub API.
     steps:
       - name: Generate AI description
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
         with:
@@ -44,12 +44,20 @@ jobs:
               return;
             }
 
-            const { data: diff } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              mediaType: { format: 'diff' },
-            });
+            let diff = '';
+            try {
+              const diffRes = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                mediaType: { format: 'diff' },
+              });
+              diff = diffRes.data;
+            } catch (err) {
+              // Very large PRs exceed the REST API's 20k-line diff cap (HTTP 406). Don't fail the
+              // job over it — fall back to the changed-file list below so a description still generates.
+              core.warning(`Could not fetch PR diff (${err.status || err.message}) — using changed-file list only.`);
+            }
 
             const maxDiffLen = 6000;
             const truncatedDiff = diff.length > maxDiffLen

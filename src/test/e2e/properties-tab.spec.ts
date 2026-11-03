@@ -52,7 +52,7 @@ test('editing display name updates the XML', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, '<DisplayName>My Cool App</DisplayName>');
     expect(xml).toContain('<DisplayName>My Cool App</DisplayName>');
 });
 
@@ -61,7 +61,7 @@ test('editing publisher display name updates the XML', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, '<PublisherDisplayName>Test Publisher</PublisherDisplayName>');
     expect(xml).toContain('<PublisherDisplayName>Test Publisher</PublisherDisplayName>');
 });
 
@@ -70,7 +70,7 @@ test('editing logo path updates the XML', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, '<Logo>Assets\\NewLogo.png</Logo>');
     expect(xml).toContain('<Logo>Assets\\NewLogo.png</Logo>');
 });
 
@@ -128,7 +128,7 @@ test('description textarea is editable', async () => {
         await waitForDebounce(ctx.page);
         await ctx.page.waitForTimeout(1_000);
 
-        const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+        const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'A test description');
         expect(xml).toContain('A test description');
     }
 });
@@ -152,7 +152,7 @@ test('can add Auto Update App Installer URI', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'https://example.com/appinstaller');
     expect(xml).toContain('https://example.com/appinstaller');
 });
 

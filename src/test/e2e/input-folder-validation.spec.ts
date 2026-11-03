@@ -8,14 +8,12 @@ import {
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { extensionLaunchArgs } from './helpers';
 
 const VSCODE_EXE =
 	process.env.VSCODE_PATH ??
 	path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe');
-const EXTENSION_ROOT = path.resolve(__dirname, '..', '..', '..');
-const EXTENSION_ARGS = process.env.E2E_USE_INSTALLED_EXTENSION === '1'
-	? []
-	: [`--extensionDevelopmentPath=${EXTENSION_ROOT}`];
+const EXTENSION_ARGS = extensionLaunchArgs();
 const pendingApps = new Set<ElectronApplication>();
 const pendingDirectories = new Set<string>();
 

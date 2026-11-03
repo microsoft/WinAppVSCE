@@ -91,6 +91,6 @@ test('editing identity name persists to XML', async () => {
     await switchTab(frame, 'identity');
     await setInputValue(frame, 'identity-name', 'PushNotificationsEdited');
     await waitForDebounce(ctx.page);
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Name="PushNotificationsEdited"');
     expect(xml).toContain('Name="PushNotificationsEdited"');
 });

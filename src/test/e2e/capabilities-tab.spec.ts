@@ -61,7 +61,7 @@ test('can check internetClient capability', async () => {
     const checked = await isCapabilityChecked(frame, 'internetClient');
     expect(checked).toBe(true);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'internetClient');
     expect(xml).toContain('internetClient');
 });
 
@@ -85,7 +85,7 @@ test('can toggle a device capability', async () => {
     const checked = await isCapabilityChecked(frame, 'device:microphone');
     expect(checked).toBe(true);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'microphone');
     expect(xml).toContain('microphone');
 
     // Toggle back off
@@ -103,7 +103,7 @@ test('can add systemAIModels capability', async () => {
     const checked = await isCapabilityChecked(frame, 'systemai:systemAIModels');
     expect(checked).toBe(true);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, ['systemAIModels', 'schemas.microsoft.com/appx/manifest/systemai/windows10']);
     expect(xml).toContain('systemAIModels');
     expect(xml).toContain('schemas.microsoft.com/appx/manifest/systemai/windows10');
 });
@@ -140,7 +140,7 @@ test('re-adding rescap capability restores xmlns:rescap', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, ['runFullTrust', 'xmlns:rescap']);
     expect(xml).toContain('runFullTrust');
     expect(xml).toContain('xmlns:rescap');
 });
@@ -212,7 +212,7 @@ test('adding valid custom capability succeeds', async () => {
     expect(val).toBe('');
 
     // The capability should appear in the XML
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Contoso.Devices.SerialCommunication_0wer1ey63g7b4');
     expect(xml).toContain('Contoso.Devices.SerialCommunication_0wer1ey63g7b4');
 });
 

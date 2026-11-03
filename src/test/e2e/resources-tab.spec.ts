@@ -62,7 +62,7 @@ test('can edit resource language', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Language="en-US"');
     expect(xml).toContain('Language="en-US"');
 });
 

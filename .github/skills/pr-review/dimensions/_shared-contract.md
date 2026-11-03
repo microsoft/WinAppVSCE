@@ -1,90 +1,111 @@
 # Shared output contract
 
-Every dimension sub-agent must follow this output contract.
+## Output
 
-## Header line
+Sub-agent output is internal synthesis input. Keep severity, confidence,
+validation, and domain metadata here, but the orchestrator must not copy that
+bookkeeping into the user-visible report unless it changes the action or
+confidence.
 
-Start with exactly one line:
+Start with one line: `# <dimension>: <N> findings`.
 
-```
-# <dimension name>: <N> findings
-```
-
-Where `<dimension name>` is one of: `security`, `correctness`, `extension-ux`,
-`alternative-solution`, `test-coverage`, `docs-and-samples`, `packaging`,
-`multi-model`.
-
-## Per-finding block
-
-Each finding is a level-2 heading followed by labeled bullets:
+Then one block per finding:
 
 ```markdown
-## <relative file path>:<start_line>-<end_line>
+## <plain finding title>
 - **Severity**: critical | high | medium | low
 - **Confidence**: high | medium | low
-- **Domain**: <dimension name>
-- **Finding**: <one-line statement of what is wrong>
-- **Evidence**: <specific code evidence — quote 1-3 lines, cite line refs in the diff>
-- **Recommendation**: <concrete actionable next step>
+- **Validation**: static-only (needs runtime confirmation)
+- **Domain**: <dimension>
+- **Location**: <repo-relative path and post-change lines>
+- **What is wrong**: <the defect, in plain language>
+- **Show me**: <smallest command/input/code path; prefer input -> actual -> expected>
+- **Why it matters**: <concrete user, build, security, or maintenance consequence>
+- **Smallest fix**: <least-complex change that resolves it>
 ```
 
-Notes:
+Always emit `Validation: static-only`; the orchestrator promotes it only after a
+real reproduction. Define unavoidable jargon on first use. If you cannot provide
+a concrete `Show me`, lower confidence or drop the finding.
 
-- File paths are relative to the repo root (no leading `./`).
-- Line numbers refer to the **post-change** file (the right side of the diff).
-  For `working` / `staged` / `all` scopes this means the working-tree or staged
-  state, not a committed version.
-- For findings that span discontiguous regions, emit them as separate findings.
+End with a `## What I checked` section, one bullet per area inspected. This is
+internal evidence for consolidation, not a user-visible coverage table.
 
-## Trailing "what I checked" note
+## The bar
 
-After the findings (or in place of them when there are zero), include:
+Before emitting anything, ask:
 
-```markdown
-## What I checked
-- <one bullet per area inspected>
-- <another concrete area inspected>
-```
+> Could a junior developer with no prior conversation understand what fails, see
+> it happen, and know the smallest repair after one read?
 
-This appears in the orchestrator's `Coverage notes` section so the developer
-can see scope, not just verdict.
+> Would a busy maintainer, looking at a PR that is otherwise ready to ship,
+> genuinely want this changed — or is this merely a true statement about the
+> code?
 
-## The Team Lead Test (mandatory signal-to-noise gate)
+Emit it only if you can finish the sentence **"a user doing X will hit Y."**
 
-Before emitting a finding, ask: *"Would a senior maintainer of this repo keep
-this comment in a PR review, or delete it as noise?"* If you would delete it,
-do not emit it.
+Drop it if:
 
-Specifically, **drop**:
+- The code works and you are describing a tidier alternative.
+- The fix adds more complexity than the problem costs users.
+- It guards against something that cannot happen here — input the extension
+  controls, a state the caller guarantees, a platform or VS Code version the
+  repo does not support (`engines.vscode` in `package.json`).
+- It is a "for completeness" / "for consistency" item with no user-visible
+  effect.
+- The TypeScript compiler (`npm run compile-tsc`) or ESLint (`npm run lint`)
+  already catches it. Style, naming, and formatting are never findings.
 
-- Style, formatting, brace placement, naming preferences (linters cover these).
-- Suggestions to "consider adding a comment" without a substantive reason.
-- Speculative hypotheticals not grounded in the diff.
-- Restatements of what the code does.
-- Anything TypeScript, ESLint, or the repo's existing build/test checks already
-  flag in an obvious way.
+**Never drop** a security issue, data loss, a crash, wrong output, or a broken
+install. This bar removes polish and speculation, not defects.
 
-**Keep**:
+**There is no quota, and zero findings is a good result.** Two precise findings
+beat eight thorough ones. Never invent one to avoid an empty report.
 
-- Bugs, logic errors, race conditions, missed edge cases.
-- Security issues (never suppressed, even at low confidence).
-- API/UX inconsistencies users will notice.
-- Coverage gaps with concrete impact.
-- Doc/packaging drift caused by this change.
+## Compatibility gate
 
-## Severity guide
+The baseline is the latest supported published Marketplace release, never an
+earlier commit, review round, current PR implementation, or unreleased release
+work. Before calling something a compatibility break or recommending an alias,
+fallback, migration path, legacy branch, or compatibility abstraction, identify:
 
-| Severity | Meaning |
-|----------|---------|
-| critical | Will break users, corrupt data, leak secrets, or block release. Must fix before merge. |
-| high     | Real bug, real security/UX issue, or real coverage gap. Should fix before merge. |
-| medium   | Worth fixing but not a blocker; may be deferred with a note. |
-| low      | Minor improvement; only emit if the improvement is concrete and actionable. |
+1. The supported published version containing the behavior.
+2. The public contract or persisted user data involved — a command ID, setting
+   key, debugger `type` or `launch.json` field, custom-editor `viewType`, or a
+   file the extension writes into the user's workspace.
+3. A real external consumer that would break (a user's `launch.json`,
+   `settings.json`, keybinding, task, or script).
 
-## Confidence guide
+If any is missing, it is not a compatibility finding: prefer a clean replacement
+of the unreleased behavior. A publicly supported preview contract is the only
+exception.
 
-- **high**: Full chain visible in the diff (cause + effect both present).
-- **medium**: One half visible; the other half inferred from repo context you read.
-- **low**: Pattern resembles a known issue but key elements not verifiable.
+## Recommendations
 
-Security findings are **never** suppressed by low confidence — emit them anyway.
+Write the **smallest** fix that resolves the finding, not the most thorough.
+
+Try the subtractive fix first: delete the branch, drop the option, reject the
+input, collapse the second code path, or document the limitation. If your fix
+adds a new command / setting / module / abstraction, say in one clause why a
+smaller one will not do — if you cannot, propose the smaller one instead. Never
+recommend speculative generality.
+
+## Severity
+
+| | |
+|---|---|
+| critical | Breaks users, corrupts data, leaks secrets, or blocks release |
+| high | Real bug, real security or UX issue, real coverage gap |
+| medium | Worth fixing, not a blocker |
+| low | Only if the improvement is concrete and actionable |
+
+Confidence is **high** when cause and effect are both visible in the diff,
+**medium** when one half is inferred from repo context you read, **low** when the
+pattern matches a known issue but key elements are unverifiable. Security
+findings are never suppressed for low confidence.
+
+## Re-reviews
+
+If told this branch was already reviewed: emit critical and high only, and treat
+code added in response to earlier review comments as **re-openable — not settled
+design**.

@@ -9,7 +9,7 @@
 .PARAMETER Tag
     The release tag to download (e.g., "v0.3.2").
     Use "latest" to download the latest stable release.
-    Defaults to "latest".
+    Defaults to the release pinned in cli-version.json.
 .PARAMETER DestinationPath
     Directory that receives win-x64 and win-arm64. Defaults to the repository bin directory.
 .EXAMPLE
@@ -29,8 +29,19 @@ param(
 $ErrorActionPreference = "Stop"
 $repo = "microsoft/winappcli"
 $projectRoot = Split-Path $PSScriptRoot -Parent
+$versionFile = Join-Path $projectRoot "cli-version.json"
+$pinnedTag = if (Test-Path $versionFile) {
+    (Get-Content $versionFile -Raw | ConvertFrom-Json).releaseTag
+} else {
+    $null
+}
 $Tag = if ([string]::IsNullOrWhiteSpace($Tag)) {
-    if ([string]::IsNullOrWhiteSpace($env:WINAPP_CLI_RELEASE_TAG)) { "latest" }
+    if ([string]::IsNullOrWhiteSpace($env:WINAPP_CLI_RELEASE_TAG)) {
+        if ([string]::IsNullOrWhiteSpace($pinnedTag)) {
+            throw "No WinApp CLI release tag was provided and cli-version.json has no releaseTag."
+        }
+        $pinnedTag
+    }
     else { $env:WINAPP_CLI_RELEASE_TAG }
 } else {
     $Tag

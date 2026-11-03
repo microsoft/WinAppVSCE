@@ -65,7 +65,7 @@ test('can edit target device family minVersion', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'MinVersion="10.0.19041.0"');
     expect(xml).toContain('MinVersion="10.0.19041.0"');
 });
 
@@ -102,7 +102,7 @@ test('can edit package dependency name', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Microsoft.VCLibs.140.00');
     expect(xml).toContain('Microsoft.VCLibs.140.00');
 });
 

@@ -71,7 +71,7 @@ test('editing app id updates the XML', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Id="MyApp"');
     expect(xml).toContain('Id="MyApp"');
 });
 
@@ -83,7 +83,7 @@ test('editing app executable updates the XML', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Executable="MyApp.exe"');
     expect(xml).toContain('Executable="MyApp.exe"');
 });
 
@@ -131,7 +131,7 @@ test('can add a Protocol Activation extension and fill its fields', async () => 
     await ctx.page.waitForTimeout(1_000);
 
     // Verify the XML contains the protocol extension
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, ['Name="myprotocol"', 'windows.protocol']);
     expect(xml).toContain('Name="myprotocol"');
     expect(xml).toContain('windows.protocol');
 });
@@ -196,7 +196,7 @@ test('can add a Splash Screen visual asset via dropdown', async () => {
         await waitForDebounce(ctx.page);
         await ctx.page.waitForTimeout(1_000);
 
-        const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+        const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'SplashScreen.png');
         expect(xml).toContain('SplashScreen.png');
     } else {
         // If already present, just verify it's visible
@@ -220,7 +220,7 @@ test('can add a Wide 310x150 Logo visual asset', async () => {
             await input.dispatchEvent('input');
             await waitForDebounce(ctx.page);
             await ctx.page.waitForTimeout(1_000);
-            const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+            const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Wide310x150Logo.png');
             expect(xml).toContain('Wide310x150Logo.png');
         }
     }
@@ -242,7 +242,7 @@ test('can add a Square 71x71 Logo visual asset', async () => {
             await input.dispatchEvent('input');
             await waitForDebounce(ctx.page);
             await ctx.page.waitForTimeout(1_000);
-            const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+            const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Square71x71Logo.png');
             expect(xml).toContain('Square71x71Logo.png');
         }
     }
@@ -264,7 +264,7 @@ test('can add a Square 310x310 Logo visual asset', async () => {
             await input.dispatchEvent('input');
             await waitForDebounce(ctx.page);
             await ctx.page.waitForTimeout(1_000);
-            const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+            const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Square310x310Logo.png');
             expect(xml).toContain('Square310x310Logo.png');
         }
     }
@@ -290,7 +290,7 @@ test('can add a Badge Logo visual asset', async () => {
             await input.dispatchEvent('input');
             await waitForDebounce(ctx.page);
             await ctx.page.waitForTimeout(1_000);
-            const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+            const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'BadgeLogo.png');
             expect(xml).toContain('BadgeLogo.png');
         }
     }
@@ -315,7 +315,7 @@ test('can add Wide 310x150 Logo visual asset', async () => {
             await input.dispatchEvent('input');
             await waitForDebounce(ctx.page);
             await ctx.page.waitForTimeout(1_000);
-            const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+            const xml = await readManifestXml(ctx.page, ctx.workspacePath, ['Wide310x150Logo.png', 'DefaultTile']);
             expect(xml).toContain('Wide310x150Logo.png');
             expect(xml).toContain('DefaultTile');
         }
@@ -341,7 +341,7 @@ test('can add Square 71x71 Logo visual asset', async () => {
             await input.dispatchEvent('input');
             await waitForDebounce(ctx.page);
             await ctx.page.waitForTimeout(1_000);
-            const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+            const xml = await readManifestXml(ctx.page, ctx.workspacePath, ['Square71x71Logo.png', 'DefaultTile']);
             expect(xml).toContain('Square71x71Logo.png');
             expect(xml).toContain('DefaultTile');
         }
@@ -367,7 +367,7 @@ test('can add Square 310x310 Logo visual asset', async () => {
             await input.dispatchEvent('input');
             await waitForDebounce(ctx.page);
             await ctx.page.waitForTimeout(1_000);
-            const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+            const xml = await readManifestXml(ctx.page, ctx.workspacePath, ['Square310x310Logo.png', 'DefaultTile']);
             expect(xml).toContain('Square310x310Logo.png');
             expect(xml).toContain('DefaultTile');
         }
@@ -465,7 +465,7 @@ test('can add Splash Screen Background Color', async () => {
         await waitForDebounce(ctx.page);
         await ctx.page.waitForTimeout(1_000);
 
-        const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+        const xml = await readManifestXml(ctx.page, ctx.workspacePath, '#FF0000');
         expect(xml).toContain('#FF0000');
     }
 });
@@ -545,7 +545,7 @@ test('can change Trust Level to mediumIL', async () => {
     await group.locator('.custom-select-option[data-value="mediumIL"]').click();
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'TrustLevel="mediumIL"');
     expect(xml).toContain('TrustLevel="mediumIL"');
 });
 
@@ -580,7 +580,7 @@ test('can change Runtime Behavior to packagedClassicApp', async () => {
     await group.locator('.custom-select-option[data-value="packagedClassicApp"]').click();
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'RuntimeBehavior="packagedClassicApp"');
     expect(xml).toContain('RuntimeBehavior="packagedClassicApp"');
 });
 
@@ -632,7 +632,7 @@ test('can add Parameters attribute', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, '--verbose --port 8080');
     expect(xml).toContain('--verbose --port 8080');
 });
 
@@ -661,7 +661,7 @@ test('can add a COM Server extension', async () => {
     await ctx.page.waitForTimeout(1_000);
 
     expect(await extContent.locator('.list-item').count()).toBe(initialCount + 1);
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'windows.comServer');
     expect(xml).toContain('windows.comServer');
 });
 
@@ -676,7 +676,7 @@ test('can add an App Execution Alias extension', async () => {
     await ctx.page.waitForTimeout(1_000);
 
     expect(await extContent.locator('.list-item').count()).toBe(initialCount + 1);
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'windows.appExecutionAlias');
     expect(xml).toContain('windows.appExecutionAlias');
 });
 
@@ -691,7 +691,7 @@ test('can add a Background Tasks extension', async () => {
     await ctx.page.waitForTimeout(1_000);
 
     expect(await extContent.locator('.list-item').count()).toBe(initialCount + 1);
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'windows.backgroundTasks');
     expect(xml).toContain('windows.backgroundTasks');
 });
 
@@ -706,7 +706,7 @@ test('can add a File Type Association extension', async () => {
     await ctx.page.waitForTimeout(1_000);
 
     expect(await extContent.locator('.list-item').count()).toBe(initialCount + 1);
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'windows.fileTypeAssociation');
     expect(xml).toContain('windows.fileTypeAssociation');
 });
 
@@ -721,7 +721,7 @@ test('can add a Startup Task extension', async () => {
     await ctx.page.waitForTimeout(1_000);
 
     expect(await extContent.locator('.list-item').count()).toBe(initialCount + 1);
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'windows.startupTask');
     expect(xml).toContain('windows.startupTask');
 });
 
@@ -736,7 +736,7 @@ test('can add a Share Target extension', async () => {
     await ctx.page.waitForTimeout(1_000);
 
     expect(await extContent.locator('.list-item').count()).toBe(initialCount + 1);
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'windows.shareTarget');
     expect(xml).toContain('windows.shareTarget');
 });
 
@@ -751,7 +751,7 @@ test('can add an App Service extension', async () => {
     await ctx.page.waitForTimeout(1_000);
 
     expect(await extContent.locator('.list-item').count()).toBe(initialCount + 1);
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'windows.appService');
     expect(xml).toContain('windows.appService');
 });
 
@@ -766,7 +766,7 @@ test('can add a Toast Notification Activation extension', async () => {
     await ctx.page.waitForTimeout(1_000);
 
     expect(await extContent.locator('.list-item').count()).toBe(initialCount + 1);
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'windows.toastNotificationActivation');
     expect(xml).toContain('windows.toastNotificationActivation');
 });
 
@@ -781,7 +781,7 @@ test('can add an MCP Server extension', async () => {
     await ctx.page.waitForTimeout(1_000);
 
     expect(await extContent.locator('.list-item').count()).toBe(initialCount + 1);
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'windows.appExtension');
     expect(xml).toContain('windows.appExtension');
 });
 
@@ -892,7 +892,7 @@ test('copy to assets copies file and updates field path', async () => {
         expect(fs.existsSync(copiedFile)).toBe(true);
 
         // Verify the manifest XML was updated
-        const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+        const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Assets\\test-asset.png');
         expect(xml).toContain('Assets\\test-asset.png');
     }
 

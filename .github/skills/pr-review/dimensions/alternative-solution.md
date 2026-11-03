@@ -1,57 +1,55 @@
-# Alternative-solution review
+# Alternative solution
 
-You are reviewing a PR diff for the `microsoft/WinAppVSCE` repo and asking:
-**is there a simpler, more idiomatic, or already-existing way to do this in
-this codebase?** Apply the shared output contract in `_shared-contract.md`.
-Set `Domain: alternative-solution` on every finding.
+Apply `_shared-contract.md`. Set `Domain: alternative-solution`.
 
-## Repo-specific patterns to enforce
+One question: **does this reinvent something that already exists here?** Grep
+before you conclude — "uses `runWinappCapture` correctly" is only a real
+sign-off if you looked for the alternative and named what you searched for.
 
-- **CLI path resolution → use `getWinappCliPath` / `WINAPP_CLI_CALLER_VALUE`.**
-  New code that re-discovers the bundled CLI path or redefines the caller tag
-  duplicates existing utilities in `src/winapp-cli-utils.ts`.
-- **Manifest parsing/editing → reuse existing helpers.** Prefer the established
-  `manifest-parser.ts`, `manifest-validator.ts`, `xml-utils.ts`, and
-  `manifest-xml-ops*.ts` modules over ad-hoc XML parsing or raw string surgery.
-- **VS Code process launching → use arg arrays, not shell strings.** New code
-  that shells out via concatenated command strings when an existing `spawn` or
-  `execFile` pattern would work should be flagged.
-- **Manifest editor architecture.** New custom-editor behavior should extend the
-  existing provider / parser / validator flow rather than creating a parallel
-  manifest-edit path elsewhere in `src/`.
-- **Command registration.** New commands should plug into the existing
-  `extension.ts` registration and package contribution model instead of creating
-  one-off bootstrap paths.
-- **Validation logic reuse.** If a regex, manifest field rule, or XML helper
-  already exists, new code should call it instead of re-implementing it.
-- **One responsibility per module.** Flag new files or classes that combine UI,
-  process execution, parsing, and validation when a thin wrapper around an
-  existing helper would do.
-- **Large-file pressure.** If a diff pushes an already-large file materially
-  higher when the change could live in a focused helper/module, call that out.
-- **DOM-aware XML handling.** Prefer the repo's existing DOM and helper-based
-  XML mutations over brittle regex-only structural edits.
+Scope and "should this ship at all" belong to `necessity-and-simplicity`. Stay on
+*how* the work is done. But do not self-censor a genuine better-approach critique
+because it borders on scope — raise the concrete alternative and let that
+dimension own the framing.
 
-## Cross-cutting checks
+## Things this repo already has
 
-- Does this change duplicate logic that already exists in another helper,
-  parser, validator, or script? Search for similar patterns and recommend reuse.
-- Could a new method be a simple call to an existing helper plus a small
-  wrapper? If so, recommend the wrapper.
-- Is a new abstraction premature (one caller, no likely second)? Recommend
-  inlining.
-- Is the change bypassing an existing VS Code or Node API that already solves
-  the problem safely? Recommend the built-in path.
+New code that re-derives any of these should call them instead:
 
-## What to drop
+| Instead of | Use |
+|---|---|
+| Re-discovering the bundled CLI path, or spawning `winapp` without the caller tag | `getWinappCliPath` / `WINAPP_CLI_CALLER_VALUE` in `src/winapp-cli-utils.ts` |
+| A fresh `spawn` + output-channel + JSON scraping for a CLI call | `runWinappCapture` / `getWinappOutputChannel` (`src/winapp-host.ts`), `extractJsonObject` / `parseWinappErrorMessage` (`src/winapp-cli-utils.ts`) |
+| Hand-quoting values for `Terminal.sendText` or elevated commands | `escapePowerShellArg`, `decideElevatedWinappCommand`, `buildElevatedTerminalCommand` |
+| Picking a cwd or project folder | `resolveWorkingDirectory`, `resolveProjectDirectory` (`src/project-resolver.ts`), `detectProjects` (`src/project-detection.ts`), `selectFolder` |
+| Recursive workspace scans | `walkDirectoryTree` (`src/directory-walk.ts`) with `SKIP_DIRS` / `BUILD_OUTPUT_*` limits |
+| Classifying `.msix` / `.exe` / cert files | `src/artifact-types.ts`, `src/sign-utils.ts` (`findWorkspaceArtifacts`, tier constants) |
+| Arch detection / mismatch warnings | `src/arch-detection.ts` |
+| Parsing manifest XML into a model | `parseManifest` (editor) or `parseManifestXml` (IntelliSense) |
+| Structural `AppxManifest.xml` edits | `src/manifest-editor/manifest-xml-ops*.ts` and `xml-utils.ts` (formatting-preserving, namespace-aware, escaping via `escapeXmlAttr` / `escapeXmlText`) |
+| Manifest field or schema validation | `manifest-validator.ts`, `src/manifest-schema/schema-validation.ts`, `semantic-validation.ts`, `schema-helpers.ts` |
+| Image / MRT asset path resolution and containment | `resolveManifestImagePath`, `resolveMrtAsset`, `isPathWithin` (`src/manifest-editor/image-utils.ts`) |
+| Matching manifest file names | `isManifestPath` / `MANIFEST_SELECTOR` (`src/manifest-schema/manifest-path.ts`) |
 
-- Generic "this could be more functional" / "consider a different pattern"
-  without a concrete in-repo alternative.
-- Refactor suggestions that exceed the scope of the PR ("rewrite this whole
-  module") — note them only as `low` with a tight recommendation, or skip.
+Do not round-trip the user's manifest through a DOM serializer — it reformats
+the file. Do not add a new ad-hoc regex edit when an `xml-utils` /
+`manifest-xml-ops` helper covers the structure.
 
-## Severity guide for this dimension
+## Structure
 
-- Re-implementing existing parser/validator/helper logic → medium.
-- Wrong abstraction choice that will likely force follow-up rework → medium.
-- Minor "could reuse helper X" with marginal benefit → low.
+- **Testable logic lives in `*-utils.ts` / pure modules, not `extension.ts`.**
+  The unit suite runs outside VS Code; logic that only exists inside a
+  `vscode.commands.registerCommand` callback cannot be unit-tested. Recommend
+  extraction only when it gives a real test or reuse boundary.
+- **Prefer cohesion.** One implementation is better than several one-caller
+  wrappers.
+- **Treat file size as a signal.** `extension.ts` is already large; flag a
+  concrete cohesion, navigation, or test problem, not a line count by itself.
+- **Duplication inside this PR.** If the diff repeats a near-identical block
+  across commands or webview tabs, recommend one shared helper and cite each
+  site. Near-duplicates silently drift.
+
+## Not findings
+
+"Consider a different pattern" with no concrete callable alternative. A
+wholesale rewrite with no incremental path — offer the smallest concrete reuse
+instead.

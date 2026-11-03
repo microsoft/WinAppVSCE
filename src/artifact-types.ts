@@ -12,9 +12,6 @@ export const ARTIFACT_EXTENSIONS = ['msix', 'msixbundle', 'appx', 'appxbundle'] 
 /** Extensions with leading dot (internal — used by helpers below). */
 const DOTTED_EXTENSIONS = ARTIFACT_EXTENSIONS.map((ext) => `.${ext}`);
 
-/** Glob patterns that match packaged artifacts anywhere in a directory tree. */
-export const ARTIFACT_GLOBS: string[] = ARTIFACT_EXTENSIONS.map((ext) => `**/*.${ext}`);
-
 /** File-dialog filter for MSIX/APPX packages (VS Code `showOpenDialog` format). */
 export const ARTIFACT_DIALOG_FILTER: Record<string, string[]> = {
 	'MSIX Packages': [...ARTIFACT_EXTENSIONS]

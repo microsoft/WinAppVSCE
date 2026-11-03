@@ -8,7 +8,7 @@ export * from './manifest-xml-ops';
 
 import { XMLSerializer } from '@xmldom/xmldom';
 import type { Element } from '@xmldom/xmldom';
-import { parseManifestXml } from '../manifest-schema/xml-parser';
+import { parseXml } from '../xml-read';
 import {
     ManifestData,
     IdentityData,
@@ -170,7 +170,7 @@ function walkExtensionElement(element: Element, fields: ExtensionField[], isRoot
  * See: https://github.com/microsoft/winappVSCE/issues
  */
 export function parseManifest(xmlText: string): ManifestData {
-    const { doc, errors } = parseManifestXml(xmlText);
+    const { doc, errors } = parseXml(xmlText);
     if (errors.length > 0) {
         throw new Error(`XML parse error: ${errors[0].message}`);
     }

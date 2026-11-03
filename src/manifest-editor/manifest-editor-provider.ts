@@ -10,11 +10,16 @@ import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { parseManifest, applyFieldChange, addCapability, removeCapability, addPackageDependency, removePackageDependency, addTargetDeviceFamily, removeTargetDeviceFamily, moveTargetDeviceFamily, movePackageDependency, addMainPackageDependency, removeMainPackageDependency, moveMainPackageDependency, addDriverConstraint, removeDriverConstraint, moveDriverConstraint, addOSPackageDependency, removeOSPackageDependency, moveOSPackageDependency, addHostRuntimeDependency, removeHostRuntimeDependency, moveHostRuntimeDependency, addExternalDependency, removeExternalDependency, moveExternalDependency, addApplication, removeApplication, addExtension, removeExtension, updateExtensionField, addResource, removeResource, moveResource, setShowNameOnTiles, addPhoneIdentity, removePhoneIdentity, removeVisualAsset } from './manifest-parser';
 import { validateManifest } from './manifest-validator';
-import { getWebviewContent, getParseErrorContent } from './webview-content';
+import { getWebviewContent } from './webview-content';
 import { WebviewToExtensionMessage } from './manifest-types';
 import { getWinappCliPath, WINAPP_CLI_CALLER_VALUE } from '../winapp-cli-utils';
 import { SchemaModel } from '../manifest-schema/schema-model';
 import { AssetCopyTokenStore } from './asset-copy-token-store';
+import { MrtResolution, checkAspectRatio, getImageDimensions, resolveManifestImagePath } from './image-utils';
+import { applyFlushedChanges, documentParses } from './flush-changes';
+
+/** Debounce window for external document changes (e.g. typing in the XML text editor). */
+const EXTERNAL_CHANGE_DEBOUNCE_MS = 250;
 
 export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
     public static readonly viewType = 'winapp.manifestEditor';
@@ -67,27 +72,15 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
 
         // Track whether we're currently applying an edit to avoid feedback loops
         let isApplyingEdit = false;
-        let showingErrorView = false;
+        let externalChangeTimer: NodeJS.Timeout | undefined;
+        // Text produced by a save-flush edit. VS Code applies save-participant edits outside
+        // applyEdit, so isApplyingEdit cannot cover them; match on the result instead.
+        let pendingFlushText: string | null = null;
         const assetCopyTokens = new AssetCopyTokenStore();
 
-        /** Try to parse — if it fails, show error view; if it succeeds, show/update editor. */
-        const tryParseOrShowError = (text: string): boolean => {
-            try {
-                parseManifest(text);
-                return true;
-            } catch (e) {
-                const errMsg = e instanceof Error ? e.message : String(e);
-                if (!showingErrorView) {
-                    showingErrorView = true;
-                    webviewPanel.webview.html = getParseErrorContent(webviewPanel.webview, freshNonce(), errMsg);
-                }
-                return false;
-            }
-        };
-
-        /** Load the full editor view. */
+        /** Load the editor document. Reassigning `webview.html` destroys all webview UI state,
+            so this runs once per panel: parse failures surface as an overlay instead. */
         const showEditorView = () => {
-            showingErrorView = false;
             webviewPanel.webview.html = getWebviewContent(webviewPanel.webview, freshNonce(), manifestDirUri);
             // The editor will send 'ready' once loaded, which triggers updateWebview
         };
@@ -148,37 +141,64 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             try {
                 data = parseManifest(text);
             } catch (e) {
+                // Surface the failure as an overlay rather than rebuilding the document, which
+                // would wipe tab/scroll/expanded-field state every time the XML is transiently bad.
                 const errMsg = e instanceof Error ? e.message : String(e);
-                if (!showingErrorView) {
-                    showingErrorView = true;
-                    webviewPanel.webview.html = getParseErrorContent(webviewPanel.webview, freshNonce(), errMsg);
-                }
+                webviewPanel.webview.postMessage({ type: 'parseError', message: errMsg });
                 return;
             }
-            if (showingErrorView) { showEditorView(); }
             const errors = validateManifest(data, this.getSchema());
             webviewPanel.webview.postMessage({ type: 'update', data, errors, forceAll });
         };
 
-        // Initial load: check if XML is valid
-        if (tryParseOrShowError(document.getText())) {
-            webviewPanel.webview.html = getWebviewContent(webviewPanel.webview, freshNonce(), manifestDirUri);
-        }
-
-        // Listen for document changes (e.g., from the text editor, undo, or external edits)
-        const changeDocSub = vscode.workspace.onDidChangeTextDocument(e => {
-            if (e.document.uri.toString() === document.uri.toString() && !isApplyingEdit) {
-                if (showingErrorView) {
-                    // Check if the XML is now valid — if so, switch to editor
-                    const text = document.getText();
-                    if (tryParseOrShowError(text)) {
-                        showEditorView();
-                    }
-                } else {
-                    // External change (undo, redo, text editor) — force-update all fields
-                    updateWebview(true);
-                }
+        /** Refresh only the error list, leaving the form untouched. After our own save-flush edit
+            the form already matches the document, and re-rendering would rebuild the inputs from
+            the document value, discarding anything typed since the flush. */
+        const refreshValidationOnly = () => {
+            let data;
+            try {
+                data = parseManifest(document.getText());
+            } catch {
+                // A flush only edits text that parses, so this is unexpected: fall back to the
+                // full path, which raises the overlay.
+                updateWebview(true);
+                return;
             }
+            webviewPanel.webview.postMessage({
+                type: 'validationErrors',
+                errors: validateManifest(data, this.getSchema()),
+            });
+        };
+
+        // The editor document loads even when the XML is currently unparseable: it posts 'ready',
+        // and the resulting updateWebview raises the overlay over the empty form.
+        showEditorView();
+
+        // Listen for document changes (e.g., from the text editor, undo, or external edits).
+        // Debounced: re-rendering mid-word is wasted work and half-typed XML doesn't parse.
+        const changeDocSub = vscode.workspace.onDidChangeTextDocument(e => {
+            if (e.document.uri.toString() !== document.uri.toString() || isApplyingEdit) { return; }
+            // A save with no content change still raises this event; there is nothing to re-render.
+            if (e.contentChanges.length === 0) { return; }
+            // A save-flush edit echoing back is our own write, not an external one. Treating it as
+            // external would discard input typed since the flush and overwrite the focused field,
+            // which loses keystrokes outright when autosave is on.
+            const isFlushEcho = pendingFlushText !== null && e.document.getText() === pendingFlushText;
+            if (isFlushEcho) {
+                pendingFlushText = null;
+            } else {
+                // Drop input still in the webview's 300ms debounce before the re-render: it was
+                // typed against the pre-edit document, so replaying it would overwrite the change.
+                webviewPanel.webview.postMessage({ type: 'externalChange' });
+            }
+            if (externalChangeTimer) { clearTimeout(externalChangeTimer); }
+            externalChangeTimer = setTimeout(() => {
+                externalChangeTimer = undefined;
+                // A genuine external change (undo, redo, text editor) force-updates all fields.
+                // Our own echo only refreshes validation: re-rendering would rebuild the
+                // Applications inputs and drop characters typed since the save.
+                if (isFlushEcho) { refreshValidationOnly(); } else { updateWebview(true); }
+            }, EXTERNAL_CHANGE_DEBOUNCE_MS);
         });
 
         // Flush pending webview input changes before save so Ctrl+S captures edits
@@ -205,6 +225,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
         });
 
         webviewPanel.onDidDispose(() => {
+            if (externalChangeTimer) { clearTimeout(externalChangeTimer); }
             changeDocSub.dispose();
             willSaveSub.dispose();
         });
@@ -228,88 +249,90 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                             // Apply all pending field changes and resolve the save promise
                             // Match nonce to prevent stale resolution from rapid double-saves
                             if (pendingSaveResolve && message.nonce === pendingSaveNonce) {
-                                let result = text;
-                                for (const change of message.changes) {
-                                    result = applyFieldChange(result, change.section, change.field, change.value, change.index);
-                                }
-                                const edits = result !== text
-                                    ? [vscode.TextEdit.replace(new vscode.Range(0, 0, document.lineCount, 0), result)]
-                                    : [];
                                 const resolve = pendingSaveResolve;
                                 pendingSaveResolve = null;
                                 pendingSaveNonce = null;
-                                resolve(edits);
+                                // The nonce is already cleared, so the 500ms fallback can no longer
+                                // resolve this save. Guarantee it completes even if a change throws.
+                                let edits: vscode.TextEdit[] = [];
+                                try {
+                                    const { text: result, failed } = applyFlushedChanges(text, message.changes);
+                                    if (result !== text) {
+                                        edits = [vscode.TextEdit.replace(new vscode.Range(0, 0, document.lineCount, 0), result)];
+                                        // Suppress the echo of this edit so it is not mistaken for
+                                        // an external change (see onDidChangeTextDocument).
+                                        pendingFlushText = result;
+                                    }
+                                    if (failed.length > 0) {
+                                        // The webview already emptied its queue, so these edits are
+                                        // gone. Say which ones rather than failing silently.
+                                        vscode.window.showWarningMessage(
+                                            `Manifest edit failed for ${failed.join(', ')}. Re-apply the change and save again.`,
+                                        );
+                                        updateWebview(true);
+                                    }
+                                } catch (err) {
+                                    console.warn('[ManifestEditor] Flushing pending changes failed:', err);
+                                    edits = [];
+                                } finally {
+                                    resolve(edits);
+                                }
                             }
                             return;
                         }
 
                         case 'openAsText':
-                            await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+                            // The parse-error overlay opens beside itself so the visual editor
+                            // stays open, as its message says. Other entry points replace the tab.
+                            await vscode.commands.executeCommand(
+                                'vscode.openWith',
+                                document.uri,
+                                'default',
+                                message.beside ? vscode.ViewColumn.Beside : undefined,
+                            );
                             return;
 
                         case 'checkImagePath': {
                             const imgPath = message.imagePath;
                             const manifestDirPath = path.dirname(document.uri.fsPath);
-                            const resolved = path.resolve(manifestDirPath, imgPath);
-                            const usesWorkspaceFallback = imgPath.startsWith('..\\') || imgPath.startsWith('../');
-                            const isWithinRoot = (candidatePath: string, rootPath: string): boolean => {
-                                const relativePath = path.relative(rootPath, candidatePath);
-                                return relativePath !== ''
-                                    && !relativePath.startsWith('..')
-                                    && !path.isAbsolute(relativePath);
+
+                            // An MSIX manifest references the unqualified asset name; MRT resolves it
+                            // at runtime against qualifier-suffixed files (Logo.scale-200.png).
+                            const postFound = (resolution: MrtResolution): void => {
+                                const dims = getImageDimensions(resolution.resolvedPath);
+                                const aspectWarning = dims
+                                    ? checkAspectRatio(message.field, dims.width, dims.height, resolution.qualifiers)
+                                    : null;
+                                // The webview builds preview URIs relative to the manifest folder, so
+                                // anything outside it has to be sent as an absolute webview URI.
+                                const previewRelative = path.relative(manifestDirPath, resolution.resolvedPath);
+                                const insideManifestDir = previewRelative !== ''
+                                    && !previewRelative.startsWith('..')
+                                    && !path.isAbsolute(previewRelative);
+                                const previewPath = insideManifestDir
+                                    ? previewRelative.replace(/\\/g, '/')
+                                    : webviewPanel.webview.asWebviewUri(vscode.Uri.file(resolution.resolvedPath)).toString();
+                                webviewPanel.webview.postMessage({
+                                    type: 'imagePathStatus',
+                                    field: message.field,
+                                    index: message.index,
+                                    status: 'found',
+                                    aspectWarning: aspectWarning || undefined,
+                                    previewPath: resolution.isExact ? undefined : previewPath,
+                                });
                             };
-                            const workspaceRoot = vscode.workspace.workspaceFolders?.find(wf =>
-                                resolved.toLowerCase() === wf.uri.fsPath.toLowerCase()
-                                || isWithinRoot(resolved, wf.uri.fsPath)
-                            )?.uri.fsPath;
 
-                            // Check if the resolved path is inside the package directory AND exists
-                            const normalizedResolved = resolved.toLowerCase();
-                            const normalizedManifestDir = manifestDirPath.toLowerCase() + path.sep;
-                            if (normalizedResolved.startsWith(normalizedManifestDir) && fs.existsSync(resolved)) {
-                                const dims = getImageDimensions(resolved);
-                                const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
-                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
-                                return;
-                            }
+                            const workspaceRoots = (vscode.workspace.workspaceFolders ?? []).map(wf => wf.uri.fsPath);
+                            const outcome = resolveManifestImagePath(manifestDirPath, imgPath, workspaceRoots);
 
-                            if (!path.isAbsolute(imgPath) && usesWorkspaceFallback && workspaceRoot && fs.existsSync(resolved)) {
-                                const dims = getImageDimensions(resolved);
-                                const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
-                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
-                                return;
-                            }
-
-                            // The path resolves outside the package dir (e.g., ..\..\Downloads\img.png)
-                            // or is an absolute path — check if the file exists at the resolved location
-                            if (fs.existsSync(resolved)) {
-                                const copyToken = assetCopyTokens.issue(resolved);
+                            if (outcome.status === 'found') {
+                                postFound(outcome.resolution);
+                            } else if (outcome.status === 'external') {
+                                const copyToken = assetCopyTokens.issue(outcome.sourcePath);
                                 webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', copyToken });
-                                return;
+                            } else {
+                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'notFound' });
                             }
-
-                            // Check if it's an absolute path that exists
-                            if (path.isAbsolute(imgPath) && fs.existsSync(imgPath)) {
-                                const copyToken = assetCopyTokens.issue(imgPath);
-                                webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'external', copyToken });
-                                return;
-                            }
-
-                            // Only fall back to workspace-root resolution for paths that
-                            // explicitly escape the manifest folder (for example ..\Assets\logo.png).
-                            if (usesWorkspaceFallback && vscode.workspace.workspaceFolders) {
-                                for (const wf of vscode.workspace.workspaceFolders) {
-                                    const candidate = path.resolve(wf.uri.fsPath, imgPath);
-                                    if (fs.existsSync(candidate)) {
-                                        const dims = getImageDimensions(candidate);
-                                        const aspectWarning = dims ? checkAspectRatio(message.field, dims.width, dims.height) : null;
-                                        webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'found', aspectWarning: aspectWarning || undefined });
-                                        return;
-                                    }
-                                }
-                            }
-
-                            webviewPanel.webview.postMessage({ type: 'imagePathStatus', field: message.field, index: message.index, status: 'notFound' });
                             return;
                         }
 
@@ -429,6 +452,11 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             }
 
             if (newText !== undefined && newText !== text) {
+                // A debounced edit can arrive after the document stopped parsing. Rewriting it from
+                // XML we could not parse would clobber what the user is typing in the text editor.
+                if (!documentParses(text)) {
+                    return;
+                }
                 isApplyingEdit = true;
                 try {
                     const edit = new vscode.WorkspaceEdit();
@@ -447,71 +475,4 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             }
         });
     }
-}
-
-/** Reads width/height from PNG or JPEG file headers without loading the full image. */
-function getImageDimensions(filePath: string): { width: number; height: number } | null {
-    try {
-        const fd = fs.openSync(filePath, 'r');
-        const header = Buffer.alloc(32);
-        fs.readSync(fd, header, 0, 32, 0);
-
-        // PNG: bytes 0-7 are signature, IHDR chunk starts at byte 8, width at 16, height at 20
-        if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) {
-            const width = header.readUInt32BE(16);
-            const height = header.readUInt32BE(20);
-            fs.closeSync(fd);
-            return { width, height };
-        }
-
-        // JPEG: scan for SOF0/SOF2 marker (0xFF 0xC0 or 0xFF 0xC2)
-        if (header[0] === 0xFF && header[1] === 0xD8) {
-            const buf = Buffer.alloc(65536);
-            fs.readSync(fd, buf, 0, buf.length, 0);
-            fs.closeSync(fd);
-            let offset = 2;
-            while (offset < buf.length - 9) {
-                if (buf[offset] !== 0xFF) break;
-                const marker = buf[offset + 1];
-                if (marker === 0xC0 || marker === 0xC2) {
-                    const height = buf.readUInt16BE(offset + 5);
-                    const width = buf.readUInt16BE(offset + 7);
-                    return { width, height };
-                }
-                const len = buf.readUInt16BE(offset + 2);
-                offset += 2 + len;
-            }
-            return null;
-        }
-
-        fs.closeSync(fd);
-        return null;
-    } catch {
-        return null;
-    }
-}
-
-/** Expected aspect ratios for manifest image fields (width:height). */
-const EXPECTED_RATIOS: Record<string, { w: number; h: number; label: string }> = {
-    'visualElements.square150x150Logo': { w: 1, h: 1, label: '1:1 (square)' },
-    'visualElements.square44x44Logo': { w: 1, h: 1, label: '1:1 (square)' },
-    'visualElements.square71x71Logo': { w: 1, h: 1, label: '1:1 (square)' },
-    'visualElements.square310x310Logo': { w: 1, h: 1, label: '1:1 (square)' },
-    'visualElements.wide310x150Logo': { w: 310, h: 150, label: '310:150 (wide)' },
-    'visualElements.badgeLogo': { w: 1, h: 1, label: '1:1 (square)' },
-    'visualElements.splashScreenImage': { w: 620, h: 300, label: '620:300 (wide)' },
-    'logo': { w: 1, h: 1, label: '1:1 (square)' },
-};
-
-/** Returns a warning string if the image aspect ratio doesn't match expectations (±5% tolerance). */
-function checkAspectRatio(field: string, width: number, height: number): string | null {
-    const expected = EXPECTED_RATIOS[field];
-    if (!expected || width === 0 || height === 0) { return null; }
-    const actualRatio = width / height;
-    const expectedRatio = expected.w / expected.h;
-    const tolerance = 0.05;
-    if (Math.abs(actualRatio - expectedRatio) / expectedRatio > tolerance) {
-        return `Image is ${width}×${height} — expected ${expected.label} aspect ratio`;
-    }
-    return null;
 }

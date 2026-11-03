@@ -5,7 +5,8 @@ import {
 	buildElevatedTerminalCommand,
 	resolveWindowsPowerShellPath,
 	isUsableElevatedCliPath,
-	decideElevatedWinappCommand
+	decideElevatedWinappCommand,
+	parseWinappErrorMessage
 } from '../winapp-cli-utils';
 
 const launcherPath = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
@@ -38,6 +39,17 @@ describe('escapePowerShellArg', () => {
 		assert.equal(escaped, "'''; Remove-Item C:\\ #'");
 		// The result is a single balanced literal: every quote is paired.
 		assert.equal((escaped.match(/'/g) || []).length % 2, 0);
+	});
+
+	it('escapes the Unicode quotes PowerShell also accepts as single quotes', () => {
+		// PowerShell treats U+2018-U+201B as single quotes, so a project path
+		// discovered in the workspace could otherwise close the literal.
+		const attack = 'App\u2019;ni INJECTED;\u2019.csproj';
+		const escaped = escapePowerShellArg(attack);
+		assert.equal(escaped, "'App\u2019\u2019;ni INJECTED;\u2019\u2019.csproj'");
+		for (const quote of ["'", '\u2018', '\u2019', '\u201A', '\u201B']) {
+			assert.equal(escapePowerShellArg(`a${quote}b`), `'a${quote}${quote}b'`);
+		}
 	});
 
 	it('handles an empty string', () => {
@@ -174,3 +186,29 @@ describe('decideElevatedWinappCommand', () => {
 	});
 });
 
+
+describe('parseWinappErrorMessage', () => {
+	it('strips the CLI status glyph from plain-text errors', () => {
+		assert.equal(parseWinappErrorMessage('❌ Invalid publisher format'), 'Invalid publisher format');
+	});
+
+	it('strips the bracketed [ERROR] prefix', () => {
+		assert.equal(parseWinappErrorMessage('[ERROR] - Something broke'), 'Something broke');
+	});
+
+	it('reports plain-text errors that carry no status glyph', () => {
+		assert.equal(
+			parseWinappErrorMessage('Certificate file already exists: C:\\proj\\devcert.pfx'),
+			'Certificate file already exists: C:\\proj\\devcert.pfx'
+		);
+	});
+
+	it('skips leading blank lines', () => {
+		assert.equal(parseWinappErrorMessage('\n\n  \nSomething broke\n'), 'Something broke');
+	});
+
+	it('returns undefined when there is no output to report', () => {
+		assert.equal(parseWinappErrorMessage(''), undefined);
+		assert.equal(parseWinappErrorMessage('   \n\n  '), undefined);
+	});
+});

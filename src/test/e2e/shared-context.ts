@@ -2,12 +2,13 @@
  * Singleton VS Code instance shared across all E2E spec files.
  * Since Playwright runs with workers:1, all specs execute in the same process.
  */
-import { type FrameLocator } from '@playwright/test';
+import { expect, type FrameLocator } from '@playwright/test';
 import {
     createTempWorkspace,
     launchVSCode,
     openManifestEditor,
     getWebviewFrame,
+    runCommand,
     teardown,
     type VSCodeTestContext,
 } from './helpers';
@@ -40,11 +41,32 @@ export async function ensureEditor(): Promise<{ ctx: VSCodeTestContext; frame: F
 export async function resetManifest(ctx: VSCodeTestContext, fixtureName: string = FIXTURE_NAME): Promise<FrameLocator> {
     const src = path.join(FIXTURES_DIR, fixtureName);
     const dest = path.join(ctx.workspacePath, 'AppxManifest.xml');
+    const fixtureXml = fs.readFileSync(src, 'utf-8');
     fs.copyFileSync(src, dest);
     // Give the editor time to detect the file change and reload
     await ctx.page.waitForTimeout(2_000);
     // Re-acquire the webview frame (it may have reloaded with new content)
     sharedFrame = await getWebviewFrame(ctx.page);
+
+    // The watcher-driven reload is best-effort — VS Code will not pick the new content
+    // up while the document still holds edits from the previous spec. Wait for a value
+    // only this fixture carries, and force a revert from disk if it does not arrive.
+    const identityName = /<Identity\b[^>]*\bName="([^"]*)"/.exec(fixtureXml)?.[1];
+    if (!identityName) {
+        return sharedFrame;
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const loaded = await expect(sharedFrame.locator('#identity-name'))
+            .toHaveValue(identityName, { timeout: 10_000 })
+            .then(() => true)
+            .catch(() => false);
+        if (loaded) {
+            return sharedFrame;
+        }
+        await runCommand(ctx.page, 'File: Revert File');
+        sharedFrame = await getWebviewFrame(ctx.page);
+    }
+    await expect(sharedFrame.locator('#identity-name')).toHaveValue(identityName, { timeout: 15_000 });
     return sharedFrame;
 }
 

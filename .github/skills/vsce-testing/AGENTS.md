@@ -82,6 +82,9 @@ $onEditor = Confirm-VSCodeEditor -Ctx $ctx -OpenFileIfNeeded $file
 Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'winapp.certGenerate' -Answers @(@{accept=$true})
 Invoke-VSCodeDriverCommand -Ctx $ctx -CommandId 'some.command' -Arguments @('value', 42)
 Invoke-VSCodeDriverDebug   -Ctx $ctx -InputFolder "$proj\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64"
+#   ^ writes launch.json's deprecated `inputFolder` key, so this drives FOLDER mode only.
+#     To exercise project mode, write launch.json yourself with `input` set to a .csproj/.sln
+#     and call Invoke-VSCodeDriverStep with @{ type='debug'; writeLaunch=$false }.
 Invoke-VSCodeDriverOpenFile -Ctx $ctx -Path "$proj\Package.appxmanifest"
 
 # 4. Observe: screenshot the integrated terminal / editor.
@@ -123,9 +126,10 @@ modal is up. `Confirm-VSCodeEditor` handles that; if you act manually, call `Cle
   cheaply search for the open file's tab basename (stored in `$ctx.EditorFile`).
 - **`code --reuse-window --goto` MUST include `--user-data-dir=$ctx.Udd`** or it targets the default
   profile, not our drive instance.
-- **Extension commands run fire-and-forget in an integrated terminal** (`terminal.sendText`).
-  `executeCommand` returns before the CLI finishes — **poll for the effect** (e.g. `devcert.pfx`), do
-  not check immediately.
+- **Most extension commands run fire-and-forget in an integrated terminal** (`terminal.sendText`).
+  `executeCommand` returns before the CLI finishes — **poll for the effect**, do not check
+  immediately. Exception: `winapp.certGenerate` spawns the CLI directly and awaits its exit code, so
+  its notifications appear without polling.
 - **`command 'winapp.certGenerate' not found`** means the winapp extension isn't loaded in that
   instance → fix the `--extensions-dir` (step 2 above), it's not a code bug.
 - **Process-kill safety:** only `Stop-Process -Id <PID>` for OUR instances (match `drive-udd-*` /
@@ -150,11 +154,26 @@ Answers (ordered, one per prompt the command raises):
 - Free-text `showInputBox` prompts (e.g. cert password) **cannot** be auto-answered — avoid or accept
   defaults.
 
+**`winapp.certGenerate` prompt sequence** (it is no longer a single Yes/No):
+1. Install QuickPick — "Generate only" vs "Generate and install (requires admin)" → `@{accept=$true}`.
+2. Publisher `showInputBox` — raised when the resolved project directory holds **no canonically
+   named manifest** (`Package.appxmanifest` / `AppxManifest.xml` directly in that directory). A
+   normal project has one, so the publisher comes from it and this prompt does not appear. There is
+   no manifest picker: nothing else is offered as a substitute. This is a free-text prompt and
+   therefore **not auto-answerable**: drive certGenerate against a project that contains a
+   canonically named manifest so the prompt never appears.
+3. Overwrite warning — raised when the certificate already exists. Its actions
+   ("Overwrite Existing Cert" / "Use Existing Cert") are notification buttons, which **UIA does not
+   expose**; only the aria-live label text is readable. Delete the stale `.pfx` first for a clean run.
+
 Command arguments are passed with `-Arguments`; queue/script JSON uses `args`. Descriptors with
 `kind: activeDocumentUri`, `fileUri`, or `position` resolve to the corresponding VS Code API object.
 Legacy steps with `type: commandArgs` remain supported.
 
-`debug` steps use `launch.json`'s `inputFolder` (the app's built `win-x64` output). No dialogs.
+`debug` steps use `launch.json`'s `input` — a `.csproj`/`.sln`/`.slnx`, a directory containing one,
+or the app's built `win-x64` output folder. No dialogs. The older `inputFolder` key is a deprecated
+alias that still works and only accepts a build-output folder. Omit both and F5 prompts with the
+run-target picker, which needs a QuickPick answer rather than a dialog.
 
 ---
 
@@ -173,11 +192,14 @@ Legacy steps with `type: commandArgs` remain supported.
 - **Pack is slow + fire-and-forget.** The driver returns `done` in ~11s but `winapp pack` keeps
   building in the terminal; **poll for the MSIX** (up to ~2 min). Output lands at
   `<proj>\.winapp\self-contained\<arch>\extracted\MSIX\Main.msix` (hidden, generically named).
-- **F5 / `Invoke-VSCodeDriverDebug` works** with a valid `launch.json` `inputFolder` = the `win-x64`
-  build output containing the exe: `sessionEvents` shows `start:coreclr:…` and the app process comes
-  up. NOTE `startDebugging` returns **false** even on success — key on `launched` (a `start:coreclr`
-  event), not `started`. If `inputFolder` is empty/wrong, F5 silently falls back to the pack folder
-  picker.
+- **F5 / `Invoke-VSCodeDriverDebug` works** with a valid `launch.json` `input`. Two shapes are
+  useful: project mode (`input` = a `.csproj`/`.sln`, which restores and builds before launching —
+  slower, so allow for the build) and folder mode (`input` = the `win-x64` build output containing
+  the exe, which launches what is already built). Either way `sessionEvents` shows
+  `start:coreclr:…` and the app process comes up. NOTE `startDebugging` returns **false** even on
+  success — key on `launched` (a `start:coreclr` event), not `started`. If `input` is empty/wrong,
+  F5 falls back to prompting; with neither `input` nor `inputFolder` set it raises the run-target
+  QuickPick, answered with `@{accept=$true}`, not a dialog.
 - **The WinApp debugger requires `ms-dotnettools.csharp`** (coreclr) — install it into
   `.drive-extensions` too: `code --extensions-dir=.drive-extensions
   --install-extension ms-dotnettools.csharp`. Without it F5 shows an "Install Extension" prompt.

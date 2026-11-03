@@ -54,7 +54,7 @@ test('editing name field updates the XML document', async () => {
     // Allow VS Code to apply the edit
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Name="com.test.MyNewApp"');
     expect(xml).toContain('Name="com.test.MyNewApp"');
 });
 
@@ -63,7 +63,7 @@ test('editing version field updates the XML document', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'Version="3.0.0.0"');
     expect(xml).toContain('Version="3.0.0.0"');
 });
 
@@ -118,7 +118,7 @@ test('can change processor architecture', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'ProcessorArchitecture="x64"');
     expect(xml).toContain('ProcessorArchitecture="x64"');
 });
 
@@ -141,7 +141,7 @@ test('entering a Resource ID updates the XML', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'ResourceId="MyResourceId"');
     expect(xml).toContain('ResourceId="MyResourceId"');
 });
 
@@ -165,7 +165,7 @@ test('editing Phone Identity updates the XML', async () => {
     await waitForDebounce(ctx.page);
     await ctx.page.waitForTimeout(1_000);
 
-    const xml = await readManifestXml(ctx.page, ctx.workspacePath);
+    const xml = await readManifestXml(ctx.page, ctx.workspacePath, 'PhoneProductId="11111111-2222-3333-4444-555555555555"');
     expect(xml).toContain('PhoneProductId="11111111-2222-3333-4444-555555555555"');
 });
 
