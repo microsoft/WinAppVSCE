@@ -1983,11 +1983,25 @@ namespace WinUIXamlPreview.UI
         /// Warn when an unbuilt project's page rendered with parts missing (custom controls placeholdered, app
         /// resources unresolved) — a build restores them, and the output watcher relaunches the preview on its own.
         /// </summary>
-        private void UpdateBuildHint(System.Collections.Generic.List<string>? missingKeys, System.Collections.Generic.List<string>? unmappedTypes)
+        private void UpdateBuildHint(System.Collections.Generic.List<string>? missingKeys, System.Collections.Generic.List<string>? unmappedTypes, bool designValuesSkipped = false)
         {
             var doc = SelectionDocument;
             var unbuilt = _activeProject != null && _activeUserDll == null;
             var text = BuildHint.Describe(unbuilt, missingKeys, unmappedTypes);
+            var title = BuildHint.Title;
+            var severity = BannerSeverity.Warning;
+            if (designValuesSkipped)
+            {
+                if (text == null)
+                {
+                    (title, text, severity) = ("Design-time values skipped", DesignValuesSkippedNote, BannerSeverity.Info);
+                }
+                else
+                {
+                    text += " " + DesignValuesSkippedNote;
+                }
+            }
+
             if (text == null || (doc != null && _buildHintDismissed.Contains(doc)))
             {
                 if (_buildHintBar.IsShown)
@@ -1999,10 +2013,13 @@ namespace WinUIXamlPreview.UI
 
             if (!_buildHintBar.IsShown)
             {
-                Log.Write($"Build hint: unbuilt project; {missingKeys?.Count ?? 0} unresolved key(s), unmapped type(s): {string.Join(", ", unmappedTypes ?? new System.Collections.Generic.List<string>())}.");
+                Log.Write($"Build hint: unbuilt project; {missingKeys?.Count ?? 0} unresolved key(s), unmapped type(s): {string.Join(", ", unmappedTypes ?? new System.Collections.Generic.List<string>())}; d: values skipped: {designValuesSkipped}.");
             }
-            _buildHintBar.Show(BannerSeverity.Warning, BuildHint.Title, text);
+            _buildHintBar.Show(severity, title, text);
         }
+
+        private const string DesignValuesSkippedNote =
+            "The page didn't load with its d: design-time values, so they aren't shown. Check them for invalid values or resources.";
 
         // The host plan of the current document when it may upgrade (null under recovery / identity fallback),
         // so turning full fidelity back on can start the upgrade without relaunching.
@@ -2141,7 +2158,7 @@ namespace WinUIXamlPreview.UI
                     PerfEnd("frame");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
-                    UpdateBuildHint(frame.MissingKeys, frame.UnmappedTypes);
+                    UpdateBuildHint(frame.MissingKeys, frame.UnmappedTypes, frame.DesignValuesSkipped);
                     UpdateNewerTypesNote(frame.NewerTypes);
                     Log.Write($"Frame rendered: {frame.Width}x{frame.Height}px ({frame.DipWidth}x{frame.DipHeight} dip).");
                 }
@@ -2209,7 +2226,7 @@ namespace WinUIXamlPreview.UI
                     PerfEnd("hwnd");
                     OnRenderSucceeded(); // clear death streak; retire any swapped-away surface; warm a spare
                     HideStatus();
-                    UpdateBuildHint(msg.MissingKeys, msg.UnmappedTypes);
+                    UpdateBuildHint(msg.MissingKeys, msg.UnmappedTypes, msg.DesignValuesSkipped);
                     UpdateNewerTypesNote(msg.NewerTypes);
                     Log.Write($"Native surface hosted: hwnd=0x{msg.Hwnd:X} px={pxW}x{pxH} dip={dipW:0}x{dipH:0} scale={msg.Scale}.");
                 }

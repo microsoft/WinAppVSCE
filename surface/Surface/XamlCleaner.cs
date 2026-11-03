@@ -164,6 +164,11 @@ internal static class XamlCleaner
     /// otherwise. May be null.
     /// </param>
     /// <param name="designSizedRoot">Receives "Width"/"Height" when the root's size came from <c>d:</c> markup rather than a real attribute. May be null.</param>
+    /// <param name="designValues">
+    /// When true, a <c>d:</c> property value (e.g. <c>d:Text</c>) replaces the element's real value, as in the VS
+    /// designer. When false only the root's design size is kept (Sample data off, or the values failed to load).
+    /// </param>
+    /// <param name="designPromotions">Receives "Element.Property" for each <c>d:</c> value promoted to a runtime property. May be null.</param>
     public static string Clean(
         string rawXaml,
         Func<string, bool>? isKnownResourceKey = null,
@@ -175,7 +180,9 @@ internal static class XamlCleaner
         SampleTypeModel? sampleTypes = null,
         IList<ChartFixup>? chartFixups = null,
         ISet<string>? missingFrameworkTypes = null,
-        ISet<string>? designSizedRoot = null)
+        ISet<string>? designSizedRoot = null,
+        bool designValues = true,
+        ISet<string>? designPromotions = null)
     {
         if (string.IsNullOrWhiteSpace(rawXaml))
         {
@@ -263,7 +270,7 @@ internal static class XamlCleaner
             var rootHeightBefore = root.Attribute("Height")?.Value;
             foreach (var el in root.DescendantsAndSelf().ToList())
             {
-                CleanElementAttributes(el, root, isKnownResourceKey, docKeys, droppedKeys, providerMapsFullName, samples, missingResourceKeys);
+                CleanElementAttributes(el, root, isKnownResourceKey, docKeys, droppedKeys, providerMapsFullName, samples, missingResourceKeys, designValues, designPromotions);
             }
             if (designSizedRoot is not null)
             {
@@ -352,12 +359,32 @@ internal static class XamlCleaner
         HashSet<string> droppedKeys,
         Func<string, bool>? providerMapsFullName,
         SamplePlan? samples,
-        ISet<string>? missingResourceKeys)
+        ISet<string>? missingResourceKeys,
+        bool designValues,
+        ISet<string>? designPromotions)
     {
         bool sampleData = samples is not null;
         var toRemove = new List<XAttribute>();
-        var toAdd = new List<(XName name, string value)>();
+        var toAdd = new List<(XName name, string value, bool replace)>();
         var toRewrite = new List<(XAttribute attr, string value)>();
+
+        // Rule 5 (design values): decide the d:* mappings first, so a real value they replace isn't cleaned for nothing
+        // (and doesn't report, say, a missing resource key the preview never uses).
+        foreach (var a in el.Attributes())
+        {
+            if (!a.IsNamespaceDeclaration && a.Name.Namespace == Design)
+            {
+                MapDesignAttribute(el, root, a, toAdd, designValues);
+            }
+        }
+        var replaced = new HashSet<XName>(toAdd.Where(t => t.replace).Select(t => t.name));
+        if (designPromotions is not null)
+        {
+            foreach (var name in replaced)
+            {
+                designPromotions.Add(el.Name.LocalName + "." + name.LocalName);
+            }
+        }
 
         foreach (var a in el.Attributes())
         {
@@ -369,6 +396,12 @@ internal static class XamlCleaner
             var ns = a.Name.Namespace;
             var local = a.Name.LocalName;
 
+            if (replaced.Contains(a.Name))
+            {
+                toRemove.Add(a); // a d: value takes its place
+                continue;
+            }
+
             // Rule 5: markup-compatibility (mc:Ignorable, ...) — always drop.
             if (ns == Mc)
             {
@@ -376,10 +409,9 @@ internal static class XamlCleaner
                 continue;
             }
 
-            // Rule 5: design (d:*) attributes — map the useful ones, then drop.
+            // Rule 5: design (d:*) attributes — mapped above, now dropped.
             if (ns == Design)
             {
-                MapDesignAttribute(el, root, a, toAdd);
                 toRemove.Add(a);
                 continue;
             }
@@ -434,7 +466,7 @@ internal static class XamlCleaner
                     }
                     if (sample.Tag is not null && el.Attribute("Tag") is null)
                     {
-                        toAdd.Add(("Tag", sample.Tag));
+                        toAdd.Add(("Tag", sample.Tag, false));
                     }
                     continue;
                 }
@@ -494,10 +526,11 @@ internal static class XamlCleaner
             a.Remove();
         }
 
-        // Add mapped design->runtime attributes last, never clobbering an existing real property.
-        foreach (var (name, value) in toAdd)
+        // Add mapped design->runtime attributes last. A d: property value replaces the real one; the root's
+        // design size only fills a size the markup doesn't set.
+        foreach (var (name, value, replace) in toAdd)
         {
-            if (el.Attribute(name) is null)
+            if (replace || el.Attribute(name) is null)
             {
                 el.SetAttributeValue(name, value);
             }
@@ -510,7 +543,7 @@ internal static class XamlCleaner
     /// type (e.g. <c>d:Text</c>) becomes that runtime property so design-time data still renders.
     /// Design-only markup extensions (<c>{d:DesignInstance}</c>, <c>{d:DesignData}</c>) are never mapped.
     /// </summary>
-    private static void MapDesignAttribute(XElement el, XElement root, XAttribute a, List<(XName, string)> toAdd)
+    private static void MapDesignAttribute(XElement el, XElement root, XAttribute a, List<(XName, string, bool)> toAdd, bool designValues)
     {
         var local = a.Name.LocalName;
         var value = a.Value;
@@ -519,12 +552,14 @@ internal static class XamlCleaner
         {
             if (el == root)
             {
-                var target = local == "DesignWidth" ? "Width" : "Height";
-                if (root.Attribute(target) is null)
-                {
-                    toAdd.Add((target, value));
-                }
+                toAdd.Add((local == "DesignWidth" ? "Width" : "Height", value, false));
             }
+            return;
+        }
+
+        // Without design values only the root's design size survives (d:Width/d:Height size the page too).
+        if (!designValues && !(el == root && local is "Width" or "Height"))
+        {
             return;
         }
 
@@ -536,14 +571,11 @@ internal static class XamlCleaner
 
         // Only map when the runtime property genuinely exists on the element's type — this prevents
         // Blend-only attributes (d:LayoutOverrides, d:IsHidden, ...) from becoming invalid properties.
-        // An {x:Bind} on the same property is about to be dropped, so it doesn't block the mapping.
         var type = ResolveElementType(el);
-        var existing = el.Attribute(local);
         if (type is not null &&
-            type.GetProperty(local, BindingFlags.Public | BindingFlags.Instance) is not null &&
-            (existing is null || IsMarkupExtension(el, existing.Value, "Bind", Xaml)))
+            type.GetProperty(local, BindingFlags.Public | BindingFlags.Instance) is not null)
         {
-            toAdd.Add((local, value));
+            toAdd.Add((local, value, true));
         }
     }
 

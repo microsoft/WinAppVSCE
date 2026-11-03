@@ -626,6 +626,7 @@ internal sealed class FrameServer
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
                 newerTypes = RenderHost.LastNewerTypes,
+                designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });
         }
         else
@@ -641,6 +642,7 @@ internal sealed class FrameServer
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
                 newerTypes = RenderHost.LastNewerTypes,
+                designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });
         }
     }
@@ -695,6 +697,7 @@ internal sealed class FrameServer
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
                 newerTypes = RenderHost.LastNewerTypes,
+                designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });
 
             // Teach the client the authored subtree's custom content-property names (bug D1) so its XAML
@@ -715,6 +718,7 @@ internal sealed class FrameServer
                 missingKeys = RenderHost.LastMissingKeys,
                 unmappedTypes = RenderHost.LastUnmappedTypes,
                 newerTypes = RenderHost.LastNewerTypes,
+                designValuesSkipped = RenderHost.LastDesignValuesSkipped,
             });
         }
     }

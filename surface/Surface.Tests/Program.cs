@@ -1398,7 +1398,7 @@ namespace Surface.Tests
             Check("d:DataContext DesignInstance not promoted", Attr(sp, "DataContext") is null);
             Check("d:LayoutOverrides (not a property) not promoted", Attr(sp, "LayoutOverrides") is null);
             Eq("d:Text -> Text", "Sample", Attr(Named(r, "T1"), "Text"));
-            Eq("d:Text never overwrites a real Text", "Real", Attr(Named(r, "T2"), "Text"));
+            Eq("d:Text replaces a real Text", "Sample", Attr(Named(r, "T2"), "Text"));
             Check("d:Text with design extension not promoted", Attr(Named(r, "T3"), "Text") is null);
             Check("d:NotAProperty not promoted", Attr(Named(r, "T4"), "NotAProperty") is null);
             Check("design elements removed", First(r, "DesignProperties") is null);
@@ -1413,6 +1413,38 @@ namespace Surface.Tests
             sized.Clear();
             XamlCleaner.Clean(Doc("<Grid />", rootAttrs: "Width=\"300\" Height=\"500\""), designSizedRoot: sized);
             Check("design size: real Width/Height not reported", sized.Count == 0);
+
+            // d: values win over any real value, and only apply with design values on.
+            var wins = Doc(
+                "<StackPanel>" +
+                "<TextBlock x:Name=\"B\" Text=\"{Binding Name}\" d:Text=\"Bound\" />" +
+                "<TextBlock x:Name=\"R\" Foreground=\"{StaticResource NoSuchKey}\" d:Foreground=\"Red\" />" +
+                "<TextBlock x:Name=\"V\" Visibility=\"Collapsed\" d:Visibility=\"Visible\" />" +
+                "<TextBlock x:Name=\"Plain\" Text=\"Real\" />" +
+                "</StackPanel>",
+                rootAttrs: "Width=\"300\" d:Width=\"500\" d:DesignHeight=\"700\"");
+            var missingKeys = new HashSet<string>();
+            var promoted = new HashSet<string>();
+            sized.Clear();
+            var w = XDocument.Parse(XamlCleaner.Clean(wins, isKnownResourceKey: _ => false, missingResourceKeys: missingKeys, designSizedRoot: sized, designPromotions: promoted)).Root!;
+            Eq("d:Text replaces a {Binding}", "Bound", Attr(Named(w, "B"), "Text"));
+            Eq("d:Foreground replaces a {StaticResource}", "Red", Attr(Named(w, "R"), "Foreground"));
+            Check("replaced resource reference isn't reported missing", missingKeys.Count == 0, string.Join(",", missingKeys));
+            Eq("d:Visibility replaces Visibility", "Visible", Attr(Named(w, "V"), "Visibility"));
+            Eq("element without d: keeps its value", "Real", Attr(Named(w, "Plain"), "Text"));
+            Eq("root d:Width replaces Width", "500", Attr(w, "Width"));
+            Check("root d:Width reported as design size", sized.Contains("Width"));
+            Check("promotions recorded", promoted.Contains("TextBlock.Text") && promoted.Contains("TextBlock.Foreground"), string.Join(",", promoted));
+
+            promoted.Clear();
+            var off = XDocument.Parse(XamlCleaner.Clean(wins, designValues: false, designPromotions: promoted)).Root!;
+            Eq("design values off: {Binding} kept", "{Binding Name}", Attr(Named(off, "B"), "Text"));
+            Eq("design values off: Visibility kept", "Collapsed", Attr(Named(off, "V"), "Visibility"));
+            Check("design values off: no d: attributes remain",
+                !off.DescendantsAndSelf().Any(e => e.Attributes().Any(a => !a.IsNamespaceDeclaration && a.Name.NamespaceName.Contains("expression/blend"))));
+            Eq("design values off: root d:Width still sizes", "500", Attr(off, "Width"));
+            Eq("design values off: root d:DesignHeight still sizes", "700", Attr(off, "Height"));
+            Check("design values off: only root size promoted", promoted.Count == 1 && promoted.All(p => p.EndsWith(".Width")), string.Join(",", promoted));
         }
 
         // ------------------------------------------------------------ R6

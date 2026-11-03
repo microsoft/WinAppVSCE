@@ -126,12 +126,12 @@ internal sealed class RenderHost
     /// resource-scope key resolver (Layer 2) is passed through so the cleaner can distinguish a resolvable
     /// <c>{StaticResource}</c> from a genuinely-undefined one.
     /// </summary>
-    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false, SampleTypeModel? sampleTypes = null, IList<ChartFixup>? chartFixups = null, ISet<string>? missingFrameworkTypes = null)
+    internal static string CleanXaml(string xaml, ISet<string>? forcePlaceholderTypes = null, bool sampleData = false, SampleTypeModel? sampleTypes = null, IList<ChartFixup>? chartFixups = null, ISet<string>? missingFrameworkTypes = null, bool designValues = true, ISet<string>? designPromotions = null)
     {
         var missing = new SortedSet<string>(StringComparer.Ordinal);
         var unmapped = new SortedSet<string>(StringComparer.Ordinal);
         var designSized = new HashSet<string>(StringComparer.Ordinal);
-        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes, chartFixups, missingFrameworkTypes, designSized);
+        var cleaned = XamlCleaner.Clean(xaml, App.ResourceKeyResolver, ProviderMapsFullName, forcePlaceholderTypes, sampleData, missing, unmapped, sampleTypes, chartFixups, missingFrameworkTypes, designSized, designValues, designPromotions);
         LastMissingKeys = missing.ToArray();
         LastUnmappedTypes = unmapped.ToArray();
         LastDesignSizedRoot = designSized;
@@ -156,6 +156,12 @@ internal sealed class RenderHost
 
     /// <summary>Root dimensions ("Width"/"Height") the most recent clean took from <c>d:</c> markup; a device preset overrides these.</summary>
     internal static IReadOnlySet<string> LastDesignSizedRoot { get; private set; } = new HashSet<string>();
+
+    /// <summary>
+    /// True when the most recent render dropped the page's <c>d:</c> design values because the page failed to load
+    /// with them (e.g. <c>d:Width="abc"</c>). The app ignores them, so the preview renders without them and says so.
+    /// </summary>
+    internal static bool LastDesignValuesSkipped { get; private set; }
 
     /// <summary>
     /// WinUI types the page uses that this host's WinUI doesn't have (a newer WinAppSDK added them), which the
@@ -291,6 +297,7 @@ internal sealed class RenderHost
         LastUnmappedTypes = Array.Empty<string>();
         LastNewerTypes = Array.Empty<string>();
         LastDesignSizedRoot = new HashSet<string>();
+        LastDesignValuesSkipped = false;
         try
         {
             // P1 (non-page classification): a structurally non-designable root — a ResourceDictionary
@@ -322,10 +329,13 @@ internal sealed class RenderHost
             // Bounded wait: a cold project parse that runs long finishes in the background for the next render.
             var sampleTypes = SampleData ? SampleTypeModel.ForDocument(DocumentPath, TimeSpan.FromSeconds(3)) : null;
             const int maxSafetyNetRetries = 5;
+            // d: values (d:Text, d:Background, …) apply with Sample data on; dropped once if the page won't load with them.
+            var designValues = SampleData;
             for (int attempt = 0; ; attempt++)
             {
                 var chartFixups = new List<ChartFixup>();
-                var xaml = CleanXaml(rawXaml, forced, SampleData, sampleTypes, chartFixups, missingFramework);
+                var designPromotions = new HashSet<string>(StringComparer.Ordinal);
+                var xaml = CleanXaml(rawXaml, forced, SampleData, sampleTypes, chartFixups, missingFramework, designValues, designPromotions);
                 if (attempt == 0 && timings is not null) timings.CleanMs = ElapsedMs(tClean);
 
                 object? parsed;
@@ -372,6 +382,16 @@ internal sealed class RenderHost
                     if (l is int cl && c is int cc && XamlErrorText.MapToSource(xaml, rawXaml, cl, cc) is var (ml, mc))
                     {
                         (l, c) = (ml, mc);
+                    }
+
+                    // A d: value the app never uses may be what broke the page (d:Width="abc", a d:Background resource
+                    // that isn't in scope, …): render once more without d: values rather than fail on design-only markup.
+                    if (designValues && designPromotions.Count > 0)
+                    {
+                        App.Log($"SAFETY-NET: Load failed with d: values ({string.Join(", ", designPromotions)}) — retrying without them. {Flatten(ex)}");
+                        designValues = false;
+                        LastDesignValuesSkipped = true;
+                        continue;
                     }
 
                     // Backstop: an opaque failure (no position, no identifiable constructor) is most likely
@@ -445,7 +465,10 @@ internal sealed class RenderHost
                 // §51 M1: honor the Blend design namespace's d:DataContext (d:DesignInstance / d:DesignData)
                 // so a classic {Binding} page renders real sample data. Never
                 // throws — a bad design hint can only fail to add data, never fail an otherwise-good render.
-                ApplyDesignTimeData(fe, rawXaml);
+                if (designValues)
+                {
+                    ApplyDesignTimeData(fe, rawXaml);
+                }
                 if (SampleData && xaml.Contains(SampleListFiller.TagPrefix, StringComparison.Ordinal))
                 {
                     SampleListFiller.Attach(fe);
