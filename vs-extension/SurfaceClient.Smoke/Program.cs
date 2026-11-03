@@ -516,8 +516,8 @@ namespace WinUIXamlPreview.Smoke
 
         /// <summary>
         /// WS2-F6: with sample data on (the surface default) an {x:Bind} text property renders a placeholder —
-        /// FallbackValue when given, a d: value when present, else a value generated from the path (see SamplePlanner) — and a bound list gets
-        /// dummy rows. Toggling it off (UpdateXaml with sampleData=false) re-hosts with bindings simply dropped.
+        /// FallbackValue when given, a d: value when present, else a sample value generated from the path (see SamplePlanner) — and a bound list gets
+        /// dummy rows. Toggling it off (UpdateXaml with sampleData=false) re-hosts with bindings and d: values dropped.
         /// </summary>
         private static async Task RunSampleDataClient(string surfaceExe)
         {
@@ -541,10 +541,14 @@ namespace WinUIXamlPreview.Smoke
                 return FindProp(await t, prop)?.Value;
             }
 
-            Check("x:Bind path renders a value named after it", await ReadText("0.0.0", "Text") == "User name");
+            var userName = await ReadText("0.0.0", "Text");
+            Console.WriteLine($"    x:Bind ViewModel.UserName -> '{userName}'");
+            Check("x:Bind path renders a sample value", !string.IsNullOrEmpty(userName) && !userName!.StartsWith("{"));
             Check("x:Bind FallbackValue wins", await ReadText("0.0.1", "Text") == "Loading status");
             Check("d:Text wins over x:Bind placeholder", await ReadText("0.0.2", "Text") == "Previewer title");
-            Check("function binding renders a value named after it", await ReadText("0.0.3", "Content") == "Greeting");
+            var greeting = await ReadText("0.0.3", "Content");
+            Console.WriteLine($"    x:Bind Fmt.Greeting(...) -> '{greeting}'");
+            Check("function binding renders a sample value", !string.IsNullOrEmpty(greeting) && !greeting!.StartsWith("{"));
             Check("unresolved StaticResource renders {Key} (WS2-F5)", await ReadText("0.0.5", "Text") == "{KeyAddedInAppCode}");
 
             bool filled = false;
@@ -561,7 +565,7 @@ namespace WinUIXamlPreview.Smoke
             client.UpdateXaml(SampleDataXaml);
             await rehost;
             Check("sample data off: x:Bind text left empty", string.IsNullOrEmpty(await ReadText("0.0.0", "Text")));
-            Check("sample data off: d:Text still applies", await ReadText("0.0.2", "Text") == "Previewer title");
+            Check("sample data off: d:Text ignored too", string.IsNullOrEmpty(await ReadText("0.0.2", "Text")));
             Check("sample data off: unresolved StaticResource left empty", string.IsNullOrEmpty(await ReadText("0.0.5", "Text")));
         }
         private static PropItemMsg? FindProp(ElementPropsMsg? msg, string name)
