@@ -58,6 +58,12 @@ Schema sync reports success only after every required XSD is copied. If `winapp 
 returns nonzero, its diagnostics are logged as warnings; sync can still succeed when all
 required schemas are available. Missing packages or XSDs remain fatal.
 
+## Packaged extension E2E tests
+
+Install the VSIX using the downloaded VS Code's `bin\code.cmd`, not its GUI executable.
+The CLI reports installation diagnostics and an exit code. Keep `VSCODE_PATH` pointing
+to `Code.exe` and use the same isolated extensions directory for installation and E2E tests.
+
 ## Release checks
 
 - [ ] Run `npm run test:unit` and `npm test`.

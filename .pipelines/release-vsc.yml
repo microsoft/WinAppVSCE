@@ -292,6 +292,11 @@ extends:
                     Write-Error "Downloaded VS Code executable not found at $codePath"
                     exit 1
                 }
+                $codeCli = Join-Path $vscodeDir "bin\code.cmd"
+                if (-not (Test-Path $codeCli)) {
+                    Write-Error "Downloaded VS Code CLI not found at $codeCli"
+                    exit 1
+                }
 
                 $vsix = Get-ChildItem -Path "$(System.DefaultWorkingDirectory)/artifacts" -Filter "winapp-*.vsix" |
                     Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -300,12 +305,13 @@ extends:
                     exit 1
                 }
 
-                & $codePath --user-data-dir "$(Agent.TempDirectory)/vscode-install-profile" `
+                & $codeCli --user-data-dir "$(Agent.TempDirectory)/vscode-install-profile" `
                     --extensions-dir "$(Agent.TempDirectory)/vscode-extensions" `
                     --install-extension $vsix.FullName --force
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Error "Failed to install packaged VSIX"
-                    exit $LASTEXITCODE
+                $installExitCode = $LASTEXITCODE
+                if ($installExitCode -ne 0) {
+                    Write-Error "Failed to install packaged VSIX with the VS Code CLI (exit code $installExitCode)"
+                    exit $installExitCode
                 }
 
                 $env:VSCODE_PATH = $codePath

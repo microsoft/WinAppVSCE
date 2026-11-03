@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -144,6 +144,87 @@ test("release signing patterns select every first-party server binary", () => {
   );
   assert.deepEqual(selected.sort(), binaries.sort());
 });
+
+for (const scenario of [
+  { name: "installs through the CLI into the E2E extensions directory", exitCode: 0 },
+  { name: "reports the installer diagnostic and exit code", exitCode: 19 },
+  { name: "rejects a missing CLI instead of invoking the GUI", missingCli: true },
+]) {
+  test(`release VSIX installation ${scenario.name}`, { skip: process.platform !== "win32" }, () => {
+    const temp = realpathSync.native(mkdtempSync(path.join(tmpdir(), "winapp-vsix-install-")));
+    try {
+      const agentTemp = path.join(temp, "agent temp");
+      const checkout = path.join(temp, "checkout");
+      const codePath = path.join(agentTemp, "vscode", "Code.exe");
+      const cliArgs = path.join(temp, "cli-args.txt");
+      const vsixPath = path.join(checkout, "artifacts", "winapp-0.4.0.vsix");
+      mkdirSync(path.join(agentTemp, "vscode", "bin"), { recursive: true });
+      mkdirSync(path.dirname(vsixPath), { recursive: true });
+      writeFileSync(codePath, "");
+      writeFileSync(vsixPath, "");
+      if (!scenario.missingCli) {
+        writeFileSync(path.join(agentTemp, "vscode", "bin", "code.cmd"), [
+          "@echo off",
+          "echo fixture installer diagnostic",
+          'echo %* > "%RELEASE_TEST_CLI_ARGS%"',
+          `exit /b ${scenario.exitCode}`,
+          "",
+        ].join("\r\n"));
+      }
+      const pipeline = readFileSync(path.join(root, ".pipelines", "release-vsc.yml"), "utf8");
+      const e2eStep = pipeline.split("displayName: Run E2E tests\n")[1]?.split("          - task:")[0];
+      const install = e2eStep?.match(/                \$codePath = Join-Path[\s\S]+?(?=                # The 'vscode' project)/)?.[0];
+      assert.ok(install, "Missing release VSIX install script");
+      const script = install.replace(/^                /gm, "")
+        .replaceAll("$(Agent.TempDirectory)", "$env:RELEASE_TEST_AGENT_TEMP")
+        .replaceAll("$(System.DefaultWorkingDirectory)", "$env:RELEASE_TEST_CHECKOUT");
+      const result = spawnSync("pwsh", ["-NoProfile", "-Command", `
+        $ErrorActionPreference = 'Stop'
+        $global:LASTEXITCODE = 37
+        $vscodeDir = Join-Path $env:RELEASE_TEST_AGENT_TEMP 'vscode'
+        ${script}
+        if ($env:VSCODE_PATH -ne (Join-Path $env:RELEASE_TEST_AGENT_TEMP 'vscode\\Code.exe')) { throw 'E2E must launch Code.exe' }
+        if ($env:E2E_USE_INSTALLED_EXTENSION -ne '1') { throw 'E2E must use the installed VSIX' }
+        if ([IO.Path]::GetFullPath($env:E2E_EXTENSIONS_DIR) -ne (Join-Path $env:RELEASE_TEST_AGENT_TEMP 'vscode-extensions')) { throw 'E2E extension directory mismatch' }
+        Write-Host 'Ready to run E2E tests'
+      `], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          RELEASE_TEST_AGENT_TEMP: agentTemp,
+          RELEASE_TEST_CHECKOUT: checkout,
+          RELEASE_TEST_CLI_ARGS: cliArgs,
+        },
+      });
+      assert.ifError(result.error);
+      const output = result.stdout + result.stderr;
+      if (scenario.missingCli) {
+        assert.notEqual(result.status, 0, output);
+        assert.match(output, /Downloaded VS Code CLI not found/);
+      } else {
+        assert.match(output, /fixture installer diagnostic/);
+        const args = readFileSync(cliArgs, "utf8").replaceAll('"', "").replaceAll("/", "\\");
+        assert.ok(args.includes(`--user-data-dir ${path.join(agentTemp, "vscode-install-profile")}`), args);
+        assert.ok(args.includes(`--extensions-dir ${path.join(agentTemp, "vscode-extensions")}`), args);
+        assert.ok(args.includes(`--install-extension ${vsixPath} --force`), args);
+        if (scenario.exitCode === 0) {
+          assert.equal(result.status, 0, output);
+          assert.match(output, /Ready to run E2E tests/);
+        } else {
+          assert.notEqual(result.status, 0, output);
+          assert.match(output, /Failed to install packaged VSIX.*exit code 19/);
+        }
+      }
+      if (scenario.missingCli || scenario.exitCode !== 0) {
+        assert.doesNotMatch(output, /Ready to run E2E tests/);
+      }
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+}
 
 test("ensure-server-bundle rejects an unknown mode", () => {
   const output = mkdtempSync(path.join(tmpdir(), "winui-ensure-"));
