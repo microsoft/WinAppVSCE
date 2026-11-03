@@ -59,7 +59,7 @@ namespace WinUIXamlPreview.UI
         // auto-restarts and re-renders, bounded by the restart budget, which resets on any successful render.
         // Process recycling: a pre-warmed idle spare renders a "risky" document (one that has crashed the
         // surface before) in a fresh, unarmed process without a visible cold-restart blip.
-        private readonly PreviewSessionState _session = new PreviewSessionState();
+        private readonly PreviewSessionState _session = new PreviewSessionState(RiskyDocStore.Shared);
 
         // WS3-P0 latency markers: one pending "action → paint" span, closed by the next Hwnd/Frame/Error.
         // Emits greppable "PERF <label>.paint ms=<n> outcome=<x>" lines (see scripts\previewer-perf-summary.ps1).

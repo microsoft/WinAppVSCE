@@ -24,6 +24,12 @@ namespace WinUIXamlPreview.UI
     internal sealed class PreviewSessionState
     {
         private readonly HashSet<string> _riskyDocs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly RiskyDocStore? _riskyStore;
+
+        public PreviewSessionState(RiskyDocStore? riskyStore = null)
+        {
+            _riskyStore = riskyStore;
+        }
 
         private bool _themeSwapPending;
         private int _themeSwapGen;
@@ -202,9 +208,33 @@ namespace WinUIXamlPreview.UI
 
         // ---- surface death -----------------------------------------------------
 
-        public bool IsRisky(string? path) => !string.IsNullOrEmpty(path) && _riskyDocs.Contains(path!);
+        /// <summary>The doc crashed a preview this session, or in a recent session (<see cref="RiskyDocStore"/>).</summary>
+        public bool IsRisky(string? path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return false;
+            }
 
-        public void MarkRisky(string path) => _riskyDocs.Add(path);
+            if (_riskyDocs.Contains(path!))
+            {
+                return true;
+            }
+
+            if (_riskyStore?.Contains(path!) == true)
+            {
+                _riskyDocs.Add(path!);
+                return true;
+            }
+
+            return false;
+        }
+
+        public void MarkRisky(string path)
+        {
+            _riskyDocs.Add(path);
+            _riskyStore?.Add(path);
+        }
 
         /// <summary>The active surface died. Recover spends one restart attempt.</summary>
         public ActiveDeathAction OnActiveDied(string? path, bool disposed, bool protocolMismatch)

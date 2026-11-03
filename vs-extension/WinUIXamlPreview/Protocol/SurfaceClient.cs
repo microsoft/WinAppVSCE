@@ -317,7 +317,46 @@ namespace WinUIXamlPreview.Protocol
                 {
                     AppCodeFault?.Invoke(true);
                 }
+                else if (IsRuntimeFatalLine(e.Data))
+                {
+                    ScheduleCrashKill(e.Data.Trim());
+                }
             }
+        }
+
+        /// <summary>
+        /// The .NET runtime's first stderr line for a process-ending failure (access violation, unhandled exception,
+        /// FailFast). After printing it the process hands off to Windows Error Reporting, which can keep the dead
+        /// process — and a reparented window that shares VS's input queue — alive for 10+ s.
+        /// </summary>
+        internal static bool IsRuntimeFatalLine(string line)
+        {
+            var t = line.TrimStart();
+            return t.StartsWith("Fatal error.", StringComparison.Ordinal)
+                || t.StartsWith("Unhandled exception. ", StringComparison.Ordinal)
+                || t.StartsWith("Process terminated. ", StringComparison.Ordinal);
+        }
+
+        /// <summary>How long to let the runtime finish writing the stack trace to the log before killing.</summary>
+        internal static TimeSpan CrashKillDelay { get; set; } = TimeSpan.FromMilliseconds(200);
+
+        private int _crashKillScheduled;
+
+        private void ScheduleCrashKill(string line)
+        {
+            if (Interlocked.Exchange(ref _crashKillScheduled, 1) != 0)
+            {
+                return;
+            }
+
+            if (line.Length > 160)
+            {
+                line = line.Substring(0, 160) + "…";
+            }
+
+            _ = Task.Delay(CrashKillDelay).ContinueWith(
+                _ => Fault($"Surface process crashed ({line}); ending it now so Visual Studio stays responsive."),
+                TaskScheduler.Default);
         }
 
         private void OnExited(object? sender, EventArgs e)

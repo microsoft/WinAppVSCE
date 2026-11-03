@@ -99,7 +99,8 @@ namespace WinUIXamlPreview.Testing
             return true;
         }
 
-        /// <summary>Resets persisted options to the product defaults, with background full-fidelity builds off.</summary>
+        /// <summary>Resets persisted options to the product defaults, with background full-fidelity builds off, and
+        /// forgets documents learned as risky in earlier runs.</summary>
         public static void ResetOptions()
         {
             PreviewOptions.Location = PreviewLocation.Right;
@@ -112,6 +113,7 @@ namespace WinUIXamlPreview.Testing
             PreviewOptions.CanvasWidth = 0;
             PreviewOptions.CanvasHeight = 0;
             PreviewOptions.FullFidelityAutoBuild = false;
+            RiskyDocStore.Shared.Clear();
         }
     }
 }

@@ -29,6 +29,7 @@ internal static partial class Program
         // Close reasons and exit codes.
         Eq("close: hung", "hung", TelemetryClassifier.CloseReason("Surface stopped responding (no reply for 10s)."));
         Eq("close: exited", "exited", TelemetryClassifier.CloseReason("Surface process exited (code=0xC0000409)."));
+        Eq("close: crashed", "crashed", TelemetryClassifier.CloseReason("Surface process crashed (Fatal error.); ending it now so Visual Studio stays responsive."));
         Eq("close: exit code", "0xC0000409", TelemetryClassifier.ExitCode("Surface process exited (code=0xC0000409)."));
         Eq("close: no code", null, TelemetryClassifier.ExitCode("Surface stopped responding."));
         Eq("hresult: found", "0x80073CFF", TelemetryClassifier.HResult("Add-AppxPackage failed: 0x80073cff, Developer Mode is off"));

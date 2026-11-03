@@ -233,6 +233,49 @@ internal static partial class Program
             Eq("disconnected detail: plain reason", "boom", PreviewErrorText.DisconnectedDetail("boom", s.Restarts.Exhausted, s.Restarts.MaxAttempts));
         }
 
+        // ---- risky docs persist across sessions (RiskyDocStore) ----
+        {
+            var file = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "wxp-risky-" + Guid.NewGuid().ToString("N") + ".txt");
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            try
+            {
+                var s1 = new PreviewSessionState(new RiskyDocStore(file, () => now));
+                Check("store: unknown doc not risky", !s1.IsRisky(@"C:\a\Page.xaml"));
+                s1.OnActiveDied(@"C:\a\Page.xaml", false, false);
+
+                // A later VS session (fresh state + store instance) still knows the doc crashed.
+                var s2 = new PreviewSessionState(new RiskyDocStore(file, () => now.AddDays(1)));
+                Check("store: crash remembered across sessions", s2.IsRisky(@"C:\a\Page.xaml"));
+                Check("store: path match is case-insensitive", s2.IsRisky(@"c:\A\page.XAML"));
+                Check("store: other doc not risky", !s2.IsRisky(@"C:\a\Other.xaml"));
+
+                var expired = new RiskyDocStore(file, () => now + RiskyDocStore.Expiry + TimeSpan.FromMinutes(1));
+                Check("store: entry expires", !expired.Contains(@"C:\a\Page.xaml"));
+
+                // A second crash refreshes the timestamp, and adding from another instance keeps existing entries.
+                var later = now.AddDays(10);
+                new RiskyDocStore(file, () => later).Add(@"C:\a\Page.xaml");
+                new RiskyDocStore(file, () => later).Add(@"C:\a\Second.xaml");
+                var check = new RiskyDocStore(file, () => now + RiskyDocStore.Expiry + TimeSpan.FromDays(1));
+                Check("store: re-crash refreshes expiry", check.Contains(@"C:\a\Page.xaml"));
+                Check("store: concurrent adds merge", check.Contains(@"C:\a\Second.xaml"));
+
+                System.IO.File.AppendAllText(file, "garbage line\n\tno-ticks\n12x\tC:\\bad.xaml\n");
+                Check("store: malformed lines ignored", new RiskyDocStore(file, () => later).Contains(@"C:\a\Page.xaml"));
+
+                check.Clear();
+                Check("store: clear forgets", !check.Contains(@"C:\a\Page.xaml") && !new RiskyDocStore(file, () => later).Contains(@"C:\a\Page.xaml"));
+
+                var unwritable = new PreviewSessionState(new RiskyDocStore(null));
+                unwritable.MarkRisky("p");
+                Check("store: no file still tracks in memory", unwritable.IsRisky("p"));
+            }
+            finally
+            {
+                try { System.IO.File.Delete(file); } catch { }
+            }
+        }
+
         {
             var r = new RestartPolicy(maxAttempts: 1);
             Check("policy(1): first restart", r.TryBeginRestart());

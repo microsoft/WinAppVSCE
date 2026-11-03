@@ -101,6 +101,10 @@ namespace WinUIXamlPreview.Telemetry
             {
                 return "hung";
             }
+            if (Has(r, "process crashed"))
+            {
+                return "crashed";
+            }
             if (Has(r, "process exited"))
             {
                 return "exited";

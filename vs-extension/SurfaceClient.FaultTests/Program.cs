@@ -174,6 +174,17 @@ namespace WinUIXamlPreview.FaultTests
                     Thread.Sleep(2500);
                     return 4; // Healthy start, then the renderer dies — exercises Closed after Ready.
 
+                case "ready-then-fatal-hang":
+                    SendReady(writer);
+                    // What the runtime prints on an access violation, then the process lingers (Windows Error
+                    // Reporting holds it) — the client must end it rather than wait for the exit.
+                    Console.Error.WriteLine("Fatal error.");
+                    Console.Error.WriteLine("0xC0000005");
+                    Console.Error.WriteLine("   at Microsoft.UI.Xaml.UIElement.UpdateLayout()");
+                    Console.Error.Flush();
+                    Thread.Sleep(Timeout.Infinite);
+                    return 0;
+
                 case "ready-idle":
                 default:
                     SendReady(writer);
@@ -209,6 +220,7 @@ namespace WinUIXamlPreview.FaultTests
             CrashBeforeReadyFaultsOnce();
             CrashAfterReadyRaisesClosedOnce();
             MidStreamKillRaisesClosedOnce();
+            RuntimeFatalErrorEndsLingeringProcess();
             SendAfterCloseIsSwallowed();
             IntentionalDisposeSuppressesClosedAndIsIdempotent();
             HelloAdvertisesProtocolRange();
@@ -340,6 +352,27 @@ namespace WinUIXamlPreview.FaultTests
             var closed = h.WaitForClosed(1, TimeSpan.FromSeconds(5));
             h.Client.Dispose();
             Assert(name, closed && h.ClosedCount == 1, $"closedCount={h.ClosedCount} (expect 1)");
+        }
+
+        private static void RuntimeFatalErrorEndsLingeringProcess()
+        {
+            const string name = "runtime 'Fatal error.' on stderr → process ended promptly, exactly one Closed";
+            using var h = new Harness("ready-then-fatal-hang");
+            try
+            {
+                h.Client.StartAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            }
+            catch (Exception ex) { Fail(name, $"expected Ready, got {ex.GetType().Name}: {ex.Message}"); return; }
+
+            var sw = Stopwatch.StartNew();
+            var closed = h.WaitForClosed(1, TimeSpan.FromSeconds(3));
+            var closedMs = sw.ElapsedMilliseconds;
+            var reaped = h.WaitForFakeExit(TimeSpan.FromSeconds(3));
+            var reason = h.ClosedReason ?? "";
+            h.Client.Dispose();
+            Assert(name,
+                closed && h.ClosedCount == 1 && reaped && reason.Contains("crashed") && closedMs < 2000,
+                $"closed={h.ClosedCount} in {closedMs} ms, reaped={reaped}, reason='{reason}'");
         }
 
         private static void SendAfterCloseIsSwallowed()
