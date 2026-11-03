@@ -78,8 +78,12 @@ public static class HostBuilder
                 throw new InvalidDataException("A concrete resolved WindowsAppSDK version is required: " + version);
             var surfaceSource = Path.GetDirectoryName(Path.GetFullPath(opt.SurfaceProjectPath))!;
             var templateSource = Path.GetDirectoryName(Path.GetFullPath(opt.PreviewHostPriProjectPath))!;
+            // Resolve the cache from the user's project (its NuGet.Config chain), then pin the Surface build to it
+            // so restore and the matched-host hash checks agree; the build's own directory has no such config.
+            var nugetCache = opt.NuGetCache ?? Provisioner.NuGetCacheRoot(null, opt.ProjectPath);
+            log($"nuget cache : {nugetCache}");
             string RunTool(IEnumerable<string> args) => runTool == null
-                ? Run("dotnet", args, opt, log, cancellation) : runTool("dotnet", args);
+                ? Run("dotnet", args, nugetCache, log, cancellation) : runTool("dotnet", args);
             var toolchain = RunTool(new[] { "--version" }).Trim();
             // Namespace v2 leaves all legacy user cache entries untouched.
             var cache = Path.Combine(Path.GetFullPath(opt.CacheRoot), "v2");
@@ -88,7 +92,7 @@ public static class HostBuilder
                 version, opt.Platform, opt.Rid, opt.EngineStamp ?? "", opt.NuGetCache);
             if (!opt.ForceRebuild)
             {
-                var (knownComponent, _) = Provisioner.ResolveComponent(version, opt.NuGetCache, log);
+                var (knownComponent, _) = Provisioner.ResolveComponent(version, nugetCache, log);
                 var recalled = knownComponent == null ? null
                     : BuildStorage.Recall(memoPath, surfaceSource, templateSource, knownComponent, toolchain, log, cancellation);
                 if (recalled != null)
@@ -98,7 +102,7 @@ public static class HostBuilder
                     var fast = BuildStorage.FindCompleted(cache, recalled, cancellation, log);
                     if (fast != null)
                     {
-                        VerifyMatched(fast, knownComponent!, opt, r, cancellation);
+                        VerifyMatched(fast, knownComponent!, nugetCache, opt, r, cancellation);
                         log("CACHE HIT " + recalled + " (identity memo)");
                         cancellation.ThrowIfCancellationRequested();
                         SetHost(r, fast);
@@ -132,7 +136,7 @@ public static class HostBuilder
                 TemplatePackages.Write(template, null);
                 RunTool(BuildArgs("restore", dp, version, opt));
             }
-            var (component, _) = Provisioner.ResolveComponent(version, opt.NuGetCache, log);
+            var (component, _) = Provisioner.ResolveComponent(version, nugetCache, log);
             r.WinUiComponent = component ?? throw new InvalidDataException("Resolved WinUI component missing after restore.");
             var inputWitnesses = new List<BuildStorage.Witness>();
             var key = BuildStorage.Identity(surface, template, opt.ProjectPath, version, component,
@@ -144,7 +148,7 @@ public static class HostBuilder
             var existing = opt.ForceRebuild ? null : BuildStorage.FindCompleted(cache, key, cancellation, log);
             if (existing != null)
             {
-                VerifyMatched(existing, component, opt, r, cancellation);
+                VerifyMatched(existing, component, nugetCache, opt, r, cancellation);
                 RememberKey();
                 log("CACHE HIT " + key);
                 cancellation.ThrowIfCancellationRequested();
@@ -167,7 +171,7 @@ public static class HostBuilder
             var mergedPri = Path.Combine(priDir, "resources.pri");
             if (!File.Exists(mergedPri)) throw new FileNotFoundException("PreviewHost merged resources.pri missing.", mergedPri);
             HostPayload.CopyFile(mergedPri, Path.Combine(host, "Surface.designtime.pri"), cancellation);
-            VerifyMatched(host, component, opt, r, cancellation);
+            VerifyMatched(host, component, nugetCache, opt, r, cancellation);
             HostPayload.Seal(host, key, version, opt.EngineStamp ?? "", cancellation);
             if (BuildStorage.Identity(surface, template, opt.ProjectPath, version, component,
                 opt.Platform, opt.Rid, opt.EngineStamp ?? "", toolchain, cancellation) != key)
@@ -305,12 +309,12 @@ public static class HostBuilder
         return null;
     }
 
-    private static void VerifyMatched(string host, string component, BuildOptions opt, BuildResult r,
+    private static void VerifyMatched(string host, string component, string nugetCache, BuildOptions opt, BuildResult r,
         CancellationToken cancellation)
     {
-        var managed = Provisioner.LocateComponentManaged(component, opt.NuGetCache)
+        var managed = Provisioner.LocateComponentManaged(component, nugetCache)
             ?? throw new FileNotFoundException("Expected managed WinUI component missing.");
-        var native = Provisioner.LocateComponentNative(component, opt.NuGetCache, opt.Rid)
+        var native = Provisioner.LocateComponentNative(component, nugetCache, opt.Rid)
             ?? throw new FileNotFoundException("Expected native WinUI component missing.");
         r.ExpectedManagedHash = HostPayload.Hash(managed, cancellation);
         r.ExpectedNativeHash = HostPayload.Hash(Path.Combine(native, "Microsoft.ui.xaml.dll"), cancellation);
@@ -321,12 +325,12 @@ public static class HostBuilder
         if (!r.MatchedHost) throw new InvalidDataException("Matched-host verification failed: managed and/or native SHA256 mismatch.");
     }
 
-    private static string Run(string exe, IEnumerable<string> args, BuildOptions opt, Action<string> log, CancellationToken cancellation)
+    private static string Run(string exe, IEnumerable<string> args, string nugetCache, Action<string> log, CancellationToken cancellation)
     {
         var psi = new ProcessStartInfo(exe) { UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var arg in args) psi.ArgumentList.Add(arg);
-        if (opt.NuGetCache != null) psi.Environment["NUGET_PACKAGES"] = opt.NuGetCache;
+        psi.Environment["NUGET_PACKAGES"] = nugetCache;
         psi.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         using var process = new Process { StartInfo = psi };
         cancellation.ThrowIfCancellationRequested();

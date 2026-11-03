@@ -664,6 +664,45 @@ try
     Check(HostBuilder.ResolveManifestTool(mtProj) == Path.Combine(wasdkTools, "mt.exe"), "WindowsAppSDK's own tools\\mt.exe preferred");
     File.WriteAllText(Path.Combine(mtProj, "obj", "project.assets.json"), "{ not json");
     Check(HostBuilder.ResolveManifestTool(mtProj) == null, "corrupt assets -> defer");
+
+    // NuGet cache resolution mirrors NuGet: explicit → NUGET_PACKAGES → restored packagesPath →
+    // closest NuGet.Config globalPackagesFolder → user config → default.
+    var savedNuGetEnv = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+    Environment.SetEnvironmentVariable("NUGET_PACKAGES", null);
+    try
+    {
+        var ngRepo = Path.Combine(root, "ngrepo");
+        var ngProj = Path.Combine(ngRepo, "src", "App");
+        Directory.CreateDirectory(Path.Combine(ngProj, "obj"));
+        File.WriteAllText(Path.Combine(ngProj, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var noUserConfig = Path.Combine(root, "no-user", "NuGet.Config");
+        var userConfig = Path.Combine(root, "user", "NuGet.Config");
+        Directory.CreateDirectory(Path.GetDirectoryName(userConfig)!);
+        File.WriteAllText(userConfig, "<configuration><config><add key=\"globalPackagesFolder\" value=\"D:\\user-pkgs\\\" /></config></configuration>");
+        string Config(string folder) => $"<?xml version=\"1.0\" encoding=\"utf-8\"?><configuration><config><add key=\"globalPackagesFolder\" value=\"{folder}\" /></config></configuration>";
+        var defaultPkgs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
+
+        Check(Provisioner.NuGetCacheRoot(null, ngProj, noUserConfig) == defaultPkgs, "nuget: no config -> %USERPROFILE%\\.nuget\\packages");
+        Check(Provisioner.NuGetCacheRoot(null, ngProj, userConfig) == "D:\\user-pkgs", "nuget: user config globalPackagesFolder");
+        File.WriteAllText(Path.Combine(ngRepo, "NuGet.Config"), Config("..\\pkgs-shared"));
+        Check(Provisioner.NuGetCacheRoot(null, ngProj, userConfig) == Path.Combine(root, "pkgs-shared"),
+            "nuget: repo config beats user config; relative path resolves against the config dir");
+        File.WriteAllText(Path.Combine(ngProj, "nuget.config"), Config(".packages"));
+        Check(Provisioner.NuGetCacheRoot(null, Path.Combine(ngProj, "App.csproj"), userConfig) == Path.Combine(ngProj, ".packages"),
+            "nuget: closest config wins (csproj path accepted)");
+        File.WriteAllText(Path.Combine(ngProj, "nuget.config"), "<configuration><config><add key=\"repositoryPath\" value=\"x\" /></config></configuration>");
+        Check(Provisioner.NuGetCacheRoot(null, ngProj, userConfig) == Path.Combine(root, "pkgs-shared"),
+            "nuget: config without globalPackagesFolder defers to the next one up");
+        File.WriteAllText(Path.Combine(ngProj, "nuget.config"), "<configuration><config>");
+        Check(Provisioner.NuGetCacheRoot(null, ngProj, userConfig) == Path.Combine(root, "pkgs-shared"), "nuget: malformed config ignored");
+        File.WriteAllText(Path.Combine(ngProj, "obj", "project.assets.json"),
+            JsonSerializer.Serialize(new { project = new { restore = new { packagesPath = "E:\\restored\\" } } }));
+        Check(Provisioner.NuGetCacheRoot(null, ngProj, userConfig) == "E:\\restored", "nuget: restored packagesPath beats config");
+        Environment.SetEnvironmentVariable("NUGET_PACKAGES", "F:\\env-pkgs");
+        Check(Provisioner.NuGetCacheRoot(null, ngProj, userConfig) == "F:\\env-pkgs", "nuget: NUGET_PACKAGES beats project settings");
+        Check(Provisioner.NuGetCacheRoot("G:\\explicit", ngProj, userConfig) == "G:\\explicit", "nuget: explicit path beats everything");
+    }
+    finally { Environment.SetEnvironmentVariable("NUGET_PACKAGES", savedNuGetEnv); }
     Console.WriteLine($"Provisioner fixtures: {count} passed.");
 }
 finally { Directory.Delete(root, true); }

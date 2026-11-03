@@ -48,7 +48,7 @@ public sealed class ProvisionOptions
     /// <summary>Output directory for the version-matched host (a copy of the base host + overlaid native).</summary>
     public required string OutDir { get; init; }
 
-    /// <summary>NuGet global-packages folder. Defaults to NUGET_PACKAGES env, then %USERPROFILE%\.nuget\packages.</summary>
+    /// <summary>NuGet global-packages folder. Defaults to NuGet's own resolution (see <see cref="Provisioner.NuGetCacheRoot"/>).</summary>
     public string? NuGetCache { get; init; }
 
     /// <summary>Runtime identifier native sub-path. Default win-x64.</summary>
@@ -101,7 +101,7 @@ public static class Provisioner
         {
             cancellation.ThrowIfCancellationRequested();
             var (projectDir, csproj) = NormalizeProject(opt.ProjectPath);
-            var cache = ResolveNuGetCache(opt.NuGetCache);
+            var cache = ResolveNuGetCache(opt.NuGetCache, projectDir);
             log($"project dir : {projectDir}");
             log($"nuget cache : {cache}");
 
@@ -176,30 +176,35 @@ public static class Provisioner
     }
 
     /// <summary>Map a metapackage version to its Microsoft.WindowsAppSDK.WinUI sub-version via the cached nuspec.</summary>
-    public static (string? component, string? nuspec) ResolveComponent(string metaVersion, string? nugetCache = null, Action<string>? log = null)
+    public static (string? component, string? nuspec) ResolveComponent(string metaVersion, string? nugetCache = null, Action<string>? log = null, string? projectPath = null)
     {
         log ??= _ => { };
-        return ResolveWinUiComponent(metaVersion, ResolveNuGetCache(nugetCache), log);
+        return ResolveWinUiComponent(metaVersion, ResolveNuGetCache(nugetCache, projectPath), log);
     }
 
-    /// <summary>The effective NuGet global-packages cache root (explicit → NUGET_PACKAGES → %USERPROFILE%\.nuget\packages).</summary>
-    public static string NuGetCacheRoot(string? explicitCache = null) => ResolveNuGetCache(explicitCache);
+    /// <summary>
+    /// The effective NuGet global-packages root: explicit → NUGET_PACKAGES → the project's restored packagesPath →
+    /// globalPackagesFolder from the closest NuGet.Config (project dir upward, then <paramref name="userConfig"/>,
+    /// default %APPDATA%\NuGet\NuGet.Config) → %USERPROFILE%\.nuget\packages.
+    /// </summary>
+    public static string NuGetCacheRoot(string? explicitCache = null, string? projectPath = null, string? userConfig = null)
+        => ResolveNuGetCache(explicitCache, projectPath, userConfig);
 
     /// <summary>SHA256 hex of a file (uppercase, no separators).</summary>
     public static string HashFile(string path) => Sha256(path);
 
     /// <summary>Locate the WinUI component's cached native dir (1.8+ runtimes-framework layout), or null.</summary>
-    public static string? LocateComponentNative(string component, string? nugetCache = null, string rid = "win-x64")
+    public static string? LocateComponentNative(string component, string? nugetCache = null, string rid = "win-x64", string? projectPath = null)
     {
-        var cache = ResolveNuGetCache(nugetCache);
+        var cache = ResolveNuGetCache(nugetCache, projectPath);
         var loose = Path.Combine(cache, WinUiComponent.ToLowerInvariant(), component, "runtimes-framework", rid, "native");
         return Directory.Exists(loose) && File.Exists(Path.Combine(loose, NativeAnchor)) ? loose : null;
     }
 
     /// <summary>Locate the WinUI component's cached MANAGED projection (Microsoft.WinUI.dll), or null.</summary>
-    public static string? LocateComponentManaged(string component, string? nugetCache = null)
+    public static string? LocateComponentManaged(string component, string? nugetCache = null, string? projectPath = null)
     {
-        var cache = ResolveNuGetCache(nugetCache);
+        var cache = ResolveNuGetCache(nugetCache, projectPath);
         var root = Path.Combine(cache, WinUiComponent.ToLowerInvariant(), component);
         if (!Directory.Exists(root)) return null;
         try
@@ -489,12 +494,76 @@ public static class Provisioner
 
     // ---- helpers --------------------------------------------------------------------------------
 
-    private static string ResolveNuGetCache(string? explicitCache)
+    // NuGet's own precedence: NUGET_PACKAGES, then globalPackagesFolder from the closest NuGet.Config
+    // (project dir upward, then the user config), then %USERPROFILE%\.nuget\packages. A restored project's
+    // assets file records the folder restore actually used, so prefer that over re-deriving it.
+    private static string ResolveNuGetCache(string? explicitCache, string? projectPath = null, string? userConfig = null)
     {
         if (!string.IsNullOrWhiteSpace(explicitCache)) return explicitCache!;
         var env = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
         if (!string.IsNullOrWhiteSpace(env)) return env!;
-        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
+        if (!string.IsNullOrWhiteSpace(projectPath))
+        {
+            try
+            {
+                var (dir, csproj) = NormalizeProject(projectPath!);
+                var restored = ReadPackagesPathFromAssets(ProjectFiles.FindAssetsFile(dir, csproj));
+                if (restored != null) return restored;
+                for (var d = new DirectoryInfo(dir); d != null; d = d.Parent)
+                {
+                    var configured = ReadGlobalPackagesFolder(Path.Combine(d.FullName, "NuGet.Config"));
+                    if (configured != null) return configured;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+            }
+        }
+        userConfig ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "NuGet", "NuGet.Config");
+        return ReadGlobalPackagesFolder(userConfig)
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
+    }
+
+    private static string? ReadPackagesPathFromAssets(string? assetsPath)
+    {
+        if (assetsPath == null) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(assetsPath));
+            if (doc.RootElement.TryGetProperty("project", out var project) &&
+                project.TryGetProperty("restore", out var restore) &&
+                restore.TryGetProperty("packagesPath", out var path) &&
+                path.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(path.GetString()))
+            {
+                return path.GetString()!.TrimEnd('\\', '/');
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+        }
+        return null;
+    }
+
+    /// <summary>The config/add[@key='globalPackagesFolder'] value, resolved against the config's directory.</summary>
+    private static string? ReadGlobalPackagesFolder(string configPath)
+    {
+        try
+        {
+            if (!File.Exists(configPath)) return null;
+            var value = XDocument.Load(configPath).Root?
+                .Elements().Where(e => e.Name.LocalName.Equals("config", StringComparison.OrdinalIgnoreCase))
+                .Elements().Where(e => e.Name.LocalName.Equals("add", StringComparison.OrdinalIgnoreCase))
+                .LastOrDefault(e => string.Equals((string?)e.Attribute("key"), "globalPackagesFolder", StringComparison.OrdinalIgnoreCase))?
+                .Attribute("value")?.Value;
+            if (string.IsNullOrWhiteSpace(value)) return null;
+            value = Environment.ExpandEnvironmentVariables(value!.Trim());
+            return Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, value)).TrimEnd('\\', '/');
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
     }
 
     private static string? FindUpwards(string startDir, string fileName)
