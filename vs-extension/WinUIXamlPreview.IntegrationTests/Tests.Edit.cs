@@ -26,10 +26,29 @@ namespace WinUIXamlPreview.IntegrationTests
             {
                 Fresh();
                 OpenRendered(_fx.MainPage);
-                var mark = LogMark();
-                Edit(_fx.MainPage, "Hello preview", "Live preview");
-                Thread.Sleep(250);
-                Eq(0, EditRenders(mark), "renders inside the 500ms debounce window");
+                // The debounce clock starts when VS applies the edit, but the replace round-trip can stall on a
+                // loaded runner (seen on ARM) so "250ms after it returned" may already be past 500ms. Time from
+                // before the call and only judge an attempt whose check really landed inside the window.
+                long mark = 0;
+                for (var attempt = 0; ; attempt++)
+                {
+                    var find = attempt == 0 ? "Hello preview" : "Live preview" + new string('!', attempt - 1);
+                    var replacement = "Live preview" + new string('!', attempt);
+                    mark = LogMark();
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    Edit(_fx.MainPage, find, replacement);
+                    var callMs = sw.ElapsedMilliseconds;
+                    Thread.Sleep((int)Math.Max(0, 250 - callMs));
+                    var renders = EditRenders(mark);
+                    var checkedAt = sw.ElapsedMilliseconds;
+                    if (checkedAt < 400 || attempt == 2)
+                    {
+                        Eq(0, renders, $"renders inside the 500ms debounce window (checked at {checkedAt}ms, replace took {callMs}ms, attempt {attempt + 1})");
+                        break;
+                    }
+                    WaitFor("edit render", _ => EditRenders(mark) >= 1, 30_000);
+                    WaitFor("rendered", x => Rendered(Preview(x, _fx.MainPage)), 30_000);
+                }
                 WaitFor("edit render", _ => EditRenders(mark) >= 1, 30_000);
                 WaitFor("rendered", x => Rendered(Preview(x, _fx.MainPage)), 30_000);
                 Assert(!System.IO.File.ReadAllText(_fx.MainPage).Contains("Live preview"), "edit was written to disk");
