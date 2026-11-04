@@ -15,6 +15,11 @@ namespace WinUIXamlPreview.IntegrationTests
 
         private static double Num(JsonNode? n) => n?.GetValue<double>() ?? double.NaN;
 
+        /// <summary>The margin size the product shows: the persisted size, capped so the editor keeps
+        /// <paramref name="minEditor"/> of code visible (mirrors XamlPreviewMargin.FitToEditor).</summary>
+        private static double Fitted(double persisted, double host, double minEditor) =>
+            host > 0 ? Math.Min(persisted, Math.Max(26, host - minEditor)) : persisted;
+
         private static bool ToolWindowVisible() => Call("toolWindowVisible", new { guid = ToolWindowGuid })!.GetValue<bool>();
 
         internal static void ShowWindow()
@@ -140,9 +145,10 @@ namespace WinUIXamlPreview.IntegrationTests
                 Call("click", new { path = _fx.MainPage, automationId = "PreviewShowButton" });
                 var s = WaitFor("expanded", x => Margin(x, _fx.MainPage)!["contentVisible"]!.GetValue<bool>()
                                                 && Num(Margin(x, _fx.MainPage)!["width"]) > 100);
-                var expected = Num(s["options"]!["rightWidth"]);
-                var width = Num(Margin(s, _fx.MainPage)!["width"]);
-                Assert(Math.Abs(width - expected) < 2, $"width {width} vs persisted {expected}");
+                var m = Margin(s, _fx.MainPage)!;
+                var expected = Fitted(Num(s["options"]!["rightWidth"]), Num(m["hostWidth"]), 200);
+                var width = Num(m["width"]);
+                Assert(Math.Abs(width - expected) < 2, $"width {width} vs persisted {Num(s["options"]!["rightWidth"])} fitted to host {Num(m["hostWidth"])} = {expected}");
                 Eq(false, s["options"]!["collapsed"]!.GetValue<bool>(), "persisted collapsed");
                 WaitFor("rendered after expand", x => Rendered(Preview(x, _fx.MainPage)), 120_000);
             });
@@ -180,8 +186,9 @@ namespace WinUIXamlPreview.IntegrationTests
                 Call("click", new { path = _fx.MainPage, automationId = "PreviewDockToggle" });
                 var s = WaitFor("bottom margin", x => (string?)Margin(x, _fx.MainPage)?["location"] == "Bottom", 30_000);
                 Eq("Bottom", (string?)s["options"]!["location"], "persisted location");
-                s = WaitFor("bottom margin rendered at persisted height", x =>
-                    Rendered(Preview(x, _fx.MainPage)) && Math.Abs(Num(Margin(x, _fx.MainPage)!["height"]) - Num(x["options"]!["bottomHeight"])) < 2);
+                s = WaitFor("bottom margin rendered at persisted height (fitted to the editor)", x =>
+                    Rendered(Preview(x, _fx.MainPage)) && Margin(x, _fx.MainPage) is JsonObject m
+                    && Math.Abs(Num(m["height"]) - Fitted(Num(x["options"]!["bottomHeight"]), Num(m["hostHeight"]), 120)) < 2);
 
                 Call("click", new { path = _fx.MainPage, automationId = "PreviewDockToggle" });
                 WaitFor("right margin again", x => (string?)Margin(x, _fx.MainPage)?["location"] == "Right"
