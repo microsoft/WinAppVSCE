@@ -9,6 +9,8 @@ namespace WinUIXamlPreview.UI
     // Reached only through Testing.TestHooks; UI thread only.
     public partial class PreviewControl
     {
+        internal System.IntPtr TestNativeHwnd => _nativeHost?.SurfaceHwnd ?? System.IntPtr.Zero;
+
         internal Dictionary<string, object?> TestSnapshot()
         {
             var client = _client;

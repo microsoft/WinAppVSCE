@@ -88,6 +88,7 @@ namespace WinUIXamlPreview.Editor
         public const string MarginName = "WinUIXamlPreviewMargin";
 
         private readonly IWpfTextView _textView;
+        private readonly FrameworkElement? _hostControl;
         private readonly PreviewLocation _location;
         private readonly Grid _root;
         private readonly PreviewControl _preview;
@@ -155,7 +156,7 @@ namespace WinUIXamlPreview.Editor
                 // Leak-safe singleton: one margin (one surface) per view even under re-entrant CreateMargin.
                 return host.TextView.Properties.GetOrCreateSingletonProperty(
                     typeof(XamlPreviewMargin),
-                    () => new XamlPreviewMargin(host.TextView, docFactory, location));
+                    () => new XamlPreviewMargin(host, docFactory, location));
             }
             catch (Exception ex)
             {
@@ -166,9 +167,11 @@ namespace WinUIXamlPreview.Editor
             }
         }
 
-        private XamlPreviewMargin(IWpfTextView textView, ITextDocumentFactoryService docFactory, PreviewLocation location)
+        private XamlPreviewMargin(IWpfTextViewHost host, ITextDocumentFactoryService docFactory, PreviewLocation location)
         {
+            var textView = host.TextView;
             _textView = textView;
+            _hostControl = host.HostControl;
             _location = location;
             _preview = new PreviewControl();
             _preview.ReclaimFocus = () => _textView.VisualElement.Focus();
@@ -254,8 +257,47 @@ namespace WinUIXamlPreview.Editor
             }
 
             ApplyCollapsedState();
+            if (_hostControl != null)
+            {
+                _hostControl.SizeChanged += OnHostSizeChanged;
+            }
+            FitToEditor();
             Testing.TestHooks.RegisterMargin(this);
         }
+
+        // ---- fit to the editor ---------------------------------------------
+        //
+        // The persisted size is a preference, not a guarantee: the editor tab can be narrower (docked tool
+        // windows, a split screen). A fixed-size margin wider than the tab is clipped by WPF, but the reparented
+        // WinUI HWND is not (airspace), so it would paint over neighboring VS panes. Cap the margin to what the
+        // tab can fit while keeping some code visible; the stored preference is left untouched.
+
+        internal const double MinEditorWidth = 200;
+        internal const double MinEditorHeight = 120;
+
+        private void OnHostSizeChanged(object sender, SizeChangedEventArgs e) => FitToEditor();
+
+        private void FitToEditor()
+        {
+            if (_disposed || _hostControl == null)
+            {
+                return;
+            }
+
+            if (_location == PreviewLocation.Right)
+            {
+                var w = _hostControl.ActualWidth;
+                _root.MaxWidth = w > 0 ? MaxMarginSize(w, MinEditorWidth) : double.PositiveInfinity;
+            }
+            else
+            {
+                var h = _hostControl.ActualHeight;
+                _root.MaxHeight = h > 0 ? MaxMarginSize(h, MinEditorHeight) : double.PositiveInfinity;
+            }
+        }
+
+        internal static double MaxMarginSize(double available, double minEditor) =>
+            Math.Max(CollapsedStripSize, available - minEditor);
 
         // ---- toolbar --------------------------------------------------------
         //
@@ -702,13 +744,13 @@ namespace WinUIXamlPreview.Editor
             {
                 // Grip on the LEFT edge: dragging left (negative dx) grows the panel.
                 var dx = p.X - _dragAnchor.X;
-                _root.Width = PreviewOptions.Clamp(_dragStartSize - dx, PreviewOptions.MinWidth, PreviewOptions.MaxWidth);
+                _root.Width = Math.Min(_root.MaxWidth, PreviewOptions.Clamp(_dragStartSize - dx, PreviewOptions.MinWidth, PreviewOptions.MaxWidth));
             }
             else
             {
                 // Grip on the TOP edge: dragging up (negative dy) grows the panel.
                 var dy = p.Y - _dragAnchor.Y;
-                _root.Height = PreviewOptions.Clamp(_dragStartSize - dy, PreviewOptions.MinHeight, PreviewOptions.MaxHeight);
+                _root.Height = Math.Min(_root.MaxHeight, PreviewOptions.Clamp(_dragStartSize - dy, PreviewOptions.MinHeight, PreviewOptions.MaxHeight));
             }
         }
 
@@ -814,6 +856,10 @@ namespace WinUIXamlPreview.Editor
             _disposed = true;
             Testing.TestHooks.UnregisterMargin(this);
             PreviewPackageState.PopOutChanged -= OnPopOutChanged;
+            if (_hostControl != null)
+            {
+                _hostControl.SizeChanged -= OnHostSizeChanged;
+            }
             try
             {
                 _editDebounce.Stop();

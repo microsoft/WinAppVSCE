@@ -27,7 +27,101 @@ namespace WinUIXamlPreview.UI
             _surfaceHwnd = surfaceHwnd;
             _pixelW = Math.Max(1, pixelW);
             _pixelH = Math.Max(1, pixelH);
+            LayoutUpdated += OnLayoutUpdated;
         }
+
+        // ---- airspace clip --------------------------------------------------
+        //
+        // A native child ignores WPF clipping, so if any ancestor is laid out smaller than this host (e.g. an
+        // editor margin wider than its tab) the WinUI window would paint over neighboring VS panes. Clip the
+        // child with a window region to the part of the host that lies inside every ancestor's bounds.
+
+        private (int l, int t, int r, int b)? _appliedClip; // null = no region (fully visible)
+        private bool _clipKnown;
+
+        private void OnLayoutUpdated(object? sender, EventArgs e) => UpdateClip();
+
+        protected override void OnWindowPositionChanged(System.Windows.Rect rcBoundingBox)
+        {
+            base.OnWindowPositionChanged(rcBoundingBox);
+            UpdateClip();
+        }
+
+        private void UpdateClip()
+        {
+            if (!_surfaceAlive || _surfaceHwnd == IntPtr.Zero || ActualWidth <= 0 || ActualHeight <= 0)
+            {
+                return;
+            }
+
+            try
+            {
+                var source = System.Windows.PresentationSource.FromVisual(this);
+                if (source?.RootVisual == null || source.CompositionTarget == null)
+                {
+                    return;
+                }
+
+                var full = new System.Windows.Rect(0, 0, ActualWidth, ActualHeight);
+                var visible = full;
+                for (var node = System.Windows.Media.VisualTreeHelper.GetParent(this); node != null;
+                     node = System.Windows.Media.VisualTreeHelper.GetParent(node))
+                {
+                    if (node is System.Windows.UIElement ancestor)
+                    {
+                        var bounds = ancestor.TransformToDescendant(this)
+                            .TransformBounds(new System.Windows.Rect(ancestor.RenderSize));
+                        visible.Intersect(bounds);
+                        if (visible.IsEmpty)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (node == source.RootVisual)
+                    {
+                        break;
+                    }
+                }
+
+                (int l, int t, int r, int b)? clip = null;
+                if (visible.IsEmpty)
+                {
+                    clip = (0, 0, 0, 0);
+                }
+                else if (!ClipCovers(visible, full))
+                {
+                    var m = source.CompositionTarget.TransformToDevice;
+                    clip = ((int)Math.Floor(visible.Left * m.M11), (int)Math.Floor(visible.Top * m.M22),
+                            (int)Math.Ceiling(visible.Right * m.M11), (int)Math.Ceiling(visible.Bottom * m.M22));
+                }
+
+                if (_clipKnown && Nullable.Equals(clip, _appliedClip))
+                {
+                    return;
+                }
+
+                // The system owns the region after a successful SetWindowRgn; only free it on failure.
+                var rgn = clip is { } c ? NativeMethods.CreateRectRgn(c.l, c.t, c.r, c.b) : IntPtr.Zero;
+                if (NativeMethods.SetWindowRgn(_surfaceHwnd, rgn, true) == 0 && rgn != IntPtr.Zero)
+                {
+                    NativeMethods.DeleteObject(rgn);
+                    return;
+                }
+
+                _appliedClip = clip;
+                _clipKnown = true;
+            }
+            catch
+            {
+                // best-effort: a clip failure must never break hosting
+            }
+        }
+
+        // Half-DIP tolerance so layout rounding doesn't toggle a region on an unclipped host.
+        internal static bool ClipCovers(System.Windows.Rect visible, System.Windows.Rect full) =>
+            visible.Left <= full.Left + 0.5 && visible.Top <= full.Top + 0.5 &&
+            visible.Right >= full.Right - 0.5 && visible.Bottom >= full.Bottom - 0.5;
 
         public IntPtr SurfaceHwnd => _surfaceHwnd;
 
@@ -87,6 +181,7 @@ namespace WinUIXamlPreview.UI
 
         protected override void DestroyWindowCore(HandleRef hwnd)
         {
+            LayoutUpdated -= OnLayoutUpdated;
             // Detach only when the surface is still alive (mode switch / control unload); the surface
             // owns the window and re-cloaks it on ExitNative. If the process is dead, do nothing.
             if (_surfaceAlive && _surfaceHwnd != IntPtr.Zero)
@@ -95,6 +190,11 @@ namespace WinUIXamlPreview.UI
                 // parent-relative coordinates as screen coordinates, so a child at (0,0) would flash at the
                 // desktop's top-left (e.g. the old window during a theme swap) until the surface re-cloaks it.
                 NativeMethods.MoveWindow(_surfaceHwnd, -32000, -32000, _pixelW, _pixelH, false);
+                if (_clipKnown && _appliedClip != null)
+                {
+                    // The surface reuses this window (warm re-host / spare): don't leave it clipped.
+                    NativeMethods.SetWindowRgn(_surfaceHwnd, IntPtr.Zero, false);
+                }
                 NativeMethods.SetParent(_surfaceHwnd, IntPtr.Zero);
             }
         }
@@ -122,6 +222,9 @@ namespace WinUIXamlPreview.UI
         [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
         [DllImport("user32.dll", SetLastError = true, EntryPoint = "GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll", SetLastError = true, EntryPoint = "SetWindowLongPtrW")] public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+        [DllImport("user32.dll")] public static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
+        [DllImport("gdi32.dll")] public static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+        [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
         [DllImport("user32.dll")] public static extern DPI_HOSTING_BEHAVIOR SetThreadDpiHostingBehavior(DPI_HOSTING_BEHAVIOR value);
     }
 }

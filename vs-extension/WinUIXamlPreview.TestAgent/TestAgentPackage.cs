@@ -158,6 +158,7 @@ namespace WinUIXamlPreview.TestAgent
                         .Invoke(null, new object[] { Str(req, "path"), Str(req, "elementPath") })!;
                 case "raise": return Raise(Str(req, "guid"), (int)req["id"]!);
                 case "dteCommand": Dte().ExecuteCommand(Str(req, "name"), (string?)req["args"] ?? ""); return true;
+                case "mainWindowSize": return MainWindowSize((int?)req["width"], (int?)req["height"], (string?)req["state"]);
                 case "toolWindowVisible": return ToolWindowVisible(Str(req, "guid"));
                 case "hideToolWindow": return HideToolWindow(Str(req, "guid"));
                 case "closeSolution":
@@ -182,6 +183,25 @@ namespace WinUIXamlPreview.TestAgent
         private static string Str(JObject req, string name) => (string?)req[name] ?? throw new ArgumentException("missing " + name);
 
         private DTE2 Dte() => (DTE2)GetGlobalService(typeof(SDTE));
+
+        /// <summary>Restores and resizes the VS main window (omitted values keep the current size), then applies
+        /// <paramref name="state"/> if given; returns the previous size and state so the caller can put it back.</summary>
+        private JObject MainWindowSize(int? width, int? height, string? state)
+        {
+            var w = Dte().MainWindow;
+            var before = new JObject { ["width"] = w.Width, ["height"] = w.Height, ["state"] = w.WindowState.ToString() };
+            if (width != null || height != null)
+            {
+                w.WindowState = vsWindowState.vsWindowStateNormal;
+                if (width != null) { w.Width = width.Value; }
+                if (height != null) { w.Height = height.Value; }
+            }
+            if (state != null)
+            {
+                w.WindowState = (vsWindowState)Enum.Parse(typeof(vsWindowState), state);
+            }
+            return before;
+        }
 
         // Closing a tab without saving doesn't always discard the buffer: a loaded project can keep the doc
         // data alive (dirty) in the RDT, and reopening shows the stale edits. Reload any such doc from disk.

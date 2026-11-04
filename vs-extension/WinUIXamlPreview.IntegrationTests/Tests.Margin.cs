@@ -147,6 +147,32 @@ namespace WinUIXamlPreview.IntegrationTests
                 WaitFor("rendered after expand", x => Rendered(Preview(x, _fx.MainPage)), 120_000);
             });
 
+            Run("Margin: a persisted width wider than the tab is capped; the surface never paints outside the editor", () =>
+            {
+                Fresh();
+                // Widest preference + a narrow VS window: the margin used to keep its fixed width, overflow the
+                // tab, and the reparented WinUI HWND (which ignores WPF clipping) painted over docked tool windows.
+                Call("setOption", new { name = "RightWidth", value = 1400 });
+                var before = Call("mainWindowSize", new { width = 1100, height = 800 })!.AsObject();
+                try
+                {
+                    OpenRendered(_fx.MainPage);
+                    var s = WaitFor("native surface fitted inside the editor", x =>
+                        Margin(x, _fx.MainPage) is JsonObject m && m["preview"]?["hasNative"]?.GetValue<bool>() == true
+                        && m["surfaceOverflowPx"] != null && Num(m["surfaceOverflowPx"]) <= 1, 60_000);
+                    var mm = Margin(s, _fx.MainPage)!;
+                    var host = Num(mm["hostWidth"]);
+                    var width = Num(mm["width"]);
+                    Assert(host < 1400, $"test setup: editor host {host} should be narrower than the persisted width");
+                    Assert(width <= host - 200 + 1, $"margin {width} not capped to editor host {host} minus the code minimum");
+                    Eq(1400.0, Num(s["options"]!["rightWidth"]), "persisted width untouched");
+                }
+                finally
+                {
+                    Call("mainWindowSize", new { width = (int)Num(before["width"]), height = (int)Num(before["height"]), state = (string?)before["state"] });
+                }
+            });
+
             Run("Margin: dock toggle moves the preview to the bottom and back", () =>
             {
                 Fresh();
