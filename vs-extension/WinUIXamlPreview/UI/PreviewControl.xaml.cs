@@ -755,13 +755,14 @@ namespace WinUIXamlPreview.UI
         /// live (in place, no flicker); otherwise restarts the preview from scratch (e.g. after the surface
         /// died). Safe to call from the UI thread.
         /// </summary>
-        public void Reload()
+        public void Reload([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
         {
             if (_disposed)
             {
                 return;
             }
 
+            Log.Write($"Reload requested by {caller}.");
             var path = _pinnedPath ?? _currentPath;
             if (string.IsNullOrEmpty(path))
             {
@@ -1223,11 +1224,16 @@ namespace WinUIXamlPreview.UI
             }, SelectionDocument);
         }
 
-        private void ReloadCurrent()
+        private void ReloadCurrent([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
         {
             if (_disposed || _client == null || _currentPath == null)
             {
                 return;
+            }
+
+            if (caller != nameof(Reload))
+            {
+                Log.Write($"Reload requested by {caller}.");
             }
 
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
