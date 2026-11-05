@@ -33,6 +33,8 @@
     "workspaceContains:**/*.xaml.cs",
     "onLanguage:xml",
     "onDebugResolve:winapp",
+    "onCommand:winapp.attachDevTools",
+    "onCommand:winapp.openDevToolsComments",
     "onCommand:winapp.new",
     "onCommand:winapp.init",
     "onCommand:winapp.restore",
