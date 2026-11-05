@@ -165,16 +165,48 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
             if (staged) { card.appendChild(buildStaged(prop, staged)); }
 
             if (isEdited(payload.handle, prop.name)) {
+                const record = state.edited[editKey(payload.handle, prop.name)];
                 card.appendChild(caption('EDITED', true));
                 const was = document.createElement('div');
                 was.className = 'pwit-text';
-                was.textContent = 'was ' + state.edited[editKey(payload.handle, prop.name)];
+                was.textContent = record.wasSet
+                    ? 'was ' + record.value
+                    : 'was ' + record.value + ' (not set on this element)';
                 card.appendChild(was);
             }
+
+            card.appendChild(buildValueActions(prop, payload));
         }
 
         if (prop.binding) { card.appendChild(buildDiagnosis(prop, payload)); }
         return card;
+    }
+
+    /** Restore original and Clear value, offered only where they can act. */
+    function buildValueActions(prop, payload) {
+        const actions = document.createElement('div');
+        actions.className = 'prow-actions';
+
+        if (isEdited(payload.handle, prop.name)) {
+            const restore = document.createElement('button');
+            restore.type = 'button';
+            restore.className = 'pbtn';
+            restore.textContent = 'Restore original';
+            restore.setAttribute('aria-label', 'Restore original value of ' + prop.name);
+            restore.addEventListener('click', function () { restoreOriginal(payload.handle, prop); });
+            actions.appendChild(restore);
+        }
+
+        if (canClear(prop, payload)) {
+            const clear = document.createElement('button');
+            clear.type = 'button';
+            clear.className = 'pbtn';
+            clear.textContent = 'Clear value';
+            clear.setAttribute('aria-label', 'Clear value of ' + prop.name);
+            clear.addEventListener('click', function () { clearValue(payload.handle, prop); });
+            actions.appendChild(clear);
+        }
+        return actions;
     }
 
     function buildStaged(prop, staged) {
@@ -324,9 +356,15 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         // touch keyboards for digits.
         if (prop.editKind === 'number') { input.inputMode = 'decimal'; }
         input.setAttribute('aria-label', prop.name);
+        input.dataset.draft = prop.name;
+        // Lets a re-render for another element save this draft where it was typed.
+        input.saveDraft = function (value) {
+            if (value !== prop.value) { commit(payload.handle, prop, value); }
+        };
         input.addEventListener('keydown', function (event) {
             if (event.key === 'Enter') {
                 event.preventDefault();
+                input.dataset.committed = '1';
                 commit(payload.handle, prop, input.value);
             } else if (event.key === 'Escape') {
                 input.value = prop.value;
@@ -334,6 +372,8 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
             }
         });
         input.addEventListener('blur', function () {
+            // A re-render replaces this box; that is not the user leaving it.
+            if (propsRendering) { return; }
             if (input.value !== prop.value) { commit(payload.handle, prop, input.value); }
         });
         return input;
@@ -556,10 +596,10 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         const key = editKey(handle, prop.name);
         if (opts && opts.restore) {
             delete state.edited[key];
-        } else if (!Object.prototype.hasOwnProperty.call(state.edited, key)) {
+        } else {
             // Captured before the write so "Restore original" has somewhere to
             // go back to; the engine does not keep this for us.
-            state.edited[key] = prop.value;
+            recordOriginal(handle, prop);
         }
         vscode.postMessage({
             type: 'setProperty',

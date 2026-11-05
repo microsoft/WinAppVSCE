@@ -75,7 +75,57 @@ export const PROPERTIES_FRAGMENT = `
         return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0);
     }
 
+    /** True while the grid is rebuilt, so replaced editors do not commit. */
+    let propsRendering = false;
+    /** The element the grid currently shows, so a draft knows where it belongs. */
+    let renderedHandle = null;
+
+    /**
+     * Rebuilds the grid. A half-typed value survives a rebuild of the same
+     * element, and is saved to its own element when the selection moves on.
+     */
     function renderProperties() {
+        const active = document.activeElement;
+        const draft = active && active.dataset && active.dataset.draft
+            && el.propsViewport.contains(active) && renderedHandle
+            ? {
+                handle: renderedHandle,
+                prop: active.dataset.draft,
+                value: active.value,
+                committed: active.dataset.committed === '1',
+                save: active.saveDraft,
+                start: active.selectionStart,
+                end: active.selectionEnd,
+            }
+            : null;
+
+        propsRendering = true;
+        try {
+            renderPropertiesNow();
+        } finally {
+            propsRendering = false;
+        }
+        const handle = state.properties && state.properties.handle;
+        renderedHandle = handle || null;
+
+        if (!draft) { return; }
+        if (handle !== draft.handle) {
+            if (!draft.committed && draft.save) { draft.save(draft.value); }
+            return;
+        }
+        const boxes = el.propsViewport.querySelectorAll('[data-draft]');
+        for (const box of Array.from(boxes)) {
+            if (box.dataset.draft !== draft.prop) { continue; }
+            // A committed value is the app's to report back, not ours to keep.
+            if (!draft.committed) { box.value = draft.value; }
+            box.focus();
+            if (draft.committed) { break; }
+            try { box.setSelectionRange(draft.start, draft.end); } catch (e) { /* not a text box */ }
+            break;
+        }
+    }
+
+    function renderPropertiesNow() {
         el.propsHeader.textContent = '';
         el.propsViewport.textContent = '';
         const payload = state.properties;
@@ -445,7 +495,8 @@ export const PROPERTIES_FRAGMENT = `
         list.appendChild(dd);
     }
 
-    function buildSourceLink(source) {        const wrapper = document.createElement('div');
+    function buildSourceLink(source) {
+        const wrapper = document.createElement('div');
         wrapper.className = 'prop-source';
 
         const label = document.createElement('span');
@@ -466,6 +517,27 @@ export const PROPERTIES_FRAGMENT = `
             });
         });
         wrapper.appendChild(link);
+
+        // Recovery lives next to the link that can fail, not in a far-off status.
+        const reveal = document.createElement('button');
+        reveal.type = 'button';
+        reveal.className = 'link prop-source-action';
+        reveal.textContent = 'Reveal';
+        reveal.setAttribute('aria-label', 'Reveal source file in File Explorer');
+        reveal.addEventListener('click', function () {
+            vscode.postMessage({ type: 'revealSource', file: source.file });
+        });
+        wrapper.appendChild(reveal);
+
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.className = 'link prop-source-action';
+        copy.textContent = 'Copy path';
+        copy.setAttribute('aria-label', 'Copy source file path');
+        copy.addEventListener('click', function () {
+            vscode.postMessage({ type: 'copySourcePath', file: source.file });
+        });
+        wrapper.appendChild(copy);
         return wrapper;
     }
 
@@ -485,14 +557,14 @@ export const PROPERTIES_FRAGMENT = `
         line.style.paddingLeft = (4 + depth * INDENT_PX) + 'px';
 
         const open = state.openProps.has(prop.name);
+        const toggle = function () { togglePropExpand(prop, payload); };
 
-        const chevron = document.createElement('button');
-        chevron.type = 'button';
+        // Decorative: the value button below is the one keyboard stop and
+        // carries aria-expanded, so the caret must not be a second control.
+        const chevron = document.createElement('span');
         chevron.className = 'pchevron' + (open ? ' open' : '');
         chevron.textContent = '\\uE76C';
-        chevron.setAttribute('aria-expanded', open ? 'true' : 'false');
-        chevron.setAttribute('aria-label', 'Details for ' + prop.name);
-        chevron.addEventListener('click', function () { togglePropExpand(prop, payload); });
+        chevron.setAttribute('aria-hidden', 'true');
         line.appendChild(chevron);
 
         const name = document.createElement('span');
@@ -530,9 +602,16 @@ export const PROPERTIES_FRAGMENT = `
             value.textContent = prop.value;
             value.title = prop.value;
         }
-        value.addEventListener('click', function () { togglePropExpand(prop, payload); });
+        // The focus announcement has to carry the value, not just the name.
+        value.setAttribute('aria-label', prop.name + ': '
+            + (prop.redacted ? 'value hidden' : (String(prop.value || '') || 'empty'))
+            + (isEdited(payload.handle, prop.name) ? ', changed' : ''));
+        value.setAttribute('aria-expanded', open ? 'true' : 'false');
         cell.appendChild(value);
         line.appendChild(cell);
+
+        // The whole header row expands, matching the native window.
+        line.addEventListener('click', toggle);
 
         wrap.appendChild(line);
 
@@ -544,6 +623,74 @@ export const PROPERTIES_FRAGMENT = `
 
     function isEdited(handle, name) {
         return Object.prototype.hasOwnProperty.call(state.edited, editKey(handle, name));
+    }
+
+    /**
+     * Remembers what a property was before its first edit. Bounded, oldest
+     * first, so a long session of selecting and editing cannot grow forever.
+     */
+    function recordOriginal(handle, prop) {
+        const key = editKey(handle, prop.name);
+        if (Object.prototype.hasOwnProperty.call(state.edited, key)) { return; }
+        state.edited[key] = {
+            value: prop.value,
+            wasSet: sourceIsSetHere(prop.valueSource) || isAuthored(prop),
+        };
+        const keys = Object.keys(state.edited);
+        for (let i = 0; i < keys.length - MAX_EDITED; i++) { delete state.edited[keys[i]]; }
+    }
+
+    /**
+     * Puts the pre-edit value back. A property that was never set locally is
+     * cleared instead, so it falls back to its style or default again.
+     */
+    function restoreOriginal(handle, prop) {
+        const key = editKey(handle, prop.name);
+        const record = state.edited[key];
+        if (!record) { return; }
+        delete state.edited[key];
+        if (record.wasSet) {
+            vscode.postMessage({
+                type: 'setProperty',
+                handle: handle,
+                name: prop.name,
+                value: String(record.value),
+                writeType: prop.writeType || prop.valueType,
+            });
+        } else {
+            vscode.postMessage({ type: 'clearProperty', handle: handle, name: prop.name });
+        }
+        renderProperties();
+    }
+
+    function clearValue(handle, prop) {
+        recordOriginal(handle, prop);
+        vscode.postMessage({ type: 'clearProperty', handle: handle, name: prop.name });
+        renderProperties();
+    }
+
+    /** Clearing a binding deletes it, and clearing an unset value does nothing. */
+    function canClear(prop, payload) {
+        const kind = activeKind(prop);
+        if (kind === 'binding' || kind === 'xbind' || prop.binding) { return false; }
+        return sourceIsSetHere(prop.valueSource) || isAuthored(prop)
+            || isEdited(payload.handle, prop.name);
+    }
+
+    /** Re-reads open binding and resource cards after the element reloads. */
+    function refreshOpenDiagnostics() {
+        const payload = state.properties;
+        if (!payload || !payload.handle) { return; }
+        state.bindings = Object.create(null);
+        state.resources = Object.create(null);
+        state.restoreConfirm = null;
+        for (const prop of payload.props || []) {
+            if (!state.openProps.has(prop.name)) { continue; }
+            if (prop.binding) {
+                vscode.postMessage({ type: 'diagnoseBinding', handle: payload.handle, name: prop.name });
+            }
+            vscode.postMessage({ type: 'resolveResource', handle: payload.handle, name: prop.name });
+        }
     }
 
     function togglePropExpand(prop, payload) {

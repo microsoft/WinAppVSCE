@@ -52,8 +52,8 @@ ${getDevToolsStyles(nonce)}
             <div id="focus-notice" class="focus-notice hidden" role="status" aria-live="polite"></div>
             <div id="status" class="status hidden" role="status" aria-live="polite"></div>
 
-            <div id="tree-viewport" class="tree-viewport" role="tree" aria-label="Visual tree" tabindex="0">
-                <div id="tree-header" class="tree-header"></div>
+            <div id="tree-viewport" class="tree-viewport"             role="tree" aria-label="UI elements" tabindex="0">
+                            <div id="tree-header" class="tree-header" role="none" aria-hidden="true"></div>
                 <div id="tree-sizer" class="tree-sizer"></div>
             </div>
 

@@ -9,6 +9,17 @@
 
 import * as path from 'path';
 
+/** Prefer the project matching the app name, then a single unambiguous project. */
+export function matchSourceRoot(projects: string[], processName?: string): string | undefined {
+    const matching = processName
+        ? projects.filter(project => path.basename(project, path.extname(project)).toLowerCase()
+            === processName.toLowerCase())
+        : [];
+    if (matching.length === 1) { return path.dirname(matching[0]); }
+    if (projects.length === 1) { return path.dirname(projects[0]); }
+    return undefined;
+}
+
 /** Strips the packaging scheme from a DevTools source reference. */
 export function stripSourceScheme(reference: string): string {
     const trimmed = reference.trim();

@@ -18,6 +18,7 @@ import {
     devToolsPipePath,
     NegotiateResult,
     DevToolsEventName,
+    InspectorRegisterExternalParams,
     USED_EVENTS,
 } from './protocol';
 
@@ -212,6 +213,15 @@ export class DevToolsClient extends EventEmitter {
     /** Releases any overlay/selection state this connection owns. */
     async releaseOwnedState(): Promise<void> {
         await this.trySend('DevTools.releaseOwnedState', { owner: this.ownerToken });
+    }
+
+    async registerExternalInspector(displayName: string): Promise<void> {
+        const params: InspectorRegisterExternalParams = { owner: this.ownerToken, displayName };
+        await this.send('Inspector.registerExternal', params);
+    }
+
+    async unregisterExternalInspector(): Promise<void> {
+        await this.trySend('Inspector.unregisterExternal', { owner: this.ownerToken });
     }
 
     override on<K extends DevToolsEventName>(event: K, listener: (payload: unknown) => void): this;

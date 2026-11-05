@@ -32,6 +32,7 @@ import {
     type OverlayState,
 } from './devtools-fixture';
 import { NO_HIGHLIGHT } from '../../devtools/overlay';
+import { DevToolsClient } from '../../devtools/devtools-client';
 
 // One VS Code instance and one launched app shared by the whole file: starting a
 // WinUI app per test would multiply the slowest part of the run.
@@ -43,6 +44,37 @@ let preLaunchPids = new Set<number>();
 
 /** The DevTools panel's webview root; present only once the panel has rendered. */
 const TREE_VIEWPORT = '#tree-viewport';
+
+function devToolsCliPath(): string {
+    const arch = process.arch === 'arm64' ? 'win-arm64' : 'win-x64';
+    return path.resolve(__dirname, '..', '..', '..', 'bin', arch, 'winapp.exe');
+}
+
+function fixtureProcessId(): number {
+    const result = spawnSync(
+        devToolsCliPath(),
+        ['devtools', 'list', '--include-available', '--json'],
+        { encoding: 'utf-8', timeout: 60_000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const parsed = JSON.parse(result.stdout) as {
+        apps?: { processId?: number; processName?: string }[];
+    };
+    const app = parsed.apps?.find(candidate => candidate.processName === 'DevToolsFixtureApp');
+    expect(app?.processId).toBeTruthy();
+    return app!.processId!;
+}
+
+function readNativeWindowOpen(): boolean {
+    const result = spawnSync(
+        devToolsCliPath(),
+        ['devtools', 'call', 'Window.getState', '-a', 'DevToolsFixtureApp', '--json'],
+        { encoding: 'utf-8', timeout: 60_000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const parsed = JSON.parse(result.stdout) as { result?: { open?: boolean }; open?: boolean };
+    return parsed.result?.open ?? parsed.open ?? true;
+}
 
 function hasDotnet(): boolean {
     const probe = spawnSync('dotnet', ['--version'], { shell: true, encoding: 'utf-8' });
@@ -269,6 +301,24 @@ test('switching to the Comments tab shows the comments view @winui-app', async (
     // Return to the tree so a retry of a later test starts from the default view.
     await frame.locator('#tab-tree').click();
     await expect(frame.locator(TREE_VIEWPORT)).toBeVisible();
+});
+
+test('VS Code registers as the exclusive external inspector @winui-app', async () => {
+    test.setTimeout(120_000);
+
+    const frame = await devToolsFrame();
+    await expect(frame.locator(TREE_VIEWPORT)).toBeVisible();
+
+    const client = await DevToolsClient.connect(fixtureProcessId());
+    try {
+        expect(client.supports('Inspector.registerExternal')).toBe(true);
+        await expect(client.send('Window.open', {})).rejects.toMatchObject({
+            data: { token: 'inspector-external' },
+        });
+    } finally {
+        client.dispose();
+    }
+    expect(readNativeWindowOpen()).toBe(false);
 });
 
 test('the fixture app source is committed without build output @winui-app', async () => {

@@ -17,7 +17,12 @@ export const TREE_FRAGMENT = `    // ──────────────�
         if (needle.charAt(0) === '#') {
             return name.indexOf(needle.slice(1)) !== -1;
         }
-        return type.indexOf(needle) !== -1 || name.indexOf(needle) !== -1;
+        // The caption is part of the visible label, so it must be searchable
+        // too, and always the latest one the engine reported.
+        const preview = state.previews[node.handle];
+        const caption = preview && preview.text ? String(preview.text).toLowerCase() : '';
+        return type.indexOf(needle) !== -1 || name.indexOf(needle) !== -1
+            || caption.indexOf(needle) !== -1;
     }
 
     /**
@@ -51,25 +56,30 @@ export const TREE_FRAGMENT = `    // ──────────────�
         const keep = filtering ? computeFilterSet(needle) : null;
         const rows = [];
 
-        function walk(node, depth) {
-            if (filtering && !keep.has(node.handle)) { return; }
+        function visible(nodes) {
+            return nodes.filter(function (node) { return !filtering || keep.has(node.handle); });
+        }
 
-            const children = (node.children || []).filter(function (child) {
-                return !filtering || keep.has(child.handle);
-            });
+        // Screen readers announce "n of m" among siblings, not among every row.
+        function walk(node, depth, posInSet, setSize) {
+            const children = visible(node.children || []);
             const hasChildren = children.length > 0 || (node.childCount || 0) > 0;
 
-            rows.push({ node: node, depth: depth, hasChildren: hasChildren });
+            rows.push({
+                node: node, depth: depth, hasChildren: hasChildren,
+                posInSet: posInSet, setSize: setSize,
+            });
 
             // While filtering, matched branches are forced open so results are
             // visible without disturbing the user's saved expansion state.
             const isOpen = filtering ? true : state.expanded.has(node.handle);
             if (isOpen) {
-                for (const child of children) { walk(child, depth + 1); }
+                children.forEach(function (child, i) { walk(child, depth + 1, i + 1, children.length); });
             }
         }
 
-        for (const root of state.roots) { walk(root, 0); }
+        const roots = visible(state.roots);
+        roots.forEach(function (root, i) { walk(root, 0, i + 1, roots.length); });
         state.rows = rows;
     }
 
@@ -164,6 +174,18 @@ export const TREE_FRAGMENT = `    // ──────────────�
         }, PREVIEW_DEBOUNCE_MS);
     }
 
+    /**
+     * Re-reads one element's caption. A caption is fetched once per handle,
+     * so a value the app (or an edit) changed would otherwise go stale.
+     */
+    function refreshPreview(handle) {
+        if (!handle) { return; }
+        state.previewsAsked.delete(handle);
+        if (indexOfHandle(handle) === -1) { return; }
+        state.previewsAsked.add(handle);
+        vscode.postMessage({ type: 'requestPreviews', handles: [handle] });
+    }
+
     /** Drops captions when the tree changes: handles do not survive a reload. */
     function resetPreviews() {
         state.previews = Object.create(null);
@@ -198,8 +220,8 @@ export const TREE_FRAGMENT = `    // ──────────────�
         div.setAttribute('role', 'treeitem');
         div.setAttribute('aria-level', String(row.depth + 1));
         div.setAttribute('aria-selected', node.handle === state.selected ? 'true' : 'false');
-        div.setAttribute('aria-setsize', String(total));
-        div.setAttribute('aria-posinset', String(index + 1));
+        div.setAttribute('aria-setsize', String(row.setSize || total));
+        div.setAttribute('aria-posinset', String(row.posInSet || index + 1));
         if (row.hasChildren) {
             div.setAttribute('aria-expanded', state.expanded.has(node.handle) ? 'true' : 'false');
         }
@@ -213,6 +235,8 @@ export const TREE_FRAGMENT = `    // ──────────────�
         twisty.className = 'twisty' + (row.hasChildren ? '' : ' leaf');
         twisty.textContent = state.expanded.has(node.handle) ? '⌄' : '›';
         twisty.dataset.twisty = '1';
+        // aria-expanded already says this; the glyph would be read as noise.
+        twisty.setAttribute('aria-hidden', 'true');
         div.appendChild(twisty);
 
         const type = document.createElement('span');
@@ -287,6 +311,10 @@ export const TREE_FRAGMENT = `    // ──────────────�
         const open = force === undefined ? !state.expanded.has(handle) : force;
         if (open) {
             state.expanded.add(handle);
+            const node = nodeForHandle(handle);
+            if (node && (node.childCount || 0) > 0 && !(node.children || []).length) {
+                vscode.postMessage({ type: 'expandNode', handle: handle });
+            }
         } else {
             state.expanded.delete(handle);
         }

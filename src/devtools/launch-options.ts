@@ -27,6 +27,7 @@ export interface DevToolsLaunchConfig {
      * without losing the panel.
      */
     noOverlay?: boolean;
+    devToolsInspector?: 'vscode' | 'native';
 
     /**
      * Run the app without attaching a debugger.
@@ -56,6 +57,13 @@ export interface DevToolsLaunchConfig {
  */
 export function shouldUseDevTools(config: DevToolsLaunchConfig | undefined): boolean {
     return config?.useDevTools !== false;
+}
+
+export function inspectorPreference(
+    config: DevToolsLaunchConfig | undefined,
+    setting: unknown = 'vscode',
+): 'vscode' | 'native' {
+    return (config?.devToolsInspector ?? setting) === 'native' ? 'native' : 'vscode';
 }
 
 /**

@@ -18,15 +18,18 @@ import {
 } from './devtools-types';
 import {
     normalizeEnumerateResult,
+    InspectorOpenRequestedEvent,
     PropertyGetResult,
     SelectionEvent,
     VisualNode,
     SourceResult,
     VisualTreeEnumerateResult,
 } from './protocol';
-import { openSourceLocation } from './source-navigation';
+import { copySourcePath, openSourceLocation, revealSourceLocation } from './source-navigation';
 import { diagnoseBinding, resolveResource, restoreBinding } from './binding-handlers';
 import { highlightTarget } from './overlay';
+import { DevToolsCli } from './devtools-cli';
+import { countNamedNodes, findTreeNode, replaceSubtree, subtreeRoot } from './tree-model';
 
 /**
  * Depth requested from `VisualTree.enumerate`.
@@ -90,6 +93,7 @@ export class DevToolsPanel {
 
     /** Panels keyed by process id so a second launch reuses nothing stale. */
     private static readonly open = new Map<number, DevToolsPanel>();
+    private static readonly commentPanels = new Map<string, DevToolsPanel>();
 
     private readonly disposables: vscode.Disposable[] = [];
     private client: DevToolsClient | undefined;
@@ -103,6 +107,13 @@ export class DevToolsPanel {
     private commentsVisible = false;
     private lastCommentsJson = '';
     private lastTree: VisualNode[] = [];
+    private readonly cli: DevToolsCli;
+    private connected = false;
+    private connecting = false;
+    private ended = false;
+    private treeRevision = 0;
+    private readonly expanding = new Set<string>();
+    private refreshingComments = false;
 
     /** Shared across panels so protocol noise lands in one place. */
     private static output: vscode.OutputChannel | undefined;
@@ -116,9 +127,11 @@ export class DevToolsPanel {
 
     private constructor(
         private readonly panel: vscode.WebviewPanel,
-        private readonly processId: number,
+        private readonly processId: number | undefined,
         private readonly extensionUri: vscode.Uri,
+        private readonly sourceRoot: string,
     ) {
+        this.cli = new DevToolsCli(extensionUri.fsPath, message => this.log(message));
         this.panel.webview.html = getDevToolsWebviewContent(
             this.panel.webview,
             crypto.randomBytes(16).toString('hex'),
@@ -142,12 +155,14 @@ export class DevToolsPanel {
         processId: number,
         extensionUri: vscode.Uri,
         viewColumn: vscode.ViewColumn = vscode.ViewColumn.Active,
+        sourceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? extensionUri.fsPath,
     ): Promise<DevToolsPanel> {
         const existing = DevToolsPanel.open.get(processId);
-        if (existing && !existing.disposed) {
-            existing.panel.reveal(viewColumn, true);
+        if (existing && !existing.disposed && !existing.ended) {
+            existing.panel.reveal(viewColumn, false);
             return existing;
         }
+        existing?.dispose();
 
         const panel = vscode.window.createWebviewPanel(
             DevToolsPanel.viewType,
@@ -155,15 +170,12 @@ export class DevToolsPanel {
             { viewColumn, preserveFocus: true },
             {
                 enableScripts: true,
-                // The tree and the selected element's properties are rebuilt on
-                // reconnect, so the view can be serialized rather than pinned
-                // in memory while hidden.
-                retainContextWhenHidden: false,
+                retainContextWhenHidden: true,
                 localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'images')],
             },
         );
 
-        const instance = new DevToolsPanel(panel, processId, extensionUri);
+        const instance = new DevToolsPanel(panel, processId, extensionUri, sourceRoot);
         DevToolsPanel.open.set(processId, instance);
         return instance;
     }
@@ -173,10 +185,71 @@ export class DevToolsPanel {
         DevToolsPanel.open.get(processId)?.dispose();
     }
 
+    static async showComments(extensionUri: vscode.Uri, sourceRoot: string): Promise<DevToolsPanel> {
+        const key = sourceRoot.toLowerCase();
+        const existing = DevToolsPanel.commentPanels.get(key);
+        if (existing && !existing.disposed) {
+            existing.panel.reveal(undefined, false);
+            existing.post({ type: 'showComments' });
+            await existing.refreshComments();
+            return existing;
+        }
+        const panel = vscode.window.createWebviewPanel(
+            DevToolsPanel.viewType, 'WinUI DevTools Comments',
+            { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
+            { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
+        );
+        const instance = new DevToolsPanel(panel, undefined, extensionUri, sourceRoot);
+        DevToolsPanel.commentPanels.set(key, instance);
+        return instance;
+    }
+
+    /** The app owns the pipe, but the workspace owns its saved comments. */
+    static disconnectFor(processId: number): void {
+        const instance = DevToolsPanel.open.get(processId);
+        if (instance) { instance.disconnect(); }
+    }
+
+    static disposeAll(): void {
+        for (const instance of [...DevToolsPanel.open.values(), ...DevToolsPanel.commentPanels.values()]) {
+            instance.dispose();
+        }
+        DevToolsPanel.output?.dispose();
+        DevToolsPanel.output = undefined;
+    }
+
+    private disconnect(): void {
+        this.ended = true;
+        this.connected = false;
+        this.treeRevision++;
+        this.client?.dispose();
+        this.client = undefined;
+        this.lastTree = [];
+        this.selectedHandle = undefined;
+        this.post({ type: 'status', status: { state: 'disconnected', message: 'App disconnected. Saved comments remain available.' } });
+        if (this.commentsVisible) {
+            void this.refreshComments().catch(error => this.reportError(error));
+        }
+    }
+
+    private reportError(error: unknown): void {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log(message);
+        this.post({ type: 'status', status: { state: 'error', message } });
+    }
+
     // -----------------------------------------------------------------------
 
     /** Connects to the engine and performs the initial load. */
     private async connect(): Promise<void> {
+        if (this.connecting || this.connected || this.disposed) { return; }
+        if (this.processId === undefined || this.ended) {
+            this.post({ type: 'status', status: { state: 'disconnected', message: 'Saved workspace comments - no running app required.' } });
+            this.post({ type: 'showComments' });
+            await this.refreshComments();
+            return;
+        }
+        this.connecting = true;
         this.post({ type: 'status', status: { state: 'connecting', processId: this.processId } });
 
         try {
@@ -185,14 +258,18 @@ export class DevToolsPanel {
             const message = err instanceof Error ? err.message : String(err);
             this.post({ type: 'status', status: { state: 'error', message } });
             return;
+        } finally {
+            this.connecting = false;
         }
 
-        if (this.disposed) {
+        if (this.disposed || this.ended) {
             this.client.dispose();
+            this.client = undefined;
             return;
         }
 
         const info = this.client.info;
+        this.connected = true;
         this.post({
             type: 'status',
             status: {
@@ -211,19 +288,18 @@ export class DevToolsPanel {
         });
 
         this.registerEventHandlers(this.client);
-        await this.client.enableEventStreams();
-
-        // The separate native DevTools window would otherwise duplicate this
-        // panel; close it once if the engine opened one at startup.
-        //
-        // We deliberately do NOT poll to keep it closed. Taking over the
-        // overlay's "Open the DevTools Window" button that way let the window
-        // become visible for up to a poll interval before we closed it, which
-        // read as a flash. Honouring that button needs an engine-side signal
-        // rather than a race; see the note in native window follow-up work.
-        if (this.client.supports('Window.close')) {
-            await this.client.trySend('Window.close', { owner: this.client.ownerToken });
+        if (!this.client.supports('Inspector.registerExternal')) {
+            this.reportError(new DevToolsError(
+                'This winapp DevTools build cannot route the native inspector to Visual Studio Code.'
+            ));
+        } else {
+            try {
+                await this.client.registerExternalInspector('Visual Studio Code');
+            } catch (error) {
+                this.reportError(error);
+            }
         }
+        await this.client.enableEventStreams();
 
         await this.refreshTree();
         await this.refreshSurfaces();
@@ -247,10 +323,21 @@ export class DevToolsPanel {
         client.on('Selection.picked', (payload) => {
             const handle = (payload as SelectionEvent)?.handle;
             if (!handle) { return; }
-            this.selectedHandle = handle;
-            this.post({ type: 'selectHandle', handle });
             this.post({ type: 'pickStateChanged', armed: false });
-            void this.loadProperties(handle);
+            void this.revealPickedElement(handle).catch(error => this.reportError(error));
+        });
+
+        client.on('Inspector.openRequested', (payload) => {
+            const request = payload as InspectorOpenRequestedEvent;
+            this.panel.reveal(this.panel.viewColumn, false);
+            if (request.view === 'comments') {
+                this.post({ type: 'showComments' });
+                void this.refreshComments().catch(error => this.reportError(error));
+            } else if (request.handle) {
+                void this.revealPickedElement(request.handle).catch(error => this.reportError(error));
+            } else {
+                this.post({ type: 'showInspect' });
+            }
         });
 
         client.on('Selection.armChanged', (payload) => {
@@ -280,14 +367,59 @@ export class DevToolsPanel {
         });
 
         client.on('closed', (err?: Error) => {
-            this.post({
-                type: 'status',
-                status: {
-                    state: 'disconnected',
-                    message: err?.message ?? 'The app disconnected.',
-                },
-            });
+            if (err) { this.log(err.message); }
+            this.disconnect();
         });
+    }
+
+    private async revealPickedElement(handle: string, revealPanel = true): Promise<void> {
+        this.selectedHandle = handle;
+        if (revealPanel) { this.panel.reveal(this.panel.viewColumn, false); }
+        if (!findTreeNode(this.lastTree, handle)) {
+            const client = this.client;
+            if (!client) { return; }
+            const revision = this.treeRevision;
+            const result = await client.send<VisualTreeEnumerateResult>('VisualTree.enumerate', {
+                rootHandle: handle, authored: false, depth: DEFAULT_TREE_DEPTH,
+            });
+            if (revision !== this.treeRevision || this.selectedHandle !== handle) { return; }
+            // A picked template part may be outside the authored tree. Keep it
+            // as an explicit additional root instead of silently hiding it.
+            if (!findTreeNode(this.lastTree, handle)) {
+                this.lastTree.push(subtreeRoot(result, handle));
+            }
+            this.postTree();
+        }
+        if (this.selectedHandle !== handle) { return; }
+        if (revealPanel) { this.post({ type: 'selectHandle', handle }); }
+        await this.loadProperties(handle);
+    }
+
+    private postTree(): void {
+        this.post({ type: 'tree', tree: { nodes: this.lastTree, authored: this.authoredOnly } });
+    }
+
+    private async expandNode(handle: string): Promise<void> {
+        const client = this.client;
+        const target = findTreeNode(this.lastTree, handle);
+        const revision = this.treeRevision;
+        const key = `${revision}:${handle}`;
+        if (!client || !target || this.expanding.has(key)) { return; }
+        this.expanding.add(key);
+        try {
+            const result = await client.send<VisualTreeEnumerateResult>('VisualTree.enumerate', {
+                rootHandle: handle, authored: this.authoredOnly, depth: DEFAULT_TREE_DEPTH,
+            });
+            if (revision !== this.treeRevision) { return; }
+            const replacement = subtreeRoot(result, handle);
+            if ((replacement.childCount ?? 0) > 0 && !(replacement.children?.length)) {
+                throw new Error('The engine returned no children for this expandable element.');
+            }
+            this.lastTree = replaceSubtree(this.lastTree, replacement);
+            this.postTree();
+        } finally {
+            this.expanding.delete(key);
+        }
     }
 
     /**
@@ -314,6 +446,11 @@ export class DevToolsPanel {
             const first = err instanceof Error ? err.message : String(err);
             const name = this.nameForHandle(handle);
             if (!name) { return first; }
+            // A name shared by several elements would anchor the comment to
+            // whichever one the engine finds first, not the one selected.
+            if (countNamedNodes(this.lastTree, name) !== 1) {
+                return `${first} The element could not be found again by name because "${name}" is not unique. Select it and try again.`;
+            }
 
             this.log(`Comment.add by handle ${handle} failed (${first}); retrying by name "${name}".`);
             try {
@@ -327,15 +464,7 @@ export class DevToolsPanel {
 
     /** Looks up the x:Name for a handle in the tree we last sent the webview. */
     private nameForHandle(handle: string): string | undefined {
-        const walk = (nodes: VisualNode[]): string | undefined => {
-            for (const node of nodes) {
-                if (node.handle === handle) { return node.name || undefined; }
-                const hit = walk(node.children ?? []);
-                if (hit) { return hit; }
-            }
-            return undefined;
-        };
-        return walk(this.lastTree);
+        return findTreeNode(this.lastTree, handle)?.name || undefined;
     }
 
     /**
@@ -346,8 +475,8 @@ export class DevToolsPanel {
     private startCommentPoll(): void {
         if (this.commentPoll) { return; }
         this.commentPoll = setInterval(() => {
-            if (!this.commentsVisible || this.disposed) { return; }
-            void this.refreshComments(false);
+            if (!this.commentsVisible || this.disposed || !this.panel.visible) { return; }
+            void this.refreshComments(false).catch(error => this.reportError(error));
         }, COMMENT_POLL_MS);
     }
 
@@ -363,29 +492,31 @@ export class DevToolsPanel {
      */
     private async refreshComments(force = true): Promise<void> {
         const client = this.client;
-        if (!client || this.disposed) { return; }
-
-        const result = await client.trySend('Comment.list', {}) as CommentListResult | undefined;
-        const comments = (result?.comments ?? []).map((row) => ({
-            id: row.id,
-            text: row.text,
-            status: row.status,
-            element: row.element,
-            handle: row.handle,
-            // Carried so the panel can offer the declaration as a link. In the
-            // native window this is read-only text; in an editor it can open.
-            file: row.file || row.uri,
-            line: row.line,
-            // The engine reports placed:false when it could not re-find the
-            // element, which is exactly when a human should confirm.
-            requiresConfirmation: row.placed === false,
-        }));
-
-        const json = JSON.stringify(comments);
-        if (!force && json === this.lastCommentsJson) { return; }
-        this.lastCommentsJson = json;
-
-        this.post({ type: 'comments', comments });
+        if (this.disposed || this.refreshingComments) { return; }
+        this.refreshingComments = true;
+        try {
+            const comments = client && this.connected
+                ? (await client.send<CommentListResult>('Comment.list', {})).comments?.map(row => ({
+                    id: row.id,
+                    text: row.text,
+                    status: row.status,
+                    element: row.element,
+                    handle: row.handle,
+                    file: row.file || row.uri,
+                    line: row.line,
+                    requiresConfirmation: row.placed === false,
+                })) ?? []
+                : await this.cli.comments(this.sourceRoot);
+            // Ignore a live response that raced the disconnect. The next read
+            // must come from disk and must not resurrect process-local handles.
+            if (client && !this.connected) { return; }
+            const json = JSON.stringify(comments);
+            if (!force && json === this.lastCommentsJson) { return; }
+            this.lastCommentsJson = json;
+            this.post({ type: 'comments', comments });
+        } finally {
+            this.refreshingComments = false;
+        }
     }
 
     /**
@@ -444,19 +575,30 @@ export class DevToolsPanel {
         const client = this.client;
         if (!client || this.disposed) { return; }
 
+        const revision = ++this.treeRevision;
         try {
             const result = await client.send<VisualTreeEnumerateResult>('VisualTree.enumerate', {
                 authored: this.authoredOnly,
                 depth: DEFAULT_TREE_DEPTH,
             });
             const nodes = normalizeEnumerateResult(result);
+            if (revision !== this.treeRevision) { return; }
             this.lastTree = nodes;
-            this.post({ type: 'tree', tree: { nodes, authored: this.authoredOnly } });
+            this.postTree();
+            if (this.selectedHandle && !findTreeNode(nodes, this.selectedHandle)) {
+                await this.revealPickedElement(this.selectedHandle, false);
+            }
         } catch (err) {
             if (this.disposed) { return; }
             const message = err instanceof Error ? err.message : String(err);
             this.post({ type: 'status', status: { state: 'error', message } });
         }
+    }
+
+    /** An edit saved to an element the user has since left must not pull the panel back to it. */
+    private async reloadIfSelected(handle: string): Promise<void> {
+        if (this.selectedHandle !== handle) { return; }
+        await this.loadProperties(handle);
     }
 
     private async loadProperties(handle: string): Promise<void> {
@@ -466,6 +608,7 @@ export class DevToolsPanel {
         try {
             const result = await client.send<PropertyGetResult>('Property.get', { handle });
             const source = await this.resolveSource(handle);
+            if (this.selectedHandle !== handle || !this.connected) { return; }
 
             const payload: PropertiesPayload = {
                 handle,
@@ -476,6 +619,7 @@ export class DevToolsPanel {
             this.post({ type: 'properties', properties: payload });
         } catch (err) {
             if (this.disposed) { return; }
+            if (this.selectedHandle !== handle || !this.connected) { return; }
             const message = err instanceof Error ? err.message : String(err);
             this.post({ type: 'propertiesError', handle, message });
         }
@@ -500,6 +644,11 @@ export class DevToolsPanel {
     // -----------------------------------------------------------------------
 
     private async handleMessage(message: WebviewToExtensionMessage): Promise<void> {
+        try { await this.dispatchMessage(message); }
+        catch (error) { this.reportError(error); }
+    }
+
+    private async dispatchMessage(message: WebviewToExtensionMessage): Promise<void> {
         const client = this.client;
 
         switch (message.type) {
@@ -515,6 +664,7 @@ export class DevToolsPanel {
             case 'selectNode':
                 this.selectedHandle = message.handle;
                 await this.loadProperties(message.handle);
+                if (this.selectedHandle !== message.handle) { return; }
                 if (this.layoutOn) {
                     const layout = await client?.trySend('Layout.get', { handle: message.handle });
                     if (layout) { this.post({ type: 'layout', layout: layout as never }); }
@@ -525,6 +675,18 @@ export class DevToolsPanel {
                         owner: client.ownerToken,
                     });
                 }
+                if (client?.supports('Selection.select')) {
+                    const result = await client.trySend<{ selected: boolean }>('Selection.select', {
+                        handle: message.handle, owner: client.ownerToken,
+                    });
+                    if (!result?.selected) {
+                        this.reportError(new Error('The app selection could not be synchronized. See the WinUI DevTools output for details.'));
+                    }
+                }
+                return;
+
+            case 'expandNode':
+                await this.expandNode(message.handle);
                 return;
 
             case 'hoverNode':
@@ -585,20 +747,28 @@ export class DevToolsPanel {
                 return;
 
             case 'addComment': {
-                if (!client) { return; }
+                if (!client) {
+                    this.post({ type: 'commentError', message: 'Not connected to the app, so the comment cannot be anchored.' });
+                    return;
+                }
                 const failure = await this.addComment(client, message.handle, message.text);
                 if (failure) {
                     this.log(`Comment.add failed: ${failure}`);
                     this.post({ type: 'commentError', message: failure });
+                } else {
+                    this.post({ type: 'commentAdded' });
                 }
                 await this.refreshComments(true);
                 return;
             }
 
             case 'resolveComment':
-                if (!client) { return; }
                 try {
-                    await client.send('Comment.resolve', { id: message.id });
+                    if (client && this.connected) {
+                        await client.send('Comment.resolve', { id: message.id });
+                    } else {
+                        await this.cli.changeComment(this.sourceRoot, message.id, 'resolve');
+                    }
                 } catch (err) {
                     const text = err instanceof Error ? err.message : String(err);
                     this.log(`Comment.resolve failed: ${text}`);
@@ -608,9 +778,12 @@ export class DevToolsPanel {
                 return;
 
             case 'deleteComment':
-                if (!client) { return; }
                 try {
-                    await client.send('Comment.delete', { id: message.id });
+                    if (client && this.connected) {
+                        await client.send('Comment.delete', { id: message.id });
+                    } else {
+                        await this.cli.changeComment(this.sourceRoot, message.id, 'delete');
+                    }
                 } catch (err) {
                     const text = err instanceof Error ? err.message : String(err);
                     this.log(`Comment.delete failed: ${text}`);
@@ -632,7 +805,7 @@ export class DevToolsPanel {
                     this.post(confirmation);
                     return;
                 }
-                await this.loadProperties(message.handle);
+                await this.reloadIfSelected(message.handle);
                 return;
             }
 
@@ -642,7 +815,15 @@ export class DevToolsPanel {
                 return;
 
             case 'goToSource':
-                await openSourceLocation(message.file, message.line, message.column);
+                await openSourceLocation(message.file, message.line, message.column, this.sourceRoot, this.panel.viewColumn);
+                return;
+
+            case 'revealSource':
+                await revealSourceLocation(message.file, this.sourceRoot);
+                return;
+
+            case 'copySourcePath':
+                await copySourcePath(message.file, this.sourceRoot);
                 return;
 
             case 'setProperty': {
@@ -666,7 +847,7 @@ export class DevToolsPanel {
                     const detail = err instanceof DevToolsError ? err.message : String(err);
                     void vscode.window.showWarningMessage(`Could not set ${message.name}: ${detail}`);
                 }
-                await this.loadProperties(message.handle);
+                await this.reloadIfSelected(message.handle);
                 return;
             }
 
@@ -676,7 +857,7 @@ export class DevToolsPanel {
                     handle: message.handle,
                     prop: message.name,
                 });
-                await this.loadProperties(message.handle);
+                await this.reloadIfSelected(message.handle);
                 return;
         }
     }
@@ -689,7 +870,8 @@ export class DevToolsPanel {
     dispose(): void {
         if (this.disposed) { return; }
         this.disposed = true;
-        DevToolsPanel.open.delete(this.processId);
+        if (this.processId !== undefined) { DevToolsPanel.open.delete(this.processId); }
+        else { DevToolsPanel.commentPanels.delete(this.sourceRoot.toLowerCase()); }
 
         if (this.refreshTimer) {
             clearTimeout(this.refreshTimer);
@@ -698,7 +880,11 @@ export class DevToolsPanel {
 
         this.stopCommentPoll();
         if (this.client) {
-            void this.client.releaseOwnedState().finally(() => this.client?.dispose());
+            const client = this.client;
+            this.client = undefined;
+            void client.unregisterExternalInspector()
+                .finally(() => client.releaseOwnedState())
+                .finally(() => client.dispose());
         }
 
         for (const disposable of this.disposables) {

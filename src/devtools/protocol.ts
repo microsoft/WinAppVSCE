@@ -217,6 +217,11 @@ export interface WindowStateResult {
     revision: number;
 }
 
+export interface InspectorRegisterExternalParams extends Record<string, unknown> {
+    owner: string;
+    displayName: string;
+}
+
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
@@ -247,6 +252,12 @@ export interface PropertyChangedEvent {
     origin?: string;
 }
 
+export interface InspectorOpenRequestedEvent {
+    view: 'inspect' | 'comments';
+    handle?: string;
+    origin: string | null;
+}
+
 /** Event names this client subscribes to, keyed to their payload types. */
 export interface DevToolsEventMap {
     'VisualTree.changed': VisualTreeChangedEvent;
@@ -256,6 +267,7 @@ export interface DevToolsEventMap {
     'Focus.changed': SelectionEvent;
     'Property.changed': PropertyChangedEvent;
     'Overlay.stateChanged': Record<string, unknown>;
+    'Inspector.openRequested': InspectorOpenRequestedEvent;
 }
 
 export type DevToolsEventName = keyof DevToolsEventMap;
@@ -271,6 +283,8 @@ export type DevToolsEventName = keyof DevToolsEventMap;
 export const USED_METHODS = [
     'DevTools.negotiate',
     'DevTools.releaseOwnedState',
+    'Inspector.registerExternal',
+    'Inspector.unregisterExternal',
     'VisualTree.enumerate',
     'VisualTree.getPreviews',
     'VisualTree.enable',
@@ -280,6 +294,7 @@ export const USED_METHODS = [
     'Overlay.highlight',
     'Overlay.enable',
     'Selection.arm',
+    'Selection.select',
     'Selection.disarm',
     'Selection.enable',
     'Focus.enable',
@@ -297,7 +312,6 @@ export const USED_METHODS = [
     'Overlay.layout',
     'Surface.list',
     'Surface.setActive',
-    'Window.close',
 ] as const;
 
 /** Events this client subscribes to. Also diffed by the schema-drift check. */
@@ -309,4 +323,5 @@ export const USED_EVENTS: DevToolsEventName[] = [
     'Focus.changed',
     'Property.changed',
     'Overlay.stateChanged',
+    'Inspector.openRequested',
 ];

@@ -117,6 +117,8 @@ export type ExtensionToWebviewMessage =
     | { type: 'properties'; properties: PropertiesPayload }
     | { type: 'propertiesError'; handle: string; message: string }
     | { type: 'selectHandle'; handle: string }
+    | { type: 'showInspect' }
+    | { type: 'showComments' }
     | { type: 'pickStateChanged'; armed: boolean }
     | { type: 'treeInvalidated'; reason?: string }
     | { type: 'comments'; comments: CommentPayload[] }
@@ -128,6 +130,7 @@ export type ExtensionToWebviewMessage =
     | { type: 'surfaces'; surfaces: SurfacePayload[] }
     | { type: 'layout'; layout: LayoutPayload }
     | { type: 'focusChanged'; handle?: string; label?: string }
+    | { type: 'commentAdded' }
     | { type: 'capabilities'; canEdit: boolean; canPick: boolean; canHighlight: boolean };
 
 /** Messages the webview sends to the extension host. */
@@ -151,5 +154,7 @@ export type WebviewToExtensionMessage =
     | { type: 'restoreBinding'; handle: string; name: string; confirm?: boolean }
     | { type: 'resolveResource'; handle: string; name: string }
     | { type: 'goToSource'; file: string; line?: number; column?: number }
+    | { type: 'revealSource'; file: string }
+    | { type: 'copySourcePath'; file: string }
     | { type: 'setProperty'; handle: string; name: string; value: string; writeType?: string }
     | { type: 'clearProperty'; handle: string; name: string };

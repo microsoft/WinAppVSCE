@@ -19,6 +19,54 @@ import type { ExtensionToWebviewMessage } from '../devtools/devtools-types';
 
 const NONCE = 'dom-test-nonce';
 
+test('expanding a truncated tree row requests its missing children', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: {
+        authored: true,
+        nodes: [{ handle: 'root', type: 'Grid', name: '', childCount: 1, children: [
+            { handle: 'deep', type: 'Grid', name: 'Truncated', childCount: 2, children: [] },
+        ] }],
+    } });
+    h.posted.length = 0;
+    const twisty = h.doc.querySelector('[data-handle="deep"] .twisty');
+    assert.ok(twisty);
+    twisty.dispatchEvent(new h.dom.window.MouseEvent('click', { bubbles: true }));
+    assert.ok(h.posted.some(m => m.type === 'expandNode' && m.handle === 'deep'));
+});
+
+test('a picked handle clears the tree filter and leaves the comments tab', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE });
+    const filter = h.doc.getElementById('filter') as HTMLInputElement;
+    filter.value = '#not-present';
+    filter.dispatchEvent(new h.dom.window.Event('input'));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    h.send({ type: 'showComments' });
+    await h.sendAndFlush({ type: 'selectHandle', handle: '234881525' });
+    assert.equal(filter.value, '');
+    assert.equal(h.doc.getElementById('tab-tree')?.getAttribute('aria-selected'), 'true');
+    assert.ok(h.doc.querySelector('[data-handle="234881525"][aria-selected="true"]'));
+});
+
+test('disconnect disables live controls but leaves saved comment actions available', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE });
+    h.send({ type: 'comments', comments: [{ id: 'saved', text: 'Keep this note', status: 'open', handle: '134218229' }] });
+    h.send({ type: 'status', status: { state: 'disconnected' } });
+    assert.equal((h.doc.getElementById('btn-pick') as HTMLButtonElement).disabled, true);
+    assert.equal((h.doc.getElementById('btn-focus') as HTMLButtonElement).disabled, true);
+    assert.equal((h.doc.getElementById('compose-text') as HTMLTextAreaElement).disabled, true);
+    assert.ok(!h.doc.querySelector('#comments-host')?.textContent?.includes('Show in tree'));
+    const resolve = [...h.doc.querySelectorAll('#comments-host button')].find(button => button.textContent === 'Resolve');
+    assert.ok(resolve);
+    h.posted.length = 0;
+    resolve.dispatchEvent(new h.dom.window.MouseEvent('click', { bubbles: true }));
+    assert.ok(h.posted.some(m => m.type === 'resolveComment' && m.id === 'saved'));
+});
+
 /** A single-file-per-level tree, for exercising deep ancestor paths. */
 function chain(types: string[]): Record<string, unknown> {
     let node: Record<string, unknown> | null = null;
@@ -479,16 +527,236 @@ test('an edit records the original value and says what it was', async () => {
     );
 });
 
-test('a property offers no restore or clear actions of its own', async () => {
+test('restore original puts back the pre-edit value, and clears one that was never set', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    h.revealAllProps();
+    h.expandAllProps();
+
+    const input = h.doc.querySelector('#props-viewport input[aria-label="Opacity"]') as HTMLInputElement;
+    input.value = '0.25';
+    input.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    h.pickDrop('AutomationProperties.AccessibilityView', 'Raw');
+    h.posted.length = 0;
+
+    const restore = (name: string) => h.doc.querySelector(
+        `#props-viewport button[aria-label="Restore original value of ${name}"]`) as HTMLElement;
+    restore('Opacity').dispatchEvent(new h.dom.window.MouseEvent('click', { bubbles: true }));
+    assert.deepEqual(h.posted.find(m => m.type === 'setProperty'), {
+        type: 'setProperty', handle: '234881525', name: 'Opacity', value: '0.5', writeType: 'Double',
+    });
+
+    // AccessibilityView came from its default, so putting "Content" back
+    // locally would pin it; clearing returns it to the default instead.
+    h.posted.length = 0;
+    restore('AutomationProperties.AccessibilityView')
+        .dispatchEvent(new h.dom.window.MouseEvent('click', { bubbles: true }));
+    assert.deepEqual(h.posted, [{
+        type: 'clearProperty', handle: '234881525', name: 'AutomationProperties.AccessibilityView',
+    }]);
+    assert.ok(!restore('Opacity') && !restore('AutomationProperties.AccessibilityView'),
+        'restored rows stop offering restore');
+});
+
+test('clear value is offered only for a locally set value that is not a binding', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    h.revealAllProps();
+    h.expandAllProps();
+    const clear = (name: string) => h.doc.querySelector(`#props-viewport button[aria-label="Clear value of ${name}"]`);
+    assert.ok(clear('Opacity'), 'a Local value can be cleared');
+    assert.ok(!clear('AutomationProperties.AccessibilityView'), 'a default has nothing to clear');
+
+    h.posted.length = 0;
+    (clear('Opacity') as HTMLElement).dispatchEvent(new h.dom.window.MouseEvent('click', { bubbles: true }));
+    assert.deepEqual(h.posted, [{ type: 'clearProperty', handle: '234881525', name: 'Opacity' }]);
+
+    h.send({ type: 'properties', properties: AUTHORED_PROPS } as ExtensionToWebviewMessage);
+    h.revealAllProps();
+    h.expandAllProps();
+    assert.ok(!clear('Text'), 'clearing an x:Bind target would delete the binding');
+    assert.ok(clear('Background'), 'a resource reference is a local value');
+});
+
+test('a half-typed value survives the element reloading', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
     h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
     h.expandAllProps();
+    const box = () => h.doc.querySelector('#props-viewport input[aria-label="Opacity"]') as HTMLInputElement;
+    box().focus();
+    box().value = '0.3';
+    h.posted.length = 0;
 
-    const text = h.doc.getElementById('props-viewport')?.textContent ?? '';
-    assert.ok(!text.includes('Restore original'), 'the native window has no per-property restore');
-    assert.ok(!text.includes('Clear value'), 'nor a clear');
-    assert.ok(!text.includes('DERIVED FROM'), 'the derivation block is gone too');
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+
+    assert.equal(box().value, '0.3');
+    assert.equal(h.doc.activeElement, box());
+    assert.ok(!h.posted.some(m => m.type === 'setProperty'), 'a reload is not the user committing');
+});
+
+test('a draft is saved to the element it was typed on when the selection moves', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    const box = h.doc.querySelector('#props-viewport input[aria-label="Opacity"]') as HTMLInputElement;
+    box.focus();
+    box.value = '0.3';
+    h.posted.length = 0;
+
+    h.send({ type: 'properties', properties: AUTHORED_PROPS } as ExtensionToWebviewMessage);
+
+    const sets = h.posted.filter(m => m.type === 'setProperty');
+    assert.deepEqual(sets, [{
+        type: 'setProperty', handle: '234881525', name: 'Opacity', value: '0.3', writeType: 'Double',
+    }]);
+
+    // Restore must still be there when the user goes back.
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    assert.ok(h.doc.querySelector('#props-viewport button[aria-label="Restore original value of Opacity"]'));
+});
+
+test('a committed value is not re-applied when the selection moves', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    const box = h.doc.querySelector('#props-viewport input[aria-label="Opacity"]') as HTMLInputElement;
+    box.focus();
+    box.value = '0.3';
+    box.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    h.posted.length = 0;
+    h.send({ type: 'properties', properties: AUTHORED_PROPS } as ExtensionToWebviewMessage);
+    assert.ok(!h.posted.some(m => m.type === 'setProperty'));
+});
+
+test('remembered originals are bounded', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    for (let i = 0; i < 520; i++) {
+        h.send({ type: 'properties', properties: { ...LIVE_PROPS, handle: 'h' + i } } as ExtensionToWebviewMessage);
+        h.expandAllProps();
+        const clear = h.doc.querySelector('#props-viewport button[aria-label="Clear value of Opacity"]') as HTMLElement;
+        clear.dispatchEvent(new h.dom.window.MouseEvent('click', { bubbles: true }));
+    }
+    const restoreOffered = (handle: string) => {
+        h.send({ type: 'properties', properties: { ...LIVE_PROPS, handle } } as ExtensionToWebviewMessage);
+        h.expandAllProps();
+        return !!h.doc.querySelector('#props-viewport button[aria-label="Restore original value of Opacity"]');
+    };
+    assert.ok(!restoreOffered('h0'), 'the oldest originals are dropped first');
+    assert.ok(!restoreOffered('h19'));
+    assert.ok(restoreOffered('h20'), 'the newest 500 are kept');
+    assert.ok(restoreOffered('h519'));
+});
+
+test('the source link offers reveal and copy path as recovery', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    h.posted.length = 0;
+    for (const label of ['Reveal source file in File Explorer', 'Copy source file path']) {
+        (h.doc.querySelector(`button[aria-label="${label}"]`) as HTMLElement)
+            .dispatchEvent(new h.dom.window.MouseEvent('click', { bubbles: true }));
+    }
+    assert.deepEqual(h.posted, [
+        { type: 'revealSource', file: 'MainPage.xaml' },
+        { type: 'copySourcePath', file: 'MainPage.xaml' },
+    ]);
+});
+
+test('a property row announces its value and expands from anywhere on the line', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    const value = () => h.doc.querySelector('#props-viewport [data-prop="Opacity"] .pvalue') as HTMLElement;
+    assert.equal(value().getAttribute('aria-label'), 'Opacity: 0.5');
+    assert.equal(value().getAttribute('aria-expanded'), 'false');
+    assert.equal(h.doc.querySelector('#props-viewport [data-prop="Opacity"] .pchevron')?.getAttribute('aria-hidden'), 'true');
+
+    (h.doc.querySelector('#props-viewport [data-prop="Opacity"] .prow-line') as HTMLElement)
+        .dispatchEvent(new h.dom.window.MouseEvent('click', { bubbles: true }));
+    assert.equal(value().getAttribute('aria-expanded'), 'true');
+});
+
+test('the tree is named for what it lists and its rows count their siblings', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    await h.sendAndFlush({ type: 'selectHandle', handle: '234881525' } as ExtensionToWebviewMessage);
+    const tree = h.doc.getElementById('tree-viewport') as HTMLElement;
+    assert.equal(tree.getAttribute('aria-label'), 'UI elements');
+    assert.equal(h.doc.getElementById('tree-header')?.getAttribute('aria-hidden'), 'true');
+
+    const row = (handle: string) => h.doc.querySelector(`[data-handle="${handle}"]`) as HTMLElement;
+    const position = (handle: string) => [row(handle).getAttribute('aria-posinset'), row(handle).getAttribute('aria-setsize')];
+    assert.deepEqual(position('117441013'), ['1', '1']);
+    assert.deepEqual(position('134218229'), ['1', '2']);
+    assert.deepEqual(position('150995445'), ['2', '2']);
+    assert.deepEqual(position('234881525'), ['1', '1']);
+    assert.equal(row('150995445').querySelector('.twisty')?.getAttribute('aria-hidden'), 'true');
+});
+
+test('the tree filter matches element captions and follows caption changes', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'previews', previews: [{ handle: '134218229', preview: 'Settings Header' }] });
+    const filter = h.doc.getElementById('filter') as HTMLInputElement;
+    filter.value = 'settings header';
+    filter.dispatchEvent(new h.dom.window.Event('input'));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    await h.flush();
+    assert.ok(h.rowTexts().some(text => text.includes('AppTitleBar')), 'the caption should match');
+
+    await h.sendAndFlush({ type: 'previews', previews: [{ handle: '134218229', preview: 'Account' }] });
+    assert.ok(!h.rowTexts().some(text => text.includes('AppTitleBar')), 'a stale caption must not keep matching');
+    assert.ok((h.doc.getElementById('tree-viewport')?.textContent ?? '').includes('No elements match'));
+});
+
+test('reloading the same element refreshes its caption and open diagnostics', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    await h.sendAndFlush({ type: 'selectHandle', handle: '234881525' } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    h.posted.length = 0;
+
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+
+    assert.ok(h.posted.some(m => m.type === 'requestPreviews'
+        && JSON.stringify(m.handles) === JSON.stringify(['234881525'])), 'the caption may show the new value');
+    assert.ok(h.posted.some(m => m.type === 'resolveResource' && m.name === 'Opacity'), 'open cards re-resolve');
+
+    h.posted.length = 0;
+    h.send({ type: 'properties', properties: AUTHORED_PROPS } as ExtensionToWebviewMessage);
+    assert.ok(!h.posted.some(m => m.type === 'requestPreviews'), 'a new element is not a reload');
+});
+
+test('high contrast mode keeps state visible without colour', () => {
+    const h = loadPanel();
+    const css = Array.from(h.doc.querySelectorAll('style')).map(style => style.textContent).join('\n');
+    assert.match(css, /@media \(forced-colors: active\)/);
+});
+
+test('hovering a tree row only asks for a highlight', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.posted.length = 0;
+    h.doc.querySelector('[data-handle="117441013"]')
+        ?.dispatchEvent(new h.dom.window.MouseEvent('mouseover', { bubbles: true }));
+    assert.deepEqual(h.posted, [{ type: 'hoverNode', handle: '117441013' }]);
+});
+
+test('a pick result turns the pick button off', async () => {
+    const h = loadPanel();
+    const pick = h.doc.getElementById('btn-pick') as HTMLElement;
+    h.send({ type: 'pickStateChanged', armed: true });
+    assert.equal(pick.getAttribute('aria-pressed'), 'true');
+    h.send({ type: 'pickStateChanged', armed: false });
+    assert.equal(pick.getAttribute('aria-pressed'), 'false');
 });
 
 test('expanding a bound property asks the host to diagnose the binding', async () => {
@@ -799,7 +1067,15 @@ test('adding a comment requires a selected element to anchor it', async () => {
     assert.ok(posted, 'expected an addComment message');
     assert.strictEqual(posted?.handle, '134218229');
     assert.strictEqual(posted?.text, 'this needs more padding');
-    assert.strictEqual(text.value, '', 'the box should clear so the note is not sent twice');
+    assert.ok(add.disabled, 'the button waits for the host so the note is not sent twice');
+    assert.strictEqual(text.value, '  this needs more padding  ', 'the draft is kept until the add succeeds');
+
+    h.send({ type: 'commentError', message: 'Element is stale' } as ExtensionToWebviewMessage);
+    assert.strictEqual(text.value, '  this needs more padding  ', 'a failure must not lose what was typed');
+    assert.ok(!add.disabled, 'and the user can try again');
+
+    h.send({ type: 'commentAdded' } as ExtensionToWebviewMessage);
+    assert.strictEqual(text.value, '', 'a confirmed add clears the box');
 });
 
 test('selecting an element enables the compose box without waiting for a comment list', async () => {

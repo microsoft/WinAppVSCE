@@ -27,6 +27,26 @@ export const MESSAGES_FRAGMENT = `
                     setTimeout(function () { setStatus(''); }, 4000);
                 } else if (status.state === 'disconnected') {
                     setStatus(status.message || 'Disconnected.', 'warn');
+                    state.caps = { canEdit: false, canPick: false, canHighlight: false };
+                    state.picking = false;
+                    state.focusTracking = false;
+                    state.layoutOn = false;
+                    state.selected = null;
+                    state.focused = null;
+                    state.roots = [];
+                    state.properties = null;
+                    state.layout = null;
+                    state.comments.forEach(function (comment) { delete comment.handle; });
+                    el.pick.disabled = true;
+                    el.layoutBtn.disabled = true;
+                    el.focusBtn.disabled = true;
+                    updatePickButton();
+                    setPressed(el.focusBtn, false);
+                    setPressed(el.layoutBtn, false);
+                    rebuildRows();
+                    scheduleRender();
+                    renderProperties();
+                    renderComments();
                 } else if (status.state === 'error') {
                     setStatus(status.message || 'DevTools error.', 'error');
                 }
@@ -44,6 +64,7 @@ export const MESSAGES_FRAGMENT = `
                     ? 'Pick element (Ctrl+Shift+P)'
                     : 'Element picking is not available in this app';
                 el.layoutBtn.disabled = !state.caps.canHighlight;
+                el.focusBtn.disabled = false;
                 break;
 
             case 'tree': {
@@ -55,6 +76,12 @@ export const MESSAGES_FRAGMENT = `
                     state.expanded.add(state.roots[0].handle);
                 }
                 rebuildRows();
+                for (const handle of state.expanded) {
+                    const node = nodeForHandle(handle);
+                    if (node && (node.childCount || 0) > 0 && !(node.children || []).length) {
+                        vscode.postMessage({ type: 'expandNode', handle: handle });
+                    }
+                }
                 scheduleRender();
                 break;
             }
@@ -66,15 +93,19 @@ export const MESSAGES_FRAGMENT = `
                         line: row.line,
                     };
                 }
+                // A caption that arrives or changes can add or drop a match.
+                if (state.filter.trim()) { rebuildRows(); }
                 scheduleRender();
                 break;
             }
 
-            case 'properties':
+            case 'properties': {
                 // Expansion and staging are scoped to one element; carrying
                 // them to the next selection would show another element's
                 // pending edit.
-                if (!state.properties || state.properties.handle !== message.properties.handle) {
+                const sameElement = !!state.properties
+                    && state.properties.handle === message.properties.handle;
+                if (!sameElement) {
                     state.openProps = new Set();
                     state.staged = Object.create(null);
                     state.applied = Object.create(null);
@@ -88,8 +119,14 @@ export const MESSAGES_FRAGMENT = `
                     source: message.properties.source,
                     canEdit: message.properties.canEdit,
                 };
+                if (sameElement) {
+                    refreshOpenDiagnostics();
+                    // A reload means a value changed, and the caption may show it.
+                    refreshPreview(message.properties.handle);
+                }
                 renderProperties();
                 break;
+            }
 
             case 'propertiesError':
                 state.properties = { error: message.message };
@@ -97,8 +134,19 @@ export const MESSAGES_FRAGMENT = `
                 break;
 
             case 'selectHandle':
+                state.filter = '';
+                el.filter.value = '';
+                setView('tree');
                 selectHandle(message.handle, { silent: true });
                 revealHandle(message.handle);
+                break;
+
+            case 'showInspect':
+                setView('tree');
+                break;
+
+            case 'showComments':
+                setView('comments');
                 break;
 
             case 'pickStateChanged':
@@ -123,6 +171,11 @@ export const MESSAGES_FRAGMENT = `
 
             case 'commentError':
                 showComposeError(message.message || 'Adding the comment failed.');
+                updateCompose();
+                break;
+
+            case 'commentAdded':
+                commentAdded();
                 break;
 
             case 'surfaces':

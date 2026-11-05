@@ -117,7 +117,7 @@ The gate compares three things:
    `src/devtools/`, **in both directions**: adding a call means adding its
    entry, and removing the last call site means removing its entry.
 
-Record the counts (at last sync: **29 methods, 7 events** used, 50 advertised).
+Record the counts (current integration: **30 methods, 7 events** used, 50 advertised).
 
 ### Re-pinning is part of the sync
 
@@ -148,9 +148,11 @@ list of shape changes affecting methods we call.
 
 ## Pass 3 — Invocation contract (`winapp run`)
 
-Everything we encode about CLI arguments lives in **one** file:
+Launch-mode arguments live in **one** file:
 `src/devtools/launch-options.ts`. Nothing else in the extension should build
-DevTools spawn args.
+the `run --devtools` arguments. Standalone attach/discovery lives in
+`src/devtools/commands.ts`; offline comment operations and their JSON adapters
+live in `src/devtools/devtools-cli.ts`.
 
 Re-verify against the new build:
 
@@ -168,6 +170,15 @@ Current contract, and why each part matters:
 - `headless` = engine running, overlay toolbar not drawn. That is what our
   `noOverlay` launch.json property maps to, because the panel is a second client
   and must keep the engine alive.
+- Re-check `devtools list --include-available --json` and
+  `devtools attach --pid <pid> --source-root <project>`. The extension infers
+  a unique matching workspace project, otherwise prompts for the source root.
+- Re-check offline `devtools comments list/update/delete --source-root` with
+  no running app. Saved comment anchors differ from live `Comment.list` rows;
+  repository-relative anchors are resolved against the reported store path.
+- `Selection.select` must work after the panel's initialization (event streams
+  enabled and `Window.close`), without showing the native inspector. Lazy
+  expansion and picks outside the loaded tree use rooted `VisualTree.enumerate`.
 
 Also re-check the **pipe discovery / negotiation** path if upstream touched
 `DevToolsPipeDiscovery`, `DevToolsNegotiation`, or `DevToolsStartupHooks`
@@ -241,7 +252,7 @@ Then implement only what was picked.
 ## Pass 5 — Capability audit
 
 Diff `USED_METHODS` against the full schema (the engine exposes ~50 methods;
-we use 29). Unused at last sync:
+we use 31). Unused at last sync:
 
 ```
 VisualTree.find        VisualTree.query        VisualTree.getAppAuthored
@@ -264,7 +275,7 @@ Run all of these and paste the real numbers:
 npm run compile-tsc              # typecheck
 npm run lint                     # 0 errors (11 pre-existing warnings as of last sync)
 npm run check-devtools-schema    # method/event counts, both RIDs, no drift from the pin
-npm run test:unit                # 1352/1352 at last sync
+npm run test:unit                # 1376/1376 at last sync
 npm run test:e2e -- --grep "@winui-app"   # DevTools panel E2E, 9 specs
 .\scripts\package-vsc.ps1 -CliBinariesPath (Resolve-Path bin).Path
 ```
@@ -336,3 +347,4 @@ unsupported build rather than adapting to it.)
 | Pinned schema drifting from upstream | `npm run check-cli-freshness` tells you the branch has moved; `npm run check-devtools-schema` tells you how the schema differs. Neither one re-pins for you — that is a deliberate read-the-diff step in pass 2. |
 | CI cannot run the DevTools E2E yet | Blocked on a dotnet change shipping in the CLI. Re-test CI once the new build contains it. |
 | Engine gaps issue `microsoft/winappCli#1051` | Append anything new you find; keep "blocking" and "nice to have" separated. |
+| Inspector bugs fixed upstream | List DevTools issues closed since the last sync. For each UI bug in the native window, check whether our panel has the same bug, fix it, and add a regression test in `devtools-webview-dom.test.ts` or `devtools-panel-workflows.test.ts` that names the behaviour. Engine-side fixes reach us through the re-pin. |

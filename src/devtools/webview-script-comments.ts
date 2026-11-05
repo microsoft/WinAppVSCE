@@ -108,7 +108,7 @@ export const COMMENTS_FRAGMENT = `
     // would produce an orphan note the engine cannot re-find later.
     function updateCompose() {
         const node = state.selected ? nodeForHandle(state.selected) : null;
-        const hasTarget = !!node;
+        const hasTarget = !!node && state.caps.canEdit;
         el.composeTarget.textContent = hasTarget
             ? 'On ' + (node.name ? node.name + ' (' + shortTypeName(node.type) + ')' : shortTypeName(node.type))
             : 'Select an element in the visual tree to comment on it.';
@@ -133,10 +133,16 @@ export const COMMENTS_FRAGMENT = `
         const text = el.composeText.value.trim();
         if (!text || !state.selected) { return; }
         showComposeError('');
+        // The draft stays until the host confirms the add; a failure must not
+        // throw away what the user typed.
         vscode.postMessage({ type: 'addComment', handle: state.selected, text: text });
+        el.composeAdd.disabled = true;
+    });
+
+    function commentAdded() {
         el.composeText.value = '';
         updateCompose();
-    });
+    }
 
     function showComposeError(text) {
         el.composeError.textContent = text || '';

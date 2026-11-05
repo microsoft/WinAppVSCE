@@ -20,6 +20,8 @@ export const CORE_FRAGMENT = `
 
     /** Coalescing window for caption reads while the tree is being scrolled. */
     const PREVIEW_DEBOUNCE_MS = 90;
+    // Cap on remembered pre-edit values; each one is a few bytes of text.
+    const MAX_EDITED = 500;
 
     /** Editors are suppressed for these kinds regardless of mutation posture. */
     const READONLY_EDIT_KINDS = new Set(['', 'none', 'readonly', 'readOnly']);

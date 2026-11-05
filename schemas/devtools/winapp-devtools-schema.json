@@ -9,6 +9,7 @@
   "capabilities": {
     "domains": [
       "DevTools",
+      "Inspector",
       "VisualTree",
       "Property",
       "Layout",
@@ -27,6 +28,8 @@
       "DevTools.negotiate",
       "DevTools.ping",
       "DevTools.releaseOwnedState",
+      "Inspector.registerExternal",
+      "Inspector.unregisterExternal",
       "VisualTree.enumerate",
       "VisualTree.getPreviews",
       "VisualTree.find",
@@ -82,12 +85,15 @@
       "Selection.armChanged",
       "Focus.changed",
       "Property.changed",
-      "Overlay.stateChanged"
+      "Overlay.stateChanged",
+      "Inspector.openRequested"
     ],
     "access": {
       "DevTools.negotiate": "read",
       "DevTools.ping": "read",
       "DevTools.releaseOwnedState": "ui",
+      "Inspector.registerExternal": "ui",
+      "Inspector.unregisterExternal": "ui",
       "VisualTree.enumerate": "read",
       "VisualTree.getPreviews": "read",
       "VisualTree.find": "read",
@@ -169,6 +175,28 @@
       },
       "result": {
         "$ref": "#/$defs/OwnedStateReleaseResult"
+      }
+    },
+    {
+      "name": "Inspector.registerExternal",
+      "capability": "Inspector",
+      "access": "ui",
+      "params": {
+        "$ref": "#/$defs/InspectorRegisterExternalParams"
+      },
+      "result": {
+        "$ref": "#/$defs/NullResult"
+      }
+    },
+    {
+      "name": "Inspector.unregisterExternal",
+      "capability": "Inspector",
+      "access": "ui",
+      "params": {
+        "$ref": "#/$defs/ReleaseOwnedStateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/NullResult"
       }
     },
     {
@@ -738,6 +766,13 @@
       "params": {
         "$ref": "#/$defs/OverlayStateChangedEvent"
       }
+    },
+    {
+      "name": "Inspector.openRequested",
+      "capability": "Inspector",
+      "params": {
+        "$ref": "#/$defs/InspectorOpenRequestedEvent"
+      }
     }
   ],
   "errors": [
@@ -985,6 +1020,61 @@
           "type": "string",
           "pattern": "^[1-9][0-9]*$",
           "description": "Constrain execution to this live opaque visual-tree subtree handle, intersected with window when supplied."
+        }
+      }
+    },
+    "InspectorRegisterExternalParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "displayName"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "window": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$",
+          "description": "Constrain execution to this live process-owned HWND; unsupported scoped operations fail."
+        },
+        "root": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$",
+          "description": "Constrain execution to this live opaque visual-tree subtree handle, intersected with window when supplied."
+        }
+      }
+    },
+    "InspectorOpenRequestedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "view",
+        "origin"
+      ],
+      "properties": {
+        "view": {
+          "type": "string",
+          "enum": [
+            "inspect",
+            "comments"
+          ]
+        },
+        "handle": {
+          "type": "string"
+        },
+        "origin": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -1634,7 +1724,24 @@
           "type": "integer"
         },
         "error": {
-          "type": "string"
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "token",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "integer"
+            },
+            "token": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
         },
         "fallback": {
           "type": "string"
@@ -1893,6 +2000,9 @@
           "type": "string"
         },
         "authoredKey": {
+          "type": "string"
+        },
+        "origin": {
           "type": "string"
         },
         "redacted": {

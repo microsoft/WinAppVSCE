@@ -38,7 +38,8 @@ import { resolveProjectDirectory as resolveProjectDirectoryCore } from './projec
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
 import { activateXaml, deactivateXaml } from './xaml/xamlLanguageService';
 import { DevToolsPanel } from './devtools/devtools-panel';
-import { devToolsSpawnArgs, shouldAttachDebugger, shouldUseDevTools } from './devtools/launch-options';
+import { devToolsSpawnArgs, inspectorPreference, shouldAttachDebugger, shouldUseDevTools } from './devtools/launch-options';
+import { registerDevToolsCommands } from './devtools/commands';
 import { registerManifestIntelliSense } from './manifest-intellisense/manifest-intellisense';
 import { SchemaModel } from './manifest-schema/schema-model';
 import { loadSchemaModel } from './manifest-schema/xsd-parser';
@@ -1140,7 +1141,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				}
 				teardownRequested = true;
 				disposable.dispose();
-				DevToolsPanel.closeFor(processId);
+				DevToolsPanel.disconnectFor(processId);
 				runProcess.kill();
 				vscode.debug.stopDebugging(parentSession);
 			};
@@ -1189,10 +1190,13 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// DevTools panel for the same process. Failures here are reported
 			// inside the panel so a DevTools problem never takes down a working
 			// debug session.
-			if (shouldUseDevTools(config)) {
+			if (shouldUseDevTools(config) && inspectorPreference(config,
+				vscode.workspace.getConfiguration('winapp.devTools', folder.uri).get('inspector')) === 'vscode') {
 				void DevToolsPanel.show(
 					processId,
 					vscode.Uri.file(this.extensionPath),
+					vscode.ViewColumn.Active,
+					cwd,
 				);
 			}
 
@@ -1228,6 +1232,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 
 export function activate(context: vscode.ExtensionContext) {
 	const extensionPath = context.extensionPath;
+	registerDevToolsCommands(context);
 	const provider = new WinAppDebugConfigurationProvider(extensionPath);
 
 	// Dispose the shared WinApp output channel when the extension unloads.

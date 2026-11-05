@@ -406,6 +406,8 @@ body { display: flex; flex-direction: column; }
     margin-bottom: 6px;
     border-bottom: 1px solid var(--vscode-panel-border);
 }
+.prop-source-action { margin-left: 8px; font-size: 11px; }
+.prow-line { cursor: pointer; }
 
 /* Group heading. A label, not a control: categories no longer collapse, so it
    carries no caret, no hover affordance and no focus ring. */
@@ -470,6 +472,8 @@ body { display: flex; flex-direction: column; }
     font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', var(--vscode-font-family);
     font-size: 8px;
     cursor: pointer;
+    display: inline-block;
+    text-align: center;
     transition: transform 100ms linear;
 }
 .pchevron.leaf { visibility: hidden; }
@@ -801,5 +805,15 @@ select.pfield { font-family: var(--vscode-font-family); }
 .props-crumb-toggle:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 
 .redacted { font-style: italic; opacity: 0.7; }
+
+/* OS high contrast drops author backgrounds, which carried every on/selected
+   state above. Restate them with outlines in system colours. */
+@media (forced-colors: active) {
+    .on-rule { background: Highlight; forced-color-adjust: none; }
+    .icon-btn[aria-pressed="true"],
+    .pview-btn.active { outline: 2px solid Highlight; outline-offset: -2px; }
+    .tree-row.selected { outline: 1px solid Highlight; outline-offset: -1px; }
+    .view-tab[aria-selected="true"] { text-decoration: underline; }
+}
 </style>`;
 }
