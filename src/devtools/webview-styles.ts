@@ -319,7 +319,7 @@ body { display: flex; flex-direction: column; }
 
 .tree-row:hover { background: var(--vscode-list-hoverBackground); }
 .tree-row.selected { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
-.tree-row.selected .node-name, .tree-row.selected .node-file, .tree-row.selected .node-preview { color: inherit; }
+.tree-row.selected .node-type, .tree-row.selected .node-name, .tree-row.selected .node-file, .tree-row.selected .node-preview { color: inherit; }
 
 .twisty {
     flex: 0 0 16px;
@@ -331,14 +331,13 @@ body { display: flex; flex-direction: column; }
 .twisty.leaf { visibility: hidden; }
 
 /* Rows never scroll sideways, so every caption part has to be able to shrink;
-   without min-width:0 a flex item refuses to go below its text width. */
-.node-type { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--vscode-symbolIcon-classForeground, var(--vscode-foreground)); }
+   without min-width:0 a flex item refuses to go below its text width.
+   Colours mirror the native tree (accent type, secondary italic text) through theme tokens. */
+.node-type { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--vscode-symbolIcon-interfaceForeground, var(--vscode-foreground)); }
 .node-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 6px; color: var(--vscode-descriptionForeground); }
 /* The element's own text, which is usually how a human recognizes the row. */
-.node-preview { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 8px; color: var(--vscode-debugTokenExpression-string, var(--vscode-descriptionForeground)); }
+.node-preview { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 8px; font-style: italic; color: var(--vscode-descriptionForeground); }
 .node-file { flex: 0 0 auto; margin-left: 8px; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
-/* Light themes' class-symbol orange is under 4.5:1 on white; keep text legible. */
-body.vscode-light .node-type, body.vscode-high-contrast-light .node-type { color: var(--vscode-foreground); }
 
 .tree-empty, .props-empty {
     padding: 12px 10px;
