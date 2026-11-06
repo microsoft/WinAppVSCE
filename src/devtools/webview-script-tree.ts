@@ -232,8 +232,8 @@ export const TREE_FRAGMENT = `    // ──────────────�
         div.appendChild(indent);
 
         const twisty = document.createElement('span');
-        twisty.className = 'twisty' + (row.hasChildren ? '' : ' leaf');
-        twisty.textContent = state.expanded.has(node.handle) ? '⌄' : '›';
+        twisty.className = 'twisty' + (row.hasChildren ? '' : ' leaf') + (state.expanded.has(node.handle) ? ' open' : '');
+        twisty.textContent = '\\uE76C';
         twisty.dataset.twisty = '1';
         // aria-expanded already says this; the glyph would be read as noise.
         twisty.setAttribute('aria-hidden', 'true');

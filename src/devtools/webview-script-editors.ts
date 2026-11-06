@@ -66,7 +66,7 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
 
         const chev = document.createElement('span');
         chev.className = 'pdrop-chev';
-        chev.textContent = '\u25BE';
+        chev.textContent = '\\uE70D';
         chev.setAttribute('aria-hidden', 'true');
         btn.appendChild(chev);
         root.appendChild(btn);

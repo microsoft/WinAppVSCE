@@ -321,13 +321,26 @@ body { display: flex; flex-direction: column; }
 .tree-row.selected { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
 .tree-row.selected .node-type, .tree-row.selected .node-name, .tree-row.selected .node-file, .tree-row.selected .node-preview { color: inherit; }
 
+/* Every caret is the same icon glyph in a square, flex-centred box, so the
+   ink sits in the middle and rotating it to "open" turns it in place. */
+.twisty, .pchevron, .pdrop-chev {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', var(--vscode-font-family);
+    font-size: 8px;
+    line-height: 1;
+    font-style: normal;
+    user-select: none;
+    transition: transform 100ms linear;
+}
 .twisty {
     flex: 0 0 16px;
     width: 16px;
-    text-align: center;
+    height: 16px;
     opacity: 0.8;
-    user-select: none;
 }
+.twisty.open, .pchevron.open { transform: rotate(90deg); }
 .twisty.leaf { visibility: hidden; }
 
 /* Rows never scroll sideways, so every caption part has to be able to shrink;
@@ -464,20 +477,14 @@ body { display: flex; flex-direction: column; }
 
 .pchevron {
     width: 14px;
-    height: 18px;
+    height: 14px;
     padding: 0;
     border: none;
     background: transparent;
     color: var(--vscode-foreground);
-    font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', var(--vscode-font-family);
-    font-size: 8px;
     cursor: pointer;
-    display: inline-block;
-    text-align: center;
-    transition: transform 100ms linear;
 }
 .pchevron.leaf { visibility: hidden; }
-.pchevron.open { transform: rotate(90deg); }
 .pchevron:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 
 .pname {
@@ -565,7 +572,7 @@ select.pfield { font-family: var(--vscode-font-family); }
     cursor: pointer;
 }
 .pdrop-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pdrop-chev { flex: 0 0 auto; opacity: 0.7; font-size: 10px; }
+.pdrop-chev { flex: 0 0 auto; width: 12px; height: 12px; opacity: 0.7; }
 .pdrop .custom-dropdown-menu {
     left: 0;
     right: 0;
