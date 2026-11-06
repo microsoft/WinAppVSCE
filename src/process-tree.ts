@@ -10,6 +10,19 @@ import { spawn, type ChildProcess } from 'child_process';
  * Falls back to `child.kill()` whenever taskkill is unavailable or fails, so
  * cancellation always terminates *something*.
  */
+/**
+ * Stops the app `winapp run` launched, as cancelling the CLI does. Packaged apps
+ * are not children of the CLI, so killing the run process alone leaves them open.
+ */
+export function stopLaunchedApp(processId: number, kill: (pid: number) => void = pid => process.kill(pid)): boolean {
+	try {
+		kill(processId);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export function killProcessTree(child: ChildProcess): void {
 	if (!child.pid) {
 		child.kill();

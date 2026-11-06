@@ -33,6 +33,7 @@ import {
 } from './run-utils';
 import { getWorkspaceRoots, NO_WORKSPACE_MESSAGE } from './workspace';
 import { launchRunProcess } from './run-launch';
+import { stopLaunchedApp } from './process-tree';
 import { DebugLaunchCancelled, WinAppRunFailure } from './run-exit';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
@@ -1136,16 +1137,19 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			const parentSession = session;
 
 			// Tear down exactly once, whichever side finishes first: the child debug
-			// session ending or the winapp run process exiting. Killing the run
-			// process here prevents it from being orphaned in the background.
+			// session ending or the winapp run process exiting. A user Stop also closes
+			// the app, like cancelling `winapp run`; a run that exits on its own does not.
 			let teardownRequested = false;
-			const teardown = () => {
+			const teardown = (stopApp = false) => {
 				if (teardownRequested) {
 					return;
 				}
 				teardownRequested = true;
 				disposable.dispose();
 				DevToolsPanel.disconnectFor(processId);
+				if (stopApp) {
+					stopLaunchedApp(processId);
+				}
 				runProcess.kill();
 				vscode.debug.stopDebugging(parentSession);
 			};
@@ -1156,7 +1160,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			// from our own stopDebugging call harmless.
 			const disposable = vscode.debug.onDidTerminateDebugSession((ended) => {
 				if (ended.parentSession === parentSession || ended.id === parentSession.id) {
-					teardown();
+					teardown(true);
 				}
 			});
 
