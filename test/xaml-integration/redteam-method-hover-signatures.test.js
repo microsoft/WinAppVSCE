@@ -126,6 +126,11 @@ describe("WinUI XAML red-team 70 (method hover returns/params adversarial)", fun
     assert.strictEqual(md, "", `invalid function call must not show a valid signature; got: ${md}`);
   });
 
+  it("red-team 70 F12 on a function call with missing arguments still opens the handler", async () => {
+    const locations = await h.definitionsAt(page('<TextBlock Text="{x:Bind OnGo_C|lick()}" />'));
+    assert.ok(locations.some((l) => /SmokePage\.xaml\.cs$/i.test(l.fsPath)), `expected code-behind; got ${JSON.stringify(locations)}`);
+  });
+
   it("red-team 70 attached Grid.Row attribute hover stays attached-property summary-only", async () => {
     const buffer = page('<Grid><Button Grid.Ro|w="1" /></Grid>');
     const md = await h.hoverAt(buffer);

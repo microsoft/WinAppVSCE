@@ -127,7 +127,7 @@ test('untrusted activation keeps safe editors but blocks every CLI command befor
 		assert.ok(host.commands.has(command), `${command} is registered in Restricted Mode`);
 		assert.equal(await host.commands.get(command)!(), undefined, `${command} is blocked`);
 	}
-	assert.equal(host.warnings.length, cliCommands.length);
+	assert.equal(host.warnings.length, 0, 'VS Code owns the trust prompt; blocked commands add no toast');
 	assert.deepEqual(host.calls, ['manifestEditor', 'manifestIntelliSense', 'xaml']);
 });
 
@@ -137,8 +137,8 @@ test('all debugger entry points reject untrusted workspaces', async () => {
 	assert.equal(await provider.resolveDebugConfiguration(undefined, {}), undefined);
 	assert.equal(await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {}), undefined);
 	assert.equal((host.providers[1].provideDebugConfigurations() as unknown[]).length, 0);
-	await assert.rejects(async () => host.factories[0].createDebugAdapterDescriptor({}), /Trust this workspace/);
-	assert.equal(host.warnings.length, 3);
+	await assert.rejects(async () => host.factories[0].createDebugAdapterDescriptor({}), /trusted workspace/);
+	assert.equal(host.warnings.length, 0);
 	assert.deepEqual(host.calls, ['manifestEditor', 'manifestIntelliSense', 'xaml']);
 });
 

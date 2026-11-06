@@ -1,13 +1,10 @@
 import * as vscode from 'vscode';
 
-export const WORKSPACE_TRUST_REQUIRED = 'Trust this workspace to run WinApp commands or debug applications.';
+export const WORKSPACE_TRUST_REQUIRED = 'WinApp debugging requires a trusted workspace.';
 
+// VS Code's Restricted Mode UI already explains trust; blocked commands stay silent.
 export function requireTrustedWorkspace(): boolean {
-	if (vscode.workspace.isTrusted) {
-		return true;
-	}
-	void vscode.window.showWarningMessage(WORKSPACE_TRUST_REQUIRED);
-	return false;
+	return vscode.workspace.isTrusted;
 }
 
 export function registerTrustedCommand(

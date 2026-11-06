@@ -592,7 +592,9 @@ internal sealed partial class XamlLanguageServer
     }
 
     /// <summary>Shared pipeline for definition/hover: map the caret to a member name on the page's x:Class type (either an event-handler attribute value or an x:Bind path segment) and resolve it</summary>
-    private async Task<(ISymbol? Symbol, MemberTarget? Target)> ResolveSymbolAtAsync(TextDocumentPositionParams p)
+    private async Task<(ISymbol? Symbol, MemberTarget? Target)> ResolveSymbolAtAsync(
+        TextDocumentPositionParams p,
+        bool forDefinition = false)
     {
         if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc))
         {
@@ -621,7 +623,14 @@ internal sealed partial class XamlLanguageServer
             NearestEnclosingElement(doc, offset) is { } element &&
             XamlSemanticFacts.IsXBind(extension, element.NamespaceScope))
         {
-            return (ResolveBindableSymbol(doc, offset, rootType, classSymbol, bindingTypeSystem), target);
+            // Hover hides members x:Bind rejects; F12 still navigates there so the user can fix them.
+            var symbol = ResolveBindableSymbol(doc, offset, rootType, classSymbol, bindingTypeSystem);
+            if (symbol is null && forDefinition)
+            {
+                symbol = ResolveBindableSymbol(
+                    doc, offset, rootType, classSymbol, bindingTypeSystem, includeRejected: true);
+            }
+            return (symbol, target);
         }
 
         return (FindMember(classSymbol, target.Value.Name), target);
@@ -632,7 +641,8 @@ internal sealed partial class XamlLanguageServer
         int offset,
         INamedTypeSymbol rootType,
         INamedTypeSymbol pageClass,
-        XamlTypeSystem typeSystem)
+        XamlTypeSystem typeSystem,
+        bool includeRejected = false)
     {
         if (FindMemberTargetAt(doc, offset) is not { } target)
         {
@@ -664,14 +674,21 @@ internal sealed partial class XamlLanguageServer
         }
         for (int i = firstSegment; i < target.Preceding.Length; i++)
         {
-            var next = CompletionProvider.ResolveBindSegmentType(
-                typeSystem, currentType, target.Preceding[i], includeRootNonPublic, pageClass);
+            var next = includeRejected
+                ? ResolveAnySegmentType(currentType, target.Preceding[i])
+                : CompletionProvider.ResolveBindSegmentType(
+                    typeSystem, currentType, target.Preceding[i], includeRootNonPublic, pageClass);
             if (next is null)
             {
                 return null;
             }
             currentType = next;
             includeRootNonPublic = false;
+        }
+
+        if (includeRejected)
+        {
+            return currentType is INamedTypeSymbol named ? FindMember(named, target.Name) : null;
         }
 
         if (target.ArgumentCount is { } argumentCount)
@@ -683,6 +700,21 @@ internal sealed partial class XamlLanguageServer
 
         return typeSystem.GetBindableMembers(currentType, includeRootNonPublic, pageClass)
             .FirstOrDefault(member => member.Name == target.Name);
+    }
+
+    /// <summary>Resolves a path segment's type from any declared member, unwrapping one element type per indexer.</summary>
+    private static ITypeSymbol? ResolveAnySegmentType(ITypeSymbol current, string segment)
+    {
+        var (name, indexers) = SplitIndexers(segment.Trim());
+        var type = current is INamedTypeSymbol named && FindMember(named, name) is { } member
+            ? XamlTypeSystem.GetMemberType(member)
+            : null;
+        for (int i = 0; i < indexers && type is not null; i++)
+        {
+            type = XamlTypeSystem.GetCollectionElementType(type);
+        }
+
+        return type;
     }
 
     private Task NotifyMsBuildUnavailableAsync(MsBuildUnavailableException exception)

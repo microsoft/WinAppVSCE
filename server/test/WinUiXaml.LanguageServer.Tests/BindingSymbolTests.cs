@@ -49,6 +49,30 @@ public sealed class BindingSymbolTests
         }
     }
 
+    [Theory]
+    [InlineData("ViewModel.Hid|den", "Hidden")]
+    [InlineData("ViewModel.SetO|nly", "SetOnly")]
+    [InlineData("ViewModel.HiddenChild.Te|xt", "Text")]
+    [InlineData("ViewModel.For|mat()", "Format")]
+    [InlineData("(local:ViewModel)Hid|den", "Hidden")]
+    [InlineData("ViewModel.Miss|ing", null)]
+    public void DefinitionStillNavigatesToMembersThatDiagnosticsReject(string path, string? expectedName)
+    {
+        var buffer = $$"""
+            <Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:local="using:TestApp" x:Class="TestApp.Page"
+                  Text="{x:Bind {{path}}}" />
+            """;
+        int offset = buffer.IndexOf('|');
+        var doc = new TextDocument("file:///C:/test/Page.xaml", buffer.Remove(offset, 1));
+        var page = TypeSystem.ResolveMetadataType("TestApp.Page")!;
+        var symbol = XamlLanguageServer.ResolveBindableSymbol(
+            doc, offset, page, page, TypeSystem, includeRejected: true);
+
+        Assert.Equal(expectedName, symbol?.Name);
+    }
+
     private static XamlTypeSystem CreateTypeSystem()
     {
         const string source = """

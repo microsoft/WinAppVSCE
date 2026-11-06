@@ -1275,7 +1275,7 @@ describe("WinUI XAML — method hover returns/params", function () {
   });
 
   it("undocumented user method gets a deterministic metadata description", async () => {
-    const md = await h.hoverAt(page('<TextBlock Text="{x:Bind OnGo_C|lick()}" />'));
+    const md = await h.hoverAt(page('<TextBlock Text="{x:Bind OnGo_C|lick}" />'));
     assert.ok(/OnGo_Click\(object sender, RoutedEventArgs e\)/.test(md), `expected the method signature; got: ${md}`);
     assert.ok(/Method `OnGo_Click` declared by/.test(md), `expected the metadata fallback; got: ${md}`);
     assert.ok(!/\*\*Returns:\*\*/.test(md), `undocumented method must NOT carry Returns; got: ${md}`);
