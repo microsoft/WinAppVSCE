@@ -45,12 +45,25 @@ export const CONTROLS_FRAGMENT = `
 
     el.tabTree.addEventListener('click', function () { setView('tree'); });
     el.tabComments.addEventListener('click', function () { setView('comments'); });
+    // Tabs follow the ARIA pattern: one tab stop, arrows move and select.
+    [el.tabTree, el.tabComments].forEach(function (tab) {
+        tab.addEventListener('keydown', function (ev) {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) { return; }
+            ev.preventDefault();
+            const next = (ev.key === 'Home') ? el.tabTree : (ev.key === 'End') ? el.tabComments
+                : (tab === el.tabTree ? el.tabComments : el.tabTree);
+            next.click();
+            next.focus();
+        });
+    });
 
     function setView(view) {
         state.view = view;
         const onTree = view === 'tree';
         el.tabTree.setAttribute('aria-selected', onTree ? 'true' : 'false');
         el.tabComments.setAttribute('aria-selected', onTree ? 'false' : 'true');
+        el.tabTree.tabIndex = onTree ? 0 : -1;
+        el.tabComments.tabIndex = onTree ? -1 : 0;
         el.treeViewport.classList.toggle('hidden', !onTree);
         el.commentsViewport.classList.toggle('hidden', onTree);
         // Pick, focus tracking, the filter and Just my XAML are all scoped to

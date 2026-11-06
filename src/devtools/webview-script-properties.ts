@@ -551,7 +551,7 @@ export const PROPERTIES_FRAGMENT = `
         copy.type = 'button';
         copy.className = 'link prop-source-action';
         copy.textContent = 'Copy path';
-        copy.setAttribute('aria-label', 'Copy source file path');
+        copy.setAttribute('aria-label', 'Copy path of source file');
         copy.addEventListener('click', function () {
             vscode.postMessage({ type: 'copySourcePath', file: source.file });
         });

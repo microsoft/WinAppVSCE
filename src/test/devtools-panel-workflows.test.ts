@@ -304,6 +304,23 @@ test('attach discovers apps and passes the matching workspace project as source 
     inspector = 'vscode';
 });
 
+test('the engine echoing the panel\'s own selection does not steal keyboard focus', async t => {
+    const pid = 830700 + process.pid;
+    const engine = await FakeDevToolsEngine.start(pid, { methods: [...USED_METHODS] });
+    t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'comments'));
+    panel.receive({ type: 'selectNode', handle: 'h-title' });
+    await until(() => panel.messages.some(m => m.type === 'properties'));
+    const reveals = panel.reveals.length;
+    engine.emit('Selection.picked', { handle: 'h-title' });
+    await until(() => panel.messages.some(m => m.type === 'pickStateChanged'));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(panel.reveals.length, reveals, 'revealing would move focus out of the tree');
+});
+
 test('a picked element disarms pick mode in the panel', async t => {
     const pid = 860000 + process.pid;
     const engine = await FakeDevToolsEngine.start(pid, { methods: [...USED_METHODS] });

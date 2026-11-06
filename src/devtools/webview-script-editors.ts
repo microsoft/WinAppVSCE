@@ -16,11 +16,13 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
     /** The menu currently open, so opening one closes the last. */
     let openDrop = null;
     let propsRenderPending = false;
+    let dropSeq = 0;
 
     function closeDrop() {
         if (!openDrop) { return; }
         openDrop.menu.classList.remove('open');
         openDrop.btn.setAttribute('aria-expanded', 'false');
+        openDrop.btn.removeAttribute('aria-activedescendant');
         openDrop = null;
         // Flush a refresh held while the menu was open, unless another menu opened meanwhile.
         if (propsRenderPending) {
@@ -50,11 +52,16 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         btn.className = 'pdrop-btn';
         btn.setAttribute('aria-haspopup', 'listbox');
         btn.setAttribute('aria-expanded', 'false');
+        // A select-only combobox: the label names its purpose and the shown value is read as its value.
+        btn.setAttribute('role', 'combobox');
         btn.setAttribute('aria-label', ariaLabel);
+        const shown = current ? current.label : (value || '');
+        const menuId = 'pdrop-' + (++dropSeq);
+        btn.setAttribute('aria-controls', menuId);
 
         const label = document.createElement('span');
         label.className = 'pdrop-label';
-        label.textContent = current ? current.label : (value || '');
+        label.textContent = shown;
         btn.appendChild(label);
 
         const chev = document.createElement('span');
@@ -66,11 +73,13 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
 
         const menu = document.createElement('div');
         menu.className = 'custom-dropdown-menu';
+        menu.id = menuId;
         menu.setAttribute('role', 'listbox');
         menu.setAttribute('aria-label', ariaLabel);
 
-        const rows = items.map(function (item) {
+        const rows = items.map(function (item, i) {
             const row = document.createElement('div');
+            row.id = menuId + '-' + i;
             row.className = 'custom-dropdown-item'
                 + (item.value === value ? ' selected' : '');
             row.setAttribute('role', 'option');
@@ -94,6 +103,7 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         function paintFocus() {
             rows.forEach(function (row, i) { row.classList.toggle('focused', i === focused); });
             const row = rows[focused];
+            if (row) { btn.setAttribute('aria-activedescendant', row.id); }
             if (row && row.scrollIntoView) { row.scrollIntoView({ block: 'nearest' }); }
         }
 

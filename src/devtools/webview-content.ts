@@ -22,12 +22,12 @@ export function getDevToolsWebviewContent(webview: vscode.Webview, nonce: string
 ${getDevToolsStyles(nonce)}
 </head>
 <body>
-    <div class="split">
+    <div class="split" role="main" aria-label="WinUI DevTools">
         <div class="pane" id="tree-pane">
             <div class="view-tabs" role="tablist">
-                <button id="tab-tree" class="view-tab" role="tab" aria-selected="true"
+                <button id="tab-tree" class="view-tab" role="tab" aria-selected="true" aria-controls="tree-viewport"
                         title="Show this app's visual tree">Visual tree</button>
-                <button id="tab-comments" class="view-tab" role="tab" aria-selected="false"
+                <button id="tab-comments" class="view-tab" role="tab" aria-selected="false" aria-controls="comments-viewport" tabindex="-1"
                         title="Show this app's UI comments">Comments<span id="comments-badge" class="tab-badge hidden">0</span></button>
             </div>
 
@@ -57,7 +57,7 @@ ${getDevToolsStyles(nonce)}
                 <div id="tree-sizer" class="tree-sizer"></div>
             </div>
 
-            <div id="comments-viewport" class="comments-viewport hidden">
+            <div id="comments-viewport" class="comments-viewport hidden" role="tabpanel" aria-labelledby="tab-comments">
                 <div class="comment-compose">
                     <div id="compose-target" class="comment-compose-target"></div>
                     <textarea id="compose-text" class="comment-compose-text" rows="2"

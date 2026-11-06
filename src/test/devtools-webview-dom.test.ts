@@ -783,12 +783,43 @@ test('remembered originals are bounded', async () => {
     assert.ok(restoreOffered('h519'));
 });
 
+test('the view tabs follow the ARIA tab pattern from the keyboard', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    const tree = h.doc.getElementById('tab-tree') as HTMLElement;
+    const comments = h.doc.getElementById('tab-comments') as HTMLElement;
+    assert.equal(comments.tabIndex, -1, 'only the selected tab is a tab stop');
+    tree.focus();
+    tree.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    assert.equal(comments.getAttribute('aria-selected'), 'true');
+    assert.equal(h.doc.activeElement, comments);
+    assert.equal(tree.tabIndex, -1);
+    assert.ok(h.doc.getElementById(comments.getAttribute('aria-controls')!), 'the tab names its panel');
+});
+
+test('a value dropdown is a combobox that tells assistive tech which option is highlighted', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: AUTHORED_PROPS } as unknown as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    const btn = h.drop('Kind of value for Text')!.querySelector('.pdrop-btn') as HTMLElement;
+    assert.equal(btn.getAttribute('role'), 'combobox');
+    const key = (k: string) => btn.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: k, bubbles: true }));
+    key('Enter');
+    const first = btn.getAttribute('aria-activedescendant');
+    assert.ok(first && h.doc.getElementById(first)?.getAttribute('role') === 'option');
+    key('ArrowDown');
+    assert.notEqual(btn.getAttribute('aria-activedescendant'), first, 'moving the cursor is announced');
+    key('Escape');
+    assert.equal(btn.getAttribute('aria-activedescendant'), null);
+});
+
 test('the source link offers reveal and copy path as recovery', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
     h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
     h.posted.length = 0;
-    for (const label of ['Reveal source file in File Explorer', 'Copy source file path']) {
+    for (const label of ['Reveal source file in File Explorer', 'Copy path of source file']) {
         (h.doc.querySelector(`button[aria-label="${label}"]`) as HTMLElement)
             .dispatchEvent(new h.dom.window.MouseEvent('click', { bubbles: true }));
     }

@@ -339,6 +339,8 @@ export class DevToolsPanel {
             const handle = (payload as SelectionEvent)?.handle;
             if (!handle) { return; }
             this.post({ type: 'pickStateChanged', armed: false });
+            // The engine echoes the panel's own selection; revealing it would steal keyboard focus.
+            if (handle === this.selectedHandle) { return; }
             void this.revealPickedElement(handle).catch(error => this.reportError(error));
         });
 
