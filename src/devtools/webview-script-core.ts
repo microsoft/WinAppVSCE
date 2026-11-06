@@ -113,10 +113,14 @@ export const CORE_FRAGMENT = `
         /** Resource-key suggestions, keyed by property name. */
         resources: Object.create(null),
         comments: [],
+        /** Element a non-empty comment draft was started on. */
+        composeHandle: null,
         surfaces: [],
         layout: null,
         restoreConfirm: null,
         restoreConfirmScope: '',
+        /** Set once the host was asked for every tree level; it keeps them from then on. */
+        fullTreeRequested: false,
     };
 
     const el = {

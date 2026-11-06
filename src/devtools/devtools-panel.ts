@@ -50,6 +50,12 @@ const TREE_REFRESH_DEBOUNCE_MS = 300;
  */
 const COMMENT_POLL_MS = 1500;
 
+/** The engine only emits `Property.changed` for DevTools writes, so app-driven changes are polled. */
+const PROPERTY_POLL_MS = 1000;
+
+/** Engine error code for a handle that no longer resolves (token `not-found`). */
+const ENGINE_NOT_FOUND = -32009;
+
 /**
  * Shapes of the parity-domain results we consume. These mirror the bundled
  * schema's `$defs`; only the fields the panel renders are declared.
@@ -99,11 +105,15 @@ export class DevToolsPanel {
     private client: DevToolsClient | undefined;
     private refreshTimer: NodeJS.Timeout | undefined;
     private authoredOnly = true;
+    private fullTree = false;
     private selectedHandle: string | undefined;
     private focusTracking = false;
     private layoutOn = false;
     private disposed = false;
     private commentPoll: NodeJS.Timeout | undefined;
+    private propertyPoll: NodeJS.Timeout | undefined;
+    private propertyPollBusy = false;
+    private lastPropsKey: string | undefined;
     private commentsVisible = false;
     private lastCommentsJson = '';
     private lastTree: VisualNode[] = [];
@@ -163,6 +173,10 @@ export class DevToolsPanel {
             return existing;
         }
         existing?.dispose();
+        // A relaunch gets a new PID; the previous run's disconnected panel is now just a stale tab.
+        for (const stale of [...DevToolsPanel.open.values()]) {
+            if (stale.ended && stale.sourceRoot.toLowerCase() === sourceRoot.toLowerCase()) { stale.dispose(); }
+        }
 
         const panel = vscode.window.createWebviewPanel(
             DevToolsPanel.viewType,
@@ -300,6 +314,7 @@ export class DevToolsPanel {
             }
         }
         await this.client.enableEventStreams();
+        this.startPropertyPoll();
 
         await this.refreshTree();
         await this.refreshSurfaces();
@@ -480,6 +495,22 @@ export class DevToolsPanel {
         }, COMMENT_POLL_MS);
     }
 
+    private startPropertyPoll(): void {
+        if (this.propertyPoll) { return; }
+        this.propertyPoll = setInterval(() => {
+            const handle = this.selectedHandle;
+            if (!handle || this.propertyPollBusy || this.disposed || !this.connected || !this.panel.visible) { return; }
+            this.propertyPollBusy = true;
+            void this.loadProperties(handle, true).finally(() => { this.propertyPollBusy = false; });
+        }, PROPERTY_POLL_MS);
+    }
+
+    private stopPropertyPoll(): void {
+        if (!this.propertyPoll) { return; }
+        clearInterval(this.propertyPoll);
+        this.propertyPoll = undefined;
+    }
+
     private stopCommentPoll(): void {
         if (!this.commentPoll) { return; }
         clearInterval(this.commentPoll);
@@ -579,7 +610,8 @@ export class DevToolsPanel {
         try {
             const result = await client.send<VisualTreeEnumerateResult>('VisualTree.enumerate', {
                 authored: this.authoredOnly,
-                depth: DEFAULT_TREE_DEPTH,
+                // A filter can only find what was loaded, so filtering loads every level.
+                depth: this.fullTree ? -1 : DEFAULT_TREE_DEPTH,
             });
             const nodes = normalizeEnumerateResult(result);
             if (revision !== this.treeRevision) { return; }
@@ -601,12 +633,16 @@ export class DevToolsPanel {
         await this.loadProperties(handle);
     }
 
-    private async loadProperties(handle: string): Promise<void> {
+    private async loadProperties(handle: string, onlyIfChanged = false): Promise<void> {
         const client = this.client;
         if (!client || this.disposed) { return; }
 
         try {
             const result = await client.send<PropertyGetResult>('Property.get', { handle });
+            if (this.selectedHandle !== handle || !this.connected) { return; }
+            const key = handle + '\n' + JSON.stringify(result?.props ?? []);
+            if (onlyIfChanged && key === this.lastPropsKey) { return; }
+            this.lastPropsKey = key;
             const source = await this.resolveSource(handle);
             if (this.selectedHandle !== handle || !this.connected) { return; }
 
@@ -620,6 +656,12 @@ export class DevToolsPanel {
         } catch (err) {
             if (this.disposed) { return; }
             if (this.selectedHandle !== handle || !this.connected) { return; }
+            if (err instanceof DevToolsError && err.code === ENGINE_NOT_FOUND) {
+                this.selectedHandle = undefined;
+                this.lastPropsKey = undefined;
+                this.post({ type: 'propertiesError', handle, message: 'This element is no longer in the app. Select another element.' });
+                return;
+            }
             const message = err instanceof Error ? err.message : String(err);
             this.post({ type: 'propertiesError', handle, message });
         }
@@ -687,6 +729,12 @@ export class DevToolsPanel {
 
             case 'expandNode':
                 await this.expandNode(message.handle);
+                return;
+
+            case 'loadFullTree':
+                if (this.fullTree) { return; }
+                this.fullTree = true;
+                await this.refreshTree();
                 return;
 
             case 'hoverNode':
@@ -801,6 +849,11 @@ export class DevToolsPanel {
                 if (!client) { return; }
                 const confirmation = await restoreBinding(
                     client, message.handle, message.name, message.confirm);
+                if (confirmation && 'failed' in confirmation) {
+                    void vscode.window.showWarningMessage(
+                        `Could not restore the binding on ${message.name}: ${confirmation.failed}`);
+                    return;
+                }
                 if (confirmation) {
                     this.post(confirmation);
                     return;
@@ -846,6 +899,7 @@ export class DevToolsPanel {
                 } catch (err) {
                     const detail = err instanceof DevToolsError ? err.message : String(err);
                     void vscode.window.showWarningMessage(`Could not set ${message.name}: ${detail}`);
+                    this.post({ type: 'setPropertyFailed', handle: message.handle, name: message.name });
                 }
                 await this.reloadIfSelected(message.handle);
                 return;
@@ -879,6 +933,7 @@ export class DevToolsPanel {
         }
 
         this.stopCommentPoll();
+        this.stopPropertyPoll();
         if (this.client) {
             const client = this.client;
             this.client = undefined;

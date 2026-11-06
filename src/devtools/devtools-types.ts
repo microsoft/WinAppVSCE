@@ -116,6 +116,7 @@ export type ExtensionToWebviewMessage =
     | { type: 'tree'; tree: TreePayload }
     | { type: 'properties'; properties: PropertiesPayload }
     | { type: 'propertiesError'; handle: string; message: string }
+    | { type: 'setPropertyFailed'; handle: string; name: string }
     | { type: 'selectHandle'; handle: string }
     | { type: 'showInspect' }
     | { type: 'showComments' }
@@ -140,6 +141,7 @@ export type WebviewToExtensionMessage =
     | { type: 'selectNode'; handle: string }
     | { type: 'hoverNode'; handle: string | undefined }
     | { type: 'expandNode'; handle: string }
+    | { type: 'loadFullTree' }
     | { type: 'requestPreviews'; handles: string[] }
     | { type: 'togglePick'; armed: boolean }
     | { type: 'toggleFocusTracking'; armed: boolean }

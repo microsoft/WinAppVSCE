@@ -117,7 +117,8 @@ export const PROPERTIES_FRAGMENT = `
         for (const box of Array.from(boxes)) {
             if (box.dataset.draft !== draft.prop) { continue; }
             // A committed value is the app's to report back, not ours to keep.
-            if (!draft.committed) { box.value = draft.value; }
+            // Carry the flag so the stale box is not later restored as a draft.
+            if (!draft.committed) { box.value = draft.value; } else { box.dataset.committed = '1'; }
             box.focus();
             if (draft.committed) { break; }
             try { box.setSelectionRange(draft.start, draft.end); } catch (e) { /* not a text box */ }
@@ -265,13 +266,23 @@ export const PROPERTIES_FRAGMENT = `
         renderProperties();
     }
 
-    function flattenProps(props, depth, out) {
-        for (const prop of props) {
+    function flattenProps(props, depth, out, parent) {
+        for (const raw of props) {
+            const prop = parent ? Object.assign({}, raw, { parent: parent }) : raw;
             out.push({ prop: prop, depth: depth });
             if (prop.children && prop.children.length) {
-                flattenProps(prop.children, depth + 1, out);
+                flattenProps(prop.children, depth + 1, out, rowKey(prop));
             }
         }
+    }
+
+    /** Sub-property rows (a brush's Color) are keyed by path so they never collide with the element's own. */
+    function rowKey(prop) {
+        return prop.parent ? prop.parent + '.' + prop.name : prop.name;
+    }
+
+    function isResourceAuthored(prop) {
+        return prop.authoredKind === 'staticResource' || prop.authoredKind === 'themeResource';
     }
 
     function size(value) {
@@ -550,13 +561,14 @@ export const PROPERTIES_FRAGMENT = `
     function buildPropRow(prop, depth, payload) {
         const wrap = document.createElement('div');
         wrap.className = 'prow';
-        wrap.dataset.prop = prop.name;
+        wrap.dataset.prop = rowKey(prop);
 
         const line = document.createElement('div');
         line.className = 'prow-line';
         line.style.paddingLeft = (4 + depth * INDENT_PX) + 'px';
 
-        const open = state.openProps.has(prop.name);
+        const open = state.openProps.has(rowKey(prop));
+        const edited = !prop.parent && isEdited(payload.handle, prop.name);
         const toggle = function () { togglePropExpand(prop, payload); };
 
         // Decorative: the value button below is the one keyboard stop and
@@ -589,7 +601,7 @@ export const PROPERTIES_FRAGMENT = `
         dot.className = 'pdot';
         dot.textContent = '\\u25CF';
         dot.setAttribute('aria-hidden', 'true');
-        if (!isEdited(payload.handle, prop.name)) { dot.classList.add('hidden'); }
+        if (!edited) { dot.classList.add('hidden'); }
         cell.appendChild(dot);
 
         const value = document.createElement('button');
@@ -605,7 +617,7 @@ export const PROPERTIES_FRAGMENT = `
         // The focus announcement has to carry the value, not just the name.
         value.setAttribute('aria-label', prop.name + ': '
             + (prop.redacted ? 'value hidden' : (String(prop.value || '') || 'empty'))
-            + (isEdited(payload.handle, prop.name) ? ', changed' : ''));
+            + (edited ? ', changed' : ''));
         value.setAttribute('aria-expanded', open ? 'true' : 'false');
         cell.appendChild(value);
         line.appendChild(cell);
@@ -686,28 +698,64 @@ export const PROPERTIES_FRAGMENT = `
         state.restoreConfirm = null;
         for (const prop of payload.props || []) {
             if (!state.openProps.has(prop.name)) { continue; }
-            if (prop.binding) {
+            if (wantsDiagnosis(prop)) {
                 vscode.postMessage({ type: 'diagnoseBinding', handle: payload.handle, name: prop.name });
             }
-            vscode.postMessage({ type: 'resolveResource', handle: payload.handle, name: prop.name });
+            if (isResourceAuthored(prop)) {
+                vscode.postMessage({ type: 'resolveResource', handle: payload.handle, name: prop.name });
+            }
         }
     }
 
+    /** A live write took over an authored binding, so only Restore binding applies. */
+    function bindingReplaced(prop) {
+        return (prop.authoredKind === 'binding' || prop.authoredKind === 'xBind')
+            && prop.valueSource === 'DevTools';
+    }
+
+    /** A rejected first write changed nothing, so it must not leave an EDITED marker. */
+    function forgetRejectedEdit(handle, name) {
+        const payload = state.properties;
+        if (!payload || payload.handle !== handle) { return; }
+        const prop = (payload.props || []).find(p => p.name === name);
+        if (prop && prop.valueSource === 'DevTools') { return; }
+        delete state.edited[editKey(handle, name)];
+        renderProperties();
+    }
+
+    /** A property back on its live or compiled binding no longer carries our edit, so forget it. */
+    function dropRestoredBindingEdits(handle, props) {
+        for (const prop of props || []) {
+            const bound = prop.binding || prop.authoredKind === 'binding' || prop.authoredKind === 'xBind';
+            if (!bound || prop.valueSource === 'DevTools') { continue; }
+            delete state.edited[editKey(handle, prop.name)];
+            delete state.applied[prop.name];
+        }
+    }
+
+    /** Diagnosing also captures the binding for Restore, so a replaced one is skipped. */
+    function wantsDiagnosis(prop) {
+        return !!prop.binding && !bindingReplaced(prop);
+    }
+
     function togglePropExpand(prop, payload) {
-        if (state.openProps.has(prop.name)) {
-            state.openProps.delete(prop.name);
+        const key = rowKey(prop);
+        if (state.openProps.has(key)) {
+            state.openProps.delete(key);
         } else {
-            state.openProps.add(prop.name);
+            state.openProps.add(key);
+            // Sub-property rows are read-only; the engine cannot address them by path.
+            if (prop.parent) { renderProperties(); return; }
             // Binding diagnosis is expensive and needs the managed agent, so it
             // is requested only when the card is actually opened.
-            if (prop.binding && !state.bindings[prop.name]) {
+            if (wantsDiagnosis(prop) && !state.bindings[prop.name]) {
                 vscode.postMessage({
                     type: 'diagnoseBinding',
                     handle: payload.handle,
                     name: prop.name,
                 });
             }
-            if (!state.resources[prop.name]) {
+            if (isResourceAuthored(prop) && !state.resources[prop.name]) {
                 vscode.postMessage({
                     type: 'resolveResource',
                     handle: payload.handle,
@@ -730,18 +778,24 @@ export const PROPERTIES_FRAGMENT = `
         if (type.indexOf('brush') !== -1 || type.indexOf('color') !== -1) { kinds.push('color'); }
         if (fieldNamesFor(prop)) { kinds.push('fields'); }
         kinds.push('text');
-        kinds.push('resource');
-        kinds.push('binding');
+        // The RPC cannot assign a resource or install a binding, so these kinds only describe authored ones.
+        if (isResourceAuthored(prop)) { kinds.push('resource'); }
+        if (prop.binding || prop.valueSource === 'Binding' || prop.authoredKind === 'binding') { kinds.push('binding'); }
         return kinds;
     }
 
     /** The markup the app authored, parsed back into path and mode. */
     function authoredPath(prop) {
-        return prop.authoredKey || '';
+        if (prop.authoredKey) { return prop.authoredKey; }
+        const markup = prop.authored || prop.binding || '';
+        const named = /Path\\s*=\\s*([^,}\\s]+)/.exec(markup);
+        if (named) { return named[1]; }
+        const first = /^\\{\\s*(?:x:)?Bind(?:ing)?\\s+([^,=}\\s]+)\\s*[,}]/.exec(markup);
+        return first ? first[1] : '';
     }
 
     function authoredMode(prop) {
-        const match = /Mode\s*=\s*([A-Za-z]+)/.exec(prop.authored || '');
+        const match = /Mode\\s*=\\s*([A-Za-z]+)/.exec(prop.authored || prop.binding || '');
         return match ? match[1] : '';
     }
 
@@ -770,7 +824,17 @@ export const PROPERTIES_FRAGMENT = `
         const staged = state.staged[prop.name];
         if (staged) { return staged.kind; }
         if (state.applied[prop.name]) { return state.applied[prop.name]; }
-        return kindsFor(prop)[0];
+        return currentKind(prop);
+    }
+
+    /** What the value is now, as the native window reports it; a live write makes it a literal. */
+    function currentKind(prop) {
+        const kinds = kindsFor(prop);
+        if (prop.valueSource === 'DevTools') { return kinds[0]; }
+        if (prop.authoredKind === 'xBind') { return 'xbind'; }
+        if (prop.binding || prop.valueSource === 'Binding' || prop.authoredKind === 'binding') { return 'binding'; }
+        if (isResourceAuthored(prop)) { return 'resource'; }
+        return kinds[0];
     }
 
     function caption(text, spaced) {

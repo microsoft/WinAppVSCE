@@ -35,6 +35,25 @@ test('expanding a truncated tree row requests its missing children', async t => 
     assert.ok(h.posted.some(m => m.type === 'expandNode' && m.handle === 'deep'));
 });
 
+test('filtering a partly loaded tree asks once for every level, so deep matches are found', async t => {
+    const h = loadPanel();
+    t.after(() => h.dom.window.close());
+    await h.sendAndFlush({ type: 'tree', tree: {
+        authored: false,
+        nodes: [{ handle: 'root', type: 'Grid', name: '', childCount: 1, children: [
+            { handle: 'deep', type: 'Grid', name: 'Truncated', childCount: 2, children: [] },
+        ] }],
+    } });
+    h.posted.length = 0;
+    const filter = h.doc.getElementById('filter') as HTMLInputElement;
+    for (const text of ['#Counter', '#CounterButton']) {
+        filter.value = text;
+        filter.dispatchEvent(new h.dom.window.Event('input'));
+        await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    assert.equal(h.posted.filter(m => m.type === 'loadFullTree').length, 1);
+});
+
 test('a picked handle clears the tree filter and leaves the comments tab', async t => {
     const h = loadPanel();
     t.after(() => h.dom.window.close());
@@ -496,17 +515,34 @@ test('a read-only posture suppresses property editors', async () => {
 test('choosing a different KIND stages the change rather than applying it', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
-    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: AUTHORED_PROPS } as unknown as ExtensionToWebviewMessage);
     h.expandAllProps();
     h.posted.length = 0;
 
-    assert.ok(h.drop('Kind of value for Opacity'), 'expected a KIND dropdown');
-    h.pickDrop('Kind of value for Opacity', 'resource');
+    assert.ok(h.drop('Kind of value for Text'), 'expected a KIND dropdown');
+    h.pickDrop('Kind of value for Text', 'text');
 
     assert.ok(h.doc.querySelector('#props-viewport .pstaged'), 'expected a staged banner');
     // Switching representation can destroy a binding, so it must never happen
     // as a side effect of moving a dropdown.
     assert.ok(!h.posted.some((m) => m.type === 'setProperty'), 'staging must not write to the app');
+});
+
+test('writing a value through the staged kind applies it and drops the staged banner', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'capabilities', canEdit: true, canPick: true, canHighlight: true } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: AUTHORED_PROPS } as unknown as ExtensionToWebviewMessage);
+    h.expandAllProps();
+
+    h.pickDrop('Kind of value for Text', 'text');
+    assert.ok(h.doc.querySelector('#props-viewport .pstaged'), 'picking a kind stages it');
+    const input = h.doc.querySelector('#props-viewport input[aria-label="Text"]') as HTMLInputElement;
+    input.value = 'literal';
+    input.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    assert.ok(h.posted.some((m) => m.type === 'setProperty' && m.value === 'literal'));
+    assert.ok(!h.doc.querySelector('#props-viewport .pstaged'), 'the write was the apply');
 });
 
 test('an edit records the original value and says what it was', async () => {
@@ -620,6 +656,38 @@ test('a draft is saved to the element it was typed on when the selection moves',
     assert.ok(h.doc.querySelector('#props-viewport button[aria-label="Restore original value of Opacity"]'));
 });
 
+test('an expanded value lists its precedence chain with the winner marked', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    const lines = Array.from(h.doc.querySelectorAll('#props-viewport .pchain .pwit-text')).map(e => e.textContent);
+    assert.deepEqual(lines, ['\u25B8 Local  0.5   MainPage.xaml:9', '   Default  1']);
+    const editor = h.doc.querySelector('#props-viewport input[aria-label="Opacity"]');
+    assert.ok(editor, 'the editor still renders beside the chain');
+});
+
+test('blurring after a committed edit does not write the stale value back', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    const box = () => h.doc.querySelector('#props-viewport input[aria-label="Opacity"]') as HTMLInputElement;
+    box().focus();
+    box().value = '0.3';
+    box().dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    // The host confirms with a fresh payload for the same element.
+    const confirmed = {
+        ...LIVE_PROPS,
+        props: LIVE_PROPS.props.map(p => p.name === 'Opacity' ? { ...p, value: '0.3' } : p),
+    };
+    h.send({ type: 'properties', properties: confirmed } as ExtensionToWebviewMessage);
+    assert.equal(box().value, '0.3', 'the box shows the confirmed value, not the pre-edit one');
+    h.posted.length = 0;
+    box().blur();
+    assert.ok(!h.posted.some(m => m.type === 'setProperty'), 'blur must not revert the edit');
+});
+
 test('a committed value is not re-applied when the selection moves', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
@@ -728,7 +796,7 @@ test('reloading the same element refreshes its caption and open diagnostics', as
 
     assert.ok(h.posted.some(m => m.type === 'requestPreviews'
         && JSON.stringify(m.handles) === JSON.stringify(['234881525'])), 'the caption may show the new value');
-    assert.ok(h.posted.some(m => m.type === 'resolveResource' && m.name === 'Opacity'), 'open cards re-resolve');
+    assert.ok(!h.posted.some(m => m.type === 'resolveResource' && m.name === 'Opacity'), 'a literal value is never resolved as a resource');
 
     h.posted.length = 0;
     h.send({ type: 'properties', properties: AUTHORED_PROPS } as ExtensionToWebviewMessage);
@@ -1093,6 +1161,37 @@ test('selecting an element enables the compose box without waiting for a comment
     assert.ok(h.doc.getElementById('compose-target')?.textContent?.includes('AppTitleBar'));
 });
 
+test('a comment draft stays on the element it was started on', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.doc.getElementById('tab-comments')?.dispatchEvent(new h.dom.window.Event('click', { bubbles: true }));
+    h.send({ type: 'selectHandle', handle: '134218229' } as ExtensionToWebviewMessage);
+    const text = h.doc.getElementById('compose-text') as HTMLTextAreaElement;
+    const add = h.doc.getElementById('compose-add') as HTMLButtonElement;
+    const target = () => h.doc.getElementById('compose-target')?.textContent ?? '';
+    text.value = 'title bar note';
+    text.dispatchEvent(new h.dom.window.Event('input', { bubbles: true }));
+
+    h.send({ type: 'selectHandle', handle: '150995445' } as ExtensionToWebviewMessage);
+    assert.ok(target().includes('AppTitleBar') && target().includes('Draft started here'), target());
+    h.posted.length = 0;
+    add.dispatchEvent(new h.dom.window.Event('click', { bubbles: true }));
+    const posted = h.posted.find((m) => m.type === 'addComment') as { handle: string } | undefined;
+    assert.strictEqual(posted?.handle, '134218229', 'the draft is not reassigned to the new selection');
+
+    const withoutTitleBar = JSON.parse(JSON.stringify(LIVE_TREE));
+    withoutTitleBar.nodes[0].children.shift();
+    await h.sendAndFlush({ type: 'tree', tree: withoutTitleBar } as ExtensionToWebviewMessage);
+    h.send({ type: 'commentError', message: 'Element is stale' } as ExtensionToWebviewMessage);
+    assert.ok(target().includes('is gone'), target());
+    assert.ok(add.disabled, 'a draft for a removed element cannot be saved elsewhere');
+    assert.strictEqual(text.value, 'title bar note', 'the draft is kept');
+
+    text.value = '';
+    text.dispatchEvent(new h.dom.window.Event('input', { bubbles: true }));
+    assert.ok(target().includes('RootFrame'), 'clearing the draft follows the selection again');
+});
+
 test('leaving the comments tab tells the host to stop polling', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
@@ -1321,41 +1420,310 @@ test('the per-row source line went with the witness block', async () => {
     h.send({ type: 'properties', properties: AUTHORED_PROPS } as unknown as ExtensionToWebviewMessage);
     h.expandAllProps();
 
-    const shown = h.doc.getElementById('props-viewport')?.textContent ?? '';
+    const viewport = h.doc.getElementById('props-viewport')!.cloneNode(true) as HTMLElement;
+    // The precedence chain cites each entry's declaration, as the native window does.
+    viewport.querySelectorAll('.pchain').forEach(c => c.remove());
+    const shown = viewport.textContent ?? '';
     // The one source link that remains is the element-level one in the header.
     assert.ok(!shown.includes('MainPage.xaml:18'), 'no per-row source line remains');
 });
 
-test('a resource-backed property prefills the authored key', async () => {
+test('the default KIND names what the value is now, as the native window does', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    const text = { valueType: 'System.String', editKind: 'text', writeType: 'String' };
+    h.send({
+        type: 'properties',
+        properties: {
+            ...LIVE_PROPS,
+            props: [
+                { ...text, name: 'Text', value: 'a', valueSource: 'Binding', authoredKind: 'binding', binding: '{Binding Title}' },
+                { ...text, name: 'Tag', value: 'b', valueSource: 'Local', authoredKind: 'themeResource', authoredKey: 'K' },
+                { ...text, name: 'Name', value: 'c', valueSource: 'DevTools', authoredKind: 'binding', authoredKey: 'Title' },
+            ],
+        },
+    } as unknown as ExtensionToWebviewMessage);
+    h.expandAllProps();
+
+    assert.strictEqual(h.dropValue('Kind of value for Text'), 'binding', 'a {Binding} is not plain text');
+    assert.strictEqual(h.dropValue('Kind of value for Tag'), 'resource', 'a resource key is not plain text');
+    assert.strictEqual(h.dropValue('Kind of value for Name'), 'text', 'a live edit replaced the binding');
+});
+
+test('once Restore binding lands, the panel stops showing the replaced edit', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    const bound = {
+        name: 'Text', value: 'Hello', valueType: 'System.String', editKind: 'text',
+        valueSource: 'Binding', authoredKind: 'binding', binding: '{Binding Title}',
+    };
+    const props = (p: object) => ({
+        type: 'properties', properties: { ...LIVE_PROPS, props: [p] },
+    } as unknown as ExtensionToWebviewMessage);
+    h.send(props(bound));
+    h.expandAllProps();
+    h.pickDrop('Kind of value for Text', 'text');
+    const input = h.doc.querySelector('#props-viewport input[aria-label="Text"]') as HTMLInputElement;
+    input.value = 'literal';
+    input.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    h.send(props({ ...bound, value: 'literal', valueSource: 'DevTools', binding: undefined }));
+    assert.ok((h.doc.getElementById('props-viewport')?.textContent ?? '').includes('was Hello'));
+
+    h.send(props(bound));
+
+    const shown = h.doc.getElementById('props-viewport')?.textContent ?? '';
+    assert.ok(!shown.includes('was Hello'), 'the edit is gone from the app');
+    assert.ok(!shown.includes('Restore original'));
+    assert.strictEqual(h.dropValue('Kind of value for Text'), 'binding', 'KIND follows the binding again');
+});
+
+test('once an x:Bind restore lands, the panel stops showing the replaced edit', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    const bound = {
+        name: 'Text', value: 'Hello', valueType: 'System.String', editKind: 'text',
+        valueSource: 'Local', authoredKind: 'xBind', authored: '{x:Bind ViewModel.Title}',
+    };
+    const props = (p: object) => ({
+        type: 'properties', properties: { ...LIVE_PROPS, props: [p] },
+    } as unknown as ExtensionToWebviewMessage);
+    h.send(props(bound));
+    h.expandAllProps();
+    h.pickDrop('Kind of value for Text', 'text');
+    const input = h.doc.querySelector('#props-viewport input[aria-label="Text"]') as HTMLInputElement;
+    input.value = 'literal';
+    input.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    h.send(props({ ...bound, value: 'literal', valueSource: 'DevTools' }));
+    assert.ok((h.doc.getElementById('props-viewport')?.textContent ?? '').includes('was Hello'));
+
+    h.send(props(bound));
+
+    const shown = h.doc.getElementById('props-viewport')?.textContent ?? '';
+    assert.ok(!shown.includes('was Hello'), 'compiled bindings report Local once restored');
+    assert.ok(!shown.includes('Restore original'));
+});
+
+test('only a resource-authored value offers the resource kind, labelled with its key', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    const props = (p: object) => ({
+        type: 'properties', properties: { ...LIVE_PROPS, props: [p] },
+    } as unknown as ExtensionToWebviewMessage);
+    const options = (label: string) => [...(h.drop(label)?.querySelectorAll('[data-value]') ?? [])]
+        .map(o => (o as HTMLElement).dataset.value);
+
+    h.send(props({ name: 'Padding', value: '16,16,16,16', valueType: 'Thickness', editKind: 'thickness', writeType: 'Thickness', valueSource: 'Local' }));
+    h.posted.length = 0;
+    h.expandAllProps();
+    assert.ok(!options('Kind of value for Padding').includes('resource'), 'the RPC cannot assign a resource');
+    assert.ok(!h.posted.some(m => m.type === 'resolveResource'), 'a literal is never resolved as a resource');
+
+    h.send(props({ name: 'Foreground', value: '#FF0078D4', valueType: 'Brush', editKind: 'text', writeType: 'Brush', valueSource: 'Local', authoredKind: 'staticResource', authoredKey: 'BrandBrush' }));
+    h.expandAllProps();
+    assert.strictEqual(h.dropValue('Kind of value for Foreground'), 'resource');
+    h.send({ type: 'resource', name: 'Foreground', resource: { key: 'Foreground', resolved: '2587815578744' } } as ExtensionToWebviewMessage);
+    assert.ok((h.doc.querySelector('#props-viewport .pexpand')?.textContent ?? '').includes('currently BrandBrush = #FF0078D4'), 'a bare handle is not a value');
+});
+
+test('staging a literal over a binding or resource warns what it replaces', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    const props = (p: object) => ({
+        type: 'properties', properties: { ...LIVE_PROPS, props: [p] },
+    } as unknown as ExtensionToWebviewMessage);
+    const staged = () => h.doc.querySelector('#props-viewport .pstaged')?.textContent ?? '';
+    const brush = {
+        name: 'Foreground', value: '#FF8A2BE2', valueType: 'Brush', editKind: 'color', writeType: 'SolidColorBrush',
+        valueSource: 'Local', authoredKind: 'staticResource', authoredKey: 'BrandBrush', authored: '{StaticResource BrandBrush}',
+    };
+
+    h.send(props({ name: 'Text', value: 'Hi', valueType: 'System.String', editKind: 'text', valueSource: 'Binding', authoredKind: 'binding', binding: '{Binding Title}' }));
+    h.expandAllProps();
+    h.pickDrop('Kind of value for Text', 'text');
+    assert.ok(staged().includes('replaces the binding'));
+
+    h.send(props(brush));
+    h.expandAllProps();
+    h.pickDrop('Kind of value for Foreground', 'color');
+    assert.ok(staged().includes('replaces {StaticResource BrandBrush}'));
+
+    h.send(props({ ...brush, valueSource: 'DevTools' }));
+    assert.ok((h.doc.querySelector('#props-viewport .pexpand')?.textContent ?? '').includes('cannot reconnect the resource'));
+});
+
+test('a brush edits as a whole colour while its sub-properties stay read-only', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({
+        type: 'properties',
+        properties: {
+            ...LIVE_PROPS,
+            props: [
+                {
+                    name: 'Foreground', value: '#FF8A2BE2', valueType: 'Microsoft.UI.Xaml.Media.SolidColorBrush',
+                    editKind: 'color', writeType: 'SolidColorBrush', valueSource: 'Local',
+                    children: [
+                        { name: 'Color', value: 'BlueViolet', valueType: 'Windows.UI.Color', editKind: 'color' },
+                        { name: 'Opacity', value: '1', valueType: 'Windows.Foundation.Double', editKind: 'number' },
+                    ],
+                },
+                { name: 'Opacity', value: '1', valueType: 'Double', editKind: 'number', writeType: 'Double', valueSource: 'Default' },
+            ],
+        },
+    } as unknown as ExtensionToWebviewMessage);
+    h.expandAllProps();
+
+    const keys = [...h.doc.querySelectorAll('#props-viewport .prow')].map(r => (r as HTMLElement).dataset.prop);
+    assert.deepStrictEqual(keys, ['Foreground', 'Foreground.Color', 'Foreground.Opacity', 'Opacity']);
+    assert.ok(h.drop('Kind of value for Foreground'), 'the brush itself is editable');
+    const child = h.doc.querySelector('#props-viewport .prow[data-prop="Foreground.Color"]') as HTMLElement;
+    assert.ok(!child.querySelector('input, .pdrop'), 'the engine cannot write a sub-property');
+    assert.ok(h.drop('Kind of value for Opacity'), 'the element Opacity is unaffected by the child of the same name');
+});
+
+test('a rejected write leaves no EDITED marker, but an earlier applied edit stays', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    const local = { name: 'Text', value: 'Hello', valueType: 'System.String', editKind: 'text', writeType: 'String', valueSource: 'Local' };
+    const props = (p: object) => ({
+        type: 'properties', properties: { ...LIVE_PROPS, props: [p] },
+    } as unknown as ExtensionToWebviewMessage);
+    const write = (value: string) => {
+        const input = h.doc.querySelector('#props-viewport input[aria-label="Text"]') as HTMLInputElement;
+        input.value = value;
+        input.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    };
+    const shown = () => h.doc.getElementById('props-viewport')?.textContent ?? '';
+    h.send(props(local));
+    h.expandAllProps();
+    write('bad');
+    h.send({ type: 'setPropertyFailed', handle: LIVE_PROPS.handle, name: 'Text' } as ExtensionToWebviewMessage);
+    assert.ok(!shown().includes('was Hello'), 'nothing changed in the app');
+
+    write('good');
+    h.send(props({ ...local, value: 'good', valueSource: 'DevTools' }));
+    write('bad again');
+    h.send({ type: 'setPropertyFailed', handle: LIVE_PROPS.handle, name: 'Text' } as ExtensionToWebviewMessage);
+    assert.ok(shown().includes('was Hello'), 'the successful edit can still be restored');
+});
+
+test('a healthy binding offers no Restore binding, as there is nothing to restore', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({
+        type: 'properties',
+        properties: {
+            ...LIVE_PROPS,
+            props: [{
+                name: 'Text', value: 'a', valueType: 'System.String', editKind: 'text',
+                valueSource: 'Binding', authoredKind: 'binding', binding: '{Binding Title}',
+            }],
+        },
+    } as unknown as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    h.send({
+        type: 'binding',
+        name: 'Text',
+        binding: { status: 'evaluated', ok: true, source: 'Vm', path: 'Title', mode: 'OneWay' },
+    } as ExtensionToWebviewMessage);
+
+    const shown = h.doc.getElementById('props-viewport')?.textContent ?? '';
+    assert.ok(shown.includes('evaluated'), 'the diagnosis is shown');
+    assert.ok(!shown.includes('Restore binding'), 'restore only follows a live edit');
+    assert.ok(!h.doc.querySelector('#props-viewport .pbind-bad'), 'a working binding is not shown as failing');
+});
+
+test('a binding replaced by a live edit offers Restore binding without re-diagnosing', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({
+        type: 'properties',
+        properties: {
+            ...LIVE_PROPS,
+            props: [{
+                name: 'Text', value: 'literal', valueType: 'System.String', editKind: 'text',
+                valueSource: 'DevTools', authoredKind: 'binding', authoredKey: 'Title',
+            }],
+        },
+    } as unknown as ExtensionToWebviewMessage);
+    h.posted.length = 0;
+    h.expandAllProps();
+
+    // Diagnosing captures the binding; doing it now would save the literal instead.
+    assert.ok(!h.posted.some((m) => m.type === 'diagnoseBinding'));
+    const shown = h.doc.getElementById('props-viewport')?.textContent ?? '';
+    assert.ok(shown.includes('replaced this binding'), 'the state is explained');
+    assert.ok(!shown.includes('x:Bind'), 'a runtime binding restores on its own');
+
+    const restore = Array.from(h.doc.querySelectorAll('#props-viewport button'))
+        .find((b) => b.textContent === 'Restore binding') as HTMLElement | undefined;
+    assert.ok(restore, 'expected Restore binding');
+    restore.click();
+    const sent = h.posted.find((m) => m.type === 'restoreBinding');
+    assert.strictEqual(sent?.name, 'Text');
+});
+
+test('a resource-backed property shows its authored key read-only', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
     h.send({ type: 'capabilities', canEdit: true, canPick: true, canHighlight: true } as ExtensionToWebviewMessage);
     h.send({ type: 'properties', properties: AUTHORED_PROPS } as unknown as ExtensionToWebviewMessage);
     h.expandAllProps();
 
-    h.pickDrop('Kind of value for Background', 'resource');
+    assert.strictEqual(h.dropValue('Kind of value for Background'), 'resource');
 
     const key = h.doc.querySelector('#props-viewport input[aria-label="Background resource key"]') as HTMLInputElement;
     assert.ok(key, 'expected the resource key field');
     assert.strictEqual(key.value, 'ProbeBrush', 'the authored key should be prefilled, not blank');
+    assert.ok(key.readOnly, 'the RPC cannot assign resources, so the key is not editable');
+    key.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assert.ok(!h.posted.some(m => m.type === 'setProperty'), 'no markup string is written');
 });
 
-test('a bound property prefills the path and mode from the authored markup', async () => {
+test('a bound property shows its path and mode read-only and never writes markup', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
     h.send({ type: 'capabilities', canEdit: true, canPick: true, canHighlight: true } as ExtensionToWebviewMessage);
-    h.send({ type: 'properties', properties: AUTHORED_PROPS } as unknown as ExtensionToWebviewMessage);
+    const text = {
+        ...AUTHORED_PROPS.props[0], valueSource: 'Binding',
+        authored: '{Binding Vm.Title, Mode=OneWay}', authoredKind: 'binding',
+    };
+    h.send({ type: 'properties', properties: { ...AUTHORED_PROPS, props: [text] } } as unknown as ExtensionToWebviewMessage);
     h.expandAllProps();
+    h.posted.length = 0;
 
-    h.pickDrop('Kind of value for Text', 'binding');
+    assert.strictEqual(h.dropValue('Kind of value for Text'), 'binding');
 
     const path = h.doc.querySelector('#props-viewport input[aria-label="Text binding path"]') as HTMLInputElement;
     assert.strictEqual(path.value, 'Vm.Title', 'path comes from authoredKey');
-    // Mode is only inside the markup string; there is no mode field.
-    assert.strictEqual(
-        h.dropValue('Text binding mode'), 'OneWay',
-        'mode is parsed out of the authored markup',
-    );
+    assert.ok(path.readOnly, 'the RPC cannot install a binding');
+    const mode = h.doc.querySelector('#props-viewport [aria-label="Text binding mode"]');
+    assert.strictEqual(mode?.textContent, 'OneWay', 'mode is parsed out of the authored markup');
+    assert.ok(![...h.doc.querySelectorAll('#props-viewport button')].some(b => /Apply binding|Switch to/.test(b.textContent ?? '')));
+    assert.ok(!h.posted.some(m => m.type === 'setProperty'));
+});
+
+test('a live binding without authoredKey takes its path from the markup', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    const text = {
+        name: 'Text', value: 'Hello', valueType: 'System.String', editKind: 'text', valueSource: 'Binding',
+        binding: '{Binding Title, Mode=OneWay}', authored: '{Binding Title, Mode=OneWay}',
+    };
+    h.send({ type: 'properties', properties: { ...LIVE_PROPS, props: [text] } } as unknown as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    const path = h.doc.querySelector('#props-viewport input[aria-label="Text binding path"]') as HTMLInputElement;
+    assert.strictEqual(path.value, 'Title');
+});
+
+test('an unbound property does not offer the binding kind', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: LIVE_PROPS } as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    const options = [...(h.drop('Kind of value for Opacity')?.querySelectorAll('[data-value]') ?? [])]
+        .map(o => (o as HTMLElement).dataset.value);
+    assert.ok(!options.includes('binding') && !options.includes('resource'), options.join(','));
 });
 
 /**
@@ -1512,6 +1880,8 @@ async function openColorPicker(): Promise<{ h: Harness; swatch: HTMLInputElement
     h.send({ type: 'properties', properties: AUTHORED_PROPS } as ExtensionToWebviewMessage);
     h.revealAllProps();
     h.expandAllProps();
+    // The brush comes from a resource, so colour is a deliberate KIND choice.
+    h.pickDrop('Kind of value for Background', 'color');
     const swatch = h.doc.querySelector('#props-viewport .pswatch') as HTMLInputElement;
     assert.ok(swatch, 'the colour property should render a swatch');
 

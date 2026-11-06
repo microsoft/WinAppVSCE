@@ -135,11 +135,13 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         const card = document.createElement('div');
         card.className = 'pexpand';
 
+        // A brush row edits as a whole colour; its sub-properties cannot be written over the RPC.
         const editable = payload.canEdit
             && state.caps.canEdit
             && !prop.redacted
+            && !prop.parent
             && !READONLY_EDIT_KINDS.has(prop.editKind || '')
-            && !(prop.children && prop.children.length);
+            && (!(prop.children && prop.children.length) || prop.editKind === 'color');
 
         if (editable) {
             const kinds = kindsFor(prop);
@@ -175,11 +177,40 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
                 card.appendChild(was);
             }
 
+            if (prop.valueSource === 'DevTools' && isResourceAuthored(prop)) {
+                card.appendChild(note('A live value replaced ' + (prop.authored || 'the resource reference')
+                    + '. Restore original writes the old value back but cannot reconnect the resource; restart the app for that.'));
+            }
+
             card.appendChild(buildValueActions(prop, payload));
         }
 
-        if (prop.binding) { card.appendChild(buildDiagnosis(prop, payload)); }
+        if (prop.chain && prop.chain.length > 1) { card.appendChild(buildChain(prop, payload)); }
+        if (prop.binding || bindingReplaced(prop)) { card.appendChild(buildDiagnosis(prop, payload)); }
         return card;
+    }
+
+    /** Every source competing for the value, with the winner marked, as the native window lists it. */
+    function buildChain(prop, payload) {
+        const host = document.createElement('div');
+        host.className = 'pchain';
+        host.appendChild(caption('PRECEDENCE', true));
+        const edited = isEdited(payload.handle, prop.name);
+        for (const entry of prop.chain) {
+            const line = document.createElement('div');
+            line.className = 'pwit-text' + (entry.winner ? ' winner' : '');
+            // A bare handle number means nothing to a reader; name the type instead.
+            const value = /^\\d{10,}$/.test(entry.value || '') ? shortTypeName(prop.valueType || '') : entry.value;
+            let text = (entry.winner ? '\\u25B8 ' : '   ') + entry.source + '  ' + value;
+            if (entry.winner && entry.source === 'Local' && edited) {
+                text += '   set by DevTools';
+            } else if (entry.file && entry.line) {
+                text += '   ' + String(entry.file).split(/[\\\\/]/).pop() + ':' + entry.line;
+            }
+            line.textContent = text;
+            host.appendChild(line);
+        }
+        return host;
     }
 
     /** Restore original and Clear value, offered only where they can act. */
@@ -209,6 +240,19 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         return actions;
     }
 
+    /** What a literal write costs when the value currently follows a binding or resource. */
+    function linkLossWarning(prop, nextKind) {
+        if (nextKind === 'binding' || nextKind === 'xbind' || nextKind === 'resource') { return ''; }
+        const now = currentKind(prop);
+        if (now === 'binding' || now === 'xbind') {
+            return 'It replaces the binding, so its source stops updating this property until you use Restore binding.';
+        }
+        if (now === 'resource') {
+            return 'It replaces ' + (prop.authored || 'the resource reference') + ', which cannot be reconnected live; restart the app to get it back.';
+        }
+        return '';
+    }
+
     function buildStaged(prop, staged) {
         const box = document.createElement('div');
         box.className = 'pstaged';
@@ -221,6 +265,8 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         const body = document.createElement('div');
         body.className = 'pstaged-body';
         body.textContent = 'This will write the value as ' + (KIND_LABELS[staged.kind] || staged.kind) + '.';
+        const warning = linkLossWarning(prop, staged.kind);
+        if (warning) { body.textContent += ' ' + warning; }
         box.appendChild(body);
 
         const actions = document.createElement('div');
@@ -256,35 +302,20 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         const host = document.createElement('div');
         host.appendChild(caption('BINDING', true));
 
-        const info = state.bindings[prop.name];
-        if (!info) {
+        // A live write leaves nothing to diagnose; only Restore applies, as in the native window.
+        const replaced = bindingReplaced(prop);
+        const info = replaced ? null : state.bindings[prop.name];
+        if (replaced) {
+            host.appendChild(note('A live edit replaced this binding; its source no longer updates ' + prop.name + '.'));
+        } else if (!info) {
             host.appendChild(note('Diagnosing...'));
             return host;
-        }
-        if (info.unavailable) {
+        } else if (info.unavailable) {
             host.appendChild(note(info.message || 'Binding diagnosis is not available for this app.'));
             return host;
         }
-
-        const grid = document.createElement('div');
-        grid.className = 'pbind-grid';
-        addPair(grid, 'Status', info.status || 'unknown', info.ok === false);
-        addPair(grid, 'Source', info.source || '(none)', false);
-        addPair(grid, 'Path \\u00B7 Mode', (info.path || '') + ' \\u00B7 ' + (info.mode || ''), false);
-        addPair(grid, 'Value', info.value === undefined ? '' : String(info.value), false);
-        host.appendChild(grid);
-
-        if (info.walk && info.walk.length) {
-            const walk = document.createElement('div');
-            walk.className = 'pwalk';
-            for (const step of info.walk) {
-                const row = document.createElement('div');
-                row.className = 'pwit-text';
-                row.textContent = step;
-                walk.appendChild(row);
-            }
-            host.appendChild(walk);
-        }
+        if (info) { appendDiagnosis(host, info); }
+        if (!replaced) { return host; }
 
         const actions = document.createElement('div');
         actions.className = 'prow-actions';
@@ -310,11 +341,34 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
             host.appendChild(note(
                 'This re-pushes every compiled binding on '
                 + (state.restoreConfirmScope || 'the owning page')
-                + ', not just this property. Press again to go ahead.'));
-        } else {
+                + ' and can undo other live edits there. Press again to go ahead.'));
+        } else if (prop.authoredKind === 'xBind') {
             host.appendChild(note('Re-applies every x:Bind on this page.'));
         }
         return host;
+    }
+
+    /** Status, source, path and mode, value, and the path walk of a live binding. */
+    function appendDiagnosis(host, info) {
+        const grid = document.createElement('div');
+        grid.className = 'pbind-grid';
+        addPair(grid, 'Status', info.status || 'unknown', info.ok === false);
+        addPair(grid, 'Source', info.source || '(none)', false);
+        addPair(grid, 'Path \\u00B7 Mode', (info.path || '') + ' \\u00B7 ' + (info.mode || ''), false);
+        addPair(grid, 'Value', info.value === undefined ? '' : String(info.value), false);
+        host.appendChild(grid);
+
+        if (info.walk && info.walk.length) {
+            const walk = document.createElement('div');
+            walk.className = 'pwalk';
+            for (const step of info.walk) {
+                const row = document.createElement('div');
+                row.className = 'pwit-text';
+                row.textContent = step;
+                walk.appendChild(row);
+            }
+            host.appendChild(walk);
+        }
     }
 
     function addPair(grid, key, value, bad) {
@@ -371,9 +425,12 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
                 input.blur();
             }
         });
+        input.addEventListener('input', function () { delete input.dataset.committed; });
         input.addEventListener('blur', function () {
             // A re-render replaces this box; that is not the user leaving it.
             if (propsRendering) { return; }
+            // A committed box may still show the pre-edit payload; never write that back.
+            if (input.dataset.committed === '1') { return; }
             if (input.value !== prop.value) { commit(payload.handle, prop, input.value); }
         });
         return input;
@@ -488,35 +545,29 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'pfield';
-        input.placeholder = 'type a key';
-        // The engine already knows the authored key when the app used one.
-        if (prop.authoredKind === 'staticResource' || prop.authoredKind === 'themeResource') {
-            input.value = prop.authoredKey || '';
-        }
+        input.readOnly = true;
+        input.value = prop.authoredKey || '';
         input.setAttribute('aria-label', prop.name + ' resource key');
         host.appendChild(input);
 
         const resolved = document.createElement('div');
         resolved.className = 'pnote';
         const found = state.resources[prop.name];
-        if (found) {
-            resolved.textContent = found.resolved
-                ? 'currently ' + found.key + ' = ' + found.resolved
-                : 'This value does not come from a resource.';
+        // Resource.resolve returns the concrete value, not a key, and a bare object handle for brushes.
+        if (found && found.resolved && isResourceAuthored(prop)) {
+            const value = /^\\d{10,}$/.test(found.resolved) ? prop.value : found.resolved;
+            resolved.textContent = 'currently ' + (prop.authoredKey || found.key) + ' = ' + value;
         }
         host.appendChild(resolved);
 
-        input.addEventListener('keydown', function (event) {
-            if (event.key !== 'Enter') { return; }
-            event.preventDefault();
-            const key = input.value.trim();
-            if (key) { commit(payload.handle, prop, '{StaticResource ' + key + '}'); }
-        });
-
-        host.appendChild(note('the key, as text. The resolved value is on the row above.'));
+        host.appendChild(note('Live resource assignment is not supported. Pick another kind to set a value, or change the key in XAML.'));
         return host;
     }
 
+    /**
+     * Shows the live binding read-only. The RPC has no way to install a
+     * binding, so writing markup would only set the literal text.
+     */
     function bindingEditor(prop, payload) {
         const host = document.createElement('div');
 
@@ -524,63 +575,35 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
         const path = document.createElement('input');
         path.type = 'text';
         path.className = 'pfield';
-        path.placeholder = 'a path on the DataContext';
+        path.readOnly = true;
         path.value = authoredPath(prop);
         path.setAttribute('aria-label', prop.name + ' binding path');
         host.appendChild(path);
 
         host.appendChild(caption('MODE', true));
-        let mode = authoredMode(prop);
-        host.appendChild(dropdown(
-            ['OneTime', 'OneWay', 'TwoWay'],
-            mode,
-            prop.name + ' binding mode',
-            function (picked) { mode = picked; },
-        ));
+        const mode = document.createElement('div');
+        mode.className = 'pwit-text';
+        mode.setAttribute('aria-label', prop.name + ' binding mode');
+        mode.textContent = authoredMode(prop) || 'Default';
+        host.appendChild(mode);
 
-        const actions = document.createElement('div');
-        actions.className = 'prow-actions';
-        const apply = document.createElement('button');
-        apply.type = 'button';
-        apply.className = 'pbtn primary';
-        apply.textContent = 'Apply binding';
-        apply.addEventListener('click', function () {
-            commit(payload.handle, prop, '{Binding ' + path.value.trim() + ', Mode=' + mode + '}');
-        });
-        actions.appendChild(apply);
-        host.appendChild(actions);
-
-        host.appendChild(note('applied to the running app only. Your .xaml is not changed.'));
+        host.appendChild(note('Live binding changes are not supported. Change the binding in XAML and restart the app.'));
         return host;
     }
 
     /**
-     * x:Bind is compiled, so it cannot be rewritten at runtime. The native
-     * window shows the expression read-only and offers the one escape hatch:
-     * replace it with a runtime {Binding}.
+     * x:Bind is compiled, so it cannot be rewritten at runtime. The RPC cannot
+     * install a runtime {Binding} either, so the expression is read-only.
      */
     function xbindEditor(prop, payload) {
         const host = document.createElement('div');
 
         const expr = document.createElement('div');
         expr.className = 'pwit-text';
-        expr.textContent = prop.binding || prop.value;
+        expr.textContent = prop.binding || prop.authored || prop.value;
         host.appendChild(expr);
 
-        host.appendChild(note('x:Bind is compiled into the app, so DevTools cannot change it here.'));
-
-        const actions = document.createElement('div');
-        actions.className = 'prow-actions';
-        const exit = document.createElement('button');
-        exit.type = 'button';
-        exit.className = 'pbtn';
-        exit.textContent = 'Switch to {Binding}...';
-        exit.addEventListener('click', function () {
-            state.staged[prop.name] = { kind: 'binding' };
-            renderProperties();
-        });
-        actions.appendChild(exit);
-        host.appendChild(actions);
+        host.appendChild(note('x:Bind is compiled into the app, so DevTools cannot change it here. Pick Text to try a literal value.'));
         return host;
     }
 
@@ -600,6 +623,12 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
             // Captured before the write so "Restore original" has somewhere to
             // go back to; the engine does not keep this for us.
             recordOriginal(handle, prop);
+        }
+        // Writing through the staged kind's editor is the apply; drop the pending bar.
+        const staged = state.staged[prop.name];
+        if (staged) {
+            state.applied[prop.name] = staged.kind;
+            delete state.staged[prop.name];
         }
         vscode.postMessage({
             type: 'setProperty',

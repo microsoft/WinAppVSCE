@@ -105,13 +105,27 @@ export const COMMENTS_FRAGMENT = `
     }
 
     // A comment is anchored to an element, so composing without a selection
-    // would produce an orphan note the engine cannot re-find later.
+    // would produce an orphan note the engine cannot re-find later. A draft
+    // stays pinned to the element it was started on.
     function updateCompose() {
-        const node = state.selected ? nodeForHandle(state.selected) : null;
+        if (el.composeText.value.trim() === '') { state.composeHandle = null; }
+        const pinned = state.composeHandle;
+        const handle = pinned || state.selected;
+        const node = handle ? nodeForHandle(handle) : null;
+        if (pinned && !node) {
+            el.composeTarget.textContent = 'The element this draft was for is gone. Copy or clear the text to comment on another element.';
+            el.composeText.disabled = false;
+            el.composeAdd.disabled = true;
+            return;
+        }
         const hasTarget = !!node && state.caps.canEdit;
-        el.composeTarget.textContent = hasTarget
+        let target = hasTarget
             ? 'On ' + (node.name ? node.name + ' (' + shortTypeName(node.type) + ')' : shortTypeName(node.type))
             : 'Select an element in the visual tree to comment on it.';
+        if (hasTarget && pinned && pinned !== state.selected) {
+            target += '. Draft started here; clear it to comment on the selected element.';
+        }
+        el.composeTarget.textContent = target;
         el.composeText.disabled = !hasTarget;
         el.composeAdd.disabled = !hasTarget || el.composeText.value.trim() === '';
     }
@@ -127,20 +141,25 @@ export const COMMENTS_FRAGMENT = `
         return found;
     }
 
-    el.composeText.addEventListener('input', updateCompose);
+    el.composeText.addEventListener('input', function () {
+        if (!state.composeHandle && el.composeText.value.trim() !== '') { state.composeHandle = state.selected; }
+        updateCompose();
+    });
 
     el.composeAdd.addEventListener('click', function () {
         const text = el.composeText.value.trim();
-        if (!text || !state.selected) { return; }
+        const handle = state.composeHandle || state.selected;
+        if (!text || !handle) { return; }
         showComposeError('');
         // The draft stays until the host confirms the add; a failure must not
         // throw away what the user typed.
-        vscode.postMessage({ type: 'addComment', handle: state.selected, text: text });
+        vscode.postMessage({ type: 'addComment', handle: handle, text: text });
         el.composeAdd.disabled = true;
     });
 
     function commentAdded() {
         el.composeText.value = '';
+        state.composeHandle = null;
         updateCompose();
     }
 

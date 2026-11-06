@@ -76,6 +76,7 @@ export const CONTROLS_FRAGMENT = `
         filterTimer = setTimeout(function () {
             state.filter = el.filter.value;
             persist();
+            requestFullTreeIfFiltering();
             rebuildRows();
             el.treeViewport.scrollTop = 0;
             scheduleRender();

@@ -7,6 +7,7 @@ import {
 	createProgressLineReader,
 	expandRequiredToggles,
 	parseProcessIdFromJson,
+	parseRunErrorFromJson,
 	PROGRESS_MESSAGE_MAX_LENGTH,
 	resolveDebugInput,
 	resolveRunProject,
@@ -257,6 +258,20 @@ describe('parseProcessIdFromJson', () => {
 		assert.strictEqual(parseProcessIdFromJson('{"processId": "4242"}'), undefined);
 		assert.strictEqual(parseProcessIdFromJson('{"processId": 0}'), undefined);
 		assert.strictEqual(parseProcessIdFromJson('{"processId": -1}'), undefined);
+	});
+});
+
+describe('parseRunErrorFromJson', () => {
+	it('reports the partial failure the CLI returns beside a PID', () => {
+		const out = '{"AUMID":"a","ProcessId":5,"Error":"DevTools injection failed: too long"}';
+		assert.strictEqual(parseProcessIdFromJson(out), 5);
+		assert.strictEqual(parseRunErrorFromJson(out), 'DevTools injection failed: too long');
+	});
+
+	it('ignores a missing, empty, or non-string error', () => {
+		assert.strictEqual(parseRunErrorFromJson('{"ProcessId": 5}'), undefined);
+		assert.strictEqual(parseRunErrorFromJson('{"ProcessId": 5, "Error": "  "}'), undefined);
+		assert.strictEqual(parseRunErrorFromJson('{"ProcessId": 5, "Error": null}'), undefined);
 	});
 });
 

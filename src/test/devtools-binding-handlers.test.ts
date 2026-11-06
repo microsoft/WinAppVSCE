@@ -57,12 +57,29 @@ test('a healthy binding is reported as ok with its path and mode', async () => {
     assert.strictEqual(binding.mode, 'OneWay');
 });
 
-test('the engine also counts "bound" as healthy, not just "ok"', async () => {
-    const client = stubClient({ 'Binding.diagnose': { state: 'bound' } });
+test('the engine reports a working binding as "evaluated", which is healthy', async () => {
+    const client = stubClient({ 'Binding.diagnose': { state: 'evaluated' } });
 
     const message = await diagnoseBinding(client, 'h-title', 'Text');
 
     assert.strictEqual(bindingOf(message).ok, true);
+});
+
+test('a live binding is captured so Restore binding can put it back later', async () => {
+    const client = stubClient({ 'Binding.diagnose': { state: 'evaluated' } });
+
+    await diagnoseBinding(client, 'h-title', 'Text');
+
+    const capture = client.calls.find((c) => c.method === 'Binding.capture');
+    assert.deepStrictEqual(capture?.params, { handle: 'h-title', prop: 'Text' });
+});
+
+test('nothing is captured when no live binding was observed', async () => {
+    const client = stubClient({ 'Binding.diagnose': { state: 'unavailable' } });
+
+    await diagnoseBinding(client, 'h-title', 'Text');
+
+    assert.ok(!client.calls.some((c) => c.method === 'Binding.capture'));
 });
 
 test('a broken binding is reported with its state and not marked ok', async () => {
@@ -147,12 +164,12 @@ test('the target value is used when the source could not be resolved', async () 
 
 test('restoring a binding the engine wants confirmed asks the user first', async () => {
     const client = stubClient({
-        'Binding.restore': { state: 'confirmation-required', restoreScope: 'MainPage' },
+        'Binding.restore': { state: 'confirmation-required', restoreScope: 'owner', restoreOwner: 'MainPage_obj1_Bindings' },
     });
 
     const message = await restoreBinding(client, 'h-title', 'Text', false);
 
-    assert.strictEqual(message?.type, 'bindingRestoreConfirm');
+    assert.ok(message && 'type' in message && message.type === 'bindingRestoreConfirm');
     assert.strictEqual((message as Extract<ExtensionToWebviewMessage, { type: 'bindingRestoreConfirm' }>).scope, 'MainPage');
 });
 
@@ -184,19 +201,29 @@ test('a confirmed restore passes the flag the engine is waiting for', async () =
 });
 
 test('a completed restore returns nothing so the caller reloads the grid', async () => {
-    const client = stubClient({ 'Binding.restore': { state: 'ok' } });
+    const client = stubClient({ 'Binding.restore': { state: 'restored', bound: 'True' } });
 
     const message = await restoreBinding(client, 'h-title', 'Text', true);
 
     assert.strictEqual(message, undefined);
 });
 
-test('a restore the engine ignored entirely is treated as completed', async () => {
+test('a restore the engine refused reports its reason instead of looking done', async () => {
+    const client = stubClient({
+        'Binding.restore': { state: 'unavailable', reason: 'nothing was captured for Text on this element' },
+    });
+
+    const message = await restoreBinding(client, 'h-title', 'Text', false);
+
+    assert.deepStrictEqual(message, { failed: 'nothing was captured for Text on this element' });
+});
+
+test('a restore the engine ignored entirely is not treated as completed', async () => {
     const client = stubClient({});
 
     const message = await restoreBinding(client, 'h-title', 'Text', false);
 
-    assert.strictEqual(message, undefined);
+    assert.ok(message && 'failed' in message);
 });
 
 // ───────────────────────────── resources ─────────────────────────────

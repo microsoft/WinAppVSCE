@@ -10,6 +10,7 @@ import type { ExtensionToWebviewMessage, WebviewToExtensionMessage } from '../de
 const disposable = { dispose() {} };
 class Panel {
     viewColumn = 1;
+    visible = false;
     messages: ExtensionToWebviewMessage[] = [];
     reveals: unknown[][] = [];
     receive: (message: WebviewToExtensionMessage) => void = () => { throw new Error('No message handler'); };
@@ -81,6 +82,22 @@ async function until(predicate: () => boolean): Promise<void> {
     }
 }
 
+test('relaunching the same project replaces the previous run\'s disconnected panel', async t => {
+    const first = 830500 + process.pid;
+    const second = first + 1;
+    const engine = await FakeDevToolsEngine.start(second, { methods: [...USED_METHODS] });
+    t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(first, extensionUri, 1, process.cwd());
+    const stale = panels.at(-1)!;
+    let staleDisposed = false;
+    const onDispose = stale.onDispose;
+    stale.onDispose = () => { staleDisposed = true; onDispose?.(); };
+    DevToolsPanel.disconnectFor(first);
+    await DevToolsPanel.show(second, extensionUri, 1, process.cwd());
+    assert.ok(staleDisposed, 'the stale panel for the old PID is closed');
+    assert.notEqual(panels.at(-1), stale);
+});
+
 test('tree selection updates the engine selection and highlight', async t => {
     const pid = 810000 + process.pid;
     const engine = await FakeDevToolsEngine.start(pid, { methods: [...USED_METHODS] });
@@ -143,6 +160,32 @@ test('expanding a truncated node fetches its children and surfaces subtree failu
     fail = true;
     panel.receive({ type: 'expandNode', handle: 'root' });
     await until(() => panel.messages.some(m => m.type === 'status' && m.status.message === 'Element went stale'));
+});
+
+test('a filter request loads the whole tree, and later refreshes keep every level', async t => {
+    const pid = 825000 + process.pid;
+    const engine = await FakeDevToolsEngine.start(pid, {
+        methods: [...USED_METHODS],
+        handlers: {
+            'VisualTree.enumerate': () => ({ nodes: [{ handle: 'root', type: 'Grid', name: '', childCount: 0, children: [] }] }),
+        },
+    });
+    t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'comments'));
+    const depths = () => engine.received
+        .filter(m => m.method === 'VisualTree.enumerate' && !m.params.rootHandle)
+        .map(m => m.params.depth);
+    assert.deepEqual(depths(), [12]);
+
+    panel.receive({ type: 'loadFullTree' });
+    await until(() => depths().length === 2);
+    panel.receive({ type: 'refreshTree', authored: false });
+    await until(() => depths().length === 3);
+
+    assert.deepEqual(depths(), [12, -1, -1]);
 });
 
 test('a picked element outside the loaded tree is fetched and the panel revealed', async t => {
@@ -330,6 +373,81 @@ test('a stale comment anchor falls back to a unique name and confirms the add', 
     await until(() => panel.messages.some(m => m.type === 'commentAdded'));
     assert.deepEqual(engine.received.filter(m => m.method === 'Comment.add').at(-1)?.params,
         { name: 'Only', text: 'too tight' });
+});
+
+test('app-driven value changes reach the selected element, unchanged polls post nothing', async t => {
+    const pid = 866000 + process.pid;
+    let text = 'Count: 0';
+    const engine = await FakeDevToolsEngine.start(pid, {
+        methods: [...USED_METHODS],
+        handlers: { 'Property.get': () => ({ props: [{ name: 'Text', value: text, type: 'String' }] }) },
+    });
+    t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.visible = true;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'comments'));
+    panel.receive({ type: 'selectNode', handle: 'counter' });
+    const posted = () => panel.messages.filter(m => m.type === 'properties');
+    await until(() => posted().length === 1);
+    const gets = () => engine.received.filter(m => m.method === 'Property.get').length;
+    const start = gets();
+    await until(() => gets() > start);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(posted().length, 1);
+
+    text = 'Count: 2';
+    await until(() => posted().length === 2);
+    const last = posted().at(-1);
+    assert.ok(last?.type === 'properties' && last.properties.props[0].value === 'Count: 2');
+});
+
+test('a rejected property write tells the webview so it can drop the edit marker', async t => {
+    const pid = 868000 + process.pid;
+    const engine = await FakeDevToolsEngine.start(pid, {
+        methods: [...USED_METHODS],
+        handlers: { 'HotReload.setProperty': () => { throw new Error('conversion failed'); } },
+    });
+    t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'comments'));
+    panel.receive({ type: 'setProperty', handle: 'border', name: 'Width', value: 'abc', writeType: 'Double' });
+    await until(() => panel.messages.some(m => m.type === 'setPropertyFailed'));
+    assert.deepEqual(panel.messages.find(m => m.type === 'setPropertyFailed'),
+        { type: 'setPropertyFailed', handle: 'border', name: 'Width' });
+});
+
+test('a selected element removed by the app gets a clear message and polling stops', async t => {
+    const pid = 867000 + process.pid;
+    let gone = false;
+    const engine = await FakeDevToolsEngine.start(pid, {
+        methods: [...USED_METHODS],
+        handlers: {
+            'Property.get': () => {
+                if (gone) { throw Object.assign(new Error('handle or name not found'), { code: -32009 }); }
+                return { props: [{ name: 'Text', value: 'Dynamic 0', type: 'String' }] };
+            },
+        },
+    });
+    t.after(async () => { DevToolsPanel.disposeAll(); await engine.stop(); });
+    await DevToolsPanel.show(pid, extensionUri);
+    const panel = panels.at(-1)!;
+    panel.visible = true;
+    panel.receive({ type: 'ready' });
+    await until(() => panel.messages.some(m => m.type === 'comments'));
+    panel.receive({ type: 'selectNode', handle: 'dynamic0' });
+    await until(() => panel.messages.some(m => m.type === 'properties'));
+
+    gone = true;
+    await until(() => panel.messages.some(m => m.type === 'propertiesError'));
+    const error = panel.messages.find(m => m.type === 'propertiesError');
+    assert.ok(error?.type === 'propertiesError' && error.message.includes('no longer in the app'));
+    const gets = engine.received.filter(m => m.method === 'Property.get').length;
+    await new Promise(resolve => setTimeout(resolve, 1300));
+    assert.equal(engine.received.filter(m => m.method === 'Property.get').length, gets, 'the removed handle is not re-polled');
 });
 
 test('an edit saved to an element the user has left does not pull the panel back', async t => {

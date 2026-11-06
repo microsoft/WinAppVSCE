@@ -626,6 +626,8 @@ select.pfield { font-family: var(--vscode-font-family); }
     white-space: pre-wrap;
 }
 .pwit-note { font-size: 10px; font-style: italic; color: var(--vscode-descriptionForeground); }
+.pchain .pwit-text { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.pchain .pwit-text.winner { color: var(--vscode-foreground); }
 
 .link {
     color: var(--vscode-textLink-foreground);

@@ -228,7 +228,7 @@ export class FakeDevToolsEngine {
             this.reply(socket, message.id, result);
         } catch (err) {
             this.reply(socket, message.id, undefined, {
-                code: -32000,
+                code: (err as { code?: number })?.code ?? -32000,
                 message: err instanceof Error ? err.message : String(err),
             });
         }

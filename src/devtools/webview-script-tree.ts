@@ -307,6 +307,22 @@ export const TREE_FRAGMENT = `    // ──────────────�
         scheduleRender();
     }
 
+    /** A filter only searches loaded nodes, so ask once for the levels not yet fetched. */
+    function requestFullTreeIfFiltering() {
+        if (state.fullTreeRequested || !state.filter.trim()) { return; }
+        const pending = [].concat(state.roots);
+        while (pending.length) {
+            const node = pending.pop();
+            const kids = node.children || [];
+            if ((node.childCount || 0) > 0 && !kids.length) {
+                state.fullTreeRequested = true;
+                vscode.postMessage({ type: 'loadFullTree' });
+                return;
+            }
+            for (const kid of kids) { pending.push(kid); }
+        }
+    }
+
     function toggleExpand(handle, force) {
         const open = force === undefined ? !state.expanded.has(handle) : force;
         if (open) {

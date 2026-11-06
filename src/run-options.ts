@@ -383,6 +383,13 @@ export function parseProcessIdFromJson(output: string): number | undefined {
 	return typeof pid === 'number' && pid > 0 ? pid : undefined;
 }
 
+/** The non-fatal `Error` the CLI reports beside a PID, such as a DevTools injection failure. */
+export function parseRunErrorFromJson(output: string): string | undefined {
+	const json = extractJsonObject(output);
+	const error = json?.Error ?? json?.error;
+	return typeof error === 'string' && error.trim() ? error.trim() : undefined;
+}
+
 /** Keeps a notification message to one line's worth of text. */
 export const PROGRESS_MESSAGE_MAX_LENGTH = 120;
 

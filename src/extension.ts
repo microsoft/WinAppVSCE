@@ -1109,12 +1109,16 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 			const baseSpawnArgs = [...buildRunArgs(runOptions), ...devToolsSpawnArgs(config)];
 
 			const outputChannel = getWinappOutputChannel();
-			const { processId, runProcess } = await launchRunProcess({
+			const { processId, runProcess, warning } = await launchRunProcess({
 				cliPath,
 				args: baseSpawnArgs,
 				cwd,
 				outputChannel
 			});
+			// The app is running; this is a partial failure such as DevTools not attaching.
+			if (warning) {
+				void vscode.window.showWarningMessage(`WinApp launched the app, but reported: ${warning}`);
+			}
 
 			// Build the attach debug configuration
 			const debugConfiguration: vscode.DebugConfiguration = {

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
-import { createProgressLineReader, parseProcessIdFromJson } from './run-options';
+import { createProgressLineReader, parseProcessIdFromJson, parseRunErrorFromJson } from './run-options';
 import { classifyRunExit } from './run-exit';
 import { killProcessTree } from './process-tree';
 import { WINAPP_CLI_CALLER_VALUE } from './winapp-cli-utils';
@@ -8,6 +8,8 @@ import { WINAPP_CLI_CALLER_VALUE } from './winapp-cli-utils';
 export interface LaunchedRunProcess {
 	processId: number;
 	runProcess: ReturnType<typeof spawn>;
+	/** A non-fatal failure the CLI reported alongside the PID (e.g. DevTools injection). */
+	warning?: string;
 }
 
 export interface LaunchRunProcessOptions {
@@ -78,7 +80,8 @@ export async function launchRunProcess(
 				stdout += text;
 				const pid = parseProcessIdFromJson(stdout);
 				if (pid) {
-					settle(() => resolve({ processId: pid, runProcess: child }));
+					const warning = parseRunErrorFromJson(stdout);
+					settle(() => resolve({ processId: pid, runProcess: child, warning }));
 				}
 			});
 

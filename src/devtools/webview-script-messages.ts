@@ -76,6 +76,7 @@ export const MESSAGES_FRAGMENT = `
                     state.expanded.add(state.roots[0].handle);
                 }
                 rebuildRows();
+                requestFullTreeIfFiltering();
                 for (const handle of state.expanded) {
                     const node = nodeForHandle(handle);
                     if (node && (node.childCount || 0) > 0 && !(node.children || []).length) {
@@ -120,6 +121,7 @@ export const MESSAGES_FRAGMENT = `
                     canEdit: message.properties.canEdit,
                 };
                 if (sameElement) {
+                    dropRestoredBindingEdits(message.properties.handle, message.properties.props);
                     refreshOpenDiagnostics();
                     // A reload means a value changed, and the caption may show it.
                     refreshPreview(message.properties.handle);
@@ -131,6 +133,10 @@ export const MESSAGES_FRAGMENT = `
             case 'propertiesError':
                 state.properties = { error: message.message };
                 renderProperties();
+                break;
+
+            case 'setPropertyFailed':
+                forgetRejectedEdit(message.handle, message.name);
                 break;
 
             case 'selectHandle':
