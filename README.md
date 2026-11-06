@@ -16,6 +16,13 @@ Try the WinApp extension today: [**VS Code Markplace**](https://marketplace.visu
 
 ## Features
 
+### Workspace Trust
+
+In an untrusted workspace, XAML syntax highlighting and manifest editing and
+IntelliSense remain available. WinApp CLI commands, debugging, manifest asset
+generation, and the XAML language server require workspace trust. Grant trust
+only if you trust the workspace contents; project evaluation can execute code.
+
 ### Command Palette
 
 All commands are accessible from the Command Palette (`Ctrl+Shift+P`). Type **WinApp** to find CLI,

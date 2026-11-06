@@ -85,6 +85,12 @@ test('add package dependency button is visible', async () => {
     await expect(frame.locator('#add-package-dep')).toBeVisible();
 });
 
+test('main package dependency help links to its schema reference', async () => {
+    const link = frame.locator('a[href*="element-uap3-mainpackagedependency"]');
+    await expect(link).toHaveAttribute('href',
+        'https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-uap3-mainpackagedependency');
+});
+
 test('can add a package dependency', async () => {
     const initialCount = await countListItems(frame, 'package-dependencies');
     await clickButton(frame, 'add-package-dep');

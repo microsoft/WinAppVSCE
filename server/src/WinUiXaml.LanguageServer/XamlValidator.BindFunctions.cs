@@ -453,7 +453,7 @@ internal static partial class XamlValidator
     private static bool IsBooleanType(ITypeSymbol type) =>
         XamlValueConverter.UnwrapNullable(type).SpecialType == SpecialType.System_Boolean;
 
-    private static bool AcceptsArgumentCount(IMethodSymbol method, int argumentCount)
+    internal static bool AcceptsArgumentCount(IMethodSymbol method, int argumentCount)
     {
         int required = method.Parameters.Count(p => !p.IsOptional && !p.IsParams);
         if (argumentCount < required)
