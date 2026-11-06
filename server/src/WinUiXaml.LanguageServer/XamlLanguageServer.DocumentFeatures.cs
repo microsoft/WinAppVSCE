@@ -663,6 +663,16 @@ internal sealed partial class XamlLanguageServer
                 return;
             }
 
+            foreach (var declaration in occurrences.Where(occurrence => occurrence.IsDeclaration))
+            {
+                XamlRename.EnsureNoCollision(
+                    fileDoc,
+                    fileDoc.OffsetAt(declaration.Range.Start),
+                    newName,
+                    XamlRenameKind.Key,
+                    context?.TypeSystem);
+            }
+
             hasDeclaration |= occurrences.Any(o => o.IsDeclaration);
             edits[fileDoc.Uri] = occurrences
                 .Select(o => new TextEdit { Range = o.Range, NewText = newName })
@@ -1025,7 +1035,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         var handlerName = attr.Value.Text.Trim();
-        if (!IdentifierPattern.IsMatch(handlerName))
+        if (!XamlRename.IsValidName(handlerName))
         {
             return null;
         }

@@ -268,7 +268,7 @@ internal sealed partial class XamlLanguageServer
     private bool TryGetReadyProjectContext(
         string uri,
         out XamlProjectContext context,
-        bool allowStale = false)
+        bool allowStale = true)
     {
         if (_syntaxOnlyDocuments.ContainsKey(uri))
         {
@@ -288,7 +288,8 @@ internal sealed partial class XamlLanguageServer
             return true;
         }
 
-        if (allowStale && _contexts.TryGetStale(uri, out var stale))
+        if (allowStale && _contexts.TryGetStale(uri, out var stale) &&
+            (stale.Stage == XamlProjectStage.Full || latest is null))
         {
             context = stale;
             return true;
@@ -307,7 +308,7 @@ internal sealed partial class XamlLanguageServer
     private bool TryGetAcceptedContext(
         TextDocument document,
         out XamlProjectContext context,
-        bool allowStale = false)
+        bool allowStale = true)
     {
         if (!TryGetReadyProjectContext(document.Uri, out var accepted, allowStale))
         {
@@ -478,6 +479,12 @@ internal sealed partial class XamlLanguageServer
         try
         {
             fullResolution = await ResolveIfAllowedAsync(path, cancellationToken, xamlText).ConfigureAwait(false);
+        }
+        catch (ProjectRestoreRequiredException ex)
+        {
+            await NotifyProjectRestoreRequiredAsync(ex).ConfigureAwait(false);
+            await NotifyProjectContextStatusAsync(uri, "packages-not-restored", ex.Message).ConfigureAwait(false);
+            return null;
         }
         catch (OperationCanceledException)
         {
@@ -827,7 +834,7 @@ internal sealed partial class XamlLanguageServer
                     }
 
                     var text = attr.Value.Text.Trim();
-                    return IdentifierPattern.IsMatch(text)
+                    return XamlRename.IsValidName(text)
                         ? new MemberTarget(text, attr.Value.InnerSpan)
                         : null;
                 }
@@ -927,7 +934,7 @@ internal sealed partial class XamlLanguageServer
 
         var seg = segments[idx];
         var (name, _) = SplitIndexers(seg.Raw.Trim());
-        if (!IdentifierPattern.IsMatch(name))
+        if (!XamlRename.IsValidName(name))
         {
             return null;
         }
@@ -1049,7 +1056,6 @@ internal sealed partial class XamlLanguageServer
         // delay cannot look like a ready-but-empty language service.
         _ = Task.Run(async () =>
         {
-            await NotifyProjectContextStatusAsync(uri, "loading").ConfigureAwait(false);
             await Task.Delay(500).ConfigureAwait(false);
             if (!_documents.ContainsKey(uri) || _syntaxOnlyDocuments.ContainsKey(uri))
             {
@@ -1061,6 +1067,10 @@ internal sealed partial class XamlLanguageServer
             {
                 var (state, message) = ProjectContextStatusFor(context);
                 await NotifyProjectContextStatusAsync(uri, state, message).ConfigureAwait(false);
+                if (_documents.TryGetValue(uri, out var current))
+                {
+                    await PublishDiagnosticsAsync(current).ConfigureAwait(false);
+                }
             }
         });
     }

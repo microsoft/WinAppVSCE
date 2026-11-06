@@ -138,6 +138,7 @@ internal sealed class TextDocumentSyncOptions
 
     /// <summary>0 = None, 1 = Full, 2 = Incremental.</summary>
     [JsonPropertyName("change")] public int Change { get; set; }
+    [JsonPropertyName("save")] public bool Save { get; set; }
 }
 
 // --- Geometry ---------------------------------------------------------------
@@ -193,6 +194,11 @@ internal sealed class TextDocumentItem
 internal sealed class DidOpenTextDocumentParams
 {
     [JsonPropertyName("textDocument")] public TextDocumentItem TextDocument { get; set; } = new();
+}
+
+internal sealed class DidSaveTextDocumentParams
+{
+    [JsonPropertyName("textDocument")] public TextDocumentIdentifier TextDocument { get; set; } = new();
 }
 
 internal sealed class DidChangeTextDocumentParams

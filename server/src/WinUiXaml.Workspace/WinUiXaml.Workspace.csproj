@@ -23,6 +23,7 @@
          entry point initializes MefHostServices.DefaultHost, whose composition fails once trimmed.
          Microsoft.Build and Build.Locator are gone too; MSBuild runs out-of-process (see MsBuildCli). -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageReference Include="NuGet.Versioning" Version="7.0.0" />
   </ItemGroup>
 
   <ItemGroup>

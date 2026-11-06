@@ -4,6 +4,89 @@ namespace WinUiXaml.Workspace.Tests;
 
 public sealed class ProjectRestoreDetectionTests
 {
+    [Theory]
+    [InlineData("Existing", "1.0.0", false)]
+    [InlineData("Existing", "1.0", false)]
+    [InlineData("Existing", "1", false)]
+    [InlineData("Added", "1.0.0", true)]
+    [InlineData("Existing", "2.0.0", true)]
+    public void StaleAssetsDoNotHidePackageReferenceChanges(string package, string version, bool expected)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "winui-xaml-restore", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var assets = Path.Combine(root, "project.assets.json");
+        File.WriteAllText(assets, """
+            {"targets":{},"libraries":{},"project":{"frameworks":{"net10.0":{
+              "dependencies":{"Existing":{"version":"[1.0.0, )"}}
+            }}}}
+            """);
+        try
+        {
+            var evaluation = new MsBuildCli.Evaluation(
+                [], null, assets, true, [], "App",
+                packageReferences: [new MsBuildCli.PackageReference(package, version)]);
+            Assert.Equal(expected, RoslynProjectWorkspace.RequiresRestore(evaluation));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("[1.0,2.0)", "[1.0.0, 2.0.0)", false)]
+    [InlineData("1.*", "[1.*, )", false)]
+    [InlineData("[1.0,2.0)", "[1.0.0, 3.0.0)", true)]
+    [InlineData(null, "[1.0.0, )", true)]
+    public void RestoredDependencySetsAndNuGetRangesAreCompared(string? current, string restored, bool requiresRestore)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "winui-xaml-restore", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var assets = Path.Combine(root, "project.assets.json");
+        File.WriteAllText(assets, """
+            {"targets":{},"libraries":{},"project":{"frameworks":{"net10.0":{
+              "dependencies":{"Existing":{"version":"$VERSION"},"SDK":{"version":"1.0","autoReferenced":true}}
+            }}}}
+            """.Replace("$VERSION", restored, StringComparison.Ordinal));
+        try
+        {
+            var evaluation = new MsBuildCli.Evaluation(
+                [], null, assets, current is not null, [], "App",
+                packageReferences: current is null ? [] : [new MsBuildCli.PackageReference("Existing", current)]);
+            Assert.Equal(requiresRestore, RoslynProjectWorkspace.RequiresRestore(evaluation));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AnotherFrameworkCannotHideStaleAssetsForTheSelectedFramework()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "winui-xaml-restore", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var assets = Path.Combine(root, "project.assets.json");
+        File.WriteAllText(assets, """
+            {"targets":{},"libraries":{},"project":{"frameworks":{
+              "net10.0":{"dependencies":{"Existing":{"version":"[1.0.0, )"}}},
+              "net9.0":{"dependencies":{"Existing":{"version":"[2.0.0, )"}}}
+            }}}
+            """);
+        try
+        {
+            var evaluation = new MsBuildCli.Evaluation(
+                [], null, assets, true, [], "App",
+                packageReferences: [new MsBuildCli.PackageReference("Existing", "2.0")],
+                targetFramework: "net10.0");
+            Assert.True(RoslynProjectWorkspace.RequiresRestore(evaluation));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task LoadingUnrestoredPackageProjectRequestsRestore()
     {

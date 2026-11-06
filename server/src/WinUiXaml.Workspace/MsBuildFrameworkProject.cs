@@ -18,12 +18,14 @@ namespace WinUiXaml.Workspace
             Compilation compilation,
             ImmutableArray<string> xamlFiles,
             string? applicationDefinitionPath,
-            ImmutableArray<string> unresolvedProjectReferences)
+            ImmutableArray<string> unresolvedProjectReferences,
+            ProjectInputSnapshot inputs)
         {
             Compilation = compilation;
             XamlFiles = xamlFiles;
             ApplicationDefinitionPath = applicationDefinitionPath;
             UnresolvedProjectReferences = unresolvedProjectReferences;
+            _inputs = inputs;
         }
 
         internal Compilation Compilation { get; }
@@ -32,6 +34,8 @@ namespace WinUiXaml.Workspace
 
         /// <summary>Referenced projects that had never been built when this project loaded.</summary>
         internal ImmutableArray<string> UnresolvedProjectReferences { get; }
+        private readonly ProjectInputSnapshot _inputs;
+        internal bool InputsChanged() => _inputs.HasChanges();
 
         internal static MsBuildFrameworkProject? Load(
             string projectPath,
@@ -48,9 +52,7 @@ namespace WinUiXaml.Workspace
                 fullPath,
                 properties,
                 cancellationToken);
-            if (RoslynProjectWorkspace.RequiresRestore(
-                evaluation.ProjectAssetsFile,
-                evaluation.HasPackageReferences))
+            if (RoslynProjectWorkspace.RequiresRestore(evaluation))
             {
                 throw new ProjectRestoreRequiredException(projectPath);
             }
@@ -89,7 +91,11 @@ namespace WinUiXaml.Workspace
                 evaluation.ApplicationDefinition,
                 // This stage does not build project references, so only the full stage can report
                 // build-required from what it actually observed.
-                ImmutableArray<string>.Empty);
+                ImmutableArray<string>.Empty,
+                new ProjectInputSnapshot(
+                    [fullPath],
+                    evaluation.BuildInputFiles.Concat(
+                        evaluation.ProjectAssetsFile is { } assets ? new[] { assets } : Array.Empty<string>())));
         }
     }
 }

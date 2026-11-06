@@ -282,6 +282,26 @@ namespace WinUiXaml.Workspace
                 Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
                 StringComparison.OrdinalIgnoreCase);
 
+        public bool InvalidateChangedProjects()
+        {
+            List<string> changed;
+            lock (_gate)
+            {
+                changed = _projects.Where(pair =>
+                    pair.Value.Task.IsCompletedSuccessfully && pair.Value.Task.Result.InputsChanged())
+                    .Select(pair => pair.Key).ToList();
+                changed.AddRange(_frameworkProjects.Where(pair =>
+                    !_projects.ContainsKey(pair.Key) &&
+                    pair.Value.IsCompletedSuccessfully && pair.Value.Result?.InputsChanged() == true)
+                    .Select(pair => pair.Key));
+            }
+            if (changed.Count > 0)
+            {
+                InvalidateAll();
+            }
+            return changed.Count > 0;
+        }
+
         /// <summary>Drops the cached workspace for a project so the next resolve reloads it.</summary>
         public void Invalidate(string projectPath)
         {

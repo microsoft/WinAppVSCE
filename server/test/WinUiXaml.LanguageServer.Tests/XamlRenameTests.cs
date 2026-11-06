@@ -76,6 +76,55 @@ public class XamlRenameTests
         return edit.Changes[Uri];
     }
 
+    [Theory]
+    [InlineData("class")]
+    [InlineData("namespace")]
+    [InlineData("true")]
+    [InlineData("@class")]
+    public void RenameRejectsReservedIdentifiers(string name)
+    {
+        var (doc, offset) = Caret("<Grid x:Name=\"A|\"/>");
+        Assert.Throws<RenameValidationException>(() =>
+            XamlRename.Rename(doc, offset, name, FrameworkTypeSystem));
+    }
+
+    [Theory]
+    [InlineData("\u540d\u524d")]
+    [InlineData("caf\u00e9")]
+    [InlineData("a\u0301")]
+    [InlineData("value")]
+    public void RenameAcceptsCSharpIdentifiers(string name)
+    {
+        Assert.All(RenameEdits("<Grid x:Name=\"A|\"/>", name),
+            edit => Assert.Equal(name, edit.NewText));
+    }
+
+    [Theory]
+    [InlineData("<Grid><Button x:Name=\"A|\"/><Button x:Name=\"B\"/></Grid>")]
+    [InlineData("<Grid><Button x:Name=\"A\"/><Button x:Name=\"B\"/><TextBox Text=\"{Binding ElementName=A|}\"/></Grid>")]
+    [InlineData("<ResourceDictionary><Button x:Key=\"A|\"/><Button x:Key=\"B\"/></ResourceDictionary>")]
+    [InlineData("<ResourceDictionary><Button x:Key=\"A\"/><Button x:Key=\"B\"/><Button Tag=\"{StaticResource A|}\"/></ResourceDictionary>")]
+    public void RenameRejectsCollisionInDeclarationScope(string text)
+    {
+        var (doc, offset) = Caret(text);
+        Assert.Throws<RenameValidationException>(() =>
+            XamlRename.Rename(doc, offset, "B", FrameworkTypeSystem));
+    }
+
+    [Theory]
+    [InlineData("<Grid><Button x:Name=\"A|\"/><DataTemplate><Button x:Name=\"B\"/></DataTemplate></Grid>")]
+    [InlineData("<ResourceDictionary><Button x:Key=\"A|\"/><DataTemplate x:Key=\"Template\"><Button><Button.Resources><Button x:Key=\"B\"/></Button.Resources></Button></DataTemplate></ResourceDictionary>")]
+    public void RenameAllowsSameSpellingInAnotherScope(string text)
+    {
+        Assert.NotEmpty(RenameEdits(text, "B"));
+    }
+
+    [Fact]
+    public void RenameToExistingSpellingIsANoOp()
+    {
+        Assert.Single(RenameEdits("<Grid x:Name=\"A|\"/>", "A"));
+    }
+
     private static XamlTypeSystem CreateFrameworkTypeSystem()
     {
         const string source = """

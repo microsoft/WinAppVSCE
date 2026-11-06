@@ -36,12 +36,59 @@ namespace WinUiXaml.Workspace
   <Import Project="$(WinUiXamlUserAfterCSharpTargets)"
           Condition="'$(WinUiXamlUserAfterCSharpTargets)' != '' and Exists('$(WinUiXamlUserAfterCSharpTargets)')" />
 
+  <PropertyGroup Condition="'$(WinUiXamlBuildRoot)' != ''">
+    <WinUiXamlProjectOutput>$(WinUiXamlBuildRoot)$([MSBuild]::StableStringHash('$(MSBuildProjectFullPath)'))\</WinUiXamlProjectOutput>
+  </PropertyGroup>
+
+  <!-- Global output properties protect project overrides. Each reference needs its own outputs,
+       rather than inheriting the root project's paths into its ordinary build. -->
+  <Target Name="WinUiXamlIsolateProjectReferences" BeforeTargets="AssignProjectConfiguration"
+          Condition="'$(WinUiXamlBuildRoot)' != ''">
+    <ItemGroup>
+      <ProjectReference Update="@(ProjectReference)">
+        <_WinUiXamlOutput>$(WinUiXamlBuildRoot)$([MSBuild]::StableStringHash('%(FullPath)'))\</_WinUiXamlOutput>
+      </ProjectReference>
+      <ProjectReference Update="@(ProjectReference)">
+        <AdditionalProperties>%(ProjectReference.AdditionalProperties);IntermediateOutputPath=%(ProjectReference._WinUiXamlOutput)obj\;OutputPath=%(ProjectReference._WinUiXamlOutput)bin\;OutDir=%(ProjectReference._WinUiXamlOutput)bin\</AdditionalProperties>
+      </ProjectReference>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="WinUiXamlSnapshotMarkup"
+          BeforeTargets="DesignTimeMarkupCompilation;MarkupCompilePass1;MarkupCompilePass2"
+          Condition="'$(WinUiXamlProjectOutput)' != ''">
+    <ItemGroup>
+      <_WinUiXamlOriginalPage Include="@(Page)">
+        <SnapshotRelativePath>%(Identity)</SnapshotRelativePath>
+        <SnapshotRelativePath Condition="$([System.IO.Path]::IsPathRooted('%(Identity)')) or $([System.String]::Copy('%(Identity)').StartsWith('..'))">$([MSBuild]::StableStringHash('%(FullPath)'))\%(Filename)%(Extension)</SnapshotRelativePath>
+        <Snapshot>$(WinUiXamlProjectOutput)xaml\%(_WinUiXamlOriginalPage.SnapshotRelativePath)</Snapshot>
+        <Link Condition="'%(_WinUiXamlOriginalPage.Link)' == ''">%(_WinUiXamlOriginalPage.SnapshotRelativePath)</Link>
+      </_WinUiXamlOriginalPage>
+      <_WinUiXamlOriginalApplicationDefinition Include="@(ApplicationDefinition)">
+        <Snapshot>$(WinUiXamlProjectOutput)xaml\%(Filename)%(Extension)</Snapshot>
+        <Link Condition="'%(_WinUiXamlOriginalApplicationDefinition.Link)' == ''">%(Identity)</Link>
+      </_WinUiXamlOriginalApplicationDefinition>
+    </ItemGroup>
+    <Copy SourceFiles="@(_WinUiXamlOriginalPage)" DestinationFiles="@(_WinUiXamlOriginalPage->'%(Snapshot)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_WinUiXamlOriginalApplicationDefinition)" DestinationFiles="@(_WinUiXamlOriginalApplicationDefinition->'%(Snapshot)')" SkipUnchangedFiles="true" />
+    <ItemGroup>
+      <Page Remove="@(Page)" />
+      <ApplicationDefinition Remove="@(ApplicationDefinition)" />
+      <Page Include="@(_WinUiXamlOriginalPage->'%(Snapshot)')">
+        <Link>%(_WinUiXamlOriginalPage.Link)</Link>
+      </Page>
+      <ApplicationDefinition Include="@(_WinUiXamlOriginalApplicationDefinition->'%(Snapshot)')">
+        <Link>%(_WinUiXamlOriginalApplicationDefinition.Link)</Link>
+      </ApplicationDefinition>
+    </ItemGroup>
+  </Target>
+
   <!-- Invoked here rather than named on the command line: DesignTimeMarkupCompilation exists only where
        the WinUI targets are imported, and MSBuild fails the whole request with MSB4057 for a target the
        project does not define, which ContinueOnError cannot demote. XamlCompilerTaskPath decides safely. -->
   <Target Name="WinUiXamlDesignTimeMarkup"
           BeforeTargets="CoreCompile"
-          Condition="'$(WinUiXamlDesignTimeRoot)' == 'true'">
+          Condition="'$(WinUiXamlDesignTimeRoot)' == 'true' and '$(WinUiXamlSkipMarkupCompilation)' != 'true'">
     <CallTarget Targets="DesignTimeMarkupCompilation" Condition="'$(XamlCompilerTaskPath)' != ''" />
   </Target>
 </Project>
@@ -64,8 +111,7 @@ namespace WinUiXaml.Workspace
 
                 try
                 {
-                    var directory = System.IO.Path.Combine(
-                        System.IO.Path.GetTempPath(), "winui-xaml-ls", "targets");
+                    var directory = DesignTimeBuildStorage.TargetsDirectory;
                     Directory.CreateDirectory(directory);
                     var file = System.IO.Path.Combine(directory, FileName);
 

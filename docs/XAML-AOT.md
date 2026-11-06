@@ -22,6 +22,18 @@ signed artifact without rebuilding that artifact. Signed ARM64 execution is
 tracked separately in [#296](https://github.com/microsoft/WinAppVSCE/issues/296).
 Managed unit tests alone do not prove this deployment boundary.
 
+## Design-time project state
+
+MSBuild uses server-private intermediate and output folders, including referenced
+projects. The markup compiler reads XAML snapshots rather than holding editor
+files open. These folders are reused while the server runs and removed on exit.
+Normal builds continue to use the project's own `obj` and `bin` folders.
+
+Project refreshes retain the last usable context. A XAML compile error does not
+prevent loading C# project types, and failed loads do not restart on each edit.
+Saving or reopening a XAML document checks disk inputs for missed watcher events;
+changed package references require matching restored assets.
+
 ## Roslyn trim-warning dispositions
 
 Warnings remain visible. These dispositions apply to the pinned source, not future
