@@ -102,6 +102,7 @@ import {
 	WINAPP_LAUNCH_CONFIG_NAME
 } from './launch-config';
 import { offerLaunchConfiguration } from './launch-assets';
+import { registerTrustedCommand, requireTrustedWorkspace, WORKSPACE_TRUST_REQUIRED } from './workspace-trust';
 
 const WINDOWS_POWERSHELL_PATH = resolveWindowsPowerShellPath(process.env.SystemRoot);
 const FILE_PICKER_DETAIL = 'Open a file picker';
@@ -913,6 +914,9 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		config: vscode.DebugConfiguration,
 		_token?: vscode.CancellationToken
 	): Promise<vscode.DebugConfiguration | undefined> {
+		if (!requireTrustedWorkspace()) {
+			return undefined;
+		}
 		// If no configuration, create a default one
 		if (!config.type && !config.request && !config.name) {
 			config.type = WINAPP_DEBUG_TYPE;
@@ -945,6 +949,9 @@ class WinAppDebugConfigurationProvider implements vscode.DebugConfigurationProvi
 		config: vscode.DebugConfiguration,
 		_token?: vscode.CancellationToken
 	): Promise<vscode.DebugConfiguration | undefined> {
+		if (!requireTrustedWorkspace()) {
+			return undefined;
+		}
 		if (!folder) {
 			vscode.window.showErrorMessage(NO_WORKSPACE_MESSAGE);
 			return undefined;
@@ -1023,6 +1030,9 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 		session: vscode.DebugSession,
 		_executable: vscode.DebugAdapterExecutable | undefined
 	): Promise<vscode.DebugAdapterDescriptor> {
+		if (!requireTrustedWorkspace()) {
+			throw new Error(WORKSPACE_TRUST_REQUIRED);
+		}
 		const config = session.configuration;
 		const folder = session.workspaceFolder;
 
@@ -1215,7 +1225,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.debug.registerDebugConfigurationProvider(
 			WINAPP_DEBUG_TYPE,
-			{ provideDebugConfigurations: () => [createDefaultLaunchConfiguration()] },
+			{ provideDebugConfigurations: () => vscode.workspace.isTrusted ? [createDefaultLaunchConfiguration()] : [] },
 			vscode.DebugConfigurationProviderTriggerKind.Dynamic
 		)
 	);
@@ -1224,9 +1234,16 @@ export function activate(context: vscode.ExtensionContext) {
 	// extension for <language>" prompt, so offer to create one up front.
 	// Fire-and-forget: activation must not block on a notification, but a
 	// rejection still has to land somewhere other than an unhandled one.
-	offerLaunchConfiguration(context).catch(error => {
-		console.error('WinApp: failed to offer a launch configuration', error);
-	});
+	const offerTrustedLaunchConfiguration = () => {
+		if (!vscode.workspace.isTrusted) {
+			return;
+		}
+		offerLaunchConfiguration(context).catch(error => {
+			console.error('WinApp: failed to offer a launch configuration', error);
+		});
+	};
+	offerTrustedLaunchConfiguration();
+	context.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(offerTrustedLaunchConfiguration));
 
 	const factory = new WinAppDebugAdapterFactory(extensionPath);
 	context.subscriptions.push(
@@ -1337,7 +1354,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.init command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.init', async () => {
+		registerTrustedCommand('winapp.init', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1367,7 +1384,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.restore command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.restore', async () => {
+		registerTrustedCommand('winapp.restore', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1384,7 +1401,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.update command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.update', async () => {
+		registerTrustedCommand('winapp.update', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1411,7 +1428,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.pack command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.pack', async () => {
+		registerTrustedCommand('winapp.pack', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1472,21 +1489,21 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.run command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.run', async () => {
+		registerTrustedCommand('winapp.run', async () => {
 			await executeRunCommand(extensionPath, false);
 		})
 	);
 
 	// Register winapp.runWithOptions command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.runWithOptions', async () => {
+		registerTrustedCommand('winapp.runWithOptions', async () => {
 			await executeRunCommand(extensionPath, true);
 		})
 	);
 
 	// Register winapp.createDebugIdentity command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.createDebugIdentity', async () => {
+		registerTrustedCommand('winapp.createDebugIdentity', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1507,7 +1524,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.manifestGenerate command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.manifestGenerate', async () => {
+		registerTrustedCommand('winapp.manifestGenerate', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1534,7 +1551,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.manifestUpdateAssets command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.manifestUpdateAssets', async () => {
+		registerTrustedCommand('winapp.manifestUpdateAssets', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1560,7 +1577,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.certGenerate command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.certGenerate', async () => {
+		registerTrustedCommand('winapp.certGenerate', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1598,7 +1615,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.certInstall command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.certInstall', async () => {
+		registerTrustedCommand('winapp.certInstall', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1621,7 +1638,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.sign command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.sign', async (prefilledPath?: string) => {
+		registerTrustedCommand('winapp.sign', async (prefilledPath?: string) => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1633,7 +1650,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.tool command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.tool', async () => {
+		registerTrustedCommand('winapp.tool', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1678,7 +1695,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.getWinappPath command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.getWinappPath', async () => {
+		registerTrustedCommand('winapp.getWinappPath', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1705,7 +1722,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.manifestAddAlias command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.manifestAddAlias', async () => {
+		registerTrustedCommand('winapp.manifestAddAlias', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1722,7 +1739,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register winapp.unregister command
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.unregister', async () => {
+		registerTrustedCommand('winapp.unregister', async () => {
 			const workspacePath = getWorkspacePath();
 			if (!workspacePath) {
 				return;
@@ -1740,7 +1757,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register winapp.certInfo command
 	// This command only inspects a certificate file and does not require a workspace.
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.certInfo', async () => {
+		registerTrustedCommand('winapp.certInfo', async () => {
 			const certPath = await selectFile('Select certificate file', {
 				'Certificates': ['pfx', 'cer']
 			});

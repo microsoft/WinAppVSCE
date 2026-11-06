@@ -7,6 +7,63 @@ namespace WinUiXaml.LanguageServer.Tests;
 
 public sealed class ServerShutdownTests
 {
+    [Fact]
+    public async Task RedirectedDiagnosticsPreserveUnicodePathsAsUtf8()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "winui-encoding-\u00fcn\u00ef \u65e5\u672c\u8a9e-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var log = Path.Combine(root, "server.log");
+        var assembly = typeof(ServerShutdownTests).Assembly.Location;
+        using var server = new Process
+        {
+            StartInfo = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+            {
+                ArgumentList =
+                {
+                    "exec", "--runtimeconfig", Path.ChangeExtension(assembly, ".runtimeconfig.json"),
+                    "--depsfile", Path.ChangeExtension(assembly, ".deps.json"),
+                    typeof(XamlLanguageServer).Assembly.Location,
+                },
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardErrorEncoding = new UTF8Encoding(false, true),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            },
+        };
+        server.StartInfo.Environment["WINUI_XAML_LOG"] = log;
+        bool started = false;
+        try
+        {
+            server.Start();
+            started = true;
+            var stderr = server.StandardError.ReadToEndAsync();
+            await Send(server, new { id = 1, method = "initialize", @params = new
+            {
+                rootUri = new Uri(root + Path.DirectorySeparatorChar).AbsoluteUri,
+            } });
+            await WaitForResponse(server, 1);
+            await Send(server, new { id = 2, method = "shutdown" });
+            await WaitForResponse(server, 2);
+            await Send(server, new { method = "exit" });
+            await server.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.Equal(0, server.ExitCode);
+            Assert.Contains(root, await stderr);
+            Assert.Contains(root, await File.ReadAllTextAsync(log, new UTF8Encoding(false, true)));
+        }
+        finally
+        {
+            if (started && !server.HasExited)
+            {
+                server.Kill(entireProcessTree: true);
+                await server.WaitForExitAsync();
+            }
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("shutdown", 0)]
     [InlineData("exit", 1)]

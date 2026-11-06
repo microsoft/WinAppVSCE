@@ -436,7 +436,9 @@ internal sealed partial class XamlLanguageServer
     }
 
     /// <summary>Resolves the symbol under the caret for hover/definition, trying two pipelines in order</summary>
-    private async Task<(ISymbol? Symbol, TextSpan? Span)> ResolveNamedSymbolAsync(TextDocumentPositionParams p)
+    private async Task<(ISymbol? Symbol, TextSpan? Span)> ResolveNamedSymbolAsync(
+        TextDocumentPositionParams p,
+        bool forDefinition = false)
     {
         var typeHit = await ResolveTypeSymbolAtAsync(p).ConfigureAwait(false);
         if (typeHit.Symbol != null)
@@ -444,7 +446,7 @@ internal sealed partial class XamlLanguageServer
             return typeHit;
         }
 
-        var (symbol, target) = await ResolveSymbolAtAsync(p).ConfigureAwait(false);
+        var (symbol, target) = await ResolveSymbolAtAsync(p, forDefinition).ConfigureAwait(false);
         return (symbol, target?.Span);
     }
 

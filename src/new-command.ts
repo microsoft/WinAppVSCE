@@ -7,6 +7,7 @@
 import * as vscode from 'vscode';
 import * as os from 'os';
 import * as path from 'path';
+import { registerTrustedCommand } from './workspace-trust';
 import {
 	buildNewArgs,
 	describeNewFailure,
@@ -218,7 +219,7 @@ export function registerWinappNewCommand(
 	extensionPath: string
 ): void {
 	context.subscriptions.push(
-		vscode.commands.registerCommand('winapp.new', async () => {
+		registerTrustedCommand('winapp.new', async () => {
 			// The folder picker should open somewhere familiar, so it still starts
 			// from the workspace (or home when nothing is open).
 			const defaultFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();

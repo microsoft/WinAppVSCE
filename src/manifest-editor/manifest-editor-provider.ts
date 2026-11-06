@@ -8,6 +8,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { execFile } from 'child_process';
+import { requireTrustedWorkspace } from '../workspace-trust';
 import { parseManifest, applyFieldChange, addCapability, removeCapability, addPackageDependency, removePackageDependency, addTargetDeviceFamily, removeTargetDeviceFamily, moveTargetDeviceFamily, movePackageDependency, addMainPackageDependency, removeMainPackageDependency, moveMainPackageDependency, addDriverConstraint, removeDriverConstraint, moveDriverConstraint, addOSPackageDependency, removeOSPackageDependency, moveOSPackageDependency, addHostRuntimeDependency, removeHostRuntimeDependency, moveHostRuntimeDependency, addExternalDependency, removeExternalDependency, moveExternalDependency, addApplication, removeApplication, addExtension, removeExtension, updateExtensionField, addResource, removeResource, moveResource, setShowNameOnTiles, addPhoneIdentity, removePhoneIdentity, removeVisualAsset } from './manifest-parser';
 import { validateManifest } from './manifest-validator';
 import { getWebviewContent } from './webview-content';
@@ -224,10 +225,16 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             }
         });
 
+        // Asset regeneration runs the CLI, so the editor hides it until the workspace is trusted.
+        const postWorkspaceTrust = () => webviewPanel.webview.postMessage(
+            { type: 'workspaceTrust', trusted: vscode.workspace.isTrusted });
+        const trustSub = vscode.workspace.onDidGrantWorkspaceTrust(postWorkspaceTrust);
+
         webviewPanel.onDidDispose(() => {
             if (externalChangeTimer) { clearTimeout(externalChangeTimer); }
             changeDocSub.dispose();
             willSaveSub.dispose();
+            trustSub.dispose();
         });
 
         // Handle messages from the webview
@@ -242,6 +249,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                 } else {
                     switch (message.type) {
                         case 'ready':
+                            postWorkspaceTrust();
                             updateWebview();
                             return;
 
@@ -413,6 +421,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                         }
 
                         case 'updateAssets': {
+                            if (!requireTrustedWorkspace()) { return; }
                             const imagePath = await vscode.window.showOpenDialog({
                                 canSelectFiles: true,
                                 canSelectFolders: false,
