@@ -33,7 +33,7 @@ import {
 } from './run-utils';
 import { getWorkspaceRoots, NO_WORKSPACE_MESSAGE } from './workspace';
 import { launchRunProcess } from './run-launch';
-import { stopLaunchedApp } from './process-tree';
+import { endRun } from './process-tree';
 import { DebugLaunchCancelled, WinAppRunFailure } from './run-exit';
 import { resolveProjectDirectory as resolveProjectDirectoryCore } from './project-resolver';
 import { ManifestEditorProvider } from './manifest-editor/manifest-editor-provider';
@@ -1147,10 +1147,7 @@ class WinAppDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory 
 				teardownRequested = true;
 				disposable.dispose();
 				DevToolsPanel.disconnectFor(processId);
-				if (stopApp) {
-					stopLaunchedApp(processId);
-				}
-				runProcess.kill();
+				endRun(runProcess, processId, stopApp);
 				vscode.debug.stopDebugging(parentSession);
 			};
 

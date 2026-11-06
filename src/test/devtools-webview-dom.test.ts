@@ -528,6 +528,67 @@ test('choosing a different KIND stages the change rather than applying it', asyn
     assert.ok(!h.posted.some((m) => m.type === 'setProperty'), 'staging must not write to the app');
 });
 
+test('an applied KIND survives a reload while nothing has been written yet', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'capabilities', canEdit: true, canPick: true, canHighlight: true } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: AUTHORED_PROPS } as unknown as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    h.pickDrop('Kind of value for Text', 'text');
+    const apply = Array.from(h.doc.querySelectorAll('#props-viewport button')).find(b => b.textContent === 'Apply') as HTMLElement;
+    apply.click();
+    const input = h.doc.querySelector('#props-viewport input[aria-label="Text"]') as HTMLInputElement;
+    input.focus();
+    input.value = 'typing';
+    input.dispatchEvent(new h.dom.window.Event('input', { bubbles: true }));
+
+    // The bound value ticking in the app reloads the same element.
+    const ticked = { ...AUTHORED_PROPS, props: [{ ...AUTHORED_PROPS.props[0], value: 'bound title 2' }, AUTHORED_PROPS.props[1]] };
+    h.send({ type: 'properties', properties: ticked } as unknown as ExtensionToWebviewMessage);
+
+    const after = h.doc.querySelector('#props-viewport input[aria-label="Text"]') as HTMLInputElement | null;
+    assert.ok(after, 'the Text editor the user applied is still there');
+    assert.strictEqual(after.value, 'typing', 'and so is what they typed');
+});
+
+test('a reload waits for an open menu to close instead of destroying it', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'properties', properties: AUTHORED_PROPS } as unknown as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    const root = h.drop('Kind of value for Text')!;
+    (root.querySelector('.pdrop-btn') as HTMLElement).click();
+    assert.ok(root.querySelector('.custom-dropdown-menu')?.classList.contains('open'));
+
+    const ticked = { ...AUTHORED_PROPS, props: [{ ...AUTHORED_PROPS.props[0], value: 'bound title 2' }, AUTHORED_PROPS.props[1]] };
+    h.send({ type: 'properties', properties: ticked } as unknown as ExtensionToWebviewMessage);
+    assert.ok(root.isConnected, 'the open menu was not rebuilt under the pointer');
+    assert.ok(root.querySelector('.custom-dropdown-menu')?.classList.contains('open'));
+
+    h.doc.body.click();
+    await h.flush();
+    assert.ok(!root.isConnected, 'the held reload ran once the menu closed');
+    assert.ok((h.doc.getElementById('props-viewport')?.textContent ?? '').includes('bound title 2'));
+});
+
+test('a pending Restore binding confirmation survives a change to another property', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    const text = {
+        name: 'Text', value: 'literal', valueType: 'System.String', editKind: 'text',
+        valueSource: 'DevTools', authoredKind: 'xBind', authoredKey: 'Title',
+    };
+    const opacity = { name: 'Opacity', value: '1', valueType: 'System.Double', editKind: 'number', valueSource: 'Default' };
+    const props = (o: string) => ({ ...LIVE_PROPS, props: [text, { ...opacity, value: o }] });
+    h.send({ type: 'properties', properties: props('1') } as unknown as ExtensionToWebviewMessage);
+    h.expandAllProps();
+    h.send({ type: 'bindingRestoreConfirm', name: 'Text', scope: 'MainPage' } as unknown as ExtensionToWebviewMessage);
+
+    h.send({ type: 'properties', properties: props('0.5') } as unknown as ExtensionToWebviewMessage);
+    const labels = Array.from(h.doc.querySelectorAll('#props-viewport button')).map(b => b.textContent);
+    assert.ok(labels.includes('Restore binding (confirm)'), 'the second press still confirms');
+});
+
 test('writing a value through the staged kind applies it and drops the staged banner', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);

@@ -15,12 +15,17 @@ export const EDITORS_FRAGMENT = `    /* ── Dropdown ────────
 
     /** The menu currently open, so opening one closes the last. */
     let openDrop = null;
+    let propsRenderPending = false;
 
     function closeDrop() {
         if (!openDrop) { return; }
         openDrop.menu.classList.remove('open');
         openDrop.btn.setAttribute('aria-expanded', 'false');
         openDrop = null;
+        // Flush a refresh held while the menu was open, unless another menu opened meanwhile.
+        if (propsRenderPending) {
+            queueMicrotask(function () { if (!openDrop && propsRenderPending) { renderProperties(); } });
+        }
     }
 
     document.addEventListener('click', function (ev) {

@@ -106,6 +106,7 @@ export const MESSAGES_FRAGMENT = `
                 // pending edit.
                 const sameElement = !!state.properties
                     && state.properties.handle === message.properties.handle;
+                const previousProps = sameElement ? state.properties.props : null;
                 if (!sameElement) {
                     state.openProps = new Set();
                     state.staged = Object.create(null);
@@ -122,7 +123,7 @@ export const MESSAGES_FRAGMENT = `
                 };
                 if (sameElement) {
                     dropRestoredBindingEdits(message.properties.handle, message.properties.props);
-                    refreshOpenDiagnostics();
+                    refreshOpenDiagnostics(previousProps);
                     // A reload means a value changed, and the caption may show it.
                     refreshPreview(message.properties.handle);
                 }

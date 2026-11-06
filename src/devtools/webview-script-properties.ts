@@ -85,6 +85,13 @@ export const PROPERTIES_FRAGMENT = `
      * element, and is saved to its own element when the selection moves on.
      */
     function renderProperties() {
+        // Rebuilding would destroy an open menu under the pointer; redraw once it closes.
+        if (openDrop && el.propsViewport.contains(openDrop.root)
+            && state.properties && state.properties.handle === renderedHandle) {
+            propsRenderPending = true;
+            return;
+        }
+        propsRenderPending = false;
         const active = document.activeElement;
         const draft = active && active.dataset && active.dataset.draft
             && el.propsViewport.contains(active) && renderedHandle
@@ -689,15 +696,23 @@ export const PROPERTIES_FRAGMENT = `
             || isEdited(payload.handle, prop.name);
     }
 
-    /** Re-reads open binding and resource cards after the element reloads. */
-    function refreshOpenDiagnostics() {
+    /**
+     * Re-reads open binding and resource cards whose property changed in a reload.
+     * Unchanged ones keep their diagnosis and any pending Restore confirmation.
+     */
+    function refreshOpenDiagnostics(previousProps) {
         const payload = state.properties;
         if (!payload || !payload.handle) { return; }
-        state.bindings = Object.create(null);
-        state.resources = Object.create(null);
-        state.restoreConfirm = null;
+        const before = new Map((previousProps || []).map(p => [p.name, p]));
         for (const prop of payload.props || []) {
-            if (!state.openProps.has(prop.name)) { continue; }
+            const old = before.get(prop.name);
+            if (old && old.value === prop.value && old.valueSource === prop.valueSource) { continue; }
+            if (state.restoreConfirm === prop.name) { state.restoreConfirm = null; }
+            if (!state.openProps.has(prop.name)) {
+                delete state.bindings[prop.name];
+                delete state.resources[prop.name];
+                continue;
+            }
             if (wantsDiagnosis(prop)) {
                 vscode.postMessage({ type: 'diagnoseBinding', handle: payload.handle, name: prop.name });
             }
@@ -728,6 +743,8 @@ export const PROPERTIES_FRAGMENT = `
         for (const prop of props || []) {
             const bound = prop.binding || prop.authoredKind === 'binding' || prop.authoredKind === 'xBind';
             if (!bound || prop.valueSource === 'DevTools') { continue; }
+            // A kind applied without a write yet is the user's choice, not a restored edit.
+            if (!state.edited[editKey(handle, prop.name)]) { continue; }
             delete state.edited[editKey(handle, prop.name)];
             delete state.applied[prop.name];
         }
