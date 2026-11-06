@@ -36,6 +36,7 @@ namespace WinUiXaml.LanguageServer.Lsp;
 [JsonSerializable(typeof(TextDocumentIdentifier))]
 [JsonSerializable(typeof(TextDocumentItem))]
 [JsonSerializable(typeof(DidOpenTextDocumentParams))]
+[JsonSerializable(typeof(DidSaveTextDocumentParams))]
 [JsonSerializable(typeof(DidChangeTextDocumentParams))]
 [JsonSerializable(typeof(TextDocumentContentChangeEvent))]
 [JsonSerializable(typeof(DidCloseTextDocumentParams))]

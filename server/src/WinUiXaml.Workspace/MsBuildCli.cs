@@ -52,7 +52,10 @@ namespace WinUiXaml.Workspace
                 string? targetFrameworks = null,
                 string? customAfterCSharpTargets = null,
                 ImmutableArray<ResolvedProjectReference> resolvedProjectReferences = default,
-                bool isWinUiProject = false)
+                bool isWinUiProject = false,
+                ImmutableArray<PackageReference> packageReferences = default,
+                ImmutableArray<string> buildInputFiles = default,
+                string? targetFramework = null)
             {
                 XamlFiles = xamlFiles;
                 ApplicationDefinition = applicationDefinition;
@@ -64,6 +67,9 @@ namespace WinUiXaml.Workspace
                 CustomAfterCSharpTargets = customAfterCSharpTargets;
                 ResolvedProjectReferences = resolvedProjectReferences;
                 IsWinUiProject = isWinUiProject;
+                PackageReferences = packageReferences;
+                BuildInputFiles = buildInputFiles;
+                TargetFramework = targetFramework;
             }
 
             public ImmutableArray<string> XamlFiles { get; }
@@ -73,6 +79,10 @@ namespace WinUiXaml.Workspace
             public ImmutableArray<string> ProjectReferences { get; }
             public ImmutableArray<ResolvedProjectReference> ResolvedProjectReferences { get; }
             public bool IsWinUiProject { get; }
+            public ImmutableArray<PackageReference> PackageReferences { get; }
+            public ImmutableArray<string> BuildInputFiles { get; }
+            public string? TargetFramework { get; }
+            public bool MarkupCompilationFailed { get; init; }
             public string? AssemblyName { get; }
 
             /// <summary>The project's semicolon-separated <c>TargetFrameworks</c>, or null for a single framework; non-null means an outer build with no <c>Compile</c> target.</summary>
@@ -87,6 +97,8 @@ namespace WinUiXaml.Workspace
             ImmutableDictionary<string, string> Properties,
             ImmutableArray<string> OutputPaths,
             ImmutableArray<string> Aliases);
+
+        internal sealed record PackageReference(string Name, string? Version);
 
         /// <summary>The MSBuild host as an absolute path, or null when no dotnet host can be found.</summary>
         /// <remarks>Never a bare name: the child runs with the project directory as its working directory, and
@@ -168,7 +180,8 @@ namespace WinUiXaml.Workspace
             var fullPath = Path.GetFullPath(projectPath);
             return EvaluateAndCompileCore(
                 fullPath,
-                PinTargetFramework(fullPath, globalProperties, cancellationToken),
+                DesignTimeBuildStorage.Isolate(
+                    fullPath, PinTargetFramework(fullPath, globalProperties, cancellationToken), cancellationToken),
                 ReadUserAfterCSharpTargets(fullPath, globalProperties, cancellationToken),
                 cancellationToken);
         }
@@ -349,6 +362,7 @@ namespace WinUiXaml.Workspace
             AppendProperties(arguments, globalProperties);
 
             string output;
+            var markupCompilationFailed = false;
             try
             {
                 output = Run(
@@ -371,10 +385,19 @@ namespace WinUiXaml.Workspace
                     fallback.Arguments,
                     ex.UnresolvedAssemblies.ToImmutableArray());
             }
+            catch (MsBuildUnavailableException ex) when (
+                System.Text.RegularExpressions.Regex.IsMatch(ex.Message, @"\bWMC\d{4}\b") &&
+                !IsProjectFileInUseFailure(ex.Message))
+            {
+                Console.Error.WriteLine($"[winui-xaml-ls] markup compilation failed; loading project sources: {ex.Message}");
+                markupCompilationFailed = true;
+                arguments.Add("-p:WinUiXamlSkipMarkupCompilation=true");
+                output = Run(arguments, Path.GetDirectoryName(fullPath), DesignTimeBuildTimeout, cancellationToken, fullPath);
+            }
 
             using var document = ParseJson(output, projectPath);
             return (
-                ReadEvaluation(document.RootElement, fullPath, globalProperties),
+                ReadEvaluation(document.RootElement, fullPath, globalProperties) with { MarkupCompilationFailed = markupCompilationFailed },
                 ReadItemIdentities(document.RootElement, "CscCommandLineArgs"),
                 ImmutableArray<string>.Empty);
         }
@@ -407,6 +430,7 @@ namespace WinUiXaml.Workspace
             CancellationToken cancellationToken = default)
         {
             var fullPath = Path.GetFullPath(projectPath);
+            globalProperties = DesignTimeBuildStorage.Isolate(fullPath, globalProperties, cancellationToken);
             var arguments = new List<string>
             {
                 "msbuild",
@@ -530,6 +554,8 @@ namespace WinUiXaml.Workspace
         {
             arguments.Add("-getItem:Page");
             arguments.Add("-getItem:ApplicationDefinition");
+            arguments.Add("-getItem:_WinUiXamlOriginalPage");
+            arguments.Add("-getItem:_WinUiXamlOriginalApplicationDefinition");
             arguments.Add("-getItem:PackageReference");
             arguments.Add("-getItem:ProjectReference");
             arguments.Add("-getItem:_MSBuildProjectReferenceExistent");
@@ -538,7 +564,9 @@ namespace WinUiXaml.Workspace
             arguments.Add("-getProperty:ProjectAssetsFile");
             arguments.Add("-getProperty:AssemblyName");
             arguments.Add("-getProperty:TargetFrameworks");
+            arguments.Add("-getProperty:TargetFramework");
             arguments.Add("-getProperty:CustomAfterMicrosoftCSharpTargets");
+            arguments.Add("-getProperty:MSBuildAllProjects");
             arguments.Add("-getProperty:UseWinUI");
             arguments.Add("-getProperty:TargetPlatformIdentifier");
         }
@@ -547,10 +575,13 @@ namespace WinUiXaml.Workspace
             JsonElement root, string fullProjectPath, IReadOnlyDictionary<string, string> globalProperties)
         {
             var projectDirectory = Path.GetDirectoryName(fullProjectPath)!;
-            var applicationDefinitions = ReadItemPaths(root, "ApplicationDefinition", projectDirectory)
+            var applicationDefinitions = ReadItemPaths(root,
+                    CountItems(root, "_WinUiXamlOriginalApplicationDefinition") > 0
+                        ? "_WinUiXamlOriginalApplicationDefinition" : "ApplicationDefinition", projectDirectory)
                 .Where(File.Exists)
                 .ToImmutableArray();
-            var pages = ReadItemPaths(root, "Page", projectDirectory);
+            var pages = ReadItemPaths(root,
+                CountItems(root, "_WinUiXamlOriginalPage") > 0 ? "_WinUiXamlOriginalPage" : "Page", projectDirectory);
             var xamlFiles = pages
                 .Concat(applicationDefinitions)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -575,7 +606,17 @@ namespace WinUiXaml.Workspace
                 ReadProperty(root, "TargetFrameworks"),
                 ReadProperty(root, "CustomAfterMicrosoftCSharpTargets"),
                 ReadResolvedProjectReferences(root, projectDirectory, globalProperties),
-                IsWinUiEvaluation(root));
+                IsWinUiEvaluation(root),
+                (((IEnumerable<JsonElement>?)ItemArray(root, "PackageReference")) ?? Enumerable.Empty<JsonElement>())
+                    .Select(item => new PackageReference(
+                        item.GetProperty("Identity").GetString()!,
+                        item.TryGetProperty("VersionOverride", out var versionOverride) && versionOverride.GetString() is { Length: > 0 } overridden
+                            ? overridden : item.TryGetProperty("Version", out var version) ? version.GetString() : null))
+                    .ToImmutableArray(),
+                (ReadProperty(root, "MSBuildAllProjects") ?? "")
+                    .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(path => Path.GetFullPath(path, projectDirectory)).ToImmutableArray(),
+                ReadProperty(root, "TargetFramework"));
         }
 
         internal static bool IsWinUiEvaluation(JsonElement root) =>
