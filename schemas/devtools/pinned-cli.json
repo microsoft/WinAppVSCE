@@ -1,0 +1,10 @@
+{
+    "version": "0.7.2-external-inspector-poc-main",
+    "repository": "microsoft/winappCli",
+    "branch": "chiaramooney-external-inspector-prototype",
+    "pullRequest": 0,
+    "commit": "f44924dc",
+    "runId": 0,
+    "syncedOn": "2026-10-19",
+    "comment": "Local ARM64 and x64 validation build from winappCli main f44924dc plus the uncommitted external-inspector prototype. The exact source and binary hashes are recorded in the prototype artifact's build-info.json. This pin is for the test VSIX only; replace it with a committed upstream build before shipping."
+}

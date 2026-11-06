@@ -12,5 +12,5 @@
 		"skipLibCheck": true,
 		"types": ["node", "mocha"]
 	},
-	"exclude": ["playwright.config.ts", "node_modules"]
+	"exclude": ["playwright.config.ts", "node_modules", "scripts"]
 }
