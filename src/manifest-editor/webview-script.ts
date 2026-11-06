@@ -807,6 +807,9 @@ export function getEditorScript(nonce: string, manifestDirUri: string): string {
                         if (img.src) img.src = img.src.split('?')[0] + '?t=' + Date.now();
                     });
                     break;
+                case 'workspaceTrust':
+                    document.body.classList.toggle('workspace-untrusted', !msg.trusted);
+                    break;
                 case 'flushChanges': {
                     const changes = flushPendingChanges();
                     vscode.postMessage({ type: 'changesFlushed', changes, nonce: msg.nonce });

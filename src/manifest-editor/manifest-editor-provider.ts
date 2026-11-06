@@ -225,10 +225,16 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
             }
         });
 
+        // Asset regeneration runs the CLI, so the editor hides it until the workspace is trusted.
+        const postWorkspaceTrust = () => webviewPanel.webview.postMessage(
+            { type: 'workspaceTrust', trusted: vscode.workspace.isTrusted });
+        const trustSub = vscode.workspace.onDidGrantWorkspaceTrust(postWorkspaceTrust);
+
         webviewPanel.onDidDispose(() => {
             if (externalChangeTimer) { clearTimeout(externalChangeTimer); }
             changeDocSub.dispose();
             willSaveSub.dispose();
+            trustSub.dispose();
         });
 
         // Handle messages from the webview
@@ -243,6 +249,7 @@ export class ManifestEditorProvider implements vscode.CustomTextEditorProvider {
                 } else {
                     switch (message.type) {
                         case 'ready':
+                            postWorkspaceTrust();
                             updateWebview();
                             return;
 

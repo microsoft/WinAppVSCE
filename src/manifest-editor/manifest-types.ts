@@ -164,6 +164,7 @@ export type ExtensionToWebviewMessage =
     | { type: 'update'; data: ManifestData; errors: ValidationError[] }
     | { type: 'validationErrors'; errors: ValidationError[] }
     | { type: 'refreshImages' }
+    | { type: 'workspaceTrust'; trusted: boolean }
     | { type: 'flushChanges' };
 
 /** Message types sent from the webview to the extension. */

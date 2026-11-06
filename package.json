@@ -62,7 +62,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "XAML syntax highlighting and manifest editing are available. WinApp commands, debugging, asset generation, and the XAML language server require workspace trust."
+      "description": "XAML syntax highlighting and manifest editing are available. WinApp commands are hidden, and debugging, asset generation, and the XAML language server wait for workspace trust."
     }
   },
   "contributes": {
@@ -301,6 +301,78 @@
       "commandPalette": [
         {
           "command": "winapp.openManifestEditor"
+        },
+        {
+          "command": "winapp.new",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.init",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.restore",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.update",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.pack",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.run",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.runWithOptions",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.createDebugIdentity",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.manifestGenerate",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.manifestUpdateAssets",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.certGenerate",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.certInstall",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.sign",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.tool",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.getWinappPath",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.manifestAddAlias",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.unregister",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "winapp.certInfo",
+          "when": "isWorkspaceTrusted"
         }
       ]
     },

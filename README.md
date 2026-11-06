@@ -19,9 +19,9 @@ Try the WinApp extension today: [**VS Code Markplace**](https://marketplace.visu
 ### Workspace Trust
 
 In an untrusted workspace, XAML syntax highlighting and manifest editing and
-IntelliSense remain available. WinApp CLI commands, debugging, manifest asset
-generation, and the XAML language server do nothing until the workspace is
-trusted through VS Code's Restricted Mode prompt.
+IntelliSense remain available. WinApp CLI commands and the manifest editor's
+**Regenerate Assets** button are hidden, and the XAML language server stays off.
+Starting a WinApp debug session shows VS Code's trust prompt first.
 
 ### Command Palette
 

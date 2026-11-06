@@ -113,6 +113,21 @@ test('declares limited Restricted Mode support', () => {
 	assert.match(manifest.capabilities.untrustedWorkspaces.description, /trust/i);
 });
 
+test('every trust-gated command is hidden from the Command Palette until trusted', () => {
+	const manifest = JSON.parse(readFileSync(path.join(sourceRoot, '..', 'package.json'), 'utf8'));
+	const host = createHost();
+	const palette = new Map<string, string | undefined>(manifest.contributes.menus.commandPalette
+		.map((entry: { command: string; when?: string }) => [entry.command, entry.when]));
+	const gated = manifest.contributes.commands
+		.map((entry: { command: string }) => entry.command as string)
+		.filter((command: string) => !command.startsWith('winapp.xaml.') && command !== 'winapp.openManifestEditor');
+	assert.ok(host.commands.size > 0);
+	for (const command of gated) {
+		assert.equal(palette.get(command), 'isWorkspaceTrusted', `${command} is hidden in Restricted Mode`);
+	}
+	assert.equal(palette.get('winapp.openManifestEditor'), undefined, 'manifest editing stays available');
+});
+
 test('untrusted activation keeps safe editors but blocks every CLI command before side effects', async () => {
 	const host = createHost();
 	assert.deepEqual(host.calls, ['manifestEditor', 'manifestIntelliSense', 'xaml']);
