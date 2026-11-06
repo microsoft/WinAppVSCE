@@ -110,13 +110,4 @@ export const CONTROLS_FRAGMENT = `
 
     function updatePickButton() {
         setPressed(el.pick, state.picking);
-    }
-
-    // Matches the in-app shortcut so muscle memory carries across surfaces.
-    window.addEventListener('keydown', function (event) {
-        if (event.ctrlKey && event.shiftKey && (event.key === 'P' || event.key === 'p')) {
-            if (el.pick.disabled) { return; }
-            event.preventDefault();
-            el.pick.click();
-        }
-    });`;
+    }`;

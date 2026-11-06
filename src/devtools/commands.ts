@@ -66,5 +66,6 @@ export function registerDevToolsCommands(context: vscode.ExtensionContext): void
         const sourceRoot = await chooseSourceRoot();
         if (sourceRoot) { await DevToolsPanel.showComments(context.extensionUri, sourceRoot); }
     });
+    register('winapp.devToolsTogglePick', async () => { DevToolsPanel.togglePickInActive(); });
     context.subscriptions.push({ dispose: () => DevToolsPanel.disposeAll() });
 }

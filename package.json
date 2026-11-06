@@ -35,6 +35,7 @@
     "onDebugResolve:winapp",
     "onCommand:winapp.attachDevTools",
     "onCommand:winapp.openDevToolsComments",
+    "onCommand:winapp.devToolsTogglePick",
     "onCommand:winapp.new",
     "onCommand:winapp.init",
     "onCommand:winapp.restore",
@@ -104,6 +105,11 @@
       {
         "command": "winapp.openDevToolsComments",
         "title": "Open DevTools Comments",
+        "category": "WinApp"
+      },
+      {
+        "command": "winapp.devToolsTogglePick",
+        "title": "Toggle Pick Element in DevTools",
         "category": "WinApp"
       },
       {
@@ -308,9 +314,20 @@
       "commandPalette": [
         {
           "command": "winapp.openManifestEditor"
+        },
+        {
+          "command": "winapp.devToolsTogglePick",
+          "when": "activeWebviewPanelId == 'winapp.devToolsPanel'"
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "winapp.devToolsTogglePick",
+        "key": "ctrl+shift+c",
+        "when": "activeWebviewPanelId == 'winapp.devToolsPanel'"
+      }
+    ],
     "breakpoints": [
       {
         "language": "csharp"

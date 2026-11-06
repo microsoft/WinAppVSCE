@@ -32,7 +32,7 @@ ${getDevToolsStyles(nonce)}
             </div>
 
             <div class="controls" id="tree-controls">
-                <button id="btn-pick" class="icon-btn" aria-pressed="false" title="Pick element (Ctrl+Shift+P)" aria-label="Pick element">
+                <button id="btn-pick" class="icon-btn" aria-pressed="false" title="Pick element (Ctrl+Shift+C)" aria-label="Pick element" aria-keyshortcuts="Control+Shift+C">
                     <span class="glyph" aria-hidden="true">&#xE7C9;</span><span class="on-rule"></span>
                 </button>
                 <button id="btn-focus" class="icon-btn" aria-pressed="false" title="Track keyboard focus" aria-label="Track keyboard focus">

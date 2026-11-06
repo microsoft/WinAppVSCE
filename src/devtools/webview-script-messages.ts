@@ -61,7 +61,7 @@ export const MESSAGES_FRAGMENT = `
                 };
                 el.pick.disabled = !state.caps.canPick;
                 el.pick.title = state.caps.canPick
-                    ? 'Pick element (Ctrl+Shift+P)'
+                    ? 'Pick element (Ctrl+Shift+C)'
                     : 'Element picking is not available in this app';
                 el.layoutBtn.disabled = !state.caps.canHighlight;
                 el.focusBtn.disabled = false;
@@ -154,6 +154,10 @@ export const MESSAGES_FRAGMENT = `
 
             case 'showComments':
                 setView('comments');
+                break;
+
+            case 'togglePick':
+                if (!el.pick.disabled) { el.pick.click(); }
                 break;
 
             case 'pickStateChanged':

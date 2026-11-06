@@ -120,6 +120,7 @@ export type ExtensionToWebviewMessage =
     | { type: 'selectHandle'; handle: string }
     | { type: 'showInspect' }
     | { type: 'showComments' }
+    | { type: 'togglePick' }
     | { type: 'pickStateChanged'; armed: boolean }
     | { type: 'treeInvalidated'; reason?: string }
     | { type: 'comments'; comments: CommentPayload[] }

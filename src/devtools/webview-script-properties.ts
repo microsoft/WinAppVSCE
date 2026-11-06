@@ -624,6 +624,7 @@ export const PROPERTIES_FRAGMENT = `
         // The focus announcement has to carry the value, not just the name.
         value.setAttribute('aria-label', prop.name + ': '
             + (prop.redacted ? 'value hidden' : (String(prop.value || '') || 'empty'))
+            + (prop.binding ? ', bound to ' + prop.binding : '')
             + (edited ? ', changed' : ''));
         value.setAttribute('aria-expanded', open ? 'true' : 'false');
         cell.appendChild(value);

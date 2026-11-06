@@ -6,7 +6,13 @@ export const COMMENTS_FRAGMENT = `
     // ───────────────────────── comments ─────────────────────────
 
     function renderComments() {
+        // A rebuild would drop focus to the page; remember which comment action had it.
+        const active = document.activeElement;
+        const keep = active && el.commentsHost.contains(active) && active.dataset && active.dataset.commentId
+            ? { id: active.dataset.commentId, action: active.dataset.action }
+            : null;
         el.commentsHost.textContent = '';
+        el.commentsHost.removeAttribute('role');
         updateCompose();
 
         const open = state.comments.filter(function (c) { return c.status === 'open'; }).length;
@@ -19,17 +25,43 @@ export const COMMENTS_FRAGMENT = `
             empty.className = 'props-empty';
             empty.textContent = 'No UI comments yet. Pick an element and add one.';
             el.commentsHost.appendChild(empty);
+            if (keep) { (el.composeText.disabled ? el.tabComments : el.composeText).focus(); }
             return;
         }
 
+        el.commentsHost.setAttribute('role', 'list');
+        el.commentsHost.setAttribute('aria-label', 'UI comments');
         for (const comment of state.comments) {
             el.commentsHost.appendChild(buildComment(comment));
         }
+        if (keep) { restoreCommentFocus(keep); }
+    }
+
+    /** Same action on the same comment, else the next comment's first action, else the compose box. */
+    function restoreCommentFocus(keep) {
+        const buttons = Array.from(el.commentsHost.querySelectorAll('[data-action]'));
+        const mine = buttons.filter(function (b) { return b.dataset.commentId === keep.id; });
+        const target = mine.find(function (b) { return b.dataset.action === keep.action; })
+            || mine[0] || buttons[0] || el.composeText;
+        target.focus();
+    }
+
+    function commentButton(comment, action, label, subject) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'pbtn';
+        button.textContent = label;
+        button.dataset.commentId = comment.id;
+        button.dataset.action = action;
+        button.setAttribute('aria-label', label + ' comment on ' + subject);
+        return button;
     }
 
     function buildComment(comment) {
         const box = document.createElement('div');
         box.className = 'comment' + (comment.status && comment.status !== 'open' ? ' ' + comment.status : '');
+        box.setAttribute('role', 'listitem');
+        const subject = comment.element || comment.automationId || 'element';
 
         const element = document.createElement('div');
         element.className = 'comment-el';
@@ -68,10 +100,8 @@ export const COMMENTS_FRAGMENT = `
         actions.className = 'comment-actions';
 
         if (comment.handle) {
-            const reveal = document.createElement('button');
-            reveal.type = 'button';
-            reveal.className = 'pbtn';
-            reveal.textContent = 'Show in tree';
+            const reveal = commentButton(comment, 'reveal', 'Show in tree', subject);
+            reveal.setAttribute('aria-label', 'Show ' + subject + ' in tree');
             reveal.addEventListener('click', function () {
                 setView('tree');
                 selectHandle(comment.handle);
@@ -81,20 +111,14 @@ export const COMMENTS_FRAGMENT = `
         }
 
         if (comment.status === 'open') {
-            const resolve = document.createElement('button');
-            resolve.type = 'button';
-            resolve.className = 'pbtn';
-            resolve.textContent = 'Resolve';
+            const resolve = commentButton(comment, 'resolve', 'Resolve', subject);
             resolve.addEventListener('click', function () {
                 vscode.postMessage({ type: 'resolveComment', id: comment.id });
             });
             actions.appendChild(resolve);
         }
 
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'pbtn';
-        remove.textContent = 'Delete';
+        const remove = commentButton(comment, 'delete', 'Delete', subject);
         remove.addEventListener('click', function () {
             vscode.postMessage({ type: 'deleteComment', id: comment.id });
         });

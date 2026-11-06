@@ -211,7 +211,7 @@ DevTools has two halves, and you can use either on its own:
 |---|---|
 | **Visual tree** | The live element tree. Hovering highlights an element; selecting a row also synchronizes the engine selection. Expand a truncated branch to load its children. |
 | **Filter** | Type to match element types and names; prefix with `#` to search names only. |
-| **Pick element** (Ctrl+Shift+P) | Click an element in the running app to select it in the tree. |
+| **Pick element** (Ctrl+Shift+C) | Click an element in the running app to select it in the tree. |
 | **Track keyboard focus** | Follow focus through the app as you tab around it — useful for chasing down accessibility and tab-order bugs. |
 | **Layout adorners** | Draw margin, padding and alignment over the selected element, in the app and as a box model in the panel. |
 | **Just my XAML** | Hide framework-internal elements so the tree matches the markup you wrote. On by default. |

@@ -199,6 +199,13 @@ export class DevToolsPanel {
         DevToolsPanel.open.get(processId)?.dispose();
     }
 
+    /** The panel's pick shortcut; a contributed keybinding so it never also opens VS Code UI. */
+    static togglePickInActive(): void {
+        for (const instance of DevToolsPanel.open.values()) {
+            if (instance.panel.active) { instance.post({ type: 'togglePick' }); return; }
+        }
+    }
+
     static async showComments(extensionUri: vscode.Uri, sourceRoot: string): Promise<DevToolsPanel> {
         const key = sourceRoot.toLowerCase();
         const existing = DevToolsPanel.commentPanels.get(key);

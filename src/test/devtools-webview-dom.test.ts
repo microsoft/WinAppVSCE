@@ -1197,6 +1197,51 @@ test('a hash prefix searches names only, as the placeholder promises', async () 
     assert.ok(text.includes('RootFrame'), 'expected the named match');
 });
 
+test('comment actions name the comment they act on, and focus survives the list rebuild', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.doc.getElementById('tab-comments')?.dispatchEvent(new h.dom.window.Event('click', { bubbles: true }));
+    const two = [
+        { id: 'a', text: 'one', status: 'open', element: 'CounterButton' },
+        { id: 'b', text: 'two', status: 'open', element: 'CounterText' },
+    ];
+    h.send({ type: 'comments', comments: two } as unknown as ExtensionToWebviewMessage);
+    const host = h.doc.getElementById('comments-host')!;
+    assert.equal(host.getAttribute('role'), 'list');
+    assert.equal(host.querySelectorAll('[role="listitem"]').length, 2);
+    const del = h.doc.querySelector('button[aria-label="Delete comment on CounterText"]') as HTMLElement;
+    assert.ok(del, 'each Delete says which comment it removes');
+
+    del.focus();
+    h.send({ type: 'comments', comments: two } as unknown as ExtensionToWebviewMessage);
+    assert.equal(h.doc.activeElement?.getAttribute('aria-label'), 'Delete comment on CounterText', 'same action keeps focus');
+
+    (h.doc.querySelector('button[aria-label="Delete comment on CounterText"]') as HTMLElement).focus();
+    h.send({ type: 'comments', comments: [two[0]] } as unknown as ExtensionToWebviewMessage);
+    assert.equal(h.doc.activeElement?.getAttribute('data-comment-id'), 'a', 'a deleted comment hands focus to the next one');
+
+    (h.doc.querySelector('button[data-comment-id="a"]') as HTMLElement).focus();
+    h.send({ type: 'comments', comments: [] } as unknown as ExtensionToWebviewMessage);
+    assert.ok(['compose-text', 'tab-comments'].includes(h.doc.activeElement?.id ?? ''), 'the last deletion keeps focus in the view');
+});
+
+test('a bound property announces its binding with its value', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    const text = { name: 'Text', value: 'Hello', valueType: 'System.String', editKind: 'text', valueSource: 'Binding', binding: '{Binding Title}' };
+    h.send({ type: 'properties', properties: { ...LIVE_PROPS, props: [text] } } as unknown as ExtensionToWebviewMessage);
+    assert.ok(h.doc.querySelector('#props-viewport button[aria-label="Text: Hello, bound to {Binding Title}"]'));
+});
+
+test('the pick shortcut command toggles pick mode in the panel', async () => {
+    const h = loadPanel();
+    await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
+    h.send({ type: 'capabilities', canEdit: true, canPick: true, canHighlight: true } as ExtensionToWebviewMessage);
+    h.posted.length = 0;
+    h.send({ type: 'togglePick' } as ExtensionToWebviewMessage);
+    assert.ok(h.posted.some(m => m.type === 'setPick' || m.type === 'pick' || String(m.type).toLowerCase().includes('pick')));
+});
+
 test('adding a comment requires a selected element to anchor it', async () => {
     const h = loadPanel();
     await h.sendAndFlush({ type: 'tree', tree: LIVE_TREE } as ExtensionToWebviewMessage);
