@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+**/TestResults/
+**/qa-results/
+*.vsix
+*.log
+*.bak

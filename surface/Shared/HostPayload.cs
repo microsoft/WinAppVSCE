@@ -1,0 +1,278 @@
+#nullable enable
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Threading;
+
+namespace WinUISurface.Shared;
+
+// Linked into net8 provisioning and net472 adapters. No IDE or UI dependencies.
+internal sealed class PayloadManifest
+{
+    public int Format { get; set; } = 2;
+    public string Key { get; set; } = "";
+    public string Version { get; set; } = "";
+    public string EngineStamp { get; set; } = "";
+    public Dictionary<string, string> Files { get; set; } = new Dictionary<string, string>();
+}
+
+internal static class HostPayload
+{
+    public const string ManifestName = ".payload.json";
+    public const string RunMarker = ".surface-run";
+    /// <summary>Provisioner stderr line emitted on a cache miss, just before the slow compile starts.</summary>
+    public const string CompilingMarker = "PHASE: compiling matched host";
+    public static string Hash(string path, CancellationToken cancellation = default)
+    {
+        cancellation.ThrowIfCancellationRequested();
+        using var sha = SHA256.Create();
+        using var stream = File.OpenRead(path);
+        var buffer = new byte[81920];
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) != 0)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            sha.TransformBlock(buffer, 0, read, buffer, 0);
+        }
+        cancellation.ThrowIfCancellationRequested();
+        sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+        return BitConverter.ToString(sha.Hash!).Replace("-", "").ToLowerInvariant();
+    }
+
+    public static void Seal(string host, string key, string version, string stamp, CancellationToken cancellation = default)
+    {
+        var m = new PayloadManifest { Key = key, Version = version, EngineStamp = stamp };
+        foreach (var path in Directory.GetFiles(host, "*", SearchOption.AllDirectories).OrderBy(p => p, StringComparer.Ordinal))
+        {
+            var rel = path.Substring(host.TrimEnd('\\', '/').Length + 1);
+            if (rel != ManifestName) m.Files.Add(rel, Hash(path, cancellation));
+        }
+        cancellation.ThrowIfCancellationRequested();
+        File.WriteAllText(Path.Combine(host, ManifestName), JsonSerializer.Serialize(m));
+        Validate(host, key, cancellation);
+    }
+
+    public static PayloadManifest Validate(string host, string? key = null, CancellationToken cancellation = default,
+        Action<string>? log = null)
+    {
+        var m = ReadManifest(File.ReadAllText(Path.Combine(host, ManifestName)), key, cancellation);
+        foreach (var pair in m.Files)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (Hash(Path.Combine(host, pair.Key), cancellation) != pair.Value)
+                throw new InvalidDataException("Payload hash mismatch: " + pair.Key);
+            log?.Invoke("Validated payload member: " + pair.Key);
+        }
+        RejectUnexpectedFiles(host, m, cancellation);
+        return m;
+    }
+
+    // Structural checks only (identity, required members, safe relative paths); no file content is read.
+    private static PayloadManifest ReadManifest(string text, string? key, CancellationToken cancellation)
+    {
+        cancellation.ThrowIfCancellationRequested();
+        var m = JsonSerializer.Deserialize<PayloadManifest>(text)
+            ?? throw new InvalidDataException("Missing payload manifest.");
+        if (m.Format != 2 || string.IsNullOrEmpty(m.Key) || (key != null && m.Key != key))
+            throw new InvalidDataException("Payload identity mismatch.");
+        foreach (var required in new[] { "Surface.exe", "Surface.dll", "Surface.pri", "Surface.designtime.pri",
+            "Surface.deps.json", "Surface.runtimeconfig.json", "Microsoft.WinUI.dll", "Microsoft.ui.xaml.dll" })
+            if (!m.Files.ContainsKey(required)) throw new InvalidDataException("Incomplete payload: " + required);
+        foreach (var rel in m.Files.Keys)
+            if (Path.IsPathRooted(rel) || rel.Split('\\', '/').Any(p => p == ".."))
+                throw new InvalidDataException("Unsafe payload member.");
+        return m;
+    }
+
+    // Unknown payload files could shadow assemblies/resources; run ownership marker is the only extra.
+    private static void RejectUnexpectedFiles(string host, PayloadManifest m, CancellationToken cancellation)
+    {
+        foreach (var path in Directory.EnumerateFiles(host, "*", SearchOption.AllDirectories))
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (!m.Files.ContainsKey(path.Substring(host.TrimEnd('\\', '/').Length + 1)) &&
+                path != Path.Combine(host, ManifestName) && path != Path.Combine(host, RunMarker))
+                throw new InvalidDataException("Unexpected payload file.");
+        }
+        cancellation.ThrowIfCancellationRequested();
+    }
+
+    // Caller supplies a NEW, private path; no mirrors/deletions of caller-owned existing directories.
+    public static PayloadManifest CreateRunCopy(string host, string destination,
+        CancellationToken cancellation = default, Action<string>? log = null)
+    {
+        cancellation.ThrowIfCancellationRequested();
+        host = CanonicalDirectory(host);
+        destination = CanonicalDirectory(destination);
+        var staging = destination + ".preparing-" + Guid.NewGuid().ToString("N");
+        // Component boundaries matter: H2 is a valid sibling of H, but H/run is not.
+        // Check both paths before any filesystem writes, including creation of staging parents.
+        if (IsWithin(destination, host) || IsWithin(staging, host))
+            throw new IOException("Run-copy destination and staging must be outside the pristine host.");
+        // One pass: each member is hashed while it is copied and must match the manifest, so every byte
+        // the run uses is verified without separately re-reading the pristine host or the finished copy.
+        var manifestText = File.ReadAllText(Path.Combine(host, ManifestName));
+        var m = ReadManifest(manifestText, null, cancellation);
+        if (Directory.Exists(destination) || File.Exists(destination))
+            throw new IOException("Run-copy destination must not exist: " + destination);
+        // Publish without replacing an existing destination. Cancellation owns only this unique sibling,
+        // never the caller's destination or the validated source/cache generation.
+        if (Directory.Exists(staging) || File.Exists(staging))
+            throw new IOException("Run-copy staging collision: " + staging);
+        Directory.CreateDirectory(staging);
+        try
+        {
+            foreach (var pair in m.Files)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                var dest = Path.Combine(staging, pair.Key);
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                if (CopyAndHash(Path.Combine(host, pair.Key), dest, cancellation) != pair.Value)
+                    throw new InvalidDataException("Payload hash mismatch: " + pair.Key);
+                log?.Invoke("Copied run payload: " + pair.Key);
+            }
+            File.WriteAllText(Path.Combine(staging, ManifestName), manifestText);
+            log?.Invoke("Copied run payload: " + ManifestName);
+            log?.Invoke("Validating prepared run payload.");
+            RejectUnexpectedFiles(staging, m, cancellation);
+            File.WriteAllText(Path.Combine(staging, RunMarker), Guid.NewGuid().ToString("N"));
+            // A freshly written tree can be briefly held open by AV/indexer scans, which surfaces as a transient
+            // access-denied/sharing failure on the rename. Retry briefly; never over an existing destination.
+            for (var attempt = 0; ; attempt++)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                try
+                {
+                    Directory.Move(staging, destination);
+                    break;
+                }
+                catch (Exception ex) when (attempt < 10 && (ex is IOException or UnauthorizedAccessException)
+                    && Directory.Exists(staging) && !Directory.Exists(destination) && !File.Exists(destination))
+                {
+                    log?.Invoke($"Run-copy publish retry {attempt + 1}: {ex.Message}");
+                    Thread.Sleep(50 * (attempt + 1));
+                }
+            }
+            return m;
+        }
+        finally
+        {
+            if (Directory.Exists(staging)) DeleteOwnedDirectory(staging);
+        }
+    }
+
+    public static void CopyFile(string source, string destination, CancellationToken cancellation = default) =>
+        Copy(source, destination, null, cancellation);
+
+    private static string CopyAndHash(string source, string destination, CancellationToken cancellation)
+    {
+        using var sha = SHA256.Create();
+        Copy(source, destination, sha, cancellation);
+        sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+        return BitConverter.ToString(sha.Hash!).Replace("-", "").ToLowerInvariant();
+    }
+
+    private static void Copy(string source, string destination, HashAlgorithm? hash, CancellationToken cancellation)
+    {
+        cancellation.ThrowIfCancellationRequested();
+        using var input = File.OpenRead(source);
+        using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        var buffer = new byte[81920];
+        int read;
+        while ((read = input.Read(buffer, 0, buffer.Length)) != 0)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            hash?.TransformBlock(buffer, 0, read, buffer, 0);
+            output.Write(buffer, 0, read);
+        }
+        cancellation.ThrowIfCancellationRequested();
+    }
+
+    private static string CanonicalDirectory(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full)!;
+        full = full.Length == root.Length ? root : full.TrimEnd('\\', '/');
+        // Reject Windows aliases and reparse ancestors instead of resolving through them.
+        for (var current = full; current != null; current = Path.GetDirectoryName(current))
+        {
+            var name = Path.GetFileName(current);
+            if (name.EndsWith(".", StringComparison.Ordinal) || name.EndsWith(" ", StringComparison.Ordinal))
+                throw new IOException("Ambiguous directory component: " + current);
+            if ((Directory.Exists(current) || File.Exists(current)) &&
+                (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("Run-copy directory links are not supported: " + current);
+        }
+        return full;
+    }
+
+    private static bool IsWithin(string path, string parent) =>
+        string.Equals(path, parent, StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith(parent.TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+
+    // Only for invocation-owned paths. Never traverse a directory junction/symlink during cleanup.
+    public static void DeleteOwnedDirectory(string path)
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0)
+        {
+            foreach (var file in Directory.GetFiles(path)) File.Delete(file);
+            foreach (var child in Directory.GetDirectories(path)) DeleteOwnedDirectory(child);
+        }
+        Directory.Delete(path);
+    }
+
+    public const string TrashPrefix = ".trash-";
+
+    // Atomically claims a directory by renaming it to a sibling trash name, then deletes it. A Surface
+    // process uses its run directory as its working directory, which blocks the rename, so a directory
+    // in use is never touched. Returns false (and leaves the directory) when the claim fails. A delete
+    // interrupted by a late-released file leaves a trash directory that the next sweep retries.
+    public static bool TryRetire(string path, Action<string>? log = null, int deleteAttempts = 1)
+    {
+        string claimed;
+        if (Path.GetFileName(path).StartsWith(TrashPrefix, StringComparison.Ordinal)) claimed = path;
+        else
+        {
+            claimed = Path.Combine(Path.GetDirectoryName(path)!, TrashPrefix + Guid.NewGuid().ToString("N"));
+            try { Directory.Move(path, claimed); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        }
+        for (var attempt = 1; ; attempt++)
+        {
+            try { DeleteOwnedDirectory(claimed); return true; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= deleteAttempts)
+                {
+                    log?.Invoke("Deferred cleanup of '" + claimed + "': " + ex.Message);
+                    return true;
+                }
+                Thread.Sleep(500);
+            }
+        }
+    }
+
+    // Removes run-copies (and abandoned staging/trash directories) under a run root that are older than
+    // minAge and not in use. Age protects a copy between creation and process launch.
+    public static int SweepRunRoot(string root, TimeSpan minAge, Action<string>? log = null)
+    {
+        if (!Directory.Exists(root)) return 0;
+        var cutoff = DateTime.UtcNow - minAge;
+        var removed = 0;
+        foreach (var dir in Directory.GetDirectories(root))
+        {
+            try
+            {
+                var info = new DirectoryInfo(dir);
+                var trash = info.Name.StartsWith(TrashPrefix, StringComparison.Ordinal);
+                if (!trash && (info.CreationTimeUtc > cutoff || info.LastWriteTimeUtc > cutoff)) continue;
+                if (TryRetire(dir, log)) removed++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return removed;
+    }
+}

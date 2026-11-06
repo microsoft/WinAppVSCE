@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- App code that reads loose content files from the app folder, and app code that faults in an async void
+     handler after load (both patterns used by WinUI Gallery's ControlExample). -->
+<Page
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:TestFixtureApp.Controls">
+    <StackPanel Padding="16" Spacing="12">
+        <c:ContentFileReader />
+        <c:AsyncThrowingControl />
+        <TextBlock Text="Still alive" />
+    </StackPanel>
+</Page>

@@ -1,0 +1,157 @@
+name: XAML Previewer CI
+
+# PR gate for the Visual Studio WinUI XAML previewer (vs-extension/, surface/).
+# `tests` runs the non-VS lane and builds a shareable VSIX; `vs-integration` then drives a real
+# Visual Studio + Surface through the full in-VS suite on all three hosted Windows images.
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "vs-extension/**"
+      - "surface/**"
+      - ".github/workflows/previewer-ci.yml"
+  push:
+    branches: [ "main" ]
+    paths:
+      - "vs-extension/**"
+      - "surface/**"
+      - ".github/workflows/previewer-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: previewer-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests + VSIX
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: '24'
+
+    - name: Install npm dependencies
+      run: npm ci
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: '10.0.x'
+
+    # Fault-injection, unit, source-map, XamlCleaner, identity-logic, provisioner and protocol tests.
+    - name: Run tests
+      shell: pwsh
+      run: ./vs-extension/Test-Migration.ps1
+
+    - name: Build VSIX
+      shell: pwsh
+      run: ./vs-extension/WinUIXamlPreview/Build-Vsix.ps1 -Configuration Release -NoDeploy
+
+    - name: Upload VSIX
+      id: upload
+      uses: actions/upload-artifact@v7
+      with:
+        name: WinUIXamlPreview-vsix
+        path: vs-extension/WinUIXamlPreview/bin/Release/WinUIXamlPreview.vsix
+        if-no-files-found: error
+        retention-days: 90
+
+    - name: Summary
+      shell: pwsh
+      env:
+        ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+      run: |
+        @"
+        ## WinUI XAML Previewer VSIX
+
+        **Download:** $env:ARTIFACT_URL
+
+        Unzip, then double-click ``WinUIXamlPreview.vsix`` (Visual Studio 17.8+). Link expires in 90 days.
+        "@ | Add-Content $env:GITHUB_STEP_SUMMARY
+
+  vs-integration:
+    name: VS integration (${{ matrix.os }})
+    needs: tests
+    strategy:
+      fail-fast: false
+      matrix:
+        # VS 2026 x64, VS 2022 x64, VS 2026 ARM64
+        os: [ windows-latest, windows-2022, windows-11-arm ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: '24'
+
+    - name: Install npm dependencies
+      run: npm ci
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: '10.0.x'
+
+    # Hosted x64 images ship only the runtime framework package; Surface's bootstrapper also needs
+    # Main/Singleton/DDLM (otherwise it exits 0x80670016). Windows PowerShell: pwsh's Appx module
+    # fails on windows-2022.
+    - name: Install Windows App Runtime 2.5
+      shell: powershell
+      run: |
+        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+        $exe = "$env:RUNNER_TEMP\wasdk-runtime.exe"
+        Invoke-WebRequest "https://aka.ms/windowsappsdk/2.5/latest/windowsappruntimeinstall-$arch.exe" -OutFile $exe -UseBasicParsing
+        & $exe --quiet --force
+        if ($LASTEXITCODE -ne 0) { throw "Windows App Runtime installer exited $LASTEXITCODE" }
+
+    # Exits non-zero when any test fails. Flakes: rerun the job (`gh run rerun --job <id>`).
+    - name: In-VS integration suite
+      shell: pwsh
+      run: ./vs-extension/Test-VsIntegration.ps1 -TimeoutMinutes 60
+
+    - name: Summary
+      if: ${{ !cancelled() }}
+      shell: pwsh
+      run: |
+        $r = "$env:TEMP\wxp-vs-integration\results.log"
+        $out = if (Test-Path $r) {
+          $lines = Get-Content $r
+          $total = ($lines | Select-String '=====' | Select-Object -Last 1).Line
+          $fails = $lines | Select-String '^\S+ (FAIL |SETUP FAILED)' | ForEach-Object {
+            $l = $_.Line; if ($l.Length -gt 300) { $l.Substring(0, 300) + '…' } else { $l } }
+          $s = "### ${{ matrix.os }}: $(if ($total) { $total -replace '^\S+\s+', '' } else { 'no totals (run aborted)' })"
+          if ($fails) { $s += "`n``````n$($fails -join "`n")`n``````" }
+          $s
+        } else { "### ${{ matrix.os }}: no results.log (setup failed before tests ran)" }
+        $out | Add-Content $env:GITHUB_STEP_SUMMARY
+
+    - name: Collect logs
+      if: ${{ failure() }}
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force vsint-logs | Out-Null
+        Copy-Item "$env:TEMP\wxp-vs-integration\*.log" vsint-logs -ErrorAction SilentlyContinue
+        Copy-Item "$env:LOCALAPPDATA\WinUIXamlPreview\preview.log" vsint-logs -ErrorAction SilentlyContinue
+
+    - name: Upload logs
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: vs-integration-logs-${{ matrix.os }}
+        path: vsint-logs
+        if-no-files-found: warn
+        retention-days: 14

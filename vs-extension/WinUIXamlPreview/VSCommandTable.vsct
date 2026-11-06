@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+
+  <!--
+    Adds a single "WinUI XAML Preview" command under View -> Other Windows that shows the preview
+    tool window on demand. The tool window still auto-shows on shell init, but this gives users a
+    discoverable, standard entry point (and a way to reopen it after closing).
+  -->
+
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+
+  <Commands package="guidPreviewPackage">
+    <Groups>
+      <!-- Our own group, parented to the View -> Other Windows menu group. -->
+      <Group guid="guidPreviewCmdSet" id="ViewOtherWindowsGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDG_VS_WNDO_OTRWNDWS1" />
+      </Group>
+    </Groups>
+
+    <Buttons>
+      <Button guid="guidPreviewCmdSet" id="ShowPreviewCommandId" priority="0x0100" type="Button">
+        <Parent guid="guidPreviewCmdSet" id="ViewOtherWindowsGroup" />
+        <Strings>
+          <ButtonText>WinUI XAML Preview</ButtonText>
+          <MenuText>WinUI XAML Preview</MenuText>
+          <ToolTipText>Show the live WinUI XAML preview pane</ToolTipText>
+        </Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <Symbols>
+    <GuidSymbol name="guidPreviewPackage" value="{d4245f7f-5871-4a4d-97c1-84595921b383}" />
+
+    <GuidSymbol name="guidPreviewCmdSet" value="{5c97e212-6033-4935-8de3-82e1bd9245df}">
+      <IDSymbol name="ViewOtherWindowsGroup" value="0x1020" />
+      <IDSymbol name="ShowPreviewCommandId" value="0x0100" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>
