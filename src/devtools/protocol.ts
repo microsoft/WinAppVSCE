@@ -305,6 +305,7 @@ export const USED_METHODS = [
     'Comment.resolve',
     'Comment.delete',
     'Binding.diagnose',
+    'Binding.capture',
     'Binding.walk',
     'Binding.restore',
     'Resource.resolve',
