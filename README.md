@@ -32,6 +32,9 @@ packaging, and language-service commands.
 |---------|-------------|
 | **WinApp: Create WinUI App** | Scaffold a new WinUI 3 app from an official Windows App SDK template. Pick a template, name it, and choose where it goes. Works with no folder open. Requires the .NET SDK. |
 | **WinApp: Initialize Project** | Set up a new project with the Windows SDK and/or Windows App SDK. Prompts for SDK channel (stable, preview, experimental, or none). |
+| **WinApp: Create Sparse Identity Manifest** | Generate an identity-only `appxmanifest.xml` for an existing executable, without installing SDKs or restructuring the project. Step 1 of the sparse packaging workflow. |
+| **WinApp: Create Sparse Identity Package** | Package a sparse identity manifest into an identity-only `.msix`. Step 2 of the sparse packaging workflow. |
+| **WinApp: Embed Identity into Executable** | Embed a generated sparse identity into an executable (or write it to a side-by-side `.manifest`). Step 3 of the sparse packaging workflow. |
 | **WinApp: Restore Packages** | Restore project packages and dependencies. |
 | **WinApp: Update Packages** | Update packages and dependencies to the latest versions. |
 | **WinApp: Run Application** | Build and run your app as a loose-layout packaged application with full package identity, which is great for testing APIs that require identity. Select a project (`.csproj`), a solution (`.sln`/`.slnx`), or an already-built output folder. |
@@ -64,7 +67,7 @@ When you run a project-context WinApp command (such as **Initialize Project**, *
 2. **Project at workspace root**: If a recognized project exists at the root, commands run there immediately.
 3. **Automatic scan**: Searches the workspace for compatible projects and prompts if multiple are found.
 
-Commands that already take an explicit file target — such as **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers) — operate on the file you select and do not run project detection.
+Commands that already take an explicit target, such as **Create Sparse Identity Package** (sparse manifest), **Create Sparse Identity Manifest** and **Embed Identity into Executable** (executable pickers), **Sign File** (workspace QuickPick with file-dialog fallback), **Install Certificate**, and **Certificate Info** (file pickers), operate on the file or folder you select and do not run project detection.
 
 **Run Application**, **F5**, and project-mode **Create MSIX Package or Bundle** share runnable `.csproj` and `.sln` discovery rather than the project-directory detection above. Run falls back to build output when no runnable project is available; packaging asks up front whether to build a project or package existing output. You can always pick something that wasn't listed with **Browse…**. Running or packaging a build output folder needs a `Package.appxmanifest` (or `AppxManifest.xml`) in it. Run **WinApp: Generate Manifest** if you don't have one.
 
@@ -369,6 +372,41 @@ Use **WinApp: Generate Manifest** to create an `Package.appxmanifest` from a tem
 Use **WinApp: Create MSIX Package or Bundle** to package either a .NET `.csproj` or existing build output. A single target produces an `.msix`; selecting multiple architectures or build output folders produces an `.msixbundle`.
 
 When packaging finishes, you can reveal, sign, or install the generated package. Use **WinApp: Sign File** to sign MSIX/APPX packages, `.exe` files, and `.dll` files with a `.pfx` certificate.
+
+Use **WinApp: Create Sparse Identity Package** for an identity-only manifest. It produces a `.identity.msix` and offers **Reveal** and **Sign**, but not the normal **Install** action because registration also requires the external application location.
+
+### Give an existing app package identity (sparse packaging)
+
+Sparse packaging grants package identity to an app that already builds and ships as a plain desktop executable, with no project restructuring, SDK install, or deployment change. The app keeps running from its normal install location; only a small identity package is registered alongside it.
+
+Run these three commands in order:
+
+1. **WinApp: Create Sparse Identity Manifest**: Pick the executable you want to grant identity to. WinApp generates an identity-only `appxmanifest.xml` plus placeholder `Assets/` in a `sparse/` folder beside the project. Package name, publisher, and version are inferred from the executable's file version info; open the generated manifest in the **AppxManifest Editor** if you want to change them. If a manifest is already there, WinApp asks before overwriting it.
+2. **WinApp: Create Sparse Identity Package**: Select the generated `sparse/appxmanifest.xml`. This produces a `.identity.msix`. Sign it with **WinApp: Sign File** (or let the pack step generate a development certificate). To trust that generated certificate, run **WinApp: Install Certificate**, which handles the required administrator prompt.
+3. **WinApp: Embed Identity into Executable**: Point at the same executable. WinApp records the package identity so Windows will associate the running process with the registered package.
+
+> **Important:** Embedding identity into an `.exe` rewrites the binary in place, which invalidates any existing Authenticode signature. WinApp displays a reminder while embedding; sign the executable *after* embedding, not before. Choosing a side-by-side `.manifest` target instead leaves the binary untouched.
+
+For local testing, finish the workflow by deploying the generated assets beside
+the executable and registering the identity package against that external
+location:
+
+```powershell
+Copy-Item .\sparse\Assets -Destination .\bin\Release\Assets -Recurse -Force
+Add-AppxPackage -Path .\MyApp.identity.msix `
+  -ExternalLocation (Resolve-Path .\bin\Release)
+```
+
+The external location must be the directory that contains the executable and
+the `Assets\` layout referenced by the sparse manifest. This is why sparse
+packages offer **Reveal** and **Sign**, but not the normal **Install** action:
+registration requires the application-specific external location. Production
+installers should copy the app, assets, and identity MSIX, then perform the same
+external-location registration. Unregister during cleanup with:
+
+```powershell
+Get-AppxPackage -Name <manifest Identity Name> | Remove-AppxPackage
+```
 
 ### Access Windows SDK tools
 

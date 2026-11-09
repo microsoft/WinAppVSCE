@@ -21,36 +21,37 @@ export type PackNotificationAction = 'reveal' | 'sign' | 'install' | 'none';
 export type PackCompletionPlan =
 	| { kind: 'cancelled' }
 	| { kind: 'error'; message: string }
-	| { kind: 'success'; artifactPath: string; appName: string | undefined; message: string };
+	| {
+			kind: 'success';
+			artifactPath: string;
+			appName: string | undefined;
+			message: string;
+			actions: PackActionLabel[];
+	  };
 
 /**
  * Markers the CLI prints immediately before the produced artifact path.
  *
- * A single-package run prints `📦 Package:` while a multi-folder bundle run
- * prints `📦 Bundle:` instead (see `PackageCommand.cs` in microsoft/winappcli:
- * `$"{UiSymbols.Package} Package: {result.MsixPath}"` vs
- * `$"{UiSymbols.Package} Bundle: {result.BundlePath}"`). Both must be accepted,
- * otherwise a successful bundle is misreported as a packaging failure.
+ * The wording varies for a full package, bundle, and identity-only package:
  *
- * The bundle branch prints no per-slice `📦 Package:` line — individual slices
- * are reported as `[1/2] Packing x64...` — so there is never more than one
- * artifact marker to choose between.
+ *   📦 Package:           C:\out\MyApp_1.0.0_x64.msix
+ *   📦 Bundle:            C:\out\MyApp_1.0.0_x64_arm64.msixbundle
+ *   📦 Identity package:  C:\out\MyApp.identity.msix
  *
- * The path may follow on the same line or wrap onto subsequent lines, so the
- * parser tolerates both layouts.
+ * The path may follow on the same line or wrap onto subsequent lines.
  */
-const PACKAGE_MARKERS = ['📦 Package:', '📦 Bundle:'] as const;
+const PACKAGE_MARKERS = ['📦 Identity package:', '📦 Package:', '📦 Bundle:'] as const;
 
 /**
- * Locate the first artifact marker in a line.
+ * Locate the end offset of whichever package marker appears in `line`.
  *
- * @returns The index just past the marker, or `-1` when the line has none.
+ * @returns The index just past the marker, or `-1` when none is present.
  */
 function findMarkerEnd(line: string): number {
 	for (const marker of PACKAGE_MARKERS) {
-		const markerIndex = line.indexOf(marker);
-		if (markerIndex >= 0) {
-			return markerIndex + marker.length;
+		const index = line.indexOf(marker);
+		if (index >= 0) {
+			return index + marker.length;
 		}
 	}
 	return -1;
@@ -74,9 +75,8 @@ function looksLikeArtifactPath(candidate: string): boolean {
  * Extract the absolute path of the artifact produced by `winapp package` from
  * its captured stdout.
  *
- * The CLI prints the path after a `📦 Package:` marker (or `📦 Bundle:` for a
- * multi-folder bundle run), but Spectre.Console wrapping frequently pushes the
- * path onto the line *after* the marker, e.g.:
+ * The CLI prints the path after a package marker, but Spectre.Console
+ * wrapping frequently pushes the path onto the line *after* the marker, e.g.:
  *
  * ```
  *   📦 Package:
@@ -171,6 +171,7 @@ export function planPackCompletion(result: {
 	code: number | null;
 	output: string;
 	cancelled?: boolean;
+	identityOnly?: boolean;
 }): PackCompletionPlan {
 	if (result.cancelled) {
 		return { kind: 'cancelled' };
@@ -195,8 +196,28 @@ export function planPackCompletion(result: {
 		kind: 'success',
 		artifactPath,
 		appName,
-		message: buildPackSuccessMessage(artifactPath, appName)
+		message: buildPackSuccessMessage(artifactPath, appName),
+		actions: getPackActions(result.identityOnly === true)
 	};
+}
+
+/**
+ * Choose the action buttons offered on the completion notification.
+ *
+ * **Install is withheld for identity-only (sparse) packages.** Such a package
+ * carries no binaries and no assets: Windows resolves both from the *external
+ * location* at runtime. Registering it therefore requires
+ * `Add-AppxPackage -ExternalLocation <install-dir>` with the app's assets
+ * already deployed there, which the extension's plain
+ * `Add-AppxPackage -Path <msix>` does not do — offering Install would either
+ * fail outright or register a broken layout missing every logo the manifest
+ * references. Registration for a sparse package is the installer's job.
+ */
+function getPackActions(identityOnly: boolean): PackActionLabel[] {
+	if (identityOnly) {
+		return [PACK_ACTIONS.reveal, PACK_ACTIONS.sign];
+	}
+	return [PACK_ACTIONS.reveal, PACK_ACTIONS.sign, PACK_ACTIONS.install];
 }
 
 /**
