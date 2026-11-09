@@ -511,7 +511,7 @@ internal static partial class XamlValidator
                     scope,
                     typeSystem) &&
                 attribute.Value is { IsMarkupExtension: false } value &&
-                !IsIdentifier(value.Text))
+                !XamlRename.IsValidName(value.Text))
             {
                 diagnostics.Add(Diag(doc, value.InnerSpan, SeverityError, InvalidNameCode,
                     $"'{value.Text}' is not a valid XAML name."));

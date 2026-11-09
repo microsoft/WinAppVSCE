@@ -1260,7 +1260,7 @@ public class XamlCodeActionsTests
     }
 
     [Fact]
-    public void InvalidName_SanitizesUnicodeUsingRenameGrammar()
+    public void InvalidName_DoesNotRewriteAValidUnicodeIdentifier()
     {
         var typeSystem = BuildNameTypeSystem();
         var xaml = "<Page xmlns=\"using:Microsoft.UI.Xaml\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Name=\"Náme\"/>";
@@ -1268,12 +1268,7 @@ public class XamlCodeActionsTests
         int valueAt = xaml.IndexOf("Náme", System.StringComparison.Ordinal);
         var diagnostic = Diag(XamlValidator.InvalidNameCode, R(0, valueAt, valueAt + 4), null);
 
-        var edit = Assert.Single(
-            Assert.Single(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem))
-                .Edit!.Changes[Uri]);
-
-        Assert.Equal("N_me", edit.NewText);
-        Assert.True(XamlRename.IsValidName(edit.NewText));
+        Assert.Empty(XamlCodeActions.Compute(Uri, doc, Context(diagnostic), typeSystem));
     }
 
     [Fact]

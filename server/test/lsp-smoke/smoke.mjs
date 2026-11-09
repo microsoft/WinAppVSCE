@@ -829,16 +829,14 @@ async function main() {
     method: "textDocument/hover",
     params: { textDocument: { uri: xamlUri }, position: pageCaret },
   });
-  const fallbackResponse = await waitFor(responseFor(108), 5000, "post-invalidation suppressed hover");
+  const fallbackResponse = await waitFor(responseFor(108), 5000, "post-invalidation retained hover");
   const fallbackMs = performance.now() - fallbackStarted;
   if (fallbackMs >= 1000) fail(`post-invalidation fallback hover took ${fallbackMs.toFixed(0)} ms`);
-  if (fallbackResponse.result !== null) {
-    fail(`post-invalidation hover should be suppressed while reloading: ${JSON.stringify(fallbackResponse.result)}`);
+  if (!/class Microsoft\.UI\.Xaml\.Controls\.Page/.test(fallbackResponse.result?.contents?.value ?? "")) {
+    fail(`post-invalidation hover should retain the last usable context: ${JSON.stringify(fallbackResponse.result)}`);
   }
 
-  // The load-bearing regression check for non-blocking F12 (issue #220). The cache is provably
-  // empty here (the hover above was suppressed) and the reload takes seconds, so only a
-  // non-blocking definition can answer inside the budget.
+  // F12 remains non-blocking and uses the last good compilation while its replacement loads.
   const reloadDefinitionStarted = performance.now();
   send({
     id: 701,
@@ -847,13 +845,13 @@ async function main() {
   });
   const reloadDefinition = await waitFor(responseFor(701), 90000, "definition during reload");
   const reloadDefinitionMs = performance.now() - reloadDefinitionStarted;
-  if (reloadDefinition.result !== null) {
-    fail(`definition should be suppressed while the project reloads: ${JSON.stringify(reloadDefinition.result)}`);
+  if (!reloadDefinition.result?.uri?.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) {
+    fail(`definition should retain the last usable context during reload: ${JSON.stringify(reloadDefinition.result)}`);
   }
   if (reloadDefinitionMs >= 1000) {
     fail(`definition during reload took ${reloadDefinitionMs.toFixed(0)} ms (contract: <1000 ms — it must not block on the reload)`);
   }
-  console.log(`[ok] definition(reloading): suppressed, did not block on the reload (${reloadDefinitionMs.toFixed(0)} ms)`);
+  console.log(`[ok] definition(reloading): retained, did not block on the reload (${reloadDefinitionMs.toFixed(0)} ms)`);
 
   await reloadLoadingPromise;
   await reloadReadyPromise;
@@ -900,7 +898,7 @@ async function main() {
     fail(`imported props change did not alter project context: ${JSON.stringify(removedDefinition.result)}`);
   }
 
-  console.log(`[ok] hover is suppressed during invalidation and authoritative after reload (${fallbackMs.toFixed(0)} ms suppressed, ${authoritativeMs.toFixed(0)} ms restored)`);
+  console.log(`[ok] hover retains usable context during invalidation and refreshes after reload (${fallbackMs.toFixed(0)} ms retained, ${authoritativeMs.toFixed(0)} ms refreshed)`);
 
   cleanImportedBuild();
   process.removeListener("exit", cleanImportedBuild);
@@ -934,7 +932,7 @@ async function main() {
     `[ok] imported props watched event changes and restores project context (${(performance.now() - recoveryStarted).toFixed(0)} ms, ${attempt} attempts)`
   );
 
-  // Unsaved x:Class edits invalidate only this URI and resolution must use the in-memory text.
+  // Unsaved x:Class edits rebind against the existing compilation without starting a project load.
   const page2Text = xamlText
     .replace("SmokeFixture.SmokePage", "SmokeFixture.Page2")
     .replace("OnGo_Click", "OnOpenDiPage_Click");
@@ -968,7 +966,7 @@ async function main() {
   if (!restoredClassDefinition.result?.uri?.toLowerCase().endsWith(EXPECTED_CODE_BEHIND)) {
     fail(`restored x:Class did not restore SmokePage resolution: ${JSON.stringify(restoredClassDefinition.result)}`);
   }
-  console.log("[ok] in-memory x:Class changes invalidate and rebuild only the document context");
+  console.log("[ok] in-memory x:Class changes rebind the document without rebuilding project context");
 
   // 4) definition (F12) on the {x:Bind GreetingText} path -> the GreetingText property (project cached now)
   send({

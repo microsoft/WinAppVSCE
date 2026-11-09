@@ -15,15 +15,13 @@ namespace WinUiXaml.LanguageServer;
 /// <summary>Handles XAML language-server protocol requests.</summary>
 internal sealed partial class XamlLanguageServer
 {
-    private static readonly Regex IdentifierPattern = new(@"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
-
     private readonly JsonRpcConnection _connection;
     private readonly XamlProjectResolver _resolver;
     private readonly ConcurrentDictionary<string, TextDocument> _documents = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _syntaxOnlyDocuments =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly AsyncSingleFlightCache<string, XamlProjectContext> _contexts =
-        new(StringComparer.OrdinalIgnoreCase);
+        new(StringComparer.OrdinalIgnoreCase, cacheFailures: true);
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, XamlTypeSystem> _typeSystems = new();
     private readonly XamlResourceGraph _resourceGraph = new();
     private readonly ProjectInputTracker _projectInputs = new();
@@ -123,6 +121,9 @@ internal sealed partial class XamlLanguageServer
             case "textDocument/didClose":
                 await DidCloseAsync(Deserialize<DidCloseTextDocumentParams>(@params)).ConfigureAwait(false);
                 break;
+            case "textDocument/didSave":
+                await DidSaveAsync(Deserialize<DidSaveTextDocumentParams>(@params)).ConfigureAwait(false);
+                break;
             case "workspace/didChangeWatchedFiles":
                 await DidChangeWatchedFilesAsync(Deserialize<DidChangeWatchedFilesParams>(@params)).ConfigureAwait(false);
                 break;
@@ -154,7 +155,7 @@ internal sealed partial class XamlLanguageServer
     internal static ServerCapabilities CreateServerCapabilities(bool formattingEnabled) =>
         new()
         {
-            TextDocumentSync = new TextDocumentSyncOptions { OpenClose = true, Change = 1 /* Full */ },
+            TextDocumentSync = new TextDocumentSyncOptions { OpenClose = true, Change = 1 /* Full */, Save = true },
             DefinitionProvider = true,
             ReferencesProvider = true,
             DocumentHighlightProvider = true,
@@ -494,6 +495,7 @@ internal sealed partial class XamlLanguageServer
             p.TextDocument.Text,
             p.TextDocument.Version);
         _documents[p.TextDocument.Uri] = doc;
+        await RevalidateProjectInputsAsync(doc.Uri).ConfigureAwait(false);
         await PublishDiagnosticsAsync(doc).ConfigureAwait(false);
         WarmUp(doc.Uri);
     }
@@ -507,20 +509,48 @@ internal sealed partial class XamlLanguageServer
 
         // Full sync: the last change carries the complete document text.
         var text = p.ContentChanges[^1].Text;
-        _documents.TryGetValue(p.TextDocument.Uri, out var previous);
         var doc = new TextDocument(
             p.TextDocument.Uri,
             text,
             p.TextDocument.Version);
         _documents[p.TextDocument.Uri] = doc;
-        if (!string.Equals(
-            previous is null ? null : XamlIntrospection.GetClass(previous.Text),
-            XamlIntrospection.GetClass(text),
-            StringComparison.Ordinal))
-        {
-            InvalidateContextAndWarm(p.TextDocument.Uri);
-        }
         await PublishDiagnosticsAsync(doc).ConfigureAwait(false);
+    }
+
+    private async Task DidSaveAsync(DidSaveTextDocumentParams p)
+    {
+        await RevalidateProjectInputsAsync(p.TextDocument.Uri, retryFailed: true).ConfigureAwait(false);
+        if (_documents.TryGetValue(p.TextDocument.Uri, out var document))
+        {
+            await PublishDiagnosticsAsync(document).ConfigureAwait(false);
+            if (!TryGetReadyContext(document.Uri, out _))
+            {
+                WarmUp(document.Uri);
+            }
+        }
+    }
+
+    private async Task RevalidateProjectInputsAsync(string uri, bool retryFailed = false)
+    {
+        if (UriToPath(uri) is not { } path ||
+            !TryGetAllowedRoot(path, out var canonicalPath, out var allowedRoot))
+        {
+            return;
+        }
+
+        var changed = _resolver.InvalidateChangedProjects();
+        if (!changed && retryFailed && _contexts.HasCompleted(uri) &&
+            (!TryGetReadyContext(uri, out var context) ||
+             ProjectContextStatusFor(context).State is "generators-unavailable" or "reference-build-failed") &&
+            XamlProjectResolver.FindOwningProject(canonicalPath, allowedRoot) is { } project)
+        {
+            _resolver.Invalidate(project);
+            changed = true;
+        }
+        if (changed)
+        {
+            await ResetContextsAndRefreshDocumentsAsync(eligibilityChanged: false).ConfigureAwait(false);
+        }
     }
 
     private async Task DidCloseAsync(DidCloseTextDocumentParams p)
@@ -726,14 +756,7 @@ internal sealed partial class XamlLanguageServer
     private async Task ResetContextsAndRefreshDocumentsAsync(bool eligibilityChanged)
     {
         _syntaxOnlyDocuments.Clear();
-        if (eligibilityChanged)
-        {
-            _contexts.InvalidateAll();
-        }
-        else
-        {
-            _contexts.RestartAllPreservingLatest();
-        }
+        _contexts.RestartAllPreservingLatest();
 
         // Discard semantic diagnostics produced from the old compilation immediately, then rebuild
         // and republish them against the new project context for every open document.
@@ -766,7 +789,6 @@ internal sealed partial class XamlLanguageServer
 
         if (!TryGetReadyContext(uri, out var context))
         {
-            InvalidateContextAndWarm(uri);
             return;
         }
 

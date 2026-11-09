@@ -1,22 +1,23 @@
-using System.Diagnostics;
 using System.Text.RegularExpressions;
+using System.Diagnostics;
 using Microsoft.CodeAnalysis;
 using Xunit;
 
 namespace WinUiXaml.Workspace.Tests;
 
-/// <summary>Pins the payoff of the reference repair, which nothing else asserts. The repair exists so a never-built <c>ProjectReference</c> still lets the XAML markup compiler run, and the markup compiler is what writes <c>.g.i.cs</c> -- <c>InitializeComponent</c> and one field per <c>x:Name</c>. Every other test around this covers either the failure string or the reported status, so the whole mechanism could be removed and they would all still pass while the feature it was built for silently disappeared. This asserts the generated members themselves, on a project whose reference is genuinely absent from disk.</summary>
+/// <summary>Exercises real WinUI markup generation with isolated outputs and a shared, initially unbuilt reference.</summary>
 public sealed class UnbuiltReferenceStillYieldsGeneratedMembersTests : IDisposable
 {
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "giprobe" + Guid.NewGuid().ToString("N"));
 
-    [Fact]
-    public async Task AProjectWhoseReferenceWasNeverBuiltStillGetsItsXamlGeneratedMembers()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task AProjectWhoseReferenceWasNeverBuiltStillGetsItsXamlGeneratedMembers(
+        bool sharedReference, bool brokenMarkup)
     {
-        // Package versions come from the checked-in fixture: a version this machine has never
-        // restored would send the test to the network, and that failure would read like a project
-        // that simply did not resolve.
         var fixtureProject = GetWinUiFixturePath("SmokeFixture.csproj");
         var fixtureText = await File.ReadAllTextAsync(fixtureProject);
         var tfm = Match(fixtureText, @"<TargetFramework>([^<]+)<", "TargetFramework");
@@ -33,6 +34,9 @@ public sealed class UnbuiltReferenceStillYieldsGeneratedMembersTests : IDisposab
               <PropertyGroup>
                 <TargetFramework>{tfm}</TargetFramework>
                 <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+                <IntermediateOutputPath>obj\user\</IntermediateOutputPath>
+                <OutputPath>bin\user\</OutputPath>
+                <OutDir>bin\user-out\</OutDir>
               </PropertyGroup>
             </Project>
             """);
@@ -54,6 +58,9 @@ public sealed class UnbuiltReferenceStillYieldsGeneratedMembersTests : IDisposab
                 <Platforms>x64;ARM64</Platforms>
                 <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
                 <ImplicitUsings>enable</ImplicitUsings>
+                <IntermediateOutputPath>obj\user\</IntermediateOutputPath>
+                <OutputPath>bin\user\</OutputPath>
+                <OutDir>bin\user-out\</OutDir>
               </PropertyGroup>
               <ItemGroup>
                 <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="{sdkBuildTools}" />
@@ -86,42 +93,107 @@ public sealed class UnbuiltReferenceStillYieldsGeneratedMembersTests : IDisposab
             """);
         await File.WriteAllTextAsync(
             Path.Combine(appDir, "GenPage.xaml.cs"),
-            "namespace GenApp;\npublic partial class GenPage : Microsoft.UI.Xaml.Controls.Page { public GenPage() { InitializeComponent(); } }\n");
+            "namespace GenApp;\npublic partial class GenPage : Microsoft.UI.Xaml.Controls.Page { public string Title => \"Hello\"; public GenPage() { InitializeComponent(); } }\n");
 
-        // Restore only. `dotnet restore` does not build project references, so Lib.dll stays
-        // absent -- which is the whole point of the fixture.
-        using (var restore = Process.Start(new ProcessStartInfo("dotnet", $"restore \"{appProject}\"")
+        if (brokenMarkup)
         {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        })!)
-        {
-            await restore.WaitForExitAsync();
-            Assert.Equal(0, restore.ExitCode);
+            await File.WriteAllTextAsync(Path.Combine(appDir, "Broken.xaml"), """
+                <Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+                    <Buton/>
+                </Page>
+                """);
         }
 
-        Assert.False(
-            Directory.Exists(Path.Combine(libDir, "bin")),
-            "the referenced project must be unbuilt for this test to mean anything");
+        var projects = new List<string> { appProject };
+        if (sharedReference)
+        {
+            var secondApp = Path.Combine(_root, "AppB");
+            Directory.CreateDirectory(secondApp);
+            foreach (var file in Directory.EnumerateFiles(appDir))
+            {
+                File.Copy(file, Path.Combine(secondApp, Path.GetFileName(file)));
+            }
+            projects.Add(Path.Combine(secondApp, Path.GetFileName(appProject)));
+        }
 
-        using var workspace = await RoslynProjectWorkspace.LoadProjectAsync(appProject);
-        var compilation = await workspace.GetCompilationAsync();
-        Assert.NotNull(compilation);
+        foreach (var project in projects)
+        {
+            FixtureRestore.Run(project);
+        }
+        Assert.False(Directory.Exists(Path.Combine(libDir, "bin")));
 
-        var page = compilation!.GetTypeByMetadataName("GenApp.GenPage");
-        Assert.NotNull(page);
+        Dictionary<string, DateTime>? userFiles = null;
+        if (sharedReference)
+        {
+            var start = new ProcessStartInfo(MsBuildCli.DotnetPath!)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            foreach (var argument in new[] { "build", Path.Combine(libDir, "Lib.csproj"), "--no-restore", "--nologo" })
+            {
+                start.ArgumentList.Add(argument);
+            }
+            using var build = Process.Start(start)!;
+            var output = build.StandardOutput.ReadToEndAsync();
+            var error = build.StandardError.ReadToEndAsync();
+            await build.WaitForExitAsync();
+            Assert.True(build.ExitCode == 0, await output + await error);
+            userFiles = Directory.EnumerateFiles(libDir, "*", SearchOption.AllDirectories)
+                .ToDictionary(path => path, File.GetLastWriteTimeUtc);
+        }
+        using var userOutputLock = sharedReference
+            ? new FileStream(Path.Combine(libDir, "bin", "user-out", "Lib.dll"), FileMode.Open, FileAccess.Read, FileShare.Read)
+            : null;
+        var workspaces = await Task.WhenAll(projects.Select(project =>
+            RoslynProjectWorkspace.LoadProjectAsync(project)));
+        foreach (var workspace in workspaces)
+        {
+            using var owned = workspace;
+            var compilation = await workspace.GetCompilationAsync();
+            Assert.NotNull(compilation);
+            var page = compilation.GetTypeByMetadataName("GenApp.GenPage");
+            Assert.NotNull(page);
+            Assert.Single(page.GetMembers("Title"));
+            Assert.Empty(workspace.UnresolvedProjectReferences);
+            Assert.Contains(Path.Combine(appDir, "GenPage.xaml"), workspaces[0].XamlFiles);
 
-        // Both of these come only from the markup compiler's .g.i.cs. Without the repair the
-        // markup compiler aborts on the missing Lib.dll and neither exists.
-        Assert.NotEmpty(page!.GetMembers("InitializeComponent"));
-        var named = Assert.Single(page.GetMembers("NamedFromXaml"));
-        Assert.Equal(
-            "Microsoft.UI.Xaml.Controls.TextBlock",
-            (named as IFieldSymbol)?.Type.ToDisplayString());
-
-        // The referenced project's own types still resolve from source, which is the separate
-        // guarantee the project-reference graph provides.
-        Assert.NotNull(compilation.GetTypeByMetadataName("Lib.Greeter"));
+            if (!brokenMarkup)
+            {
+                Assert.NotEmpty(page.GetMembers("InitializeComponent"));
+                var named = Assert.Single(page.GetMembers("NamedFromXaml"));
+                Assert.Equal(
+                    "Microsoft.UI.Xaml.Controls.TextBlock",
+                    (named as IFieldSymbol)?.Type.ToDisplayString());
+                Assert.All(page.GetMembers("InitializeComponent").SelectMany(member => member.DeclaringSyntaxReferences),
+                    syntax => Assert.False(syntax.SyntaxTree.FilePath.StartsWith(appDir, StringComparison.OrdinalIgnoreCase)));
+            }
+            Assert.NotNull(compilation.GetTypeByMetadataName("Lib.Greeter"));
+            if (brokenMarkup)
+            {
+                Assert.False(workspace.InputsChanged());
+                await File.WriteAllTextAsync(Path.Combine(appDir, "Broken.xaml"),
+                    """<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"><Button/></Page>""");
+                Assert.True(workspace.InputsChanged());
+                using var repaired = await RoslynProjectWorkspace.LoadProjectAsync(appProject);
+                var repairedCompilation = await repaired.GetCompilationAsync();
+                Assert.NotEmpty(repairedCompilation!.GetTypeByMetadataName("GenApp.GenPage")!.GetMembers("InitializeComponent"));
+            }
+        }
+        if (userFiles is not null)
+        {
+            Assert.Equal(userFiles.Keys.Order(), Directory.EnumerateFiles(libDir, "*", SearchOption.AllDirectories).Order());
+            Assert.All(userFiles, file => Assert.Equal(file.Value, File.GetLastWriteTimeUtc(file.Key)));
+        }
+        else
+        {
+            Assert.False(Directory.Exists(Path.Combine(libDir, "bin")));
+            Assert.False(Directory.Exists(Path.Combine(libDir, "obj", "user")));
+        }
+        Assert.False(File.Exists(Path.Combine(appDir, "obj", "Debug", tfm, "input.json")));
+        Assert.False(Directory.Exists(Path.Combine(appDir, "obj", "user")));
+        Assert.False(Directory.Exists(Path.Combine(appDir, "bin")));
     }
 
     private static string PackageVersion(string projectText, string id) =>

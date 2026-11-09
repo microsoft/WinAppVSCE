@@ -543,7 +543,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         int offset = doc.OffsetAt(p.Position);
-        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var context = await GetContextAsync(p.TextDocument.Uri, allowStale: false).ConfigureAwait(false);
         var typeSystem = context?.TypeSystem;
         EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
         EnsureNameRenameDoesNotLeaveCodeBehindReferences(doc, offset, context);
@@ -565,7 +565,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         int offset = doc.OffsetAt(p.Position);
-        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var context = await GetContextAsync(p.TextDocument.Uri, allowStale: false).ConfigureAwait(false);
         var typeSystem = context?.TypeSystem;
         EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
         EnsureNameRenameDoesNotLeaveCodeBehindReferences(doc, offset, context);
@@ -661,6 +661,16 @@ internal sealed partial class XamlLanguageServer
             if (occurrences.Count == 0)
             {
                 return;
+            }
+
+            foreach (var declaration in occurrences.Where(occurrence => occurrence.IsDeclaration))
+            {
+                XamlRename.EnsureNoCollision(
+                    fileDoc,
+                    fileDoc.OffsetAt(declaration.Range.Start),
+                    newName,
+                    XamlRenameKind.Key,
+                    context?.TypeSystem);
             }
 
             hasDeclaration |= occurrences.Any(o => o.IsDeclaration);
@@ -1025,7 +1035,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         var handlerName = attr.Value.Text.Trim();
-        if (!IdentifierPattern.IsMatch(handlerName))
+        if (!XamlRename.IsValidName(handlerName))
         {
             return null;
         }
