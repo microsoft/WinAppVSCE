@@ -543,7 +543,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         int offset = doc.OffsetAt(p.Position);
-        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var context = await GetContextAsync(p.TextDocument.Uri, allowStale: false).ConfigureAwait(false);
         var typeSystem = context?.TypeSystem;
         EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
         EnsureNameRenameDoesNotLeaveCodeBehindReferences(doc, offset, context);
@@ -565,7 +565,7 @@ internal sealed partial class XamlLanguageServer
         }
 
         int offset = doc.OffsetAt(p.Position);
-        var context = await GetContextAsync(p.TextDocument.Uri).ConfigureAwait(false);
+        var context = await GetContextAsync(p.TextDocument.Uri, allowStale: false).ConfigureAwait(false);
         var typeSystem = context?.TypeSystem;
         EnsureCompleteNameRenameSemantics(doc, p.Position, typeSystem);
         EnsureNameRenameDoesNotLeaveCodeBehindReferences(doc, offset, context);

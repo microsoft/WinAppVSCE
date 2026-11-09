@@ -184,7 +184,7 @@ internal sealed partial class XamlLanguageServer
         (await GetContextAsync(uri).ConfigureAwait(false))?.TypeSystem;
 
     /// <summary> Resolves the document to its project <see cref="XamlResolution"/> (for the x:Class symbol) plus the cached <see cref="XamlTypeSystem"/> for its compilation.</summary>
-    private async Task<XamlProjectContext?> GetContextAsync(string uri)
+    private async Task<XamlProjectContext?> GetContextAsync(string uri, bool allowStale = true)
     {
         if (_syntaxOnlyDocuments.ContainsKey(uri))
         {
@@ -192,9 +192,16 @@ internal sealed partial class XamlLanguageServer
         }
 
         if (_documents.TryGetValue(uri, out var document) &&
-            TryGetAcceptedContext(document, out var accepted))
+            TryGetAcceptedContext(document, out var accepted, allowStale))
         {
             return accepted;
+        }
+
+        if (!allowStale)
+        {
+            WarmUp(uri);
+            throw new RequestFailedException(
+                "This operation requires a fully resolved project. Wait for project loading to finish before retrying.");
         }
 
         // A non-blocking request takes whatever is already loaded. Starting the shared warm-up keeps

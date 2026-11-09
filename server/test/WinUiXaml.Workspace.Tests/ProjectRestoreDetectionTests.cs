@@ -5,6 +5,55 @@ namespace WinUiXaml.Workspace.Tests;
 public sealed class ProjectRestoreDetectionTests
 {
     [Theory]
+    [InlineData(true, "1.0", null, null, "1.0", false)]
+    [InlineData(true, "2.0", null, null, "2.0", true)]
+    [InlineData(true, "2.0", null, "1.0", "1.0", false)]
+    [InlineData(true, "1.0", null, "2.0", "2.0", true)]
+    [InlineData(false, "2.0", "1.0", null, "1.0", false)]
+    [InlineData(false, "1.0", "2.0", null, "2.0", true)]
+    public void EvaluatedPackageVersionsRespectCentralManagementAndOverrides(
+        bool centrallyManaged,
+        string centralVersion,
+        string? directVersion,
+        string? versionOverride,
+        string expectedVersion,
+        bool requiresRestore)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "winui-xaml-restore", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "obj"));
+        var project = Path.Combine(root, "App.csproj");
+        File.WriteAllText(Path.Combine(root, "Directory.Packages.props"), $$"""
+            <Project>
+              <PropertyGroup><ManagePackageVersionsCentrally>{{centrallyManaged}}</ManagePackageVersionsCentrally></PropertyGroup>
+              <ItemGroup><PackageVersion Include="Existing" Version="{{centralVersion}}"/></ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(project, $$"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <ItemGroup><PackageReference Include="Existing"
+                {{(directVersion is null ? "" : $"Version=\"{directVersion}\"")}}
+                {{(versionOverride is null ? "" : $"VersionOverride=\"{versionOverride}\"")}}/></ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(root, "obj", "project.assets.json"), """
+            {"targets":{},"libraries":{},"project":{"frameworks":{"net10.0":{
+              "dependencies":{"Existing":{"version":"[1.0.0, )"},"SDK":{"version":"1.0","autoReferenced":true}}
+            }}}}
+            """);
+        try
+        {
+            var evaluation = MsBuildCli.Evaluate(project, new Dictionary<string, string>());
+            Assert.Equal(expectedVersion, Assert.Single(evaluation.PackageReferences).Version);
+            Assert.Equal(requiresRestore, RoslynProjectWorkspace.RequiresRestore(evaluation));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
     [InlineData("Existing", "1.0.0", false)]
     [InlineData("Existing", "1.0", false)]
     [InlineData("Existing", "1", false)]

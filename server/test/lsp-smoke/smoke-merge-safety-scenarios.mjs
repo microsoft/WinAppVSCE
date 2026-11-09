@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -111,11 +111,81 @@ export async function runMergeSafetyScenarios(ctx) {
       assert.equal(response.error?.code, -32803, "resource keys must be unique in the declaration dictionary");
       assert.equal(response.result, undefined);
     }
+    unlinkSync(join(renameRoot, "continue-load"));
+    writeFileSync(join(renameRoot, "Page.cs"), `namespace RenameProbe;
+      public partial class Page : Microsoft.UI.Xaml.Controls.Page {
+        public string Read() => Input.Text;
+        public string ReadNewReference() => Unused.Text;
+      }`);
+    const refreshStarted = waitFor(status(renameUri, "loading"), 90000, "rename refresh started");
+    const refreshing = waitFor(status(renameUri, "framework-ready"), 90000, "rename refresh framework context");
+    const refreshed = waitFor(status(renameUri, "ready"), 120000, "rename refreshed full context");
+    watched(join(renameRoot, "Page.cs"));
+    try {
+      await refreshStarted;
+      for (const method of ["prepareRename", "rename"]) {
+        const response = await request(method, renameUri, { position: unusedPosition, newName: "Spare" });
+        assert.equal(response.error?.code, -32803, `${method} must refuse immediately when the current context is unavailable`);
+        assert.match(response.error.message, /fully resolved project/);
+        assert.equal(response.result, undefined);
+      }
+      await refreshing;
+      for (const method of ["prepareRename", "rename"]) {
+        const response = await request(method, renameUri, { position: unusedPosition, newName: "Spare" });
+        assert.equal(response.error?.code, -32803, `${method} must not use the previous compilation during refresh`);
+        assert.match(response.error.message, /fully resolved project/);
+        assert.equal(response.result, undefined, "refresh-time refusal must not contain partial edits");
+      }
+    } finally {
+      writeFileSync(join(renameRoot, "continue-load"), "");
+    }
+    await refreshed;
+    for (const method of ["prepareRename", "rename"]) {
+      const response = await request(method, renameUri, { position: unusedPosition, newName: "Spare" });
+      assert.equal(response.error?.code, -32803, `${method} must inspect newly saved code-behind references`);
+      assert.match(response.error.message, /code-behind references/);
+      assert.equal(response.result, undefined);
+    }
   } finally {
+    writeFileSync(join(renameRoot, "continue-load"), "");
     close(renameUri);
   }
   console.log("[ok] prepare/direct name rename refuse framework-only contexts; full contexts retain safe rename and code-behind guards");
   console.log("[ok] resource rename rejects commas and equals signs from both declarations and usages without partial edits");
+  console.log("[ok] prepare/direct name rename refuse stale compilations during refresh and detect newly saved C# references");
+
+  const centralProps = join(renameRoot, "Directory.Packages.props");
+  const centralText = version => `<Project>
+    <PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup>
+    <ItemGroup><PackageVersion Include="Microsoft.WindowsAppSDK" Version="${version}"/></ItemGroup>
+  </Project>`;
+  const changedSdkVersion = sdkVersion.replace(/\d+$/, value => String(Number(value) + 1));
+  assert.notEqual(changedSdkVersion, sdkVersion, "central package regression needs a different version");
+  writeFileSync(centralProps, centralText(sdkVersion));
+  writeFileSync(renameProject, readFileSync(renameProject, "utf8").replace(
+    `Include="Microsoft.WindowsAppSDK" Version="${sdkVersion}"`, 'Include="Microsoft.WindowsAppSDK"'));
+  execFileSync("dotnet", ["restore", renameProject, "--nologo"], {
+    stdio: "pipe", timeout: 90000, windowsHide: true,
+  });
+  const centralReady = waitFor(status(renameUri, "ready"), 120000, "centrally managed project ready");
+  open(renameUri, renameText);
+  try {
+    await centralReady;
+    const restoreRequired = waitFor(status(renameUri, "packages-not-restored"), 90000, "changed central package requires restore");
+    writeFileSync(centralProps, centralText(changedSdkVersion));
+    send({ method: "textDocument/didSave", params: { textDocument: { uri: renameUri } } });
+    await restoreRequired;
+    writeFileSync(centralProps, centralText(sdkVersion));
+    execFileSync("dotnet", ["restore", renameProject, "--nologo"], {
+      stdio: "pipe", timeout: 90000, windowsHide: true,
+    });
+    const restored = waitFor(status(renameUri, "ready"), 120000, "central package restore recovery");
+    send({ method: "textDocument/didSave", params: { textDocument: { uri: renameUri } } });
+    await restored;
+  } finally {
+    close(renameUri);
+  }
+  console.log("[ok] central package version changes require restore; matching restored assets recover the project");
 
   const deepUri = "untitled:DeepMarkup.xaml";
   const deepText = `<Grid Tag="${"{Binding Converter=".repeat(50000)}value${"}".repeat(50000)}"/>`;

@@ -557,11 +557,13 @@ namespace WinUiXaml.Workspace
             arguments.Add("-getItem:_WinUiXamlOriginalPage");
             arguments.Add("-getItem:_WinUiXamlOriginalApplicationDefinition");
             arguments.Add("-getItem:PackageReference");
+            arguments.Add("-getItem:PackageVersion");
             arguments.Add("-getItem:ProjectReference");
             arguments.Add("-getItem:_MSBuildProjectReferenceExistent");
             arguments.Add("-getItem:ReferencePath");
             arguments.Add("-getProperty:_GlobalPropertiesToRemoveFromProjectReferences");
             arguments.Add("-getProperty:ProjectAssetsFile");
+            arguments.Add("-getProperty:ManagePackageVersionsCentrally");
             arguments.Add("-getProperty:AssemblyName");
             arguments.Add("-getProperty:TargetFrameworks");
             arguments.Add("-getProperty:TargetFramework");
@@ -594,6 +596,33 @@ namespace WinUiXaml.Workspace
                 assetsFile = Path.Combine(projectDirectory, assetsFile);
             }
 
+            string? PackageVersion(JsonElement item)
+            {
+                if (item.TryGetProperty("VersionOverride", out var versionOverride) &&
+                    versionOverride.GetString() is { Length: > 0 } overridden)
+                {
+                    return overridden;
+                }
+                if (item.TryGetProperty("Version", out var version) &&
+                    version.GetString() is { Length: > 0 } explicitVersion)
+                {
+                    return explicitVersion;
+                }
+                if (string.Equals(ReadProperty(root, "ManagePackageVersionsCentrally"), "true", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var central in (IEnumerable<JsonElement>?)ItemArray(root, "PackageVersion") ?? Enumerable.Empty<JsonElement>())
+                    {
+                        if (string.Equals(central.GetProperty("Identity").GetString(),
+                                item.GetProperty("Identity").GetString(), StringComparison.OrdinalIgnoreCase) &&
+                            central.TryGetProperty("Version", out var centralVersion))
+                        {
+                            return centralVersion.GetString();
+                        }
+                    }
+                }
+                return null;
+            }
+
             return new Evaluation(
                 xamlFiles,
                 applicationDefinitions.FirstOrDefault(),
@@ -610,8 +639,7 @@ namespace WinUiXaml.Workspace
                 (((IEnumerable<JsonElement>?)ItemArray(root, "PackageReference")) ?? Enumerable.Empty<JsonElement>())
                     .Select(item => new PackageReference(
                         item.GetProperty("Identity").GetString()!,
-                        item.TryGetProperty("VersionOverride", out var versionOverride) && versionOverride.GetString() is { Length: > 0 } overridden
-                            ? overridden : item.TryGetProperty("Version", out var version) ? version.GetString() : null))
+                        PackageVersion(item)))
                     .ToImmutableArray(),
                 (ReadProperty(root, "MSBuildAllProjects") ?? "")
                     .Split(';', StringSplitOptions.RemoveEmptyEntries)

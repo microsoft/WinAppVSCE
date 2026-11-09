@@ -31,8 +31,10 @@ Normal builds continue to use the project's own `obj` and `bin` folders.
 
 Project refreshes retain the last usable context. A XAML compile error does not
 prevent loading C# project types, and failed loads do not restart on each edit.
+Rename checks use current project state rather than a retained compilation.
 Saving or reopening a XAML document checks disk inputs for missed watcher events;
-changed package references require matching restored assets.
+changed package references, including centrally managed versions, require matching
+restored assets.
 
 ## Roslyn trim-warning dispositions
 
