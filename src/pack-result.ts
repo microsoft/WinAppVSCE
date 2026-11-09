@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { isArtifactPath, stripArtifactExtension } from './artifact-types';
+import { parseWinappErrorMessage } from './winapp-cli-utils';
 
 /**
  * Pure helpers for interpreting the output of `winapp package` and building the
@@ -23,18 +24,44 @@ export type PackCompletionPlan =
 	| { kind: 'success'; artifactPath: string; appName: string | undefined; message: string };
 
 /**
- * Marker the CLI prints immediately before the packaged artifact path.
+ * Markers the CLI prints immediately before the produced artifact path.
+ *
+ * A single-package run prints `📦 Package:` while a multi-folder bundle run
+ * prints `📦 Bundle:` instead (see `PackageCommand.cs` in microsoft/winappcli:
+ * `$"{UiSymbols.Package} Package: {result.MsixPath}"` vs
+ * `$"{UiSymbols.Package} Bundle: {result.BundlePath}"`). Both must be accepted,
+ * otherwise a successful bundle is misreported as a packaging failure.
+ *
+ * The bundle branch prints no per-slice `📦 Package:` line — individual slices
+ * are reported as `[1/2] Packing x64...` — so there is never more than one
+ * artifact marker to choose between.
+ *
  * The path may follow on the same line or wrap onto subsequent lines, so the
  * parser tolerates both layouts.
  */
-const PACKAGE_MARKER = '📦 Package:';
+const PACKAGE_MARKERS = ['📦 Package:', '📦 Bundle:'] as const;
+
+/**
+ * Locate the first artifact marker in a line.
+ *
+ * @returns The index just past the marker, or `-1` when the line has none.
+ */
+function findMarkerEnd(line: string): number {
+	for (const marker of PACKAGE_MARKERS) {
+		const markerIndex = line.indexOf(marker);
+		if (markerIndex >= 0) {
+			return markerIndex + marker.length;
+		}
+	}
+	return -1;
+}
 
 function stripMarkers(line: string): string {
-	// Remove the leading "📦 Package:" marker if present, plus surrounding
+	// Remove the leading artifact marker if present, plus surrounding
 	// whitespace, so what remains is the (possibly empty) path fragment.
-	const markerIndex = line.indexOf(PACKAGE_MARKER);
-	if (markerIndex >= 0) {
-		return line.slice(markerIndex + PACKAGE_MARKER.length).trim();
+	const markerEnd = findMarkerEnd(line);
+	if (markerEnd >= 0) {
+		return line.slice(markerEnd).trim();
 	}
 	return line.trim();
 }
@@ -47,8 +74,9 @@ function looksLikeArtifactPath(candidate: string): boolean {
  * Extract the absolute path of the artifact produced by `winapp package` from
  * its captured stdout.
  *
- * The CLI prints the path after a "📦 Package:" marker, but Spectre.Console
- * wrapping frequently pushes the path onto the line *after* the marker, e.g.:
+ * The CLI prints the path after a `📦 Package:` marker (or `📦 Bundle:` for a
+ * multi-folder bundle run), but Spectre.Console wrapping frequently pushes the
+ * path onto the line *after* the marker, e.g.:
  *
  * ```
  *   📦 Package:
@@ -57,7 +85,7 @@ function looksLikeArtifactPath(candidate: string): boolean {
  * ```
  *
  * Strategy:
- * Prefer the text attached to (or following) the "📦 Package:" marker,
+ * Prefer the text attached to (or following) the artifact marker,
  * concatenating consecutive lines to handle Spectre.Console wrapping.
  *
  * @param output Combined stdout (and optionally stderr) captured from the CLI.
@@ -66,9 +94,9 @@ function looksLikeArtifactPath(candidate: string): boolean {
 export function parsePackagedArtifactPath(output: string): string | undefined {
 	const lines = output.split(/\r?\n/).map((line) => line.replace(/\r$/, ''));
 
-	// 1. Anchor on the "📦 Package:" marker.
+	// 1. Anchor on the artifact marker ("📦 Package:" or "📦 Bundle:").
 	for (let i = 0; i < lines.length; i++) {
-		if (!lines[i].includes(PACKAGE_MARKER)) {
+		if (findMarkerEnd(lines[i]) < 0) {
 			continue;
 		}
 
@@ -150,9 +178,15 @@ export function planPackCompletion(result: {
 
 	const artifactPath = parsePackagedArtifactPath(result.output);
 	if (result.code !== 0 || !artifactPath) {
+		const explicitError = result.output
+			.split(/\r?\n/)
+			.find(line => /^\s*(?:\[ERROR\]\s*-\s*|[❌✖✗]\s*)/u.test(line));
+		const detail = explicitError ? parseWinappErrorMessage(explicitError) : undefined;
 		return {
 			kind: 'error',
-			message: 'Packaging failed. See the WinApp output channel for details.'
+			message: detail
+				? `Packaging failed: ${detail}`
+				: 'Packaging failed. See the WinApp output channel for details.'
 		};
 	}
 
