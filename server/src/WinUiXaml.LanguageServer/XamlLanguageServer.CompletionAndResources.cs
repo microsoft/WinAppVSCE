@@ -606,7 +606,9 @@ internal sealed partial class XamlLanguageServer
     }
 
     /// <summary>Shared pipeline for definition/hover: map the caret to a member name on the page's x:Class type (either an event-handler attribute value or an x:Bind path segment) and resolve it</summary>
-    private async Task<(ISymbol? Symbol, MemberTarget? Target)> ResolveSymbolAtAsync(TextDocumentPositionParams p)
+    private async Task<(ISymbol? Symbol, MemberTarget? Target)> ResolveSymbolAtAsync(
+        TextDocumentPositionParams p,
+        bool forDefinition = false)
     {
         if (!_documents.TryGetValue(p.TextDocument.Uri, out var doc))
         {
@@ -629,39 +631,104 @@ internal sealed partial class XamlLanguageServer
 
         // Inside a DataTemplate the x:Bind root is the template's x:DataType, not the page's x:Class.
         var rootType = await ResolveBindRootTypeAsync(doc, offset, p.TextDocument.Uri).ConfigureAwait(false) ?? classSymbol;
-
-        // Walk any dotted path segments typed before the caret one so the caret segment resolves against the correct type.
-        var currentType = rootType;
-
-        // A leading cast ((local:Type)Member) rebinds the walk to the named type instead of the root.
-        if (target.Value.CastType is { } castName)
+        if (context?.TypeSystem is { } bindingTypeSystem &&
+            doc.Parsed.Root is { } documentRoot &&
+            InnermostMarkupExtensionAt(documentRoot, offset) is { } extension &&
+            NearestEnclosingElement(doc, offset) is { } element &&
+            XamlSemanticFacts.IsXBind(extension, element.NamespaceScope))
         {
-            var typeSystem = await GetTypeSystemAsync(p.TextDocument.Uri).ConfigureAwait(false);
-            var caretNode = doc.Parsed.FindNode(offset);
-            var scope = (caretNode != null ? NearestElementScope(caretNode) : null) ?? doc.Parsed.Root?.NamespaceScope;
-            var castType = typeSystem != null && scope != null
-                ? XamlSemanticFacts.ResolveTypeName(castName, scope, typeSystem)
-                : null;
-            if (castType == null)
+            // Hover hides members x:Bind rejects; F12 still navigates there so the user can fix them.
+            var symbol = ResolveBindableSymbol(doc, offset, rootType, classSymbol, bindingTypeSystem);
+            if (symbol is null && forDefinition)
             {
-                return (null, target);
+                symbol = ResolveBindableSymbol(
+                    doc, offset, rootType, classSymbol, bindingTypeSystem, includeRejected: true);
             }
+            return (symbol, target);
+        }
 
+        return (FindMember(classSymbol, target.Value.Name), target);
+    }
+
+    internal static ISymbol? ResolveBindableSymbol(
+        TextDocument doc,
+        int offset,
+        INamedTypeSymbol rootType,
+        INamedTypeSymbol pageClass,
+        XamlTypeSystem typeSystem,
+        bool includeRejected = false)
+    {
+        if (FindMemberTargetAt(doc, offset) is not { } target)
+        {
+            return null;
+        }
+
+        ITypeSymbol currentType = rootType;
+        bool includeRootNonPublic = SymbolEqualityComparer.Default.Equals(rootType, pageClass);
+        if (target.CastType is { } castName)
+        {
+            var scope = NearestEnclosingElement(doc, offset)?.NamespaceScope;
+            if (scope is null ||
+                XamlSemanticFacts.ResolveTypeName(castName, scope, typeSystem) is not { } castType)
+            {
+                return null;
+            }
             currentType = castType;
+            includeRootNonPublic = false;
         }
 
-        foreach (var segment in target.Value.Preceding)
+        int firstSegment = 0;
+        if (target.CastType is null && target.Preceding.Length > 0 &&
+            XamlSemanticFacts.ResolveNamedElementTypeInScope(
+                doc, doc.Parsed.FindNode(offset), target.Preceding[0], typeSystem) is { } namedType)
         {
-            var next = WalkBindSegmentType(currentType, segment);
-            if (next == null)
+            currentType = namedType;
+            includeRootNonPublic = false;
+            firstSegment = 1;
+        }
+        for (int i = firstSegment; i < target.Preceding.Length; i++)
+        {
+            var next = includeRejected
+                ? ResolveAnySegmentType(currentType, target.Preceding[i])
+                : CompletionProvider.ResolveBindSegmentType(
+                    typeSystem, currentType, target.Preceding[i], includeRootNonPublic, pageClass);
+            if (next is null)
             {
-                return (null, target);
+                return null;
             }
-
             currentType = next;
+            includeRootNonPublic = false;
         }
 
-        return (FindMember(currentType, target.Value.Name), target);
+        if (includeRejected)
+        {
+            return currentType is INamedTypeSymbol named ? FindMember(named, target.Name) : null;
+        }
+
+        if (target.ArgumentCount is { } argumentCount)
+        {
+            return typeSystem.GetBindableMethods(currentType, includeRootNonPublic, pageClass)
+                .FirstOrDefault(method => method.Name == target.Name &&
+                    XamlValidator.AcceptsArgumentCount(method, argumentCount));
+        }
+
+        return typeSystem.GetBindableMembers(currentType, includeRootNonPublic, pageClass)
+            .FirstOrDefault(member => member.Name == target.Name);
+    }
+
+    /// <summary>Resolves a path segment's type from any declared member, unwrapping one element type per indexer.</summary>
+    private static ITypeSymbol? ResolveAnySegmentType(ITypeSymbol current, string segment)
+    {
+        var (name, indexers) = SplitIndexers(segment.Trim());
+        var type = current is INamedTypeSymbol named && FindMember(named, name) is { } member
+            ? XamlTypeSystem.GetMemberType(member)
+            : null;
+        for (int i = 0; i < indexers && type is not null; i++)
+        {
+            type = XamlTypeSystem.GetCollectionElementType(type);
+        }
+
+        return type;
     }
 
     private Task NotifyMsBuildUnavailableAsync(MsBuildUnavailableException exception)
@@ -708,28 +775,6 @@ internal sealed partial class XamlLanguageServer
                     UnresolvedAssemblies = exception.UnresolvedAssemblies.ToList(),
                 })
             : Task.CompletedTask;
-    }
-
-    /// <summary>The named type a member evaluates to (a property/field's type or a method's return type), or null.</summary>
-    private static INamedTypeSymbol? MemberResultType(ISymbol? member) => member switch
-    {
-        IPropertySymbol p => p.Type as INamedTypeSymbol,
-        IFieldSymbol f => f.Type as INamedTypeSymbol,
-        IMethodSymbol m => m.ReturnType as INamedTypeSymbol,
-        _ => null,
-    };
-
-    /// <summary>Resolves one preceding {x:Bind} path segment to the type it evaluates to, unwrapping the collection element type once per trailing [...] indexer group (so Items[0] on an</summary>
-    private static INamedTypeSymbol? WalkBindSegmentType(INamedTypeSymbol currentType, string segment)
-    {
-        var (name, indexers) = SplitIndexers(segment);
-        var type = MemberResultType(FindMember(currentType, name));
-        for (int i = 0; i < indexers && type != null; i++)
-        {
-            type = XamlTypeSystem.GetCollectionElementType(type) as INamedTypeSymbol;
-        }
-
-        return type;
     }
 
     /// <summary>Splits an x:Bind path segment into its member name and the number of trailing <c>[...]</c> indexer groups.</summary>
@@ -906,7 +951,12 @@ internal sealed partial class XamlLanguageServer
         }
 
         string path = paren >= 0 ? rawValue.Substring(0, paren) : rawValue;
-        return DottedSegmentAt(path, valueSpan.Start, offset);
+        var target = DottedSegmentAt(path, valueSpan.Start, offset);
+        return target is not null &&
+            target.Value.Span.End == valueSpan.Start + path.TrimEnd().Length &&
+            XamlValidator.TryParseBindFunctionCall(rawValue, out var call)
+                ? target.Value with { ArgumentCount = call.ArgumentRanges.Count }
+                : target;
     }
 
     /// <summary>Resolves the dotted path segment under offset within path, whose first character is at absolute pathAbsStart.</summary>
@@ -1015,6 +1065,8 @@ internal sealed partial class XamlLanguageServer
 
         /// <summary>A leading x:Bind cast type.</summary>
         public string? CastType { get; init; } = null;
+
+        public int? ArgumentCount { get; init; } = null;
     }
 
     /// <summary>An x:Bind attached-property path step ((Grid.Row)): the owner type name, the member (attached property) name, the namespace scope that resolves the owner, and the hover span.</summary>

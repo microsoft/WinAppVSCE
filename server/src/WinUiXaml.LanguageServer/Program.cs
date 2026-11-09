@@ -1,8 +1,12 @@
+using System.Text;
 using WinUiXaml.LanguageServer;
 using WinUiXaml.LanguageServer.Lsp;
 using WinUiXaml.Workspace;
 
-// Optional file logging (WINUI_XAML_LOG) — set up before any Console.Error write so nothing is lost.
+// Redirected stderr must use UTF-8 too. LSP stdout uses its own raw byte stream.
+Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
+// Set up optional file logging before any Console.Error write.
 DiagnosticLog.Initialize();
 
 // LSP speaks over stdio: stdin carries client->server, stdout carries server->client. All logging must go to stderr so it never corrupts the protocol stream.
