@@ -666,7 +666,7 @@ export async function runCompletionScenarios(ctx) {
   }
 
   // 471) An undocumented user method gets deterministic metadata prose, but no phantom sections.
-  const mUserFn = await hoverAt(471, pageCls('<TextBlock Text="{x:Bind OnGo_C|lick()}" />'), "method-hover-user-nodoc");
+  const mUserFn = await hoverAt(471, pageCls('<TextBlock Text="{x:Bind OnGo_C|lick}" />'), "method-hover-user-nodoc");
   {
     if (!mUserFn.includes("Method `OnGo_Click` declared by `SmokeFixture.SmokePage`.")) {
       fail(`Undocumented user method hover needs metadata fallback prose: ${JSON.stringify(mUserFn)}`);

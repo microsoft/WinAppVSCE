@@ -92,7 +92,7 @@ internal sealed partial class XamlLanguageServer
             return nameRef.Value.Declaration;
         }
 
-        var (symbol, _) = await ResolveNamedSymbolAsync(p).ConfigureAwait(false);
+        var (symbol, _) = await ResolveNamedSymbolAsync(p, forDefinition: true).ConfigureAwait(false);
         var location = symbol?.Locations.FirstOrDefault(l => l.IsInSource);
         return location != null ? ToLspLocation(location) : null;
     }
