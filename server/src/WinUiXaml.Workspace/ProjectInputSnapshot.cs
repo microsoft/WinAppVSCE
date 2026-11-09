@@ -52,22 +52,38 @@ internal sealed class ProjectInputSnapshot
         var result = new Dictionary<string, (long Length, long WriteTime)>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in paths)
         {
-            var file = new FileInfo(path);
-            result[path] = !file.Exists ? (-1, -1) :
-                !_trackXamlContent && path.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase) ? (0, 0) :
-                (file.Length, file.LastWriteTimeUtc.Ticks);
+            try
+            {
+                var file = new FileInfo(path);
+                result[path] = !file.Exists ? (-1, -1) :
+                    !_trackXamlContent && path.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase) ? (0, 0) :
+                    (file.Length, file.LastWriteTimeUtc.Ticks);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"[winui-xaml-ls] could not read project input '{path}': {ex.Message}");
+                result[path] = (-1, -1);
+            }
         }
         return result;
     }
 
     private static void CollectFiles(string directory, HashSet<string> paths)
     {
-        if (!Directory.Exists(directory))
+        string[] files;
+        string[] children;
+        try
         {
+            files = Directory.GetFiles(directory);
+            children = Directory.GetDirectories(directory);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"[winui-xaml-ls] could not scan project input directory '{directory}': {ex.Message}");
             return;
         }
 
-        foreach (var file in Directory.EnumerateFiles(directory))
+        foreach (var file in files)
         {
             if (Path.GetExtension(file).ToLowerInvariant() is
                 ".cs" or ".csproj" or ".props" or ".targets" or ".xaml" ||
@@ -76,13 +92,27 @@ internal sealed class ProjectInputSnapshot
                 paths.Add(file);
             }
         }
-        foreach (var child in Directory.EnumerateDirectories(directory))
+        foreach (var child in children)
         {
-            if (Path.GetFileName(child).ToLowerInvariant() is not ("obj" or "bin" or ".git" or ".vs" or "node_modules") &&
-                (File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0)
+            if (Path.GetFileName(child).ToLowerInvariant() is "obj" or "bin" or ".git" or ".vs" or "node_modules")
             {
-                CollectFiles(child, paths);
+                continue;
             }
+
+            try
+            {
+                if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0)
+                {
+                    continue;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"[winui-xaml-ls] could not inspect project input directory '{child}': {ex.Message}");
+                continue;
+            }
+
+            CollectFiles(child, paths);
         }
     }
 }

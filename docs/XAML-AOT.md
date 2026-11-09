@@ -34,7 +34,8 @@ prevent loading C# project types, and failed loads do not restart on each edit.
 Rename checks use current project state rather than a retained compilation.
 Saving or reopening a XAML document checks disk inputs for missed watcher events;
 changed package references, including centrally managed versions, require matching
-restored assets.
+restored assets. Input scans skip and log inaccessible or disappearing directories
+and files rather than failing project loading or document refresh.
 
 ## Roslyn trim-warning dispositions
 
