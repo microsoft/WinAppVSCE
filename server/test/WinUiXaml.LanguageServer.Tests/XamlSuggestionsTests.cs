@@ -26,10 +26,24 @@ public class XamlSuggestionsTests
     [InlineData("gIrd", "Grid")]
     [InlineData("Txet", "Text")]
     [InlineData("Ture", "True")]
-    [InlineData("On", "No")]
     public void AdjacentTransposition_CountsAsOneTypo(string bad, string expected)
     {
         Assert.Equal(expected, Assert.Single(XamlSuggestions.Nearest(bad, [expected])));
+    }
+
+    [Fact]
+    public void TwoLetterSwap_IsNotTreatedAsOneTypo()
+    {
+        Assert.Empty(XamlSuggestions.Nearest("On", ["No"]));
+    }
+
+    [Theory]
+    [InlineData("MaxHieght", new[] { "MaxHeight", "MinHeight" }, true)]
+    [InlineData("Moe", new[] { "Mode", "More" }, false)]
+    [InlineData("Widht", new[] { "Width" }, true)]
+    public void IsUniqueBest_RequiresStrictlyCloserFirstMatch(string target, string[] ranked, bool expected)
+    {
+        Assert.Equal(expected, XamlSuggestions.IsUniqueBest(target, ranked));
     }
 
     [Theory]

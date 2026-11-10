@@ -167,7 +167,6 @@ public class XamlCodeActionsTests
     [InlineData("<local:Grid IsEnabled=\"  Ture  \" />", "Ture", "True", XamlValidator.InvalidAttributeValueCode)]
     [InlineData("<local:Grid IsEnabled=\"Flase\" />", "Flase", "False", XamlValidator.InvalidAttributeValueCode)]
     [InlineData("<local:Grid OptionalEnabled=\"Ture\" />", "Ture", "True", XamlValidator.InvalidAttributeValueCode)]
-    [InlineData("<local:Grid Mode=\"On\" />", "On", "No", XamlValidator.InvalidAttributeValueCode)]
     public void ValidatedTypo_RoundTripsToReplacementThatClearsDiagnostic(
         string body, string bad, string replacement, string code)
     {
@@ -258,8 +257,6 @@ public class XamlCodeActionsTests
     [Theory]
     [InlineData("FrozenEdgeCount=\"unknown\"", "None,Leading,Trailing")]
     [InlineData("FrozenEdgeCount=\"Leadnig\"", "Leading")]
-    [InlineData("IsEnabld=\"1\"", "True,False")]
-    [InlineData("OptionalEnabld=\"1\"", "True,False")]
     public void UnknownProperty_OffersSmallExplicitValueChoices(string attributes, string choices)
     {
         var typeSystem = ColumnTypeSystem();
@@ -360,6 +357,7 @@ public class XamlCodeActionsTests
     [InlineData("FrozenEdgeCount", "1\n    ", "Label=\"keep\" />", null)]
     [InlineData("FrozenEdg", "Leadin\n    ", "Label=\"keep\" />", "FrozenEdge")]
     [InlineData("IsEnabld", "Tru\n    ", "Label=\"keep\" />", "IsEnabled")]
+    [InlineData("IsEnabld", "Tru ", "Label=\" keep\" />", "IsEnabled")]
     [InlineData("Labl", "x", "", "Label")]
     public void MissingClosingQuote_OnlyOffersNameRename(string bad, string value, string rest, string? good)
     {
@@ -436,6 +434,8 @@ public class XamlCodeActionsTests
     [Theory]
     [InlineData("Numbr=\"abc\"", "Numbr", "Number", "")]
     [InlineData("Numbr=\"\"", "Numbr", "Number", "")]
+    [InlineData("IsEnabld=\"1\"", "IsEnabld", "IsEnabled", "")]
+    [InlineData("OptionalEnabld=\"1\"", "OptionalEnabld", "OptionalEnabled", "")]
     [InlineData("FrozenEdg=\"Middle\"", "FrozenEdg", "FrozenEdge", "None, Leading, Trailing, Both, Automatic")]
     public void NearbyPropertyWithInvalidValue_StillOffersPreferredRename(
         string attributes, string bad, string good, string members)
@@ -602,7 +602,7 @@ public class XamlCodeActionsTests
         var action = Assert.Single(InvalidValueActions(doc, ColumnTypeSystem(enumPrefix: TagsOwner)));
 
         Assert.Equal("Replace with '0'", action.Title);
-        Assert.True(action.IsPreferred);
+        Assert.NotEqual(true, action.IsPreferred);
     }
 
     [Fact]
@@ -615,6 +615,38 @@ public class XamlCodeActionsTests
         Assert.Equal("Change 'Leadng' to 'Leading'", action.Title);
         Assert.Equal("Leadng", RangeText(doc, edit.Range));
         Assert.Contains("FrozenEdge=\" Leading \"", ApplyEdit(doc, edit));
+    }
+
+    [Theory]
+    [InlineData("IsEnabled=\"Tru\n    Label=\"keep\"")]
+    [InlineData("Number=\"10 Label=\"keep\"")]
+    [InlineData("Number=\"10 Label=\" keep\"")]
+    public void InvalidValueSwallowingNextAttribute_OffersNoValueReplacement(string attributes)
+    {
+        Assert.Empty(InvalidValueActions(ColumnDocument(attributes), ColumnTypeSystem()));
+    }
+
+    [Fact]
+    public void InvalidEnumValueWithoutCloseSpelling_OffersSmallEnumChoicesWithoutPreference()
+    {
+        var doc = ColumnDocument("FrozenEdge=\"True\"");
+        var actions = InvalidValueActions(doc, ColumnTypeSystem());
+
+        Assert.Equal(new[] { "Replace with 'None'", "Replace with 'Leading'", "Replace with 'Trailing'" },
+            actions.Select(action => action.Title));
+        Assert.All(actions, action => Assert.NotEqual(true, action.IsPreferred));
+    }
+
+    [Fact]
+    public void StrictlyClosestPropertyName_StaysPreferredWhenAWeakerMatchIsListed()
+    {
+        var typeSystem = ColumnTypeSystem(extraMembers: "public double MaxHeight { get; set; } public double MinHeight { get; set; }");
+        var actions = AttributeActions(ColumnDocument("MaxHieght=\"200\""), typeSystem);
+
+        Assert.Equal(new[] { "Change 'MaxHieght' to 'MaxHeight'", "Change 'MaxHieght' to 'MinHeight'" },
+            actions.Select(action => action.Title));
+        Assert.True(actions[0].IsPreferred);
+        Assert.NotEqual(true, actions[1].IsPreferred);
     }
     private static XamlTypeSystem ColumnTypeSystem(
         string members = "None = 0, Leading = 1, Trailing = 2",

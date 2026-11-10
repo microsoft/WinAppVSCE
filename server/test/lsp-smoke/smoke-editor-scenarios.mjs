@@ -531,6 +531,7 @@ export async function runEditorScenarios(ctx) {
     { body: '<Button IsEnabled="Ture" />', bad: "Ture", good: "True", code: "WXAML0012", count: 1 },
     { body: '<Button IsEnabled="Flase" />', bad: "Flase", good: "False", code: "WXAML0012", count: 1 },
     { body: '<Button HorizontalAlignment="Strech" />', bad: "Strech", good: "Stretch", code: "WXAML0012", count: 1 },
+    { body: '<Button MaxHieght="200" />', bad: "MaxHieght", good: "MaxHeight", code: "WXAML0003", count: 1 },
   ];
   for (const [index, scenario] of spellingCases.entries()) {
     const text = pageCls(scenario.body);
@@ -569,7 +570,6 @@ export async function runEditorScenarios(ctx) {
   const propertyValueCases = [
     { attribute: 'HorizontalAlignmentCount="1"', property: "HorizontalAlignment", values: ["Center"] },
     { attribute: 'VisibilityCount="unknown"', property: "Visibility", values: ["Visible", "Collapsed"] },
-    { attribute: 'IsEnabld="1"', property: "IsEnabled", values: ["True", "False"] },
     { attribute: 'Visib="Hidden"', property: "Visibility", values: ["Visible", "Collapsed"] },
   ];
   for (const [index, scenario] of propertyValueCases.entries()) {

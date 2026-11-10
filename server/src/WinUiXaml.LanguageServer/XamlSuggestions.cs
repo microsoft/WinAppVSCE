@@ -47,6 +47,11 @@ internal static class XamlSuggestions
     private static bool SharesFirstLetter(string a, string b) =>
         a.Length > 0 && b.Length > 0 && char.ToLowerInvariant(a[0]) == char.ToLowerInvariant(b[0]);
 
+    /// <summary>True when the first ranked name is strictly closer to target than the second, so it is safe to prefer.</summary>
+    public static bool IsUniqueBest(string target, IReadOnlyList<string> ranked) =>
+        ranked.Count == 1 ||
+        ranked.Count > 1 && Distance(target, ranked[0], 64) < Distance(target, ranked[1], 64);
+
     public static IReadOnlyList<string> AttributeNames(string target, IEnumerable<string> candidates)
     {
         var names = candidates.ToArray();
@@ -108,7 +113,8 @@ internal static class XamlSuggestions
             {
                 int cost = ai == char.ToLowerInvariant(b[j - 1]) ? 0 : 1;
                 cur[j] = Math.Min(Math.Min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
-                if (i > 1 && j > 1 &&
+                // Swapped letters count as one typo, except in 2-letter words where a swap reverses the word.
+                if (i > 1 && j > 1 && n >= 3 &&
                     ai == char.ToLowerInvariant(b[j - 2]) &&
                     char.ToLowerInvariant(a[i - 2]) == char.ToLowerInvariant(b[j - 1]))
                 {

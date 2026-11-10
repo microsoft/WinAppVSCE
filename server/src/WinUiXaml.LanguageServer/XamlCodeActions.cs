@@ -220,12 +220,7 @@ internal static class XamlCodeActions
             return true;
         }
 
-        // A missing closing quote makes the value swallow later markup; then only the name is safe to edit.
-        bool reliableValue = attribute.Value is not { Quote: { } quote } parsedValue ||
-            parsedValue.Span.Length >= 2 && doc.Text[parsedValue.Span.End - 1] == quote &&
-            doc.Text.IndexOf('<', parsedValue.Span.Start, parsedValue.Span.Length) < 0 &&
-            (parsedValue.Span.End == doc.Text.Length || char.IsWhiteSpace(doc.Text[parsedValue.Span.End]) ||
-                doc.Text[parsedValue.Span.End] is '/' or '>');
+        bool reliableValue = IsReliableValue(doc, attribute.Value);
         var members = typeSystem.GetAttributeMembers(elementType).ToDictionary(member => member.Name);
         var nearby = XamlSuggestions.Nearest(attribute.Name.LocalName, members.Keys);
         var candidates = XamlSuggestions.AttributeNames(attribute.Name.LocalName, members.Keys)
@@ -258,7 +253,8 @@ internal static class XamlCodeActions
             foreach (var replacement in values.Take(3 - (actions.Count - initialCount)))
             {
                 bool valueChanged = attribute.Value is { } currentValue && replacement != currentValue.Text;
-                bool preferred = candidates.Length == 1 && values.Count == 1 && nearby.Contains(name);
+                bool preferred = values.Count == 1 && nearby.Contains(name) && name == candidates[0] &&
+                    XamlSuggestions.IsUniqueBest(attribute.Name.LocalName, candidates);
                 string title = valueChanged
                     ? $"Replace with {name}=\"{replacement}\""
                     : $"Change '{attribute.Name.LocalName}' to '{name}'";
@@ -300,6 +296,15 @@ internal static class XamlCodeActions
 
         return true;
     }
+
+    // A missing closing quote makes the value swallow later markup, so only the name is safe to edit.
+    private static bool IsReliableValue(TextDocument doc, XamlAttributeValue? value) =>
+        value is not { Quote: { } quote } ||
+        value.Span.Length >= 2 && doc.Text[value.Span.End - 1] == quote &&
+        doc.Text.IndexOf('<', value.Span.Start, value.Span.Length) < 0 &&
+        !value.Text.TrimEnd().EndsWith('=') &&
+        (value.Span.End == doc.Text.Length || char.IsWhiteSpace(doc.Text[value.Span.End]) ||
+            doc.Text[value.Span.End] is '/' or '>');
 
     // True when Owner.Member sets the element's own property; attached members of other owners do not count.
     private static bool SetsElementProperty(
@@ -355,13 +360,8 @@ internal static class XamlCodeActions
 
         if (XamlValueConverter.TryValidate(text, type, typeSystem, out bool isValid) && !isValid)
         {
-            if (type.SpecialType != SpecialType.System_Boolean)
-            {
-                return Array.Empty<string>();
-            }
-
-            var nearest = XamlSuggestions.Nearest(text.Trim(), new[] { "True", "False" });
-            return nearest.Count > 0 ? nearest : new[] { "True", "False" };
+            // Invalid non-enum values keep the plain rename; their own diagnostic offers value fixes.
+            return Array.Empty<string>();
         }
 
         return new[] { text };
@@ -898,16 +898,20 @@ internal static class XamlCodeActions
                         suggestions.Any(suggestion => IsValidLiteral(suggestion, memberType, typeSystem) != true));
                 }
 
-                string? replacement = memberType is null
-                    ? null
-                    : XamlValueConverter.GetDefaultLiteral(memberType);
+                var targetType = memberType is null ? null : XamlValueConverter.UnwrapNullable(memberType);
+                IReadOnlyList<string> literals =
+                    attribute?.Value is not { } invalidValue || targetType is null ? Array.Empty<string>()
+                    : targetType.TypeKind == TypeKind.Enum ? AttributeReplacementValues(invalidValue.Text, targetType, typeSystem!)
+                    : targetType.SpecialType == SpecialType.System_Boolean ? new[] { "True", "False" }
+                    : XamlValueConverter.GetDefaultLiteral(targetType) is { } defaultLiteral ? new[] { defaultLiteral }
+                    : Array.Empty<string>();
                 if (attribute?.Value is null ||
-                    replacement is null ||
+                    literals.Count == 0 ||
+                    !IsReliableValue(doc, attribute.Value) ||
                     !DiagnosticTargetsSpan(doc, diagnostic.Range, attribute.Value.InnerSpan) ||
-                    memberType is not null &&
                     XamlValueConverter.TryValidate(
                         attribute.Value.Text,
-                        memberType,
+                        memberType!,
                         typeSystem!,
                         out bool isValid) &&
                     isValid)
@@ -915,9 +919,8 @@ internal static class XamlCodeActions
                     return false;
                 }
 
-                // Either Boolean is a guess, so offer both without preferring one.
-                bool isBoolean = XamlValueConverter.UnwrapNullable(memberType!).SpecialType == SpecialType.System_Boolean;
-                foreach (var literal in isBoolean ? new[] { "True", "False" } : new[] { replacement })
+                // Without a close spelling match every replacement is a guess, so none is preferred.
+                foreach (var literal in literals.Take(3))
                 {
                     AddEditAction(
                         actions,
@@ -926,7 +929,7 @@ internal static class XamlCodeActions
                         $"Replace with '{literal}'",
                         doc.RangeOf(attribute.Value.InnerSpan),
                         literal,
-                        isPreferred: !isBoolean);
+                        isPreferred: false);
                 }
 
                 return true;
